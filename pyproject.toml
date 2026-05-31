@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "multi-llm-workflow"
+version = "1.0.0"
+description = "Collaborative multi-LLM coding workflow (Claude + ChatGPT + Gemini)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "anthropic>=0.40.0",
+    "openai>=1.40.0",
+    "google-genai>=0.3.0",
+    "python-dotenv>=1.0.0",
+    "colorama>=0.4.6",
+    "gradio>=4.44.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+multi-llm = "multi_llm.cli:main"
+multi-llm-gui = "multi_llm.gui:main"
+
+[tool.setuptools]
+packages = ["multi_llm"]
+py-modules = ["multi_model_workflow", "chat_gui"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+# Keep targeting py3.9, so avoid the pyupgrade (UP) typing rewrites.
+select = ["E", "F", "I", "W", "B"]
+ignore = ["E501"]

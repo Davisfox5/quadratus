@@ -59,6 +59,12 @@ logs/
 ehthumbs.db
 Thumbs.db
 
+# Testing / tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+
 # Gradio specific
 gradio_cached_examples/
 flagged/
+.gradio/
