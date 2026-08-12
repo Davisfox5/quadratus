@@ -72,6 +72,12 @@ class Capability:
     AGENTIC = "agentic"
     #: Native multi-agent / step-by-step decomposition variants.
     MULTI_AGENT = "multi-agent"
+    #: Fit to run the orchestrator: interview the operator, author the run
+    #: policy, and hold the end goal across a long, messy debate. This is a
+    #: different axis from per-call judgement quality -- it is about coherence
+    #: over a whole session, which is why the strongest reviewer is not
+    #: automatically the strongest orchestrator.
+    ORCHESTRATE = "orchestrate"
 
 
 @dataclass(frozen=True)
@@ -102,16 +108,27 @@ ROSTER: List[ModelSpec] = [
     #    verified against claude 2.1.228 (opus/sonnet/haiku resolved live).
     _spec(
         "claude", "fable", "Claude Fable 5", 1000 * K, "slow",
-        [Capability.REASON, Capability.CODE, Capability.AGENTIC],
-        "Anthropic's most capable widely-released model. Ships aggressive "
-        "safety classifiers: Anthropic's own refusal docs state benign "
-        "cybersecurity work can trigger the cyber category. Keep it out of "
-        "security roles. Thinking is always on and cannot be disabled.",
+        [Capability.REASON, Capability.CODE, Capability.AGENTIC,
+         Capability.ORCHESTRATE],
+        "Anthropic's most capable widely-released model, positioned by the "
+        "vendor for long-running agents -- which is the orchestrator's job "
+        "description, and why it leads ORCHESTRATOR_CHAIN. Its 'Slower' "
+        "latency rating does not bite there: the orchestrator interviews at "
+        "human pace, authors policy once, and reviews at checkpoints already "
+        "gated behind a multi-minute debater run. Three real hazards: it "
+        "ships the strictest safety classifiers, and Anthropic's own refusal "
+        "docs say benign cybersecurity work can trigger the cyber category; "
+        "it costs 2x Opus 5 against the same subscription window, so it is "
+        "the model most likely to exhaust first; and it was withdrawn for 19 "
+        "days in June 2026 under export controls. All three are why the "
+        "orchestrator role needs a fallback rather than a single assignment. "
+        "Prompt it less prescriptively than prior models -- Anthropic reports "
+        "over-specified prompts reduce its output quality.",
     ),
     _spec(
         "claude", "opus", "Claude Opus 5", 1000 * K, "moderate",
         [Capability.CODE, Capability.REVIEW, Capability.DEBUG,
-         Capability.REASON, Capability.AGENTIC],
+         Capability.REASON, Capability.AGENTIC, Capability.ORCHESTRATE],
         "Freshest knowledge cutoff in the fleet (May 2026). Review is "
         "precision-leaning: ~39% precision / ~55% recall with 4x the nitpicks "
         "(CodeRabbit). Reportedly leads at debugging a known defect. Cyber "
@@ -280,6 +297,56 @@ MODE_ROSTERS: Dict[str, Dict[str, List[str]]] = {
         "planners": ["claude:opus"],
     },
 }
+
+#: Ordered preference for the orchestrator seat.
+#:
+#: Fable 5 leads because the job is holding a goal coherent across a long
+#: session, which is what the vendor built it for -- a different axis from
+#: per-call judgement, where Opus 5 is stronger. Opus 5 backs it up because
+#: the orchestrator is a single point of coordination and Fable is, in
+#: practice, the model most likely to become unavailable: it costs twice as
+#: much against the same subscription window, and it has already been
+#: withdrawn once for 19 days. A stalled orchestrator stalls everything.
+#:
+#: Fall back on any of: the subscription window for Fable being exhausted,
+#: the model being unavailable, or the project being classified
+#: security-adjacent -- Anthropic documents that benign cybersecurity work
+#: can trip Fable's classifiers, and an orchestrator that declines to discuss
+#: the project it is supervising is worse than a slightly weaker one.
+ORCHESTRATOR_CHAIN: List[str] = [
+    "claude:fable",
+    "claude:opus",
+]
+
+#: Bench used when a peer is promoted out of the brain trust into the
+#: orchestrator seat. Tried in order; the first not already seated is used.
+PEER_SUBSTITUTES: List[str] = [
+    "claude:sonnet",
+    "openai:gpt-5.6-terra",
+    "grok:grok-4.6",
+]
+
+
+def peers_for(mode: str, orchestrator: str) -> List[str]:
+    """Brain-trust peers for ``mode``, with the orchestrator excluded.
+
+    The orchestrator supervises the debate and judges which participants are
+    on the right track. A model doing that while also competing in the debate
+    will favour its own line, for the same reason the convergence judge may
+    not be a debater. So when the orchestrator seat is filled by a model that
+    would otherwise be a peer -- which happens whenever the chain falls back
+    to Opus 5 -- that model leaves the brain trust and the bench fills in.
+    """
+    seated = list(MODE_ROSTERS[mode]["peers"])
+    if orchestrator not in seated:
+        return seated
+    seated.remove(orchestrator)
+    for candidate in PEER_SUBSTITUTES:
+        if candidate not in seated and candidate != orchestrator:
+            seated.append(candidate)
+            break
+    return seated
+
 
 #: Control-plane roles. Cheap by task shape, not by importance: convergence
 #: judging is load-bearing and still checklist work. Haiku was verified

@@ -152,3 +152,66 @@ def test_ledger_extractor_is_not_a_debater_in_any_mode():
     extractor = CONTROL_PLANE["ledger_extraction"]
     for mode, roles in MODE_ROSTERS.items():
         assert extractor not in roles["peers"], mode
+
+
+# -- orchestrator seat -------------------------------------------------------
+
+from multi_llm.registry import (  # noqa: E402
+    ORCHESTRATOR_CHAIN,
+    PEER_SUBSTITUTES,
+    peers_for,
+)
+
+
+def test_orchestrator_chain_entries_resolve_and_are_capable():
+    for key in ORCHESTRATOR_CHAIN:
+        spec = resolve(key)
+        assert spec is not None, key
+        assert Capability.ORCHESTRATE in spec.caps, key
+
+
+def test_fable_leads_the_orchestrator_chain():
+    assert ORCHESTRATOR_CHAIN[0] == "claude:fable"
+
+
+def test_orchestrator_chain_has_a_fallback():
+    """Fable is the likeliest model to become unavailable, and a stalled
+    orchestrator stalls the whole run."""
+    assert len(ORCHESTRATOR_CHAIN) >= 2
+
+
+def test_fable_is_not_a_peer_in_any_mode():
+    """It orchestrates; a supervisor must not also compete in the debate."""
+    for mode, roles in MODE_ROSTERS.items():
+        assert "claude:fable" not in roles["peers"], mode
+        assert "claude:fable" not in roles["planners"], mode
+
+
+def test_primary_orchestrator_leaves_the_brain_trust_intact():
+    base = MODE_ROSTERS["adversarial"]["peers"]
+    assert peers_for("adversarial", "claude:fable") == base
+
+
+def test_fallback_orchestrator_is_removed_from_the_brain_trust():
+    seated = peers_for("adversarial", "claude:opus")
+    assert "claude:opus" not in seated
+
+
+def test_displaced_peer_is_replaced_not_merely_dropped():
+    base = MODE_ROSTERS["adversarial"]["peers"]
+    seated = peers_for("adversarial", "claude:opus")
+    assert len(seated) == len(base)
+    assert seated[-1] in PEER_SUBSTITUTES
+
+
+def test_substitute_is_never_already_seated():
+    for mode in MODE_ROSTERS:
+        for orchestrator in ORCHESTRATOR_CHAIN:
+            seated = peers_for(mode, orchestrator)
+            assert len(seated) == len(set(seated)), (mode, orchestrator)
+
+
+def test_orchestrator_is_never_seated_in_any_mode_or_chain_position():
+    for mode in MODE_ROSTERS:
+        for orchestrator in ORCHESTRATOR_CHAIN:
+            assert orchestrator not in peers_for(mode, orchestrator)
