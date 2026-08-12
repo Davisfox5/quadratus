@@ -8,6 +8,7 @@ as unavailable instead of crashing the whole workflow.
 
 from __future__ import annotations
 
+import copy
 import logging
 import random
 import time
@@ -92,6 +93,20 @@ class LLMProvider:
     # -- public API ----------------------------------------------------------
     def available(self) -> bool:
         return self._client is not None
+
+    def for_model(self, model: Optional[str]) -> "LLMProvider":
+        """Return a view of this provider bound to a different model.
+
+        Model routing sends cheap phases (convergence judging, classification,
+        summarisation) to a smaller model on the same subscription. Copying the
+        provider keeps the already-built client and avoids re-resolving a CLI
+        binary or re-constructing an SDK client on every routed call.
+        """
+        if not model or model == self.model:
+            return self
+        clone = copy.copy(self)
+        clone.model = model
+        return clone
 
     @property
     def status(self) -> str:
@@ -263,12 +278,37 @@ _REGISTRY = {
 
 
 def build_provider(name: str, settings) -> Optional[LLMProvider]:
-    """Build a single provider by name from settings, or ``None`` if unknown."""
+    """Build a single provider by name from settings, or ``None`` if unknown.
+
+    The transport is chosen per provider by ``settings.backend_for(name)``:
+    ``"cli"`` drives the vendor's subscription-authenticated coding-agent CLI,
+    ``"api"`` uses the billed HTTP SDK. Mixing is supported, so a provider
+    whose CLI is not installed can fall back to an API key without forcing the
+    whole run onto billed transport.
+    """
     entry = _REGISTRY.get(name)
     if entry is None:
         log.warning("Unknown provider %r; skipping.", name)
         return None
     cls, key_attr, model_attr = entry
+
+    backend = settings.backend_for(name)
+    if backend == "cli":
+        # Imported lazily: cli_providers depends on this module.
+        from .cli_providers import cli_provider_classes
+
+        cli_cls = cli_provider_classes().get(name)
+        if cli_cls is None:
+            log.warning("No CLI backend for %r; falling back to the API backend.", name)
+        else:
+            return cli_cls(
+                model=settings.model_for(name),
+                max_tokens=settings.max_tokens,
+                timeout=settings.cli_timeout,
+                max_retries=settings.max_retries,
+                retry_base_delay=settings.retry_base_delay,
+            )
+
     return cls(
         model=getattr(settings, model_attr),
         api_key=getattr(settings, key_attr),

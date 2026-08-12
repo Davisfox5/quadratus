@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 try:  # Loading .env is best-effort; missing python-dotenv must not crash.
     from dotenv import load_dotenv
@@ -28,6 +28,24 @@ DEFAULT_OPENAI_MODEL = "gpt-5.5-pro"
 DEFAULT_GEMINI_MODEL = "gemini-3.1-pro"
 
 DEFAULT_PROVIDER_ORDER = "claude,openai,gemini"
+
+# CLI backends address models by the vendor CLI's own naming, which is usually
+# a short alias rather than a dated API model ID. Two tiers are configured per
+# provider: "high" for planning, generation, review and synthesis, "low" for
+# the control plane (convergence verdicts, routing, refusal classification,
+# summarisation). Running the control plane on the low tier is the single
+# largest saving available when every call draws on a subscription window.
+DEFAULT_CLI_MODELS = {
+    "claude": {"high": "opus", "low": "haiku"},
+    "openai": {"high": "gpt-5.5-codex", "low": "gpt-5.5-codex-mini"},
+    "gemini": {"high": "gemini-3.1-pro", "low": "gemini-3.1-flash"},
+    "grok": {"high": "grok-code", "low": "grok-code-mini"},
+}
+
+#: Transport for every provider unless overridden per provider.
+DEFAULT_BACKEND = "cli"
+
+_VALID_BACKENDS = ("cli", "api")
 
 
 def _env_int(name: str, default: int) -> int:
@@ -86,9 +104,37 @@ class Settings:
         default_factory=lambda: os.getenv("SYNTHESIZER", "lead").strip().lower()
     )
 
+    # Transport selection
+    #: Default transport for all providers: "cli" (subscription) or "api".
+    backend: str = field(
+        default_factory=lambda: os.getenv("LLM_BACKEND", DEFAULT_BACKEND).strip().lower()
+    )
+    #: Per-provider overrides, e.g. ``{"gemini": "api"}`` from GEMINI_BACKEND.
+    backend_overrides: Dict[str, str] = field(
+        default_factory=lambda: {
+            name: value.strip().lower()
+            for name in ("claude", "openai", "gemini", "grok")
+            for value in (os.getenv(f"{name.upper()}_BACKEND", ""),)
+            if value.strip()
+        }
+    )
+    #: Model IDs used by CLI backends, keyed by provider then tier.
+    cli_models: Dict[str, Dict[str, str]] = field(
+        default_factory=lambda: {
+            name: {
+                tier: os.getenv(f"{name.upper()}_CLI_MODEL_{tier.upper()}", default)
+                for tier, default in tiers.items()
+            }
+            for name, tiers in DEFAULT_CLI_MODELS.items()
+        }
+    )
+
     # Request tuning
     max_tokens: int = field(default_factory=lambda: _env_int("MAX_TOKENS", 8000))
     timeout: float = field(default_factory=lambda: _env_float("REQUEST_TIMEOUT", 120.0))
+    #: CLI calls run a full agent loop, not a single completion, so they need a
+    #: far more generous ceiling than an HTTP request.
+    cli_timeout: float = field(default_factory=lambda: _env_float("CLI_TIMEOUT", 900.0))
     max_retries: int = field(default_factory=lambda: _env_int("MAX_RETRIES", 4))
     retry_base_delay: float = field(
         default_factory=lambda: _env_float("RETRY_BASE_DELAY", 2.0)
@@ -104,6 +150,41 @@ class Settings:
     max_file_chars: int = field(
         default_factory=lambda: _env_int("MAX_FILE_CHARS", 20000)
     )
+
+    # -- transport & routing helpers -----------------------------------------
+    def backend_for(self, provider: str) -> str:
+        """Return the transport ("cli" or "api") for one provider."""
+        choice = self.backend_overrides.get(provider, self.backend)
+        if choice not in _VALID_BACKENDS:
+            return DEFAULT_BACKEND
+        return choice
+
+    def model_for(self, provider: str, tier: str = "high") -> str:
+        """Return the model ID for a provider at a given tier.
+
+        API backends keep using their configured dated model IDs; only CLI
+        backends consult the tier table, since the CLIs use their own aliases.
+        """
+        if self.backend_for(provider) == "cli":
+            tiers = self.cli_models.get(provider, {})
+            return tiers.get(tier) or tiers.get("high") or ""
+        return {
+            "claude": self.claude_model,
+            "openai": self.openai_model,
+            "gemini": self.gemini_model,
+        }.get(provider, "")
+
+    def uses_cli(self) -> bool:
+        """True if any configured provider runs on subscription transport.
+
+        Public Gradio sharing must stay off in that case: routing anyone else's
+        prompts through your subscription credential violates the consumer
+        terms of all three major vendors.
+        """
+        return any(
+            self.backend_for(name) == "cli"
+            for name in (*self.provider_order, *self.backend_overrides)
+        )
 
     @classmethod
     def from_env(cls) -> "Settings":

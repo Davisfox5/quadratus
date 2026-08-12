@@ -143,6 +143,32 @@ def build_interface(settings: Optional[Settings] = None):
     return demo
 
 
+def resolve_share(settings) -> bool:
+    """Decide whether Gradio's public share tunnel may be enabled.
+
+    Subscription (CLI) transport authenticates as *you*. A public share link
+    would route strangers' prompts through your personal credential, which the
+    consumer terms of Anthropic, OpenAI and Google all prohibit -- and which
+    all three enforce server-side. Sharing is therefore refused outright
+    whenever any provider is on CLI transport, regardless of the opt-in
+    variable; on pure API transport the usage is billed to your key and the
+    opt-in is honoured.
+    """
+    wants_share = os.getenv("MULTI_LLM_ALLOW_SHARE", "").strip().lower() in ("1", "true", "yes")
+    if not wants_share:
+        return False
+    if settings.uses_cli():
+        print(
+            "Refusing to enable Gradio sharing: one or more providers use "
+            "subscription (CLI) transport, and exposing that publicly would "
+            "route other people's prompts through your personal subscription. "
+            "Set every provider to the 'api' backend to share.",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
 def main() -> int:
     try:
         import gradio  # noqa: F401
@@ -150,7 +176,11 @@ def main() -> int:
         print("Gradio is not installed. Run: pip install gradio", file=sys.stderr)
         return 1
     demo = build_interface()
-    demo.launch(server_name="127.0.0.1", server_port=7860, share=False)
+    demo.launch(
+        server_name="127.0.0.1",
+        server_port=7860,
+        share=resolve_share(Settings.from_env()),
+    )
     return 0
 
 
