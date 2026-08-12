@@ -35,11 +35,20 @@ DEFAULT_PROVIDER_ORDER = "claude,openai,gemini"
 # the control plane (convergence verdicts, routing, refusal classification,
 # summarisation). Running the control plane on the low tier is the single
 # largest saving available when every call draws on a subscription window.
+# Seed values only -- confirm against `multi-llm probe` on your own machine.
+# Notes behind these choices:
+#   * There is no gpt-5.5-codex model; OpenAI stopped minting Codex-specific
+#     variants after 5.3 and routed Codex onto the general GPT-5.x tiers.
+#   * GPT-5.6's tiers barely separate on coding (Sol->Luna is ~1.9pts on
+#     SWE-bench Pro for a 5x price difference), so Luna is a defensible low
+#     tier and arguably a defensible high tier for routine work.
+#   * Gemini's current Pro is still 3.1; no 3.5 Pro shipped. Current Flash is
+#     3.6 as of ~2026-07-21.
 DEFAULT_CLI_MODELS = {
     "claude": {"high": "opus", "low": "haiku"},
-    "openai": {"high": "gpt-5.5-codex", "low": "gpt-5.5-codex-mini"},
-    "gemini": {"high": "gemini-3.1-pro", "low": "gemini-3.1-flash"},
-    "grok": {"high": "grok-code", "low": "grok-code-mini"},
+    "openai": {"high": "gpt-5.6-sol", "low": "gpt-5.6-luna"},
+    "gemini": {"high": "gemini-3.1-pro", "low": "gemini-3.6-flash"},
+    "grok": {"high": "grok-4.6", "low": "grok-4-1-fast"},
 }
 
 #: Transport for every provider unless overridden per provider.
