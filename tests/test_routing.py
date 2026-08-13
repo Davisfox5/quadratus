@@ -190,3 +190,99 @@ def test_seat_and_work_routing_are_independent():
 
 def test_seat_type_is_a_seat():
     assert isinstance(orchestrator_seat(), Seat)
+
+
+# -- security excursions -----------------------------------------------------
+
+from multi_llm.routing import (  # noqa: E402
+    Excursion,
+    ExcursionUnavailable,
+    close_excursion,
+    open_security_excursion,
+)
+
+
+def test_excursion_moves_the_seat_but_defers_the_work():
+    """Opus takes the seat because Fable's classifiers would refuse the
+    subject; Sol does the work because that is the operator's preference."""
+    ex = open_security_excursion()
+    assert ex.orchestrator == OPUS
+    assert ex.worker == SOL
+
+
+def test_excursion_orchestrator_never_performs_its_own_work():
+    ex = open_security_excursion()
+    assert ex.worker != ex.orchestrator
+
+
+def test_excursion_verifier_double_checks_and_is_not_the_worker():
+    ex = open_security_excursion()
+    assert ex.verifier != ex.worker
+    assert ex.verifier == OPUS
+
+
+def test_excursion_rejects_a_self_performing_orchestrator():
+    with pytest.raises(ValueError, match="defer the work"):
+        Excursion(reason="x", orchestrator=OPUS, worker=OPUS, verifier=SOL,
+                  returns_to=FABLE)
+
+
+def test_excursion_rejects_self_verification():
+    with pytest.raises(ValueError, match="double-check its own"):
+        Excursion(reason="x", orchestrator=OPUS, worker=SOL, verifier=SOL,
+                  returns_to=FABLE)
+
+
+def test_excursion_knows_where_the_seat_returns_to():
+    assert open_security_excursion().returns_to == FABLE
+
+
+def test_closing_hands_the_seat_back_to_the_primary():
+    """The failure this prevents: degrade once, never recover."""
+    ex = open_security_excursion()
+    after = close_excursion(ex)
+    assert after.key == FABLE
+    assert after.is_primary
+
+
+def test_closing_is_unconditional():
+    """A failed security lookup still ends the excursion and hands back."""
+    ex = open_security_excursion()
+    assert close_excursion(ex).key == FABLE
+    assert close_excursion(ex).key == FABLE
+
+
+def test_excursion_still_defers_when_sol_is_unavailable():
+    ex = open_security_excursion(available=_unavailable(SOL))
+    assert ex.worker == SONNET
+    assert ex.worker != ex.orchestrator
+    assert ex.verifier != ex.worker
+
+
+def test_excursion_refuses_to_form_when_deferral_is_impossible():
+    """With every deferral target down, the only candidate is the seat holder.
+    Self-performing and self-checking would hand back a security answer
+    carrying a verification it never received, so this stops instead."""
+    with pytest.raises(ExcursionUnavailable, match="cannot be deferred"):
+        open_security_excursion(available=_unavailable(SOL, SONNET))
+
+
+def test_excursion_failure_names_what_to_restore():
+    with pytest.raises(ExcursionUnavailable) as exc:
+        open_security_excursion(available=_unavailable(SOL, SONNET))
+    assert SOL in str(exc.value) and SONNET in str(exc.value)
+
+
+def test_excursion_is_immutable():
+    ex = open_security_excursion()
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        ex.worker = OPUS  # type: ignore[misc]
+
+
+def test_excursion_does_not_touch_the_brain_trust():
+    """The whole point of peeling security off into a side-thread."""
+    from multi_llm.registry import MODE_ROSTERS, peers_for
+
+    ex = open_security_excursion()
+    assert peers_for("adversarial", ex.orchestrator) == \
+        MODE_ROSTERS["adversarial"]["peers"]

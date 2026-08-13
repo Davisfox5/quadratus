@@ -318,34 +318,41 @@ ORCHESTRATOR_CHAIN: List[str] = [
     "claude:opus",
 ]
 
-#: Bench used when a peer is promoted out of the brain trust into the
-#: orchestrator seat. Tried in order; the first not already seated is used.
-PEER_SUBSTITUTES: List[str] = [
-    "claude:sonnet",
-    "openai:gpt-5.6-terra",
-    "grok:grok-4.6",
-]
-
-
 def peers_for(mode: str, orchestrator: str) -> List[str]:
-    """Brain-trust peers for ``mode``, with the orchestrator excluded.
+    """Brain-trust peers for ``mode``.
 
-    The orchestrator supervises the debate and judges which participants are
-    on the right track. A model doing that while also competing in the debate
-    will favour its own line, for the same reason the convergence judge may
-    not be a debater. So when the orchestrator seat is filled by a model that
-    would otherwise be a peer -- which happens whenever the chain falls back
-    to Opus 5 -- that model leaves the brain trust and the bench fills in.
+    The brain trust is fixed. An earlier design recused whoever held the
+    orchestrator seat and promoted a substitute off a bench, on the reasoning
+    that a supervisor should not compete in the debate it supervises. That was
+    the wrong trade twice over: it cost the brain trust its second-strongest
+    member exactly when the primary orchestrator was already unavailable, and
+    the only available substitutes were a tier below the seats they filled.
+    A weaker brain trust is a worse failure than a supervisor with a stake.
+
+    The conflict it was solving is handled where it actually arises instead.
+    Security work is peeled into a bounded excursion (see
+    :mod:`multi_llm.routing`) rather than displacing anyone, and the one place
+    self-preference would concretely change the artifact -- choosing what
+    survives into the final answer -- is closed off by
+    :func:`synthesizer_for`.
     """
-    seated = list(MODE_ROSTERS[mode]["peers"])
-    if orchestrator not in seated:
-        return seated
-    seated.remove(orchestrator)
-    for candidate in PEER_SUBSTITUTES:
-        if candidate not in seated and candidate != orchestrator:
-            seated.append(candidate)
-            break
-    return seated
+    return list(MODE_ROSTERS[mode]["peers"])
+
+
+def synthesizer_for(mode: str, orchestrator: str) -> Optional[str]:
+    """Which peer merges the debate into the final artifact.
+
+    Synthesis is the one step where a model holding two roles could quietly
+    rewrite the outcome in its own favour: it decides what survives. So a
+    peer that is also holding the orchestrator seat is passed over here, even
+    though it keeps its seat in the debate itself.
+
+    Returns None when the mode has no other peer to fall back on, which is the
+    caller's signal that double-hatting is unavoidable and should be surfaced
+    rather than hidden.
+    """
+    candidates = [p for p in MODE_ROSTERS[mode]["peers"] if p != orchestrator]
+    return candidates[0] if candidates else None
 
 
 #: Control-plane roles. Cheap by task shape, not by importance: convergence

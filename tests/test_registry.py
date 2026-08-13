@@ -158,8 +158,8 @@ def test_ledger_extractor_is_not_a_debater_in_any_mode():
 
 from multi_llm.registry import (  # noqa: E402
     ORCHESTRATOR_CHAIN,
-    PEER_SUBSTITUTES,
     peers_for,
+    synthesizer_for,
 )
 
 
@@ -192,26 +192,50 @@ def test_primary_orchestrator_leaves_the_brain_trust_intact():
     assert peers_for("adversarial", "claude:fable") == base
 
 
-def test_fallback_orchestrator_is_removed_from_the_brain_trust():
-    seated = peers_for("adversarial", "claude:opus")
-    assert "claude:opus" not in seated
-
-
-def test_displaced_peer_is_replaced_not_merely_dropped():
+def test_brain_trust_is_fixed_regardless_of_who_orchestrates():
+    """A weaker brain trust is a worse failure than a supervisor with a stake."""
     base = MODE_ROSTERS["adversarial"]["peers"]
-    seated = peers_for("adversarial", "claude:opus")
-    assert len(seated) == len(base)
-    assert seated[-1] in PEER_SUBSTITUTES
+    for orchestrator in ORCHESTRATOR_CHAIN:
+        assert peers_for("adversarial", orchestrator) == base
 
 
-def test_substitute_is_never_already_seated():
+def test_opus_never_leaves_the_brain_trust():
+    for mode, roles in MODE_ROSTERS.items():
+        if "claude:opus" not in roles["peers"]:
+            continue
+        for orchestrator in ORCHESTRATOR_CHAIN:
+            assert "claude:opus" in peers_for(mode, orchestrator), (mode, orchestrator)
+
+
+def test_sonnet_is_never_in_the_brain_trust():
+    """It is a tier below the seats it would fill."""
+    for mode, roles in MODE_ROSTERS.items():
+        assert "claude:sonnet" not in roles["peers"], mode
+        assert "claude:sonnet" not in peers_for(mode, "claude:opus"), mode
+
+
+def test_double_hatted_peer_does_not_synthesise():
+    """Synthesis decides what survives -- the one place a stake changes the
+    artifact, so a peer holding the seat is passed over there and only there."""
+    chosen = synthesizer_for("adversarial", "claude:opus")
+    assert chosen is not None and chosen != "claude:opus"
+    assert chosen in MODE_ROSTERS["adversarial"]["peers"]
+
+
+def test_synthesiser_is_unrestricted_when_the_primary_orchestrates():
+    assert synthesizer_for("adversarial", "claude:fable") == \
+        MODE_ROSTERS["adversarial"]["peers"][0]
+
+
+def test_synthesiser_returns_none_when_double_hatting_is_unavoidable():
+    """Solo mode has one peer; the caller must surface this, not hide it."""
+    assert synthesizer_for("solo", "claude:opus") is None
+
+
+def test_double_hatting_is_confined_to_synthesis_in_every_mode():
+    """The seat holder may debate, but never picks what survives -- unless the
+    mode has nobody else, which the caller is told about explicitly."""
     for mode in MODE_ROSTERS:
         for orchestrator in ORCHESTRATOR_CHAIN:
-            seated = peers_for(mode, orchestrator)
-            assert len(seated) == len(set(seated)), (mode, orchestrator)
-
-
-def test_orchestrator_is_never_seated_in_any_mode_or_chain_position():
-    for mode in MODE_ROSTERS:
-        for orchestrator in ORCHESTRATOR_CHAIN:
-            assert orchestrator not in peers_for(mode, orchestrator)
+            chosen = synthesizer_for(mode, orchestrator)
+            assert chosen != orchestrator, (mode, orchestrator)

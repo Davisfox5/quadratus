@@ -57,7 +57,15 @@ __all__ = [
     "SECURITY_WORK_CHAIN",
     "route_security_work",
     "WorkClass",
+    "Excursion",
+    "ExcursionUnavailable",
+    "open_security_excursion",
+    "close_excursion",
 ]
+
+
+class ExcursionUnavailable(RuntimeError):
+    """No excursion can be formed that both defers the work and verifies it."""
 
 
 class WorkClass:
@@ -196,3 +204,100 @@ def route_security_work(
         if resolve(key) is not None and available(key):
             return key
     return SECURITY_WORK_CHAIN[-1]
+
+
+@dataclass(frozen=True)
+class Excursion:
+    """A bounded side-thread that briefly moves the orchestrator seat.
+
+    A security question arriving mid-session should not reshape the run. It is
+    peeled off into an excursion: the fallback orchestrator takes the seat for
+    this thread only, hands the work to the model the operator prefers for it,
+    verifies the result, writes the outcome to the ledger, and closes. The
+    primary orchestrator resumes on the next segment and reads the outcome
+    from the ledger rather than from a context it was absent for.
+
+    Two properties make this safe enough to leave the brain trust untouched.
+    The excursion is short -- one delegation and one verification, not a
+    debate -- so the acting orchestrator is routing rather than judging peers
+    it competes with. And it is closed-ended by construction: ``close_excursion``
+    is the only way it ends, so a session cannot silently continue under the
+    fallback the way an open-ended handover allowed.
+    """
+
+    reason: str
+    #: Holds the seat for the excursion only.
+    orchestrator: str
+    #: Performs the work. Never the acting orchestrator: deferring is the point.
+    worker: str
+    #: Double-checks the worker's output. Never the worker.
+    verifier: str
+    #: What the seat returns to when this closes.
+    returns_to: str
+
+    def __post_init__(self) -> None:
+        if self.worker == self.orchestrator:
+            raise ValueError(
+                "the acting orchestrator must defer the work, not perform it"
+            )
+        if self.verifier == self.worker:
+            raise ValueError("a worker cannot double-check its own output")
+
+
+def open_security_excursion(
+    *,
+    available: Callable[[str], bool] = _always_available,
+    chain: Optional[List[str]] = None,
+) -> Excursion:
+    """Peel a security question off into its own bounded thread.
+
+    The seat moves to the fallback because the primary's classifiers would
+    refuse to discuss the subject; the work moves to the operator's preferred
+    security model; and the acting orchestrator verifies rather than performs,
+    so the deferral is real and the result is checked by a second model.
+    """
+    order = list(chain if chain is not None else ORCHESTRATOR_CHAIN)
+    seat = orchestrator_seat(security_segment=True, available=available, chain=order)
+    worker = route_security_work(
+        seat.key, work_class=WorkClass.SECURITY, available=available
+    )
+    if worker == seat.key:
+        # Every model the security chain would defer to is unavailable, so the
+        # only candidate left is the one already holding the seat. Deferral and
+        # independent verification are the two things this excursion exists to
+        # guarantee, and neither survives here. Fabricating an excursion that
+        # quietly self-performs and self-checks would be worse than stopping:
+        # the operator would see a security answer carrying a verification it
+        # never actually received.
+        raise ExcursionUnavailable(
+            f"security work cannot be deferred: every model in "
+            f"SECURITY_WORK_CHAIN is unavailable except {seat.key}, which is "
+            f"acting as orchestrator. Restore one of "
+            f"{', '.join(k for k in SECURITY_WORK_CHAIN if k != seat.key)} "
+            f"or handle this item outside the run."
+        )
+    # The acting orchestrator double-checks. It did not author the answer, so
+    # this is review rather than self-review.
+    verifier = seat.key
+    return Excursion(
+        reason=SeatReason.DELEGATED_SECURITY,
+        orchestrator=seat.key,
+        worker=worker,
+        verifier=verifier,
+        returns_to=order[0],
+    )
+
+
+def close_excursion(excursion: Excursion) -> Seat:
+    """End the excursion and return the seat to the primary orchestrator.
+
+    Deliberately unconditional. The failure this exists to prevent is a
+    session that degrades once and never recovers, so closing is not
+    contingent on the excursion having succeeded -- a failed security lookup
+    still ends the excursion, records that it failed, and hands the seat back.
+    """
+    return Seat(
+        excursion.returns_to,
+        SeatReason.PRIMARY,
+        reverts_at_segment_end=False,
+    )
