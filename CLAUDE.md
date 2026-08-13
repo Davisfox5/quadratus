@@ -28,7 +28,21 @@ Key design decisions already settled:
 - **Security work is peeled into a bounded excursion**: Opus takes the seat,
   GPT-5.6 Sol does the work, Opus verifies, the excursion closes, Fable
   resumes. Never an open-ended handover.
-- **Protecting Fable's context is the binding constraint** on the whole
-  system. Nothing raw reaches it; Haiku digests first.
+- **Three memory scopes, one per role.** The orchestrator persists for the
+  whole session; a brain-trust member keeps full working memory for one task
+  and is wiped when it closes; worker bees keep nothing. Continuity where a
+  thread must be held, isolation where independence is worth more.
+- **A summary is an index, never a replacement.** Raw output is written to the
+  artifact store and kept; summaries carry pointers, and any model can fetch
+  the original when a decision turns on a detail. An earlier version of this
+  file said "nothing raw reaches Fable" -- that was wrong, and it is the one
+  design error worth remembering, because a mandatory lossy hop loses specifics
+  irrecoverably.
+- **The ledger is append-only and never re-summarised.** Summarising a summary
+  compounds loss. Reasoning is carried, not just conclusions. Dead ends are
+  carried as distilled lessons, never as raw transcripts.
+- **Invariants live outside the ledger** and are re-emitted verbatim on every
+  render. A rule findable only by reading the log will eventually be
+  summarised out of existence.
 - Model tables are seeds, not truth. The lineup churns monthly — prefer a
   probe against the installed CLIs over anything hardcoded.
