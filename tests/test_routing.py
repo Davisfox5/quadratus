@@ -9,6 +9,7 @@ import pytest
 from multi_llm.registry import ORCHESTRATOR_CHAIN
 from multi_llm.routing import (
     SECURITY_WORK_CHAIN,
+    OrchestratorUnavailable,
     Seat,
     SeatReason,
     WorkClass,
@@ -43,10 +44,11 @@ def test_security_segment_yields_the_seat():
     assert seat.reason == SeatReason.DELEGATED_SECURITY
 
 
-def test_exhausted_primary_falls_back():
-    seat = orchestrator_seat(available=_unavailable(FABLE))
-    assert seat.key == OPUS
-    assert seat.reason == SeatReason.FALLBACK_UNAVAILABLE
+def test_exhausted_primary_halts_the_run():
+    """Fable is a hard dependency: it is the only participant that persists
+    across the session, so substituting it silently changes the run."""
+    with pytest.raises(OrchestratorUnavailable, match="cannot continue"):
+        orchestrator_seat(available=_unavailable(FABLE))
 
 
 # -- the bug this module exists to fix ---------------------------------------
@@ -69,17 +71,16 @@ def test_security_delegation_is_marked_as_reverting():
     assert orchestrator_seat(security_segment=True).reverts_at_segment_end
 
 
-def test_availability_fallback_does_not_revert_at_segment_end():
-    """A spent window does not refill because the next item is about CSS."""
-    seat = orchestrator_seat(available=_unavailable(FABLE))
-    assert not seat.reverts_at_segment_end
+def test_halt_message_tells_the_operator_what_to_do():
+    with pytest.raises(OrchestratorUnavailable) as exc:
+        orchestrator_seat(available=_unavailable(FABLE))
+    assert "window" in str(exc.value)
 
 
-def test_availability_fallback_reverts_once_the_window_returns():
-    spent = orchestrator_seat(available=_unavailable(FABLE))
-    recovered = orchestrator_seat()
-    assert spent.key == OPUS
-    assert recovered.key == FABLE
+def test_the_seat_never_leaves_the_primary_except_for_security():
+    """The only non-primary seating path left."""
+    assert orchestrator_seat().is_primary
+    assert not orchestrator_seat(security_segment=True).is_primary
 
 
 def test_seat_is_immutable():
@@ -96,16 +97,14 @@ def test_security_segment_skips_primary_even_when_it_is_available():
     assert seat.key != FABLE
 
 
-def test_security_segment_with_fallback_also_down_still_seats_someone():
-    """A degraded orchestrator is recoverable; no orchestrator is not."""
-    seat = orchestrator_seat(security_segment=True, available=_unavailable(FABLE, OPUS))
-    assert seat.key is not None
-    assert seat.reason == SeatReason.FALLBACK_UNAVAILABLE
+def test_security_segment_with_no_deputy_available_halts():
+    with pytest.raises(ExcursionUnavailable, match="no deputy"):
+        orchestrator_seat(security_segment=True, available=_unavailable(FABLE, OPUS))
 
 
-def test_everything_unavailable_still_returns_a_seat():
-    seat = orchestrator_seat(available=lambda _: False)
-    assert seat.key in ORCHESTRATOR_CHAIN
+def test_everything_unavailable_halts_rather_than_degrading():
+    with pytest.raises(OrchestratorUnavailable):
+        orchestrator_seat(available=lambda _: False)
 
 
 def test_empty_chain_is_rejected():
@@ -116,6 +115,10 @@ def test_empty_chain_is_rejected():
 def test_custom_chain_is_honoured():
     seat = orchestrator_seat(chain=[SONNET, OPUS])
     assert seat.key == SONNET and seat.is_primary
+
+
+def test_a_security_deputy_always_reverts():
+    assert orchestrator_seat(security_segment=True).reverts_at_segment_end
 
 
 def test_availability_is_not_called_when_primary_is_fine():
@@ -196,7 +199,7 @@ def test_seat_type_is_a_seat():
 
 from multi_llm.routing import (  # noqa: E402
     Excursion,
-    ExcursionUnavailable,
+    ExcursionUnavailable,  # noqa: F811
     close_excursion,
     open_security_excursion,
 )

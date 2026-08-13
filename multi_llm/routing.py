@@ -2,13 +2,11 @@
 
 Two problems live here, and they share a fix.
 
-**The orchestrator seat.** Fable 5 holds it, but has to yield it in two very
-different situations: a security-classified segment, where its classifiers
-would refuse to discuss the project it is supervising; and window exhaustion
-or an outage, where it simply is not there. An earlier design handed the seat
-over as a one-way assignment, which meant nothing ever handed it back -- once
-a single security question moved the seat to the fallback, the fallback kept
-it for the rest of the session.
+**The orchestrator seat.** Fable 5 holds it, and yields it only for a
+security-classified segment, where its classifiers would refuse to discuss the
+project it is supervising. An earlier design handed the seat over as a one-way
+assignment, which meant nothing ever handed it back -- once a single security
+question moved the seat, the deputy kept it for the rest of the session.
 
 The fix is to stop storing who holds the seat. :func:`orchestrator_seat`
 computes the holder from the segment in front of it, so reversion is not a
@@ -22,11 +20,15 @@ the compaction design already needs, doing double duty.
 
 The two yield reasons revert differently, which is why they are distinct:
 
-* A security delegation is scoped to one segment and reverts at its end.
-* An availability fallback persists -- a spent window does not refill because
-  the next work item is about CSS -- and reverts only when a liveness check
-  says the primary is back. Claude subscription windows roll over on their own
-  schedule, so this is worth re-checking periodically rather than once.
+There is exactly one way for anyone other than the primary to hold the seat:
+a security excursion, scoped to one segment, which reverts at its end.
+
+An unavailable primary is not a seating problem at all -- it halts the run.
+The orchestrator is the only participant that persists across the session,
+holding the goal, the policy it authored, and the record of what has been
+decided. Debaters are re-invoked fresh each round and lose nothing by being
+swapped. Substituting the orchestrator would quietly turn the run into a
+different run, so :class:`OrchestratorUnavailable` is raised instead.
 
 **Work routing.** Separately from who supervises, security-classified *work*
 is routed by operator preference to GPT-5.6 Sol. This is experience-based
@@ -68,6 +70,19 @@ class ExcursionUnavailable(RuntimeError):
     """No excursion can be formed that both defers the work and verifies it."""
 
 
+class OrchestratorUnavailable(RuntimeError):
+    """The primary orchestrator is not available, so the run cannot proceed.
+
+    Deliberately fatal. The orchestrator is the only participant that persists
+    across the whole session -- it holds the goal, the policy it authored, and
+    the thread of what has already been decided. Debaters are re-invoked fresh
+    each round and lose nothing by being swapped; the orchestrator cannot be
+    swapped without the run silently becoming a different run. Continuing
+    under a substitute would produce a worse artifact without saying so, which
+    is the failure mode this whole design exists to avoid.
+    """
+
+
 class WorkClass:
     """Classification of a work item, produced by the spec or the classifier."""
 
@@ -82,7 +97,8 @@ class SeatReason:
     PRIMARY = "primary"
     #: Yielded for this segment only because the work is security-classified.
     DELEGATED_SECURITY = "delegated-security"
-    #: Yielded because the preferred orchestrator is unavailable.
+    #: Retained for reading historical run logs. No longer produced: an
+    #: unavailable primary halts the run rather than being substituted for.
     FALLBACK_UNAVAILABLE = "fallback-unavailable"
 
 
@@ -98,8 +114,8 @@ class Seat:
     key: str
     reason: str
     #: True when this holder gives the seat back at the end of the segment.
-    #: Availability fallbacks do not: a spent window does not refill because
-    #: the next work item happens to be unclassified.
+    #: Always true for a security deputy, which is now the only way anyone
+    #: other than the primary holds the seat at all.
     reverts_at_segment_end: bool
 
     @property
@@ -132,9 +148,12 @@ def orchestrator_seat(
         chain: Override the seat preference order, primary first.
 
     Returns:
-        The :class:`Seat` for this segment. Never None: the last chain entry
-        is seated even if it reports unavailable, because a run with a
-        degraded orchestrator is recoverable and a run with none is not.
+        The :class:`Seat` for this segment.
+
+    Raises:
+        OrchestratorUnavailable: if the primary is unavailable outside a
+            security segment. There is no substitution path: the run halts.
+        ExcursionUnavailable: if a security segment has no deputy available.
     """
     order = list(chain if chain is not None else ORCHESTRATOR_CHAIN)
     if not order:
@@ -142,33 +161,26 @@ def orchestrator_seat(
 
     primary = order[0]
 
-    # A security segment skips the primary regardless of its availability,
-    # then falls through the same liveness filtering as anyone else.
-    candidates = order[1:] if security_segment else order
-
-    for key in candidates:
-        if not available(key):
-            continue
-        if key == primary:
-            return Seat(key, SeatReason.PRIMARY, reverts_at_segment_end=False)
-        reason = (
-            SeatReason.DELEGATED_SECURITY
-            if security_segment
-            else SeatReason.FALLBACK_UNAVAILABLE
-        )
-        # A security delegation is scoped to the segment. An availability
-        # fallback is not, and is re-tested when liveness is re-checked.
-        return Seat(
-            key,
-            reason,
-            reverts_at_segment_end=(reason == SeatReason.DELEGATED_SECURITY),
+    if not security_segment:
+        if available(primary):
+            return Seat(primary, SeatReason.PRIMARY, reverts_at_segment_end=False)
+        raise OrchestratorUnavailable(
+            f"{primary} is unavailable and the run cannot continue without it. "
+            f"Wait for the subscription window to roll over, or resume the "
+            f"session once it is reachable."
         )
 
-    # Everything reported unavailable. Seat the last resort rather than
-    # stalling: the caller can surface the degradation, but a run with no
-    # orchestrator cannot make progress at all.
-    last = candidates[-1] if candidates else primary
-    return Seat(last, SeatReason.FALLBACK_UNAVAILABLE, reverts_at_segment_end=False)
+    # A security segment skips the primary by design: its classifiers would
+    # refuse to discuss the subject it is supervising. The deputy holds the
+    # seat for that thread only.
+    for key in order[1:]:
+        if available(key):
+            return Seat(key, SeatReason.DELEGATED_SECURITY, reverts_at_segment_end=True)
+
+    raise ExcursionUnavailable(
+        f"no deputy is available to take a security segment; "
+        f"{primary} cannot, and every alternative in the chain is down."
+    )
 
 
 #: Where security-classified work goes, in preference order.
