@@ -41,13 +41,27 @@ def test_models_for_filters_by_provider():
 
 
 def test_min_context_filter_selects_the_widest_windows():
-    wide = {m.key for m in models_for(Capability.LONG_CONTEXT, min_context=2000 * 1024)}
-    assert wide == {"grok:grok-4.20"}
+    wide = {m.key for m in models_for(Capability.LONG_CONTEXT, min_context=1000 * 1024)}
+    assert wide == {"openai:gpt-5.6-sol", "gemini:gemini-3.1-pro", "grok:grok-4.3"}
 
 
-def test_grok_420_has_the_largest_window():
+def test_grok_420_advertises_the_largest_window():
     widest = max(ROSTER, key=lambda m: m.context)
     assert widest.key == "grok:grok-4.20"
+
+
+def test_the_largest_advertised_window_is_not_a_long_context_candidate():
+    """An unverified 2M claim would otherwise make it the default pick for the
+    work least able to survive the claim being wrong."""
+    assert Capability.LONG_CONTEXT not in resolve("grok:grok-4.20").caps
+    assert "grok:grok-4.20" not in {m.key for m in models_for(Capability.LONG_CONTEXT)}
+
+
+def test_long_context_candidates_are_all_independently_plausible():
+    """Every remaining candidate's window is corroborated by something other
+    than the vendor's own marketing."""
+    for spec in models_for(Capability.LONG_CONTEXT):
+        assert spec.context <= 1100 * 1024, spec.key
 
 
 def test_best_for_returns_none_for_unknown_capability():

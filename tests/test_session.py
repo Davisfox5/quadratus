@@ -8,10 +8,13 @@ from multi_llm.artifacts import ArtifactStore
 from multi_llm.registry import MODE_ROSTERS
 from multi_llm.routing import OrchestratorUnavailable, WorkClass
 from multi_llm.session import Complexity, Session, SessionConfig, TaskSpec
+from multi_llm.task_kinds import MAX_TASK_LINES, TaskKind
 from multi_llm.workers import WorkerBudget
 
 FABLE = "claude:fable"
 SOL = "openai:gpt-5.6-sol"
+OPUS = "claude:opus"
+GEMINI = "gemini:gemini-3.1-pro"
 
 
 class Recorder:
@@ -226,6 +229,117 @@ def test_fable_never_leads_a_task(store, rec):
 def test_brain_trust_matches_the_mode_roster(store, rec):
     s = _session(store, rec)
     assert s.brain_trust == MODE_ROSTERS["adversarial"]["peers"]
+
+
+# -- task-kind routing inside the loop ---------------------------------------
+
+
+def test_an_unlabelled_task_still_rotates(store, rec):
+    s = _session(store, rec)
+    leads = [
+        s.run_task(TaskSpec(f"t{i}", "work", complexity=Complexity.SIMPLE)).author
+        for i in range(len(s.brain_trust))
+    ]
+    assert len(set(leads)) == len(s.brain_trust)
+
+
+def test_a_pinned_kind_overrides_the_rotation(store, rec):
+    s = _session(store, rec)
+    for i in range(len(s.brain_trust) + 1):
+        got = s.run_task(
+            TaskSpec(f"t{i}", "root-cause the crash", complexity=Complexity.SIMPLE,
+                     kind=TaskKind.DEBUG)
+        )
+        assert got.author == OPUS
+
+
+def test_pinning_does_not_stall_the_rotation_for_other_work(store, rec):
+    """A model pinned for its own kind must not also keep its queue position,
+    or the scoreboard the rotation exists to fill comes out skewed."""
+    s = _session(store, rec)
+    trust = s.brain_trust
+    assert s.run_task(TaskSpec("t1", "x", complexity=Complexity.SIMPLE)).author == trust[0]
+    s.run_task(TaskSpec("t2", "debug it", complexity=Complexity.SIMPLE,
+                        kind=TaskKind.DEBUG))
+    # The pinned task consumed trust[1]'s turn. If it had not, this would be
+    # trust[1] rather than trust[2].
+    assert s.run_task(TaskSpec("t3", "y", complexity=Complexity.SIMPLE)).author == trust[2]
+
+
+def test_mobile_work_never_lands_on_the_excluded_model(store, rec):
+    s = _session(store, rec)
+    for i in range(len(s.brain_trust) + 1):
+        got = s.run_task(
+            TaskSpec(f"t{i}", "add the settings screen",
+                     complexity=Complexity.SIMPLE, kind=TaskKind.MOBILE)
+        )
+        assert got.author != GEMINI
+
+
+def test_review_work_always_draws_the_counterpart_reviewer(store, rec):
+    """One reviewer is not a cheaper review; it is half the coverage."""
+    s = _session(store, rec)
+    spec = TaskSpec("t1", "review the diff", complexity=Complexity.SIMPLE,
+                    kind=TaskKind.REVIEW)
+    lead = SOL
+    assert OPUS in s.collaborators_for(spec, lead)
+
+
+def test_kind_guidance_reaches_the_lead(store, rec):
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "make it faster", complexity=Complexity.SIMPLE,
+                        kind=TaskKind.PERF))
+    lead_prompts = [c["prompt"] for c in rec.calls if "You are leading" in c["prompt"]]
+    assert lead_prompts
+    assert any("profiler" in p for p in lead_prompts)
+
+
+def test_a_kind_with_no_hazards_adds_nothing_to_the_prompt(store, rec):
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    lead_prompts = [c["prompt"] for c in rec.calls if "You are leading" in c["prompt"]]
+    assert all("known failure modes" not in p for p in lead_prompts)
+
+
+# -- the size ceiling --------------------------------------------------------
+
+
+def test_the_size_ceiling_reaches_every_decomposition_prompt(store):
+    rec = Recorder(next_tasks=["a", "b", "DONE"])
+    s = _session(store, rec)
+    s.run()
+    assert all(str(MAX_TASK_LINES) in p for p in rec.prompts_to(FABLE))
+
+
+def test_the_orchestrator_may_label_the_task_kind(store):
+    rec = Recorder(next_tasks=["KIND: debug\nfind the null deref", "DONE"])
+    s = _session(store, rec)
+    s.run()
+    assert s.history[0].author == OPUS
+
+
+def test_a_kind_label_is_stripped_from_the_description(store):
+    rec = Recorder(next_tasks=["KIND: docs\nwrite the README", "DONE"])
+    s = _session(store, rec)
+    spec = s.next_task()
+    assert spec.description == "write the README"
+    assert spec.kind == TaskKind.DOCS
+
+
+def test_an_unknown_kind_label_degrades_rather_than_failing_the_round(store):
+    """A mislabelled task costs a routing preference; a rejected round costs
+    the task."""
+    rec = Recorder(next_tasks=["KIND: astrology\ndo the thing", "DONE"])
+    s = _session(store, rec)
+    spec = s.next_task()
+    assert spec.kind == TaskKind.GENERAL
+    assert spec.description == "do the thing"
+
+
+def test_an_unlabelled_reply_is_taken_whole(store):
+    rec = Recorder(next_tasks=["just do the thing", "DONE"])
+    s = _session(store, rec)
+    assert s.next_task().description == "just do the thing"
 
 
 # -- worker budget is enforced through the session ---------------------------

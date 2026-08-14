@@ -46,3 +46,24 @@ Key design decisions already settled:
   summarised out of existence.
 - Model tables are seeds, not truth. The lineup churns monthly — prefer a
   probe against the installed CLIs over anything hardcoded.
+- **Task size beats model choice.** Review quality falls by roughly an order
+  of magnitude between a small diff and a large one — a wider gap than any
+  gap between reviewers. The decomposition prompt therefore carries a hard
+  size ceiling (`task_kinds.MAX_TASK_LINES`), and that is the single
+  highest-value instruction in the loop.
+- **Routing opinions live apart from the roster.** `registry.py` says what
+  shape a model is; `task_kinds.py` says what to do with that. The second
+  ages far faster than the first and every entry carries its evidence.
+- **Low confidence rotates on purpose.** A routing entry with no measured
+  basis does not pin a model, because pinning on a hunch freezes the hunch
+  and destroys the head-to-head data that would have corrected it. An empty
+  `prefer` is a statement, not an omission.
+- **Some work is gated, not routed.** Where every model is bad at something —
+  concurrency, performance — there is nobody to prefer, so the policy attaches
+  a deterministic check instead of a model. Performance additionally names a
+  profiler as the first move.
+- **Never one reviewer.** The two pinned reviewers fail in opposite directions
+  (recall-leaning vs precision-leaning), so a review task always draws its
+  counterpart even at the lowest complexity.
+- Grok 4.20's 2M window is unverified vendor marketing and deliberately does
+  not carry `LONG_CONTEXT`. Restore the tag if it passes the probe at depth.

@@ -221,9 +221,16 @@ ROSTER: List[ModelSpec] = [
     ),
     _spec(
         "grok", "grok-4.20", "Grok 4.20", 2000 * K, "moderate",
-        [Capability.LONG_CONTEXT, Capability.MULTI_AGENT],
-        "Largest window in the fleet at 2M -- twice the next best. Top "
-        "priority for the long-context probe, and unassigned until it passes.",
+        [Capability.MULTI_AGENT],
+        "Advertises the largest window in the fleet at 2M, and deliberately "
+        "does not carry LONG_CONTEXT. The figure is vendor marketing with no "
+        "independent corroboration: the model is absent from the retrieval "
+        "benchmarks that would test it, and the same vendor's own flagship "
+        "shipped with a 500K window, which is hard to reconcile with a 2M "
+        "capability sitting elsewhere in the lineup. Carrying the tag would "
+        "make it the default pick for exactly the work least able to survive "
+        "the claim being wrong. Restore the tag if it passes the long-context "
+        "probe at depth, and not before.",
     ),
 ]
 

@@ -36,11 +36,31 @@ from .routing import (
     orchestrator_seat,
     route_security_work,
 )
+from .task_kinds import MAX_TASK_LINES, ROUTING, TaskKind, guidance_for, policy_for
+from .task_kinds import route as route_kind
 from .workers import WorkerBudget, WorkerPool
 
 log = logging.getLogger(__name__)
 
 __all__ = ["Complexity", "TaskSpec", "Session", "SessionConfig"]
+
+
+#: Emitted on every decomposition prompt.
+#:
+#: This is the highest-value instruction in the whole loop, and it is about
+#: size rather than about quality. Review F1 measured 0.657 on diffs under ten
+#: lines and 0.043 on diffs over a hundred and fifty -- an order of magnitude,
+#: which is far wider than the gap between any two reviewers we could pick
+#: between. A task scoped too large has therefore already lost most of the
+#: review that was supposed to catch its defects, and no downstream choice
+#: recovers it. Splitting is the only intervention that works.
+_SIZE_CEILING = (
+    f"Size the task so it produces at most ~{MAX_TASK_LINES} lines of diff. If "
+    f"the obvious next step is bigger than that, name the first slice of it "
+    f"instead and leave the rest for the next round. Review quality falls by "
+    f"roughly an order of magnitude across this threshold, so a task scoped "
+    f"too large is one whose defects will not be found."
+)
 
 
 class Complexity:
@@ -74,6 +94,9 @@ class TaskSpec:
     description: str
     complexity: str = Complexity.STANDARD
     work_class: str = WorkClass.GENERAL
+    #: What kind of work this is, which may pin the lead. See
+    #: :mod:`multi_llm.task_kinds`; most kinds express no preference and rotate.
+    kind: str = TaskKind.GENERAL
     #: Force a particular lead. Normally left to rotation.
     lead: Optional[str] = None
 
@@ -124,23 +147,50 @@ class Session:
         return peers_for(self.config.mode, orchestrator_seat().key)
 
     def _pick_lead(self, spec: TaskSpec) -> str:
-        """Rotate the lead across the brain trust.
+        """Rotate the lead across the brain trust, then let the task kind speak.
 
         Rotation spreads load across separate subscription windows and, as a
         side effect, produces the comparison data that tells you which model
-        actually leads best on your work -- exploration at no extra cost.
+        actually leads best on your work -- exploration at no extra cost. That
+        exploration is worth keeping, so a task kind only overrides it where
+        there is measured reason to; most kinds express no preference and the
+        rotation stands. See :mod:`multi_llm.task_kinds`.
+
+        The rotation counter advances either way. If a pinned kind consumed a
+        turn without advancing it, one model would be pinned for its own kind
+        *and* keep its place in the general queue, which would skew the
+        scoreboard the rotation exists to fill.
         """
         if spec.lead:
             return spec.lead
         trust = self.brain_trust
-        lead = trust[self._rotation % len(trust)]
+        rotated = trust[self._rotation % len(trust)]
         self._rotation += 1
-        return lead
+        return route_kind(
+            spec.kind,
+            default=rotated,
+            candidates=trust,
+            available=self._available,
+        )
 
     def collaborators_for(self, spec: TaskSpec, lead: str) -> List[str]:
-        """Which other peers help with this task."""
+        """Which other peers help with this task.
+
+        Complexity sets the count, with one exception: review work always draws
+        its counterpart reviewer, even at SIMPLE. The two pinned reviewers were
+        chosen because they fail in opposite directions -- one catches ~70% of
+        known issues but only ~32% of its comments are worth keeping, the other
+        is the mirror image -- so a single reviewer is not a cheaper review, it
+        is a review missing half its coverage. Buying that back is the one
+        place an extra invocation is not optional.
+        """
         others = [p for p in self.brain_trust if p != lead]
-        return others[: Complexity.collaborator_count(spec.complexity, len(others))]
+        chosen = others[: Complexity.collaborator_count(spec.complexity, len(others))]
+        if spec.kind == TaskKind.REVIEW:
+            for peer in policy_for(TaskKind.REVIEW).prefer:
+                if peer != lead and peer in others and peer not in chosen:
+                    chosen.append(peer)
+        return chosen
 
     # -- one task ------------------------------------------------------------
     def run_task(self, spec: TaskSpec) -> TaskSummary:
@@ -191,15 +241,18 @@ class Session:
                 current=(
                     "Name the single next task, or reply exactly DONE if the goal "
                     "is met. Use the artifact pointers above if a detail matters."
+                    f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}"
                 ),
                 recent=self.config.recent_entries,
             ),
         )
         if reply.strip().upper().startswith("DONE"):
             return None
+        kind, description = _parse_kind(reply)
         return TaskSpec(
             task_id=f"t{len(self.history) + 1}",
-            description=reply.strip(),
+            description=description,
+            kind=kind,
         )
 
     def run(self, *, max_tasks: int = 20) -> List[TaskSummary]:
@@ -218,10 +271,23 @@ class Session:
 
     # -- prompts -------------------------------------------------------------
     def _lead_prompt(self, spec: TaskSpec) -> str:
-        return (
-            f"{self.memory.render(current=spec.description, recent=self.config.recent_entries)}\n\n"
-            "You are leading this task. Produce the complete work."
-        )
+        parts = [
+            self.memory.render(
+                current=spec.description, recent=self.config.recent_entries
+            ),
+            "You are leading this task. Produce the complete work.",
+        ]
+        guidance = guidance_for(spec.kind)
+        if guidance:
+            # Stated as requirements rather than advice. These exist because
+            # models measurably do badly at the thing each one guards, so a
+            # hint the lead is free to skip would not survive contact.
+            parts.append(
+                "This kind of work carries known failure modes. Treat each of "
+                "these as a requirement:\n"
+                + "\n".join(f"- {g}" for g in guidance)
+            )
+        return "\n\n".join(parts)
 
     def _collaborator_prompt(self, spec: TaskSpec, draft: str, peer: str) -> str:
         label = resolve(peer)
@@ -247,6 +313,36 @@ class Session:
             "Write the lesson, not the transcript.",
         )
         return _parse_closeout(reply)
+
+
+#: Asks the orchestrator to label the task so :mod:`multi_llm.task_kinds` can
+#: act on it. Optional by design -- an unlabelled task rotates, which is what
+#: most labels would have produced anyway.
+_KIND_REQUEST = (
+    "Begin your reply with a single line 'KIND: <kind>' choosing from: "
+    + ", ".join(sorted(ROUTING)) + ". Then the task on the following line. "
+    "Omit the line if none fits."
+)
+
+
+def _parse_kind(reply: str) -> tuple:
+    """Split an optional leading ``KIND:`` line off the orchestrator's reply.
+
+    Tolerant in the same way close-out parsing is: an unrecognised or absent
+    kind degrades to GENERAL rather than failing the round. A mislabelled task
+    costs a routing preference; a rejected round costs the task.
+    """
+    text = (reply or "").strip()
+    lines = text.splitlines()
+    if lines and lines[0].strip().upper().startswith("KIND:"):
+        claimed = lines[0].split(":", 1)[1].strip().lower()
+        rest = "\n".join(lines[1:]).strip()
+        if claimed in ROUTING and rest:
+            return claimed, rest
+        if rest:
+            log.debug("orchestrator proposed unknown task kind %r", claimed)
+            return TaskKind.GENERAL, rest
+    return TaskKind.GENERAL, text
 
 
 def _parse_closeout(reply: str):
