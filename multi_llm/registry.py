@@ -285,11 +285,25 @@ REFUSAL_CHAIN: List[str] = [
 #: added peer costs another review pass and fattens every synthesis prompt.
 MODE_ROSTERS: Dict[str, Dict[str, List[str]]] = {
     "adversarial": {
-        "peers": ["claude:opus", "openai:gpt-5.6-sol", "gemini:gemini-3.1-pro"],
-        # Paired deliberately: the two anchor opposite ends of the
-        # precision/recall tradeoff, so together they cover what neither does.
+        # The brain trust: one model per vendor, which is the point. Four
+        # independent reads is the whole reason this system exists rather than
+        # a single strong model in a loop, and dropping to three would have
+        # meant the cheapest voice to cut was also the only one from its
+        # vendor. Grok 4.6 earns its seat on independence and on turn
+        # efficiency -- roughly 53 turns and 0.5B tokens against ~103 and 2.0B
+        # for the strongest coder on comparable work -- not on peak quality,
+        # where it is the weakest of the four.
+        "peers": ["claude:opus", "openai:gpt-5.6-sol",
+                  "gemini:gemini-3.1-pro", "grok:grok-4.6"],
+        # A subset, not a shortfall. Review is the one role with measured
+        # data, and it pins the two models that fail in opposite directions:
+        # ~70% recall / ~32% precision against ~39% precision / ~55% recall.
+        # Adding a third reviewer with no measured profile would cost an
+        # invocation to dilute a pairing chosen precisely for its shape.
         "reviewers": ["openai:gpt-5.6-sol", "claude:opus"],
-        # Once per run, so a fourth voice is cheap here and only here.
+        # Planning runs once per run, so it is the cheapest place to be
+        # inclusive. It happens to equal the brain trust today; that is a
+        # coincidence of the roster size, not a constraint worth enforcing.
         "planners": ["claude:opus", "openai:gpt-5.6-sol",
                      "gemini:gemini-3.1-pro", "grok:grok-4.6"],
     },

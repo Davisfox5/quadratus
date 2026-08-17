@@ -129,9 +129,24 @@ def test_adversarial_pairs_the_precision_and_recall_reviewers():
     assert reviewers == {"claude:opus", "openai:gpt-5.6-sol"}
 
 
-def test_planning_roster_is_widest_since_it_runs_once_per_run():
-    adversarial = MODE_ROSTERS["adversarial"]
-    assert len(adversarial["planners"]) > len(adversarial["peers"])
+def test_planning_is_never_narrower_than_the_brain_trust():
+    """Planning runs once per run, so it is the cheapest place to be
+    inclusive. Excluding a peer from planning the work it will then debate
+    would be the expensive kind of saving."""
+    for mode, roles in MODE_ROSTERS.items():
+        assert set(roles["peers"]) <= set(roles["planners"]), mode
+
+
+def test_the_brain_trust_carries_one_model_per_vendor():
+    """Four independent reads is why this system exists rather than one strong
+    model in a loop; two peers from one vendor would not be independent."""
+    peers = MODE_ROSTERS["adversarial"]["peers"]
+    providers = [resolve(p).provider for p in peers]
+    assert sorted(providers) == ["claude", "gemini", "grok", "openai"]
+
+
+def test_grok_is_a_full_brain_trust_member_not_a_planner_only_guest():
+    assert "grok:grok-4.6" in MODE_ROSTERS["adversarial"]["peers"]
 
 
 def test_solo_mode_has_no_reviewers():
