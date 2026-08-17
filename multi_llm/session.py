@@ -33,8 +33,9 @@ from .registry import peers_for, resolve
 from .routing import (
     Seat,
     WorkClass,
+    close_excursion,
+    open_security_excursion,
     orchestrator_seat,
-    route_security_work,
 )
 from .task_kinds import MAX_TASK_LINES, ROUTING, TaskKind, guidance_for, policy_for
 from .task_kinds import route as route_kind
@@ -99,6 +100,18 @@ class TaskSpec:
     kind: str = TaskKind.GENERAL
     #: Force a particular lead. Normally left to rotation.
     lead: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        # ``kind`` and ``work_class`` grew up in different modules and both can
+        # say "security". Keeping them synchronised here means no caller can
+        # construct a task that one security mechanism sees and the other
+        # misses -- which is exactly the bug this guards against: the excursion
+        # machinery watching work_class while the orchestrator's label only
+        # ever set kind.
+        if self.kind == TaskKind.SECURITY:
+            self.work_class = WorkClass.SECURITY
+        elif self.work_class == WorkClass.SECURITY and self.kind == TaskKind.GENERAL:
+            self.kind = TaskKind.SECURITY
 
 
 @dataclass
@@ -184,7 +197,9 @@ class Session:
         is a review missing half its coverage. Buying that back is the one
         place an extra invocation is not optional.
         """
-        others = [p for p in self.brain_trust if p != lead]
+        # A collaborator that is down is not a collaborator; skipping it here
+        # beats failing the task mid-flight when its invocation errors.
+        others = [p for p in self.brain_trust if p != lead and self._available(p)]
         chosen = others[: Complexity.collaborator_count(spec.complexity, len(others))]
         if spec.kind == TaskKind.REVIEW:
             for peer in policy_for(TaskKind.REVIEW).prefer:
@@ -195,11 +210,10 @@ class Session:
     # -- one task ------------------------------------------------------------
     def run_task(self, spec: TaskSpec) -> TaskSummary:
         """Work one task to completion and fold it into the ledger."""
-        lead = self._pick_lead(spec)
         if spec.work_class == WorkClass.SECURITY:
-            lead = route_security_work(
-                lead, work_class=WorkClass.SECURITY, available=self._available
-            )
+            return self._run_security_task(spec)
+
+        lead = self._pick_lead(spec)
         collaborators = self.collaborators_for(spec, lead)
 
         task = TaskMemory(spec.task_id, lead, self.store)
@@ -226,6 +240,56 @@ class Session:
         self.history.append(summary)
         return summary
 
+    def _run_security_task(self, spec: TaskSpec) -> TaskSummary:
+        """Work a security-classified task inside a bounded excursion.
+
+        The settled shape, now actually wired into the loop rather than
+        existing alongside it: the deputy takes the seat for this thread only,
+        the operator's preferred security model does the work, the deputy
+        verifies -- never the worker checking itself -- and the excursion
+        closes unconditionally. The primary orchestrator is not invoked at any
+        point inside the task; it learns the outcome from the ledger entry,
+        which is the continuity mechanism the excursion design already
+        specified.
+
+        The rotation counter is deliberately not consulted or advanced:
+        security work was never the rotation's to give out, so it neither
+        consumes anyone's turn nor skews the scoreboard.
+        """
+        excursion = open_security_excursion(available=self._available)
+        try:
+            task = TaskMemory(spec.task_id, excursion.worker, self.store)
+            task.record("user", spec.description)
+
+            draft = self.invoke(excursion.worker, self._lead_prompt(spec))
+            task.record("assistant", draft)
+            task.keep(draft, kind="draft")
+
+            # Mandatory, not complexity-scaled: an unverified security answer
+            # is the failure the excursion exists to prevent, so SIMPLE does
+            # not buy the verification off.
+            verdict = self.invoke(
+                excursion.verifier,
+                self._verifier_prompt(spec, draft, excursion.verifier),
+            )
+            task.record("assistant", f"[{excursion.verifier}] {verdict}")
+            task.keep(verdict, kind=f"verify:{excursion.verifier}")
+
+            summary_text, reasoning, dead_ends = self._close_out(
+                excursion.worker, spec, task
+            )
+            summary = task.close(
+                summary=summary_text, reasoning=reasoning, dead_ends=dead_ends
+            )
+            self.memory.absorb(summary)
+            self.history.append(summary)
+            return summary
+        finally:
+            # Unconditional by design: a failed security lookup still ends the
+            # excursion and hands the seat back rather than leaving the run
+            # degraded.
+            close_excursion(excursion)
+
     # -- orchestration -------------------------------------------------------
     def next_task(self) -> Optional[TaskSpec]:
         """Ask the orchestrator what to do next, given the ledger.
@@ -246,9 +310,12 @@ class Session:
                 recent=self.config.recent_entries,
             ),
         )
-        if reply.strip().upper().startswith("DONE"):
-            return None
+        # Strip any KIND label before testing for DONE: an orchestrator that
+        # dutifully labels its final reply must still be able to end the run,
+        # not spawn a task whose description is the word DONE.
         kind, description = _parse_kind(reply)
+        if description.strip().upper().startswith("DONE"):
+            return None
         return TaskSpec(
             task_id=f"t{len(self.history) + 1}",
             description=description,
@@ -298,6 +365,18 @@ class Session:
             "read. Report everything you find with a severity and a confidence; do "
             "not filter to only the important ones. Filtering happens downstream, "
             "and a reviewer told to be selective suppresses its own findings."
+        )
+
+    def _verifier_prompt(self, spec: TaskSpec, draft: str, verifier: str) -> str:
+        label = resolve(verifier)
+        return (
+            f"Task: {spec.description}\n\n"
+            f"Proposed answer:\n{draft}\n\n"
+            f"You are {label.label if label else verifier}, verifying security "
+            "work you did not author. Check it for correctness, for anything "
+            "unsafe it recommends, and for anything it asserts without "
+            "evidence. State plainly whether it should be accepted, and what "
+            "must change if not. Do not redo the work; verify it."
         )
 
     def _close_out(self, lead: str, spec: TaskSpec, task: TaskMemory):

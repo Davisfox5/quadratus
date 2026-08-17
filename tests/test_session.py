@@ -342,6 +342,94 @@ def test_an_unlabelled_reply_is_taken_whole(store):
     assert s.next_task().description == "just do the thing"
 
 
+# -- security runs as a wired excursion, not a parallel system ---------------
+
+
+def test_kind_security_and_work_class_security_are_the_same_thing(store, rec):
+    """Two modules can both say 'security'; a task must never be visible to
+    one mechanism and invisible to the other."""
+    by_kind = TaskSpec("t1", "x", kind=TaskKind.SECURITY)
+    assert by_kind.work_class == WorkClass.SECURITY
+    by_class = TaskSpec("t2", "x", work_class=WorkClass.SECURITY)
+    assert by_class.kind == TaskKind.SECURITY
+
+
+def test_a_security_label_from_the_orchestrator_reaches_the_excursion(store):
+    rec = Recorder(next_tasks=["KIND: security\naudit the token handling", "DONE"])
+    s = _session(store, rec)
+    spec = s.next_task()
+    assert spec.work_class == WorkClass.SECURITY
+
+
+def test_security_work_is_done_by_sol_and_verified_by_the_deputy(store, rec):
+    s = _session(store, rec)
+    got = s.run_task(TaskSpec("t1", "audit the auth flow", kind=TaskKind.SECURITY))
+    assert got.author == SOL
+    verify_prompts = [c for c in rec.calls
+                      if "verifying security work" in c["prompt"]]
+    assert len(verify_prompts) == 1
+    assert verify_prompts[0]["model"] == OPUS
+
+
+def test_verification_is_not_bought_off_by_low_complexity(store, rec):
+    """An unverified security answer is the failure the excursion prevents."""
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "check the cert pinning", complexity=Complexity.SIMPLE,
+                        kind=TaskKind.SECURITY))
+    assert any("verifying security work" in c["prompt"] for c in rec.calls)
+
+
+def test_the_primary_orchestrator_is_never_invoked_inside_a_security_task(store, rec):
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "audit the auth flow", kind=TaskKind.SECURITY))
+    assert FABLE not in rec.models()
+
+
+def test_the_security_outcome_still_reaches_the_ledger(store, rec):
+    """Continuity across the excursion is the ledger's job: Fable reads the
+    outcome from there when it resumes."""
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "audit the auth flow", kind=TaskKind.SECURITY))
+    assert "built it" in s.memory.render()
+
+
+def test_security_work_does_not_consume_a_rotation_turn(store, rec):
+    s = _session(store, rec)
+    trust = s.brain_trust
+    assert s.run_task(TaskSpec("t1", "x", complexity=Complexity.SIMPLE)).author == trust[0]
+    s.run_task(TaskSpec("t2", "audit it", kind=TaskKind.SECURITY))
+    assert s.run_task(TaskSpec("t3", "y", complexity=Complexity.SIMPLE)).author == trust[1]
+
+
+def test_the_verifier_never_verifies_its_own_work(store, rec):
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "audit the auth flow", kind=TaskKind.SECURITY))
+    drafts = [c["model"] for c in rec.calls if "You are leading" in c["prompt"]]
+    verifies = [c["model"] for c in rec.calls if "verifying security work" in c["prompt"]]
+    assert drafts and verifies and set(drafts).isdisjoint(verifies)
+
+
+# -- DONE parsing ------------------------------------------------------------
+
+
+def test_a_labelled_done_still_ends_the_run(store):
+    """An orchestrator that dutifully labels its final reply must end the run,
+    not spawn a task whose description is the word DONE."""
+    rec = Recorder(next_tasks=["KIND: general\nDONE", "unreachable"])
+    s = _session(store, rec)
+    assert s.next_task() is None
+
+
+# -- collaborators respect availability --------------------------------------
+
+
+def test_an_unavailable_peer_is_not_drafted_as_a_collaborator(store, rec):
+    down = {GEMINI}
+    s = _session(store, rec, available=lambda k: k not in down)
+    spec = TaskSpec("t1", "work", complexity=Complexity.COMPLEX)
+    assert GEMINI not in s.collaborators_for(spec, s.brain_trust[0])
+
+
 # -- worker budget is enforced through the session ---------------------------
 
 

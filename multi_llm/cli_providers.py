@@ -296,7 +296,8 @@ class CLIProvider(LLMProvider):
         env = {**os.environ, **self.spec.env}
         # An inherited ANTHROPIC_API_KEY would silently divert a subscription
         # run onto billed API credits, so clear key vars for the child.
-        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+                    "GOOGLE_API_KEY", "XAI_API_KEY", "GROK_API_KEY"):
             env.pop(var, None)
 
         log.debug("%s invoking: %s", self.label, " ".join(argv[:6]))

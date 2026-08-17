@@ -132,6 +132,22 @@ def test_api_keys_are_stripped_from_child_env(claude, monkeypatch):
     assert "ANTHROPIC_API_KEY" not in seen["env"]
 
 
+def test_every_vendors_key_is_stripped_not_just_anthropics(claude, monkeypatch):
+    """The Grok keys were missed originally; all four vendors bill the same way."""
+    for var in ("OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+                "XAI_API_KEY", "GROK_API_KEY"):
+        monkeypatch.setenv(var, "sk-should-not-leak")
+    seen = {}
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda argv, **k: (seen.update(env=k.get("env")), _FakeCompleted(_claude_envelope("ok")))[1],
+    )
+    claude.generate("question")
+    for var in ("OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+                "XAI_API_KEY", "GROK_API_KEY"):
+        assert var not in seen["env"], var
+
+
 def test_history_is_rendered_into_the_prompt(claude, monkeypatch):
     seen = {}
     monkeypatch.setattr(
