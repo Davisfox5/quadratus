@@ -28,6 +28,7 @@ all, folded into the peer's task summary.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
@@ -43,11 +44,24 @@ __all__ = [
     "WorkerResult",
     "WorkerPool",
     "FanOutExceeded",
+    "RepeatedFailure",
 ]
 
 
 class FanOutExceeded(RuntimeError):
     """A task tried to commission more workers than its budget allows."""
+
+
+class RepeatedFailure(RuntimeError):
+    """The same worker prompt failed once and is being retried verbatim.
+
+    Repeating a failed action unchanged is the canonical autonomous-agent
+    death spiral -- Manus's most-reported field failure is exactly this loop,
+    burning budget on an action whose outcome is already known. One failure is
+    information; an identical retry is a strategy problem, and the fix is a
+    different prompt, a different model, or escalating the blocker into the
+    task summary -- not a second pull of the same lever.
+    """
 
 
 @dataclass
@@ -101,6 +115,9 @@ class WorkerPool:
     run: Callable[[str, str], str]
     budget: WorkerBudget = field(default_factory=WorkerBudget)
     _counts: dict = field(default_factory=dict)
+    #: (task_id, prompt-hash) for every commission that raised. A verbatim
+    #: retry of a failed prompt is refused; see :class:`RepeatedFailure`.
+    _failed: set = field(default_factory=set)
 
     # -- accounting ----------------------------------------------------------
     def spawned(self, task_id: str) -> int:
@@ -164,11 +181,23 @@ class WorkerPool:
             raise RuntimeError(
                 f"task {task.task_id!r} is closed and cannot commission workers"
             )
+        fingerprint = (task.task_id, hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16])
+        if fingerprint in self._failed:
+            raise RepeatedFailure(
+                f"this exact prompt already failed for task {task.task_id!r}. "
+                f"Retrying it verbatim is how an agent loops on a known-bad "
+                f"action: rephrase it, try a different model, or record the "
+                f"blocker in the task summary and move on."
+            )
         self._charge(task.task_id)
 
         model_key = self.preferred_model(parent_key, model)
         scratch = NoMemory()  # explicit: a worker carries nothing in or out
-        raw = self.run(model_key, prompt)
+        try:
+            raw = self.run(model_key, prompt)
+        except Exception:
+            self._failed.add(fingerprint)
+            raise
         scratch.wipe()
 
         ref = self.store.put(raw, kind=f"worker:{label}", author=model_key)

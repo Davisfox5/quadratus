@@ -28,12 +28,14 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence
 
 from .artifacts import ArtifactStore
+from .codebase_map import CodebaseMap
 from .memory import PersistentMemory, TaskMemory, TaskSummary
 from .registry import peers_for, resolve
 from .routing import (
     Seat,
     WorkClass,
     close_excursion,
+    cross_family_verifier,
     open_security_excursion,
     orchestrator_seat,
 )
@@ -43,7 +45,19 @@ from .workers import WorkerBudget, WorkerPool
 
 log = logging.getLogger(__name__)
 
-__all__ = ["Complexity", "TaskSpec", "Session", "SessionConfig"]
+__all__ = ["Complexity", "TaskSpec", "Session", "SessionConfig", "RunStalled"]
+
+
+class RunStalled(RuntimeError):
+    """The orchestrator named the same task twice in a row.
+
+    Two identical consecutive decompositions mean the ledger is not moving the
+    orchestrator's view forward -- the loop has stopped converging and every
+    further round would spend the subscription window re-running a known
+    outcome. Raised rather than silently continued or silently stopped: the
+    operator should see that the run stalled and why, because the fix (a
+    better close-out, a narrower goal, a fetched artifact) is theirs to pick.
+    """
 
 
 #: Emitted on every decomposition prompt.
@@ -122,6 +136,14 @@ class SessionConfig:
     #: Earlier entries and every artifact stay reachable; this narrows the
     #: view rather than discarding anything.
     recent_entries: Optional[int] = None
+    #: Cross-session memory about the repository itself. Rendered into every
+    #: orchestrator and lead prompt, and amended from task close-outs.
+    codebase_map: Optional[CodebaseMap] = None
+    #: When set, ``run()`` first asks the orchestrator for the full expected
+    #: task list and hands it to this callable. False aborts before any task
+    #: executes -- the operator reviews the plan at the moment it is cheap to
+    #: change, not after the window is spent. None runs ungated.
+    plan_gate: Optional[Callable[[str], bool]] = None
 
 
 class Session:
@@ -267,13 +289,27 @@ class Session:
 
             # Mandatory, not complexity-scaled: an unverified security answer
             # is the failure the excursion exists to prevent, so SIMPLE does
-            # not buy the verification off.
+            # not buy the verification off. And verification crosses vendor
+            # lines when it can: the deputy verifies by default, but if the
+            # chain has degraded until deputy and worker share a vendor, a
+            # cross-family peer is drafted instead -- same-vendor checking
+            # shares the author's lineage and its blind spots.
+            verifier = excursion.verifier
+            worker_spec, verifier_spec = resolve(excursion.worker), resolve(verifier)
+            if (worker_spec and verifier_spec
+                    and worker_spec.provider == verifier_spec.provider):
+                crossed = cross_family_verifier(
+                    excursion.worker,
+                    candidates=self.brain_trust,
+                    available=self._available,
+                )
+                if crossed is not None:
+                    verifier = crossed
             verdict = self.invoke(
-                excursion.verifier,
-                self._verifier_prompt(spec, draft, excursion.verifier),
+                verifier, self._verifier_prompt(spec, draft, verifier)
             )
-            task.record("assistant", f"[{excursion.verifier}] {verdict}")
-            task.keep(verdict, kind=f"verify:{excursion.verifier}")
+            task.record("assistant", f"[{verifier}] {verdict}")
+            task.keep(verdict, kind=f"verify:{verifier}")
 
             summary_text, reasoning, dead_ends = self._close_out(
                 excursion.worker, spec, task
@@ -308,6 +344,7 @@ class Session:
                     f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}"
                 ),
                 recent=self.config.recent_entries,
+                extra=self._map_block(),
             ),
         )
         # Strip any KIND label before testing for DONE: an orchestrator that
@@ -322,28 +359,77 @@ class Session:
             kind=kind,
         )
 
+    def plan(self) -> str:
+        """Ask the orchestrator for the full expected task list, without running.
+
+        The Agent Action Plan idea, sized to fit: the operator reviews the
+        decomposition at the moment it is cheap to change -- reviewing the
+        plan is reviewing the work at a fraction of the cost -- instead of
+        discovering a mis-scoped run after the subscription window is spent.
+        """
+        seat = self.seat()
+        return self.invoke(
+            seat.key,
+            self.memory.render(
+                current=(
+                    "Do not start work. List every task you currently expect "
+                    "this goal to need, in order, one per line, each as "
+                    "'KIND: <kind> -- <description>'. Mark anything you are "
+                    f"unsure about with '?'.\n\n{_SIZE_CEILING}"
+                ),
+                recent=self.config.recent_entries,
+                extra=self._map_block(),
+            ),
+        )
+
     def run(self, *, max_tasks: int = 20) -> List[TaskSummary]:
         """Drive tasks until the orchestrator says DONE or the cap is hit.
 
         The cap is a runaway backstop, not a quality gate: a loop that has not
         converged by then has a problem the cap will not fix, and the caller
         should look at why.
+
+        Raises:
+            RunStalled: when the orchestrator names the same task twice in a
+                row -- the loop has stopped converging, and burning further
+                rounds on a known outcome helps nobody.
         """
+        if self.config.plan_gate is not None:
+            if not self.config.plan_gate(self.plan()):
+                log.info("plan gate declined the run; nothing executed")
+                return []
+        previous_description: Optional[str] = None
         for _ in range(max_tasks):
             spec = self.next_task()
             if spec is None:
                 break
+            if spec.description == previous_description:
+                raise RunStalled(
+                    f"the orchestrator named the same task twice in a row: "
+                    f"{spec.description!r}. The last close-out did not move "
+                    f"its view forward. Improve the summary, narrow the goal, "
+                    f"or intervene before re-running."
+                )
+            previous_description = spec.description
             self.run_task(spec)
         return list(self.history)
 
     # -- prompts -------------------------------------------------------------
+    def _map_block(self) -> str:
+        if self.config.codebase_map is None:
+            return ""
+        return self.config.codebase_map.render()
+
     def _lead_prompt(self, spec: TaskSpec) -> str:
         parts = [
             self.memory.render(
                 current=spec.description, recent=self.config.recent_entries
             ),
-            "You are leading this task. Produce the complete work.",
         ]
+        map_block = self._map_block()
+        if map_block:
+            parts.append(map_block)
+        parts.append("You are leading this task. Produce the complete work.")
         guidance = guidance_for(spec.kind)
         if guidance:
             # Stated as requirements rather than advice. These exist because
@@ -354,6 +440,16 @@ class Session:
                 "these as a requirement:\n"
                 + "\n".join(f"- {g}" for g in guidance)
             )
+        # Recitation: the task statement again, at the very end. The end of a
+        # long context is the position attention favours, and re-emitting the
+        # objective there is Manus's published fix for goal drift on long
+        # tool loops. The middle of the prompt -- where the task would
+        # otherwise sit once history piles up -- is the least reliable real
+        # estate there is.
+        parts.append(
+            "Before finishing, re-read your task, restated verbatim, and "
+            f"confirm every part of it is addressed:\n\n{spec.description}"
+        )
         return "\n\n".join(parts)
 
     def _collaborator_prompt(self, spec: TaskSpec, draft: str, peer: str) -> str:
@@ -382,16 +478,30 @@ class Session:
     def _close_out(self, lead: str, spec: TaskSpec, task: TaskMemory):
         """Have the lead write the one thing that survives the task."""
         transcript = "\n\n".join(f"[{t.role}] {t.content}" for t in task.turns())
-        reply = self.invoke(
-            lead,
-            f"Task: {spec.description}\n\n{transcript}\n\n"
+        sections = (
             "The task is finished. Write the record that survives it, as three "
             "sections:\nSUMMARY: what was built and decided.\n"
             "REASONING: why, including alternatives weighed.\n"
             "DEAD ENDS: one line each for anything tried that failed, and why. "
-            "Write the lesson, not the transcript.",
+            "Write the lesson, not the transcript."
         )
-        return _parse_closeout(reply)
+        if self.config.codebase_map is not None:
+            # Every run strengthens the map -- that is what makes it an asset
+            # that accrues rather than a snapshot that rots.
+            sections += (
+                "\nMAP NOTES: one line each, as 'topic: fact', for anything "
+                "you learned about this codebase that the next session should "
+                "not have to rediscover -- a convention, a dependency, a trap. "
+                "Durable facts about the code only; omit the section if none."
+            )
+        reply = self.invoke(lead, f"Task: {spec.description}\n\n{transcript}\n\n{sections}")
+        summary, reasoning, dead_ends, map_notes = _parse_closeout(reply)
+        if self.config.codebase_map is not None:
+            for topic, note in map_notes:
+                self.config.codebase_map.amend(
+                    topic=topic, note=note, author=lead, session=spec.task_id
+                )
+        return summary, reasoning, dead_ends
 
 
 #: Asks the orchestrator to label the task so :mod:`multi_llm.task_kinds` can
@@ -425,14 +535,18 @@ def _parse_kind(reply: str) -> tuple:
 
 
 def _parse_closeout(reply: str):
-    """Split a close-out into summary, reasoning and dead ends.
+    """Split a close-out into summary, reasoning, dead ends and map notes.
 
     Tolerant by design: a missing section degrades to a usable record rather
     than failing the task, since the raw work is stored either way. Reasoning
     falls back to the summary because the ledger refuses an empty one, and a
-    weak reason recorded honestly beats a lost task.
+    weak reason recorded honestly beats a lost task. Map notes that do not
+    parse as 'topic: fact' are dropped rather than guessed at -- the map is
+    long-lived, so a malformed note is worse there than nowhere.
     """
-    sections: Dict[str, List[str]] = {"SUMMARY": [], "REASONING": [], "DEAD ENDS": []}
+    sections: Dict[str, List[str]] = {
+        "SUMMARY": [], "REASONING": [], "DEAD ENDS": [], "MAP NOTES": [],
+    }
     current = "SUMMARY"
     for line in (reply or "").splitlines():
         stripped = line.strip()
@@ -450,4 +564,11 @@ def _parse_closeout(reply: str):
     summary = " ".join(sections["SUMMARY"]).strip() or (reply or "").strip() or "(no summary)"
     reasoning = " ".join(sections["REASONING"]).strip() or summary
     dead_ends = [d.lstrip("-• ").strip() for d in sections["DEAD ENDS"] if d.strip()]
-    return summary, reasoning, dead_ends
+    map_notes: List[tuple] = []
+    for raw in sections["MAP NOTES"]:
+        raw = raw.lstrip("-• ").strip()
+        if ":" in raw:
+            topic, note = raw.split(":", 1)
+            if topic.strip() and note.strip():
+                map_notes.append((topic.strip(), note.strip()))
+    return summary, reasoning, dead_ends, map_notes

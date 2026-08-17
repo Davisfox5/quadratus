@@ -59,6 +59,7 @@ __all__ = [
     "SECURITY_WORK_CHAIN",
     "route_security_work",
     "WorkClass",
+    "cross_family_verifier",
     "Excursion",
     "ExcursionUnavailable",
     "open_security_excursion",
@@ -216,6 +217,32 @@ def route_security_work(
         if resolve(key) is not None and available(key):
             return key
     return SECURITY_WORK_CHAIN[-1]
+
+
+def cross_family_verifier(
+    author: str,
+    *,
+    candidates: List[str],
+    available: Callable[[str], bool] = _always_available,
+) -> Optional[str]:
+    """Pick a verifier from a different vendor family than the author.
+
+    Same-vendor verification shares the author's training lineage, its blind
+    spots, and often its opinions -- Blitzy's audited SWE-Bench Pro record was
+    built specifically on one model family checking another's work, and the
+    independent auditors credited the harness, not the models. So verification
+    crosses vendor lines whenever a candidate exists; returns None when none
+    does, which the caller must surface rather than quietly self-verifying.
+    """
+    author_spec = resolve(author)
+    author_provider = author_spec.provider if author_spec else author.split(":", 1)[0]
+    for key in candidates:
+        spec = resolve(key)
+        if key == author or spec is None:
+            continue
+        if spec.provider != author_provider and available(key):
+            return key
+    return None
 
 
 @dataclass(frozen=True)

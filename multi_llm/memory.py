@@ -216,11 +216,12 @@ class PersistentMemory:
         return self.store.get(ref_or_id)
 
     def render(self, *, current: str = "", recent: Optional[int] = None,
-               with_previews: bool = True) -> str:
+               with_previews: bool = True, extra: str = "") -> str:
         """The orchestrator's prompt body for this turn."""
         return self.ledger.render(
             goal=self.goal,
             current=current,
             recent=recent,
             with_previews=with_previews,
+            extra=extra,
         )

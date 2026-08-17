@@ -189,7 +189,7 @@ def test_run_stops_when_the_orchestrator_says_done(store):
 
 
 def test_run_respects_the_task_cap(store):
-    rec = Recorder(next_tasks=["a"] * 50)
+    rec = Recorder(next_tasks=[f"task {i}" for i in range(50)])
     s = _session(store, rec)
     assert len(s.run(max_tasks=3)) == 3
 

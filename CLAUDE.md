@@ -67,3 +67,22 @@ Key design decisions already settled:
   counterpart even at the lowest complexity.
 - Grok 4.20's 2M window is unverified vendor marketing and deliberately does
   not carry `LONG_CONTEXT`. Restore the tag if it passes the probe at depth.
+- **Verification crosses vendor lines.** Same-vendor checking shares the
+  author's lineage and blind spots; Blitzy's audited record was built on one
+  family checking another. `cross_family_verifier` enforces it, including in
+  security excursions when the chain degrades to a same-vendor pair.
+- **The lead's task is recited at the end of its prompt** (Manus's fix for
+  goal drift): the end of context is the position attention favours, so the
+  objective is re-emitted there, not just stated up front.
+- **A verbatim retry of a failed action is refused** (`RepeatedFailure`), and
+  a run stalls loudly (`RunStalled`) when the orchestrator names the same
+  task twice in a row. Repeating a known-bad action is the canonical agent
+  death spiral; the fix is a changed strategy, not a second pull.
+- **The codebase map is the cross-session memory** (`codebase_map.py`):
+  append-only notes about the repository itself, with provenance, rendered
+  into every orchestrator and lead prompt and amended from close-outs. The
+  ledger records what a run did; the map records what was learned about the
+  code, which is worth as much on the hundredth run as the first.
+- **The plan gate is opt-in** (`SessionConfig.plan_gate`): the operator can
+  review the full expected task list before any window is spent. Reviewing
+  the plan is reviewing the work at a fraction of the cost.

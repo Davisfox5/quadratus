@@ -154,6 +154,7 @@ class Ledger:
         current: str = "",
         recent: Optional[int] = None,
         with_previews: bool = True,
+        extra: str = "",
     ) -> str:
         """Build the orchestrator's prompt body.
 
@@ -167,6 +168,10 @@ class Ledger:
                 ledger and their artifacts stay on disk; this narrows the view,
                 it does not discard anything.
             with_previews: Include artifact previews. Off gives a terser index.
+            extra: An additional pre-rendered block (e.g. the codebase map),
+                placed after the completed work and before the current
+                question, so the goal keeps the first position and the live
+                question keeps the last.
         """
         blocks: List[str] = [f"## Goal (verbatim, unchanged)\n\n{goal.strip()}"]
 
@@ -191,6 +196,9 @@ class Ledger:
             )
         else:
             blocks.append("## Completed work\n\n_Nothing completed yet._")
+
+        if extra.strip():
+            blocks.append(extra.strip())
 
         if current.strip():
             blocks.append(f"## Now\n\n{current.strip()}")
