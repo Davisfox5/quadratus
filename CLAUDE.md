@@ -87,9 +87,9 @@ Key design decisions already settled:
 - **Tool requests flow worker → lead → reissue.** A worker lacking access says
   `NEED TOOL: <what>` in its one answer; the lead reissues the errand with the
   grant (`allow_writes`). The asking worker is wiped as normal. No mid-task
-  dialogue, no orchestrator involvement. Gemini 3.6 Thinking and Grok 4.20/4.3
-  are deliberately not workers: wrong shape, unverified, or dominated by 4.1
-  Fast.
+  dialogue, no orchestrator involvement. Grok 4.3 is deliberately not a
+  worker (dominated by 4.1 Fast); Gemini 3.6 Thinking and Grok 4.20 serve
+  only as in-family escalation targets, never as base workers.
 - **Some work is gated, not routed.** Where every model is bad at something —
   concurrency, performance — there is nobody to prefer, so the policy attaches
   a deterministic check instead of a model. Performance additionally names a
