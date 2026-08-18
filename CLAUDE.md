@@ -54,10 +54,18 @@ Key design decisions already settled:
 - **Routing opinions live apart from the roster.** `registry.py` says what
   shape a model is; `task_kinds.py` says what to do with that. The second
   ages far faster than the first and every entry carries its evidence.
-- **Low confidence rotates on purpose.** A routing entry with no measured
-  basis does not pin a model, because pinning on a hunch freezes the hunch
-  and destroys the head-to-head data that would have corrected it. An empty
-  `prefer` is a statement, not an omission.
+- **Difficulty is the primary routing axis; kind pins are the exception**
+  (`task_kinds.DIFFICULTY_LADDER`). Complex → Opus, standard → Sol, simple
+  (the bulk of well-sized tasks) → Grok 4.6, rote → Gemini 3.1 Pro. The
+  earlier kind-pinned table concentrated nearly everything on two
+  subscriptions while Grok and Google sat idle — exactly how one window
+  exhausts early and forces a degraded run. An unavailable or excluded rung
+  escalates upward before it degrades downward. Surviving pins: security and
+  testing → Sol (operator directive), review → the Sol+Opus pair,
+  scope/decompose → Fable; Gemini still never leads mobile. Revisit rungs on
+  Grok 4.7 and Gemini 3.5 Pro releases.
+- **An empty `prefer` is a statement, not an omission** — it means the kind
+  rides the ladder rather than anyone having earned a pin.
 - **Some work is gated, not routed.** Where every model is bad at something —
   concurrency, performance — there is nobody to prefer, so the policy attaches
   a deterministic check instead of a model. Performance additionally names a

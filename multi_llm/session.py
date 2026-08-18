@@ -97,19 +97,22 @@ _SIZE_CEILING = (
 
 
 class Complexity:
-    """How many brain-trust members a task is worth.
+    """How hard a task is. Drives two decisions at once.
 
-    Collaborators are not free: each one is another full invocation and another
-    voice in the lead's working memory. Scaling by complexity is the same
-    guidance Anthropic gives its own lead agents -- simple fact-finding gets one
-    agent, complex work gets many -- rather than convening everyone by default.
+    First, who leads: difficulty maps onto the brain trust as a ladder (see
+    :data:`multi_llm.task_kinds.DIFFICULTY_LADDER`), so the hardest work gets
+    the strongest model and the bulk of the work lands on the subscriptions
+    with capacity to spare. Second, how many collaborators the task draws:
+    each one is another full invocation and another voice in the lead's
+    working memory, so easy work is not made expensive by ceremony.
     """
 
-    SIMPLE = "simple"      # lead alone
+    ROTE = "rote"          # mechanical; lead alone
+    SIMPLE = "simple"      # the bulk of well-sized tasks; lead alone
     STANDARD = "standard"  # lead + one collaborator
-    COMPLEX = "complex"    # lead + the whole brain trust
+    COMPLEX = "complex"    # many logical steps; lead + the whole brain trust
 
-    _COLLABORATORS = {SIMPLE: 0, STANDARD: 1, COMPLEX: None}
+    _COLLABORATORS = {ROTE: 0, SIMPLE: 0, STANDARD: 1, COMPLEX: None}
 
     @classmethod
     def collaborator_count(cls, complexity: str, available: int) -> int:
@@ -240,6 +243,7 @@ class Session:
         self._rotation += 1
         return route_kind(
             spec.kind,
+            difficulty=spec.complexity,
             default=rotated,
             candidates=trust,
             available=self._available,
@@ -468,13 +472,14 @@ class Session:
         # Strip any KIND label before testing for DONE: an orchestrator that
         # dutifully labels its final reply must still be able to end the run,
         # not spawn a task whose description is the word DONE.
-        kind, description = _parse_kind(reply)
+        kind, difficulty, description = _parse_kind(reply)
         if description.strip().upper().startswith("DONE"):
             return None
         return TaskSpec(
             task_id=f"t{len(self.history) + 1}",
             description=description,
             kind=kind,
+            complexity=difficulty,
         )
 
     def plan(self) -> str:
@@ -683,33 +688,46 @@ _MAX_ASKS_PER_DECISION = 3
 
 
 #: Asks the orchestrator to label the task so :mod:`multi_llm.task_kinds` can
-#: act on it. Optional by design -- an unlabelled task rotates, which is what
-#: most labels would have produced anyway.
+#: act on it. Kind and difficulty together are the routing decision: the few
+#: pinned kinds go where the evidence says, everything else rides the
+#: difficulty ladder across the four subscriptions.
 _KIND_REQUEST = (
-    "Begin your reply with a single line 'KIND: <kind>' choosing from: "
-    + ", ".join(sorted(ROUTING)) + ". Then the task on the following line. "
-    "Omit the line if none fits."
+    "Begin your reply with a single line 'KIND: <kind> <difficulty>'. Kind is "
+    "one of: " + ", ".join(sorted(ROUTING)) + ". Difficulty is one of: rote, "
+    "simple, standard, complex -- judge it by how many logical steps the task "
+    "takes and what breaks if it is wrong. Most well-sized tasks are simple; "
+    "reserve complex for genuinely hard reasoning. Then the task on the "
+    "following line. Omit the line if none fits."
 )
 
 
 def _parse_kind(reply: str) -> tuple:
     """Split an optional leading ``KIND:`` line off the orchestrator's reply.
 
-    Tolerant in the same way close-out parsing is: an unrecognised or absent
-    kind degrades to GENERAL rather than failing the round. A mislabelled task
-    costs a routing preference; a rejected round costs the task.
+    Returns (kind, difficulty, description). Tolerant in the same way
+    close-out parsing is: an unrecognised or absent label degrades to the
+    default rather than failing the round. A mislabelled task costs a routing
+    preference; a rejected round costs the task. The difficulty default is
+    SIMPLE -- the bulk of well-sized tasks belong there, and the ladder puts
+    them on the subscription with capacity to spare.
     """
     text = (reply or "").strip()
     lines = text.splitlines()
     if lines and lines[0].strip().upper().startswith("KIND:"):
-        claimed = lines[0].split(":", 1)[1].strip().lower()
+        label = lines[0].split(":", 1)[1].strip().lower()
         rest = "\n".join(lines[1:]).strip()
+        parts = label.split()
+        claimed = parts[0] if parts else ""
+        difficulty = next(
+            (p for p in parts[1:] if p in Complexity._COLLABORATORS),
+            Complexity.SIMPLE,
+        )
         if claimed in ROUTING and rest:
-            return claimed, rest
+            return claimed, difficulty, rest
         if rest:
             log.debug("orchestrator proposed unknown task kind %r", claimed)
-            return TaskKind.GENERAL, rest
-    return TaskKind.GENERAL, text
+            return TaskKind.GENERAL, difficulty, rest
+    return TaskKind.GENERAL, Complexity.SIMPLE, text
 
 
 def _parse_closeout(reply: str):

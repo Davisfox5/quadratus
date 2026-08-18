@@ -60,6 +60,7 @@ __all__ = [
     "TaskKind",
     "KindPolicy",
     "ROUTING",
+    "DIFFICULTY_LADDER",
     "MAX_TASK_LINES",
     "policy_for",
     "route",
@@ -183,6 +184,38 @@ GROK = "grok:grok-4.6"
 FABLE = "claude:fable"
 
 
+#: Difficulty -> lead. The primary routing axis; kind pins are the exception.
+#:
+#: An earlier version of this table pinned most kinds to Opus or Sol on
+#: benchmark evidence. That was locally right and globally wrong: it
+#: concentrated nearly every invocation on two subscriptions while the Grok
+#: and Google windows sat idle, which is exactly how one window exhausts early
+#: and forces a degraded run while capacity elsewhere goes unspent. Routing by
+#: difficulty spreads the load across all four subscriptions *and* still puts
+#: the strongest model on the work that actually needs it.
+#:
+#: The rungs, per the operator's read of current capability:
+#: * COMPLEX -- many logical steps, high stakes -> Opus 5, top of the pack.
+#: * STANDARD -- real judgement, not the hardest -> GPT-5.6 Sol.
+#: * SIMPLE -- the bulk of well-sized (<=100-line) tasks -> Grok 4.6, which is
+#:   capable at this grade and cheap against its own window; expected to close
+#:   the gap further with 4.7.
+#: * ROTE -- mechanical work -> Gemini 3.1 Pro, currently the least proven of
+#:   the four; revisit the rung when 3.5 Pro ships.
+#:
+#: A rung that is unavailable or excluded escalates upward (a stronger model
+#: can always do easier work) before it degrades downward.
+DIFFICULTY_LADDER: Dict[str, str] = {
+    "complex": OPUS,
+    "standard": SOL,
+    "simple": GROK,
+    "rote": GEMINI_PRO,
+}
+
+#: Least to most capable, for escalation.
+_LADDER_ORDER: Tuple[str, ...] = (GEMINI_PRO, GROK, SOL, OPUS)
+
+
 #: The routing table. Read the ``evidence`` line before changing a row.
 ROUTING: Dict[str, KindPolicy] = {
     TaskKind.SCOPE: KindPolicy(
@@ -216,21 +249,20 @@ ROUTING: Dict[str, KindPolicy] = {
     ),
 
     TaskKind.BACKEND: KindPolicy(
-        prefer=(OPUS,),
-        confidence=Confidence.MEDIUM,
+        confidence=Confidence.LOW,
         evidence=(
-            "Terminal-Bench 3.0 43.5 vs 34.6 for the nearest rival. A single "
-            "agentic benchmark, so medium rather than high."
+            "Rides the difficulty ladder. Opus leads agentic benchmarks here "
+            "(Terminal-Bench 3.0 43.5 vs 34.6), which is why hard backend work "
+            "reaches it via COMPLEX -- but pinning every backend task to one "
+            "subscription starves the others and exhausts it first."
         ),
     ),
     TaskKind.FRONTEND: KindPolicy(
-        prefer=(OPUS,),
-        confidence=Confidence.MEDIUM,
+        confidence=Confidence.LOW,
         evidence=(
-            "Freshest knowledge cutoff in the fleet (May 2026), which matters "
-            "more here than elsewhere because framework APIs churn fast. But "
-            "the harness dominates: a screenshot-verification loop changes "
-            "outcomes more than the model does."
+            "Rides the difficulty ladder: the harness dominates here -- a "
+            "screenshot-verification loop changes outcomes more than the "
+            "model does -- so the gate matters and the pin did not."
         ),
         tool_first=(
             "a rendered-page check (multi_llm.browser.render_page: screenshot, "
@@ -243,7 +275,6 @@ ROUTING: Dict[str, KindPolicy] = {
         ),
     ),
     TaskKind.MOBILE: KindPolicy(
-        prefer=(OPUS,),
         exclude=(GEMINI_PRO,),
         confidence=Confidence.HIGH,
         evidence=(
@@ -254,21 +285,19 @@ ROUTING: Dict[str, KindPolicy] = {
         ),
     ),
     TaskKind.BULK: KindPolicy(
-        prefer=(GROK,),
-        confidence=Confidence.MEDIUM,
+        confidence=Confidence.LOW,
         evidence=(
-            "Roughly 53 turns and 0.5B tokens against ~103 turns and 2.0B for "
-            "the strongest coder on comparable work -- a ~4x efficiency gap "
-            "that only pays off where per-task judgement is not the constraint."
+            "Rides the ladder; bulk work is SIMPLE or ROTE by nature, which "
+            "lands it on Grok -- ~4x turn efficiency measured -- or Gemini "
+            "without needing a pin."
         ),
     ),
     TaskKind.GLUE: KindPolicy(
-        prefer=(LUNA,),
-        confidence=Confidence.MEDIUM,
+        confidence=Confidence.LOW,
         evidence=(
-            "The 5.6 tiers differ by ~1.9 points on SWE-bench Pro for roughly "
-            "5x the cost, so the cheap tier is a defensible default for work "
-            "with little judgement in it, not merely a fallback."
+            "Rides the ladder as SIMPLE or ROTE. The earlier Luna pin saved "
+            "little: Luna spends the same OpenAI window as Sol, so it did not "
+            "spread load across subscriptions, which is the point now."
         ),
     ),
 
@@ -286,12 +315,11 @@ ROUTING: Dict[str, KindPolicy] = {
         ),
     ),
     TaskKind.DEBUG: KindPolicy(
-        prefer=(OPUS,),
-        confidence=Confidence.MEDIUM,
+        confidence=Confidence.LOW,
         evidence=(
-            "Vendor-stated strength at root-causing a known defect. A different "
-            "job from REVIEW, and the same model does not lead at both -- which "
-            "is why the two are separate kinds."
+            "Rides the ladder: a gnarly root-cause is COMPLEX and reaches "
+            "Opus (vendor-stated strength) that way; a shallow one does not "
+            "need it. Still a separate kind from REVIEW -- different jobs."
         ),
     ),
     TaskKind.CONCURRENCY: KindPolicy(
@@ -321,11 +349,11 @@ ROUTING: Dict[str, KindPolicy] = {
     ),
 
     TaskKind.REFACTOR: KindPolicy(
-        prefer=(OPUS,),
-        confidence=Confidence.MEDIUM,
+        confidence=Confidence.LOW,
         evidence=(
-            "Best measured agent performance sits at 22-41% against ~87% for a "
-            "competent human. The preference is weak and the gap is the point."
+            "Rides the ladder. Best measured agent performance sits at 22-41% "
+            "against ~87% for a competent human -- the gap is the point, and "
+            "no pin closes it; the human check does."
         ),
         human_check=True,
         gate=(
@@ -335,11 +363,11 @@ ROUTING: Dict[str, KindPolicy] = {
     ),
     TaskKind.TEST: KindPolicy(
         prefer=(SOL,),
-        confidence=Confidence.LOW,
+        confidence=Confidence.HIGH,
         evidence=(
-            "Recall-leaning reviewer, which is the right bias for enumerating "
-            "cases. But generated suites average ~40% mutation score, so the "
-            "coverage number they produce overstates what they actually check."
+            "Operator directive: testing always goes to Sol, alongside "
+            "security. The recall-leaning bias fits enumerating cases; the "
+            "mutation gate below covers what generated suites overstate."
         ),
         gate=(
             "Judge the suite by whether it fails when the code is wrong, not "
@@ -348,12 +376,11 @@ ROUTING: Dict[str, KindPolicy] = {
         ),
     ),
     TaskKind.COMPREHEND: KindPolicy(
-        prefer=(OPUS,),
-        confidence=Confidence.MEDIUM,
+        confidence=Confidence.LOW,
         evidence=(
-            "Comprehension degrades from around 32K regardless of the "
-            "advertised window, so the chunking matters more than the window "
-            "size. Feed it in pieces rather than trusting a 1M context claim."
+            "Rides the ladder. Comprehension degrades from ~32K regardless of "
+            "advertised window, so the chunking gate matters more than which "
+            "model reads."
         ),
         gate=(
             "Read in bounded chunks and record findings as you go. Do not rely "
@@ -361,12 +388,11 @@ ROUTING: Dict[str, KindPolicy] = {
         ),
     ),
     TaskKind.IAC: KindPolicy(
-        prefer=(SOL,),
-        confidence=Confidence.MEDIUM,
+        confidence=Confidence.LOW,
         evidence=(
-            "Models improved at generating infrastructure code without "
-            "improving at securing it, so the generated artifact needs a "
-            "deterministic check rather than a second opinion."
+            "Rides the ladder. Models improved at generating infrastructure "
+            "code without improving at securing it, so the deterministic gate "
+            "is what carries this kind, not a pin."
         ),
         gate=(
             "Show the plan output and any policy-scan result before applying "
@@ -374,11 +400,11 @@ ROUTING: Dict[str, KindPolicy] = {
         ),
     ),
     TaskKind.DOCS: KindPolicy(
-        prefer=(SONNET,),
         confidence=Confidence.LOW,
         evidence=(
-            "Cheap, fast, carries no classifier, and adequate. No comparative "
-            "evidence -- this is a cost decision, not a quality one."
+            "Rides the ladder as ROTE, which lands it on the least-loaded "
+            "window. The earlier Sonnet pin spent the same Anthropic window "
+            "the orchestrator needs most."
         ),
     ),
     TaskKind.PERF: KindPolicy(
@@ -429,19 +455,28 @@ def route(
     kind: str,
     *,
     default: str,
+    difficulty: Optional[str] = None,
     candidates: Optional[Sequence[str]] = None,
     available: Callable[[str], bool] = _available_always,
 ) -> str:
-    """Pick the lead for a task of this ``kind``.
+    """Pick the lead for a task of this ``kind`` at this ``difficulty``.
+
+    Two axes, checked in order. A kind pin wins first -- those are the few
+    exceptions with evidence or an operator directive behind them (security
+    and testing to Sol, review to the pair, scope and decomposition to the
+    orchestrator). Everything else routes by the difficulty ladder, which is
+    what spreads the load across all four subscriptions. An unavailable or
+    excluded rung escalates upward -- a stronger model can always do easier
+    work -- before it degrades downward.
 
     Args:
         kind: A :class:`TaskKind` value.
-        default: Whoever rotation already selected. Used when the policy
-            expresses no preference, which is the common case by design.
+        difficulty: A :data:`DIFFICULTY_LADDER` key. None skips the ladder.
+        default: Whoever rotation already selected; the last resort.
         candidates: The pool to fall back into when ``default`` is excluded.
             Normally the brain trust.
         available: Liveness predicate. A pinned model that is down does not
-            block the task; the policy degrades to rotation.
+            block the task; the policy degrades down the checks.
 
     Returns:
         The model key to lead with. Never raises -- an unroutable task is
@@ -454,6 +489,17 @@ def route(
     for key in policy.prefer:
         if key not in excluded and available(key):
             return key
+
+    if difficulty in DIFFICULTY_LADDER:
+        start = _LADDER_ORDER.index(DIFFICULTY_LADDER[difficulty])
+        # The rung itself, then upward: capability only increases.
+        for key in _LADDER_ORDER[start:]:
+            if key not in excluded and available(key):
+                return key
+        # Downward only when everything stronger is out too.
+        for key in reversed(_LADDER_ORDER[:start]):
+            if key not in excluded and available(key):
+                return key
 
     if default not in excluded and available(default):
         return default

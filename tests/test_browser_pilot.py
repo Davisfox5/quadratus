@@ -8,7 +8,7 @@ import pytest
 
 from multi_llm.browser_pilot import PilotRun, drive, pilot_model
 from multi_llm.registry import Capability, resolve
-from multi_llm.task_kinds import ROUTING, TaskKind
+from multi_llm.task_kinds import DIFFICULTY_LADDER
 
 playwright = pytest.importorskip("playwright.sync_api")
 
@@ -45,8 +45,8 @@ class ScriptedPilot:
 # -- pilot selection ----------------------------------------------------------
 
 
-def test_complex_flows_get_the_frontend_leads_pilot():
-    assert pilot_model() == ROUTING[TaskKind.FRONTEND].prefer[0]
+def test_complex_flows_get_the_ladders_top_rung():
+    assert pilot_model() == DIFFICULTY_LADDER["complex"]
 
 
 def test_routine_automation_downshifts_to_a_cheap_coder():

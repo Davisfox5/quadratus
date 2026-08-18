@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from multi_llm.registry import MODE_ROSTERS, resolve
 from multi_llm.task_kinds import (
+    DIFFICULTY_LADDER,
     MAX_TASK_LINES,
     ROUTING,
     Confidence,
@@ -103,11 +104,11 @@ def test_an_unknown_kind_rotates_rather_than_raising():
     assert policy_for("astrology") is ROUTING[TaskKind.GENERAL]
 
 
-def test_a_pinned_but_unavailable_model_degrades_to_rotation():
+def test_a_pinned_but_unavailable_model_degrades_gracefully():
     got = route(
-        TaskKind.BACKEND, default=SOL, candidates=TRUST, available=lambda k: k != OPUS
+        TaskKind.TEST, default=GEMINI, candidates=TRUST, available=lambda k: k != SOL
     )
-    assert got == SOL
+    assert got == GEMINI
 
 
 def test_everything_unavailable_still_returns_a_lead():
@@ -120,6 +121,56 @@ def test_everything_unavailable_still_returns_a_lead():
 
 def test_route_prefers_earlier_entries_in_the_prefer_list():
     assert route(TaskKind.REVIEW, default=GEMINI, candidates=TRUST) == SOL
+
+
+# -- the difficulty ladder ---------------------------------------------------
+
+
+def test_the_ladder_spans_all_four_subscriptions():
+    """The point is load-spreading: one lead per vendor window."""
+    providers = {k.split(":")[0] for k in DIFFICULTY_LADDER.values()}
+    assert providers == {"claude", "openai", "grok", "gemini"}
+
+
+def test_each_difficulty_maps_to_its_rung():
+    assert route(TaskKind.BACKEND, default=GEMINI, difficulty="complex") == OPUS
+    assert route(TaskKind.BACKEND, default=GEMINI, difficulty="standard") == SOL
+    assert route(TaskKind.BACKEND, default=OPUS, difficulty="simple") == "grok:grok-4.6"
+    assert route(TaskKind.BACKEND, default=OPUS, difficulty="rote") == GEMINI
+
+
+def test_an_unavailable_rung_escalates_upward_before_downward():
+    """A stronger model can always do easier work; degrading is a last resort."""
+    got = route(TaskKind.BACKEND, default=GEMINI, difficulty="simple",
+                available=lambda k: k != "grok:grok-4.6")
+    assert got == SOL
+    got = route(TaskKind.BACKEND, default=GEMINI, difficulty="complex",
+                available=lambda k: k != OPUS)
+    assert got == SOL  # nothing above Opus; falls one rung down
+
+
+def test_an_excluded_rung_is_skipped():
+    """Rote mobile work must not land on Gemini; it climbs to the next rung."""
+    got = route(TaskKind.MOBILE, default=OPUS, difficulty="rote")
+    assert got == "grok:grok-4.6"
+
+
+def test_kind_pins_beat_the_ladder():
+    """Security and testing go to Sol whatever the difficulty says."""
+    for difficulty in DIFFICULTY_LADDER:
+        assert route(TaskKind.SECURITY, default=GEMINI, difficulty=difficulty) == SOL
+        assert route(TaskKind.TEST, default=GEMINI, difficulty=difficulty) == SOL
+
+
+def test_no_difficulty_means_no_ladder():
+    assert route(TaskKind.BACKEND, default=GEMINI) == GEMINI
+
+
+def test_only_a_handful_of_kinds_pin_at_all():
+    """The ladder is the primary axis; pins are the exception, not the rule."""
+    pinned = {k for k, p in ROUTING.items() if p.prefer}
+    assert pinned == {TaskKind.SCOPE, TaskKind.DECOMPOSE, TaskKind.SECURITY,
+                      TaskKind.TEST, TaskKind.REVIEW}
 
 
 # -- guidance ----------------------------------------------------------------
@@ -167,10 +218,11 @@ def test_review_pins_two_models_with_opposite_failure_modes():
     assert set(prefer) == set(MODE_ROSTERS["adversarial"]["reviewers"])
 
 
-def test_review_and_debug_route_differently():
-    """Finding unknown bugs and root-causing a known one are different jobs,
-    and the same model does not lead at both."""
-    assert policy_for(TaskKind.REVIEW).prefer[0] != policy_for(TaskKind.DEBUG).prefer[0]
+def test_review_stays_pinned_while_debug_rides_the_ladder():
+    """Review has measured evidence behind its pair; debug reaches the right
+    model through difficulty instead of a pin."""
+    assert policy_for(TaskKind.REVIEW).prefer
+    assert not policy_for(TaskKind.DEBUG).prefer
 
 
 def test_no_per_language_routing_exists():

@@ -94,13 +94,19 @@ def test_unknown_complexity_falls_back_to_standard(store, rec):
 # -- lead rotation -----------------------------------------------------------
 
 
-def test_lead_rotates_across_the_brain_trust(store, rec):
+def test_difficulty_routes_up_the_ladder(store, rec):
+    """The primary routing axis: hardest to the strongest, bulk to the
+    subscriptions with capacity to spare."""
     s = _session(store, rec)
-    leads = [
-        s.run_task(TaskSpec(f"t{i}", "work", complexity=Complexity.SIMPLE)).author
-        for i in range(len(s.brain_trust))
-    ]
-    assert len(set(leads)) == len(s.brain_trust)
+    expect = {
+        Complexity.COMPLEX: OPUS,
+        Complexity.STANDARD: SOL,
+        Complexity.SIMPLE: "grok:grok-4.6",
+        Complexity.ROTE: GEMINI,
+    }
+    for i, (difficulty, lead) in enumerate(expect.items()):
+        got = s.run_task(TaskSpec(f"t{i}", "work", complexity=difficulty))
+        assert got.author == lead, difficulty
 
 
 def test_an_explicit_lead_overrides_rotation(store, rec):
@@ -234,36 +240,34 @@ def test_brain_trust_matches_the_mode_roster(store, rec):
 # -- task-kind routing inside the loop ---------------------------------------
 
 
-def test_an_unlabelled_task_still_rotates(store, rec):
-    s = _session(store, rec)
-    leads = [
-        s.run_task(TaskSpec(f"t{i}", "work", complexity=Complexity.SIMPLE)).author
-        for i in range(len(s.brain_trust))
-    ]
-    assert len(set(leads)) == len(s.brain_trust)
+def test_an_unavailable_rung_escalates_upward(store, rec):
+    """A stronger model can always do easier work; degrading is a last resort."""
+    down = {"grok:grok-4.6"}
+    s = _session(store, rec, available=lambda k: k not in down)
+    got = s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert got.author == SOL
 
 
-def test_a_pinned_kind_overrides_the_rotation(store, rec):
+def test_a_pinned_kind_overrides_the_ladder(store, rec):
+    """Testing always goes to Sol (operator directive), whatever the rung says."""
     s = _session(store, rec)
-    for i in range(len(s.brain_trust) + 1):
+    for difficulty in (Complexity.ROTE, Complexity.SIMPLE, Complexity.COMPLEX):
         got = s.run_task(
-            TaskSpec(f"t{i}", "root-cause the crash", complexity=Complexity.SIMPLE,
-                     kind=TaskKind.DEBUG)
+            TaskSpec(f"t-{difficulty}", "write the API tests",
+                     complexity=difficulty, kind=TaskKind.TEST)
         )
-        assert got.author == OPUS
+        assert got.author == SOL, difficulty
 
 
-def test_pinning_does_not_stall_the_rotation_for_other_work(store, rec):
-    """A model pinned for its own kind must not also keep its queue position,
-    or the scoreboard the rotation exists to fill comes out skewed."""
+def test_the_ladder_is_deterministic_not_rotating(store, rec):
+    """Same difficulty, same lead, every time -- load is spread by the
+    orchestrator mixing difficulty labels, not by taking turns."""
     s = _session(store, rec)
-    trust = s.brain_trust
-    assert s.run_task(TaskSpec("t1", "x", complexity=Complexity.SIMPLE)).author == trust[0]
-    s.run_task(TaskSpec("t2", "debug it", complexity=Complexity.SIMPLE,
-                        kind=TaskKind.DEBUG))
-    # The pinned task consumed trust[1]'s turn. If it had not, this would be
-    # trust[1] rather than trust[2].
-    assert s.run_task(TaskSpec("t3", "y", complexity=Complexity.SIMPLE)).author == trust[2]
+    leads = {
+        s.run_task(TaskSpec(f"t{i}", "work", complexity=Complexity.SIMPLE)).author
+        for i in range(3)
+    }
+    assert leads == {"grok:grok-4.6"}
 
 
 def test_mobile_work_never_lands_on_the_excluded_model(store, rec):
@@ -311,11 +315,19 @@ def test_the_size_ceiling_reaches_every_decomposition_prompt(store):
     assert all(str(MAX_TASK_LINES) in p for p in rec.prompts_to(FABLE))
 
 
-def test_the_orchestrator_may_label_the_task_kind(store):
-    rec = Recorder(next_tasks=["KIND: debug\nfind the null deref", "DONE"])
+def test_the_orchestrator_may_label_kind_and_difficulty(store):
+    rec = Recorder(next_tasks=["KIND: debug complex\nfind the null deref", "DONE"])
     s = _session(store, rec)
     s.run()
-    assert s.history[0].author == OPUS
+    assert s.history[0].author == OPUS  # complex -> top rung
+
+
+def test_an_unlabelled_difficulty_defaults_to_simple(store):
+    """The bulk of well-sized tasks belong on the ladder's simple rung."""
+    rec = Recorder(next_tasks=["KIND: backend\nadd the endpoint", "DONE"])
+    s = _session(store, rec)
+    spec = s.next_task()
+    assert spec.complexity == Complexity.SIMPLE
 
 
 def test_a_kind_label_is_stripped_from_the_description(store):
@@ -393,12 +405,12 @@ def test_the_security_outcome_still_reaches_the_ledger(store, rec):
     assert "built it" in s.memory.render()
 
 
-def test_security_work_does_not_consume_a_rotation_turn(store, rec):
+def test_security_routing_ignores_the_ladder_entirely(store, rec):
     s = _session(store, rec)
-    trust = s.brain_trust
-    assert s.run_task(TaskSpec("t1", "x", complexity=Complexity.SIMPLE)).author == trust[0]
-    s.run_task(TaskSpec("t2", "audit it", kind=TaskKind.SECURITY))
-    assert s.run_task(TaskSpec("t3", "y", complexity=Complexity.SIMPLE)).author == trust[1]
+    for difficulty in (Complexity.ROTE, Complexity.COMPLEX):
+        got = s.run_task(TaskSpec(f"t-{difficulty}", "audit it",
+                                  complexity=difficulty, kind=TaskKind.SECURITY))
+        assert got.author == SOL, difficulty
 
 
 def test_the_verifier_never_verifies_its_own_work(store, rec):

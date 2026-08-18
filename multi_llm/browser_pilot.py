@@ -41,7 +41,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .registry import Capability, models_for
 from .structured import StructuredError, extract_json
-from .task_kinds import ROUTING, TaskKind
+from .task_kinds import DIFFICULTY_LADDER
 
 log = logging.getLogger(__name__)
 
@@ -55,13 +55,13 @@ READ_CHARS = 2000
 def pilot_model(*, routine: bool = False) -> str:
     """Which model should hold the controls.
 
-    Complex flows take the frontend policy's pinned lead -- the routing table
-    already encodes who is best at judging a rendered UI, and this reuses that
-    decision rather than duplicating it. Routine automation takes the first
-    cheap coder in the roster; if the roster someday carries no cheap coder,
-    the complex pilot flies everything rather than nobody flying.
+    Complex flows take the top rung of the difficulty ladder -- the same
+    judgement the router applies to any hard task, reused rather than
+    duplicated. Routine automation takes the first cheap coder in the roster;
+    if the roster someday carries no cheap coder, the complex pilot flies
+    everything rather than nobody flying.
     """
-    complex_pilot = ROUTING[TaskKind.FRONTEND].prefer[0]
+    complex_pilot = DIFFICULTY_LADDER["complex"]
     if not routine:
         return complex_pilot
     cheap = [m for m in models_for(Capability.CHEAP) if Capability.CODE in m.caps]
