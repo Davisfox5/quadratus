@@ -100,9 +100,20 @@ WORKER_TREE: dict = {
     "draft": "openai:gpt-5.6-luna",
 }
 
-#: Where an errand goes when it defeated the cheap tier. One tier up, spent
-#: sparingly -- this burns a premium window.
-ESCALATION_WORKER = "claude:sonnet"
+#: Escalation stays in the family: an errand the base worker could not do,
+#: but which still belongs to that worker's skill (a lookup stays a lookup),
+#: bumps one tier up the same vendor's line rather than jumping sideways to a
+#: different skill set. Operator directive. Two targets carry a caveat: the
+#: Gemini Thinking alias and Grok 4.20 are unverified against live CLIs --
+#: acceptable here because escalation fires rarely and only after the
+#: verified base already failed, and resolve_model falls back to the base if
+#: the bump target is unknown to the roster.
+WORKER_ESCALATION: dict = {
+    "claude:haiku": "claude:sonnet",
+    "gemini:gemini-3.6-flash": "gemini:gemini-3.6-thinking",
+    "openai:gpt-5.6-luna": "openai:gpt-5.6-terra",
+    "grok:grok-4-1-fast": "grok:grok-4.20",
+}
 
 #: The generalist default when the lead names no errand: the tier's most
 #: accurate brain, least likely to be confidently wrong.
@@ -110,12 +121,22 @@ DEFAULT_WORKER = "claude:haiku"
 
 
 def pick_worker(errand: Optional[str] = None, *, demanding: bool = False) -> str:
-    """The worker tree: skill picks the model, difficulty picks the tier."""
-    if demanding:
-        return ESCALATION_WORKER
+    """The worker tree: skill picks the family, difficulty picks the tier.
+
+    ``demanding`` bumps the errand's base worker one tier up its own vendor's
+    line -- the skill stays matched, the horsepower increases. A bump target
+    missing from the roster degrades to the base rather than failing the
+    errand.
+    """
     if errand is None:
-        return DEFAULT_WORKER
-    return WORKER_TREE.get(errand.strip().lower(), DEFAULT_WORKER)
+        base = DEFAULT_WORKER
+    else:
+        base = WORKER_TREE.get(errand.strip().lower(), DEFAULT_WORKER)
+    if demanding:
+        from .registry import resolve
+        bumped = WORKER_ESCALATION.get(base, base)
+        return bumped if resolve(bumped) is not None else base
+    return base
 
 
 def worker_menu() -> str:
@@ -130,12 +151,13 @@ def worker_menu() -> str:
         "(accurate, but its knowledge is old -- current things go to lookup)\n"
         "- code: small snippet or explanation -> Haiku\n"
         "- format / draft: extract, tag, boilerplate -> Luna\n"
-        "- demanding: an errand that defeated the cheap tier -> Sonnet, "
-        "sparingly\n"
-        "If an errand fails: rewrite it, or re-send it unchanged to a "
-        "different worker -- never the same instruction to the same worker "
-        "twice. A worker that lacked a tool it needed will say NEED TOOL; "
-        "reissue that errand with the tool granted."
+        "- demanding: the errand defeated the base worker but the skill still "
+        "fits -> same family, one tier up (Haiku->Sonnet, Flash->Thinking, "
+        "Luna->Terra, Grok Fast->Grok 4.20). Sparingly.\n"
+        "If an errand fails: rewrite it, re-send it unchanged to a different "
+        "worker, or mark it demanding -- never the same instruction to the "
+        "same worker twice. A worker that lacked a tool it needed will say "
+        "NEED TOOL; reissue that errand with the tool granted."
     )
 
 

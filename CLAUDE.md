@@ -68,9 +68,15 @@ Key design decisions already settled:
   rides the ladder rather than anyone having earned a pin.
 - **Workers are picked by errand, not vendor loyalty** (`workers.WORKER_TREE`):
   lookup → Grok 4.1 Fast, read/visual → Gemini Flash, check/code → Haiku,
-  format/draft → Luna, escalation → Sonnet. One skill per vendor, so picking
-  by skill also spreads the four windows. The same-vendor default was retired:
-  caches stay warm through regular use, which the tree guarantees.
+  format/draft → Luna. One skill per vendor, so picking by skill also spreads
+  the four windows. The same-vendor default was retired: caches stay warm
+  through regular use, which the tree guarantees. **Escalation stays in the
+  family** (`WORKER_ESCALATION`): a demanding errand bumps one tier up its own
+  vendor's line — Haiku→Sonnet, Flash→3.6 Thinking, Luna→Terra, Grok
+  Fast→Grok 4.20 — so the skill stays matched while the horsepower rises.
+  The two unverified bump targets are acceptable there because escalation
+  fires rarely, after the verified base already failed, and degrades back to
+  the base if the target leaves the roster.
 - **Worker failure rules**: same prompt + same model twice is refused
   (`RepeatedFailure`); the same prompt on a *different* worker is a changed
   strategy and allowed. Budgets: `max_concurrent` (4) bounds parallel width,

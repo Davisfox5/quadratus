@@ -276,8 +276,28 @@ def test_the_tree_picks_by_errand_and_spreads_vendors():
     assert vendors == {"grok", "gemini", "claude", "openai"}
 
 
-def test_demanding_errands_escalate_one_tier():
-    assert pick_worker("lookup", demanding=True) == "claude:sonnet"
+def test_demanding_errands_escalate_within_their_own_family():
+    """The skill stays matched; the horsepower goes up one tier."""
+    assert pick_worker("check", demanding=True) == "claude:sonnet"
+    assert pick_worker("read", demanding=True) == "gemini:gemini-3.6-thinking"
+    assert pick_worker("format", demanding=True) == "openai:gpt-5.6-terra"
+    assert pick_worker("lookup", demanding=True) == "grok:grok-4.20"
+
+
+def test_a_bump_target_missing_from_the_roster_degrades_to_the_base():
+    from multi_llm.registry import resolve
+    from multi_llm.workers import WORKER_ESCALATION
+    for bumped in WORKER_ESCALATION.values():
+        # every configured bump must resolve today, or pick_worker would
+        # silently fall back -- this test is the tripwire for roster drift
+        assert resolve(bumped) is not None, bumped
+
+
+def test_escalation_never_crosses_vendor_lines():
+    from multi_llm.registry import resolve
+    from multi_llm.workers import WORKER_ESCALATION
+    for base, bumped in WORKER_ESCALATION.items():
+        assert resolve(base).provider == resolve(bumped).provider, base
 
 
 def test_an_unknown_errand_gets_the_careful_generalist():
