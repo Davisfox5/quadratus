@@ -91,10 +91,21 @@ Key design decisions already settled:
   otherwise, marked as such. Metering is observational only — a meter that
   can fail a run has negative value. Prices are a seed sheet, stale by
   assumption.
-- **Critique gets a rebuttal round.** When collaborators reviewed a draft,
-  the lead must revise it, answering every finding — fix or rebut, never
-  silence. Without this the debate informs only the close-out prose while
-  the artifact ships un-amended.
+- **Critique gets a rebuttal round, then fix→verify — never more open
+  debate.** The measured failure of extra debate rounds is conformity
+  (uncritical majority-adoption up to ~85%, peer rationales destabilising
+  correct answers, 2–3× tokens for equal or worse accuracy); the measured
+  success case for iteration is external feedback on a concrete named
+  defect. So reviewers mark findings BLOCKING, re-check exactly those
+  against the revision (never seeing each other, never voting, never
+  widening scope), and the cycle is capped (`max_fix_cycles`); leftovers go
+  to the close-out as open questions.
+- **Browser piloting is core infrastructure** (`browser_pilot.py`,
+  playwright is a baseline dependency): a model drives a real page through a
+  strict one-action-per-turn JSON protocol, the harness executes and
+  observes. Complex flows get the frontend policy's pinned lead
+  (brain-trust grade); routine automations downshift to a cheap coder —
+  recognising an automation and downshifting is how windows are saved.
 - **Questions only the operator can answer go through ASK** — the
   orchestrator emits `ASK: <question>`; the answer becomes a standing ruling
   re-emitted on every render (never re-asked). No channel configured means

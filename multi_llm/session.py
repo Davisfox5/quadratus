@@ -171,6 +171,14 @@ class SessionConfig:
     #: None means an ASK raises :class:`OperatorInputNeeded` so the caller can
     #: collect the answer and resume, rather than the question being guessed.
     ask_operator: Optional[Callable[[str], str]] = None
+    #: How many lead revisions a task may spend answering blocking findings.
+    #: The count is deliberately small and the loop deliberately narrow --
+    #: each extra cycle is a reviewer re-checking its own named findings
+    #: against the revision, never a fresh round of open debate. The measured
+    #: failure of unguided multi-round debate is conformity, not shortage of
+    #: rounds; the measured success case for iteration is external feedback on
+    #: a concrete defect, which is exactly and only what this loop carries.
+    max_fix_cycles: int = 2
 
 
 class Session:
@@ -278,22 +286,61 @@ class Session:
         # Collaborators contribute into the lead's working memory. They see the
         # task and the draft, not the whole session: their value is an
         # independent read, which inheriting the lead's history would erode.
-        notes: List[str] = []
+        notes: List[tuple] = []
         for peer in collaborators:
             note = self.invoke(peer, self._collaborator_prompt(spec, draft, peer))
             task.record("assistant", f"[{peer}] {note}")
             task.keep(note, kind=f"review:{peer}")
-            notes.append(f"[{peer}]\n{note}")
+            notes.append((peer, note))
 
         # The rebuttal round: the lead answers every finding and revises. This
         # is where the debate actually lands in the artifact -- without it,
         # independent reads inform only the close-out prose while the work
         # ships un-amended, which is critique as theatre. Costs one lead
         # invocation, bought only when there were critiques to answer.
+        #
+        # Then fix->verify, not more debate: reviewers who marked findings
+        # BLOCKING re-check only those findings against the revision, and an
+        # unresolved verdict buys at most one more revision. The distinction
+        # is load-bearing. Measured across debate protocols, extra open
+        # rounds produce conformity -- agents uncritically adopting the
+        # majority at rates up to ~85%, peer rationales destabilising
+        # previously-correct answers, at 2-3x the tokens for equal or worse
+        # accuracy -- while iteration grounded in external feedback on a
+        # concrete named defect is the one case that reliably improves the
+        # artifact. So reviewers here never see each other, never vote, and
+        # never widen scope: they check their own findings and nothing else.
         if notes:
-            revision = self.invoke(lead, self._revision_prompt(spec, draft, notes))
+            revision = self.invoke(
+                lead, self._revision_prompt(spec, draft, [f"[{p}]\n{n}" for p, n in notes])
+            )
             task.record("assistant", revision)
             task.keep(revision, kind="revision")
+
+            blocking = [(p, n) for p, n in notes if "BLOCKING" in n.upper()]
+            cycles = 1
+            unresolved = self._recheck_blocking(spec, blocking, revision, task)
+            while unresolved and cycles < self.config.max_fix_cycles:
+                revision = self.invoke(
+                    lead, self._fix_prompt(spec, revision, unresolved)
+                )
+                task.record("assistant", revision)
+                task.keep(revision, kind="revision")
+                cycles += 1
+                unresolved = self._recheck_blocking(
+                    spec, [(p, n) for p, n in blocking
+                           if any(p == up for up, _ in unresolved)],
+                    revision, task,
+                )
+            if unresolved:
+                # The cap ran out with findings still open. They go to the
+                # record loudly rather than being lost in the transcript.
+                task.record(
+                    "user",
+                    "Blocking findings still unresolved at close -- carry them "
+                    "into the summary as open questions:\n"
+                    + "\n".join(f"[{p}] {v}" for p, v in unresolved),
+                )
 
         summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
         summary = task.close(
@@ -531,7 +578,10 @@ class Session:
             f"You are {label.label if label else peer}, contributing an independent "
             "read. Report everything you find with a severity and a confidence; do "
             "not filter to only the important ones. Filtering happens downstream, "
-            "and a reviewer told to be selective suppresses its own findings."
+            "and a reviewer told to be selective suppresses its own findings. "
+            "Prefix any finding that must be fixed before this work is acceptable "
+            "with 'BLOCKING:' -- you will be asked to re-check exactly those "
+            "against the revision."
         )
 
     def _revision_prompt(self, spec: TaskSpec, draft: str, notes: List[str]) -> str:
@@ -544,6 +594,44 @@ class Session:
             "rebut it with a reason -- silence is not a response. A finding "
             "you cannot decide goes to the record as an open question, not "
             "into the void. Produce the complete revised work, not a diff."
+        )
+
+    def _recheck_blocking(
+        self, spec: TaskSpec, blocking: List[tuple], revision: str, task: TaskMemory
+    ) -> List[tuple]:
+        """Have each blocking reviewer re-check its own findings. Nothing else.
+
+        Returns (peer, verdict) pairs for findings still unresolved. Scope is
+        the narrowest that does the job: the reviewer sees its own findings
+        and the revision -- not the other reviewers, not a vote, not an
+        invitation to find new problems. Widening any of those is where
+        debate protocols measurably tip into conformity.
+        """
+        unresolved: List[tuple] = []
+        for peer, note in blocking:
+            verdict = self.invoke(
+                peer,
+                f"Task: {spec.description}\n\n"
+                f"You reviewed this work and raised these findings:\n{note}\n\n"
+                f"The revised work:\n{revision}\n\n"
+                "Check only your BLOCKING findings against the revision. Do "
+                "not raise new findings. Reply exactly 'RESOLVED' if every "
+                "blocking finding is addressed, otherwise 'UNRESOLVED: <what "
+                "specifically remains>'.",
+            )
+            task.record("assistant", f"[{peer} recheck] {verdict}")
+            if not verdict.strip().upper().startswith("RESOLVED"):
+                unresolved.append((peer, verdict.strip()))
+        return unresolved
+
+    def _fix_prompt(self, spec: TaskSpec, revision: str, unresolved: List[tuple]) -> str:
+        remaining = "\n\n".join(f"[{p}]\n{v}" for p, v in unresolved)
+        return (
+            f"Task: {spec.description}\n\n"
+            f"Your current work:\n{revision}\n\n"
+            f"These blocking findings remain unresolved:\n{remaining}\n\n"
+            "Fix them, or state precisely why the reviewer is wrong. Produce "
+            "the complete revised work."
         )
 
     def _verifier_prompt(self, spec: TaskSpec, draft: str, verifier: str) -> str:

@@ -16,6 +16,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "colorama>=0.4.6",
     "gradio>=4.44.0",
+    "playwright>=1.40",
 ]
 
 [project.optional-dependencies]
@@ -23,11 +24,9 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.5",
 ]
-# Browser evidence for frontend verification (multi_llm.browser). Optional so
-# users who never run frontend tasks carry no browser stack.
-browser = [
-    "playwright>=1.40",
-]
+# Kept for compatibility: playwright is now a baseline dependency, so this
+# extra is empty. Browser evidence and piloting are core infrastructure.
+browser = []
 
 [project.scripts]
 multi-llm = "multi_llm.cli:main"

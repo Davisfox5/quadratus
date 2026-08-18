@@ -182,3 +182,75 @@ def test_the_revision_lands_before_the_closeout(store):
     revise_at = next(i for i, p in enumerate(order) if "Revise your work" in p)
     close_at = next(i for i, p in enumerate(order) if "The task is finished" in p)
     assert revise_at < close_at
+
+
+# -- the fix->verify cycle ----------------------------------------------------
+
+
+class BlockingRecorder(Recorder):
+    """Collaborators raise a BLOCKING finding; rechecks resolve on a script."""
+
+    def __init__(self, recheck_verdicts):
+        super().__init__()
+        self._verdicts = list(recheck_verdicts)
+
+    def __call__(self, model, prompt, system=None):
+        if "contributing an independent read" in prompt:
+            self.calls.append({"model": model, "prompt": prompt})
+            return "BLOCKING: the escaping drops surrogate pairs"
+        if "Check only your BLOCKING findings" in prompt:
+            self.calls.append({"model": model, "prompt": prompt})
+            return self._verdicts.pop(0)
+        return super().__call__(model, prompt, system)
+
+
+def test_a_blocking_finding_triggers_a_recheck(store):
+    rec = BlockingRecorder(["RESOLVED"])
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
+    rechecks = [c for c in rec.calls if "Check only your BLOCKING" in c["prompt"]]
+    assert len(rechecks) == 1
+
+
+def test_an_unresolved_verdict_buys_exactly_one_more_revision(store):
+    rec = BlockingRecorder(["UNRESOLVED: still drops them", "RESOLVED"])
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
+    fixes = [c for c in rec.calls if "blocking findings remain unresolved"
+             in c["prompt"].lower()]
+    assert len(fixes) == 1
+
+
+def test_the_cycle_is_capped_and_leftovers_reach_the_closeout(store):
+    rec = BlockingRecorder(["UNRESOLVED: no", "UNRESOLVED: still no"])
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
+    rechecks = [c for c in rec.calls if "Check only your BLOCKING" in c["prompt"]]
+    assert len(rechecks) == 2  # capped by max_fix_cycles=2
+    closeout = next(c["prompt"] for c in rec.calls if "The task is finished" in c["prompt"])
+    assert "still unresolved at close" in closeout
+
+
+def test_non_blocking_critiques_get_no_recheck(store):
+    rec = Recorder()  # plain reviews carry no BLOCKING marker
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
+    assert not any("Check only your BLOCKING" in c["prompt"] for c in rec.calls)
+
+
+def test_reviewers_are_told_how_to_mark_blocking_findings(store):
+    rec = Recorder()
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
+    review = next(c["prompt"] for c in rec.calls
+                  if "contributing an independent read" in c["prompt"])
+    assert "BLOCKING" in review
+
+
+def test_rechecks_never_widen_scope(store):
+    rec = BlockingRecorder(["RESOLVED"])
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
+    recheck = next(c["prompt"] for c in rec.calls
+                   if "Check only your BLOCKING" in c["prompt"])
+    assert "Do not raise new findings" in recheck
