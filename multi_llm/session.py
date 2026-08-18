@@ -42,7 +42,7 @@ from .routing import (
 from .task_kinds import MAX_TASK_LINES, ROUTING, TaskKind, guidance_for, policy_for
 from .task_kinds import route as route_kind
 from .usage import UsageMeter
-from .workers import WorkerBudget, WorkerPool
+from .workers import WorkerBudget, WorkerPool, worker_menu
 
 log = logging.getLogger(__name__)
 
@@ -553,6 +553,7 @@ class Session:
         if map_block:
             parts.append(map_block)
         parts.append("You are leading this task. Produce the complete work.")
+        parts.append(worker_menu())
         guidance = guidance_for(spec.kind)
         if guidance:
             # Stated as requirements rather than advice. These exist because

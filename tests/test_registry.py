@@ -45,9 +45,12 @@ def test_min_context_filter_selects_the_widest_windows():
     assert wide == {"openai:gpt-5.6-sol", "gemini:gemini-3.1-pro", "grok:grok-4.3"}
 
 
-def test_grok_420_advertises_the_largest_window():
-    widest = max(ROSTER, key=lambda m: m.context)
-    assert widest.key == "grok:grok-4.20"
+def test_the_largest_advertised_windows_are_both_unverified_groks():
+    widest = max(m.context for m in ROSTER)
+    claimants = {m.key for m in ROSTER if m.context == widest}
+    assert claimants == {"grok:grok-4.20", "grok:grok-4-1-fast"}
+    for key in claimants:
+        assert Capability.LONG_CONTEXT not in resolve(key).caps
 
 
 def test_the_largest_advertised_window_is_not_a_long_context_candidate():

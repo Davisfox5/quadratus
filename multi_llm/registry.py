@@ -215,6 +215,15 @@ ROSTER: List[ModelSpec] = [
         "RETRIEVAL is also exposed as a consultant function.",
     ),
     _spec(
+        "grok", "grok-4-1-fast", "Grok 4.1 Fast", 2000 * K, "fastest",
+        [Capability.CHEAP, Capability.RETRIEVAL, Capability.AGENTIC],
+        "The worker tier's scout: xAI's best tool-calling model, tuned for "
+        "live web lookup, at the lowest prices in the fleet. Mid-pack at "
+        "reasoning and code -- not what it is hired for. Its advertised 2M "
+        "window follows the same rule as Grok 4.20's: unverified, so no "
+        "LONG_CONTEXT tag until it passes the probe.",
+    ),
+    _spec(
         "grok", "grok-4.3", "Grok 4.3", 1000 * K, "moderate",
         [Capability.LONG_CONTEXT, Capability.REASON],
         "Kept in the roster for its 1M window against 4.6's 500K.",

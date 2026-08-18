@@ -66,6 +66,24 @@ Key design decisions already settled:
   Grok 4.7 and Gemini 3.5 Pro releases.
 - **An empty `prefer` is a statement, not an omission** — it means the kind
   rides the ladder rather than anyone having earned a pin.
+- **Workers are picked by errand, not vendor loyalty** (`workers.WORKER_TREE`):
+  lookup → Grok 4.1 Fast, read/visual → Gemini Flash, check/code → Haiku,
+  format/draft → Luna, escalation → Sonnet. One skill per vendor, so picking
+  by skill also spreads the four windows. The same-vendor default was retired:
+  caches stay warm through regular use, which the tree guarantees.
+- **Worker failure rules**: same prompt + same model twice is refused
+  (`RepeatedFailure`); the same prompt on a *different* worker is a changed
+  strategy and allowed. Budgets: `max_concurrent` (4) bounds parallel width,
+  `max_per_task` (12) is the lifetime backstop — sized so a lead can rewrite
+  or reroute failed errands without a round trip through the orchestrator.
+  Workers run concurrently (`commission_many`); a failed errand returns as a
+  result with `error`, never tearing down siblings.
+- **Tool requests flow worker → lead → reissue.** A worker lacking access says
+  `NEED TOOL: <what>` in its one answer; the lead reissues the errand with the
+  grant (`allow_writes`). The asking worker is wiped as normal. No mid-task
+  dialogue, no orchestrator involvement. Gemini 3.6 Thinking and Grok 4.20/4.3
+  are deliberately not workers: wrong shape, unverified, or dominated by 4.1
+  Fast.
 - **Some work is gated, not routed.** Where every model is bad at something —
   concurrency, performance — there is nobody to prefer, so the policy attaches
   a deterministic check instead of a model. Performance additionally names a

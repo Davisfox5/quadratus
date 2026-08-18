@@ -247,9 +247,11 @@ def test_a_closed_task_cannot_commission(store, pool):
         pool.commission(task=task, parent_key="claude:opus", prompt="go", label="w")
 
 
-def test_workers_default_to_the_parents_own_provider(store, pool):
-    """Same-provider workers reuse the parent's cached prefix."""
-    assert pool.preferred_model("claude:opus").startswith("claude:")
+def test_the_worker_tree_not_vendor_loyalty_picks_the_default(store, pool):
+    """No errand named -> the tier's most accurate generalist, regardless of
+    who the parent is."""
+    assert pool.resolve_model(None) == "claude:haiku"
+    assert pool.resolve_model(None, errand="lookup") == "grok:grok-4-1-fast"
 
 
 def test_budgets_are_tracked_per_task_not_globally(store):

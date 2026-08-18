@@ -63,6 +63,7 @@ PRICES: Dict[str, Price] = {
     "gemini:gemini-3.6-flash": Price(0.3, 2.5),
     "gemini:gemini-3.6-thinking": Price(2.0, 12.0),
     "grok:grok-4.6": Price(3.0, 15.0),
+    "grok:grok-4-1-fast": Price(0.2, 0.5),
     "grok:grok-4.3": Price(3.0, 15.0),
     "grok:grok-4.20": Price(5.0, 25.0),
 }

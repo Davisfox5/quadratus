@@ -176,7 +176,7 @@ def test_a_verbatim_retry_of_a_failed_prompt_is_refused(store):
     task = TaskMemory("t1", OPUS, store)
     with pytest.raises(RuntimeError, match="boom"):
         pool.commission(task=task, parent_key=OPUS, prompt="fetch the RFC", label="a")
-    with pytest.raises(RepeatedFailure, match="rephrase"):
+    with pytest.raises(RepeatedFailure, match="Rephrase"):
         pool.commission(task=task, parent_key=OPUS, prompt="fetch the RFC", label="b")
 
 
@@ -263,3 +263,123 @@ def test_no_gate_means_no_extra_invocation(store):
     s = _session(store, rec)
     s.run(max_tasks=1)
     assert len(rec.calls) == 1  # just next_task; no plan round
+
+
+# -- the worker tree, concurrency, and tool requests ---------------------------
+
+from multi_llm.workers import pick_worker, worker_menu  # noqa: E402
+
+
+def test_the_tree_picks_by_errand_and_spreads_vendors():
+    picks = {pick_worker(e) for e in ("lookup", "read", "check", "format")}
+    vendors = {p.split(":")[0] for p in picks}
+    assert vendors == {"grok", "gemini", "claude", "openai"}
+
+
+def test_demanding_errands_escalate_one_tier():
+    assert pick_worker("lookup", demanding=True) == "claude:sonnet"
+
+
+def test_an_unknown_errand_gets_the_careful_generalist():
+    assert pick_worker("interpretive-dance") == "claude:haiku"
+
+
+def test_the_menu_reaches_the_lead_prompt(store, rec):
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    lead = next(c["prompt"] for c in rec.calls if "You are leading" in c["prompt"])
+    assert "Worker bees" in lead and "lookup" in lead and "NEED TOOL" in lead
+
+
+def test_the_same_prompt_may_be_rerouted_to_a_different_worker(store):
+    """A lookup that failed on a stale-knowledge model is rationally re-sent,
+    unchanged, to the scout. Only same-prompt-same-model is a death spiral."""
+    def run(model, prompt):
+        if model == "claude:haiku":
+            raise RuntimeError("knowledge too old")
+        return "found it"
+
+    pool = WorkerPool(store=store, run=run)
+    task = TaskMemory("t1", OPUS, store)
+    with pytest.raises(RuntimeError):
+        pool.commission(task=task, parent_key=OPUS, prompt="latest React API", label="a")
+    got = pool.commission(task=task, parent_key=OPUS, prompt="latest React API",
+                          label="b", errand="lookup")
+    assert got.summary == "found it"
+    assert got.model == "grok:grok-4-1-fast"
+
+
+def test_workers_actually_run_concurrently(store):
+    """Three errands that each wait for the others can only finish together."""
+    import threading
+    barrier = threading.Barrier(3, timeout=5)
+
+    def run(model, prompt):
+        barrier.wait()
+        return "ok"
+
+    pool = WorkerPool(store=store, run=run)
+    task = TaskMemory("t1", OPUS, store)
+    results = pool.commission_many(
+        task=task, parent_key=OPUS,
+        jobs=[{"prompt": f"p{i}", "label": f"w{i}"} for i in range(3)],
+    )
+    assert [r.error for r in results] == [None, None, None]
+
+
+def test_one_failed_errand_does_not_tear_down_its_siblings(store):
+    def run(model, prompt):
+        if "bad" in prompt:
+            raise RuntimeError("boom")
+        return "fine"
+
+    pool = WorkerPool(store=store, run=run)
+    task = TaskMemory("t1", OPUS, store)
+    results = pool.commission_many(
+        task=task, parent_key=OPUS,
+        jobs=[{"prompt": "good one", "label": "a"},
+              {"prompt": "bad one", "label": "b"},
+              {"prompt": "another good", "label": "c"}],
+    )
+    assert [bool(r.error) for r in results] == [False, True, False]
+    assert any("FAILED" in t.content for t in task.turns())
+
+
+def test_a_worker_can_ask_for_a_tool_it_lacks(store):
+    pool = WorkerPool(store=store, run=lambda m, p: "NEED TOOL: file write access\nI can draft it but not save it.")
+    task = TaskMemory("t1", OPUS, store)
+    got = pool.commission(task=task, parent_key=OPUS, prompt="save the config", label="w")
+    assert got.needs_tool == "file write access"
+    assert "needs a tool" in got.summary
+
+
+def test_the_reissued_errand_carries_the_grant(store):
+    seen = {}
+
+    def run(model, prompt, allow_writes=False):
+        seen["allow_writes"] = allow_writes
+        return "done"
+
+    pool = WorkerPool(store=store, run=run)
+    task = TaskMemory("t1", OPUS, store)
+    pool.commission(task=task, parent_key=OPUS, prompt="save the config",
+                    label="w", allow_writes=True)
+    assert seen["allow_writes"] is True
+
+
+def test_the_lifetime_ceiling_still_exists(store):
+    from multi_llm.workers import FanOutExceeded, WorkerBudget
+    pool = WorkerPool(store=store, run=lambda m, p: "ok",
+                      budget=WorkerBudget(max_per_task=2))
+    task = TaskMemory("t1", OPUS, store)
+    pool.commission(task=task, parent_key=OPUS, prompt="a", label="a")
+    pool.commission(task=task, parent_key=OPUS, prompt="b", label="b")
+    with pytest.raises(FanOutExceeded):
+        pool.commission(task=task, parent_key=OPUS, prompt="c", label="c")
+
+
+def test_worker_menu_names_every_errand_in_the_tree():
+    from multi_llm.workers import WORKER_TREE
+    menu = worker_menu()
+    for errand in WORKER_TREE:
+        assert errand in menu, errand
