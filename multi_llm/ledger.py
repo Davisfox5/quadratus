@@ -102,6 +102,12 @@ class Ledger:
         #: Rules that must survive every render. Held outside the entries so
         #: they cannot be displaced by volume.
         self.invariants: List[str] = list(invariants or [])
+        #: Operator answers to questions only they could answer. Same
+        #: treatment as invariants -- re-emitted verbatim on every render --
+        #: because a ruling that gets buried will be asked again, and asking
+        #: the operator the same question twice is the failure the ASK channel
+        #: exists to prevent.
+        self.rulings: List[str] = []
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -179,6 +185,12 @@ class Ledger:
             blocks.append(
                 "## Standing rules (always in force)\n\n"
                 + "\n".join(f"- {rule}" for rule in self.invariants)
+            )
+
+        if self.rulings:
+            blocks.append(
+                "## Operator rulings (asked and answered; do not re-ask)\n\n"
+                + "\n".join(f"- {r}" for r in self.rulings)
             )
 
         shown = self._entries if recent is None else self._entries[-recent:]

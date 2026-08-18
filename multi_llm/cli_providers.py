@@ -104,6 +104,29 @@ def _extract_plain(stdout: str) -> str:
     return stdout.strip()
 
 
+def _extract_claude_usage(stdout: str) -> Optional[Dict[str, int]]:
+    """Real token counts from the claude JSON envelope, when present.
+
+    Cache reads and creations are folded into ``input_tokens``: the meter's
+    question is what the call would have cost on API keys, and cached input is
+    still billed input there (at a different rate the seed sheet does not try
+    to model -- the counterfactual is deliberately the conservative one).
+    """
+    try:
+        usage = json.loads(stdout).get("usage") or {}
+        input_tokens = (
+            int(usage.get("input_tokens", 0))
+            + int(usage.get("cache_read_input_tokens", 0))
+            + int(usage.get("cache_creation_input_tokens", 0))
+        )
+        output_tokens = int(usage.get("output_tokens", 0))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if input_tokens == 0 and output_tokens == 0:
+        return None
+    return {"input_tokens": input_tokens, "output_tokens": output_tokens}
+
+
 @dataclass
 class CLISpec:
     """Declarative description of how to drive one vendor CLI."""
@@ -128,6 +151,11 @@ class CLISpec:
     #: Pass the prompt on stdin rather than as a positional arg. Safer for very
     #: long prompts, which can exceed the OS argv limit.
     prompt_on_stdin: bool = False
+    #: Pull real token counts out of CLI stdout, as a dict with
+    #: ``input_tokens``/``output_tokens`` (or None when the CLI does not report
+    #: them). Measured counts beat any character estimate, so a spec that can
+    #: provide this should.
+    extract_usage: Optional[Callable[[str], Optional[Dict[str, int]]]] = None
     #: Whether these flags have been checked against a real binary.
     verified: bool = False
     #: Environment variables to set for the subprocess.
@@ -151,6 +179,7 @@ CLAUDE_SPEC = CLISpec(
     # length limit, which whole code artifacts would otherwise hit.
     prompt_on_stdin=True,
     verified=True,
+    extract_usage=_extract_claude_usage,
 )
 
 #: Unverified: no ``codex`` binary was available to check against.
@@ -225,6 +254,9 @@ class CLIProvider(LLMProvider):
         self._workdir = workdir
         self._owned_workdir: Optional[str] = None
         self._allow_writes = allow_writes
+        #: Real token counts from the most recent call, when the CLI reported
+        #: them; None otherwise. Read by metering glue, never load-bearing.
+        self.last_usage: Optional[Dict[str, int]] = None
         super().__init__(model, api_key="cli-oauth", **kwargs)
 
     # -- lifecycle -----------------------------------------------------------
@@ -325,6 +357,11 @@ class CLIProvider(LLMProvider):
                 f"{self.label} CLI exited {proc.returncode}: {detail}"
             )
 
+        if self.spec.extract_usage is not None:
+            try:
+                self.last_usage = self.spec.extract_usage(proc.stdout)
+            except Exception:  # noqa: BLE001 -- metering must never fail a call
+                self.last_usage = None
         return self.spec.extract(proc.stdout)
 
     def _retryable(self, exc: Exception) -> bool:

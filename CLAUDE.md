@@ -86,3 +86,21 @@ Key design decisions already settled:
 - **The plan gate is opt-in** (`SessionConfig.plan_gate`): the operator can
   review the full expected task list before any window is spent. Reviewing
   the plan is reviewing the work at a fraction of the cost.
+- **Every invocation is metered against API list prices** (`usage.py`):
+  measured token counts when the CLI reports them, ~4-chars/token estimates
+  otherwise, marked as such. Metering is observational only — a meter that
+  can fail a run has negative value. Prices are a seed sheet, stale by
+  assumption.
+- **Critique gets a rebuttal round.** When collaborators reviewed a draft,
+  the lead must revise it, answering every finding — fix or rebut, never
+  silence. Without this the debate informs only the close-out prose while
+  the artifact ships un-amended.
+- **Questions only the operator can answer go through ASK** — the
+  orchestrator emits `ASK: <question>`; the answer becomes a standing ruling
+  re-emitted on every render (never re-asked). No channel configured means
+  `OperatorInputNeeded` is raised, not guessed around. Three asks per
+  decision, then it is interrogating, not deciding (`RunStalled`).
+- **Frontend evidence comes from a real browser** (`browser.py`, optional
+  `playwright` extra): screenshot, console errors (including late throws),
+  failed requests. Deterministic and dumb by design — it produces evidence,
+  reviewers produce judgement.

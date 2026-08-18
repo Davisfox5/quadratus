@@ -23,6 +23,11 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.5",
 ]
+# Browser evidence for frontend verification (multi_llm.browser). Optional so
+# users who never run frontend tasks carry no browser stack.
+browser = [
+    "playwright>=1.40",
+]
 
 [project.scripts]
 multi-llm = "multi_llm.cli:main"

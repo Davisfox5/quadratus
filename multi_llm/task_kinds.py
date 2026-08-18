@@ -232,9 +232,14 @@ ROUTING: Dict[str, KindPolicy] = {
             "the harness dominates: a screenshot-verification loop changes "
             "outcomes more than the model does."
         ),
+        tool_first=(
+            "a rendered-page check (multi_llm.browser.render_page: screenshot, "
+            "console errors, failed requests from a real headless browser)"
+        ),
         gate=(
             "Verify the rendered result visually before claiming it works; a "
-            "frontend change that compiles is not a frontend change that works."
+            "frontend change that compiles is not a frontend change that works. "
+            "Late console errors count: frameworks routinely throw after load."
         ),
     ),
     TaskKind.MOBILE: KindPolicy(

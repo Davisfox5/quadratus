@@ -41,11 +41,29 @@ from .routing import (
 )
 from .task_kinds import MAX_TASK_LINES, ROUTING, TaskKind, guidance_for, policy_for
 from .task_kinds import route as route_kind
+from .usage import UsageMeter
 from .workers import WorkerBudget, WorkerPool
 
 log = logging.getLogger(__name__)
 
-__all__ = ["Complexity", "TaskSpec", "Session", "SessionConfig", "RunStalled"]
+__all__ = [
+    "Complexity",
+    "TaskSpec",
+    "Session",
+    "SessionConfig",
+    "RunStalled",
+    "OperatorInputNeeded",
+]
+
+
+class OperatorInputNeeded(RuntimeError):
+    """The orchestrator asked a question only the operator can answer.
+
+    Raised when no ``ask_operator`` channel is configured. Deliberately not
+    swallowed: a system that guesses the answer to a question it explicitly
+    flagged as operator-only has defeated the point of asking. The question
+    is in ``args[0]``; answer it, add it to the session's rulings, and resume.
+    """
 
 
 class RunStalled(RuntimeError):
@@ -144,6 +162,15 @@ class SessionConfig:
     #: executes -- the operator reviews the plan at the moment it is cheap to
     #: change, not after the window is spent. None runs ungated.
     plan_gate: Optional[Callable[[str], bool]] = None
+    #: Records every invocation with its API-price counterfactual. Purely
+    #: observational: metering failure never fails a run.
+    usage_meter: Optional["UsageMeter"] = None
+    #: How the system reaches the operator when only they can answer -- the
+    #: orchestrator emits ``ASK: <question>`` instead of a task, and this
+    #: callable returns the answer, which is recorded as a standing ruling.
+    #: None means an ASK raises :class:`OperatorInputNeeded` so the caller can
+    #: collect the answer and resume, rather than the question being guessed.
+    ask_operator: Optional[Callable[[str], str]] = None
 
 
 class Session:
@@ -161,6 +188,8 @@ class Session:
     ) -> None:
         self.config = config or SessionConfig()
         self.store = store
+        if self.config.usage_meter is not None:
+            invoke = self.config.usage_meter.wrap(invoke)
         self.invoke = invoke
         self._available = available or (lambda _key: True)
         self.memory = PersistentMemory(goal, store, invariants=invariants)
@@ -249,10 +278,22 @@ class Session:
         # Collaborators contribute into the lead's working memory. They see the
         # task and the draft, not the whole session: their value is an
         # independent read, which inheriting the lead's history would erode.
+        notes: List[str] = []
         for peer in collaborators:
             note = self.invoke(peer, self._collaborator_prompt(spec, draft, peer))
             task.record("assistant", f"[{peer}] {note}")
             task.keep(note, kind=f"review:{peer}")
+            notes.append(f"[{peer}]\n{note}")
+
+        # The rebuttal round: the lead answers every finding and revises. This
+        # is where the debate actually lands in the artifact -- without it,
+        # independent reads inform only the close-out prose while the work
+        # ships un-amended, which is critique as theatre. Costs one lead
+        # invocation, bought only when there were critiques to answer.
+        if notes:
+            revision = self.invoke(lead, self._revision_prompt(spec, draft, notes))
+            task.record("assistant", revision)
+            task.keep(revision, kind="revision")
 
         summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
         summary = task.close(
@@ -333,20 +374,50 @@ class Session:
         Returns None when it reports the goal met. The orchestrator sees
         summaries with pointers, so if the decision turns on a detail a summary
         skipped it can fetch the original rather than guess.
+
+        The orchestrator may also reply ``ASK: <question>`` when the decision
+        turns on something only the operator knows -- scope, taste, a business
+        constraint no artifact can settle. The answer is recorded as a
+        standing ruling and re-emitted on every render, so a question is never
+        asked twice, and the orchestrator is re-prompted with the ruling in
+        hand. Bounded, so a confused orchestrator cannot interrogate the
+        operator in a loop.
+
+        Raises:
+            OperatorInputNeeded: on an ASK when no ``ask_operator`` channel is
+                configured. Guessing an answer the orchestrator explicitly
+                flagged as operator-only would defeat the point of asking.
         """
         seat = self.seat()
-        reply = self.invoke(
-            seat.key,
-            self.memory.render(
-                current=(
-                    "Name the single next task, or reply exactly DONE if the goal "
-                    "is met. Use the artifact pointers above if a detail matters."
-                    f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}"
+        for _ in range(_MAX_ASKS_PER_DECISION):
+            reply = self.invoke(
+                seat.key,
+                self.memory.render(
+                    current=(
+                        "Name the single next task, or reply exactly DONE if the "
+                        "goal is met. Use the artifact pointers above if a detail "
+                        "matters. If the decision turns on something only the "
+                        "operator can answer, reply 'ASK: <one question>' instead."
+                        f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}"
+                    ),
+                    recent=self.config.recent_entries,
+                    extra=self._map_block(),
                 ),
-                recent=self.config.recent_entries,
-                extra=self._map_block(),
-            ),
-        )
+            )
+            stripped = reply.strip()
+            if not stripped.upper().startswith("ASK:"):
+                break
+            question = stripped[4:].strip()
+            if self.config.ask_operator is None:
+                raise OperatorInputNeeded(question)
+            answer = self.config.ask_operator(question)
+            self.memory.ledger.rulings.append(f"Q: {question} -- A: {answer}")
+        else:
+            raise RunStalled(
+                f"the orchestrator asked the operator {_MAX_ASKS_PER_DECISION} "
+                f"questions without naming a task; it is interrogating, not "
+                f"deciding."
+            )
         # Strip any KIND label before testing for DONE: an orchestrator that
         # dutifully labels its final reply must still be able to end the run,
         # not spawn a task whose description is the word DONE.
@@ -463,6 +534,18 @@ class Session:
             "and a reviewer told to be selective suppresses its own findings."
         )
 
+    def _revision_prompt(self, spec: TaskSpec, draft: str, notes: List[str]) -> str:
+        joined = "\n\n".join(notes)
+        return (
+            f"Task: {spec.description}\n\n"
+            f"Your draft:\n{draft}\n\n"
+            f"Independent reviews of it:\n{joined}\n\n"
+            "Revise your work. Address every finding explicitly: fix it, or "
+            "rebut it with a reason -- silence is not a response. A finding "
+            "you cannot decide goes to the record as an open question, not "
+            "into the void. Produce the complete revised work, not a diff."
+        )
+
     def _verifier_prompt(self, spec: TaskSpec, draft: str, verifier: str) -> str:
         label = resolve(verifier)
         return (
@@ -502,6 +585,13 @@ class Session:
                     topic=topic, note=note, author=lead, session=spec.task_id
                 )
         return summary, reasoning, dead_ends
+
+
+#: How many operator questions one decision may spend before it is judged to
+#: be interrogating rather than deciding. Three is generous: a decision that
+#: genuinely needs more operator input than that is a scoping conversation,
+#: which belongs in the interview, not the loop.
+_MAX_ASKS_PER_DECISION = 3
 
 
 #: Asks the orchestrator to label the task so :mod:`multi_llm.task_kinds` can
