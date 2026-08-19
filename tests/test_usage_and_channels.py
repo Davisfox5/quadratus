@@ -21,6 +21,7 @@ from .test_session import Recorder
 
 FABLE = "claude:fable"
 OPUS = "claude:opus"
+SOL = "openai:gpt-5.6-sol"
 
 
 @pytest.fixture
@@ -254,3 +255,160 @@ def test_rechecks_never_widen_scope(store):
     recheck = next(c["prompt"] for c in rec.calls
                    if "Check only your BLOCKING" in c["prompt"])
     assert "Do not raise new findings" in recheck
+
+
+# -- the fetch channel --------------------------------------------------------
+
+
+class FetchingRecorder(Recorder):
+    """The orchestrator or lead asks for an artifact once, then answers."""
+
+    def __init__(self, fetch_id, **kw):
+        super().__init__(**kw)
+        self._fetch_id = fetch_id
+        self._asked = set()
+
+    def __call__(self, model, prompt, system=None):
+        marker = (model, "lead" if "You are leading" in prompt else "orch")
+        if ("Fetched artifacts" not in prompt and marker not in self._asked
+                and ("You are leading" in prompt or "Name the single next task" in prompt)):
+            self._asked.add(marker)
+            self.calls.append({"model": model, "prompt": prompt})
+            return f"FETCH: {self._fetch_id}"
+        return super().__call__(model, prompt, system)
+
+
+def test_the_orchestrator_can_open_an_artifact_before_deciding(store):
+    ref = store.put("the summary omitted this exact escaping rule",
+                    kind="draft", author=OPUS)
+    rec = FetchingRecorder(ref.id, next_tasks=["do the thing", "DONE"])
+    s = _session(store, rec)
+    spec = s.next_task()
+    assert spec.description == "do the thing"
+    served = [c["prompt"] for c in rec.calls if "Fetched artifacts" in c["prompt"]]
+    assert served and "exact escaping rule" in served[0]
+
+
+def test_a_lead_can_open_an_artifact_before_drafting(store):
+    ref = store.put("full detail the preview skipped", kind="draft", author=OPUS)
+    rec = FetchingRecorder(ref.id)
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    served = [c["prompt"] for c in rec.calls
+              if "Fetched artifacts" in c["prompt"] and "You are leading" in c["prompt"]]
+    assert served and "full detail the preview skipped" in served[0]
+
+
+def test_an_unknown_artifact_id_is_corrected_not_fatal(store):
+    rec = FetchingRecorder("no-such-id", next_tasks=["do the thing", "DONE"])
+    s = _session(store, rec)
+    assert s.next_task().description == "do the thing"
+    served = [c["prompt"] for c in rec.calls if "Fetched artifacts" in c["prompt"]]
+    assert served and "check the id" in served[0]
+
+
+def test_fetching_is_budgeted(store):
+    class Greedy(Recorder):
+        def __call__(self, model, prompt, system=None):
+            self.calls.append({"model": model, "prompt": prompt})
+            if "Name the single next task" in prompt:
+                return "FETCH: aaaaaaaaaaaa"  # forever
+            return super().__call__(model, prompt, system)
+
+    rec = Greedy()
+    s = _session(store, rec)
+    s.next_task()  # must terminate
+    orch_calls = [c for c in rec.calls if "Name the single next task" in c["prompt"]]
+    assert len(orch_calls) <= 1 + s.config.max_fetches
+
+
+def test_a_draft_mentioning_fetch_in_prose_is_not_a_request(store):
+    rec = Recorder()  # replies "[model] output" -- never a bare FETCH line
+    s = _session(store, rec)
+    got = s.run_task(TaskSpec("t1", "explain FETCH: semantics", complexity=Complexity.SIMPLE))
+    assert got.summary  # ran straight through
+
+
+# -- the consult channel ------------------------------------------------------
+
+
+class ConsultingRecorder(Recorder):
+    """The lead asks Sol one question, then drafts with the answer."""
+
+    def __init__(self, consult_line="CONSULT Sol: is bcrypt still the right choice?"):
+        super().__init__()
+        self._line = consult_line
+        self._asked = False
+
+    def __call__(self, model, prompt, system=None):
+        if "You are leading" in prompt and not self._asked:
+            self._asked = True
+            self.calls.append({"model": model, "prompt": prompt})
+            return self._line
+        return super().__call__(model, prompt, system)
+
+
+def test_a_lead_can_consult_a_named_peer(store):
+    rec = ConsultingRecorder()
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "build the login flow", complexity=Complexity.SIMPLE))
+    consults = [c for c in rec.calls if "area of strength" in c["prompt"]]
+    assert len(consults) == 1
+    assert consults[0]["model"] == SOL
+    assert "bcrypt" in consults[0]["prompt"]
+
+
+def test_the_consultant_answers_blind(store):
+    """The consultant sees the task and the question -- never the draft, the
+    ledger, or the session. Expertise, not agreement."""
+    rec = ConsultingRecorder()
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "build the login flow", complexity=Complexity.SIMPLE))
+    consult = next(c["prompt"] for c in rec.calls if "area of strength" in c["prompt"])
+    assert "Build a JSON parser" not in consult   # no goal/ledger
+    assert "You are leading" not in consult       # no lead prompt
+
+
+def test_the_answer_returns_to_the_lead_and_is_filed(store):
+    rec = ConsultingRecorder()
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "build the login flow", complexity=Complexity.SIMPLE))
+    redraft = [c["prompt"] for c in rec.calls
+               if "Consult answers" in c["prompt"] and "You are leading" in c["prompt"]]
+    assert redraft
+    kinds = {r.kind for r in s.memory.ledger.refs()}
+    assert f"consult:{SOL}" in kinds
+
+
+def test_the_lead_cannot_consult_itself_or_strangers(store):
+    rec = ConsultingRecorder(consult_line="CONSULT Grok 4.6: hmm?")
+    s = _session(store, rec)
+    # lead for a SIMPLE task IS grok -- consulting itself must not resolve
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert not any("area of strength" in c["prompt"] for c in rec.calls)
+    redraft = [c["prompt"] for c in rec.calls if "not a member you can consult" in c["prompt"]]
+    assert redraft
+
+
+def test_the_consult_budget_is_enforced(store):
+    class Chatty(Recorder):
+        def __call__(self, model, prompt, system=None):
+            if "You are leading" in prompt:
+                self.calls.append({"model": model, "prompt": prompt})
+                return "CONSULT Sol: another question?"
+            return super().__call__(model, prompt, system)
+
+    rec = Chatty()
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    consults = [c for c in rec.calls if "area of strength" in c["prompt"]]
+    assert len(consults) == s.config.max_consults
+    assert any("consult budget spent" in c["prompt"] for c in rec.calls)
+
+
+def test_leads_are_told_the_channels_exist(store):
+    rec = Recorder()
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    lead = next(c["prompt"] for c in rec.calls if "You are leading" in c["prompt"])
+    assert "FETCH:" in lead and "CONSULT" in lead

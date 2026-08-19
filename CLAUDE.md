@@ -138,6 +138,15 @@ Key design decisions already settled:
   observes. Complex flows get the frontend policy's pinned lead
   (brain-trust grade); routine automations downshift to a cheap coder —
   recognising an automation and downshifting is how windows are saved.
+- **Two request channels keep one-shot calls honest.** A reply that *is* a
+  request gets served and the model re-asked: `FETCH: <artifact-id>` opens
+  the full original behind any summary (orchestrator and leads; budgeted,
+  `max_fetches`), and a lead may `CONSULT <member>: <question>` — one bounded
+  question to one named brain-trust member, answered blind (no draft, no
+  session), for cross-expertise input that in-family escalation cannot give
+  (`max_consults`, default 2 — a consult is a question, not a conversation).
+  Consults never happen inside security excursions, and peers still never
+  chat.
 - **Questions only the operator can answer go through ASK** — the
   orchestrator emits `ASK: <question>`; the answer becomes a standing ruling
   re-emitted on every render (never re-asked). No channel configured means

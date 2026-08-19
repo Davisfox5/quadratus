@@ -174,6 +174,15 @@ class SessionConfig:
     #: None means an ASK raises :class:`OperatorInputNeeded` so the caller can
     #: collect the answer and resume, rather than the question being guessed.
     ask_operator: Optional[Callable[[str], str]] = None
+    #: How many artifact fetches one decision or draft may spend. A model that
+    #: replies with only ``FETCH: <artifact-id>`` gets the full original and
+    #: is re-asked -- the request loop behind "a summary is an index".
+    max_fetches: int = 3
+    #: How many peer consults a lead may spend per task. A consult is one
+    #: bounded question to one named brain-trust member, answered blind --
+    #: cross-expertise input where family escalation cannot help. Small on
+    #: purpose: two questions is a consult, more is a conversation.
+    max_consults: int = 2
     #: How many lead revisions a task may spend answering blocking findings.
     #: The count is deliberately small and the loop deliberately narrow --
     #: each extra cycle is a reviewer re-checking its own named findings
@@ -270,6 +279,111 @@ class Session:
                     chosen.append(peer)
         return chosen
 
+    # -- request channels ----------------------------------------------------
+    def _invoke_with_fetches(self, model_key: str, build_prompt, *, task=None) -> str:
+        """Invoke, serving artifact requests until a real answer arrives.
+
+        ``build_prompt`` takes the fetched (id, content) pairs gathered so far
+        and returns the full prompt, so each layer can splice the material in
+        at its own right position. Bounded by ``max_fetches``; an unknown id
+        comes back as a correction rather than an error, because the model can
+        fix a typo and the harness cannot.
+        """
+        fetched: List[tuple] = []
+        reply = self.invoke(model_key, build_prompt(fetched))
+        for _ in range(self.config.max_fetches):
+            artifact_id = _parse_fetch(reply)
+            if artifact_id is None:
+                break
+            try:
+                content = self.memory.fetch(artifact_id)
+            except KeyError:
+                content = f"(no artifact {artifact_id!r} exists -- check the id)"
+            fetched.append((artifact_id, content))
+            if task is not None:
+                task.record("assistant", f"[fetched artifact {artifact_id}]")
+            reply = self.invoke(model_key, build_prompt(fetched))
+        return reply
+
+    def _resolve_consultant(self, name: str, lead: str) -> Optional[str]:
+        """Match a consult request to a brain-trust member, forgivingly.
+
+        Leads say 'Sol' or 'Opus 5' or a full key; all resolve. The lead
+        itself and anyone outside the brain trust do not -- a consult is
+        cross-expertise input from a peer, not an arbitrary summons.
+        """
+        want = name.strip().lower()
+        for key in self.brain_trust:
+            if key == lead:
+                continue
+            spec = resolve(key)
+            if want == key.lower() or (
+                spec is not None
+                and (want == spec.alias.lower() or want in spec.label.lower())
+            ):
+                return key
+        return None
+
+    def _draft_with_channels(self, lead: str, spec: TaskSpec, task: TaskMemory) -> str:
+        """The lead drafts, with the fetch and consult channels live.
+
+        A reply that is a request gets served and the lead re-asked; a reply
+        that is work is the draft. Consults are answered blind -- the
+        consultant sees the task and the question, never the draft or the
+        session -- so the answer is expertise, not agreement. Both channels
+        are budgeted, and a lead that spends its consult budget is told so and
+        asked to proceed with what it has.
+        """
+        consult_answers: List[str] = []
+        consults_used = 0
+
+        def build(fetched: List[tuple]) -> str:
+            extras: List[str] = []
+            if consult_answers:
+                extras.append("## Consult answers\n\n" + "\n\n".join(consult_answers))
+            if fetched:
+                extras.append(_render_fetches(fetched))
+            return self._lead_prompt(spec, lead=lead, extras=extras)
+
+        for _ in range(self.config.max_consults + 1):
+            draft = self._invoke_with_fetches(lead, build, task=task)
+            requests = _parse_consults(draft)
+            if not requests:
+                return draft
+            if consults_used >= self.config.max_consults:
+                consult_answers.append(
+                    "(consult budget spent -- proceed with what you have and "
+                    "record any open question in your close-out)"
+                )
+                return self._invoke_with_fetches(lead, build, task=task)
+            for name, question in requests:
+                if consults_used >= self.config.max_consults:
+                    break
+                consults_used += 1  # spent even on a bad name; no free retries
+                peer = self._resolve_consultant(name, lead)
+                if peer is None:
+                    consult_answers.append(
+                        f"[{name}] is not a member you can consult; see the "
+                        f"list in your instructions."
+                    )
+                    continue
+                answer = self.invoke(peer, self._consult_prompt(spec, question, peer))
+                task.record("assistant", f"[consult {peer}] {answer}")
+                task.keep(answer, kind=f"consult:{peer}")
+                consult_answers.append(f"[{peer}]\n{answer}")
+        return draft
+
+    def _consult_prompt(self, spec: TaskSpec, question: str, peer: str) -> str:
+        label = resolve(peer)
+        return (
+            f"Task context: {spec.description}\n\n"
+            f"A colleague leading this task asks you one question in your "
+            f"area of strength:\n{question}\n\n"
+            f"You are {label.label if label else peer}. Answer just this "
+            "question, concretely. You have no other context by design; if it "
+            "cannot be answered without more, say exactly what is missing."
+        )
+
     # -- one task ------------------------------------------------------------
     def run_task(self, spec: TaskSpec) -> TaskSummary:
         """Work one task to completion and fold it into the ledger."""
@@ -282,8 +396,9 @@ class Session:
         task = TaskMemory(spec.task_id, lead, self.store)
         task.record("user", spec.description)
 
-        # The lead drafts with full working memory.
-        draft = self.invoke(lead, self._lead_prompt(spec))
+        # The lead drafts with full working memory, and with the fetch and
+        # consult channels live: a reply that is a request gets served.
+        draft = self._draft_with_channels(lead, spec, task)
         task.record("assistant", draft)
         task.keep(draft, kind="draft")
 
@@ -375,7 +490,15 @@ class Session:
             task = TaskMemory(spec.task_id, excursion.worker, self.store)
             task.record("user", spec.description)
 
-            draft = self.invoke(excursion.worker, self._lead_prompt(spec))
+            # Fetch channel only: the excursion stays a straight line, so
+            # there is no consult here by design.
+            draft = self._invoke_with_fetches(
+                excursion.worker,
+                lambda fetched: self._lead_prompt(
+                    spec, extras=[_render_fetches(fetched)] if fetched else None
+                ),
+                task=task,
+            )
             task.record("assistant", draft)
             task.keep(draft, kind="draft")
 
@@ -440,21 +563,30 @@ class Session:
                 flagged as operator-only would defeat the point of asking.
         """
         seat = self.seat()
-        for _ in range(_MAX_ASKS_PER_DECISION):
-            reply = self.invoke(
-                seat.key,
-                self.memory.render(
-                    current=(
-                        "Name the single next task, or reply exactly DONE if the "
-                        "goal is met. Use the artifact pointers above if a detail "
-                        "matters. If the decision turns on something only the "
-                        "operator can answer, reply 'ASK: <one question>' instead."
-                        f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}"
-                    ),
-                    recent=self.config.recent_entries,
-                    extra=self._map_block(),
+
+        def build(fetched: List[tuple]) -> str:
+            # Rebuilt every round: an answered ASK lands in the rulings, and
+            # the re-ask must carry it -- a stale prompt would re-ask the
+            # operator the question they just answered.
+            body = self.memory.render(
+                current=(
+                    "Name the single next task, or reply exactly DONE if the "
+                    "goal is met. To read a full artifact behind a summary "
+                    "first, reply with exactly 'FETCH: <artifact-id>' and "
+                    "nothing else. If the decision turns on something only the "
+                    "operator can answer, reply 'ASK: <one question>' instead."
+                    f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}"
                 ),
+                recent=self.config.recent_entries,
+                extra=self._map_block(),
             )
+            if fetched:
+                body += ("\n\n" + _render_fetches(fetched)
+                         + "\n\nWith that read, answer now.")
+            return body
+
+        for _ in range(_MAX_ASKS_PER_DECISION):
+            reply = self._invoke_with_fetches(seat.key, build)
             stripped = reply.strip()
             if not stripped.upper().startswith("ASK:"):
                 break
@@ -543,7 +675,13 @@ class Session:
             return ""
         return self.config.codebase_map.render()
 
-    def _lead_prompt(self, spec: TaskSpec) -> str:
+    def _lead_prompt(
+        self,
+        spec: TaskSpec,
+        *,
+        lead: Optional[str] = None,
+        extras: Optional[List[str]] = None,
+    ) -> str:
         parts = [
             self.memory.render(
                 current=spec.description, recent=self.config.recent_entries
@@ -554,6 +692,24 @@ class Session:
             parts.append(map_block)
         parts.append("You are leading this task. Produce the complete work.")
         parts.append(worker_menu())
+        parts.append(
+            "To read a filed artifact in full before working, reply with "
+            "exactly 'FETCH: <artifact-id>' and nothing else -- you will get "
+            "the content and be asked again."
+        )
+        if lead is not None:
+            consultables = [p for p in self.brain_trust if p != lead]
+            names = ", ".join(
+                (resolve(p).label if resolve(p) else p) for p in consultables
+            )
+            parts.append(
+                "If one specific question outside your strengths blocks you, "
+                "reply with only 'CONSULT <member>: <question>' -- the member "
+                "answers blind and their answer comes back to you. Members "
+                f"you may consult: {names}. At most "
+                f"{self.config.max_consults} per task; a consult is a "
+                "question, not a conversation."
+            )
         guidance = guidance_for(spec.kind)
         if guidance:
             # Stated as requirements rather than advice. These exist because
@@ -564,6 +720,8 @@ class Session:
                 "these as a requirement:\n"
                 + "\n".join(f"- {g}" for g in guidance)
             )
+        for extra in extras or ():
+            parts.append(extra)
         # Recitation: the task statement again, at the very end. The end of a
         # long context is the position attention favours, and re-emitting the
         # objective there is Manus's published fix for goal drift on long
@@ -679,6 +837,58 @@ class Session:
                     topic=topic, note=note, author=lead, session=spec.task_id
                 )
         return summary, reasoning, dead_ends
+
+
+def _parse_fetch(reply: str) -> Optional[str]:
+    """An artifact request: the whole reply is ``FETCH: <artifact-id>``.
+
+    Deliberately strict -- only a reply that *is* a fetch request counts, so a
+    draft that merely mentions the word FETCH in code or prose is never
+    mistaken for one.
+    """
+    stripped = (reply or "").strip()
+    lines = [ln for ln in stripped.splitlines() if ln.strip()]
+    if len(lines) == 1 and lines[0].upper().startswith("FETCH:"):
+        wanted = lines[0].split(":", 1)[1].strip()
+        return wanted or None
+    return None
+
+
+#: Fetched artifacts are appended whole, but a pathological artifact must not
+#: flood the requester's prompt.
+_FETCH_CHAR_CAP = 12_000
+
+
+def _render_fetches(fetched) -> str:
+    blocks = ["## Fetched artifacts (you asked for these)"]
+    for artifact_id, content in fetched:
+        body = content if len(content) <= _FETCH_CHAR_CAP else (
+            content[:_FETCH_CHAR_CAP] + "\n[...truncated]"
+        )
+        blocks.append(f"[artifact {artifact_id}]\n{body}")
+    return "\n\n".join(blocks)
+
+
+def _parse_consults(reply: str):
+    """Consult requests: the reply *begins* with ``CONSULT <member>: <q>``.
+
+    Returns [(member, question), ...] or [] when the reply is a real draft.
+    Same strictness rationale as :func:`_parse_fetch`.
+    """
+    lines = [ln.strip() for ln in (reply or "").strip().splitlines() if ln.strip()]
+    if not lines or not lines[0].upper().startswith("CONSULT "):
+        return []
+    out = []
+    for line in lines:
+        if not line.upper().startswith("CONSULT "):
+            break
+        rest = line[len("CONSULT "):]
+        if ":" not in rest:
+            continue
+        member, question = rest.split(":", 1)
+        if member.strip() and question.strip():
+            out.append((member.strip(), question.strip()))
+    return out
 
 
 #: How many operator questions one decision may spend before it is judged to
