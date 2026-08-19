@@ -412,3 +412,54 @@ def test_leads_are_told_the_channels_exist(store):
     s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
     lead = next(c["prompt"] for c in rec.calls if "You are leading" in c["prompt"])
     assert "FETCH:" in lead and "CONSULT" in lead
+
+
+# -- clean reviews skip the revision round -------------------------------------
+
+
+class CleanReviewRecorder(Recorder):
+    def __call__(self, model, prompt, system=None):
+        if "contributing an independent read" in prompt:
+            self.calls.append({"model": model, "prompt": prompt})
+            return "NO FINDINGS"
+        return super().__call__(model, prompt, system)
+
+
+def test_clean_reviews_buy_no_revision_round(store):
+    rec = CleanReviewRecorder()
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
+    assert not any("Revise your work" in c["prompt"] for c in rec.calls)
+
+
+def test_one_substantive_review_still_triggers_the_revision(store):
+    class Mixed(Recorder):
+        def __init__(self):
+            super().__init__()
+            self._first = True
+
+        def __call__(self, model, prompt, system=None):
+            if "contributing an independent read" in prompt:
+                self.calls.append({"model": model, "prompt": prompt})
+                if self._first:
+                    self._first = False
+                    return "NO FINDINGS"
+                return "the error path swallows the exception"
+            return super().__call__(model, prompt, system)
+
+    rec = Mixed()
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.COMPLEX))
+    revisions = [c["prompt"] for c in rec.calls if "Revise your work" in c["prompt"]]
+    assert len(revisions) == 1
+    assert "swallows the exception" in revisions[0]
+    assert "NO FINDINGS" not in revisions[0]  # empty notes are not re-sent
+
+
+def test_reviewers_are_told_how_to_say_nothing(store):
+    rec = Recorder()
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
+    review = next(c["prompt"] for c in rec.calls
+                  if "contributing an independent read" in c["prompt"])
+    assert "NO FINDINGS" in review

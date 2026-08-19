@@ -429,6 +429,13 @@ class Session:
         # concrete named defect is the one case that reliably improves the
         # artifact. So reviewers here never see each other, never vote, and
         # never widen scope: they check their own findings and nothing else.
+        # Clean reviews cost nothing further: a reviewer with nothing to say
+        # says NO FINDINGS, and a revision round against empty critiques would
+        # be the most avoidable spend in the loop.
+        notes = [
+            (p, n) for p, n in notes
+            if n.strip().upper().rstrip(".") != "NO FINDINGS"
+        ]
         if notes:
             revision = self.invoke(
                 lead, self._revision_prompt(spec, draft, [f"[{p}]\n{n}" for p, n in notes])
@@ -745,7 +752,8 @@ class Session:
             "and a reviewer told to be selective suppresses its own findings. "
             "Prefix any finding that must be fixed before this work is acceptable "
             "with 'BLOCKING:' -- you will be asked to re-check exactly those "
-            "against the revision."
+            "against the revision. If you genuinely find nothing worth changing, "
+            "reply exactly 'NO FINDINGS' and nothing else."
         )
 
     def _revision_prompt(self, spec: TaskSpec, draft: str, notes: List[str]) -> str:
