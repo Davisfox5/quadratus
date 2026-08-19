@@ -152,6 +152,13 @@ Key design decisions already settled:
   re-emitted on every render (never re-asked). No channel configured means
   `OperatorInputNeeded` is raised, not guessed around. Three asks per
   decision, then it is interrogating, not deciding (`RunStalled`).
+- **The integration gate is the deterministic half of "does it fit
+  together"** (`integration.py`): after a task's work is final, the harness
+  runs the project's own check command (tests, build). A failure buys the
+  lead one fix round with the real output in hand (`max_gate_fixes`); a
+  survivor is carried loudly into the close-out. Sequencing + the map keep
+  pieces consistent; only execution proves them, and no model is in this
+  loop.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

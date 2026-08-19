@@ -403,3 +403,80 @@ def test_worker_menu_names_every_errand_in_the_tree():
     menu = worker_menu()
     for errand in WORKER_TREE:
         assert errand in menu, errand
+
+
+# -- the integration gate -------------------------------------------------------
+
+from multi_llm.integration import GateResult, IntegrationGate  # noqa: E402
+
+
+def test_a_passing_command_passes():
+    import sys
+    got = IntegrationGate([sys.executable, "-c", "print('ok')"]).run()
+    assert got.passed and got.returncode == 0
+
+
+def test_a_failing_command_carries_its_output():
+    import sys
+    got = IntegrationGate(
+        [sys.executable, "-c", "import sys; print('boom detail'); sys.exit(1)"]
+    ).run()
+    assert not got.passed
+    assert "boom detail" in got.output
+
+
+def test_a_missing_binary_is_a_failed_result_not_a_crash():
+    got = IntegrationGate(["definitely-not-a-real-binary-xyz"]).run()
+    assert not got.passed and "not found" in got.output
+
+
+class StubGate:
+    """Scripted gate outcomes for session tests."""
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.runs = 0
+
+    def run(self):
+        self.runs += 1
+        passed = self.outcomes.pop(0) if self.outcomes else True
+        return GateResult(passed=passed, command="pytest -q",
+                          returncode=0 if passed else 1,
+                          output="" if passed else "2 failed, 30 passed")
+
+
+def test_a_passing_gate_costs_no_extra_invocation(store):
+    rec = Recorder()
+    gate = StubGate([True])
+    s = _session(store, rec, config=SessionConfig(integration_gate=gate))
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert gate.runs == 1
+    assert not any("integration check failed" in c["prompt"] for c in rec.calls)
+
+
+def test_a_failing_gate_feeds_the_output_back_for_one_fix(store):
+    rec = Recorder()
+    gate = StubGate([False, True])
+    s = _session(store, rec, config=SessionConfig(integration_gate=gate))
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    fixes = [c["prompt"] for c in rec.calls if "integration check failed" in c["prompt"]]
+    assert len(fixes) == 1
+    assert "2 failed, 30 passed" in fixes[0]
+    assert gate.runs == 2
+
+
+def test_a_persistent_failure_is_carried_loudly_to_the_closeout(store):
+    rec = Recorder()
+    gate = StubGate([False, False])
+    s = _session(store, rec, config=SessionConfig(integration_gate=gate))
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    closeout = next(c["prompt"] for c in rec.calls if "The task is finished" in c["prompt"])
+    assert "still failing at close" in closeout
+
+
+def test_no_gate_configured_means_no_gate_runs(store):
+    rec = Recorder()
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert not any("Integration gate" in c["prompt"] for c in rec.calls
+                   if "The task is finished" in c["prompt"])

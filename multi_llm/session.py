@@ -183,6 +183,14 @@ class SessionConfig:
     #: cross-expertise input where family escalation cannot help. Small on
     #: purpose: two questions is a consult, more is a conversation.
     max_consults: int = 2
+    #: Runs the project's own check command after a task's work is final --
+    #: the deterministic answer to "do the pieces actually fit together".
+    #: Anything with a ``run() -> GateResult`` shape works; see
+    #: :class:`multi_llm.integration.IntegrationGate`. None skips the gate.
+    integration_gate: Optional[object] = None
+    #: How many fix rounds a failing integration gate buys the lead before
+    #: the failure is carried into the record as an open problem.
+    max_gate_fixes: int = 1
     #: How many lead revisions a task may spend answering blocking findings.
     #: The count is deliberately small and the loop deliberately narrow --
     #: each extra cycle is a reviewer re-checking its own named findings
@@ -467,6 +475,8 @@ class Session:
                     "into the summary as open questions:\n"
                     + "\n".join(f"[{p}] {v}" for p, v in unresolved),
                 )
+
+        self._run_integration_gate(lead, spec, task)
 
         summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
         summary = task.close(
@@ -805,6 +815,41 @@ class Session:
             "Fix them, or state precisely why the reviewer is wrong. Produce "
             "the complete revised work."
         )
+
+    def _run_integration_gate(self, lead: str, spec: TaskSpec, task: TaskMemory) -> None:
+        """Execute the project's own check and feed a failure back once.
+
+        Reviewers judge the work by reading; this is the half that runs it.
+        A failure buys the lead a bounded number of fix rounds with the real
+        output in hand; a failure that survives the cap is written loudly
+        into the task memory so the close-out and the ledger carry it as an
+        open problem instead of a silent one.
+        """
+        gate = self.config.integration_gate
+        if gate is None:
+            return
+        result = gate.run()
+        task.record("user", result.render())
+        fixes = 0
+        while not result.passed and fixes < self.config.max_gate_fixes:
+            fix = self.invoke(
+                lead,
+                f"Task: {spec.description}\n\n"
+                f"The project's own integration check failed after your "
+                f"work:\n{result.render()}\n\n"
+                "Fix the failure. Produce the complete revised work.",
+            )
+            task.record("assistant", fix)
+            task.keep(fix, kind="gate-fix")
+            fixes += 1
+            result = gate.run()
+            task.record("user", result.render())
+        if not result.passed:
+            task.record(
+                "user",
+                "The integration gate is still failing at close -- carry it "
+                "into the summary as an open failure.",
+            )
 
     def _verifier_prompt(self, spec: TaskSpec, draft: str, verifier: str) -> str:
         label = resolve(verifier)
