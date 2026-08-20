@@ -29,7 +29,7 @@ class Recorder:
 
     def __call__(self, model, prompt, system=None):
         self.calls.append({"model": model, "prompt": prompt})
-        if "Name the single next task" in prompt:
+        if "Name the next wave of tasks" in prompt:
             return self._next.pop(0) if self._next else "DONE"
         if "The task is finished" in prompt:
             return self._closeout

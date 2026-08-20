@@ -271,7 +271,7 @@ class FetchingRecorder(Recorder):
     def __call__(self, model, prompt, system=None):
         marker = (model, "lead" if "You are leading" in prompt else "orch")
         if ("Fetched artifacts" not in prompt and marker not in self._asked
-                and ("You are leading" in prompt or "Name the single next task" in prompt)):
+                and ("You are leading" in prompt or "Name the next wave of tasks" in prompt)):
             self._asked.add(marker)
             self.calls.append({"model": model, "prompt": prompt})
             return f"FETCH: {self._fetch_id}"
@@ -311,14 +311,14 @@ def test_fetching_is_budgeted(store):
     class Greedy(Recorder):
         def __call__(self, model, prompt, system=None):
             self.calls.append({"model": model, "prompt": prompt})
-            if "Name the single next task" in prompt:
+            if "Name the next wave of tasks" in prompt:
                 return "FETCH: aaaaaaaaaaaa"  # forever
             return super().__call__(model, prompt, system)
 
     rec = Greedy()
     s = _session(store, rec)
     s.next_task()  # must terminate
-    orch_calls = [c for c in rec.calls if "Name the single next task" in c["prompt"]]
+    orch_calls = [c for c in rec.calls if "Name the next wave of tasks" in c["prompt"]]
     assert len(orch_calls) <= 1 + s.config.max_fetches
 
 
@@ -477,7 +477,7 @@ def test_the_lead_never_sees_reviewer_identities(store):
             self.calls.append({"model": model, "prompt": prompt})
             if "contributing an independent read" in prompt:
                 return "BLOCKING: the cache is never invalidated"
-            if "Name the single next task" in prompt:
+            if "Name the next wave of tasks" in prompt:
                 return "DONE"
             if "The task is finished" in prompt:
                 return "SUMMARY: built\nREASONING: simplest"

@@ -2,14 +2,24 @@
 
 One cycle:
 
-1. The orchestrator reads its ledger and names the next task.
-2. A brain-trust member leads it, with collaborators drawn in according to the
-   task's complexity.
-3. The lead works with full memory for the duration, commissioning worker bees
-   for anything it needs fetched, read, or checked.
-4. The task closes. The lead emits one summary, with reasoning, dead ends, and
-   pointers to the full work. Everything else it accumulated is dropped.
-5. The orchestrator absorbs that summary and picks the next task.
+1. The orchestrator reads its ledger and names the next *wave*: every task
+   that is ready to start now and does not depend on another task in the same
+   wave. Dependency ordering lives in the wave boundaries -- what must build
+   on earlier work waits for a later wave; what is independent runs at the
+   same time, up to ``max_parallel_tasks``. Instances are stateless CLI
+   calls, so ten parallel tasks on one model are just ten subprocesses.
+2. A brain-trust member leads each task, with collaborators drawn in
+   according to the task's complexity.
+3. The lead works with full memory for the duration, commissioning worker
+   bees for anything it needs fetched, read, or checked.
+4. The task closes. The lead emits one summary, with reasoning, dead ends,
+   open questions, and pointers to the full work. Everything else it
+   accumulated is dropped.
+5. The orchestrator absorbs those summaries and names the next wave. It is
+   the final arbiter: a result it judges not good enough -- even one that
+   passed review -- is sent back with ``REDO`` and a concrete objection, and
+   every open question bubbled up from any level must be addressed, never
+   skated past.
 
 Model calls are injected as ``invoke`` rather than constructed here, so the
 loop can be driven by real CLI providers in production and by a fake in tests
@@ -24,6 +34,8 @@ does not need judgement.
 from __future__ import annotations
 
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence
 
@@ -67,7 +79,11 @@ class OperatorInputNeeded(RuntimeError):
 
 
 class RunStalled(RuntimeError):
-    """The orchestrator named the same task twice in a row.
+    """The loop has stopped converging.
+
+    Raised when the orchestrator names the same task in two consecutive
+    waves, rejects the same result more than ``max_redos`` times, or spends
+    its ASK budget interrogating.
 
     Two identical consecutive decompositions mean the ledger is not moving the
     orchestrator's view forward -- the loop has stopped converging and every
@@ -191,6 +207,15 @@ class SessionConfig:
     #: How many fix rounds a failing integration gate buys the lead before
     #: the failure is carried into the record as an open problem.
     max_gate_fixes: int = 1
+    #: How many tasks may run at the same time within one wave. Instances are
+    #: stateless CLI calls, so ten parallel Opus tasks are just ten
+    #: subprocesses; this cap exists for vendor rate limits, not architecture.
+    max_parallel_tasks: int = 4
+    #: How many times the orchestrator may reject (REDO) the same task's
+    #: result before the loop stalls loudly for the operator. The orchestrator
+    #: is the final arbiter of what ships, but an arbiter rejecting the same
+    #: work three times is a stuck arbiter.
+    max_redos: int = 2
     #: How many lead revisions a task may spend answering blocking findings.
     #: The count is deliberately small and the loop deliberately narrow --
     #: each extra cycle is a reviewer re-checking its own named findings
@@ -228,6 +253,15 @@ class Session:
         )
         self._rotation = 0
         self.history: List[TaskSummary] = []
+        # Wave bookkeeping. Tasks in one wave run on threads, so everything
+        # the threads share -- the rotation counter, the ledger, the history
+        # -- is touched only under this lock.
+        self._lock = threading.Lock()
+        #: Every spec ever issued, by task id, so a REDO can name its target.
+        self._specs: Dict[str, TaskSpec] = {}
+        #: REDO count per original task id; past ``max_redos`` the run stalls.
+        self._redo_counts: Dict[str, int] = {}
+        self._task_counter = 0
 
     # -- seating -------------------------------------------------------------
     def seat(self, *, security: bool = False) -> Seat:
@@ -256,8 +290,9 @@ class Session:
         if spec.lead:
             return spec.lead
         trust = self.brain_trust
-        rotated = trust[self._rotation % len(trust)]
-        self._rotation += 1
+        with self._lock:
+            rotated = trust[self._rotation % len(trust)]
+            self._rotation += 1
         return route_kind(
             spec.kind,
             difficulty=spec.complexity,
@@ -421,6 +456,11 @@ class Session:
         # per reviewer belongs: the scoreboard's question, not the author's.
         labels = {peer: f"Reviewer {chr(65 + i)}"
                   for i, peer in enumerate(collaborators)}
+        # Questions the harness itself knows are open at close -- an
+        # unresolved blocking finding, a failing gate -- are folded into the
+        # summary's open questions directly rather than trusting the lead's
+        # close-out prose to carry them.
+        harness_questions: List[str] = []
         notes: List[tuple] = []
         for peer in collaborators:
             note = self.invoke(peer, self._collaborator_prompt(spec, draft, peer))
@@ -492,15 +532,28 @@ class Session:
                     "into the summary as open questions:\n"
                     + "\n".join(f"[{labels[p]}] {v}" for p, v in unresolved),
                 )
+                harness_questions.extend(
+                    f"Unresolved blocking finding ({labels[p]}): {v}"
+                    for p, v in unresolved
+                )
 
-        self._run_integration_gate(lead, spec, task)
+        gate_question = self._run_integration_gate(lead, spec, task)
+        if gate_question:
+            harness_questions.append(gate_question)
 
-        summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
-        summary = task.close(
-            summary=summary_text, reasoning=reasoning, dead_ends=dead_ends
+        summary_text, reasoning, dead_ends, open_questions = self._close_out(
+            lead, spec, task
         )
-        self.memory.absorb(summary)
-        self.history.append(summary)
+        for q in harness_questions:
+            if q not in open_questions:
+                open_questions.append(q)
+        summary = task.close(
+            summary=summary_text, reasoning=reasoning, dead_ends=dead_ends,
+            open_questions=open_questions,
+        )
+        with self._lock:
+            self.memory.absorb(summary)
+            self.history.append(summary)
         return summary
 
     def _run_security_task(self, spec: TaskSpec) -> TaskSummary:
@@ -560,14 +613,16 @@ class Session:
             task.record("assistant", f"[{verifier}] {verdict}")
             task.keep(verdict, kind=f"verify:{verifier}")
 
-            summary_text, reasoning, dead_ends = self._close_out(
+            summary_text, reasoning, dead_ends, open_questions = self._close_out(
                 excursion.worker, spec, task
             )
             summary = task.close(
-                summary=summary_text, reasoning=reasoning, dead_ends=dead_ends
+                summary=summary_text, reasoning=reasoning, dead_ends=dead_ends,
+                open_questions=open_questions,
             )
-            self.memory.absorb(summary)
-            self.history.append(summary)
+            with self._lock:
+                self.memory.absorb(summary)
+                self.history.append(summary)
             return summary
         finally:
             # Unconditional by design: a failed security lookup still ends the
@@ -576,12 +631,20 @@ class Session:
             close_excursion(excursion)
 
     # -- orchestration -------------------------------------------------------
-    def next_task(self) -> Optional[TaskSpec]:
-        """Ask the orchestrator what to do next, given the ledger.
+    def next_wave(self) -> Optional[List[TaskSpec]]:
+        """Ask the orchestrator for the next wave of tasks, given the ledger.
 
-        Returns None when it reports the goal met. The orchestrator sees
-        summaries with pointers, so if the decision turns on a detail a summary
-        skipped it can fetch the original rather than guess.
+        A wave is every task that can start right now: dependency ordering
+        lives in the wave boundaries, and tasks within one wave run at the
+        same time without seeing each other's results. Returns None when the
+        orchestrator reports the goal met.
+
+        The reply may also carry ``REDO <task-id>: <objection>`` lines -- the
+        arbiter verdict. The orchestrator is the final judge of what ships,
+        so a completed task it finds not good enough, even one that passed
+        review, is reissued with the objection and a pointer to the prior
+        work. Bounded by ``max_redos`` per task, because an arbiter rejecting
+        the same work over and over is a stuck arbiter.
 
         The orchestrator may also reply ``ASK: <question>`` when the decision
         turns on something only the operator knows -- scope, taste, a business
@@ -595,6 +658,8 @@ class Session:
             OperatorInputNeeded: on an ASK when no ``ask_operator`` channel is
                 configured. Guessing an answer the orchestrator explicitly
                 flagged as operator-only would defeat the point of asking.
+            RunStalled: when a task is rejected more than ``max_redos`` times,
+                or the ASK budget is spent interrogating.
         """
         seat = self.seat()
 
@@ -604,11 +669,27 @@ class Session:
             # operator the question they just answered.
             body = self.memory.render(
                 current=(
-                    "Name the single next task, or reply exactly DONE if the "
-                    "goal is met. To read a full artifact behind a summary "
+                    "Name the next wave of tasks: every task that is ready to "
+                    "start right now, one per line, each as 'TASK <kind> "
+                    "<difficulty>: <description>'. Tasks in one wave run at "
+                    "the same time and cannot see each other's results, so a "
+                    "task that builds on another task's output goes in a "
+                    "later wave, never the same one. A wave of one is fine.\n\n"
+                    "You are the final arbiter of finished work. If a "
+                    "completed task's result is not good enough -- even one "
+                    "that passed review -- reject it with a line 'REDO "
+                    "<task-id>: <what must change and why>' and it will be "
+                    "redone with your objection in hand.\n\n"
+                    "Address every OPEN QUESTION in the record before or "
+                    "alongside new work: answer it here from what you know, "
+                    "issue a task or REDO that resolves it, or raise it to "
+                    "the operator. Never skate past one.\n\n"
+                    "Reply exactly DONE if the goal is met and nothing "
+                    "remains. To read a full artifact behind a summary "
                     "first, reply with exactly 'FETCH: <artifact-id>' and "
-                    "nothing else. If the decision turns on something only the "
-                    "operator can answer, reply 'ASK: <one question>' instead."
+                    "nothing else. If the decision turns on something only "
+                    "the operator can answer, reply 'ASK: <one question>' "
+                    "instead."
                     f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}"
                 ),
                 recent=self.config.recent_entries,
@@ -635,18 +716,96 @@ class Session:
                 f"questions without naming a task; it is interrogating, not "
                 f"deciding."
             )
+
+        tasks, redos, residual = _parse_wave(reply)
+        specs: List[TaskSpec] = []
+        for task_id, objection in redos:
+            reissued = self._reissue(task_id, objection)
+            if reissued is not None:
+                specs.append(reissued)
+        for kind, difficulty, description in tasks:
+            specs.append(self._new_spec(kind, difficulty, description))
+        if tasks or redos:
+            return specs or None
+
+        # No TASK/REDO lines: a bare reply is a single-task wave (or DONE).
         # Strip any KIND label before testing for DONE: an orchestrator that
         # dutifully labels its final reply must still be able to end the run,
         # not spawn a task whose description is the word DONE.
-        kind, difficulty, description = _parse_kind(reply)
+        kind, difficulty, description = _parse_kind(residual or reply)
         if description.strip().upper().startswith("DONE"):
             return None
-        return TaskSpec(
-            task_id=f"t{len(self.history) + 1}",
-            description=description,
-            kind=kind,
-            complexity=difficulty,
+        return [self._new_spec(kind, difficulty, description)]
+
+    def next_task(self) -> Optional[TaskSpec]:
+        """The next single task: the first of the next wave.
+
+        Kept for callers that drive tasks one at a time; ``run()`` goes
+        through :meth:`next_wave` and executes whole waves.
+        """
+        wave = self.next_wave()
+        return wave[0] if wave else None
+
+    def _new_spec(self, kind: str, difficulty: str, description: str) -> TaskSpec:
+        with self._lock:
+            self._task_counter += 1
+            task_id = f"t{self._task_counter}"
+        spec = TaskSpec(
+            task_id=task_id, description=description,
+            kind=kind, complexity=difficulty,
         )
+        self._specs[spec.task_id] = spec
+        return spec
+
+    def _reissue(self, task_id: str, objection: str) -> Optional[TaskSpec]:
+        """Turn an arbiter REDO into a fresh spec carrying the objection.
+
+        The reissued task inherits the original's kind and difficulty, gets
+        the objection verbatim in its description, and points at the prior
+        work so the new lead reads what was rejected instead of guessing at
+        it. An unknown task id is logged and skipped -- the orchestrator
+        mistyped, and the next render still shows the work it wanted redone.
+        """
+        spec = self._specs.get(task_id.strip())
+        if spec is None:
+            log.warning("orchestrator rejected unknown task %r; skipping", task_id)
+            return None
+        root = spec.task_id.split("-r", 1)[0]
+        count = self._redo_counts.get(root, 0) + 1
+        if count > self.config.max_redos:
+            raise RunStalled(
+                f"the orchestrator has rejected task {root!r} {count} times. "
+                f"An arbiter rejecting the same work past max_redos "
+                f"({self.config.max_redos}) is stuck: the objection is not "
+                f"one the current decomposition can answer. Rescope the task "
+                f"or intervene before re-running."
+            )
+        self._redo_counts[root] = count
+        prior = next(
+            (e for e in self.memory.ledger.entries if e.task_id == spec.task_id),
+            None,
+        )
+        pointer = ""
+        if prior is not None and prior.refs:
+            pointer = (
+                "\nThe rejected work is filed as: "
+                + ", ".join(f"artifact {r.id} ({r.kind})" for r in prior.refs)
+                + ". Read it before redoing rather than starting blind."
+            )
+        redo = TaskSpec(
+            task_id=f"{root}-r{count}",
+            description=(
+                f"{spec.description}\n\n"
+                f"The orchestrator reviewed the previous result and rejected "
+                f"it: {objection}\n"
+                f"Redo the work so this objection is answered.{pointer}"
+            ),
+            complexity=spec.complexity,
+            work_class=spec.work_class,
+            kind=spec.kind,
+        )
+        self._specs[redo.task_id] = redo
+        return redo
 
     def plan(self) -> str:
         """Ask the orchestrator for the full expected task list, without running.
@@ -672,36 +831,73 @@ class Session:
         )
 
     def run(self, *, max_tasks: int = 20) -> List[TaskSummary]:
-        """Drive tasks until the orchestrator says DONE or the cap is hit.
+        """Drive waves until the orchestrator says DONE or the cap is hit.
 
+        Each wave's tasks run concurrently, up to ``max_parallel_tasks`` at a
+        time; the next wave is not asked for until every task in this one has
+        closed, because the wave boundary is where dependency ordering lives.
         The cap is a runaway backstop, not a quality gate: a loop that has not
         converged by then has a problem the cap will not fix, and the caller
         should look at why.
 
         Raises:
-            RunStalled: when the orchestrator names the same task twice in a
-                row -- the loop has stopped converging, and burning further
-                rounds on a known outcome helps nobody.
+            RunStalled: when a task in this wave repeats a description from
+                the previous wave verbatim -- the loop has stopped converging,
+                and burning further rounds on a known outcome helps nobody.
         """
         if self.config.plan_gate is not None:
             if not self.config.plan_gate(self.plan()):
                 log.info("plan gate declined the run; nothing executed")
                 return []
-        previous_description: Optional[str] = None
-        for _ in range(max_tasks):
-            spec = self.next_task()
-            if spec is None:
+        previous_wave: List[str] = []
+        executed = 0
+        while executed < max_tasks:
+            wave = self.next_wave()
+            if not wave:
                 break
-            if spec.description == previous_description:
+            wave = wave[: max_tasks - executed]
+            repeated = next(
+                (s.description for s in wave if s.description in previous_wave),
+                None,
+            )
+            if repeated is not None:
                 raise RunStalled(
-                    f"the orchestrator named the same task twice in a row: "
-                    f"{spec.description!r}. The last close-out did not move "
+                    f"the orchestrator named the same task in two consecutive "
+                    f"waves: {repeated!r}. The last close-out did not move "
                     f"its view forward. Improve the summary, narrow the goal, "
                     f"or intervene before re-running."
                 )
-            previous_description = spec.description
-            self.run_task(spec)
+            previous_wave = [s.description for s in wave]
+            executed += len(wave)
+            self._run_wave(wave)
         return list(self.history)
+
+    def _run_wave(self, wave: List[TaskSpec]) -> List[TaskSummary]:
+        """Execute one wave, tasks concurrently, and wait for all of them.
+
+        A wave of one skips the thread pool entirely -- exceptions and
+        tracebacks stay plain in the common sequential case. For a real wave,
+        every task is allowed to finish even if a sibling fails: a completed
+        summary is real progress and is already in the ledger, so tearing
+        down siblings would only discard finished work. The first failure is
+        re-raised afterwards.
+        """
+        if len(wave) == 1:
+            return [self.run_task(wave[0])]
+        results: List[TaskSummary] = []
+        first_error: Optional[BaseException] = None
+        width = min(len(wave), max(1, self.config.max_parallel_tasks))
+        with ThreadPoolExecutor(max_workers=width) as pool:
+            futures = [pool.submit(self.run_task, spec) for spec in wave]
+            for future in futures:
+                try:
+                    results.append(future.result())
+                except BaseException as exc:  # noqa: BLE001 -- re-raised below
+                    if first_error is None:
+                        first_error = exc
+        if first_error is not None:
+            raise first_error
+        return results
 
     # -- prompts -------------------------------------------------------------
     def _map_block(self) -> str:
@@ -840,18 +1036,20 @@ class Session:
             "the complete revised work."
         )
 
-    def _run_integration_gate(self, lead: str, spec: TaskSpec, task: TaskMemory) -> None:
+    def _run_integration_gate(
+        self, lead: str, spec: TaskSpec, task: TaskMemory
+    ) -> Optional[str]:
         """Execute the project's own check and feed a failure back once.
 
         Reviewers judge the work by reading; this is the half that runs it.
         A failure buys the lead a bounded number of fix rounds with the real
         output in hand; a failure that survives the cap is written loudly
-        into the task memory so the close-out and the ledger carry it as an
-        open problem instead of a silent one.
+        into the task memory and returned as an open question so the ledger
+        carries it as an open problem instead of a silent one.
         """
         gate = self.config.integration_gate
         if gate is None:
-            return
+            return None
         result = gate.run()
         task.record("user", result.render())
         fixes = 0
@@ -874,6 +1072,12 @@ class Session:
                 "The integration gate is still failing at close -- carry it "
                 "into the summary as an open failure.",
             )
+            return (
+                f"The integration check was still failing when task "
+                f"{spec.task_id} closed; the full output is in the task's "
+                f"record."
+            )
+        return None
 
     def _verifier_prompt(self, spec: TaskSpec, draft: str, verifier: str) -> str:
         label = resolve(verifier)
@@ -891,11 +1095,16 @@ class Session:
         """Have the lead write the one thing that survives the task."""
         transcript = "\n\n".join(f"[{t.role}] {t.content}" for t in task.turns())
         sections = (
-            "The task is finished. Write the record that survives it, as three "
+            "The task is finished. Write the record that survives it, as four "
             "sections:\nSUMMARY: what was built and decided.\n"
             "REASONING: why, including alternatives weighed.\n"
             "DEAD ENDS: one line each for anything tried that failed, and why. "
-            "Write the lesson, not the transcript."
+            "Write the lesson, not the transcript.\n"
+            "OPEN QUESTIONS: one line each for anything you could not settle "
+            "that must not be skated past -- a decision you need made, access "
+            "you lacked, a finding left unresolved, a question a worker "
+            "raised that you could not answer. The orchestrator is required "
+            "to address every line here. Omit the section if none."
         )
         if self.config.codebase_map is not None:
             # Every run strengthens the map -- that is what makes it an asset
@@ -907,13 +1116,13 @@ class Session:
                 "Durable facts about the code only; omit the section if none."
             )
         reply = self.invoke(lead, f"Task: {spec.description}\n\n{transcript}\n\n{sections}")
-        summary, reasoning, dead_ends, map_notes = _parse_closeout(reply)
+        summary, reasoning, dead_ends, map_notes, open_questions = _parse_closeout(reply)
         if self.config.codebase_map is not None:
             for topic, note in map_notes:
                 self.config.codebase_map.amend(
                     topic=topic, note=note, author=lead, session=spec.task_id
                 )
-        return summary, reasoning, dead_ends
+        return summary, reasoning, dead_ends, open_questions
 
 
 def _parse_fetch(reply: str) -> Optional[str]:
@@ -975,18 +1184,60 @@ def _parse_consults(reply: str):
 _MAX_ASKS_PER_DECISION = 3
 
 
-#: Asks the orchestrator to label the task so :mod:`multi_llm.task_kinds` can
-#: act on it. Kind and difficulty together are the routing decision: the few
-#: pinned kinds go where the evidence says, everything else rides the
+#: Defines the label vocabulary for TASK lines so :mod:`multi_llm.task_kinds`
+#: can act on them. Kind and difficulty together are the routing decision:
+#: the few pinned kinds go where the evidence says, everything else rides the
 #: difficulty ladder across the four subscriptions.
 _KIND_REQUEST = (
-    "Begin your reply with a single line 'KIND: <kind> <difficulty>'. Kind is "
-    "one of: " + ", ".join(sorted(ROUTING)) + ". Difficulty is one of: rote, "
-    "simple, standard, complex -- judge it by how many logical steps the task "
-    "takes and what breaks if it is wrong. Most well-sized tasks are simple; "
-    "reserve complex for genuinely hard reasoning. Then the task on the "
-    "following line. Omit the line if none fits."
+    "On each TASK line, kind is one of: " + ", ".join(sorted(ROUTING)) + ". "
+    "Difficulty is one of: rote, simple, standard, complex -- judge it by how "
+    "many logical steps the task takes and what breaks if it is wrong. Most "
+    "well-sized tasks are simple; reserve complex for genuinely hard "
+    "reasoning. Omit either label if none fits."
 )
+
+
+def _parse_wave(reply: str) -> tuple:
+    """Split the orchestrator's reply into new tasks, rejections, and the rest.
+
+    Returns ``(tasks, redos, residual)``: ``tasks`` as (kind, difficulty,
+    description) tuples from ``TASK <kind> <difficulty>: <description>``
+    lines, ``redos`` as (task_id, objection) tuples from ``REDO <task-id>:
+    <objection>`` lines, and ``residual`` as the remaining lines joined --
+    which is where a legacy single-task reply or a DONE lands.
+
+    Tolerant the same way ``_parse_kind`` is: an unrecognised kind or
+    difficulty degrades to the default rather than dropping the task, because
+    a mislabelled task costs a routing preference and a dropped one costs the
+    work.
+    """
+    tasks: List[tuple] = []
+    redos: List[tuple] = []
+    residual: List[str] = []
+    for line in (reply or "").splitlines():
+        stripped = line.strip().lstrip("-• ").strip()
+        upper = stripped.upper()
+        if (upper.startswith("TASK ") or upper.startswith("TASK:")) and ":" in stripped:
+            header, description = stripped.split(":", 1)
+            description = description.strip()
+            if not description:
+                continue
+            labels = [p.lower() for p in header.split()[1:]]
+            kind = next((p for p in labels if p in ROUTING), TaskKind.GENERAL)
+            difficulty = next(
+                (p for p in labels if p in Complexity._COLLABORATORS),
+                Complexity.SIMPLE,
+            )
+            tasks.append((kind, difficulty, description))
+        elif upper.startswith("REDO ") and ":" in stripped:
+            header, objection = stripped.split(":", 1)
+            parts = header.split(None, 1)
+            task_id = parts[1].strip() if len(parts) > 1 else ""
+            if task_id and objection.strip():
+                redos.append((task_id, objection.strip()))
+        elif stripped:
+            residual.append(stripped)
+    return tasks, redos, "\n".join(residual)
 
 
 def _parse_kind(reply: str) -> tuple:
@@ -1019,7 +1270,8 @@ def _parse_kind(reply: str) -> tuple:
 
 
 def _parse_closeout(reply: str):
-    """Split a close-out into summary, reasoning, dead ends and map notes.
+    """Split a close-out into summary, reasoning, dead ends, map notes and
+    open questions.
 
     Tolerant by design: a missing section degrades to a usable record rather
     than failing the task, since the raw work is stored either way. Reasoning
@@ -1030,6 +1282,7 @@ def _parse_closeout(reply: str):
     """
     sections: Dict[str, List[str]] = {
         "SUMMARY": [], "REASONING": [], "DEAD ENDS": [], "MAP NOTES": [],
+        "OPEN QUESTIONS": [],
     }
     current = "SUMMARY"
     for line in (reply or "").splitlines():
@@ -1055,4 +1308,10 @@ def _parse_closeout(reply: str):
             topic, note = raw.split(":", 1)
             if topic.strip() and note.strip():
                 map_notes.append((topic.strip(), note.strip()))
-    return summary, reasoning, dead_ends, map_notes
+    open_questions = [
+        q.lstrip("-• ").strip()
+        for q in sections["OPEN QUESTIONS"]
+        if q.lstrip("-• ").strip()
+        and q.lstrip("-• ").strip().lower() not in ("none", "none.")
+    ]
+    return summary, reasoning, dead_ends, map_notes, open_questions

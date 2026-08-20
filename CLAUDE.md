@@ -169,3 +169,24 @@ Key design decisions already settled:
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
   reviewers produce judgement.
+- **The orchestrator names waves, not single tasks.** A wave is every task
+  ready to start now; dependency ordering lives in the wave boundaries —
+  what builds on other work waits for a later wave, what is independent runs
+  concurrently (`max_parallel_tasks`, a rate-limit cap, not architecture).
+  Instances are stateless CLI calls, so ten parallel tasks on one model are
+  just ten subprocesses; nothing limits a wave to one instance per member.
+  Wave tasks never see each other's results, which is what keeps parallelism
+  from degrading quality.
+- **The orchestrator is the final arbiter.** Task completion and job
+  completion are different judgements: a task that closed — even one that
+  passed review — can still be rejected with `REDO <task-id>: <objection>`,
+  reissued with the objection verbatim and pointers to the rejected work,
+  same kind and difficulty. Bounded (`max_redos`); past the cap the run
+  stalls loudly, because an arbiter rejecting the same work three times is
+  stuck, not deciding.
+- **Open questions bubble through the ledger from any level.** A close-out
+  carries an OPEN QUESTIONS section (worker's unmet need, lead's unsettled
+  decision, unresolved blocking finding, surviving gate failure — the last
+  two folded in by the harness, not trusted to prose). The ledger renders
+  them loudly and the wave prompt requires each to be addressed — answered,
+  tasked, REDOne, or ASKed to the operator — never skated past.

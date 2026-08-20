@@ -62,6 +62,12 @@ class LedgerEntry:
     #: Distilled lessons from what failed. "Tried X, failed because Y" -- the
     #: lesson, never the transcript.
     dead_ends: List[str] = field(default_factory=list)
+    #: Questions the task could not settle itself, bubbled up from any level
+    #: -- a worker's NEED TOOL, a lead's uncertainty, an unresolved blocking
+    #: finding. Rendered loudly: the orchestrator must address these next
+    #: round -- answer from the record, reissue work, or ASK the operator --
+    #: never skate past them.
+    open_questions: List[str] = field(default_factory=list)
     #: Pointers to the full raw work. This is what makes the entry an index
     #: rather than a replacement.
     refs: List[ArtifactRef] = field(default_factory=list)
@@ -74,6 +80,11 @@ class LedgerEntry:
             parts.append(
                 "**Already tried and rejected:**\n"
                 + "\n".join(f"- {d}" for d in self.dead_ends)
+            )
+        if self.open_questions:
+            parts.append(
+                "**OPEN QUESTIONS (must be addressed, not skipped):**\n"
+                + "\n".join(f"- {q}" for q in self.open_questions)
             )
         if self.refs:
             if with_previews:
@@ -124,6 +135,7 @@ class Ledger:
         summary: str,
         reasoning: str,
         dead_ends: Optional[Sequence[str]] = None,
+        open_questions: Optional[Sequence[str]] = None,
         refs: Optional[Sequence[ArtifactRef]] = None,
     ) -> LedgerEntry:
         """Record a completed task. Reasoning is required, not optional."""
@@ -141,6 +153,7 @@ class Ledger:
             summary=summary,
             reasoning=reasoning,
             dead_ends=list(dead_ends or []),
+            open_questions=list(open_questions or []),
             refs=list(refs or []),
         )
         self._entries.append(entry)

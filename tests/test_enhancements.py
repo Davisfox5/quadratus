@@ -133,7 +133,7 @@ def test_the_goal_still_leads_and_the_question_still_closes(store, tmp_path):
     s.run(max_tasks=1)
     prompt = rec.prompts_to(FABLE)[0]
     assert prompt.index("Build a JSON parser") < prompt.index("MAP-MARKER")
-    assert prompt.index("MAP-MARKER") < prompt.index("Name the single next task")
+    assert prompt.index("MAP-MARKER") < prompt.index("Name the next wave of tasks")
 
 
 def test_closeouts_teach_the_map(store, tmp_path):
@@ -217,7 +217,7 @@ def test_a_refused_retry_does_not_consume_budget(store):
 def test_a_stalled_run_raises_rather_than_burning_the_window(store):
     rec = Recorder(next_tasks=["build the lexer", "build the lexer"])
     s = _session(store, rec)
-    with pytest.raises(RunStalled, match="twice in a row"):
+    with pytest.raises(RunStalled, match="two consecutive waves"):
         s.run(max_tasks=10)
 
 

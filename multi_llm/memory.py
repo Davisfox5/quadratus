@@ -80,6 +80,9 @@ class TaskSummary:
     summary: str
     reasoning: str
     dead_ends: List[str] = field(default_factory=list)
+    #: Questions the task could not settle itself; the orchestrator must
+    #: address them next round rather than skate past.
+    open_questions: List[str] = field(default_factory=list)
     refs: List[ArtifactRef] = field(default_factory=list)
 
 
@@ -142,7 +145,8 @@ class TaskMemory:
 
     # -- closure -------------------------------------------------------------
     def close(self, *, summary: str, reasoning: str,
-              dead_ends: Optional[Sequence[str]] = None) -> TaskSummary:
+              dead_ends: Optional[Sequence[str]] = None,
+              open_questions: Optional[Sequence[str]] = None) -> TaskSummary:
         """End the task, emit its summary, and wipe everything else.
 
         The wipe is not an optimisation. Carrying a finished task's transcript
@@ -163,6 +167,7 @@ class TaskMemory:
             summary=summary,
             reasoning=reasoning,
             dead_ends=list(dead_ends or []),
+            open_questions=list(open_questions or []),
             refs=list(self._refs),
         )
         self._closed = True
@@ -203,6 +208,7 @@ class PersistentMemory:
             summary=summary.summary,
             reasoning=summary.reasoning,
             dead_ends=summary.dead_ends,
+            open_questions=summary.open_questions,
             refs=summary.refs,
         )
 
