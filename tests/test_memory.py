@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from multi_llm.artifacts import ArtifactStore
-from multi_llm.ledger import Ledger
+from multi_llm.ledger import ELISION_INDEX_CAP, Ledger, estimate_tokens
 from multi_llm.memory import NoMemory, PersistentMemory, TaskMemory
 from multi_llm.workers import FanOutExceeded, WorkerBudget, WorkerPool
 
@@ -295,3 +295,108 @@ def test_end_to_end_one_task_through_the_architecture(store):
     assert "300 lines" in mem.fetch(drafts[0])
     # And the peer's working memory is gone.
     assert task.turns() == []
+
+
+# -- the flush: a context window is not a place to keep things ---------------
+
+
+def test_the_working_transcript_is_kept_when_the_task_closes(store):
+    task = TaskMemory("t1", "claude:opus", store)
+    task.record("user", "implement string escaping")
+    task.record("assistant", "surrogate pairs are the whole problem here")
+    summary = task.close(summary="done", reasoning="the RFC is unambiguous")
+
+    transcripts = [r for r in summary.refs if r.kind == "transcript:t1"]
+    assert len(transcripts) == 1
+    assert "surrogate pairs are the whole problem" in store.get(transcripts[0])
+
+
+def test_the_transcript_reference_does_not_preview_the_turns(store):
+    """Kept for fetching, not for reading over the orchestrator's shoulder."""
+    task = TaskMemory("t1", "claude:opus", store)
+    task.record("user", "implement string escaping")
+    summary = task.close(summary="done", reasoning="because")
+
+    ref = [r for r in summary.refs if r.kind.startswith("transcript:")][0]
+    assert "implement string escaping" not in ref.render()
+    assert "1 turns" in ref.preview
+
+
+def test_the_flush_appends_so_earlier_pointers_keep_their_place(store):
+    task = TaskMemory("t1", "claude:opus", store)
+    task.record("assistant", "a turn")
+    task.keep("the draft", kind="draft")
+    summary = task.close(summary="done", reasoning="because")
+    assert summary.refs[0].kind == "draft"
+
+
+def test_abandoning_a_task_flushes_nothing(store):
+    """close is an ending, wipe is an abandonment; they should not agree."""
+    task = TaskMemory("t1", "claude:opus", store)
+    task.record("assistant", "a turn nobody wants")
+    task.wipe()
+    assert store.ids() == []
+
+
+# -- render budget: the render shrinks, the ledger does not ------------------
+
+
+def _loaded(store, count=6, *, summary_size=400):
+    mem = PersistentMemory("Build a JSON parser", store, invariants=["No new deps."])
+    for i in range(count):
+        task = TaskMemory(f"t{i}", "claude:opus", store)
+        task.keep("x" * 2000 + "\n" + "detail line\n" * 40, kind="draft")
+        mem.absorb(
+            task.close(summary=f"task {i} did " + "y" * summary_size, reasoning="r")
+        )
+    return mem
+
+
+def test_an_unbudgeted_render_is_unchanged(store):
+    mem = _loaded(store, count=3)
+    full = mem.render(current="what next?")
+    assert "task 0 did" in full and "task 2 did" in full
+
+
+def test_previews_go_before_entries_do(store):
+    mem = _loaded(store, count=6)
+    full = mem.render(current="what next?")
+    budget = estimate_tokens(full) - 100
+    trimmed = mem.render(current="what next?", budget_tokens=budget)
+
+    assert estimate_tokens(trimmed) <= budget
+    # Every entry is still there in full; only the artifact samples went.
+    for i in range(6):
+        assert f"task {i} did" in trimmed
+    assert "detail line" not in trimmed
+    assert "artifact" in trimmed  # the pointers remain
+
+
+def test_a_tight_budget_elides_oldest_entries_and_indexes_them(store):
+    mem = _loaded(store, count=6)
+    trimmed = mem.render(current="what next?", budget_tokens=400)
+
+    assert estimate_tokens(trimmed) <= 400
+    assert "task 5 did" in trimmed          # the newest work survives
+    assert "task 0 did" not in trimmed      # the oldest is not rendered
+    assert "not shown in full" in trimmed   # but it is announced
+    assert "t0 (by claude:opus)" in trimmed  # and it is addressable
+    assert len(mem.ledger) == 6             # and it is still in the ledger
+
+
+def test_the_budget_never_costs_the_goal_the_rules_or_the_question(store):
+    mem = _loaded(store, count=6)
+    mem.ledger.rulings.append("Q: ship Friday? -- A: no, Monday.")
+    squeezed = mem.render(current="THE QUESTION NOW", budget_tokens=1)
+
+    assert "Build a JSON parser" in squeezed
+    assert "No new deps." in squeezed
+    assert "Monday" in squeezed
+    assert "THE QUESTION NOW" in squeezed
+
+
+def test_a_long_run_collapses_the_index_rather_than_listing_everything(store):
+    mem = _loaded(store, count=ELISION_INDEX_CAP + 5, summary_size=100)
+    trimmed = mem.render(current="what next?", budget_tokens=300)
+    assert "t0 through t" in trimmed
+    assert "t0 (by claude:opus)" not in trimmed

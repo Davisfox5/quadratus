@@ -1,12 +1,17 @@
-"""Tests for the five externally-informed enhancements.
+"""Tests for the externally-informed enhancements.
 
 Each traces to a measured failure or success in a deployed system: recitation
 and the failure-loop breaker from Manus's published lessons and field
 failures, cross-family verification and the codebase map from Blitzy's
-audited harness, the plan gate from its AAP review step.
+audited harness, the plan gate from its AAP review step, and -- at the end of
+this file -- the delegation deadline and the one-way permission rule, from
+OpenClaw's subagent reaping and the compromise arithmetic of systems that act
+on any agent's proposal.
 """
 
 from __future__ import annotations
+
+import time
 
 import pytest
 
@@ -16,7 +21,12 @@ from multi_llm.memory import TaskMemory
 from multi_llm.routing import cross_family_verifier
 from multi_llm.session import Complexity, RunStalled, Session, SessionConfig, TaskSpec
 from multi_llm.task_kinds import TaskKind
-from multi_llm.workers import RepeatedFailure, WorkerPool
+from multi_llm.workers import (
+    TOOL_REQUEST_CAP,
+    RepeatedFailure,
+    WorkerBudget,
+    WorkerPool,
+)
 
 from .test_session import Recorder  # reuse the scripted fake
 
@@ -370,7 +380,11 @@ def test_a_worker_can_ask_for_a_tool_it_lacks(store):
     task = TaskMemory("t1", OPUS, store)
     got = pool.commission(task=task, parent_key=OPUS, prompt="save the config", label="w")
     assert got.needs_tool == "file write access"
-    assert "needs a tool" in got.summary
+    # The lead is told what was asked for, and told that the ask is the
+    # worker's own text rather than a finding it can act on unread.
+    assert "file write access" in got.summary
+    assert "asked for a tool" in got.summary
+    assert "may be repeating something it just read" in got.summary
 
 
 def test_the_reissued_errand_carries_the_grant(store):
@@ -480,3 +494,78 @@ def test_no_gate_configured_means_no_gate_runs(store):
     s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
     assert not any("Integration gate" in c["prompt"] for c in rec.calls
                    if "The task is finished" in c["prompt"])
+
+
+# -- a worker that never comes back ------------------------------------------
+
+
+def test_a_stuck_worker_does_not_hold_the_batch_open(store):
+    def run(model, prompt, allow_writes=False):
+        if "slow" in prompt:
+            time.sleep(2.0)
+        return "done"
+
+    pool = WorkerPool(
+        store=store, run=run,
+        budget=WorkerBudget(max_concurrent=2, timeout_seconds=0.1),
+    )
+    task = TaskMemory("t1", OPUS, store)
+    results = pool.commission_many(
+        task=task, parent_key=OPUS,
+        jobs=[{"prompt": "quick one", "label": "a"},
+              {"prompt": "slow one", "label": "b"}],
+    )
+
+    assert [bool(r.error) for r in results] == [False, True]
+    assert "gave up waiting" in results[1].error
+    assert any("TIMED OUT" in t.content for t in task.turns())
+
+
+def test_a_stall_is_not_a_known_bad_action(store):
+    """A failure is information; a stall is an unknown, so it may be re-sent."""
+    seen = []
+
+    def run(model, prompt, allow_writes=False):
+        seen.append(prompt)
+        if len(seen) == 1:
+            time.sleep(2.0)
+        return "done"
+
+    pool = WorkerPool(
+        store=store, run=run,
+        budget=WorkerBudget(max_concurrent=2, timeout_seconds=0.1),
+    )
+    task = TaskMemory("t1", OPUS, store)
+    pool.commission_many(
+        task=task, parent_key=OPUS, jobs=[{"prompt": "read it", "label": "a"}],
+    )
+    # Same prompt, same worker: allowed, because nothing is known about how
+    # that errand would have ended.
+    again = pool.commission(
+        task=task, parent_key=OPUS, prompt="read it", label="a-retry",
+    )
+    assert again.error is None
+
+
+def test_a_write_grant_is_on_the_record(store):
+    def run(model, prompt, allow_writes=False):
+        return "saved it"
+
+    pool = WorkerPool(store=store, run=run)
+    task = TaskMemory("t1", OPUS, store)
+    pool.commission(
+        task=task, parent_key=OPUS, prompt="save the config", label="w",
+        allow_writes=True,
+    )
+    grants = [t.content for t in task.turns() if t.content.startswith("[grant]")]
+    assert len(grants) == 1 and "writes enabled" in grants[0]
+
+
+def test_an_injected_tool_request_cannot_flood_the_lead(store):
+    pool = WorkerPool(
+        store=store,
+        run=lambda m, p: "NEED TOOL: " + "shell access and " * 200,
+    )
+    task = TaskMemory("t1", OPUS, store)
+    got = pool.commission(task=task, parent_key=OPUS, prompt="read this page", label="w")
+    assert len(got.needs_tool) <= TOOL_REQUEST_CAP

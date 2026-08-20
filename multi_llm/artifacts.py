@@ -78,13 +78,25 @@ class ArtifactStore:
     def _meta_path(self, artifact_id: str) -> Path:
         return self.root / f"{artifact_id}.json"
 
-    def put(self, content: str, *, kind: str, author: str) -> ArtifactRef:
-        """Store raw output and return a reference to it."""
+    def put(self, content: str, *, kind: str, author: str,
+            preview: Optional[str] = None) -> ArtifactRef:
+        """Store raw output and return a reference to it.
+
+        ``preview`` overrides the default first-lines sample. Almost nothing
+        should use it -- the sample is what lets a reader triage without a
+        fetch. The exception is content that is stored precisely so it does
+        *not* travel: a task transcript is filed for later fetching, and a
+        reference to it that carried ten lines of raw working turns would walk
+        those turns straight into the orchestrator's prompt, which is the one
+        thing the memory scopes exist to prevent. There, a description is the
+        honest preview.
+        """
         if content is None:
             content = ""
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:12]
         lines = content.splitlines()
-        preview = "\n".join(lines[:PREVIEW_LINES])
+        if preview is None:
+            preview = "\n".join(lines[:PREVIEW_LINES])
         ref = ArtifactRef(
             id=digest,
             kind=kind,

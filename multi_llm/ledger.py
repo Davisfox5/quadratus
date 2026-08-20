@@ -24,6 +24,13 @@ sitting in context make a model measurably more likely to repeat them. So the
 schema has a place for "we tried X, it failed because Y" and no place for the
 failure itself -- that stays in the artifact store, fetchable.
 
+**The render shrinks; the ledger never does.** A long session will eventually
+build a body bigger than the window it is rendered into. That pressure is
+handled at render time, by dropping artifact previews and then eliding whole
+entries from the oldest end, each replaced by an index line naming its task and
+artifacts -- never by rewriting an entry, which is the one thing that would
+compound loss. See :meth:`Ledger._fit`.
+
 Rendering puts the invariants first and the current task last. Those are the
 two positions a model uses most reliably; the middle of a long prompt is the
 least reliable real estate there is, so nothing important is placed there.
@@ -38,8 +45,14 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
 from .artifacts import ArtifactRef
+from .usage import CHARS_PER_TOKEN
 
-__all__ = ["LedgerEntry", "Ledger"]
+__all__ = ["LedgerEntry", "Ledger", "estimate_tokens", "ELISION_INDEX_CAP"]
+
+#: Beyond this many elided entries the per-task index is itself a cost, and a
+#: range plus a count carries the same information for a reader who is going
+#: to ask for a task by id anyway.
+ELISION_INDEX_CAP = 25
 
 
 @dataclass(frozen=True)
@@ -161,6 +174,7 @@ class Ledger:
         recent: Optional[int] = None,
         with_previews: bool = True,
         extra: str = "",
+        budget_tokens: Optional[int] = None,
     ) -> str:
         """Build the orchestrator's prompt body.
 
@@ -178,41 +192,131 @@ class Ledger:
                 placed after the completed work and before the current
                 question, so the goal keeps the first position and the live
                 question keeps the last.
+            budget_tokens: Approximate ceiling for the whole rendered body.
+                A fixed ``recent`` cannot know how big its entries turned out
+                to be; this measures. See :meth:`_fit`.
         """
-        blocks: List[str] = [f"## Goal (verbatim, unchanged)\n\n{goal.strip()}"]
+        head: List[str] = [f"## Goal (verbatim, unchanged)\n\n{goal.strip()}"]
 
         if self.invariants:
-            blocks.append(
+            head.append(
                 "## Standing rules (always in force)\n\n"
                 + "\n".join(f"- {rule}" for rule in self.invariants)
             )
 
         if self.rulings:
-            blocks.append(
+            head.append(
                 "## Operator rulings (asked and answered; do not re-ask)\n\n"
                 + "\n".join(f"- {r}" for r in self.rulings)
             )
 
-        shown = self._entries if recent is None else self._entries[-recent:]
-        if shown:
-            omitted = len(self._entries) - len(shown)
-            header = "## Completed work"
-            if omitted > 0:
-                header += (
-                    f"\n\n_{omitted} earlier task(s) not shown; their entries and "
-                    f"full artifacts remain available on request._"
-                )
-            blocks.append(
-                header + "\n\n"
-                + "\n\n".join(e.render(with_previews=with_previews) for e in shown)
-            )
-        else:
-            blocks.append("## Completed work\n\n_Nothing completed yet._")
-
+        tail: List[str] = []
         if extra.strip():
-            blocks.append(extra.strip())
-
+            tail.append(extra.strip())
         if current.strip():
-            blocks.append(f"## Now\n\n{current.strip()}")
+            tail.append(f"## Now\n\n{current.strip()}")
 
-        return "\n\n".join(blocks)
+        shown = self._entries if recent is None else self._entries[-recent:]
+        elided = self._entries[: len(self._entries) - len(shown)]
+
+        def assemble(kept: List[LedgerEntry], dropped: List[LedgerEntry],
+                     previews: bool) -> str:
+            return "\n\n".join(
+                [*head, _work_block(kept, dropped, previews), *tail]
+            )
+
+        if budget_tokens is None:
+            return assemble(shown, elided, with_previews)
+        return self._fit(assemble, shown, elided, with_previews, budget_tokens)
+
+    @staticmethod
+    def _fit(assemble, shown, elided, with_previews, budget_tokens) -> str:
+        """Shrink the render until it fits, without abridging anything.
+
+        Context pressure is not a maybe in a long session, and the way it
+        usually announces itself is a provider error mid-run. Handling it in
+        advance is the easy part; the trap is *how*. The standard answer --
+        summarise the old turns -- is the one move this ledger exists to
+        forbid, because summarising a summary compounds loss and the second
+        pass takes the reasoning with it.
+
+        So the render degrades in two steps and never rewrites a word:
+
+        1. Drop artifact previews, oldest position first, so entries stay
+           whole and only the inline sample of their attachments goes.
+        2. Elide whole entries from the oldest end, replacing each with an
+           index line naming its task and artifacts.
+
+        An elided entry is not lost in any sense: it is still in the ledger,
+        its artifacts are still on disk, and the index tells the orchestrator
+        exactly what to ask for. This is "a summary is an index" applied to
+        the render itself -- the content leaves the context window, not the
+        system.
+
+        If the parts that are never trimmed -- goal, standing rules, operator
+        rulings, the current question -- exceed the budget on their own, the
+        fully-elided render is returned over budget rather than cut. Those are
+        the load-bearing text; a budget that cannot hold them is the wrong
+        budget, and silently dropping a standing rule to satisfy a number
+        would be a far worse failure than an over-long prompt.
+        """
+        # Step one is tried once and whole: previews are the cheapest thing to
+        # lose, so every entry keeps its previews or none does. Interleaving
+        # the two steps would trade a whole entry away to keep one sample,
+        # which is the wrong thing to lose first.
+        if with_previews:
+            candidate = assemble(shown, elided, True)
+            if estimate_tokens(candidate) <= budget_tokens:
+                return candidate
+        candidate = ""
+        for cut in range(len(shown) + 1):
+            candidate = assemble(shown[cut:], elided + shown[:cut], False)
+            if estimate_tokens(candidate) <= budget_tokens:
+                return candidate
+        return candidate
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token count, on the same ~4-chars/token rule the meter uses.
+
+    Good enough to decide whether a prompt is about to blow a window; not
+    good enough to bill against, which is why nothing here reports it as a
+    measurement.
+    """
+    return int(len(text or "") / CHARS_PER_TOKEN)
+
+
+def _work_block(shown: List[LedgerEntry], elided: List[LedgerEntry],
+                with_previews: bool) -> str:
+    """The completed-work section, with an index for whatever is not shown."""
+    if not shown and not elided:
+        return "## Completed work\n\n_Nothing completed yet._"
+
+    header = "## Completed work"
+    if elided:
+        header += "\n\n" + _elision_index(elided)
+    if not shown:
+        return header
+    return (
+        header + "\n\n"
+        + "\n\n".join(e.render(with_previews=with_previews) for e in shown)
+    )
+
+
+def _elision_index(entries: List[LedgerEntry]) -> str:
+    """Name what is not shown, so it can still be asked for by id."""
+    notice = (
+        f"_{len(entries)} earlier task(s) not shown in full here. Their entries "
+        f"are intact in the ledger and nothing has been re-summarised -- ask "
+        f"for any of them, or fetch an artifact below, when a decision turns "
+        f"on one._"
+    )
+    if len(entries) > ELISION_INDEX_CAP:
+        return notice + (
+            f"\n\n_Tasks {entries[0].task_id} through {entries[-1].task_id}._"
+        )
+    lines = []
+    for entry in entries:
+        refs = ", ".join(f"artifact {r.id}" for r in entry.refs) or "no artifacts"
+        lines.append(f"- {entry.task_id} (by {entry.author}): {refs}")
+    return notice + "\n\n" + "\n".join(lines)

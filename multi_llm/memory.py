@@ -70,9 +70,10 @@ class NoMemory:
 class TaskSummary:
     """What survives when a brain-trust member finishes a task.
 
-    Everything else that member accumulated -- its own turns, the raw output of
-    every worker it commissioned -- is dropped at this point. This object and
-    the artifacts it points at are the whole inheritance.
+    Everything else that member accumulated is dropped at this point. This
+    object and the artifacts it points at are the whole inheritance -- and one
+    of those artifacts is the task's own transcript, flushed to the store on
+    the way out, so "dropped" means "left the context window", never "gone".
     """
 
     task_id: str
@@ -157,6 +158,7 @@ class TaskMemory:
                 "a task summary needs its reasoning: the next reader gets this "
                 "and nothing else unless it fetches an artifact"
             )
+        self._flush()
         result = TaskSummary(
             task_id=self.task_id,
             author=self.author,
@@ -169,8 +171,55 @@ class TaskMemory:
         self._turns = []
         return result
 
+    def _flush(self) -> Optional[ArtifactRef]:
+        """Write the working transcript to the store before it is wiped.
+
+        The lead's own turns are the one thing in this system that used to be
+        genuinely unrecoverable. Worker output, drafts, reviews and revisions
+        are all kept as artifacts as they happen; the peer's own reasoning
+        between them existed only in the context window, so whatever the
+        close-out prose failed to carry was gone the moment the task closed.
+
+        OpenClaw hit the same edge from the other direction and fixed it the
+        same way: before compaction clears a session it runs a silent turn
+        that writes what matters to disk, on the principle that a fact living
+        only in a context window is a fact you are about to lose. The
+        difference here is that no model is in the loop -- the harness writes
+        the transcript verbatim, so the flush cannot itself be lossy, cannot
+        hallucinate, and costs nothing.
+
+        The transcript is a pointer in the summary, not part of it: the
+        close-out prose stays the thing the next reader gets, and the raw
+        thread is there when a decision turns on a detail it skipped. Its
+        reference deliberately carries a description instead of the usual
+        first-lines preview -- a preview here would put raw working turns into
+        every orchestrator render, which is exactly what the scopes forbid.
+        """
+        if self._store is None or not self._turns:
+            return None
+        transcript = "\n\n".join(f"[{t.role}] {t.content}" for t in self._turns)
+        ref = self._store.put(
+            transcript,
+            kind=f"transcript:{self.task_id}",
+            author=self.author,
+            preview=(
+                f"[working transcript of task {self.task_id}: "
+                f"{len(self._turns)} turns, not previewed here. Fetch it when "
+                f"a decision turns on how this task actually went.]"
+            ),
+        )
+        # Appended, not prepended: earlier refs are what the peer chose to
+        # keep, and a caller reading refs[0] should still find that.
+        self._refs.append(ref)
+        return ref
+
     def wipe(self) -> None:
-        """Discard working memory without producing a summary."""
+        """Discard working memory without producing a summary.
+
+        Deliberately no flush: ``close`` is a task ending, where the thread is
+        worth keeping, and ``wipe`` is an abandonment, where the caller has
+        said the opposite.
+        """
         self._turns = []
         self._refs = []
         self._closed = True
@@ -216,12 +265,19 @@ class PersistentMemory:
         return self.store.get(ref_or_id)
 
     def render(self, *, current: str = "", recent: Optional[int] = None,
-               with_previews: bool = True, extra: str = "") -> str:
-        """The orchestrator's prompt body for this turn."""
+               with_previews: bool = True, extra: str = "",
+               budget_tokens: Optional[int] = None) -> str:
+        """The orchestrator's prompt body for this turn.
+
+        ``budget_tokens`` caps the result: over it, the render degrades to an
+        index of the oldest work rather than growing past the window. The
+        ledger itself is untouched by this -- see :meth:`Ledger._fit`.
+        """
         return self.ledger.render(
             goal=self.goal,
             current=current,
             recent=recent,
             with_previews=with_previews,
             extra=extra,
+            budget_tokens=budget_tokens,
         )

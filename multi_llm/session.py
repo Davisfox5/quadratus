@@ -157,6 +157,15 @@ class SessionConfig:
     #: Earlier entries and every artifact stay reachable; this narrows the
     #: view rather than discarding anything.
     recent_entries: Optional[int] = None
+    #: Approximate ceiling on the rendered ledger body, in tokens. A fixed
+    #: ``recent_entries`` guesses; this measures, and it is the only thing
+    #: standing between a long session and a mid-run context-overflow error
+    #: from the provider. Over budget, the render drops artifact previews and
+    #: then elides the oldest entries down to index lines -- the ledger is
+    #: never rewritten. The default leaves generous headroom inside the
+    #: smallest brain-trust window (200k) for the parts that are never
+    #: trimmed and for the model's own reply.
+    context_budget_tokens: Optional[int] = 120_000
     #: Cross-session memory about the repository itself. Rendered into every
     #: orchestrator and lead prompt, and amended from task close-outs.
     codebase_map: Optional[CodebaseMap] = None
@@ -613,6 +622,7 @@ class Session:
                 ),
                 recent=self.config.recent_entries,
                 extra=self._map_block(),
+                budget_tokens=self.config.context_budget_tokens,
             )
             if fetched:
                 body += ("\n\n" + _render_fetches(fetched)
@@ -668,6 +678,7 @@ class Session:
                 ),
                 recent=self.config.recent_entries,
                 extra=self._map_block(),
+                budget_tokens=self.config.context_budget_tokens,
             ),
         )
 
@@ -718,7 +729,9 @@ class Session:
     ) -> str:
         parts = [
             self.memory.render(
-                current=spec.description, recent=self.config.recent_entries
+                current=spec.description,
+                recent=self.config.recent_entries,
+                budget_tokens=self.config.context_budget_tokens,
             ),
         ]
         map_block = self._map_block()

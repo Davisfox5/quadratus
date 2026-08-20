@@ -169,3 +169,53 @@ Key design decisions already settled:
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
   reviewers produce judgement.
+- **Context pressure shrinks the render, never the ledger**
+  (`Ledger._fit`, `SessionConfig.context_budget_tokens`). A long session will
+  eventually build a body bigger than the window, and the industry default
+  answer — summarise the old turns — is the one move this ledger forbids. So
+  the render degrades in two steps and rewrites nothing: drop artifact
+  previews (all or none), then elide whole entries from the oldest end, each
+  replaced by an index line naming its task and artifacts. Goal, standing
+  rules, operator rulings and the current question are never trimmed; if they
+  alone exceed the budget the render goes over rather than cut. `recent`
+  guesses at size, this measures.
+- **A task's transcript is flushed to the store before its memory is wiped**
+  (`TaskMemory._flush`). The lead's own turns were the one genuinely
+  unrecoverable thing here: drafts, reviews and worker output are all kept as
+  they happen, but the reasoning between them lived only in the context
+  window, so whatever the close-out prose missed died with it. OpenClaw's
+  pre-compaction memory flush is the same fix; ours is better in one respect
+  — no model is in the loop, so the flush cannot itself be lossy. The
+  transcript's reference carries a *description*, not a preview, because a
+  preview would walk raw working turns into every orchestrator render.
+  `wipe()` still flushes nothing: close is an ending, wipe is an abandonment.
+- **Delegation is bounded in time, not just in count**
+  (`WorkerBudget.timeout_seconds`, 300s). A budget that counts calls but not
+  seconds still lets one stuck worker hold a task open forever. A batch
+  deadline (the errands run concurrently, so the wait is the slowest of them)
+  turns a stall into a failure the lead can reroute. Two honest limits: a
+  Python thread cannot be interrupted, so the hard kill stays with the
+  transport's own timeout; and a timeout is deliberately *not* recorded as a
+  `RepeatedFailure` fingerprint — a failure is information, a stall is an
+  unknown, and re-sending an unknown is not the death spiral.
+- **Permissions flow one way: a worker never widens its own access.** The
+  `NEED TOOL` channel is a request from the least trusted participant in the
+  system, made in text that may be repeating something it just read, so it
+  reaches the lead capped (`TOOL_REQUEST_CAP`) and explicitly flagged as the
+  worker's own words, and every granted write goes on the task record before
+  the call. The number behind this: measured on OpenClaw, one agent's
+  probability of compromise was 0.24, but a system that acts when *any* agent
+  proposes an action reached 0.86 across seven. Union-of-proposals is the
+  compounding step, and a grant is the one thing a worker can end up holding
+  that the lead did not type itself.
+- **Studied and deliberately not adopted, from OpenClaw and Grok Bot.**
+  Heartbeat/always-on runs: there is no idle time in a batch coding session, so
+  a periodic wake would spend a window to discover nothing changed. Agents
+  routing work to each other by reading each other's name and description
+  (Grok Bot's handoff): peers deciding among themselves who takes the next
+  task is exactly the correlated, reputation-driven choice the anonymised
+  reviewer rule exists to prevent — the orchestrator names the lead. Agents
+  *learning* when to interrupt for approval: the reviewers of that feature
+  found the failure is the action the agent classified as routine and never
+  surfaced, and a threshold that drifts is one nobody can audit; ASK stays an
+  explicit, bounded channel with the answers recorded as standing rulings.
