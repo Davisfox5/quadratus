@@ -322,16 +322,6 @@ class WorkerPool:
             hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
         )
         with self._lock:
-            if allow_writes:
-                # A grant is the one thing a worker can end up holding that
-                # the lead did not type itself, so it goes on the record where
-                # the operator can find it -- before the call, so a grant that
-                # then hangs is still accounted for.
-                task.record(
-                    "assistant",
-                    f"[grant] worker {label} ({model_key}) is running with "
-                    f"writes enabled",
-                )
             if fingerprint in self._failed:
                 raise RepeatedFailure(
                     f"this exact prompt already failed on {model_key} for task "
@@ -340,6 +330,18 @@ class WorkerPool:
                     f"never the same instruction to the same worker twice."
                 )
             self._charge(task.task_id)
+            if allow_writes:
+                # A grant is the one thing a worker can end up holding that
+                # the lead did not type itself, so it goes on the record where
+                # the operator can find it -- after the refusal checks, so the
+                # record never claims a grant for a worker that was refused,
+                # but before the call, so a grant that then hangs is still
+                # accounted for.
+                task.record(
+                    "assistant",
+                    f"[grant] worker {label} ({model_key}) is running with "
+                    f"writes enabled",
+                )
 
         scratch = NoMemory()  # explicit: a worker carries nothing in or out
         try:

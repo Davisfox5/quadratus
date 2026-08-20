@@ -569,3 +569,22 @@ def test_an_injected_tool_request_cannot_flood_the_lead(store):
     task = TaskMemory("t1", OPUS, store)
     got = pool.commission(task=task, parent_key=OPUS, prompt="read this page", label="w")
     assert len(got.needs_tool) <= TOOL_REQUEST_CAP
+
+
+def test_a_refused_commission_leaves_no_grant_on_the_record(store):
+    """The audit trail must never claim a grant for a worker that never ran."""
+    def run(model, prompt, allow_writes=False):
+        raise RuntimeError("boom")
+
+    pool = WorkerPool(store=store, run=run)
+    task = TaskMemory("t1", OPUS, store)
+    with pytest.raises(RuntimeError, match="boom"):
+        pool.commission(task=task, parent_key=OPUS, prompt="save it",
+                        label="w", allow_writes=True)
+    grants = [t for t in task.turns() if t.content.startswith("[grant]")]
+    assert len(grants) == 1  # the attempt itself ran, so it is on the record
+    with pytest.raises(RepeatedFailure):
+        pool.commission(task=task, parent_key=OPUS, prompt="save it",
+                        label="w2", allow_writes=True)
+    grants = [t for t in task.turns() if t.content.startswith("[grant]")]
+    assert len(grants) == 1  # the refused retry added nothing
