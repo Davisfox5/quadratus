@@ -6,8 +6,11 @@ One cycle:
    that is ready to start now and does not depend on another task in the same
    wave. Dependency ordering lives in the wave boundaries -- what must build
    on earlier work waits for a later wave; what is independent runs at the
-   same time, up to ``max_parallel_tasks``. Instances are stateless CLI
-   calls, so ten parallel tasks on one model are just ten subprocesses.
+   same time, throttled per subscription (``max_parallel_per_vendor``) --
+   four vendors at four calls each is sixteen invocations in flight, and
+   calls beyond a vendor's cap queue and start as its slots free. Instances
+   are stateless CLI calls, so ten parallel tasks on one model are just ten
+   subprocesses.
 2. A brain-trust member leads each task, with collaborators drawn in
    according to the task's complexity.
 3. The lead works with full memory for the duration, commissioning worker
@@ -207,10 +210,14 @@ class SessionConfig:
     #: How many fix rounds a failing integration gate buys the lead before
     #: the failure is carried into the record as an open problem.
     max_gate_fixes: int = 1
-    #: How many tasks may run at the same time within one wave. Instances are
-    #: stateless CLI calls, so ten parallel Opus tasks are just ten
-    #: subprocesses; this cap exists for vendor rate limits, not architecture.
-    max_parallel_tasks: int = 4
+    #: How many invocations may be in flight *per vendor* at the same time.
+    #: The limit being guarded is each subscription's rate limit, so the cap
+    #: is per subscription, not global: four Claude calls, four OpenAI calls,
+    #: four Gemini calls and four Grok calls can all run at once. Instances
+    #: are stateless CLI calls, so many parallel tasks on one model are just
+    #: subprocesses; calls beyond a vendor's cap queue and start automatically
+    #: as its slots free up.
+    max_parallel_per_vendor: int = 4
     #: How many times the orchestrator may reject (REDO) the same task's
     #: result before the loop stalls loudly for the operator. The orchestrator
     #: is the final arbiter of what ships, but an arbiter rejecting the same
@@ -243,7 +250,21 @@ class Session:
         self.store = store
         if self.config.usage_meter is not None:
             invoke = self.config.usage_meter.wrap(invoke)
-        self.invoke = invoke
+        # Every invocation passes through its vendor's gate: at most
+        # ``max_parallel_per_vendor`` calls in flight per subscription, calls
+        # beyond that queueing until a slot frees. The gate wraps the invoke
+        # itself rather than the task scheduler because tasks mix vendors --
+        # a lead on one subscription drawing reviewers and workers from three
+        # others -- and the thing being rate-limited is the subscription.
+        self._vendor_gates: Dict[str, threading.BoundedSemaphore] = {}
+        self._gates_lock = threading.Lock()
+        inner = invoke
+
+        def gated(model_key: str, prompt: str, *args, **kwargs) -> str:
+            with self._vendor_gate(model_key):
+                return inner(model_key, prompt, *args, **kwargs)
+
+        self.invoke = gated
         self._available = available or (lambda _key: True)
         self.memory = PersistentMemory(goal, store, invariants=invariants)
         self.workers = WorkerPool(
@@ -262,6 +283,23 @@ class Session:
         #: REDO count per original task id; past ``max_redos`` the run stalls.
         self._redo_counts: Dict[str, int] = {}
         self._task_counter = 0
+        #: Operator questions raised alongside a wave and not yet answered.
+        #: They pause only the work that depends on them: independent tasks
+        #: keep running, and the questions are re-rendered loudly to the
+        #: orchestrator every round until answered.
+        self.unanswered_asks: List[str] = []
+
+    def _vendor_gate(self, model_key: str) -> threading.BoundedSemaphore:
+        spec = resolve(model_key)
+        vendor = spec.provider if spec is not None else model_key.split(":", 1)[0]
+        with self._gates_lock:
+            gate = self._vendor_gates.get(vendor)
+            if gate is None:
+                gate = threading.BoundedSemaphore(
+                    max(1, self.config.max_parallel_per_vendor)
+                )
+                self._vendor_gates[vendor] = gate
+        return gate
 
     # -- seating -------------------------------------------------------------
     def seat(self, *, security: bool = False) -> Seat:
@@ -646,18 +684,23 @@ class Session:
         work. Bounded by ``max_redos`` per task, because an arbiter rejecting
         the same work over and over is a stuck arbiter.
 
-        The orchestrator may also reply ``ASK: <question>`` when the decision
-        turns on something only the operator knows -- scope, taste, a business
-        constraint no artifact can settle. The answer is recorded as a
-        standing ruling and re-emitted on every render, so a question is never
-        asked twice, and the orchestrator is re-prompted with the ruling in
-        hand. Bounded, so a confused orchestrator cannot interrogate the
-        operator in a loop.
+        The orchestrator may also raise ``ASK: <question>`` lines when a
+        decision turns on something only the operator knows -- scope, taste,
+        a business constraint no artifact can settle. An ASK alongside TASK
+        lines pauses only the work that depends on the answer: the question
+        is held (and answered in parallel with the wave when a channel is
+        configured) while independent tasks run. A reply that is *nothing
+        but* questions means the decision itself is blocked, so those are
+        answered before re-asking -- bounded, so a confused orchestrator
+        cannot interrogate the operator in a loop. Every answer is recorded
+        as a standing ruling and re-emitted on every render, so a question
+        is never asked twice.
 
         Raises:
-            OperatorInputNeeded: on an ASK when no ``ask_operator`` channel is
-                configured. Guessing an answer the orchestrator explicitly
-                flagged as operator-only would defeat the point of asking.
+            OperatorInputNeeded: on a decision-blocking ASK when no
+                ``ask_operator`` channel is configured. Guessing an answer
+                the orchestrator explicitly flagged as operator-only would
+                defeat the point of asking.
             RunStalled: when a task is rejected more than ``max_redos`` times,
                 or the ASK budget is spent interrogating.
         """
@@ -667,6 +710,8 @@ class Session:
             # Rebuilt every round: an answered ASK lands in the rulings, and
             # the re-ask must carry it -- a stale prompt would re-ask the
             # operator the question they just answered.
+            extra_blocks = [b for b in (self._map_block(), self._awaiting_block())
+                            if b]
             body = self.memory.render(
                 current=(
                     "Name the next wave of tasks: every task that is ready to "
@@ -675,25 +720,36 @@ class Session:
                     "the same time and cannot see each other's results, so a "
                     "task that builds on another task's output goes in a "
                     "later wave, never the same one. A wave of one is fine.\n\n"
-                    "You are the final arbiter of finished work. If a "
-                    "completed task's result is not good enough -- even one "
-                    "that passed review -- reject it with a line 'REDO "
-                    "<task-id>: <what must change and why>' and it will be "
-                    "redone with your objection in hand.\n\n"
+                    "You are the final arbiter of finished work, and REDO is "
+                    "your exceptional verdict, not your habit. Reject only a "
+                    "result that is genuinely wrong or unusable against the "
+                    "goal -- a missed requirement, work that does not do what "
+                    "the task asked. It has already been reviewed: do not "
+                    "reject for style, taste, or improvements you would "
+                    "merely prefer -- if an improvement matters, name it as a "
+                    "follow-up task instead. When a result truly fails that "
+                    "bar, reject it with a line 'REDO <task-id>: <what must "
+                    "change and why>' and it will be redone with your "
+                    "objection in hand.\n\n"
                     "Address every OPEN QUESTION in the record before or "
-                    "alongside new work: answer it here from what you know, "
-                    "issue a task or REDO that resolves it, or raise it to "
-                    "the operator. Never skate past one.\n\n"
+                    "alongside new work, in this order: answer it yourself "
+                    "from what you know and the record; failing that, issue "
+                    "a task or REDO that resolves it; only when nobody in "
+                    "the system can answer it, raise it to the operator as a "
+                    "line 'ASK: <one question>'. ASK lines may accompany "
+                    "TASK lines: the question goes to the operator while "
+                    "independent work continues. Never issue a task that "
+                    "depends on an unanswered question -- hold that branch "
+                    "and keep issuing work that does not. Never skate past "
+                    "an open question.\n\n"
                     "Reply exactly DONE if the goal is met and nothing "
                     "remains. To read a full artifact behind a summary "
                     "first, reply with exactly 'FETCH: <artifact-id>' and "
-                    "nothing else. If the decision turns on something only "
-                    "the operator can answer, reply 'ASK: <one question>' "
-                    "instead."
+                    "nothing else."
                     f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}"
                 ),
                 recent=self.config.recent_entries,
-                extra=self._map_block(),
+                extra="\n\n".join(extra_blocks),
             )
             if fetched:
                 body += ("\n\n" + _render_fetches(fetched)
@@ -702,14 +758,21 @@ class Session:
 
         for _ in range(_MAX_ASKS_PER_DECISION):
             reply = self._invoke_with_fetches(seat.key, build)
-            stripped = reply.strip()
-            if not stripped.upper().startswith("ASK:"):
+            tasks, redos, asks, residual = _parse_wave(reply)
+            if tasks or redos or residual or not asks:
                 break
-            question = stripped[4:].strip()
+            # The reply is nothing but questions: the decision itself is
+            # blocked on the operator, so answer before re-asking.
             if self.config.ask_operator is None:
-                raise OperatorInputNeeded(question)
-            answer = self.config.ask_operator(question)
-            self.memory.ledger.rulings.append(f"Q: {question} -- A: {answer}")
+                raise OperatorInputNeeded(
+                    asks[0] if len(asks) == 1 else "\n".join(asks)
+                )
+            for question in asks:
+                answer = self.config.ask_operator(question)
+                with self._lock:
+                    self.memory.ledger.rulings.append(
+                        f"Q: {question} -- A: {answer}"
+                    )
         else:
             raise RunStalled(
                 f"the orchestrator asked the operator {_MAX_ASKS_PER_DECISION} "
@@ -717,7 +780,18 @@ class Session:
                 f"deciding."
             )
 
-        tasks, redos, residual = _parse_wave(reply)
+        # Questions riding alongside a wave pause only what depends on them:
+        # they are held for the operator while the wave's tasks run.
+        if asks and (tasks or redos or residual):
+            with self._lock:
+                for question in asks:
+                    already_ruled = any(
+                        r.startswith(f"Q: {question} --")
+                        for r in self.memory.ledger.rulings
+                    )
+                    if question not in self.unanswered_asks and not already_ruled:
+                        self.unanswered_asks.append(question)
+
         specs: List[TaskSpec] = []
         for task_id, objection in redos:
             reissued = self._reissue(task_id, objection)
@@ -833,9 +907,10 @@ class Session:
     def run(self, *, max_tasks: int = 20) -> List[TaskSummary]:
         """Drive waves until the orchestrator says DONE or the cap is hit.
 
-        Each wave's tasks run concurrently, up to ``max_parallel_tasks`` at a
-        time; the next wave is not asked for until every task in this one has
-        closed, because the wave boundary is where dependency ordering lives.
+        Each wave's tasks run concurrently, throttled per subscription by the
+        vendor gates; the next wave is not asked for until every task in this
+        one has closed, because the wave boundary is where dependency
+        ordering lives.
         The cap is a runaway backstop, not a quality gate: a loop that has not
         converged by then has a problem the cap will not fix, and the caller
         should look at why.
@@ -844,6 +919,10 @@ class Session:
             RunStalled: when a task in this wave repeats a description from
                 the previous wave verbatim -- the loop has stopped converging,
                 and burning further rounds on a known outcome helps nobody.
+            OperatorInputNeeded: when the orchestrator reports DONE while
+                operator questions are still unanswered and no ``ask_operator``
+                channel exists -- a run does not end with questions for the
+                operator silently outstanding.
         """
         if self.config.plan_gate is not None:
             if not self.config.plan_gate(self.plan()):
@@ -854,7 +933,19 @@ class Session:
         while executed < max_tasks:
             wave = self.next_wave()
             if not wave:
-                break
+                pending = list(self.unanswered_asks)
+                if not pending:
+                    break
+                # DONE with questions outstanding is not done. With a channel,
+                # collect the answers and re-ask -- the answers may change the
+                # orchestrator's mind. Without one, surface them to the caller.
+                if self.config.ask_operator is None:
+                    raise OperatorInputNeeded(
+                        pending[0] if len(pending) == 1 else "\n".join(pending)
+                    )
+                for question in pending:
+                    self._answer_ask(question)
+                continue
             wave = wave[: max_tasks - executed]
             repeated = next(
                 (s.description for s in wave if s.description in previous_wave),
@@ -875,23 +966,41 @@ class Session:
     def _run_wave(self, wave: List[TaskSpec]) -> List[TaskSummary]:
         """Execute one wave, tasks concurrently, and wait for all of them.
 
-        A wave of one skips the thread pool entirely -- exceptions and
-        tracebacks stay plain in the common sequential case. For a real wave,
-        every task is allowed to finish even if a sibling fails: a completed
-        summary is real progress and is already in the ledger, so tearing
-        down siblings would only discard finished work. The first failure is
-        re-raised afterwards.
+        Throttling is not done here: every invocation passes through its
+        vendor's gate, so a wave wider than one subscription's cap simply
+        queues the excess per vendor while other vendors' work proceeds.
+        Held operator questions are put to the channel on the same pool, so
+        the operator answers *while* independent tasks run rather than the
+        run stopping to wait.
+
+        A wave of one with nothing held skips the thread pool entirely --
+        exceptions and tracebacks stay plain in the common sequential case.
+        For a real wave, every task is allowed to finish even if a sibling
+        fails: a completed summary is real progress and is already in the
+        ledger, so tearing down siblings would only discard finished work.
+        The first failure is re-raised afterwards.
         """
-        if len(wave) == 1:
+        asks: List[str] = []
+        if self.config.ask_operator is not None:
+            with self._lock:
+                asks = list(self.unanswered_asks)
+        if len(wave) == 1 and not asks:
             return [self.run_task(wave[0])]
         results: List[TaskSummary] = []
         first_error: Optional[BaseException] = None
-        width = min(len(wave), max(1, self.config.max_parallel_tasks))
+        width = min(len(wave) + len(asks), _MAX_WAVE_THREADS)
         with ThreadPoolExecutor(max_workers=width) as pool:
+            ask_futures = [pool.submit(self._answer_ask, q) for q in asks]
             futures = [pool.submit(self.run_task, spec) for spec in wave]
             for future in futures:
                 try:
                     results.append(future.result())
+                except BaseException as exc:  # noqa: BLE001 -- re-raised below
+                    if first_error is None:
+                        first_error = exc
+            for future in ask_futures:
+                try:
+                    future.result()
                 except BaseException as exc:  # noqa: BLE001 -- re-raised below
                     if first_error is None:
                         first_error = exc
@@ -904,6 +1013,33 @@ class Session:
         if self.config.codebase_map is None:
             return ""
         return self.config.codebase_map.render()
+
+    def _awaiting_block(self) -> str:
+        """Unanswered operator questions, re-rendered loudly every round.
+
+        These hold only the branch that needs them: the orchestrator is told
+        to keep issuing independent work and to hold anything that depends on
+        an answer, so one open question never stops the whole run.
+        """
+        with self._lock:
+            pending = list(self.unanswered_asks)
+        if not pending:
+            return ""
+        return (
+            "## Awaiting the operator (not yet answered)\n\n"
+            "These questions have been sent to the operator and not yet "
+            "answered. Do not re-ask them and do not issue tasks that depend "
+            "on an answer; keep issuing independent work.\n\n"
+            + "\n".join(f"- {q}" for q in pending)
+        )
+
+    def _answer_ask(self, question: str) -> None:
+        """Put one held question to the operator and record the ruling."""
+        answer = self.config.ask_operator(question)
+        with self._lock:
+            self.memory.ledger.rulings.append(f"Q: {question} -- A: {answer}")
+            if question in self.unanswered_asks:
+                self.unanswered_asks.remove(question)
 
     def _lead_prompt(
         self,
@@ -1103,8 +1239,11 @@ class Session:
             "OPEN QUESTIONS: one line each for anything you could not settle "
             "that must not be skated past -- a decision you need made, access "
             "you lacked, a finding left unresolved, a question a worker "
-            "raised that you could not answer. The orchestrator is required "
-            "to address every line here. Omit the section if none."
+            "raised that you could not answer. Answer questions at your own "
+            "level first; raise here only what you genuinely could not "
+            "settle, and it will be answered above you or put to the "
+            "operator. The orchestrator is required to address every line "
+            "here. Omit the section if none."
         )
         if self.config.codebase_map is not None:
             # Every run strengthens the map -- that is what makes it an asset
@@ -1177,6 +1316,12 @@ def _parse_consults(reply: str):
     return out
 
 
+#: Sanity ceiling on threads for one wave. Not a rate limit -- vendor gates
+#: do the throttling per subscription -- just a guard against an orchestrator
+#: naming a pathologically wide wave and spawning a thread per line.
+_MAX_WAVE_THREADS = 32
+
+
 #: How many operator questions one decision may spend before it is judged to
 #: be interrogating rather than deciding. Three is generous: a decision that
 #: genuinely needs more operator input than that is a scoping conversation,
@@ -1198,13 +1343,14 @@ _KIND_REQUEST = (
 
 
 def _parse_wave(reply: str) -> tuple:
-    """Split the orchestrator's reply into new tasks, rejections, and the rest.
+    """Split the orchestrator's reply into tasks, rejections, questions, rest.
 
-    Returns ``(tasks, redos, residual)``: ``tasks`` as (kind, difficulty,
-    description) tuples from ``TASK <kind> <difficulty>: <description>``
-    lines, ``redos`` as (task_id, objection) tuples from ``REDO <task-id>:
-    <objection>`` lines, and ``residual`` as the remaining lines joined --
-    which is where a legacy single-task reply or a DONE lands.
+    Returns ``(tasks, redos, asks, residual)``: ``tasks`` as (kind,
+    difficulty, description) tuples from ``TASK <kind> <difficulty>:
+    <description>`` lines, ``redos`` as (task_id, objection) tuples from
+    ``REDO <task-id>: <objection>`` lines, ``asks`` as operator questions
+    from ``ASK: <question>`` lines, and ``residual`` as the remaining lines
+    joined -- which is where a legacy single-task reply or a DONE lands.
 
     Tolerant the same way ``_parse_kind`` is: an unrecognised kind or
     difficulty degrades to the default rather than dropping the task, because
@@ -1213,6 +1359,7 @@ def _parse_wave(reply: str) -> tuple:
     """
     tasks: List[tuple] = []
     redos: List[tuple] = []
+    asks: List[str] = []
     residual: List[str] = []
     for line in (reply or "").splitlines():
         stripped = line.strip().lstrip("-• ").strip()
@@ -1235,9 +1382,13 @@ def _parse_wave(reply: str) -> tuple:
             task_id = parts[1].strip() if len(parts) > 1 else ""
             if task_id and objection.strip():
                 redos.append((task_id, objection.strip()))
+        elif upper.startswith("ASK:"):
+            question = stripped.split(":", 1)[1].strip()
+            if question:
+                asks.append(question)
         elif stripped:
             residual.append(stripped)
-    return tasks, redos, "\n".join(residual)
+    return tasks, redos, asks, "\n".join(residual)
 
 
 def _parse_kind(reply: str) -> tuple:

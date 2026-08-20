@@ -172,21 +172,37 @@ Key design decisions already settled:
 - **The orchestrator names waves, not single tasks.** A wave is every task
   ready to start now; dependency ordering lives in the wave boundaries —
   what builds on other work waits for a later wave, what is independent runs
-  concurrently (`max_parallel_tasks`, a rate-limit cap, not architecture).
-  Instances are stateless CLI calls, so ten parallel tasks on one model are
-  just ten subprocesses; nothing limits a wave to one instance per member.
-  Wave tasks never see each other's results, which is what keeps parallelism
-  from degrading quality.
-- **The orchestrator is the final arbiter.** Task completion and job
-  completion are different judgements: a task that closed — even one that
-  passed review — can still be rejected with `REDO <task-id>: <objection>`,
-  reissued with the objection verbatim and pointers to the rejected work,
-  same kind and difficulty. Bounded (`max_redos`); past the cap the run
-  stalls loudly, because an arbiter rejecting the same work three times is
-  stuck, not deciding.
-- **Open questions bubble through the ledger from any level.** A close-out
-  carries an OPEN QUESTIONS section (worker's unmet need, lead's unsettled
-  decision, unresolved blocking finding, surviving gate failure — the last
-  two folded in by the harness, not trusted to prose). The ledger renders
-  them loudly and the wave prompt requires each to be addressed — answered,
-  tasked, REDOne, or ASKed to the operator — never skated past.
+  concurrently. Instances are stateless CLI calls, so ten parallel tasks on
+  one model are just ten subprocesses; nothing limits a wave to one instance
+  per member. Wave tasks never see each other's results, which is what
+  keeps parallelism from degrading quality.
+- **Concurrency is throttled per subscription, not globally**
+  (`max_parallel_per_vendor`, gates wrapped around every invocation). The
+  thing being rate-limited is each vendor's window, so four Claude + four
+  OpenAI + four Gemini + four Grok calls can all be in flight at once
+  (sixteen), and calls beyond one vendor's cap queue and start automatically
+  as its slots free. The gate wraps `invoke` rather than the task scheduler
+  because tasks mix vendors — a lead on one subscription draws reviewers and
+  workers from three others.
+- **The orchestrator is the final arbiter, and REDO is exceptional.** Task
+  completion and job completion are different judgements: a task that
+  closed — even one that passed review — can still be rejected with
+  `REDO <task-id>: <objection>`, reissued with the objection verbatim and
+  pointers to the rejected work, same kind and difficulty. But the prompt
+  sets a deliberately high bar — genuinely wrong or unusable against the
+  goal, never style or taste, improvements become follow-up tasks — because
+  a nitpicking arbiter would make the dedicated reviewers pointless.
+  Bounded (`max_redos`); past the cap the run stalls loudly, because an
+  arbiter rejecting the same work three times is stuck, not deciding.
+- **Open questions climb a ladder and pause only their own branch.** A
+  worker's question goes to its lead first; what the lead cannot settle
+  goes into the close-out's OPEN QUESTIONS (unresolved blocking findings
+  and surviving gate failures folded in by the harness, not trusted to
+  prose); the orchestrator answers from the record, issues a task or REDO
+  that resolves it, or — only when nobody in the system can answer — raises
+  `ASK:` lines that may ride *alongside* TASK lines. A riding ASK is
+  answered in parallel with the wave when a channel exists; unanswered, it
+  is re-rendered loudly as do-not-depend-on-this while independent work
+  continues, and a DONE with questions still outstanding raises rather than
+  ending the run silently. Only a reply that is *nothing but* questions
+  blocks the decision itself.

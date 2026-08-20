@@ -123,6 +123,19 @@ def test_the_wave_prompt_states_independence_and_arbitership(store):
     assert "OPEN QUESTION" in prompt
 
 
+def test_the_wave_prompt_sets_a_high_bar_for_rejection(store):
+    """REDO must be exceptional -- a nitpicking arbiter would make the
+    dedicated reviewers pointless."""
+    rec = Recorder(waves=["DONE"])
+    s = _session(store, rec)
+    s.next_wave()
+    prompt = rec.prompts_to_orchestrator()[0]
+    assert "exceptional" in prompt
+    assert "genuinely wrong" in prompt
+    assert "do not reject for style" in prompt
+    assert "follow-up task" in prompt
+
+
 # -- running a wave in parallel -------------------------------------------------
 
 
@@ -148,32 +161,57 @@ def test_independent_tasks_in_one_wave_run_at_the_same_time(store):
     assert summaries[0].author == summaries[1].author  # same model, twice
 
 
-def test_wave_width_is_capped_by_max_parallel_tasks(store):
+def test_concurrency_is_capped_per_vendor_and_excess_queues(store):
+    """Five same-vendor tasks with a per-vendor cap of two: never more than
+    two of that vendor's calls in flight, and all five still complete --
+    the queue feeds the next task in as a slot frees, automatically."""
     peak = {"now": 0, "max": 0}
     gate = threading.Lock()
-    entered = threading.Semaphore(0)
 
     class Counting(Recorder):
         def __call__(self, model, prompt, system=None):
-            if "You are leading this task" in prompt:
-                with gate:
-                    peak["now"] += 1
-                    peak["max"] = max(peak["max"], peak["now"])
-                entered.release()
-                # Hold long enough that a third task would overlap if allowed.
+            with gate:
+                peak["now"] += 1
+                peak["max"] = max(peak["max"], peak["now"])
+            try:
+                # Hold long enough that a third call would overlap if allowed.
                 import time
                 time.sleep(0.05)
+                return super().__call__(model, prompt, system)
+            finally:
                 with gate:
                     peak["now"] -= 1
-            return super().__call__(model, prompt, system)
 
     rec = Counting(waves=[
         "\n".join(f"TASK general simple: piece {i}" for i in range(5)),
         "DONE",
     ])
-    s = _session(store, rec, config=SessionConfig(max_parallel_tasks=2))
-    s.run()
+    s = _session(store, rec, config=SessionConfig(max_parallel_per_vendor=2))
+    summaries = s.run()
+    assert len(summaries) == 5
     assert peak["max"] <= 2
+
+
+def test_different_vendors_run_even_when_each_vendor_is_capped_at_one(store):
+    """The cap is per subscription, not global: with every vendor capped at
+    one, a Gemini-led task and a Grok-led task still run simultaneously."""
+    barrier = threading.Barrier(2, timeout=10)
+
+    class Meeting(Recorder):
+        def __call__(self, model, prompt, system=None):
+            if "You are leading this task" in prompt:
+                barrier.wait()  # raises BrokenBarrierError if serialised
+            return super().__call__(model, prompt, system)
+
+    rec = Meeting(waves=[
+        "TASK general rote: sweep the imports\n"
+        "TASK general simple: build the splitter",
+        "DONE",
+    ])
+    s = _session(store, rec, config=SessionConfig(max_parallel_per_vendor=1))
+    summaries = s.run()
+    assert len(summaries) == 2
+    assert summaries[0].author != summaries[1].author  # two vendors, in flight
 
 
 def test_a_failing_task_does_not_tear_down_its_siblings(store):
@@ -269,6 +307,66 @@ def test_close_out_open_questions_reach_the_ledger_loudly(store):
     assert "defaults live in code or in a file" in rendered
     # And the next wave's orchestrator prompt carried it.
     assert "defaults live in code or in a file" in rec.prompts_to_orchestrator()[-1]
+
+
+def test_an_ask_alongside_a_wave_does_not_stop_independent_work(store):
+    """An operator question rides with the wave: the independent task runs,
+    and the answer lands as a ruling without the run ever pausing."""
+    answered = []
+
+    def operator(question):
+        answered.append(question)
+        return "dark blue"
+
+    rec = Recorder(waves=[
+        "TASK general simple: build the config loader\n"
+        "ASK: What accent colour does the operator want?",
+        "DONE",
+    ])
+    s = _session(store, rec, config=SessionConfig(ask_operator=operator))
+    summaries = s.run()
+    assert len(summaries) == 1  # the independent task ran regardless
+    assert answered == ["What accent colour does the operator want?"]
+    assert any("dark blue" in r for r in s.memory.ledger.rulings)
+    assert s.unanswered_asks == []
+
+
+def test_an_unanswered_ask_is_rendered_loudly_and_not_lost(store):
+    """No operator channel: the question holds only its own branch. The next
+    wave still gets asked for, with the pending question rendered as
+    do-not-depend-on-this, and a DONE with it outstanding raises rather than
+    ending the run silently."""
+    from multi_llm.session import OperatorInputNeeded
+
+    rec = Recorder(waves=[
+        "TASK general simple: build the config loader\n"
+        "ASK: Should defaults live in code or a file?",
+        "DONE",
+    ])
+    s = _session(store, rec)  # no ask_operator configured
+    with pytest.raises(OperatorInputNeeded, match="defaults live in code"):
+        s.run()
+    # The independent task still completed before the question surfaced.
+    assert len(s.history) == 1
+    prompt = rec.prompts_to_orchestrator()[-1]
+    assert "Awaiting the operator" in prompt
+    assert "Should defaults live in code or a file?" in prompt
+
+
+def test_a_reply_that_is_only_questions_blocks_the_decision_itself(store):
+    """Unchanged contract: nothing but ASK lines means the orchestrator
+    cannot even name a wave, so the answer is collected before re-asking."""
+    rec = Recorder(waves=[
+        "ASK: Postgres or SQLite?",
+        "TASK general simple: make the schema",
+        "DONE",
+    ])
+    s = _session(
+        store, rec, config=SessionConfig(ask_operator=lambda q: "SQLite")
+    )
+    summaries = s.run()
+    assert len(summaries) == 1
+    assert any("SQLite" in r for r in s.memory.ledger.rulings)
 
 
 def test_a_surviving_gate_failure_becomes_an_open_question(store):
