@@ -2,6 +2,10 @@
 
 ## Communication
 
+**Be concise. Get straight to the point in every sentence.** No hedging, no
+restating the question, no narrating process. Cut anything that doesn't change
+what the reader does next. This applies to everything, always.
+
 **Lead with a TL;DR on anything long or technical.** Plain language, bullets,
 no jargon, at the very top — what it means and what the decision is. Put the
 technical detail below it for when it's wanted. Don't make the summary an
