@@ -208,14 +208,61 @@ Key design decisions already settled:
   proposes an action reached 0.86 across seven. Union-of-proposals is the
   compounding step, and a grant is the one thing a worker can end up holding
   that the lead did not type itself.
-- **Studied and deliberately not adopted, from OpenClaw and Grok Bot.**
-  Heartbeat/always-on runs: there is no idle time in a batch coding session, so
-  a periodic wake would spend a window to discover nothing changed. Agents
-  routing work to each other by reading each other's name and description
-  (Grok Bot's handoff): peers deciding among themselves who takes the next
-  task is exactly the correlated, reputation-driven choice the anonymised
-  reviewer rule exists to prevent — the orchestrator names the lead. Agents
-  *learning* when to interrupt for approval: the reviewers of that feature
-  found the failure is the action the agent classified as routine and never
-  surfaced, and a threshold that drifts is one nobody can audit; ASK stays an
-  explicit, bounded channel with the answers recorded as standing rulings.
+- **Borrow their mechanisms; refuse their delegated judgement.** Everything
+  taken from OpenClaw and Grok Bot is plumbing — flush before you wipe, put a
+  clock on a helper, cap what an untrusted participant can ask for. Everything
+  refused is a case where they hand a *decision* to the agent that we keep
+  written down. That split is not squeamishness, it follows from a difference
+  in product shape: their systems run with no operator present and no ending,
+  so a rule the AI infers is the only rule that can exist. Ours has one
+  operator and a finish line, so an explicit rule is available — and an
+  explicit rule can be read, argued with, and corrected. Weight the two
+  sources differently too: OpenClaw is open source with several independent
+  teardowns, so its mechanisms are checkable; Grok Bot is a closed beta with
+  no published reliability data, so it is a source of ideas about shape, not
+  evidence about what works. Adopting an unmeasured design choice from a beta
+  product is the same mistake as trusting an unprobed model table.
+- **Studied and deliberately not adopted, from OpenClaw and Grok Bot.** Each
+  is recorded with *their* reason as well as ours, because a rejection with
+  only half the argument gets re-litigated every time somebody rereads it.
+  - *Heartbeat / always-on runs.* Theirs: work arrives from outside on no
+    schedule — mail, calendar, notifications — so an assistant that acts only
+    when spoken to is not an assistant; waking up and looking is the product.
+    Even OpenClaw defers the wake when the agent is already busy, so the timer
+    exists purely to fill idle time. Ours: the work arrives once, as the goal,
+    and nothing changes while we are not looking. There is no idle time to
+    fill and the run ends at DONE, so a periodic wake spends a window to
+    discover nothing happened — and our windows are fixed monthly allowances,
+    not a metered bill where a wasted check-in is a rounding error.
+  - *Agents routing work to each other by reading each other's name and
+    description* (Grok Bot's handoff). Theirs: customers will not write a
+    routing table, and being the switchboard between specialists is the
+    friction the product removes; their bots do genuinely different jobs
+    (inbox vs recruiting vs expenses), so the right owner is usually obvious
+    from the label and a wrong guess is cheap and visible. Ours: the brain
+    trust is four general coding models that overlap almost entirely, so "who
+    takes this" is a judgement about quality, not category — and models carry
+    priors about other models, so peers dividing work among themselves would
+    divide it by reputation. That is the correlated, reputation-driven choice
+    the anonymised reviewer rule exists to prevent, and correlation is the one
+    thing that makes four subscriptions worth less than one. It would also
+    erase the scoreboard: rotation and the difficulty ladder exist partly to
+    record which model actually leads best on this codebase, and a
+    privately-negotiated handoff leaves nothing to grade. The orchestrator
+    names the lead, and it costs nothing because it is already being asked
+    what comes next.
+  - *Agents learning when to interrupt for approval.* Theirs: their agents act
+    in the world — sending mail, writing to a CRM, spending money — where
+    approving everything is unusable and approving nothing is dangerous, and
+    the vendor cannot write the rule in advance because what is routine at one
+    customer is a firing at another. A learned threshold is the only thing
+    that scales across that many jobs. Ours: every action lands in one
+    repository, so the consequential set is enumerable in advance and we have
+    enumerated it — writes, the check command, security work. Nothing needs
+    learning, and a learned threshold cannot be audited: months later there is
+    no answer to "why did it not ask me?", only drift. The reviewers of that
+    feature found the same failure from the other side — the action that costs
+    you is the one the agent classified as routine and never surfaced. So the
+    gates stay fixed and legible instead: the plan gate up front, the
+    integration gate at the end, ASK as an explicit bounded channel with the
+    answers kept as standing rulings, and every write grant on the record.
