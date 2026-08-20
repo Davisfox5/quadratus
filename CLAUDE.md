@@ -94,6 +94,12 @@ Key design decisions already settled:
   concurrency, performance — there is nobody to prefer, so the policy attaches
   a deterministic check instead of a model. Performance additionally names a
   profiler as the first move.
+- **Reviewers are anonymous to the lead, named in the record.** Critiques
+  reach the lead as "Reviewer A/B" so they are weighed on content, not
+  letterhead — models carry priors about other models, and reputation-based
+  discounting is exactly the filtering the lead must not do. Full
+  attribution survives in artifact kinds and the ledger for the operator's
+  scoreboard. Consults stay named: there, choosing the expert is the point.
 - **Never one reviewer.** The two pinned reviewers fail in opposite directions
   (recall-leaning vs precision-leaning), so a review task always draws its
   counterpart even at the lowest complexity.

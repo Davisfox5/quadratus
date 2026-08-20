@@ -413,10 +413,18 @@ class Session:
         # Collaborators contribute into the lead's working memory. They see the
         # task and the draft, not the whole session: their value is an
         # independent read, which inheriting the lead's history would erode.
+        # Reviewers are anonymised toward the lead: a critique must be
+        # weighed by its content, not its letterhead, and models carry priors
+        # about other models that would let a lead discount or defer by
+        # reputation. Full attribution survives for the operator -- in the
+        # artifact kinds and the ledger -- which is where feedback quality
+        # per reviewer belongs: the scoreboard's question, not the author's.
+        labels = {peer: f"Reviewer {chr(65 + i)}"
+                  for i, peer in enumerate(collaborators)}
         notes: List[tuple] = []
         for peer in collaborators:
             note = self.invoke(peer, self._collaborator_prompt(spec, draft, peer))
-            task.record("assistant", f"[{peer}] {note}")
+            task.record("assistant", f"[{labels[peer]}] {note}")
             task.keep(note, kind=f"review:{peer}")
             notes.append((peer, note))
 
@@ -446,17 +454,26 @@ class Session:
         ]
         if notes:
             revision = self.invoke(
-                lead, self._revision_prompt(spec, draft, [f"[{p}]\n{n}" for p, n in notes])
+                lead,
+                self._revision_prompt(
+                    spec, draft, [f"[{labels[p]}]\n{n}" for p, n in notes]
+                ),
             )
             task.record("assistant", revision)
             task.keep(revision, kind="revision")
 
             blocking = [(p, n) for p, n in notes if "BLOCKING" in n.upper()]
             cycles = 1
-            unresolved = self._recheck_blocking(spec, blocking, revision, task)
+            unresolved = self._recheck_blocking(
+                spec, blocking, revision, task, labels=labels
+            )
             while unresolved and cycles < self.config.max_fix_cycles:
                 revision = self.invoke(
-                    lead, self._fix_prompt(spec, revision, unresolved)
+                    lead,
+                    self._fix_prompt(
+                        spec, revision,
+                        [(labels[p], v) for p, v in unresolved],
+                    ),
                 )
                 task.record("assistant", revision)
                 task.keep(revision, kind="revision")
@@ -464,7 +481,7 @@ class Session:
                 unresolved = self._recheck_blocking(
                     spec, [(p, n) for p, n in blocking
                            if any(p == up for up, _ in unresolved)],
-                    revision, task,
+                    revision, task, labels=labels,
                 )
             if unresolved:
                 # The cap ran out with findings still open. They go to the
@@ -473,7 +490,7 @@ class Session:
                     "user",
                     "Blocking findings still unresolved at close -- carry them "
                     "into the summary as open questions:\n"
-                    + "\n".join(f"[{p}] {v}" for p, v in unresolved),
+                    + "\n".join(f"[{labels[p]}] {v}" for p, v in unresolved),
                 )
 
         self._run_integration_gate(lead, spec, task)
@@ -779,7 +796,13 @@ class Session:
         )
 
     def _recheck_blocking(
-        self, spec: TaskSpec, blocking: List[tuple], revision: str, task: TaskMemory
+        self,
+        spec: TaskSpec,
+        blocking: List[tuple],
+        revision: str,
+        task: TaskMemory,
+        *,
+        labels: Optional[dict] = None,
     ) -> List[tuple]:
         """Have each blocking reviewer re-check its own findings. Nothing else.
 
@@ -801,7 +824,8 @@ class Session:
                 "blocking finding is addressed, otherwise 'UNRESOLVED: <what "
                 "specifically remains>'.",
             )
-            task.record("assistant", f"[{peer} recheck] {verdict}")
+            shown = (labels or {}).get(peer, peer)
+            task.record("assistant", f"[{shown} recheck] {verdict}")
             if not verdict.strip().upper().startswith("RESOLVED"):
                 unresolved.append((peer, verdict.strip()))
         return unresolved

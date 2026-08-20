@@ -463,3 +463,45 @@ def test_reviewers_are_told_how_to_say_nothing(store):
     review = next(c["prompt"] for c in rec.calls
                   if "contributing an independent read" in c["prompt"])
     assert "NO FINDINGS" in review
+
+
+# -- reviewers are anonymous to the lead, named in the record -------------------
+
+
+def test_the_lead_never_sees_reviewer_identities(store):
+    class Critical(Recorder):
+        """Replies never echo model names, so any name in a lead-facing
+        prompt was put there by the harness."""
+
+        def __call__(self, model, prompt, system=None):
+            self.calls.append({"model": model, "prompt": prompt})
+            if "contributing an independent read" in prompt:
+                return "BLOCKING: the cache is never invalidated"
+            if "Name the single next task" in prompt:
+                return "DONE"
+            if "The task is finished" in prompt:
+                return "SUMMARY: built\nREASONING: simplest"
+            return "neutral output"
+
+    rec = Critical()
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.STANDARD))
+    lead_facing = [c["prompt"] for c in rec.calls
+                   if "Revise your work" in c["prompt"]
+                   or "The task is finished" in c["prompt"]
+                   or "blocking findings remain" in c["prompt"].lower()]
+    assert lead_facing
+    for prompt in lead_facing:
+        for peer in s.brain_trust:
+            assert peer not in prompt, peer
+    assert any("Reviewer A" in p for p in lead_facing)
+
+
+def test_attribution_survives_in_the_record_for_the_operator(store):
+    rec = Recorder()
+    s = _session(store, rec)
+    s.run_task(TaskSpec("t1", "work", complexity=Complexity.COMPLEX))
+    kinds = {r.kind for r in s.memory.ledger.refs()}
+    named = {k for k in kinds if k.startswith("review:")}
+    assert named  # real model keys, kept for the scoreboard
+    assert all(":" in k.split("review:", 1)[1] for k in named)
