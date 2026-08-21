@@ -206,3 +206,49 @@ Key design decisions already settled:
   continues, and a DONE with questions still outstanding raises rather than
   ending the run silently. Only a reply that is *nothing but* questions
   blocks the decision itself.
+- **Existing codebases enter through seeding, not a new mode**
+  (`repo_scan.py`). The same loop runs; what changes is the starting state:
+  a deterministic scan (no model) seeds the codebase map with
+  `author="scan"` provenance, shortens the interview (it is told not to ask
+  what the scan answers), and auto-configures the integration gate from the
+  project's own declared check command — never a guessed one. An
+  existing-codebase invariant tells the orchestrator to put comprehension
+  tasks ahead of changes wherever the map is silent about the area.
+- **The interview is wired** (`interview.py`): the control-plane model asks
+  one plain question at a time until it can emit a `GOAL:` paragraph,
+  stored verbatim as the session goal. Bounded rounds with a forced close;
+  an unanswered question aborts rather than letting the goal be built on
+  silence.
+- **The session survives the process** (`persistence.SessionLog`):
+  append-only JSONL of ledger entries, rulings, and the goal, written the
+  moment each event happens. Runs auto-resume from the log (`--fresh`
+  rotates it aside, never deletes); a torn final line from a crash is
+  skipped, not fatal; restore refuses a non-empty ledger; task numbering
+  continues past the restored history, and a REDO of prior-session work
+  resolves against the ledger summary since the original spec text did not
+  survive. Working memories and unfinished tasks are deliberately not
+  restored — wiped-by-design and re-decidable from the ledger respectively.
+- **DONE is judged by a no-stake model** (`SessionConfig.done_judge`, the
+  control plane's convergence model): the author of the DONE call never
+  gets the last word on whether the goal is met. Only an explicit UNMET
+  vetoes (a confused judge must not block a finished run), the veto is
+  spent once — the objection becomes a standing ruling and the loop
+  continues — and a second DONE stands with the objection in the record.
+- **The entry point is `multi_llm/app.py`** (`multi-llm` on the console;
+  the legacy API-key CLI moved to `multi-llm-legacy`). Subcommands: `run`
+  (default), `plan`, `probe`, `scoreboard`. All session state lives under
+  `<repo>/.multi_llm/`. Providers run *in the repository* read-only;
+  writes are per-call opt-in, and the worker pool's kwargs now pass
+  through the session so a NEED TOOL regrant reaches the provider. The
+  meter records measured token counts when the CLI reports them.
+- **Probes come in two depths** (`probes.py`): binary-on-PATH (free — the
+  run's availability callable) and live per-alias calls (`multi-llm
+  probe`). The long-context probe at depth is deliberately absent: a cheap
+  version would produce exactly the unearned confidence the registry warns
+  against.
+- **The scoreboard reads the record, decides nothing** (`scoreboard.py`):
+  reviews, clean-review rate, blocking findings, and recheck outcomes per
+  reviewer, from artifact kinds (`review:<key>`, `recheck:<key>` — recheck
+  verdicts are now kept as artifacts). Observational like the meter; its
+  numbers are evidence for pin/unpin decisions recorded in `task_kinds`,
+  never an automatic input to routing.

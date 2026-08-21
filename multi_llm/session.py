@@ -223,6 +223,18 @@ class SessionConfig:
     #: is the final arbiter of what ships, but an arbiter rejecting the same
     #: work three times is a stuck arbiter.
     max_redos: int = 2
+    #: A no-stake completion judge, as a model key (usually the control
+    #: plane's convergence model). When set, a DONE from the orchestrator is
+    #: checked against the goal by a model with no authorship stake before
+    #: the run is allowed to end; an explicit UNMET verdict buys exactly one
+    #: veto -- the objection goes back to the orchestrator and the loop
+    #: continues. None skips the check (the default, and what tests use).
+    done_judge: Optional[str] = None
+    #: On-disk session log (see :class:`multi_llm.persistence.SessionLog`).
+    #: When set, every ledger entry and ruling is appended to disk the moment
+    #: it happens, so a crashed or interrupted run can resume from what was
+    #: actually recorded. None keeps the ledger in-process only.
+    session_log: Optional[object] = None
     #: How many lead revisions a task may spend answering blocking findings.
     #: The count is deliberately small and the loop deliberately narrow --
     #: each extra cycle is a reviewer re-checking its own named findings
@@ -267,11 +279,15 @@ class Session:
         self.invoke = gated
         self._available = available or (lambda _key: True)
         self.memory = PersistentMemory(goal, store, invariants=invariants)
+        # kwargs pass through so a NEED TOOL regrant (allow_writes) reaches a
+        # provider that honours it; providers that don't are handled by the
+        # pool's TypeError fallback.
         self.workers = WorkerPool(
             store=store,
-            run=lambda model, prompt: self.invoke(model, prompt),
+            run=lambda model, prompt, **kw: self.invoke(model, prompt, **kw),
             budget=self.config.worker_budget,
         )
+        self._done_vetoed = False
         self._rotation = 0
         self.history: List[TaskSummary] = []
         # Wave bookkeeping. Tasks in one wave run on threads, so everything
@@ -288,6 +304,54 @@ class Session:
         #: keep running, and the questions are re-rendered loudly to the
         #: orchestrator every round until answered.
         self.unanswered_asks: List[str] = []
+
+    def _absorb(self, summary: TaskSummary) -> None:
+        """Fold a finished task into the ledger, history, and on-disk log."""
+        with self._lock:
+            self.memory.absorb(summary)
+            self.history.append(summary)
+            if self.config.session_log is not None:
+                try:
+                    self.config.session_log.append_entry(
+                        self.memory.ledger.entries[-1]
+                    )
+                except Exception:  # noqa: BLE001 -- persistence must not kill a run
+                    log.warning("session log write failed", exc_info=True)
+
+    def _add_ruling(self, ruling: str) -> None:
+        with self._lock:
+            self.memory.ledger.rulings.append(ruling)
+            if self.config.session_log is not None:
+                try:
+                    self.config.session_log.append_ruling(ruling)
+                except Exception:  # noqa: BLE001 -- persistence must not kill a run
+                    log.warning("session log write failed", exc_info=True)
+
+    def restore(self, session_log) -> int:
+        """Resume from a prior run's on-disk log. Returns entries restored.
+
+        Replays the log into this session's (empty) ledger, moves the task
+        counter past every task id already used, and registers placeholder
+        specs for completed tasks so an arbiter REDO of pre-resume work still
+        resolves -- the reissue description then leans on the ledger summary,
+        since the original spec text did not survive the process.
+        """
+        restored = session_log.restore_into(self.memory)
+        self._task_counter = max(
+            self._task_counter, session_log.highest_task_number()
+        )
+        for entry in self.memory.ledger.entries:
+            self._specs.setdefault(
+                entry.task_id,
+                TaskSpec(
+                    task_id=entry.task_id,
+                    description=(
+                        f"(completed in a prior session; its record follows) "
+                        f"{entry.summary}"
+                    ),
+                ),
+            )
+        return restored
 
     def _vendor_gate(self, model_key: str) -> threading.BoundedSemaphore:
         spec = resolve(model_key)
@@ -589,9 +653,7 @@ class Session:
             summary=summary_text, reasoning=reasoning, dead_ends=dead_ends,
             open_questions=open_questions,
         )
-        with self._lock:
-            self.memory.absorb(summary)
-            self.history.append(summary)
+        self._absorb(summary)
         return summary
 
     def _run_security_task(self, spec: TaskSpec) -> TaskSummary:
@@ -658,9 +720,7 @@ class Session:
                 summary=summary_text, reasoning=reasoning, dead_ends=dead_ends,
                 open_questions=open_questions,
             )
-            with self._lock:
-                self.memory.absorb(summary)
-                self.history.append(summary)
+            self._absorb(summary)
             return summary
         finally:
             # Unconditional by design: a failed security lookup still ends the
@@ -769,10 +829,7 @@ class Session:
                 )
             for question in asks:
                 answer = self.config.ask_operator(question)
-                with self._lock:
-                    self.memory.ledger.rulings.append(
-                        f"Q: {question} -- A: {answer}"
-                    )
+                self._add_ruling(f"Q: {question} -- A: {answer}")
         else:
             raise RunStalled(
                 f"the orchestrator asked the operator {_MAX_ASKS_PER_DECISION} "
@@ -934,18 +991,40 @@ class Session:
             wave = self.next_wave()
             if not wave:
                 pending = list(self.unanswered_asks)
-                if not pending:
-                    break
-                # DONE with questions outstanding is not done. With a channel,
-                # collect the answers and re-ask -- the answers may change the
-                # orchestrator's mind. Without one, surface them to the caller.
-                if self.config.ask_operator is None:
-                    raise OperatorInputNeeded(
-                        pending[0] if len(pending) == 1 else "\n".join(pending)
+                if pending:
+                    # DONE with questions outstanding is not done. With a
+                    # channel, collect the answers and re-ask -- they may
+                    # change the orchestrator's mind. Without one, surface
+                    # them to the caller.
+                    if self.config.ask_operator is None:
+                        raise OperatorInputNeeded(
+                            pending[0] if len(pending) == 1
+                            else "\n".join(pending)
+                        )
+                    for question in pending:
+                        self._answer_ask(question)
+                    continue
+                # The no-stake completion check: the author of the DONE call
+                # never gets the last word on whether the goal is met. One
+                # explicit UNMET verdict sends the objection back as a
+                # standing ruling; a second DONE stands (an unsatisfiable
+                # judge must not deadlock the run) but the objection is
+                # already in the record for the operator.
+                objection = self._judge_done()
+                if objection is not None and not self._done_vetoed:
+                    self._done_vetoed = True
+                    self._add_ruling(
+                        "A no-stake completion judge reviewed DONE and found "
+                        f"the goal unmet: {objection} -- address this before "
+                        "declaring DONE again."
                     )
-                for question in pending:
-                    self._answer_ask(question)
-                continue
+                    continue
+                if objection is not None:
+                    log.warning(
+                        "orchestrator declared DONE over the completion "
+                        "judge's standing objection: %s", objection,
+                    )
+                break
             wave = wave[: max_tasks - executed]
             repeated = next(
                 (s.description for s in wave if s.description in previous_wave),
@@ -962,6 +1041,39 @@ class Session:
             executed += len(wave)
             self._run_wave(wave)
         return list(self.history)
+
+    def _judge_done(self) -> Optional[str]:
+        """Ask the no-stake judge whether the goal is actually met.
+
+        Returns None for accepted (or no judge configured, or the judge
+        unavailable, or a malformed verdict -- only an explicit UNMET vetoes,
+        because a confused judge must never block a legitimately finished
+        run). Otherwise returns what specifically remains.
+        """
+        judge = self.config.done_judge
+        if not judge or not self._available(judge):
+            return None
+        reply = self.invoke(
+            judge,
+            self.memory.render(
+                current=(
+                    "The orchestrator has declared this goal met. You are a "
+                    "completion judge with no stake in the work: check the "
+                    "goal against the completed record above, requirement by "
+                    "requirement. Reply exactly 'MET' if every requirement "
+                    "is demonstrably covered, otherwise 'UNMET: "
+                    "<specifically what remains>'. Judge only whether the "
+                    "goal is met -- quality was reviewed elsewhere."
+                ),
+                recent=self.config.recent_entries,
+                with_previews=False,
+            ),
+        )
+        stripped = (reply or "").strip()
+        if stripped.upper().startswith("UNMET"):
+            remainder = stripped.split(":", 1)
+            return remainder[1].strip() if len(remainder) > 1 else stripped
+        return None
 
     def _run_wave(self, wave: List[TaskSpec]) -> List[TaskSummary]:
         """Execute one wave, tasks concurrently, and wait for all of them.
@@ -1036,8 +1148,8 @@ class Session:
     def _answer_ask(self, question: str) -> None:
         """Put one held question to the operator and record the ruling."""
         answer = self.config.ask_operator(question)
+        self._add_ruling(f"Q: {question} -- A: {answer}")
         with self._lock:
-            self.memory.ledger.rulings.append(f"Q: {question} -- A: {answer}")
             if question in self.unanswered_asks:
                 self.unanswered_asks.remove(question)
 
@@ -1158,6 +1270,9 @@ class Session:
             )
             shown = (labels or {}).get(peer, peer)
             task.record("assistant", f"[{shown} recheck] {verdict}")
+            # Kept under the reviewer's real name: recheck outcomes are what
+            # the operator's scoreboard scores feedback quality from.
+            task.keep(verdict, kind=f"recheck:{peer}")
             if not verdict.strip().upper().startswith("RESOLVED"):
                 unresolved.append((peer, verdict.strip()))
         return unresolved

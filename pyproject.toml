@@ -29,7 +29,8 @@ dev = [
 browser = []
 
 [project.scripts]
-multi-llm = "multi_llm.cli:main"
+multi-llm = "multi_llm.app:main"
+multi-llm-legacy = "multi_llm.cli:main"
 multi-llm-gui = "multi_llm.gui:main"
 
 [tool.setuptools]
