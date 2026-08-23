@@ -171,8 +171,9 @@ ruff check .
 pytest
 ```
 
-CI runs ruff and the test suite on Python 3.9/3.11/3.12
-(`.github/workflows/ci.yml`). Tests need no network and no keys.
+CI runs ruff and the test suite on Python 3.11/3.12
+(`.github/workflows/ci.yml`), installing a Chromium for the browser tests.
+Tests need no network and no keys.
 
 ## License
 
