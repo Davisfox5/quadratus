@@ -223,6 +223,14 @@ class SessionConfig:
     #: is the final arbiter of what ships, but an arbiter rejecting the same
     #: work three times is a stuck arbiter.
     max_redos: int = 2
+    #: The product map (see :mod:`multi_llm.product_map`): the deep,
+    #: cross-vendor-verified codebase reference built before project work
+    #: starts. Rendered into every orchestrator and lead prompt as an
+    #: overview plus a fetchable section index, and re-checked for staleness
+    #: after every wave so a section whose code changed is flagged rather
+    #: than trusted. Anything with ``render_block()`` and ``refresh()``
+    #: works; None runs without one.
+    product_map: Optional[object] = None
     #: A no-stake completion judge, as a model key (usually the control
     #: plane's convergence model). When set, a DONE from the orchestrator is
     #: checked against the goal by a model with no authorship stake before
@@ -770,8 +778,11 @@ class Session:
             # Rebuilt every round: an answered ASK lands in the rulings, and
             # the re-ask must carry it -- a stale prompt would re-ask the
             # operator the question they just answered.
-            extra_blocks = [b for b in (self._map_block(), self._awaiting_block())
-                            if b]
+            extra_blocks = [
+                b for b in (self._map_block(), self._product_map_block(),
+                            self._awaiting_block())
+                if b
+            ]
             body = self.memory.render(
                 current=(
                     "Name the next wave of tasks: every task that is ready to "
@@ -1040,6 +1051,14 @@ class Session:
             previous_wave = [s.description for s in wave]
             executed += len(wave)
             self._run_wave(wave)
+            if self.config.product_map is not None:
+                # Deterministic staleness pass: sections whose files this
+                # wave changed get flagged before the next decision reads
+                # them as truth.
+                try:
+                    self.config.product_map.refresh()
+                except Exception:  # noqa: BLE001 -- observational
+                    log.warning("product map refresh failed", exc_info=True)
         return list(self.history)
 
     def _judge_done(self) -> Optional[str]:
@@ -1126,6 +1145,15 @@ class Session:
             return ""
         return self.config.codebase_map.render()
 
+    def _product_map_block(self) -> str:
+        if self.config.product_map is None:
+            return ""
+        try:
+            return self.config.product_map.render_block()
+        except Exception:  # noqa: BLE001 -- a broken map must not break a round
+            log.warning("product map render failed", exc_info=True)
+            return ""
+
     def _awaiting_block(self) -> str:
         """Unanswered operator questions, re-rendered loudly every round.
 
@@ -1168,6 +1196,9 @@ class Session:
         map_block = self._map_block()
         if map_block:
             parts.append(map_block)
+        product_block = self._product_map_block()
+        if product_block:
+            parts.append(product_block)
         parts.append("You are leading this task. Produce the complete work.")
         parts.append(worker_menu())
         parts.append(

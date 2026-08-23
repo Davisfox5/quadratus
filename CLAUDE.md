@@ -214,6 +214,28 @@ Key design decisions already settled:
   project's own declared check command — never a guessed one. An
   existing-codebase invariant tells the orchestrator to put comprehension
   tasks ahead of changes wherever the map is silent about the area.
+- **Deep understanding comes first, by operator directive**
+  (`product_map.py`): no project work on an existing codebase until it is
+  surveyed into a product map — Blitzy's tech-spec idea built on this
+  architecture's own strengths. The skeleton (area partitioning, the
+  dependency graph) is mechanical and free; the reading is *wide, not
+  long* — one reader per area, parallel across all four subscriptions,
+  central areas drawing a stronger ladder rung; every section is verified
+  by a different vendor before it enters the map, with corrections
+  appended under the verifier's name, never silently merged. The operator
+  reviews the finished document (`product_map.md`) at a gate before
+  anything is built. An earlier lazy-only posture (understand only what
+  the goal touches) was argued and overruled — the survey's incremental
+  economics (below) are what make the eager version affordable.
+- **The product map is living, by fingerprint.** Every section records a
+  hash of the files it describes; after every wave the hashes are
+  re-checked deterministically and a section whose code changed is marked
+  STALE in every render — the orchestrator must resurvey it before relying
+  on it. Unchanged areas are never paid for twice: a repeat survey costs
+  zero calls on an untouched repo. The full document rides nowhere; every
+  prompt gets the overview plus a fetchable section index (an index over
+  durable originals, the ledger's contract), and superseded section
+  versions stay in the artifact store.
 - **The interview is wired** (`interview.py`): the control-plane model asks
   one plain question at a time until it can emit a `GOAL:` paragraph,
   stored verbatim as the session goal. Bounded rounds with a forced close;

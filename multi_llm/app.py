@@ -45,6 +45,7 @@ from .probes import (
     probe_models,
     render_probe_report,
 )
+from .product_map import ProductMap, build_units, run_survey, survey_estimate
 from .registry import CONTROL_PLANE
 from .repo_scan import scan_repo, seed_map
 from .scoreboard import build_scoreboard, render_scoreboard
@@ -65,10 +66,12 @@ _BASE_INVARIANTS = [
 ]
 
 _EXISTING_CODEBASE_INVARIANT = (
-    "The work concerns an existing codebase. Ground every task in the "
-    "codebase map; when the map says nothing about the area a task would "
-    "change, put a comprehension task in an earlier wave so the change is "
-    "made with the code understood rather than guessed at."
+    "The work concerns an existing codebase. The product map is the "
+    "standing reference: ground every task in it, fetch the relevant "
+    "section before changing an area, and never rely on a section marked "
+    "STALE -- issue a comprehend task to resurvey it first. Where the map "
+    "is silent, put a comprehension task in an earlier wave so the change "
+    "is made with the code understood rather than guessed at."
 )
 
 
@@ -200,6 +203,58 @@ def _prepare(args) -> dict:
         gate = IntegrationGate(check_cmd, cwd=repo)
         print(f"Integration gate: {' '.join(check_cmd)}")
 
+    store = ArtifactStore(state / "artifacts")
+    available = lambda key: binary_available(key.split(":", 1)[0])  # noqa: E731
+
+    # The product map: no project work starts on an existing codebase until
+    # it has been surveyed into a verified, operator-reviewable reference.
+    # Incremental by fingerprint -- a repeat run on an unchanged repo skips
+    # straight through.
+    product_map = None
+    if scan.has_code and not args.no_survey:
+        product_map = ProductMap(
+            state / "product_map.json", root=repo,
+            md_path=state / "product_map.md",
+        )
+        stale = product_map.stale_units(build_units(repo))
+        if stale:
+            calls = survey_estimate(len(stale))
+            print(
+                f"\nProduct map: {len(stale)} area(s) need surveying "
+                f"(~{calls} model calls, parallel across your four "
+                f"subscriptions)."
+            )
+            if interactive:
+                go = input("Run the survey now? [Y/n] ").strip().lower()
+                if go in ("n", "no"):
+                    raise SystemExit(
+                        "stopped: the survey is required before project "
+                        "work. Re-run when ready, or pass --no-survey to "
+                        "run without a product map."
+                    )
+            written = run_survey(
+                repo, invoke=invoke, store=store, product_map=product_map,
+                available=available, progress=lambda m: print(f"  {m}"),
+            )
+            print(
+                f"Product map: {written} section(s) written and "
+                f"cross-vendor verified -> {product_map.md_path}"
+            )
+            if interactive and not args.no_map_gate:
+                print(
+                    "\nReview the product map before any project work: "
+                    f"{product_map.md_path}"
+                )
+                approve = input(
+                    "Approve the product map? [y/N] "
+                ).strip().lower()
+                if approve not in ("y", "yes"):
+                    raise SystemExit(
+                        "product map not approved; nothing has been built. "
+                        "Re-run after reviewing (the survey will not be "
+                        "re-paid for unchanged code)."
+                    )
+
     invariants = list(_BASE_INVARIANTS)
     if scan.has_code:
         invariants.append(_EXISTING_CODEBASE_INVARIANT)
@@ -214,14 +269,15 @@ def _prepare(args) -> dict:
         ),
         done_judge=CONTROL_PLANE["convergence"],
         session_log=session_log,
+        product_map=product_map,
     )
     session = Session(
         goal,
-        ArtifactStore(state / "artifacts"),
+        store,
         invoke,
         config=config,
         invariants=invariants,
-        available=lambda key: binary_available(key.split(":", 1)[0]),
+        available=available,
     )
     if resuming:
         restored = session.restore(session_log)
@@ -301,6 +357,11 @@ def _parser() -> argparse.ArgumentParser:
                        help="Archive the previous session log and start over.")
         p.add_argument("--no-plan-gate", action="store_true",
                        help="Skip the plan approval prompt.")
+        p.add_argument("--no-map-gate", action="store_true",
+                       help="Skip the product map approval prompt.")
+        p.add_argument("--no-survey", action="store_true",
+                       help="Run without building the product map (not "
+                            "recommended on an existing codebase).")
         p.add_argument("wish", nargs="?", default="",
                        help="What you want, in a sentence; the interview "
                             "makes it concrete.")
