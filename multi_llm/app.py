@@ -292,13 +292,30 @@ def _prepare(args) -> dict:
     elif product_map is not None:
         invariants.append(_DESIGN_INVARIANT)
 
+    # The plan gate writes the plan into the product map before asking for
+    # approval -- one document carries the design, the order, and (as tasks
+    # close) the progress. With gating declined or no terminal, the plan is
+    # still recorded; only the approval question is skipped.
+    def _plan_gate(plan_text: str) -> bool:
+        if product_map is not None:
+            ref = store.put(plan_text, kind="build-plan", author="orchestrator")
+            product_map.set_plan(
+                content=plan_text, author="orchestrator", artifact_id=ref.id,
+            )
+            print(f"Build plan written into {product_map.md_path}")
+        if interactive and not args.no_plan_gate:
+            return _terminal_plan_gate(plan_text)
+        return True
+
     config = SessionConfig(
         codebase_map=codebase_map,
         integration_gate=gate,
         ask_operator=_terminal_ask if interactive else None,
         plan_gate=(
-            _terminal_plan_gate
-            if interactive and not args.no_plan_gate else None
+            _plan_gate
+            if product_map is not None
+            or (interactive and not args.no_plan_gate)
+            else None
         ),
         done_judge=CONTROL_PLANE["convergence"],
         session_log=session_log,

@@ -236,6 +236,14 @@ Key design decisions already settled:
   prompt gets the overview plus a fetchable section index (an index over
   durable originals, the ledger's contract), and superseded section
   versions stay in the artifact store.
+- **One document carries design, order, and progress.** The build plan is
+  not a separate artifact: the plan gate writes it into the product map
+  (a design draft carries a BUILD ORDER section from birth), and as each
+  task closes the harness — not a model — appends a progress line, so the
+  document continuously reflects how far the build has come. The plan
+  stays a forecast the live loop re-judges every wave; deliberate
+  departures are named in close-outs, never drifted into. The operator
+  reviews one spec: what it is, the order it gets built, what is done.
 - **The interview is wired** (`interview.py`): the control-plane model asks
   one plain question at a time until it can emit a `GOAL:` paragraph,
   stored verbatim as the session goal. Bounded rounds with a forced close;

@@ -325,6 +325,14 @@ class Session:
                     )
                 except Exception:  # noqa: BLE001 -- persistence must not kill a run
                     log.warning("session log write failed", exc_info=True)
+        # The product map's progress record: the document tracks the build
+        # because the harness writes it, not because a model remembers to.
+        pm = self.config.product_map
+        if pm is not None and hasattr(pm, "record_progress"):
+            try:
+                pm.record_progress(summary.task_id, summary.summary)
+            except Exception:  # noqa: BLE001 -- observational
+                log.warning("product map progress write failed", exc_info=True)
 
     def _add_ruling(self, ruling: str) -> None:
         with self._lock:

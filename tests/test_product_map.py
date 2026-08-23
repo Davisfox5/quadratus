@@ -307,6 +307,49 @@ def test_newly_built_areas_are_flagged_until_surveyed(tmp_path, store):
     assert "storage" in block
 
 
+# -- one document: design + order + progress -----------------------------------
+
+
+def test_the_design_prompt_asks_for_a_build_order(tmp_path, store):
+    _pm, calls, _root = _design(tmp_path, store)
+    assert "BUILD ORDER" in calls[0]["prompt"]
+
+
+def test_plan_and_progress_live_in_the_same_document(tmp_path, store):
+    pm, _calls, _root = _design(tmp_path, store)
+    ref = store.put("1. storage\n2. search\n3. ui", kind="build-plan",
+                    author="orchestrator")
+    pm.set_plan(content="1. storage\n2. search\n3. ui",
+                author="orchestrator", artifact_id=ref.id)
+    pm.record_progress("t1", "built the storage layer\nwith sqlite")
+    pm.record_progress("t2", "added search")
+    md = (tmp_path / "product_map.md").read_text()
+    assert "## Build plan" in md and "2. search" in md
+    assert "## Build progress" in md
+    assert "- t1: built the storage layer" in md  # first line only
+    assert "sqlite" not in md.split("## Build progress")[1]
+    block = pm.render_block()
+    assert "Build plan" in block and f"artifact {ref.id}" in block
+
+
+def test_progress_is_recorded_by_the_harness_as_tasks_close(tmp_path, store):
+    pm, _calls, _root = _design(tmp_path, store)
+
+    def rec(model, prompt, system=None):
+        if "Name the next wave of tasks" in prompt:
+            return rec.waves.pop(0) if rec.waves else "DONE"
+        if "The task is finished" in prompt:
+            return "SUMMARY: shipped the storage layer\nREASONING: fine"
+        return f"[{model}] output"
+    rec.waves = ["TASK general simple: build storage", "DONE"]
+
+    s = Session("Build a recipe box", store, rec,
+                config=SessionConfig(product_map=pm))
+    s.run()
+    assert pm.progress == [{"task": "t1", "note": "shipped the storage layer"}]
+    assert "shipped the storage layer" in (tmp_path / "product_map.md").read_text()
+
+
 def test_refresh_runs_after_every_wave(tmp_path, store):
     class FakeMap:
         def __init__(self):

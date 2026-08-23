@@ -256,12 +256,22 @@ class ProductMap:
         self.md_path = Path(md_path) if md_path else None
         self.sections: Dict[str, dict] = {}
         self.overview: Optional[dict] = None
+        #: The ordered build plan, written into the same document at the
+        #: plan gate -- one spec, not two.
+        self.plan: Optional[dict] = None
+        #: Append-only build progress: one line per completed task, recorded
+        #: by the harness as each task closes. Deterministic -- the document
+        #: tracks the build because the machinery writes it, not because a
+        #: model remembers to.
+        self.progress: List[dict] = []
         self._lock = threading.Lock()
         if self.path.exists():
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
                 self.sections = data.get("sections", {})
                 self.overview = data.get("overview")
+                self.plan = data.get("plan")
+                self.progress = data.get("progress", [])
             except (ValueError, OSError):
                 pass
 
@@ -269,7 +279,8 @@ class ProductMap:
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(
-            {"sections": self.sections, "overview": self.overview}, indent=1,
+            {"sections": self.sections, "overview": self.overview,
+             "plan": self.plan, "progress": self.progress}, indent=1,
         ), encoding="utf-8")
         if self.md_path is not None:
             self.md_path.write_text(self.render_markdown(), encoding="utf-8")
@@ -301,6 +312,29 @@ class ProductMap:
                 "content": content, "author": author,
                 "artifact": artifact_id, "origin": origin,
             }
+            self._save()
+
+    def set_plan(self, *, content: str, author: str, artifact_id: str) -> None:
+        """Write the ordered build plan into the document.
+
+        The plan stays what it always was -- a forecast the live loop
+        re-judges every wave -- but it lives in the product map, so the
+        operator reviews one document: what the system is, the order it
+        gets built, and how far along it is.
+        """
+        with self._lock:
+            self.plan = {
+                "content": content, "author": author, "artifact": artifact_id,
+            }
+            self._save()
+
+    def record_progress(self, task_id: str, note: str) -> None:
+        """Append one completed task to the document's progress record."""
+        line = (note or "").strip().splitlines()
+        with self._lock:
+            self.progress.append(
+                {"task": task_id, "note": line[0] if line else "(no summary)"}
+            )
             self._save()
 
     # -- staleness -----------------------------------------------------------
@@ -360,6 +394,20 @@ class ProductMap:
                 ]
             else:
                 lines += [heading, "", self.overview["content"].strip(), ""]
+        if self.plan:
+            lines += [
+                "## Build plan",
+                "_The intended order, in phases. A forecast the live loop "
+                "re-judges every round -- what happened is under Build "
+                "progress below._",
+                "",
+                self.plan["content"].strip(),
+                "",
+            ]
+        if self.progress:
+            lines += ["## Build progress", ""]
+            lines += [f"- {p['task']}: {p['note']}" for p in self.progress]
+            lines.append("")
         for name in sorted(self.sections):
             section = self.sections[name]
             flag = "  ⚠ STALE — code changed since this was written" \
@@ -399,6 +447,16 @@ class ProductMap:
                 )
             head = "\n".join(self.overview["content"].strip().splitlines()[:18])
             lines.append(head)
+        if self.plan:
+            plan_head = "\n".join(
+                self.plan["content"].strip().splitlines()[:12]
+            )
+            lines.append(
+                "Build plan (the intended order; re-judge it against the "
+                "completed work each round, and note deliberate departures "
+                f"in a close-out) -- full plan: artifact "
+                f"{self.plan['artifact']}:\n{plan_head}"
+            )
         if self.sections:
             index = []
             for name in sorted(self.sections):
@@ -473,6 +531,9 @@ def draft_design(
         "KEY FLOWS: the two or three paths through the system that matter "
         "most, end to end.\n"
         "BUILD, TEST, RUN: how the project will be exercised and proven.\n"
+        "BUILD ORDER: the intended phases, in order -- what each phase "
+        "delivers and what it unlocks. A forecast, not a contract: the "
+        "live loop re-judges it every round.\n"
         "RISKS: what is most likely to go wrong, and where.\n"
         "OPEN DESIGN QUESTIONS: decisions deliberately left open, one per "
         "line.\n\n"
