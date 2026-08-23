@@ -45,7 +45,13 @@ from .probes import (
     probe_models,
     render_probe_report,
 )
-from .product_map import ProductMap, build_units, run_survey, survey_estimate
+from .product_map import (
+    ProductMap,
+    build_units,
+    draft_design,
+    run_survey,
+    survey_estimate,
+)
 from .registry import CONTROL_PLANE
 from .repo_scan import scan_repo, seed_map
 from .scoreboard import build_scoreboard, render_scoreboard
@@ -72,6 +78,14 @@ _EXISTING_CODEBASE_INVARIANT = (
     "STALE -- issue a comprehend task to resurvey it first. Where the map "
     "is silent, put a comprehension task in an earlier wave so the change "
     "is made with the code understood rather than guessed at."
+)
+
+_DESIGN_INVARIANT = (
+    "The product map's overview is the approved design: build toward it. "
+    "Where the work must diverge from the design, say so explicitly in the "
+    "close-out rather than drifting silently. Once an area is built and "
+    "stable, issue a comprehend task to survey it so the map's verified "
+    "sections replace design intent with observed reality."
 )
 
 
@@ -206,58 +220,77 @@ def _prepare(args) -> dict:
     store = ArtifactStore(state / "artifacts")
     available = lambda key: binary_available(key.split(":", 1)[0])  # noqa: E731
 
-    # The product map: no project work starts on an existing codebase until
-    # it has been surveyed into a verified, operator-reviewable reference.
+    # The product map: no project work starts until the standing reference
+    # exists and the operator has approved it. On an existing codebase it is
+    # *surveyed* from the real code; from scratch it is *designed* from the
+    # goal, and verified sections replace intent as areas get built.
     # Incremental by fingerprint -- a repeat run on an unchanged repo skips
     # straight through.
     product_map = None
-    if scan.has_code and not args.no_survey:
+    if not args.no_survey:
         product_map = ProductMap(
             state / "product_map.json", root=repo,
             md_path=state / "product_map.md",
         )
-        stale = product_map.stale_units(build_units(repo))
-        if stale:
-            calls = survey_estimate(len(stale))
-            print(
-                f"\nProduct map: {len(stale)} area(s) need surveying "
-                f"(~{calls} model calls, parallel across your four "
-                f"subscriptions)."
-            )
-            if interactive:
-                go = input("Run the survey now? [Y/n] ").strip().lower()
-                if go in ("n", "no"):
-                    raise SystemExit(
-                        "stopped: the survey is required before project "
-                        "work. Re-run when ready, or pass --no-survey to "
-                        "run without a product map."
-                    )
-            written = run_survey(
-                repo, invoke=invoke, store=store, product_map=product_map,
-                available=available, progress=lambda m: print(f"  {m}"),
-            )
-            print(
-                f"Product map: {written} section(s) written and "
-                f"cross-vendor verified -> {product_map.md_path}"
-            )
-            if interactive and not args.no_map_gate:
+        gate_needed = False
+        if scan.has_code:
+            stale = product_map.stale_units(build_units(repo))
+            if stale:
+                calls = survey_estimate(len(stale))
                 print(
-                    "\nReview the product map before any project work: "
-                    f"{product_map.md_path}"
+                    f"\nProduct map: {len(stale)} area(s) need surveying "
+                    f"(~{calls} model calls, parallel across your four "
+                    f"subscriptions)."
                 )
-                approve = input(
-                    "Approve the product map? [y/N] "
-                ).strip().lower()
-                if approve not in ("y", "yes"):
-                    raise SystemExit(
-                        "product map not approved; nothing has been built. "
-                        "Re-run after reviewing (the survey will not be "
-                        "re-paid for unchanged code)."
-                    )
+                if interactive:
+                    go = input("Run the survey now? [Y/n] ").strip().lower()
+                    if go in ("n", "no"):
+                        raise SystemExit(
+                            "stopped: the survey is required before project "
+                            "work. Re-run when ready, or pass --no-survey "
+                            "to run without a product map."
+                        )
+                written = run_survey(
+                    repo, invoke=invoke, store=store,
+                    product_map=product_map, available=available,
+                    progress=lambda m: print(f"  {m}"),
+                )
+                print(
+                    f"Product map: {written} section(s) written and "
+                    f"cross-vendor verified -> {product_map.md_path}"
+                )
+                gate_needed = True
+        elif product_map.overview is None:
+            # From scratch: the map is designed before it can be surveyed.
+            print(
+                "\nNothing exists yet, so the product map is written as a "
+                "design first (2 model calls: one architect, one "
+                "cross-vendor review)."
+            )
+            draft_design(
+                goal, invoke=invoke, store=store, product_map=product_map,
+                available=available,
+            )
+            print(f"Design written -> {product_map.md_path}")
+            gate_needed = True
+        if gate_needed and interactive and not args.no_map_gate:
+            print(
+                "\nReview the product map before any project work: "
+                f"{product_map.md_path}"
+            )
+            approve = input("Approve the product map? [y/N] ").strip().lower()
+            if approve not in ("y", "yes"):
+                raise SystemExit(
+                    "product map not approved; nothing has been built. "
+                    "Re-run after reviewing (unchanged work is never "
+                    "re-paid for)."
+                )
 
     invariants = list(_BASE_INVARIANTS)
     if scan.has_code:
         invariants.append(_EXISTING_CODEBASE_INVARIANT)
+    elif product_map is not None:
+        invariants.append(_DESIGN_INVARIANT)
 
     config = SessionConfig(
         codebase_map=codebase_map,

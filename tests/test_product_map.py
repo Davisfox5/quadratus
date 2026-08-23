@@ -242,6 +242,71 @@ def test_sections_are_fetchable_through_the_session_channel(tmp_path, store):
     assert state["fetched"]  # the index led to a real full-text fetch
 
 
+# -- from scratch: the map is designed, then earned ----------------------------
+
+
+def _design(tmp_path, store, review="NO CONCERNS"):
+    from multi_llm.product_map import draft_design
+
+    root = tmp_path / "empty-proj"
+    root.mkdir()
+    pm = ProductMap(tmp_path / "pm.json", root=root,
+                    md_path=tmp_path / "product_map.md")
+    calls = []
+
+    def invoke(model, prompt):
+        calls.append({"model": model, "prompt": prompt})
+        if "designated skeptic" in prompt:
+            return review
+        return (
+            "WHAT THIS SYSTEM IS: a recipe box.\n"
+            "ARCHITECTURE: storage, search, ui.\nKEY FLOWS: add; find.\n"
+            "BUILD, TEST, RUN: pytest.\nRISKS: scope creep.\n"
+            "OPEN DESIGN QUESTIONS: none."
+        )
+
+    draft_design("Build a recipe box.", invoke=invoke, store=store,
+                 product_map=pm)
+    return pm, calls, root
+
+
+def test_a_from_scratch_map_is_designed_and_cross_vendor_reviewed(tmp_path, store):
+    pm, calls, _root = _design(tmp_path, store,
+                               review="- search is underspecified")
+    assert pm.overview["origin"] == "design"
+    assert "DESIGN REVIEW" in pm.overview["content"]
+    assert "search is underspecified" in pm.overview["content"]
+    architect = resolve(calls[0]["model"])
+    reviewer = resolve(calls[1]["model"])
+    assert architect.provider != reviewer.provider
+    md = (tmp_path / "product_map.md").read_text()
+    assert "design — written before the code" in md
+    assert store.get(pm.overview["artifact"])  # the design is a real artifact
+
+
+def test_a_clean_design_review_is_not_appended(tmp_path, store):
+    pm, _calls, _root = _design(tmp_path, store, review="NO CONCERNS")
+    assert "DESIGN REVIEW" not in pm.overview["content"]
+
+
+def test_a_design_only_map_still_rides_in_prompts(tmp_path, store):
+    pm, _calls, _root = _design(tmp_path, store)
+    block = pm.render_block()
+    assert "Product map (the standing codebase reference)" in block
+    assert "approved design" in block
+    assert "recipe box" in block
+
+
+def test_newly_built_areas_are_flagged_until_surveyed(tmp_path, store):
+    pm, _calls, root = _design(tmp_path, store)
+    (root / "storage").mkdir()
+    (root / "storage" / "db.py").write_text("RECIPES = []\n")
+    pm.refresh()
+    block = pm.render_block()
+    assert "not yet surveyed" in block
+    assert "storage" in block
+
+
 def test_refresh_runs_after_every_wave(tmp_path, store):
     class FakeMap:
         def __init__(self):

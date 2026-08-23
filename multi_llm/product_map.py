@@ -63,6 +63,7 @@ __all__ = [
     "import_graph",
     "run_survey",
     "survey_estimate",
+    "draft_design",
 ]
 
 #: An area bigger than this is split before surveying: a reader that gets a
@@ -288,10 +289,17 @@ class ProductMap:
             }
             self._save()
 
-    def set_overview(self, *, content: str, author: str, artifact_id: str) -> None:
+    def set_overview(self, *, content: str, author: str, artifact_id: str,
+                     origin: str = "survey") -> None:
+        """``origin`` records how the overview came to be: ``"survey"`` means
+        it was assembled from verified sections of real code; ``"design"``
+        means it was written before any code existed and describes intent.
+        The distinction is rendered, because a reader must know whether a
+        claim is observation or plan."""
         with self._lock:
             self.overview = {
-                "content": content, "author": author, "artifact": artifact_id,
+                "content": content, "author": author,
+                "artifact": artifact_id, "origin": origin,
             }
             self._save()
 
@@ -315,10 +323,23 @@ class ProductMap:
                 out.append(name)
         return sorted(out)
 
+    def unsurveyed_names(self) -> List[str]:
+        """Areas that exist in the code but have no verified section yet.
+
+        On a from-scratch build these appear as the code comes into
+        existence: the design overview described the intent, and each area
+        earns a verified section once it is real and surveyed.
+        """
+        return sorted(
+            u.name for u in build_units(self.root)
+            if u.name not in self.sections
+        )
+
     def refresh(self) -> List[str]:
         """Re-check fingerprints. Called at wave boundaries; deterministic."""
         with self._lock:
             self._stale_cache = self.stale_names()
+            self._unsurveyed_cache = self.unsurveyed_names()
             return list(self._stale_cache)
 
     # -- rendering -----------------------------------------------------------
@@ -327,7 +348,18 @@ class ProductMap:
         lines = ["# Product map", ""]
         stale = set(self.stale_names())
         if self.overview:
-            lines += ["## Overview", "", self.overview["content"].strip(), ""]
+            heading = "## Overview"
+            if self.overview.get("origin") == "design":
+                heading = "## Overview (design — written before the code)"
+                lines += [
+                    heading, "",
+                    "_This describes what is to be built. As areas are "
+                    "built and surveyed, verified sections replace intent "
+                    "with observation._", "",
+                    self.overview["content"].strip(), "",
+                ]
+            else:
+                lines += [heading, "", self.overview["content"].strip(), ""]
         for name in sorted(self.sections):
             section = self.sections[name]
             flag = "  ⚠ STALE — code changed since this was written" \
@@ -354,27 +386,41 @@ class ProductMap:
         fetches a full section by its artifact id when a decision turns on
         the detail.
         """
-        if not self.sections:
+        if not self.sections and not self.overview:
             return ""
         stale = set(getattr(self, "_stale_cache", None) or self.stale_names())
         lines = ["## Product map (the standing codebase reference)"]
         if self.overview:
+            if self.overview.get("origin") == "design":
+                lines.append(
+                    "(The overview is the approved design, written before "
+                    "the code: it states intent. Build toward it; where "
+                    "reality must diverge, say so in a close-out.)"
+                )
             head = "\n".join(self.overview["content"].strip().splitlines()[:18])
             lines.append(head)
-        index = []
-        for name in sorted(self.sections):
-            section = self.sections[name]
-            mark = " [STALE]" if name in stale else ""
-            index.append(f"- {name}{mark} -- artifact {section['artifact']}")
-        lines.append(
-            "Sections (reply 'FETCH: <artifact-id>' to read one in full):\n"
-            + "\n".join(index)
-        )
+        if self.sections:
+            index = []
+            for name in sorted(self.sections):
+                section = self.sections[name]
+                mark = " [STALE]" if name in stale else ""
+                index.append(f"- {name}{mark} -- artifact {section['artifact']}")
+            lines.append(
+                "Sections (reply 'FETCH: <artifact-id>' to read one in "
+                "full):\n" + "\n".join(index)
+            )
         if stale:
             lines.append(
                 "STALE sections describe code that has since changed: do not "
                 "rely on one -- issue a comprehend task to resurvey that "
                 "area first."
+            )
+        unsurveyed = getattr(self, "_unsurveyed_cache", None) or []
+        if unsurveyed:
+            lines.append(
+                "Areas built but not yet surveyed (only the design speaks "
+                "for them): " + ", ".join(unsurveyed) + ". Issue a "
+                "comprehend task to survey an area once it stabilises."
             )
         return "\n\n".join(lines)
 
@@ -382,6 +428,76 @@ class ProductMap:
 def survey_estimate(stale_count: int) -> int:
     """Model calls a survey will spend: read + verify per area, one overview."""
     return stale_count * 2 + (1 if stale_count else 0)
+
+
+def draft_design(
+    goal: str,
+    *,
+    invoke: Callable[..., str],
+    store,
+    product_map: ProductMap,
+    available: Callable[[str], bool] = lambda _key: True,
+) -> str:
+    """Write the product map from scratch, for a build that starts from one.
+
+    The mirror of the survey: with no code to read, the map's first version
+    is a *design* -- what will be built, written before any of it exists,
+    reviewed by the operator at the same gate. The strongest available
+    architect drafts it; a different vendor's model reviews the design for
+    gaps and risks, and the review is appended under its own name rather
+    than silently merged -- the same two-vendor contract every surveyed
+    section carries.
+
+    As the build proceeds, real areas appear and are surveyed; verified
+    sections accumulate under the design overview until observation has
+    replaced intent everywhere. Costs two calls.
+    """
+    peers = MODE_ROSTERS["adversarial"]["peers"]
+    architect = route_kind(
+        TaskKind.ARCHITECT,
+        difficulty="complex",
+        default=DIFFICULTY_LADDER["complex"],
+        candidates=peers,
+        available=available,
+    )
+    draft = invoke(architect, (
+        "Nothing has been built yet. Write the product map for the system "
+        "this goal describes -- the standing reference document every task "
+        "of the build will consult, and the design the operator will "
+        "approve before any work starts.\n\n"
+        f"The goal, verbatim:\n{goal}\n\n"
+        "Write with exactly these headings:\n"
+        "WHAT THIS SYSTEM IS: purpose and shape, in plain language.\n"
+        "ARCHITECTURE: the planned areas, each with its responsibility and "
+        "what it will depend on.\n"
+        "KEY FLOWS: the two or three paths through the system that matter "
+        "most, end to end.\n"
+        "BUILD, TEST, RUN: how the project will be exercised and proven.\n"
+        "RISKS: what is most likely to go wrong, and where.\n"
+        "OPEN DESIGN QUESTIONS: decisions deliberately left open, one per "
+        "line.\n\n"
+        "Design only what the goal needs -- every area you name is work "
+        "someone will be assigned."
+    ))
+    reviewer = cross_family_verifier(
+        architect, candidates=peers, available=available,
+    ) or architect
+    review = invoke(reviewer, (
+        "Another vendor's model wrote this design for a system to be built "
+        f"toward this goal:\n\nGoal:\n{goal}\n\nDesign:\n{draft}\n\n"
+        "Review it as the designated skeptic: name what is missing, what "
+        "will not work as described, and what is riskier than the design "
+        "admits. Reply 'NO CONCERNS' if it is genuinely sound; otherwise "
+        "list concerns one per line. Do not rewrite the design."
+    ))
+    content = draft
+    if review.strip().upper().rstrip(".") != "NO CONCERNS":
+        content += f"\n\nDESIGN REVIEW ({reviewer}):\n{review.strip()}"
+    ref = store.put(content, kind="map-design", author=architect)
+    product_map.set_overview(
+        content=content, author=architect, artifact_id=ref.id, origin="design",
+    )
+    return content
 
 
 def _unit_content(root: Path, unit: SurveyUnit) -> str:
