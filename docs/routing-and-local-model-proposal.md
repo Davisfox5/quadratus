@@ -61,28 +61,29 @@ The smallest version that gets most of the value, in order:
 
 Do these three and the cascade is gone without a new abstraction.
 
-## Recommendation 2: the Fable question, which needs your call
+## The Fable seat is correct as-is
+
+Recorded because I raised it as a question and it was not one.
 
 `routing.py` seats Fable 5 as the orchestrator and `ORCHESTRATOR_CHAIN` leads
-with it. Your standing rule is that Fable is a build-time tool in Claude Code and
-never a runtime dependency.
+with it. I flagged that against the rule that Fable is a build-time tool and
+never a runtime dependency. That was a misreading of the rule.
 
-Whether this repo violates that depends on what "runtime" means here. This is a
-developer tool that runs on your machine against your own subscriptions, which
-reads as build-time. But it is a long-running orchestrator making autonomous
-model calls, which is the shape the rule exists to control, and `registry.py`
-already documents Fable as the model most likely to exhaust the subscription
-window first (2x Opus 5 against the same window) and as having been withdrawn for
-19 days in June 2026.
+The rule exists to keep Fable out of the **shipped products** (Flex, LINDA,
+R3CRUIT3R), where a suspension or a price change would hit paying customers and
+where every call is on a cost-sensitive per-request path. This repo is a
+developer tool that runs on Davis's own machine against his own subscriptions.
+Its whole purpose is to put several frontier models on one task, so "it calls a
+non-Anthropic model" is the product working, not a policy violation, and the
+orchestrator seat is exactly the kind of judgment-heavy, low-volume work Fable
+is for. `registry.py` already documents the three real hazards of that seat
+(strictest classifiers, 2x Opus 5 against the same window, the June 2026
+withdrawal) and picks it anyway, with reasons.
 
-**I have not changed it.** Two options:
+**No change. Do not "fix" this.** `df-model-routing` should treat this repo as
+build-time tooling and skip it, which is now written into `CLAUDE.md`.
 
-- Treat this repo as build-time tooling and leave Fable seated. Write the
-  exemption into `CLAUDE.md` so `df-model-routing` stops flagging it.
-- Move the orchestrator seat to Opus 5 and keep Fable as an explicit opt-in for
-  a hard session. `ORCHESTRATOR_CHAIN` already supports reordering.
-
-## Recommendation 3: local model as a third participant (technique 8)
+## Recommendation 2: local model as a third participant (technique 8)
 
 Worth doing, and narrower than it sounds. The playbook's rule is the important
 part: **local never produces customer-facing text, only structured labels and
@@ -118,9 +119,7 @@ hard rule that it never holds a seat in `MODE_ROSTERS`.
 
 ## Order
 
-1. Decide the Fable seat question. It is a one-line config change either way and
-   it blocks nothing else.
-2. Wire task classification into `Orchestrator.run()` and take the fast path for
+1. Wire task classification into `Orchestrator.run()` and take the fast path for
    `ROTE` and `SIMPLE`. This is the largest saving for the least code.
-3. Add the local provider and move classification onto it.
-4. Capability-based lead selection and complexity-scaled reviewers.
+2. Add the local provider and move classification onto it.
+3. Capability-based lead selection and complexity-scaled reviewers.

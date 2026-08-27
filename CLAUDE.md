@@ -169,3 +169,24 @@ Key design decisions already settled:
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
   reviewers produce judgement.
+
+## Model routing: this repo is build-time tooling
+
+`df-model-routing` audits **shipped products** against the Haiku/Sonnet/Opus
+runtime policy. It does not apply here, and a routing audit should skip this
+repo rather than file findings against it.
+
+Two reasons:
+
+- **Multi-vendor is the product.** This tool exists to put Claude, GPT, Gemini,
+  and Grok on one task and have them argue. Calls to non-Anthropic models are
+  the feature, not a policy violation.
+- **Fable 5 holds the orchestrator seat on purpose.** `routing.py` and
+  `ORCHESTRATOR_CHAIN` are deliberate, and `registry.py` documents the hazards
+  that were weighed (strictest safety classifiers, 2x Opus 5 against the same
+  subscription window, the 19-day June 2026 withdrawal). The
+  "Fable is never a runtime dependency" rule protects Flex, LINDA, and
+  R3CRUIT3R, where a suspension would hit paying customers. This runs on
+  Davis's machine against his own subscriptions.
+
+Do not "fix" either of these. See `docs/routing-and-local-model-proposal.md`.
