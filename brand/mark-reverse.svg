@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-label="Quadratus mark, one colour">
+  <title>Quadratus — one colour</title>
+  <g fill="none" stroke-linecap="round">
+    <path d="M31 26 H65" stroke="#EFE6D5" stroke-width="9"/>
+    <path d="M39 37 H57" stroke="#EFE6D5" stroke-width="9"/>
+    <path d="M39 59 H57" stroke="#EFE6D5" stroke-width="9"/>
+    <path d="M31 70 H65" stroke="#EFE6D5" stroke-width="9"/>
+  </g>
+  <path d="M70 12 C 70 34 26 62 26 84" fill="none" stroke="#EFE6D5" stroke-width="10" stroke-linecap="round"/>
+  <path d="M26 12 C 26 34 70 62 70 84" fill="none" stroke="#3A342C" stroke-width="20" stroke-linecap="round"/>
+  <path d="M26 12 C 26 34 70 62 70 84" fill="none" stroke="#EFE6D5" stroke-width="10" stroke-linecap="round"/>
+</svg>
