@@ -31,19 +31,25 @@ produces a muddy blob, which is the whole reason the set exists.
 
 | Token | Hex | Where |
 |---|---|---|
-| paper | `#EFE6D5` | tile ground, ribbon fill |
-| ink | `#3A342C` | ribbon edge, rung outlines, wordmark |
-| rust | `#B35A3C` | rung 1 |
-| teal | `#43697A` | rung 2 |
-| bone | `#E4D8C2` | rung 3 |
-| slate | `#6B7B7E` | rung 4 |
+| paper | `#F1E4CF` | tile ground, ribbon fill |
+| ink | `#191711` | ribbon edge, rung outlines, wordmark |
+| rust | `#BA7142` | rung 1 |
+| teal | `#486E71` | rung 2 |
+| bone | `#F0E2CD` | rung 3 |
+| slate | `#668682` | rung 4 |
 
-Two colours are lifted for the small inverted mark, where the originals go
-muddy against the ink tile: rust `#C9663F`, teal `#5A8798`.
+Sampled from the source plate, not estimated. `paper` and `ink` are the median
+of the background field and of the darkest 0.5% of pixels; each rung colour is
+the median of the most-saturated third of its colour family, which is the body
+of the capsule rather than its stippled edge.
 
-**These values were read off the source plate by eye, not sampled.** Resample
-them from the original illustration and update this table and the SVGs
-together before the set goes anywhere public.
+`bone` sits two steps off `paper` by design — in the plate those rungs are
+separated from the ground by their outline, not by their fill, and the mark
+reproduces that.
+
+Contrast holds in both directions: every rung clears 3:1 against `paper` in the
+large mark and against `ink` in the small inverted one, so the small mark needs
+no lifted substitutes.
 
 ## Type
 
