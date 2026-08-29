@@ -8,8 +8,8 @@ an exclusion must actually exclude, and no routing decision may stall a task.
 
 from __future__ import annotations
 
-from multi_llm.registry import MODE_ROSTERS, resolve
-from multi_llm.task_kinds import (
+from quadratus.registry import MODE_ROSTERS, resolve
+from quadratus.task_kinds import (
     DIFFICULTY_LADDER,
     MAX_TASK_LINES,
     ROUTING,

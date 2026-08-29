@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import pytest
 
-from multi_llm.artifacts import ArtifactStore
-from multi_llm.codebase_map import CodebaseMap
-from multi_llm.memory import TaskMemory
-from multi_llm.routing import cross_family_verifier
-from multi_llm.session import Complexity, RunStalled, Session, SessionConfig, TaskSpec
-from multi_llm.task_kinds import TaskKind
-from multi_llm.workers import RepeatedFailure, WorkerPool
+from quadratus.artifacts import ArtifactStore
+from quadratus.codebase_map import CodebaseMap
+from quadratus.memory import TaskMemory
+from quadratus.routing import cross_family_verifier
+from quadratus.session import Complexity, RunStalled, Session, SessionConfig, TaskSpec
+from quadratus.task_kinds import TaskKind
+from quadratus.workers import RepeatedFailure, WorkerPool
 
 from .test_session import Recorder  # reuse the scripted fake
 
@@ -254,7 +254,7 @@ def test_an_approved_plan_runs_normally(store):
 def test_the_plan_request_carries_the_size_ceiling(store, rec):
     s = _session(store, rec)
     s.plan()
-    from multi_llm.task_kinds import MAX_TASK_LINES
+    from quadratus.task_kinds import MAX_TASK_LINES
     assert str(MAX_TASK_LINES) in rec.calls[0]["prompt"]
 
 
@@ -267,7 +267,7 @@ def test_no_gate_means_no_extra_invocation(store):
 
 # -- the worker tree, concurrency, and tool requests ---------------------------
 
-from multi_llm.workers import pick_worker, worker_menu  # noqa: E402
+from quadratus.workers import pick_worker, worker_menu  # noqa: E402
 
 
 def test_the_tree_picks_by_errand_and_spreads_vendors():
@@ -285,8 +285,8 @@ def test_demanding_errands_escalate_within_their_own_family():
 
 
 def test_a_bump_target_missing_from_the_roster_degrades_to_the_base():
-    from multi_llm.registry import resolve
-    from multi_llm.workers import WORKER_ESCALATION
+    from quadratus.registry import resolve
+    from quadratus.workers import WORKER_ESCALATION
     for bumped in WORKER_ESCALATION.values():
         # every configured bump must resolve today, or pick_worker would
         # silently fall back -- this test is the tripwire for roster drift
@@ -294,8 +294,8 @@ def test_a_bump_target_missing_from_the_roster_degrades_to_the_base():
 
 
 def test_escalation_never_crosses_vendor_lines():
-    from multi_llm.registry import resolve
-    from multi_llm.workers import WORKER_ESCALATION
+    from quadratus.registry import resolve
+    from quadratus.workers import WORKER_ESCALATION
     for base, bumped in WORKER_ESCALATION.items():
         assert resolve(base).provider == resolve(bumped).provider, base
 
@@ -388,7 +388,7 @@ def test_the_reissued_errand_carries_the_grant(store):
 
 
 def test_the_lifetime_ceiling_still_exists(store):
-    from multi_llm.workers import FanOutExceeded, WorkerBudget
+    from quadratus.workers import FanOutExceeded, WorkerBudget
     pool = WorkerPool(store=store, run=lambda m, p: "ok",
                       budget=WorkerBudget(max_per_task=2))
     task = TaskMemory("t1", OPUS, store)
@@ -399,7 +399,7 @@ def test_the_lifetime_ceiling_still_exists(store):
 
 
 def test_worker_menu_names_every_errand_in_the_tree():
-    from multi_llm.workers import WORKER_TREE
+    from quadratus.workers import WORKER_TREE
     menu = worker_menu()
     for errand in WORKER_TREE:
         assert errand in menu, errand
@@ -407,7 +407,7 @@ def test_worker_menu_names_every_errand_in_the_tree():
 
 # -- the integration gate -------------------------------------------------------
 
-from multi_llm.integration import GateResult, IntegrationGate  # noqa: E402
+from quadratus.integration import GateResult, IntegrationGate  # noqa: E402
 
 
 def test_a_passing_command_passes():

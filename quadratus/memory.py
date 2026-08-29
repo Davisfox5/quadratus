@@ -5,7 +5,7 @@ a different schedule, and the schedule is chosen from what that role's job
 actually needs.
 
 **Orchestrator -- persistent.** Fable keeps everything for the whole session,
-as an append-only :class:`~multi_llm.ledger.Ledger` of completed tasks, each
+as an append-only :class:`~quadratus.ledger.Ledger` of completed tasks, each
 entry pointing at the full raw work. It is the only participant that persists,
 which is why an unavailable orchestrator halts the run rather than being
 substituted for. Nobody in the industry runs a coordinator that discards its

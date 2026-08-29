@@ -1,6 +1,9 @@
-"""The GUI treats the brand assets as optional decoration, not a dependency."""
+"""Branding assets, and that the GUI still builds against the installed Gradio."""
 
-from multi_llm.gui import brand_asset, inline_mark
+import pytest
+
+from quadratus.config import Settings
+from quadratus.gui import brand_asset, inline_mark
 
 
 def test_a_shipped_asset_resolves_to_a_real_file():
@@ -33,3 +36,17 @@ def test_the_large_drawing_is_not_stretched_into_the_medium_band():
     # header ever reaches for the wrong file this catches it.
     assert "stroke-opacity=\"0.35\"" in inline_mark(120)
     assert "stroke-opacity=\"0.35\"" not in inline_mark(52)
+
+
+def test_the_gui_actually_builds_against_the_installed_gradio():
+    """A real construction of the interface, not just an import.
+
+    Every widget call lives here and nothing else in the suite executes it, so
+    an incompatible Gradio release used to break `quadratus-gui` while CI
+    stayed green. This is the test that would have caught it.
+    """
+    gradio = pytest.importorskip("gradio")
+    from quadratus.gui import build_interface
+
+    demo = build_interface(Settings())
+    assert isinstance(demo, gradio.Blocks)

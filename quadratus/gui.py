@@ -8,17 +8,20 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from .config import Settings
+from .config import Settings, env_with_legacy
 from .orchestrator import Orchestrator
 from .providers import ProviderError, Turn
 
 _BRAND_DIR = Path(__file__).resolve().parent.parent / "brand"
 
+# Gradio 6 moved `css` off the Blocks constructor and onto launch().
+INTERFACE_CSS = ".gradio-container { max-width: 980px; margin: auto; }"
+
 
 def brand_asset(name: str) -> Optional[Path]:
     """Return the path to a brand asset, or None if it is not on disk.
 
-    ``pyproject.toml`` installs only the ``multi_llm`` package; ``brand/`` sits
+    ``pyproject.toml`` installs only the ``quadratus`` package; ``brand/`` sits
     beside it in a checkout and is absent from a wheel. The mark is therefore
     optional decoration -- the GUI falls back to a plain heading rather than
     failing to start.
@@ -103,9 +106,7 @@ def build_interface(settings: Optional[Settings] = None):
         else "⚠️ **No providers configured.** Set at least one API key in `.env`."
     )
 
-    custom_css = ".gradio-container { max-width: 980px; margin: auto; }"
-
-    with gr.Blocks(css=custom_css, title="Quadratus") as demo:
+    with gr.Blocks(title="Quadratus") as demo:
         svg = inline_mark(52)
         if svg is None:
             gr.Markdown("# Quadratus")
@@ -124,7 +125,7 @@ def build_interface(settings: Optional[Settings] = None):
         )
         gr.Markdown(status_md)
 
-        chatbot = gr.Chatbot(height=520, label="Conversation", type="messages")
+        chatbot = gr.Chatbot(height=520, label="Conversation")
 
         with gr.Row():
             msg = gr.Textbox(
@@ -201,7 +202,8 @@ def resolve_share(settings) -> bool:
     variable; on pure API transport the usage is billed to your key and the
     opt-in is honoured.
     """
-    wants_share = os.getenv("MULTI_LLM_ALLOW_SHARE", "").strip().lower() in ("1", "true", "yes")
+    raw = env_with_legacy("QUADRATUS_ALLOW_SHARE", "MULTI_LLM_ALLOW_SHARE")
+    wants_share = raw.strip().lower() in ("1", "true", "yes")
     if not wants_share:
         return False
     if settings.uses_cli():
@@ -227,6 +229,7 @@ def main() -> int:
     demo.launch(
         server_name="127.0.0.1",
         server_port=7860,
+        css=INTERFACE_CSS,
         share=resolve_share(Settings.from_env()),
         favicon_path=str(favicon) if favicon is not None else None,
     )

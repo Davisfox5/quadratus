@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from multi_llm.artifacts import ArtifactStore
-from multi_llm.registry import MODE_ROSTERS
-from multi_llm.routing import OrchestratorUnavailable, WorkClass
-from multi_llm.session import Complexity, Session, SessionConfig, TaskSpec
-from multi_llm.task_kinds import MAX_TASK_LINES, TaskKind
-from multi_llm.workers import WorkerBudget
+from quadratus.artifacts import ArtifactStore
+from quadratus.registry import MODE_ROSTERS
+from quadratus.routing import OrchestratorUnavailable, WorkClass
+from quadratus.session import Complexity, Session, SessionConfig, TaskSpec
+from quadratus.task_kinds import MAX_TASK_LINES, TaskKind
+from quadratus.workers import WorkerBudget
 
 FABLE = "claude:fable"
 SOL = "openai:gpt-5.6-sol"

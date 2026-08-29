@@ -17,14 +17,14 @@ than per-token billing.
 
 The repo contains two generations of the system:
 
-1. **The collaboration pipeline** (shipping today) — the `multi-llm` CLI and
+1. **The collaboration pipeline** (shipping today) — the `quadratus` CLI and
    Gradio GUI run a four-phase plan → consensus → build-and-debate →
    synthesis loop across the configured providers.
 2. **The session engine** (under active development) — a persistent
    orchestrator that decomposes a project into sized tasks and routes each
    one to the right model, with cross-vendor review, disposable worker
    models, an append-only ledger, and deterministic gates. Its modules live
-   alongside the pipeline in `multi_llm/` and are fully unit-tested, but it
+   alongside the pipeline in `quadratus/` and are fully unit-tested, but it
    is not yet wired to the CLI entry points.
 
 ## Backends: API keys or subscription CLIs
@@ -39,7 +39,7 @@ globally (`LLM_BACKEND=api|cli`, or `CLAUDE_BACKEND`, `OPENAI_BACKEND`, …):
 | Gemini | `GOOGLE_API_KEY` | `agy` (Google AI Pro/Ultra) |
 | Grok | — (CLI only) | `grok` (SuperGrok / X Premium+) |
 
-CLI specs are declarative (`multi_llm/cli_providers.py`), so a vendor
+CLI specs are declarative (`quadratus/cli_providers.py`), so a vendor
 renaming a flag is a one-line fix. Each CLI agent runs sandboxed in a
 scratch directory with file writes denied unless explicitly granted —
 coding agents will otherwise happily edit your working tree while
@@ -49,11 +49,11 @@ coding agents will otherwise happily edit your working tree while
 for ordinary individual use, on your own machine. Routing other people's
 prompts through your credential is prohibited by every vendor, so the GUI
 refuses to enable public sharing while a CLI backend is active. See the
-docstring in `multi_llm/cli_providers.py` for the full reasoning.
+docstring in `quadratus/cli_providers.py` for the full reasoning.
 
 ## The collaboration pipeline (current entry point)
 
-`multi_llm/orchestrator.py` runs four phases:
+`quadratus/orchestrator.py` runs four phases:
 
 1. **Plan** — every available model independently proposes an approach and a
    division of labour (in parallel).
@@ -114,8 +114,8 @@ Design rationale for all of this lives in `CLAUDE.md`.
 ## Setup
 
 ```bash
-git clone https://github.com/Davisfox5/multi-llm-workflow.git
-cd multi-llm-workflow
+git clone https://github.com/Davisfox5/quadratus.git
+cd quadratus
 pip install -r requirements.txt   # or: pip install -e .
 
 cp .env.example .env
@@ -130,22 +130,22 @@ including per-provider backends and CLI model tiers.
 
 ```bash
 # After `pip install -e .`:
-multi-llm "Implement an LRU cache with O(1) get/put in Python, with tests"
+quadratus "Implement an LRU cache with O(1) get/put in Python, with tests"
 
-multi-llm --status                 # which providers/backends are configured
-multi-llm "..." --rounds 2         # more refinement rounds
-multi-llm "..." --show-stages      # print every intermediate stage
-multi-llm "..." -o solution.md     # save the full run to a file
+quadratus --status                 # which providers/backends are configured
+quadratus "..." --rounds 2         # more refinement rounds
+quadratus "..." --show-stages      # print every intermediate stage
+quadratus "..." -o solution.md     # save the full run to a file
 ```
 
-Web interface: `multi-llm-gui` (or `python chat_gui.py`), then open
+Web interface: `quadratus-gui` (or `python chat_gui.py`), then open
 http://127.0.0.1:7860. Conversation memory, file uploads, and a per-model
 contribution breakdown. Sharing is disabled while a CLI backend is active.
 
 ## Project layout
 
 ```
-multi_llm/
+quadratus/
   config.py           # Settings dataclass, env loading, backend selection
   providers.py        # API providers (Claude/ChatGPT/Gemini) + retries
   cli_providers.py    # Subscription CLI providers (claude/codex/agy/grok)

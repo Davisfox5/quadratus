@@ -287,7 +287,7 @@ class CLIProvider(LLMProvider):
             os.makedirs(self._workdir, exist_ok=True)
             return self._workdir
         if not self._owned_workdir:
-            self._owned_workdir = tempfile.mkdtemp(prefix=f"multi-llm-{self.name}-")
+            self._owned_workdir = tempfile.mkdtemp(prefix=f"quadratus-{self.name}-")
         return self._owned_workdir
 
     def cleanup(self) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from multi_llm.structured import (
+from quadratus.structured import (
     StructuredError,
     extract_json,
     generate_structured,

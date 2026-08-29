@@ -9,7 +9,7 @@ The brief said this repo runs "a fixed Claude-then-GPT cascade with no tier
 logic" and needs a heuristic router built. Half of that is right, and the half
 that is wrong changes the recommendation.
 
-There are two generations in `multi_llm/`:
+There are two generations in `quadratus/`:
 
 **The collaboration pipeline** (`orchestrator.py`), which is what the CLI and
 GUI actually run, is the fixed cascade. `run()` does:

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from multi_llm.config import Settings
-from multi_llm.providers import ProviderError, build_providers
+from quadratus.config import Settings
+from quadratus.providers import ProviderError, build_providers
 
 from .conftest import FakeProvider
 

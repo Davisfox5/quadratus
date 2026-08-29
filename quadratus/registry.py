@@ -17,7 +17,7 @@ What is and is not trustworthy here
   unreachable when this was compiled.
 * ``alias`` is what the vendor CLI is expected to accept, and is the least
   reliable field in the table. Only the Claude aliases have been checked
-  against a live binary. Run ``multi-llm probe`` to replace these with what
+  against a live binary. Run ``quadratus probe`` to replace these with what
   your CLIs actually resolve.
 * Capability tags are deliberately coarse and describe *shape*, not a quality
   ranking. Where a tag encodes a measured claim, the source is named in
@@ -361,7 +361,7 @@ def peers_for(mode: str, orchestrator: str) -> List[str]:
 
     The conflict it was solving is handled where it actually arises instead.
     Security work is peeled into a bounded excursion (see
-    :mod:`multi_llm.routing`) rather than displacing anyone, and the one place
+    :mod:`quadratus.routing`) rather than displacing anyone, and the one place
     self-preference would concretely change the artifact -- choosing what
     survives into the final answer -- is closed off by
     :func:`synthesizer_for`.

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from multi_llm.artifacts import ArtifactStore
-from multi_llm.ledger import Ledger
-from multi_llm.memory import NoMemory, PersistentMemory, TaskMemory
-from multi_llm.workers import FanOutExceeded, WorkerBudget, WorkerPool
+from quadratus.artifacts import ArtifactStore
+from quadratus.ledger import Ledger
+from quadratus.memory import NoMemory, PersistentMemory, TaskMemory
+from quadratus.workers import FanOutExceeded, WorkerBudget, WorkerPool
 
 
 @pytest.fixture

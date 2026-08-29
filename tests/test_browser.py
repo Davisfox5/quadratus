@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from multi_llm.browser import PageEvidence, render_page
+from quadratus.browser import PageEvidence, render_page
 
 playwright = pytest.importorskip("playwright.sync_api")
 
@@ -72,7 +72,7 @@ def test_missing_playwright_is_a_clear_error(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", blocked)
-    from multi_llm.browser import PlaywrightMissing
+    from quadratus.browser import PlaywrightMissing
     with pytest.raises(PlaywrightMissing, match="pip install playwright"):
         render_page("x.html", out_dir="/tmp/unused")
 

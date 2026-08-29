@@ -277,7 +277,7 @@ class WorkerPool:
     ) -> WorkerResult:
         """Run one worker for ``task`` and fold its report into that task.
 
-        The worker itself holds :class:`~multi_llm.memory.NoMemory`: it sees
+        The worker itself holds :class:`~quadratus.memory.NoMemory`: it sees
         only ``prompt``, and nothing of it survives the call except the summary
         and the stored artifact. A worker that needed a tool it lacked says
         ``NEED TOOL: <what>`` and the result carries it; the lead reissues the

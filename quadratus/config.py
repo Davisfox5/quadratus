@@ -9,8 +9,9 @@ match the exact model IDs your accounts have access to.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 try:  # Loading .env is best-effort; missing python-dotenv must not crash.
     from dotenv import load_dotenv
@@ -18,6 +19,29 @@ try:  # Loading .env is best-effort; missing python-dotenv must not crash.
     load_dotenv()
 except Exception:  # pragma: no cover - optional dependency
     pass
+
+
+_WARNED_LEGACY_ENV: Set[str] = set()
+
+
+def env_with_legacy(name: str, legacy: str, default: str = "") -> str:
+    """Read ``name``, falling back to its pre-rename ``legacy`` spelling.
+
+    The rename from multi-llm-workflow to Quadratus changed the prefix on every
+    variable this project reads. An unmigrated ``.env`` would otherwise fail
+    silently -- sharing quietly disabled, a pinned Chromium quietly ignored --
+    so the old names keep working and say so once per process.
+    """
+    value = os.getenv(name)
+    if value is not None:
+        return value
+    value = os.getenv(legacy)
+    if value is None:
+        return default
+    if legacy not in _WARNED_LEGACY_ENV:
+        _WARNED_LEGACY_ENV.add(legacy)
+        print(f"{legacy} is deprecated; rename it to {name}.", file=sys.stderr)
+    return value
 
 
 # Top-tier defaults. These are intentionally the strongest coding models from
@@ -35,7 +59,7 @@ DEFAULT_PROVIDER_ORDER = "claude,openai,gemini"
 # the control plane (convergence verdicts, routing, refusal classification,
 # summarisation). Running the control plane on the low tier is the single
 # largest saving available when every call draws on a subscription window.
-# Seed values only -- confirm against `multi-llm probe` on your own machine.
+# Seed values only -- confirm against `quadratus probe` on your own machine.
 # Notes behind these choices:
 #   * There is no gpt-5.5-codex model; OpenAI stopped minting Codex-specific
 #     variants after 5.3 and routed Codex onto the general GPT-5.x tiers.

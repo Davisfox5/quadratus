@@ -6,8 +6,8 @@ import dataclasses
 
 import pytest
 
-from multi_llm.registry import ORCHESTRATOR_CHAIN
-from multi_llm.routing import (
+from quadratus.registry import ORCHESTRATOR_CHAIN
+from quadratus.routing import (
     SECURITY_WORK_CHAIN,
     OrchestratorUnavailable,
     Seat,
@@ -173,7 +173,7 @@ def test_security_routing_returns_last_resort_when_all_are_down():
 
 
 def test_security_chain_entries_all_resolve():
-    from multi_llm.registry import resolve
+    from quadratus.registry import resolve
 
     assert all(resolve(k) is not None for k in SECURITY_WORK_CHAIN)
 
@@ -197,7 +197,7 @@ def test_seat_type_is_a_seat():
 
 # -- security excursions -----------------------------------------------------
 
-from multi_llm.routing import (  # noqa: E402
+from quadratus.routing import (  # noqa: E402
     Excursion,
     ExcursionUnavailable,  # noqa: F811
     close_excursion,
@@ -284,7 +284,7 @@ def test_excursion_is_immutable():
 
 def test_excursion_does_not_touch_the_brain_trust():
     """The whole point of peeling security off into a side-thread."""
-    from multi_llm.registry import MODE_ROSTERS, peers_for
+    from quadratus.registry import MODE_ROSTERS, peers_for
 
     ex = open_security_excursion()
     assert peers_for("adversarial", ex.orchestrator) == \

@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "multi-llm-workflow"
+name = "quadratus"
 version = "1.0.0"
 description = "Collaborative multi-LLM coding workflow (Claude + ChatGPT + Gemini)."
 readme = "README.md"
@@ -15,7 +15,7 @@ dependencies = [
     "google-genai>=0.3.0",
     "python-dotenv>=1.0.0",
     "colorama>=0.4.6",
-    "gradio>=4.44.0",
+    "gradio>=6,<7",
     "playwright>=1.40",
 ]
 
@@ -29,11 +29,11 @@ dev = [
 browser = []
 
 [project.scripts]
-multi-llm = "multi_llm.cli:main"
-multi-llm-gui = "multi_llm.gui:main"
+quadratus = "quadratus.cli:main"
+quadratus-gui = "quadratus.gui:main"
 
 [tool.setuptools]
-packages = ["multi_llm"]
+packages = ["quadratus"]
 py-modules = ["multi_model_workflow", "chat_gui"]
 
 [tool.pytest.ini_options]

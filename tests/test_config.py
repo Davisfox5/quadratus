@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from multi_llm.config import (
+from quadratus.config import (
     DEFAULT_CLAUDE_MODEL,
     DEFAULT_GEMINI_MODEL,
     DEFAULT_OPENAI_MODEL,
