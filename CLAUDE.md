@@ -15,7 +15,7 @@ and post-change reports. A short answer to a short question doesn't need one.
 This repo is being rebuilt into a multi-model coding system that runs on
 consumer *subscriptions* (Claude Max, ChatGPT, Google AI, SuperGrok) by
 driving the vendor CLIs, rather than on billed API keys. See
-`multi_llm/cli_providers.py` for why that is permitted for individual use and
+`quadratus/cli_providers.py` for why that is permitted for individual use and
 where the line is.
 
 Key design decisions already settled:

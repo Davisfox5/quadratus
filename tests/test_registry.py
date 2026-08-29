@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from multi_llm.registry import (
+from quadratus.registry import (
     CONTROL_PLANE,
     MODE_ROSTERS,
     REFUSAL_CHAIN,
@@ -188,7 +188,7 @@ def test_ledger_extractor_is_not_a_debater_in_any_mode():
 
 # -- orchestrator seat -------------------------------------------------------
 
-from multi_llm.registry import (  # noqa: E402
+from quadratus.registry import (  # noqa: E402
     ORCHESTRATOR_CHAIN,
     peers_for,
     synthesizer_for,

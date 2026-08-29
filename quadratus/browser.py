@@ -1,6 +1,6 @@
 """Deterministic browser evidence for frontend work.
 
-The frontend policy in :mod:`multi_llm.task_kinds` already states the rule --
+The frontend policy in :mod:`quadratus.task_kinds` already states the rule --
 a frontend change that compiles is not a frontend change that works -- and
 the research behind it found the harness (a render-and-look loop) moves
 frontend outcomes more than model choice does. This module is that harness
@@ -23,10 +23,11 @@ Design constraints, in order:
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import List, Optional
+
+from .config import env_with_legacy
 
 __all__ = ["PageEvidence", "render_page", "PlaywrightMissing"]
 
@@ -102,7 +103,7 @@ def render_page(
     if executable_path is None:
         # Environments that pin their own Chromium (CI images, sandboxes) name
         # it here rather than re-downloading Playwright's copy.
-        executable_path = os.environ.get("MULTI_LLM_CHROMIUM") or None
+        executable_path = env_with_legacy("QUADRATUS_CHROMIUM", "MULTI_LLM_CHROMIUM") or None
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)

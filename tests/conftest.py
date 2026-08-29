@@ -6,8 +6,8 @@ from typing import List, Sequence
 
 import pytest
 
-from multi_llm.config import Settings
-from multi_llm.providers import LLMProvider, Turn
+from quadratus.config import Settings
+from quadratus.providers import LLMProvider, Turn
 
 
 class FakeProvider(LLMProvider):

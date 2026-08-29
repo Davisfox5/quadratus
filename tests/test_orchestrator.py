@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from multi_llm.orchestrator import Orchestrator
-from multi_llm.providers import ProviderError, Turn
+from quadratus.orchestrator import Orchestrator
+from quadratus.providers import ProviderError, Turn
 
 from .conftest import FakeProvider
 

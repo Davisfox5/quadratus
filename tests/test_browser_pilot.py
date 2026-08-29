@@ -6,9 +6,9 @@ import json
 
 import pytest
 
-from multi_llm.browser_pilot import PilotRun, drive, pilot_model
-from multi_llm.registry import Capability, resolve
-from multi_llm.task_kinds import DIFFICULTY_LADDER
+from quadratus.browser_pilot import PilotRun, drive, pilot_model
+from quadratus.registry import Capability, resolve
+from quadratus.task_kinds import DIFFICULTY_LADDER
 
 playwright = pytest.importorskip("playwright.sync_api")
 

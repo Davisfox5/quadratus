@@ -100,7 +100,7 @@ class Complexity:
     """How hard a task is. Drives two decisions at once.
 
     First, who leads: difficulty maps onto the brain trust as a ladder (see
-    :data:`multi_llm.task_kinds.DIFFICULTY_LADDER`), so the hardest work gets
+    :data:`quadratus.task_kinds.DIFFICULTY_LADDER`), so the hardest work gets
     the strongest model and the bulk of the work lands on the subscriptions
     with capacity to spare. Second, how many collaborators the task draws:
     each one is another full invocation and another voice in the lead's
@@ -131,7 +131,7 @@ class TaskSpec:
     complexity: str = Complexity.STANDARD
     work_class: str = WorkClass.GENERAL
     #: What kind of work this is, which may pin the lead. See
-    #: :mod:`multi_llm.task_kinds`; most kinds express no preference and rotate.
+    #: :mod:`quadratus.task_kinds`; most kinds express no preference and rotate.
     kind: str = TaskKind.GENERAL
     #: Force a particular lead. Normally left to rotation.
     lead: Optional[str] = None
@@ -186,7 +186,7 @@ class SessionConfig:
     #: Runs the project's own check command after a task's work is final --
     #: the deterministic answer to "do the pieces actually fit together".
     #: Anything with a ``run() -> GateResult`` shape works; see
-    #: :class:`multi_llm.integration.IntegrationGate`. None skips the gate.
+    #: :class:`quadratus.integration.IntegrationGate`. None skips the gate.
     integration_gate: Optional[object] = None
     #: How many fix rounds a failing integration gate buys the lead before
     #: the failure is carried into the record as an open problem.
@@ -246,7 +246,7 @@ class Session:
         actually leads best on your work -- exploration at no extra cost. That
         exploration is worth keeping, so a task kind only overrides it where
         there is measured reason to; most kinds express no preference and the
-        rotation stands. See :mod:`multi_llm.task_kinds`.
+        rotation stands. See :mod:`quadratus.task_kinds`.
 
         The rotation counter advances either way. If a pinned kind consumed a
         turn without advancing it, one model would be pinned for its own kind
@@ -975,7 +975,7 @@ def _parse_consults(reply: str):
 _MAX_ASKS_PER_DECISION = 3
 
 
-#: Asks the orchestrator to label the task so :mod:`multi_llm.task_kinds` can
+#: Asks the orchestrator to label the task so :mod:`quadratus.task_kinds` can
 #: act on it. Kind and difficulty together are the routing decision: the few
 #: pinned kinds go where the evidence says, everything else rides the
 #: difficulty ladder across the four subscriptions.

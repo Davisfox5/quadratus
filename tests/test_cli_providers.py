@@ -11,13 +11,13 @@ import subprocess
 
 import pytest
 
-from multi_llm.cli_providers import (
+from quadratus.cli_providers import (
     ClaudeCLIProvider,
     CodexCLIProvider,
     _extract_codex_result,
 )
-from multi_llm.config import Settings
-from multi_llm.providers import ProviderError, Turn, build_provider
+from quadratus.config import Settings
+from quadratus.providers import ProviderError, Turn, build_provider
 
 
 class _FakeCompleted:
@@ -281,21 +281,21 @@ def test_model_for_returns_tiered_cli_alias():
 
 
 def test_share_refused_on_cli_transport_even_when_opted_in(monkeypatch):
-    from multi_llm.gui import resolve_share
+    from quadratus.gui import resolve_share
 
-    monkeypatch.setenv("MULTI_LLM_ALLOW_SHARE", "1")
+    monkeypatch.setenv("QUADRATUS_ALLOW_SHARE", "1")
     assert resolve_share(Settings(backend="cli")) is False
 
 
 def test_share_allowed_on_pure_api_transport_when_opted_in(monkeypatch):
-    from multi_llm.gui import resolve_share
+    from quadratus.gui import resolve_share
 
-    monkeypatch.setenv("MULTI_LLM_ALLOW_SHARE", "1")
+    monkeypatch.setenv("QUADRATUS_ALLOW_SHARE", "1")
     assert resolve_share(Settings(backend="api", backend_overrides={})) is True
 
 
 def test_share_off_by_default(monkeypatch):
-    from multi_llm.gui import resolve_share
+    from quadratus.gui import resolve_share
 
-    monkeypatch.delenv("MULTI_LLM_ALLOW_SHARE", raising=False)
+    monkeypatch.delenv("QUADRATUS_ALLOW_SHARE", raising=False)
     assert resolve_share(Settings(backend="api", backend_overrides={})) is False

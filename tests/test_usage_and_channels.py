@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import pytest
 
-from multi_llm.artifacts import ArtifactStore
-from multi_llm.cli_providers import _extract_claude_usage
-from multi_llm.session import (
+from quadratus.artifacts import ArtifactStore
+from quadratus.cli_providers import _extract_claude_usage
+from quadratus.session import (
     Complexity,
     OperatorInputNeeded,
     RunStalled,
@@ -15,7 +15,7 @@ from multi_llm.session import (
     SessionConfig,
     TaskSpec,
 )
-from multi_llm.usage import CHARS_PER_TOKEN, PRICES, UsageMeter
+from quadratus.usage import CHARS_PER_TOKEN, PRICES, UsageMeter
 
 from .test_session import Recorder
 

@@ -1,4 +1,4 @@
-"""Multi-LLM collaborative coding workflow.
+"""Quadratus -- collaborative multi-model coding workflow.
 
 Orchestrates several frontier models (Claude, ChatGPT, Gemini) so they
 collaborate on a single coding task: a lead model drafts a solution, the

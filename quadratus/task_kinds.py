@@ -1,6 +1,6 @@
 """Which kind of work goes to which model, and how sure we are.
 
-This is separate from :mod:`multi_llm.registry` on purpose. The registry says
+This is separate from :mod:`quadratus.registry` on purpose. The registry says
 what shape a model is -- wide window, no classifier, cheap. This module says
 what to *do* with that, which is a much weaker kind of claim and ages faster.
 Keeping them apart means a routing opinion can be revised without touching the
@@ -265,7 +265,7 @@ ROUTING: Dict[str, KindPolicy] = {
             "model does -- so the gate matters and the pin did not."
         ),
         tool_first=(
-            "a rendered-page check (multi_llm.browser.render_page: screenshot, "
+            "a rendered-page check (quadratus.browser.render_page: screenshot, "
             "console errors, failed requests from a real headless browser)"
         ),
         gate=(

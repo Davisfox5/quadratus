@@ -1,6 +1,6 @@
 """A model driving a real browser, one observed action at a time.
 
-:mod:`multi_llm.browser` produces passive evidence -- load a page, report what
+:mod:`quadratus.browser` produces passive evidence -- load a page, report what
 happened. This module is the active half: a model (the *pilot*) is given a
 goal and a live page, and drives it through a strict action protocol --
 navigate, click, fill, read -- with the harness executing every action in
@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from .config import env_with_legacy
 from .registry import Capability, models_for
 from .structured import StructuredError, extract_json
 from .task_kinds import DIFFICULTY_LADDER
@@ -181,9 +182,8 @@ def drive(
         model: Override the pilot choice entirely.
         max_steps: Hard budget. A flow that needs more is either complex
             enough to deserve a bigger explicit budget, or looping.
-        executable_path: Optional pinned Chromium (else MULTI_LLM_CHROMIUM).
+        executable_path: Optional pinned Chromium (else QUADRATUS_CHROMIUM).
     """
-    import os
 
     try:
         from playwright.sync_api import sync_playwright
@@ -200,7 +200,7 @@ def drive(
 
     path = Path(start_url)
     url = start_url if "://" in start_url else path.resolve().as_uri()
-    executable_path = executable_path or os.environ.get("MULTI_LLM_CHROMIUM") or None
+    executable_path = executable_path or env_with_legacy("QUADRATUS_CHROMIUM", "MULTI_LLM_CHROMIUM") or None
 
     with sync_playwright() as pw:
         launch_kwargs = {"executable_path": executable_path} if executable_path else {}
