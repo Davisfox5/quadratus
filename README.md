@@ -1,4 +1,11 @@
-# Multi-LLM Workflow
+<p align="center">
+  <img src="brand/mark-large.svg" alt="" width="96" height="96">
+</p>
+
+<h1 align="center">Quadratus</h1>
+
+<p align="center"><em>Multi-LLM Workflow — four frontier models on one coding task</em></p>
+
 
 A multi-model coding system: several frontier models collaborate on one
 coding task instead of one model working alone. It runs in two ways —

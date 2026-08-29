@@ -3,12 +3,49 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
+from pathlib import Path
 from typing import List, Optional
 
 from .config import Settings
 from .orchestrator import Orchestrator
 from .providers import ProviderError, Turn
+
+_BRAND_DIR = Path(__file__).resolve().parent.parent / "brand"
+
+
+def brand_asset(name: str) -> Optional[Path]:
+    """Return the path to a brand asset, or None if it is not on disk.
+
+    ``pyproject.toml`` installs only the ``multi_llm`` package; ``brand/`` sits
+    beside it in a checkout and is absent from a wheel. The mark is therefore
+    optional decoration -- the GUI falls back to a plain heading rather than
+    failing to start.
+    """
+    path = _BRAND_DIR / name
+    return path if path.is_file() else None
+
+
+def inline_mark(size: int) -> Optional[str]:
+    """Return the mark as inline SVG, drawn for the band ``size`` falls in.
+
+    The set is three separate drawings, not one that scales: below 32px the
+    ribbon's ink edge goes sub-pixel and the mark inverts. Picking by size here
+    is what keeps that promise -- see ``brand/README.md``.
+    """
+    if size >= 96:
+        name = "mark-large.svg"
+    elif size >= 32:
+        name = "mark-medium.svg"
+    else:
+        name = "mark-small.svg"
+    asset = brand_asset(name)
+    if asset is None:
+        return None
+    svg = asset.read_text(encoding="utf-8")
+    svg = re.sub(r'width="\d+" height="\d+"', f'width="{size}" height="{size}"', svg, count=1)
+    return svg
 
 
 def read_file(file_obj, settings: Settings) -> str:
@@ -68,8 +105,18 @@ def build_interface(settings: Optional[Settings] = None):
 
     custom_css = ".gradio-container { max-width: 980px; margin: auto; }"
 
-    with gr.Blocks(css=custom_css, title="Multi-LLM Workflow") as demo:
-        gr.Markdown("# 🤝 Multi-LLM Collaborative Workflow")
+    with gr.Blocks(css=custom_css, title="Quadratus") as demo:
+        svg = inline_mark(52)
+        if svg is None:
+            gr.Markdown("# Quadratus")
+        else:
+            gr.HTML(
+                '<div style="display:flex;align-items:center;gap:14px">'
+                f"{svg}"
+                '<span style="font-family:Baskerville,Georgia,serif;font-size:30px;'
+                'font-weight:700;letter-spacing:4.6px">QUADRATUS</span>'
+                "</div>"
+            )
         gr.Markdown(
             "Claude, ChatGPT, and Gemini collaborate — one drafts, the others "
             "review and refine, and a synthesizer merges the best ideas into a "
@@ -176,10 +223,12 @@ def main() -> int:
         print("Gradio is not installed. Run: pip install gradio", file=sys.stderr)
         return 1
     demo = build_interface()
+    favicon = brand_asset("favicon.svg")
     demo.launch(
         server_name="127.0.0.1",
         server_port=7860,
         share=resolve_share(Settings.from_env()),
+        favicon_path=str(favicon) if favicon is not None else None,
     )
     return 0
 
