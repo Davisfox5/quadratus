@@ -120,6 +120,18 @@ class Settings:
     gemini_model: str = field(
         default_factory=lambda: os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
     )
+    #: Where a request goes when Claude's safety classifiers decline it
+    #: (``stop_reason: "refusal"``, an HTTP 200 with empty content on the
+    #: Claude API since Opus 4.7 and on every Fable / Mythos model). Empty
+    #: means the refusal surfaces as a ``ProviderRefusal`` error instead of
+    #: being re-sent. One value per transport, because the API backend takes a
+    #: full model ID while the CLI backend takes the CLI's own alias.
+    claude_refusal_fallback_model: str = field(
+        default_factory=lambda: os.getenv("CLAUDE_REFUSAL_FALLBACK_MODEL", "").strip()
+    )
+    claude_cli_refusal_fallback_model: str = field(
+        default_factory=lambda: os.getenv("CLAUDE_CLI_REFUSAL_FALLBACK_MODEL", "").strip()
+    )
 
     # Collaboration behaviour
     #: Order in which providers take roles (lead first, then reviewers).
@@ -206,6 +218,20 @@ class Settings:
             "openai": self.openai_model,
             "gemini": self.gemini_model,
         }.get(provider, "")
+
+    def refusal_fallback_for(self, provider: str) -> str:
+        """Fallback model for a classifier refusal, or "" for none.
+
+        Only Claude carries a request-declining classifier that reports
+        itself as a stop reason, so only Claude has a setting. The value is
+        picked to match the transport's naming: an API model ID on ``api``,
+        a CLI alias on ``cli``.
+        """
+        if provider != "claude":
+            return ""
+        if self.backend_for(provider) == "cli":
+            return self.claude_cli_refusal_fallback_model
+        return self.claude_refusal_fallback_model
 
     def uses_cli(self) -> bool:
         """True if any configured provider runs on subscription transport.

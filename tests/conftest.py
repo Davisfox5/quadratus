@@ -7,7 +7,7 @@ from typing import List, Sequence
 import pytest
 
 from quadratus.config import Settings
-from quadratus.providers import LLMProvider, Turn
+from quadratus.providers import LLMProvider, ProviderRefusal, Turn
 
 
 class FakeProvider(LLMProvider):
@@ -27,12 +27,17 @@ class FakeProvider(LLMProvider):
         fail_times: int = 0,
         retryable: bool = True,
         max_retries: int = 4,
+        refuse: bool = False,
+        refusal_fallback_model: str = "",
     ):
         self.name = name
         self.label = label
         self.calls: List[dict] = []
         self._fail_times = fail_times
         self._is_retryable = retryable
+        #: Simulate a classifier decline (stop_reason "refusal") on every call.
+        self._refuse = refuse
+        self.refusal_fallback_model = refusal_fallback_model or None
         self._attempts = 0
         # Bypass the network-bound base __init__.
         self.model = f"{name}-test"
@@ -48,6 +53,11 @@ class FakeProvider(LLMProvider):
         self._attempts += 1
         if self._attempts <= self._fail_times:
             raise RuntimeError(f"transient failure {self._attempts}")
+        if self._refuse:
+            raise ProviderRefusal(
+                f"{self.label} ({self.model}) declined the request [cyber].",
+                model=self.model, category="cyber",
+            )
         self.calls.append({"prompt": prompt, "system": system, "history": list(history)})
         return f"[{self.label}] response to: {prompt[:40]}"
 

@@ -22,6 +22,36 @@ class ProviderError(RuntimeError):
     """A provider call failed permanently (after retries or non-retryable)."""
 
 
+class ProviderRefusal(ProviderError):
+    """The model's safety classifiers declined the request.
+
+    Anthropic returns this as a *successful* HTTP 200 with
+    ``stop_reason: "refusal"`` and an empty or partial ``content`` -- the
+    Claude API since Opus 4.7, and every Fable / Mythos model. Reading
+    ``content[0]`` unguarded turns it into a misleading "empty response".
+    Raised instead so the cause is visible, and so :meth:`LLMProvider.generate`
+    can re-send the same request once to a configured fallback model.
+
+    Never retried on the same model: the classifiers are deterministic for a
+    given request, so a verbatim retry is a known-bad action.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        model: str = "",
+        category: Optional[str] = None,
+        explanation: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.model = model
+        #: ``stop_details.category`` when the API supplied one -- e.g. "cyber",
+        #: "bio", "reasoning_extraction". None is a valid, permanent state.
+        self.category = category
+        self.explanation = explanation
+
+
 @dataclass
 class Turn:
     """A single prior message handed to a provider as conversation context."""
@@ -51,6 +81,7 @@ class LLMProvider:
         timeout: float = 120.0,
         max_retries: int = 4,
         retry_base_delay: float = 2.0,
+        refusal_fallback_model: Optional[str] = None,
     ) -> None:
         self.model = model
         self.api_key = api_key
@@ -58,6 +89,12 @@ class LLMProvider:
         self.timeout = timeout
         self.max_retries = max(1, max_retries)
         self.retry_base_delay = retry_base_delay
+        #: Where a request goes when this model's classifiers decline it.
+        #: None or empty means the refusal surfaces as :class:`ProviderRefusal`.
+        #: Not sticky: the next call goes back to the primary model, because
+        #: history here is plain text -- no thinking blocks are replayed, so
+        #: there is no reasoning continuity to protect by staying switched.
+        self.refusal_fallback_model = refusal_fallback_model or None
         self._client = None
         self._init_error: Optional[str] = None
         if api_key:
@@ -124,6 +161,32 @@ class LLMProvider:
         if not self.available():
             raise ProviderError(f"{self.label} is not available: {self._init_error}.")
         turns = list(history or [])
+        try:
+            return self._generate_once(prompt, system, turns)
+        except ProviderRefusal as refusal:
+            fallback = getattr(self, "refusal_fallback_model", None)
+            if not fallback or fallback == self.model:
+                raise
+            log.warning(
+                "%s (%s) declined the request%s; re-sending once on %s.",
+                self.label,
+                self.model,
+                f" [{refusal.category}]" if refusal.category else "",
+                fallback,
+            )
+            try:
+                return self.for_model(fallback)._generate_once(prompt, system, turns)
+            except ProviderRefusal as second:
+                raise ProviderRefusal(
+                    f"{self.label}: both {self.model} and the fallback {fallback} "
+                    f"declined the request ({second}).",
+                    model=fallback,
+                    category=second.category,
+                    explanation=second.explanation,
+                ) from second
+
+    def _generate_once(self, prompt: str, system: str, turns: List[Turn]) -> str:
+        """One model's attempt, with transport retries. Refusals pass through."""
         last_exc: Optional[Exception] = None
         for attempt in range(self.max_retries):
             try:
@@ -151,6 +214,15 @@ class LLMProvider:
         raise ProviderError(f"{self.label} call failed: {last_exc}") from last_exc
 
 
+def _field(obj, name: str):
+    """Read ``name`` off an SDK model or a plain dict; None when absent."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
 class ClaudeProvider(LLMProvider):
     name = "claude"
     label = "Claude"
@@ -170,6 +242,22 @@ class ClaudeProvider(LLMProvider):
             system=system,
             messages=messages,
         )
+        # Branch on stop_reason before touching content: a classifier decline
+        # is an HTTP 200 whose content is empty (pre-output) or partial
+        # (mid-stream), and a partial must not be mistaken for an answer.
+        if _field(resp, "stop_reason") == "refusal":
+            details = _field(resp, "stop_details")
+            category = _field(details, "category")
+            explanation = _field(details, "explanation")
+            raise ProviderRefusal(
+                f"{self.label} ({self.model}) declined the request"
+                + (f" [{category}]" if category else "")
+                + (f": {explanation}" if explanation else "")
+                + ".",
+                model=self.model,
+                category=category,
+                explanation=explanation,
+            )
         return "".join(
             block.text
             for block in resp.content
@@ -307,6 +395,7 @@ def build_provider(name: str, settings) -> Optional[LLMProvider]:
                 timeout=settings.cli_timeout,
                 max_retries=settings.max_retries,
                 retry_base_delay=settings.retry_base_delay,
+                refusal_fallback_model=settings.refusal_fallback_for(name),
             )
 
     return cls(
@@ -316,6 +405,7 @@ def build_provider(name: str, settings) -> Optional[LLMProvider]:
         timeout=settings.timeout,
         max_retries=settings.max_retries,
         retry_base_delay=settings.retry_base_delay,
+        refusal_fallback_model=settings.refusal_fallback_for(name),
     )
 
 
