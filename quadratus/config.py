@@ -47,7 +47,7 @@ def env_with_legacy(name: str, legacy: str, default: str = "") -> str:
 # Top-tier defaults. These are intentionally the strongest coding models from
 # each provider as of this writing; override via the environment as new models
 # ship or to match your account's access.
-DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
+DEFAULT_CLAUDE_MODEL = "claude-opus-5"
 DEFAULT_OPENAI_MODEL = "gpt-5.5-pro"
 DEFAULT_GEMINI_MODEL = "gemini-3.1-pro"
 
@@ -176,7 +176,10 @@ class Settings:
 
     # Request tuning
     max_tokens: int = field(default_factory=lambda: _env_int("MAX_TOKENS", 8000))
-    timeout: float = field(default_factory=lambda: _env_float("REQUEST_TIMEOUT", 120.0))
+    #: Matches the Anthropic SDK's own default. Current models run adaptive
+    #: thinking on every request and a hard task can take several minutes;
+    #: 120s produced timeout-retry loops rather than answers.
+    timeout: float = field(default_factory=lambda: _env_float("REQUEST_TIMEOUT", 600.0))
     #: CLI calls run a full agent loop, not a single completion, so they need a
     #: far more generous ceiling than an HTTP request.
     cli_timeout: float = field(default_factory=lambda: _env_float("CLI_TIMEOUT", 900.0))
