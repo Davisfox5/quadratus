@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "quadratus"
 version = "1.0.0"
-description = "Collaborative multi-LLM coding workflow (Claude + ChatGPT + Gemini)."
+description = "Quadratus: Claude, ChatGPT, Gemini and Grok collaborate on one coding task (plan, consensus, build-and-debate, synthesis), on billed APIs or your own subscriptions via the vendor coding-agent CLIs."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
