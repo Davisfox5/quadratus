@@ -47,7 +47,7 @@ def env_with_legacy(name: str, legacy: str, default: str = "") -> str:
 # Top-tier defaults. These are intentionally the strongest coding models from
 # each provider as of this writing; override via the environment as new models
 # ship or to match your account's access.
-DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
+DEFAULT_CLAUDE_MODEL = "claude-opus-5"
 DEFAULT_OPENAI_MODEL = "gpt-5.5-pro"
 DEFAULT_GEMINI_MODEL = "gemini-3.1-pro"
 
@@ -120,6 +120,18 @@ class Settings:
     gemini_model: str = field(
         default_factory=lambda: os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
     )
+    #: Where a request goes when Claude's safety classifiers decline it
+    #: (``stop_reason: "refusal"``, an HTTP 200 with empty content on the
+    #: Claude API since Opus 4.7 and on every Fable / Mythos model). Empty
+    #: means the refusal surfaces as a ``ProviderRefusal`` error instead of
+    #: being re-sent. One value per transport, because the API backend takes a
+    #: full model ID while the CLI backend takes the CLI's own alias.
+    claude_refusal_fallback_model: str = field(
+        default_factory=lambda: os.getenv("CLAUDE_REFUSAL_FALLBACK_MODEL", "").strip()
+    )
+    claude_cli_refusal_fallback_model: str = field(
+        default_factory=lambda: os.getenv("CLAUDE_CLI_REFUSAL_FALLBACK_MODEL", "").strip()
+    )
 
     # Collaboration behaviour
     #: Order in which providers take roles (lead first, then reviewers).
@@ -164,7 +176,10 @@ class Settings:
 
     # Request tuning
     max_tokens: int = field(default_factory=lambda: _env_int("MAX_TOKENS", 8000))
-    timeout: float = field(default_factory=lambda: _env_float("REQUEST_TIMEOUT", 120.0))
+    #: Matches the Anthropic SDK's own default. Current models run adaptive
+    #: thinking on every request and a hard task can take several minutes;
+    #: 120s produced timeout-retry loops rather than answers.
+    timeout: float = field(default_factory=lambda: _env_float("REQUEST_TIMEOUT", 600.0))
     #: CLI calls run a full agent loop, not a single completion, so they need a
     #: far more generous ceiling than an HTTP request.
     cli_timeout: float = field(default_factory=lambda: _env_float("CLI_TIMEOUT", 900.0))
@@ -206,6 +221,20 @@ class Settings:
             "openai": self.openai_model,
             "gemini": self.gemini_model,
         }.get(provider, "")
+
+    def refusal_fallback_for(self, provider: str) -> str:
+        """Fallback model for a classifier refusal, or "" for none.
+
+        Only Claude carries a request-declining classifier that reports
+        itself as a stop reason, so only Claude has a setting. The value is
+        picked to match the transport's naming: an API model ID on ``api``,
+        a CLI alias on ``cli``.
+        """
+        if provider != "claude":
+            return ""
+        if self.backend_for(provider) == "cli":
+            return self.claude_cli_refusal_fallback_model
+        return self.claude_refusal_fallback_model
 
     def uses_cli(self) -> bool:
         """True if any configured provider runs on subscription transport.

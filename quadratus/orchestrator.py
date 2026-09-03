@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence
 
 from . import prompts
-from .providers import LLMProvider, ProviderError, Turn, build_providers
+from .providers import LLMProvider, ProviderError, ProviderRefusal, Turn, build_providers
 
 log = logging.getLogger(__name__)
 
@@ -189,11 +189,27 @@ class Orchestrator:
                     f"(round {round_idx + 1}/{self.settings.rounds})..."
                 )
                 role = f"{reviewer.label} (reviewer/refiner per the plan)"
-                current = reviewer.generate(
-                    prompts.review_prompt(task, plan, role, current, ", ".join(contributors)),
-                    system=prompts.REVIEW_SYSTEM,
-                    history=turns,
-                )
+                try:
+                    current = reviewer.generate(
+                        prompts.review_prompt(task, plan, role, current, ", ".join(contributors)),
+                        system=prompts.REVIEW_SYSTEM,
+                        history=turns,
+                    )
+                except ProviderRefusal as exc:
+                    # A declined review round is a missing voice, not a lost
+                    # run: the current best solution stands and the decline is
+                    # recorded where the operator will see it. The lead draft
+                    # and the synthesis have no such stand-in and propagate.
+                    log.warning("Skipping %s this round: %s", reviewer.label, exc)
+                    result.stages.append(
+                        StageResult(
+                            reviewer.name,
+                            reviewer.label,
+                            f"Reviewer/refiner (round {round_idx + 1}, declined)",
+                            f"[{reviewer.label} declined this round: {exc}]",
+                        )
+                    )
+                    continue
                 result.stages.append(
                     StageResult(
                         reviewer.name,

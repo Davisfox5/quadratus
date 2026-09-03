@@ -45,7 +45,7 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence
 
-from .providers import LLMProvider, ProviderError, Turn
+from .providers import LLMProvider, ProviderError, ProviderRefusal, Turn
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +68,19 @@ class CLINotInstalled(RuntimeError):
 def _extract_claude_result(stdout: str) -> str:
     """Pull the assistant text out of ``claude --output-format json``."""
     payload = json.loads(stdout)
+    if payload.get("stop_reason") == "refusal":
+        # A classifier decline is not an error to the CLI: it is a completed
+        # turn with nothing in it. Surface it as what it is so the caller can
+        # re-route rather than see "empty response".
+        details = payload.get("stop_details") or {}
+        category = details.get("category") if isinstance(details, dict) else None
+        raise ProviderRefusal(
+            "claude declined the request"
+            + (f" [{category}]" if category else "")
+            + ".",
+            category=category,
+            explanation=(details.get("explanation") if isinstance(details, dict) else None),
+        )
     if payload.get("is_error"):
         raise ProviderError(f"claude reported an error: {payload.get('result', '')[:300]}")
     return payload.get("result", "") or ""
@@ -362,7 +375,11 @@ class CLIProvider(LLMProvider):
                 self.last_usage = self.spec.extract_usage(proc.stdout)
             except Exception:  # noqa: BLE001 -- metering must never fail a call
                 self.last_usage = None
-        return self.spec.extract(proc.stdout)
+        try:
+            return self.spec.extract(proc.stdout)
+        except ProviderRefusal as refusal:
+            refusal.model = self.model
+            raise
 
     def _retryable(self, exc: Exception) -> bool:
         if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)):

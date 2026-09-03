@@ -54,7 +54,7 @@ class Price:
 PRICES: Dict[str, Price] = {
     "claude:fable": Price(10.0, 50.0),
     "claude:opus": Price(5.0, 25.0),
-    "claude:sonnet": Price(3.0, 15.0),
+    "claude:sonnet": Price(2.0, 10.0),
     "claude:haiku": Price(1.0, 5.0),
     "openai:gpt-5.6-sol": Price(1.25, 10.0),
     "openai:gpt-5.6-terra": Price(0.6, 5.0),

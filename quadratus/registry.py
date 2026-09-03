@@ -107,9 +107,15 @@ ROSTER: List[ModelSpec] = [
     # -- Anthropic. Specs verified against platform.claude.com; aliases
     #    verified against claude 2.1.228 (opus/sonnet/haiku resolved live).
     _spec(
-        "claude", "fable", "Claude Fable 5", 1000 * K, "slow",
+        "claude", "fable", "Claude Fable 5.1", 1000 * K, "slow",
         [Capability.REASON, Capability.CODE, Capability.AGENTIC,
          Capability.ORCHESTRATE],
+        "The CLI alias resolves to the current Fable, 5.1 since 2026-09-01. "
+        "Three API rules arrived with 5.1 that any future direct call must "
+        "respect: forced tool_choice (any/tool) is a 400; thinking blocks are "
+        "bound to the producing model; and editing earlier turns invalidates "
+        "every later thinking block. The harness is single-turn and replays "
+        "no thinking blocks, so none of them bite today. "
         "Anthropic's most capable widely-released model, positioned by the "
         "vendor for long-running agents -- which is the orchestrator's job "
         "description, and why it leads ORCHESTRATOR_CHAIN. Its 'Slower' "
