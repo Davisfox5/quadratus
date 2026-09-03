@@ -49,7 +49,11 @@ def _build_settings(args: argparse.Namespace) -> Settings:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Collaborative multi-LLM coding workflow (Claude + ChatGPT + Gemini)."
+        description=(
+            "Quadratus: Claude, ChatGPT, Gemini and Grok collaborate on one coding task "
+            "(plan, consensus, build-and-debate, synthesis), on billed APIs or your own "
+            "subscriptions via the vendor coding-agent CLIs."
+        )
     )
     parser.add_argument("prompt", nargs="?", help="The coding task to solve.")
     parser.add_argument("-o", "--output", help="Write the final solution to this file.")

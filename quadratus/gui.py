@@ -119,9 +119,10 @@ def build_interface(settings: Optional[Settings] = None):
                 "</div>"
             )
         gr.Markdown(
-            "Claude, ChatGPT, and Gemini collaborate — one drafts, the others "
-            "review and refine, and a synthesizer merges the best ideas into a "
-            "single answer."
+            "Claude, ChatGPT, Gemini and Grok on one coding task — every model plans, "
+            "a coordinator merges the plans, a lead drafts while the others review and "
+            "rebut, and a synthesizer folds it all into one answer. Runs on API keys or "
+            "on the subscriptions you already pay for."
         )
         gr.Markdown(status_md)
 
