@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from quadratus.config import Settings
-from quadratus.providers import ProviderError, build_providers
+from quadratus.providers import XAI_BASE_URL, GrokProvider, ProviderError, build_providers
 
 from .conftest import FakeProvider
 
@@ -56,3 +56,33 @@ def test_build_providers_respects_order_and_skips_unknown():
     providers = build_providers(s)
     names = [p.name for p in providers]
     assert names == ["gemini", "claude"]
+
+
+def test_grok_is_a_real_api_provider_not_a_cli_only_guest():
+    s = Settings(xai_api_key="x", provider_order=["grok"], backend="api")
+    (grok,) = build_providers(s)
+    assert isinstance(grok, GrokProvider)
+    assert (grok.name, grok.label) == ("grok", "Grok")
+
+
+def test_grok_talks_to_xai_through_the_openai_client(monkeypatch):
+    import openai
+
+    seen = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+    monkeypatch.setattr(openai, "OpenAI", FakeClient)
+    p = GrokProvider("grok-4.6", "xai-key", timeout=7.0)
+    assert p.available()
+    assert seen["base_url"] == XAI_BASE_URL
+    assert seen["api_key"] == "xai-key"
+    assert seen["timeout"] == 7.0
+
+
+def test_all_four_providers_build_on_the_api_backend():
+    s = Settings(openai_api_key="x", anthropic_api_key="x", google_api_key="x",
+                 xai_api_key="x", backend="api")
+    assert [p.name for p in build_providers(s)] == ["claude", "openai", "gemini", "grok"]

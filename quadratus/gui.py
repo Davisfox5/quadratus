@@ -197,8 +197,8 @@ def resolve_share(settings) -> bool:
 
     Subscription (CLI) transport authenticates as *you*. A public share link
     would route strangers' prompts through your personal credential, which the
-    consumer terms of Anthropic, OpenAI and Google all prohibit -- and which
-    all three enforce server-side. Sharing is therefore refused outright
+    consumer terms of Anthropic, OpenAI, Google and xAI all prohibit -- and
+    which all four enforce server-side. Sharing is therefore refused outright
     whenever any provider is on CLI transport, regardless of the opt-in
     variable; on pure API transport the usage is billed to your key and the
     opt-in is honoured.

@@ -50,8 +50,9 @@ def env_with_legacy(name: str, legacy: str, default: str = "") -> str:
 DEFAULT_CLAUDE_MODEL = "claude-opus-5"
 DEFAULT_OPENAI_MODEL = "gpt-5.5-pro"
 DEFAULT_GEMINI_MODEL = "gemini-3.1-pro"
+DEFAULT_GROK_MODEL = "grok-4.6"
 
-DEFAULT_PROVIDER_ORDER = "claude,openai,gemini"
+DEFAULT_PROVIDER_ORDER = "claude,openai,gemini,grok"
 
 # CLI backends address models by the vendor CLI's own naming, which is usually
 # a short alias rather than a dated API model ID. Two tiers are configured per
@@ -109,6 +110,9 @@ class Settings:
     google_api_key: Optional[str] = field(
         default_factory=lambda: os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
     )
+    xai_api_key: Optional[str] = field(
+        default_factory=lambda: os.getenv("XAI_API_KEY") or os.getenv("GROK_API_KEY")
+    )
 
     # Model IDs
     claude_model: str = field(
@@ -119,6 +123,9 @@ class Settings:
     )
     gemini_model: str = field(
         default_factory=lambda: os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+    )
+    grok_model: str = field(
+        default_factory=lambda: os.getenv("GROK_MODEL", DEFAULT_GROK_MODEL)
     )
     #: Where a request goes when Claude's safety classifiers decline it
     #: (``stop_reason: "refusal"``, an HTTP 200 with empty content on the
@@ -220,6 +227,7 @@ class Settings:
             "claude": self.claude_model,
             "openai": self.openai_model,
             "gemini": self.gemini_model,
+            "grok": self.grok_model,
         }.get(provider, "")
 
     def refusal_fallback_for(self, provider: str) -> str:
@@ -241,7 +249,7 @@ class Settings:
 
         Public Gradio sharing must stay off in that case: routing anyone else's
         prompts through your subscription credential violates the consumer
-        terms of all three major vendors.
+        terms of all four vendors.
         """
         return any(
             self.backend_for(name) == "cli"
