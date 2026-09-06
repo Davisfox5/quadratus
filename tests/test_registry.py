@@ -42,7 +42,7 @@ def test_models_for_filters_by_provider():
 
 def test_min_context_filter_selects_the_widest_windows():
     wide = {m.key for m in models_for(Capability.LONG_CONTEXT, min_context=1000 * 1024)}
-    assert wide == {"openai:gpt-5.6-sol", "gemini:gemini-3.1-pro", "grok:grok-4.3"}
+    assert wide == {"openai:gpt-5.6-sol", "gemini:gemini-3.1-pro-preview", "grok:grok-4.3"}
 
 
 def test_the_largest_advertised_windows_are_both_unverified_groks():
