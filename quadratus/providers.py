@@ -1,4 +1,4 @@
-"""Unified provider abstraction for Claude, ChatGPT, and Gemini.
+"""Unified provider abstraction for Claude, ChatGPT, Gemini and Grok.
 
 Each provider exposes the same ``generate()`` interface, hides SDK-specific
 details, and shares retry/backoff handling. Providers degrade gracefully: if
@@ -321,6 +321,32 @@ class OpenAIProvider(LLMProvider):
         return bool(retry) and isinstance(exc, retry)
 
 
+#: xAI serves Grok over an OpenAI-compatible API, so the provider is the
+#: OpenAI one pointed at a different host.
+XAI_BASE_URL = "https://api.x.ai/v1"
+
+
+class GrokProvider(OpenAIProvider):
+    """Grok over xAI's billed API.
+
+    The request shape, error classes and retry rules are OpenAI's, because the
+    endpoint is OpenAI-compatible by design; only the host and the key differ.
+    Subclassing rather than duplicating keeps the two in step when the shared
+    call path changes.
+    """
+
+    name = "grok"
+    label = "Grok"
+
+    def _build_client(self):
+        import openai
+
+        self._sdk = openai
+        return openai.OpenAI(
+            api_key=self.api_key, base_url=XAI_BASE_URL, timeout=self.timeout
+        )
+
+
 class GeminiProvider(LLMProvider):
     name = "gemini"
     label = "Gemini"
@@ -362,6 +388,7 @@ _REGISTRY = {
     "claude": (ClaudeProvider, "anthropic_api_key", "claude_model"),
     "openai": (OpenAIProvider, "openai_api_key", "openai_model"),
     "gemini": (GeminiProvider, "google_api_key", "gemini_model"),
+    "grok": (GrokProvider, "xai_api_key", "grok_model"),
 }
 
 

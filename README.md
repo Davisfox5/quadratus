@@ -37,7 +37,7 @@ globally (`LLM_BACKEND=api|cli`, or `CLAUDE_BACKEND`, `OPENAI_BACKEND`, …):
 | Claude | `ANTHROPIC_API_KEY` | `claude` (Claude Pro/Max) |
 | ChatGPT | `OPENAI_API_KEY` | `codex` (ChatGPT Plus/Pro) |
 | Gemini | `GOOGLE_API_KEY` | `agy` (Google AI Pro/Ultra) |
-| Grok | — (CLI only) | `grok` (SuperGrok / X Premium+) |
+| Grok | `XAI_API_KEY` | `grok` (SuperGrok / X Premium+) |
 
 CLI specs are declarative (`quadratus/cli_providers.py`), so a vendor
 renaming a flag is a one-line fix. Each CLI agent runs sandboxed in a
@@ -122,7 +122,7 @@ cp .env.example .env
 ```
 
 Then either add at least one API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-`GOOGLE_API_KEY`) or set `LLM_BACKEND=cli` and sign in to the vendor CLIs
+`GOOGLE_API_KEY`, `XAI_API_KEY`) or set `LLM_BACKEND=cli` and sign in to the vendor CLIs
 you have subscriptions for. `.env.example` documents every setting,
 including per-provider backends and CLI model tiers.
 
@@ -147,7 +147,7 @@ contribution breakdown. Sharing is disabled while a CLI backend is active.
 ```
 quadratus/
   config.py           # Settings dataclass, env loading, backend selection
-  providers.py        # API providers (Claude/ChatGPT/Gemini) + retries
+  providers.py        # API providers (Claude/ChatGPT/Gemini/Grok) + retries
   cli_providers.py    # Subscription CLI providers (claude/codex/agy/grok)
   prompts.py          # Prompts for the pipeline phases
   orchestrator.py     # Four-phase collaboration pipeline (current entry)

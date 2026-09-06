@@ -44,6 +44,8 @@ def _build_settings(args: argparse.Namespace) -> Settings:
         settings.openai_model = args.openai_model
     if args.gemini_model:
         settings.gemini_model = args.gemini_model
+    if args.grok_model:
+        settings.grok_model = args.grok_model
     return settings
 
 
@@ -63,6 +65,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--claude-model", help="Override the Claude model ID.")
     parser.add_argument("--openai-model", help="Override the OpenAI model ID.")
     parser.add_argument("--gemini-model", help="Override the Gemini model ID.")
+    parser.add_argument("--grok-model", help="Override the Grok model ID.")
     parser.add_argument(
         "--show-stages",
         action="store_true",

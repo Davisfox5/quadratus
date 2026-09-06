@@ -11,7 +11,7 @@ Scope of use
 ------------
 Vendor terms permit this for ordinary *individual* use: you, on your own
 machine, against your own subscription. Routing other people's prompts through
-your credential is prohibited by all three major vendors. The GUI must
+your credential is prohibited by all four vendors. The GUI must
 therefore never be exposed publicly while a CLI backend is active; see
 ``gui.py``, which refuses to enable Gradio sharing in that configuration.
 
