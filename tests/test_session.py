@@ -14,7 +14,7 @@ from quadratus.workers import WorkerBudget
 FABLE = "claude:fable"
 SOL = "openai:gpt-5.6-sol"
 OPUS = "claude:opus"
-GEMINI = "gemini:gemini-3.1-pro"
+GEMINI = "gemini:gemini-3.1-pro-preview"
 
 
 class Recorder:

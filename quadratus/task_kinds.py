@@ -179,7 +179,7 @@ OPUS = "claude:opus"
 SOL = "openai:gpt-5.6-sol"
 LUNA = "openai:gpt-5.6-luna"
 SONNET = "claude:sonnet"
-GEMINI_PRO = "gemini:gemini-3.1-pro"
+GEMINI_PRO = "gemini:gemini-3.1-pro-preview"
 GROK = "grok:grok-4.6"
 FABLE = "claude:fable"
 

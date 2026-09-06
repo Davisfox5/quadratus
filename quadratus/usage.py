@@ -59,12 +59,12 @@ PRICES: Dict[str, Price] = {
     "openai:gpt-5.6-sol": Price(1.25, 10.0),
     "openai:gpt-5.6-terra": Price(0.6, 5.0),
     "openai:gpt-5.6-luna": Price(0.25, 2.0),
-    "gemini:gemini-3.1-pro": Price(2.0, 12.0),
+    "gemini:gemini-3.1-pro-preview": Price(2.0, 12.0),
     "gemini:gemini-3.6-flash": Price(0.3, 2.5),
     "gemini:gemini-3.6-thinking": Price(2.0, 12.0),
-    "grok:grok-4.6": Price(3.0, 15.0),
+    "grok:grok-4.6": Price(2.0, 6.0),
     "grok:grok-4-1-fast": Price(0.2, 0.5),
-    "grok:grok-4.3": Price(3.0, 15.0),
+    "grok:grok-4.3": Price(1.25, 2.5),
     "grok:grok-4.20": Price(5.0, 25.0),
 }
 

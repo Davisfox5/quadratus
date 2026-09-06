@@ -44,12 +44,20 @@ def env_with_legacy(name: str, legacy: str, default: str = "") -> str:
     return value
 
 
-# Top-tier defaults. These are intentionally the strongest coding models from
-# each provider as of this writing; override via the environment as new models
-# ship or to match your account's access.
+# Top-tier defaults for the API backend, each checked against its vendor's
+# model documentation on 2026-09-06. Override via the environment as new
+# models ship or to match your account's access. Notes behind these choices:
+#   * gpt-5.6-sol (alias gpt-5.6) is OpenAI's flagship and the model the
+#     registry already seats. It is served on both Responses and Chat
+#     Completions; the -pro models (gpt-5.5-pro) are Responses-only, which
+#     the OpenAI provider now speaks, so a -pro override also works.
+#   * Google publishes Gemini 3.1 Pro only as gemini-3.1-pro-preview -- there
+#     is no bare gemini-3.1-pro ID -- and named it the replacement when
+#     gemini-3-pro-preview was shut down on 2026-03-09.
+#   * grok-4.6 is xAI's documented frontier model (500K context).
 DEFAULT_CLAUDE_MODEL = "claude-opus-5"
-DEFAULT_OPENAI_MODEL = "gpt-5.5-pro"
-DEFAULT_GEMINI_MODEL = "gemini-3.1-pro"
+DEFAULT_OPENAI_MODEL = "gpt-5.6-sol"
+DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_GROK_MODEL = "grok-4.6"
 
 DEFAULT_PROVIDER_ORDER = "claude,openai,gemini,grok"

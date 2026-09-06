@@ -1,5 +1,10 @@
 """Unified provider abstraction for Claude, ChatGPT, Gemini and Grok.
 
+Each provider sends the request shape its vendor documents *today* -- the
+endpoint, the token-cap parameter and the model ID format were each checked
+against the vendor reference on 2026-09-06 and the finding is recorded in
+the class docstring, so the next audit knows what was verified and when.
+
 Each provider exposes the same ``generate()`` interface, hides SDK-specific
 details, and shares retry/backoff handling. Providers degrade gracefully: if
 an SDK is not installed or an API key is missing, the provider reports itself
@@ -224,6 +229,16 @@ def _field(obj, name: str):
 
 
 class ClaudeProvider(LLMProvider):
+    """Claude over the Messages API.
+
+    Verified against Anthropic's reference on 2026-09-06: ``messages.create``
+    with ``system`` and ``max_tokens``; no sampling parameters (``temperature``
+    and friends return 400 on Opus 4.7 and later); omitting ``thinking`` runs
+    adaptive thinking on Claude Opus 5; a classifier decline is an HTTP 200 with
+    ``stop_reason: "refusal"`` and a ``stop_details`` object, which is why
+    :meth:`_call` branches on the stop reason before reading content.
+    """
+
     name = "claude"
     label = "Claude"
 
@@ -277,36 +292,25 @@ class ClaudeProvider(LLMProvider):
         return bool(retry) and isinstance(exc, retry)
 
 
-class OpenAIProvider(LLMProvider):
-    name = "openai"
-    label = "ChatGPT"
+class _OpenAISDKProvider(LLMProvider):
+    """Shared client construction and retry rules for the OpenAI Python SDK.
+
+    Two vendors speak this SDK -- OpenAI itself and xAI -- but they do not
+    share an endpoint (see the subclasses), so only the client and the error
+    classes live here.
+    """
+
+    #: Override to point the same SDK at a compatible host.
+    base_url: Optional[str] = None
 
     def _build_client(self):
         import openai
 
         self._sdk = openai
-        return openai.OpenAI(api_key=self.api_key, timeout=self.timeout)
-
-    def _call(self, prompt, system, history):
-        messages = [{"role": "system", "content": system}]
-        messages += [{"role": t.role, "content": t.content} for t in history]
-        messages.append({"role": "user", "content": prompt})
-        # Newer reasoning models (o-series, gpt-5+) use ``max_completion_tokens``
-        # and reject a custom temperature, while older models use ``max_tokens``.
-        # Try the modern parameter first and fall back on a bad-request error.
-        try:
-            resp = self._client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_completion_tokens=self.max_tokens,
-            )
-        except getattr(self._sdk, "BadRequestError", Exception):
-            resp = self._client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=self.max_tokens,
-            )
-        return resp.choices[0].message.content or ""
+        kwargs = {"api_key": self.api_key, "timeout": self.timeout}
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
+        return openai.OpenAI(**kwargs)
 
     def _retryable(self, exc):
         retry = self._exc_tuple(
@@ -321,33 +325,78 @@ class OpenAIProvider(LLMProvider):
         return bool(retry) and isinstance(exc, retry)
 
 
-#: xAI serves Grok over an OpenAI-compatible API, so the provider is the
-#: OpenAI one pointed at a different host.
+class OpenAIProvider(_OpenAISDKProvider):
+    """ChatGPT over the Responses API (``POST /v1/responses``).
+
+    Verified against OpenAI's API reference on 2026-09-06: "While Chat
+    Completions remains supported, Responses is recommended for all new
+    projects", and the ``-pro`` models (``gpt-5.5-pro`` among them) list Chat
+    Completions as *not supported* -- they exist only on Responses and Batch.
+    Responses therefore covers every current model; Chat Completions does not.
+
+    ``instructions`` carries the system prompt, ``input`` the turn list, and
+    ``max_output_tokens`` the cap. ``temperature`` is deliberately not sent:
+    the reasoning models reject it.
+    """
+
+    name = "openai"
+    label = "ChatGPT"
+
+    def _call(self, prompt, system, history):
+        turns = [{"role": t.role, "content": t.content} for t in history]
+        turns.append({"role": "user", "content": prompt})
+        resp = self._client.responses.create(
+            model=self.model,
+            instructions=system,
+            input=turns,
+            max_output_tokens=self.max_tokens,
+        )
+        return resp.output_text or ""
+
+
+#: xAI serves Grok over an OpenAI-compatible API on its own host.
 XAI_BASE_URL = "https://api.x.ai/v1"
 
 
-class GrokProvider(OpenAIProvider):
-    """Grok over xAI's billed API.
+class GrokProvider(_OpenAISDKProvider):
+    """Grok over xAI's billed API (``POST /v1/chat/completions``).
 
-    The request shape, error classes and retry rules are OpenAI's, because the
-    endpoint is OpenAI-compatible by design; only the host and the key differ.
-    Subclassing rather than duplicating keeps the two in step when the shared
-    call path changes.
+    Verified against docs.x.ai on 2026-09-06: the documented integration is
+    the OpenAI Python SDK with ``base_url="https://api.x.ai/v1"`` against Chat
+    Completions, with ``max_completion_tokens`` as the token cap (``max_tokens``
+    is marked deprecated there) and the ``system`` role accepted in
+    ``messages``. xAI also exposes ``/v1/responses``, but Chat Completions is
+    what its reference documents for every current text model, so that is
+    what this sends.
     """
 
     name = "grok"
     label = "Grok"
+    base_url = XAI_BASE_URL
 
-    def _build_client(self):
-        import openai
-
-        self._sdk = openai
-        return openai.OpenAI(
-            api_key=self.api_key, base_url=XAI_BASE_URL, timeout=self.timeout
+    def _call(self, prompt, system, history):
+        messages = [{"role": "system", "content": system}]
+        messages += [{"role": t.role, "content": t.content} for t in history]
+        messages.append({"role": "user", "content": prompt})
+        resp = self._client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_completion_tokens=self.max_tokens,
         )
+        return resp.choices[0].message.content or ""
 
 
 class GeminiProvider(LLMProvider):
+    """Gemini over the google-genai SDK.
+
+    Verified against the SDK reference on 2026-09-06:
+    ``client.models.generate_content(model, contents, config)`` with
+    ``GenerateContentConfig(system_instruction=..., max_output_tokens=...)`` is
+    the documented, non-deprecated call, and conversation roles are ``user``
+    and ``model``. The newer Interactions API exists alongside it; nothing
+    steers text generation off ``generate_content``.
+    """
+
     name = "gemini"
     label = "Gemini"
 

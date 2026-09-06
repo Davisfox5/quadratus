@@ -24,7 +24,7 @@ from quadratus.task_kinds import (
 TRUST = MODE_ROSTERS["adversarial"]["peers"]
 OPUS = "claude:opus"
 SOL = "openai:gpt-5.6-sol"
-GEMINI = "gemini:gemini-3.1-pro"
+GEMINI = "gemini:gemini-3.1-pro-preview"
 
 
 # -- the table is internally coherent ----------------------------------------

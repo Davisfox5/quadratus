@@ -23,7 +23,7 @@ from .test_session import Recorder  # reuse the scripted fake
 FABLE = "claude:fable"
 OPUS = "claude:opus"
 SOL = "openai:gpt-5.6-sol"
-TRUST = [OPUS, SOL, "gemini:gemini-3.1-pro", "grok:grok-4.6"]
+TRUST = [OPUS, SOL, "gemini:gemini-3.1-pro-preview", "grok:grok-4.6"]
 
 
 @pytest.fixture

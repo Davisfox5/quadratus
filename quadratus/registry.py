@@ -205,7 +205,7 @@ ROSTER: List[ModelSpec] = [
         "probe will settle whether this alias resolves.",
     ),
     _spec(
-        "gemini", "gemini-3.1-pro", "Gemini 3.1 Pro", 1000 * K, "moderate",
+        "gemini", "gemini-3.1-pro-preview", "Gemini 3.1 Pro", 1000 * K, "moderate",
         [Capability.CODE, Capability.REASON, Capability.LONG_CONTEXT],
         "Still the current Pro; no 3.5 or 3.6 Pro shipped. Maintained for "
         "advanced math, code and large-context work.",
@@ -309,7 +309,7 @@ MODE_ROSTERS: Dict[str, Dict[str, List[str]]] = {
         # for the strongest coder on comparable work -- not on peak quality,
         # where it is the weakest of the four.
         "peers": ["claude:opus", "openai:gpt-5.6-sol",
-                  "gemini:gemini-3.1-pro", "grok:grok-4.6"],
+                  "gemini:gemini-3.1-pro-preview", "grok:grok-4.6"],
         # A subset, not a shortfall. Review is the one role with measured
         # data, and it pins the two models that fail in opposite directions:
         # ~70% recall / ~32% precision against ~39% precision / ~55% recall.
@@ -320,7 +320,7 @@ MODE_ROSTERS: Dict[str, Dict[str, List[str]]] = {
         # inclusive. It happens to equal the brain trust today; that is a
         # coincidence of the roster size, not a constraint worth enforcing.
         "planners": ["claude:opus", "openai:gpt-5.6-sol",
-                     "gemini:gemini-3.1-pro", "grok:grok-4.6"],
+                     "gemini:gemini-3.1-pro-preview", "grok:grok-4.6"],
     },
     "collaborative": {
         "peers": ["claude:opus", "openai:gpt-5.6-terra"],
