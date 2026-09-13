@@ -1,0 +1,4 @@
+Confirmed: `tests/test_basic.py` lines 16–19 patch `DATA_DIR`, `VIDEOS_DIR`, and `PROJECTS_FILE` but not `RECORDINGS_DIR`, while `app.py` line 660 saves uploaded recordings to the module-level `RECORDINGS_DIR` (line 20, resolved at import time to `data/recordings`). That matches the reproduced gate failure exactly.
+
+KIND: test rote
+Fix test isolation in `tests/test_basic.py`'s `client` fixture: add `monkeypatch.setattr(application, "RECORDINGS_DIR", str(tmp_path / "recordings"))` beside the existing `VIDEOS_DIR` patch (line 17) and `os.makedirs(tmp_path / "recordings", exist_ok=True)` beside the existing videos makedirs (line 19). Change nothing else; do not touch `data/`. Verify with `/tmp/gametape-trial-env/bin/python -m pytest -q` (all 69 tests must still pass) and confirm no new files appear under `data/recordings/` after the run.

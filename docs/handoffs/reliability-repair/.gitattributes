@@ -1,0 +1,3 @@
+# Preserve byte-exact captured inputs, including their original whitespace.
+evidence/BULK_TAGGING-first-applied.md -whitespace
+evidence/worker-second-rejected-response.txt -whitespace

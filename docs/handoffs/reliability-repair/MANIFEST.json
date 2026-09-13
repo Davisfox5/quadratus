@@ -1,0 +1,15 @@
+{
+  "quadratus_base": "8e71b6b2451654e28b96ecf3c6915dc012a752ab",
+  "quadratus_tip": "9ac8bacbdc118edbb705e495aa9045bb9ca4935f",
+  "gametape_tree_commit": "f93d8b1a4a75d0cdc128b59b650bd95d6bfc6731",
+  "quadratus_tests_observed": 572,
+  "gametape_tests_observed": 79,
+  "notes": [
+    "The branch itself contains the three code/documentation commits after quadratus_base, through quadratus_tip, plus this handoff commit. No bundle import is required.",
+    "GameTape is a tracked-tree archive at the recorded commit, not a Git repository.",
+    "Evidence contains selected response excerpts and structured invocation records; it excludes raw session transcripts, OAuth material, private environment files and production data.",
+    "Evidence local username paths use placeholders. Source documentation may retain historical local paths.",
+    "No reliability engine fixes are included. Live multi-provider acceptance remains a Mac follow-up after the cloud repair."
+  ],
+  "published_branch": "codex/project-workflow"
+}

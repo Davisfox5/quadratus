@@ -1,0 +1,32 @@
+{
+  "source": "$LOCAL_CODEX/sessions/2026/09/13/rollout-2026-09-13T14-19-12-01a09bfe-a8ab-7422-ab3e-99cfacf53362.jsonl",
+  "records": [
+    {
+      "timestamp": "2026-09-13T18:19:24.250Z",
+      "name": "spawn_agent",
+      "arguments": {
+        "task_name": "second_review",
+        "fork_turns": "all"
+      }
+    }
+  ],
+  "child_session": "01a09bfe-d4e3-78d3-bbec-8c0438c6ac62",
+  "child_model": "gpt-5.6-sol",
+  "child_effort": "high",
+  "note": "Vendor-native spawn_agent observed outside Quadratus WorkerPool; message content omitted.",
+  "parent_usage": {
+    "input_tokens": 203199,
+    "output_tokens": 6350,
+    "total_tokens": 209549
+  },
+  "child_usage": {
+    "input_tokens": 127405,
+    "output_tokens": 7700,
+    "total_tokens": 135105
+  },
+  "quadratus_reported_cli_usage": {
+    "input_tokens": 203199,
+    "output_tokens": 6350
+  },
+  "finding": "The CLI return and Quadratus ledger count match the parent session only. The separately recorded child adds 135105 tokens not included in that count."
+}

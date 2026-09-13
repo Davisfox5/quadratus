@@ -1,0 +1,35 @@
+{
+  "models": {
+    "claude:fable": {
+      "calls_returned": 2,
+      "input_tokens": 162876,
+      "output_tokens": 5029
+    },
+    "claude:opus": {
+      "calls_returned": 4,
+      "input_tokens": 734779,
+      "output_tokens": 37628
+    },
+    "openai:gpt-5.6-luna": {
+      "calls_returned": 2,
+      "input_tokens": 64675,
+      "output_tokens": 4636
+    },
+    "openai:gpt-5.6-sol": {
+      "calls_returned": 3,
+      "input_tokens": 534055,
+      "output_tokens": 20828
+    }
+  },
+  "quadratus_metered_tokens": 1564506,
+  "additional_verified_native_child_tokens": 135105,
+  "known_minimum_tokens": 1699611,
+  "unknown_calls": [
+    {
+      "model": "claude:fable",
+      "outcome": "KeyboardInterrupt",
+      "seconds": 13.48224266699981
+    }
+  ],
+  "note": "Includes cached/repeated input. Native child counted once, not every cumulative update. Subscription usage, not an actual API charge. Other vendor-internal usage is not separately reconciled."
+}
