@@ -57,12 +57,13 @@ def test_build_providers_respects_order_and_skips_unknown():
     s = Settings(
         openai_api_key="x",
         anthropic_api_key="x",
-        google_api_key="x",
-        provider_order=["gemini", "bogus", "claude"],
+        xai_api_key="x",
+        provider_order=["grok", "bogus", "claude"],
+        backend="api",
     )
     providers = build_providers(s)
     names = [p.name for p in providers]
-    assert names == ["gemini", "claude"]
+    assert names == ["grok", "claude"]
 
 
 def test_grok_is_a_real_api_provider_not_a_cli_only_guest():
@@ -89,10 +90,12 @@ def test_grok_talks_to_xai_through_the_openai_client(monkeypatch):
     assert seen["timeout"] == 7.0
 
 
-def test_all_four_providers_build_on_the_api_backend():
-    s = Settings(openai_api_key="x", anthropic_api_key="x", google_api_key="x",
+def test_every_vendor_in_the_lineup_builds_on_the_api_backend():
+    from quadratus.registry import VENDORS
+
+    s = Settings(openai_api_key="x", anthropic_api_key="x",
                  xai_api_key="x", backend="api")
-    assert [p.name for p in build_providers(s)] == ["claude", "openai", "gemini", "grok"]
+    assert [p.name for p in build_providers(s)] == list(VENDORS)
 
 
 class _Recorder:

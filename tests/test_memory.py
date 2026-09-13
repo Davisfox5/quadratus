@@ -251,7 +251,7 @@ def test_the_worker_tree_not_vendor_loyalty_picks_the_default(store, pool):
     """No errand named -> the tier's most accurate generalist, regardless of
     who the parent is."""
     assert pool.resolve_model(None) == "claude:haiku"
-    assert pool.resolve_model(None, errand="lookup") == "grok:grok-4-1-fast"
+    assert pool.resolve_model(None, errand="lookup") == "grok:worker"
 
 
 def test_budgets_are_tracked_per_task_not_globally(store):

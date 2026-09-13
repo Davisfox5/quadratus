@@ -21,14 +21,22 @@ to over-delegate to subagents, so the caps are structural, not advisory.
 
 **Workers are picked by errand, not by vendor loyalty.** The worker tree
 (:data:`WORKER_TREE`) maps what the errand *is* to the cheap model measured
-or reputed best at it: live lookup to Grok Fast, long or visual reading to
-Gemini Flash, fact and code checking to Haiku, rote formatting and drafting
-to Luna, with Sonnet as the escalation for errands that defeat the cheap
-tier. An earlier design defaulted workers to the lead's own vendor to reuse
-cached prefixes; that was retired -- each vendor's cache stays warm as long
-as the vendor gets regular use, which the tree itself guarantees, and the
+or reputed best at it: live lookup to Grok Fast, long reading to Luna, fact
+and code checking and anything visual to Haiku, rote formatting and drafting
+to Luna, with an in-family bump for errands that defeat the cheap tier. An
+earlier design defaulted workers to the lead's own vendor to reuse cached
+prefixes; that was retired -- each vendor's cache stays warm as long as the
+vendor gets regular use, which the tree itself guarantees, and the
 vendor-loyal default would have sent web lookups to models with stale
 knowledge.
+
+The tree lost a vendor on 2026-09-12 when Google left the lineup, and the two
+errands it held moved on different reasoning. Long reading went to Luna,
+which has the widest window among the cheap models that is corroborated by
+something other than its own vendor's marketing -- Grok 4.1 Fast advertised
+2M and the registry pointedly declined to believe it. Visual reading went to
+Haiku, because the Claude CLI reads image files off disk directly and that
+capability, not the window, is what the errand needs.
 
 Workers report to the peer that spawned them, never to the orchestrator. They
 were commissioned to serve one task, and their output is raw material for that
@@ -39,6 +47,7 @@ all, folded into the peer's task summary.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -80,15 +89,17 @@ class RepeatedFailure(RuntimeError):
 
 
 #: Errand -> the cheap model best suited to it, one per vendor, so picking by
-#: skill also spreads load across all four subscription windows. Seeds, not
+#: skill also spreads load across every subscription window. Seeds, not
 #: truth: only Haiku is verified in this harness, and the tier churns monthly.
 WORKER_TREE: dict = {
     #: Live web lookup, anything current. Grok's strength is the search itself.
-    "lookup": "grok:grok-4-1-fast",
-    #: Read something long and digest it. 5x the window of the others.
-    "read": "gemini:gemini-3.6-flash",
-    #: Read a screenshot, PDF, or image. The only cheap model that can.
-    "visual": "gemini:gemini-3.6-flash",
+    "lookup": "grok:worker",
+    #: Read something long and digest it. The widest cheap window that is not
+    #: an unverified vendor claim (1.1M against Haiku's 200K).
+    "read": "openai:gpt-5.6-luna",
+    #: Read a screenshot, PDF, or image. Picked for the capability rather than
+    #: the window: the Claude CLI reads image files off disk directly.
+    "visual": "claude:haiku",
     #: Check a fact, verify a claim, sanity-check code. The tier's best brain,
     #: but its knowledge is old -- anything current goes to lookup instead.
     "check": "claude:haiku",
@@ -103,16 +114,20 @@ WORKER_TREE: dict = {
 #: Escalation stays in the family: an errand the base worker could not do,
 #: but which still belongs to that worker's skill (a lookup stays a lookup),
 #: bumps one tier up the same vendor's line rather than jumping sideways to a
-#: different skill set. Operator directive. Two targets carry a caveat: the
-#: Gemini Thinking alias and Grok 4.20 are unverified against live CLIs --
-#: acceptable here because escalation fires rarely and only after the
-#: verified base already failed, and resolve_model falls back to the base if
-#: the bump target is unknown to the roster.
+#: different skill set. Operator directive. xAI is the exception that proves
+#: the rule: a consumer subscription reaches one model line, so there is no
+#: second model to bump to, and the bump is a reasoning-effort step on the
+#: same line instead -- ``grok:worker`` (low) to ``grok:expert`` (high). That
+#: is the honest version of what the old Grok Fast -> Grok 4.20 bump claimed,
+#: with two IDs this transport rejects. Both ends are probe-verified. Note
+#: what the degradation below does and does not cover -- resolve_model falls
+#: back to the base when a bump target is missing from the *roster*, which is
+#: not the same as the target being unreachable; a row that resolves but
+#: cannot be invoked passes that check and fails at transport instead.
 WORKER_ESCALATION: dict = {
     "claude:haiku": "claude:sonnet",
-    "gemini:gemini-3.6-flash": "gemini:gemini-3.6-thinking",
     "openai:gpt-5.6-luna": "openai:gpt-5.6-terra",
-    "grok:grok-4-1-fast": "grok:grok-4.20",
+    "grok:worker": "grok:expert",
 }
 
 #: The generalist default when the lead names no errand: the tier's most
@@ -144,16 +159,16 @@ def worker_menu() -> str:
     return (
         "Worker bees (one instruction each, no memory; several may run at "
         "once). Pick by errand:\n"
-        "- lookup: live web / anything current -> Grok 4.1 Fast\n"
-        "- read: long document or file -> Gemini Flash\n"
-        "- visual: screenshot, PDF, image -> Gemini Flash\n"
+        "- lookup: live web / anything current -> Grok\n"
+        "- read: long document or file -> Luna\n"
+        "- visual: screenshot, PDF, image -> Haiku\n"
         "- check: verify a fact or claim, sanity-check code -> Haiku "
         "(accurate, but its knowledge is old -- current things go to lookup)\n"
         "- code: small snippet or explanation -> Haiku\n"
         "- format / draft: extract, tag, boilerplate -> Luna\n"
         "- demanding: the errand defeated the base worker but the skill still "
-        "fits -> same family, one tier up (Haiku->Sonnet, Flash->Thinking, "
-        "Luna->Terra, Grok Fast->Grok 4.20). Sparingly.\n"
+        "fits -> same family, one tier up (Haiku->Sonnet, Luna->Terra, "
+        "Grok worker->Grok expert). Sparingly.\n"
         "If an errand fails: rewrite it, re-send it unchanged to a different "
         "worker, or mark it demanding -- never the same instruction to the "
         "same worker twice. A worker that lacked a tool it needed will say "
@@ -297,6 +312,7 @@ class WorkerPool:
         fingerprint = (
             task.task_id,
             model_key,
+            bool(allow_writes),
             hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
         )
         with self._lock:
@@ -384,16 +400,12 @@ class WorkerPool:
     def _run(self, model_key: str, prompt: str, *, allow_writes: bool) -> str:
         """Invoke the injected runner, passing the grant if it accepts one."""
         try:
-            return self.run(model_key, prompt, allow_writes=allow_writes)
-        except TypeError:
-            # The injected runner predates grants; only the default (no
-            # writes) is expressible through it.
+            inspect.signature(self.run).bind(model_key, prompt, allow_writes=allow_writes)
+        except (TypeError, ValueError):
             if allow_writes:
-                log.warning(
-                    "worker runner does not accept allow_writes; running "
-                    "read-only despite the grant"
-                )
+                raise PermissionError("worker runner cannot honor the requested write grant") from None
             return self.run(model_key, prompt)
+        return self.run(model_key, prompt, allow_writes=allow_writes)
 
     @staticmethod
     def _summarise(raw: str, *, max_chars: int = 1200) -> str:

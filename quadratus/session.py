@@ -23,8 +23,10 @@ does not need judgement.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
 from .artifacts import ArtifactStore
@@ -42,7 +44,7 @@ from .routing import (
 from .task_kinds import MAX_TASK_LINES, ROUTING, TaskKind, guidance_for, policy_for
 from .task_kinds import route as route_kind
 from .usage import UsageMeter
-from .workers import WorkerBudget, WorkerPool, worker_menu
+from .workers import WORKER_TREE, WorkerBudget, WorkerPool, worker_menu
 
 log = logging.getLogger(__name__)
 
@@ -151,6 +153,9 @@ class TaskSpec:
 
 @dataclass
 class SessionConfig:
+    project: Optional[Path] = None
+    project_excludes: tuple = ()
+    allow_writes: bool = False
     mode: str = "adversarial"
     worker_budget: WorkerBudget = field(default_factory=WorkerBudget)
     #: Render only the last N ledger entries into the orchestrator's prompt.
@@ -191,6 +196,13 @@ class SessionConfig:
     #: How many fix rounds a failing integration gate buys the lead before
     #: the failure is carried into the record as an open problem.
     max_gate_fixes: int = 1
+    #: Called with a one-line note as the run moves: the plan, each task as it
+    #: is named, each as it closes. A session spends minutes per task against
+    #: a subscription window, so a caller with no way to see what it is doing
+    #: is a caller who cannot tell a slow task from a hung one. Reporting
+    #: only, never load-bearing: a progress callback that raises is a bug in
+    #: the caller, not a reason to lose the run, so it is called defensively.
+    progress: Optional[Callable[[str], None]] = None
     #: How many lead revisions a task may spend answering blocking findings.
     #: The count is deliberately small and the loop deliberately narrow --
     #: each extra cycle is a reviewer re-checking its own named findings
@@ -215,6 +227,15 @@ class Session:
         available: Optional[Callable[[str], bool]] = None,
     ) -> None:
         self.config = config or SessionConfig()
+        self.project = Path(self.config.project).expanduser().resolve() if self.config.project else None
+        if self.config.allow_writes and self.project is None:
+            raise ValueError("A project is required for write grants.")
+        gate = self.config.integration_gate
+        if self.project and gate and Path(getattr(gate, 'cwd', None) or Path.cwd()).resolve() != self.project:
+            raise ValueError("The integration gate must run in the session project.")
+        self.completed = False
+        self.checks = []
+        self.open_findings = []
         self.store = store
         if self.config.usage_meter is not None:
             invoke = self.config.usage_meter.wrap(invoke)
@@ -223,11 +244,22 @@ class Session:
         self.memory = PersistentMemory(goal, store, invariants=invariants)
         self.workers = WorkerPool(
             store=store,
-            run=lambda model, prompt: self.invoke(model, prompt),
+            run=lambda model, prompt, **kw: self._invoke_model(model, prompt, **kw),
             budget=self.config.worker_budget,
         )
         self._rotation = 0
         self.history: List[TaskSummary] = []
+
+    def _invoke_model(self, key, prompt, *, allow_writes=False):
+        if self.project:
+            return self.invoke(key, prompt, allow_writes=bool(allow_writes and self.config.allow_writes))
+        if allow_writes:
+            return self.invoke(key, prompt, allow_writes=True)
+        return self.invoke(key, prompt)
+
+    def _edit(self, key, prompt):
+        return self._invoke_model(key, prompt,
+                                  allow_writes=bool(self.project and self.config.allow_writes))
 
     # -- seating -------------------------------------------------------------
     def seat(self, *, security: bool = False) -> Seat:
@@ -236,7 +268,7 @@ class Session:
 
     @property
     def brain_trust(self) -> List[str]:
-        return peers_for(self.config.mode, orchestrator_seat().key)
+        return peers_for(self.config.mode, "")
 
     def _pick_lead(self, spec: TaskSpec) -> str:
         """Rotate the lead across the brain trust, then let the task kind speak.
@@ -287,8 +319,41 @@ class Session:
                     chosen.append(peer)
         return chosen
 
+    def _ask_seat(self, seat: Seat, build, *, task=None):
+        """Ask the seated orchestrator, re-seating once if its window is spent.
+
+        The seat is computed from ``available``, and availability is learned
+        by calling: nothing knows a subscription window is exhausted until a
+        request comes back saying so. Without this, the first call of a run
+        discovers the primary is out and the run dies on the very failure the
+        fallback exists for -- the seating logic was right and simply never
+        got a second look.
+
+        So an exhaustion is not a run-ending error here. It is the liveness
+        check arriving late: the transport records it, the seat is recomputed
+        with that knowledge, and the question is asked again. Exactly once --
+        if the recomputed seat is the same model, or the second seat is spent
+        too, the error stands. The failed call's tokens are already spent
+        either way; what this buys back is the run.
+
+        Recognised by attribute rather than exception class, because this
+        module is handed ``invoke`` and must not learn what is behind it.
+        """
+        try:
+            return seat, self._invoke_with_fetches(seat.key, build, task=task)
+        except Exception as exc:  # noqa: BLE001 -- re-raised unless it is this
+            if not getattr(exc, "window_exhausted", False):
+                raise
+            fresh = self.seat()
+            if fresh.key == seat.key:
+                raise
+            self._note(
+                f"{seat.key} is out of window; the seat falls to {fresh.key}"
+            )
+            return fresh, self._invoke_with_fetches(fresh.key, build, task=task)
+
     # -- request channels ----------------------------------------------------
-    def _invoke_with_fetches(self, model_key: str, build_prompt, *, task=None) -> str:
+    def _invoke_with_fetches(self, model_key: str, build_prompt, *, task=None, editing=False) -> str:
         """Invoke, serving artifact requests until a real answer arrives.
 
         ``build_prompt`` takes the fetched (id, content) pairs gathered so far
@@ -298,7 +363,8 @@ class Session:
         fix a typo and the harness cannot.
         """
         fetched: List[tuple] = []
-        reply = self.invoke(model_key, build_prompt(fetched))
+        call = self._edit if editing else self._invoke_model
+        reply = call(model_key, build_prompt(fetched))
         for _ in range(self.config.max_fetches):
             artifact_id = _parse_fetch(reply)
             if artifact_id is None:
@@ -310,7 +376,9 @@ class Session:
             fetched.append((artifact_id, content))
             if task is not None:
                 task.record("assistant", f"[fetched artifact {artifact_id}]")
-            reply = self.invoke(model_key, build_prompt(fetched))
+            reply = call(model_key, build_prompt(fetched))
+        if _parse_fetch(reply) is not None:
+            raise RunStalled("Artifact fetch budget exhausted before an answer was produced.")
         return reply
 
     def _resolve_consultant(self, name: str, lead: str) -> Optional[str]:
@@ -333,53 +401,59 @@ class Session:
         return None
 
     def _draft_with_channels(self, lead: str, spec: TaskSpec, task: TaskMemory) -> str:
-        """The lead drafts, with the fetch and consult channels live.
-
-        A reply that is a request gets served and the lead re-asked; a reply
-        that is work is the draft. Consults are answered blind -- the
-        consultant sees the task and the question, never the draft or the
-        session -- so the answer is expertise, not agreement. Both channels
-        are budgeted, and a lead that spends its consult budget is told so and
-        asked to proceed with what it has.
-        """
-        consult_answers: List[str] = []
+        answers = []
         consults_used = 0
 
-        def build(fetched: List[tuple]) -> str:
-            extras: List[str] = []
-            if consult_answers:
-                extras.append("## Consult answers\n\n" + "\n\n".join(consult_answers))
+        def build(fetched):
+            extras = ["## Consult answers and worker evidence\n\n" + "\n\n".join(answers)] if answers else []
             if fetched:
                 extras.append(_render_fetches(fetched))
             return self._lead_prompt(spec, lead=lead, extras=extras)
 
-        for _ in range(self.config.max_consults + 1):
-            draft = self._invoke_with_fetches(lead, build, task=task)
-            requests = _parse_consults(draft)
-            if not requests:
-                return draft
-            if consults_used >= self.config.max_consults:
-                consult_answers.append(
-                    "(consult budget spent -- proceed with what you have and "
-                    "record any open question in your close-out)"
+        while True:
+            draft = self._invoke_with_fetches(lead, build, task=task, editing=True)
+            body = _parse_kind(draft)[2].strip()
+            if body.startswith("WORKER "):
+                if self.workers.remaining(spec.task_id) <= 0:
+                    raise RunStalled("Worker budget exhausted before a draft was produced.")
+                try:
+                    request = json.loads(body[len("WORKER "):])
+                    if (not isinstance(request, dict) or request.get('errand') not in WORKER_TREE
+                            or not isinstance(request.get('instruction'), str)
+                            or not request['instruction'].strip()
+                            or type(request.get('write', False)) is not bool
+                            or type(request.get('demanding', False)) is not bool):
+                        raise ValueError('invalid worker request')
+                except (ValueError, TypeError) as exc:
+                    raise RunStalled("Expected WORKER JSON with errand and instruction.") from exc
+                writes = request.get('write', False)
+                if writes and not (self.project and self.config.allow_writes):
+                    raise RunStalled("Worker requested edits without an operator write grant.")
+                result = self.workers.commission(
+                    task=task, parent_key=lead, prompt=request['instruction'],
+                    label=f"{request['errand']}-{self.workers.spawned(spec.task_id) + 1}",
+                    errand=request['errand'], demanding=request.get('demanding', False),
+                    allow_writes=writes,
                 )
-                return self._invoke_with_fetches(lead, build, task=task)
+                answers.append(f"Worker {result.model}: {result.summary}\n{result.ref.render()}")
+                continue
+            requests = _parse_consults(body)
+            if not requests:
+                if body.startswith(('ASK:', 'CONSULT', 'WORKER', 'FETCH:')):
+                    raise RunStalled("An unresolved request cannot be accepted as a draft.")
+                return draft
+            if consults_used + len(requests) > self.config.max_consults:
+                raise RunStalled("Consult budget exhausted before a draft was produced.")
             for name, question in requests:
-                if consults_used >= self.config.max_consults:
-                    break
-                consults_used += 1  # spent even on a bad name; no free retries
+                consults_used += 1
                 peer = self._resolve_consultant(name, lead)
                 if peer is None:
-                    consult_answers.append(
-                        f"[{name}] is not a member you can consult; see the "
-                        f"list in your instructions."
-                    )
+                    answers.append(f"{name} is not a member you can consult.")
                     continue
-                answer = self.invoke(peer, self._consult_prompt(spec, question, peer))
+                answer = self._invoke_model(peer, self._consult_prompt(spec, question, peer))
                 task.record("assistant", f"[consult {peer}] {answer}")
-                task.keep(answer, kind=f"consult:{peer}")
-                consult_answers.append(f"[{peer}]\n{answer}")
-        return draft
+                task.keep(answer, kind=f"consult:{peer}", author=peer)
+                answers.append(f"[{peer}]\n{answer}")
 
     def _consult_prompt(self, spec: TaskSpec, question: str, peer: str) -> str:
         label = resolve(peer)
@@ -423,9 +497,9 @@ class Session:
                   for i, peer in enumerate(collaborators)}
         notes: List[tuple] = []
         for peer in collaborators:
-            note = self.invoke(peer, self._collaborator_prompt(spec, draft, peer))
+            note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
             task.record("assistant", f"[{labels[peer]}] {note}")
-            task.keep(note, kind=f"review:{peer}")
+            task.keep(note, kind=f"review:{peer}", author=peer)
             notes.append((peer, note))
 
         # The rebuttal round: the lead answers every finding and revises. This
@@ -453,7 +527,7 @@ class Session:
             if n.strip().upper().rstrip(".") != "NO FINDINGS"
         ]
         if notes:
-            revision = self.invoke(
+            revision = self._edit(
                 lead,
                 self._revision_prompt(
                     spec, draft, [f"[{labels[p]}]\n{n}" for p, n in notes]
@@ -468,7 +542,7 @@ class Session:
                 spec, blocking, revision, task, labels=labels
             )
             while unresolved and cycles < self.config.max_fix_cycles:
-                revision = self.invoke(
+                revision = self._edit(
                     lead,
                     self._fix_prompt(
                         spec, revision,
@@ -484,6 +558,7 @@ class Session:
                     revision, task, labels=labels,
                 )
             if unresolved:
+                self.open_findings.extend(v for _, v in unresolved)
                 # The cap ran out with findings still open. They go to the
                 # record loudly rather than being lost in the transcript.
                 task.record(
@@ -531,7 +606,7 @@ class Session:
                 lambda fetched: self._lead_prompt(
                     spec, extras=[_render_fetches(fetched)] if fetched else None
                 ),
-                task=task,
+                task=task, editing=True,
             )
             task.record("assistant", draft)
             task.keep(draft, kind="draft")
@@ -554,11 +629,15 @@ class Session:
                 )
                 if crossed is not None:
                     verifier = crossed
-            verdict = self.invoke(
+            self._run_integration_gate(excursion.worker, spec, task)
+            verdict = self._invoke_model(
                 verifier, self._verifier_prompt(spec, draft, verifier)
             )
             task.record("assistant", f"[{verifier}] {verdict}")
-            task.keep(verdict, kind=f"verify:{verifier}")
+            task.keep(verdict, kind=f"verify:{verifier}", author=verifier)
+
+            if 'BLOCKING' in verdict.upper() or 'UNRESOLVED' in verdict.upper():
+                self.open_findings.append(verdict)
 
             summary_text, reasoning, dead_ends = self._close_out(
                 excursion.worker, spec, task
@@ -620,8 +699,8 @@ class Session:
             return body
 
         for _ in range(_MAX_ASKS_PER_DECISION):
-            reply = self._invoke_with_fetches(seat.key, build)
-            stripped = reply.strip()
+            seat, reply = self._ask_seat(seat, build)
+            stripped = _parse_kind(reply)[2].strip()
             if not stripped.upper().startswith("ASK:"):
                 break
             question = stripped[4:].strip()
@@ -639,8 +718,10 @@ class Session:
         # dutifully labels its final reply must still be able to end the run,
         # not spawn a task whose description is the word DONE.
         kind, difficulty, description = _parse_kind(reply)
-        if description.strip().upper().startswith("DONE"):
+        if description.strip().upper() == "DONE":
             return None
+        if not description.strip() or description.strip().upper().startswith(('FETCH:', 'ASK:', 'CONSULT ', 'WORKER ')):
+            raise RunStalled("An unresolved request cannot become a task.")
         return TaskSpec(
             task_id=f"t{len(self.history) + 1}",
             description=description,
@@ -657,19 +738,21 @@ class Session:
         discovering a mis-scoped run after the subscription window is spent.
         """
         seat = self.seat()
-        return self.invoke(
-            seat.key,
-            self.memory.render(
-                current=(
-                    "Do not start work. List every task you currently expect "
-                    "this goal to need, in order, one per line, each as "
-                    "'KIND: <kind> -- <description>'. Mark anything you are "
-                    f"unsure about with '?'.\n\n{_SIZE_CEILING}"
-                ),
-                recent=self.config.recent_entries,
-                extra=self._map_block(),
+        prompt = self.memory.render(
+            current=(
+                "Do not start work. List every task you currently expect "
+                "this goal to need, in order, one per line, each as "
+                "'KIND: <kind> -- <description>'. Mark anything you are "
+                f"unsure about with '?'.\n\n{_SIZE_CEILING}"
             ),
+            recent=self.config.recent_entries,
+            extra=self._map_block(),
         )
+        # Re-seats on an exhausted window like any other seat call: the plan
+        # is usually the first request a run makes, so it is the most likely
+        # place to discover the primary is out.
+        _, reply = self._ask_seat(seat, lambda fetched: prompt + ("\n\n" + _render_fetches(fetched) if fetched else ""))
+        return reply
 
     def run(self, *, max_tasks: int = 20) -> List[TaskSummary]:
         """Drive tasks until the orchestrator says DONE or the cap is hit.
@@ -683,14 +766,21 @@ class Session:
                 row -- the loop has stopped converging, and burning further
                 rounds on a known outcome helps nobody.
         """
+        if max_tasks < 1:
+            raise ValueError("max_tasks must be at least 1")
+        self.completed = False
         if self.config.plan_gate is not None:
+            self._note("asking the orchestrator for the expected task list")
             if not self.config.plan_gate(self.plan()):
                 log.info("plan gate declined the run; nothing executed")
                 return []
         previous_description: Optional[str] = None
         for _ in range(max_tasks):
+            self._note(f"asking {self.seat().key} for the next task")
             spec = self.next_task()
             if spec is None:
+                self.completed = not self.open_findings and not any(not c["passed"] for c in self.checks)
+                self._note("the orchestrator reports the goal met")
                 break
             if spec.description == previous_description:
                 raise RunStalled(
@@ -700,8 +790,24 @@ class Session:
                     f"or intervene before re-running."
                 )
             previous_description = spec.description
-            self.run_task(spec)
+            self._note(
+                f"task {len(self.history) + 1}: {spec.description} "
+                f"[{spec.kind}/{spec.complexity}]"
+            )
+            summary = self.run_task(spec)
+            self._note(f"task {len(self.history)} closed by {summary.author}")
+            if self.open_findings or (self.checks and not self.checks[-1]['passed']):
+                break
         return list(self.history)
+
+    def _note(self, message: str) -> None:
+        """Tell the caller where the run is. Never fails the run."""
+        if self.config.progress is None:
+            return
+        try:
+            self.config.progress(message)
+        except Exception:  # noqa: BLE001 -- reporting must not break the run
+            log.debug("progress callback raised", exc_info=True)
 
     # -- prompts -------------------------------------------------------------
     def _map_block(self) -> str:
@@ -726,6 +832,15 @@ class Session:
             parts.append(map_block)
         parts.append("You are leading this task. Produce the complete work.")
         parts.append(worker_menu())
+        parts.append('To commission one worker, reply only WORKER followed by JSON: '
+                     '{"errand":"code","instruction":"one bounded request",'
+                     '"demanding":false,"write":false}. '
+                     'Use write:true only for an authorized project edit. Workers cannot delegate.')
+        if self.project:
+            parts.append("Inspect the project source in your working directory. "
+                         + ("Implement this task using the edit method in your role instructions; prose alone is not implementation."
+                            if self.config.allow_writes else
+                            "This run has no edit grant. Return analysis and proposed changes only."))
         parts.append(
             "To read a filed artifact in full before working, reply with "
             "exactly 'FETCH: <artifact-id>' and nothing else -- you will get "
@@ -792,7 +907,9 @@ class Session:
             "Revise your work. Address every finding explicitly: fix it, or "
             "rebut it with a reason -- silence is not a response. A finding "
             "you cannot decide goes to the record as an open question, not "
-            "into the void. Produce the complete revised work, not a diff."
+            "into the void. "
+            + ("Update the project using the edit method in your role instructions."
+               if self.project else "Produce the complete revised work, not a diff.")
         )
 
     def _recheck_blocking(
@@ -814,7 +931,7 @@ class Session:
         """
         unresolved: List[tuple] = []
         for peer, note in blocking:
-            verdict = self.invoke(
+            verdict = self._invoke_model(
                 peer,
                 f"Task: {spec.description}\n\n"
                 f"You reviewed this work and raised these findings:\n{note}\n\n"
@@ -852,11 +969,11 @@ class Session:
         gate = self.config.integration_gate
         if gate is None:
             return
-        result = gate.run()
+        result = self._check(gate)
         task.record("user", result.render())
         fixes = 0
         while not result.passed and fixes < self.config.max_gate_fixes:
-            fix = self.invoke(
+            fix = self._edit(
                 lead,
                 f"Task: {spec.description}\n\n"
                 f"The project's own integration check failed after your "
@@ -866,14 +983,27 @@ class Session:
             task.record("assistant", fix)
             task.keep(fix, kind="gate-fix")
             fixes += 1
-            result = gate.run()
+            result = self._check(gate)
             task.record("user", result.render())
+        self.checks.append({"passed": result.passed, "command": result.command,
+                            "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', ''))})
         if not result.passed:
             task.record(
                 "user",
                 "The integration gate is still failing at close -- carry it "
                 "into the summary as an open failure.",
             )
+
+    def _check(self, gate):
+        from .integration import GateResult
+        from .project import Project
+        project = Project(self.project, exclude=self.config.project_excludes) if self.project else None
+        before = project.fingerprint() if project else None
+        result = gate.run()
+        if project and before != project.fingerprint():
+            return GateResult(False, result.command, result.returncode,
+                              "Project source changed while the integration check ran; result is not valid.")
+        return result
 
     def _verifier_prompt(self, spec: TaskSpec, draft: str, verifier: str) -> str:
         label = resolve(verifier)
@@ -906,7 +1036,7 @@ class Session:
                 "not have to rediscover -- a convention, a dependency, a trap. "
                 "Durable facts about the code only; omit the section if none."
             )
-        reply = self.invoke(lead, f"Task: {spec.description}\n\n{transcript}\n\n{sections}")
+        reply = self._invoke_model(lead, f"Task: {spec.description}\n\n{transcript}\n\n{sections}")
         summary, reasoning, dead_ends, map_notes = _parse_closeout(reply)
         if self.config.codebase_map is not None:
             for topic, note in map_notes:
@@ -923,7 +1053,7 @@ def _parse_fetch(reply: str) -> Optional[str]:
     draft that merely mentions the word FETCH in code or prose is never
     mistaken for one.
     """
-    stripped = (reply or "").strip()
+    stripped = _parse_kind(reply)[2].strip()
     lines = [ln for ln in stripped.splitlines() if ln.strip()]
     if len(lines) == 1 and lines[0].upper().startswith("FETCH:"):
         wanted = lines[0].split(":", 1)[1].strip()
@@ -978,9 +1108,9 @@ _MAX_ASKS_PER_DECISION = 3
 #: Asks the orchestrator to label the task so :mod:`quadratus.task_kinds` can
 #: act on it. Kind and difficulty together are the routing decision: the few
 #: pinned kinds go where the evidence says, everything else rides the
-#: difficulty ladder across the four subscriptions.
+#: difficulty ladder across the subscriptions.
 _KIND_REQUEST = (
-    "Begin your reply with a single line 'KIND: <kind> <difficulty>'. Kind is "
+    "Only when naming a task (never for FETCH, ASK, or DONE), begin your reply with a single line 'KIND: <kind> <difficulty>'. Kind is "
     "one of: " + ", ".join(sorted(ROUTING)) + ". Difficulty is one of: rote, "
     "simple, standard, complex -- judge it by how many logical steps the task "
     "takes and what breaks if it is wrong. Most well-sized tasks are simple; "

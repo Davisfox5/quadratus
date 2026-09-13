@@ -24,7 +24,9 @@ from quadratus.task_kinds import (
 TRUST = MODE_ROSTERS["adversarial"]["peers"]
 OPUS = "claude:opus"
 SOL = "openai:gpt-5.6-sol"
-GEMINI = "gemini:gemini-3.1-pro-preview"
+GROK = "grok:default"
+GROK_WORKER = "grok:worker"
+FABLE = "claude:fable"
 
 
 # -- the table is internally coherent ----------------------------------------
@@ -64,36 +66,39 @@ def test_low_confidence_never_pins_a_model():
 
 
 def test_low_confidence_kinds_fall_through_to_rotation():
-    assert route(TaskKind.DATA, default=GEMINI, candidates=TRUST) == GEMINI
+    assert route(TaskKind.DATA, default=GROK, candidates=TRUST) == GROK
     assert route(TaskKind.GENERAL, default=OPUS, candidates=TRUST) == OPUS
 
 
 def test_high_confidence_kinds_override_rotation():
-    assert route(TaskKind.SECURITY, default=GEMINI, candidates=TRUST) == SOL
+    assert route(TaskKind.SECURITY, default=GROK, candidates=TRUST) == SOL
 
 
 # -- exclusions --------------------------------------------------------------
 
 
-def test_mobile_work_never_lands_on_the_excluded_model():
-    """~20 points behind on a directly-verified real-world Android benchmark."""
-    for default in TRUST:
-        assert route(TaskKind.MOBILE, default=default, candidates=TRUST) != GEMINI
+def test_the_orchestrator_is_excluded_from_security_work():
+    assert FABLE in policy_for(TaskKind.SECURITY).exclude
 
 
 def test_an_exclusion_holds_even_when_the_preferred_model_is_down():
-    down = {OPUS}
+    """Security pins Sol and excludes the orchestrator; with Sol down the work
+    must still not climb back to the excluded model."""
     got = route(
-        TaskKind.MOBILE,
-        default=GEMINI,
-        candidates=TRUST,
-        available=lambda k: k not in down,
+        TaskKind.SECURITY,
+        default=FABLE,
+        candidates=[FABLE, OPUS],
+        available=lambda k: k != SOL,
     )
-    assert got not in (GEMINI, OPUS)
+    assert got != FABLE
 
 
-def test_the_orchestrator_is_excluded_from_security_work():
-    assert "claude:fable" in policy_for(TaskKind.SECURITY).exclude
+def test_no_exclusion_names_a_model_outside_the_lineup():
+    """An exclusion pointing at a model nothing can route to is noise that
+    outlives its evidence -- it reads as a live finding and cannot fire."""
+    for kind, policy in ROUTING.items():
+        for key in policy.exclude:
+            assert resolve(key) is not None, f"{kind} excludes a retired model: {key}"
 
 
 # -- routing never stalls a task ---------------------------------------------
@@ -106,9 +111,9 @@ def test_an_unknown_kind_rotates_rather_than_raising():
 
 def test_a_pinned_but_unavailable_model_degrades_gracefully():
     got = route(
-        TaskKind.TEST, default=GEMINI, candidates=TRUST, available=lambda k: k != SOL
+        TaskKind.TEST, default=GROK, candidates=TRUST, available=lambda k: k != SOL
     )
-    assert got == GEMINI
+    assert got == GROK
 
 
 def test_everything_unavailable_still_returns_a_lead():
@@ -120,50 +125,70 @@ def test_everything_unavailable_still_returns_a_lead():
 
 
 def test_route_prefers_earlier_entries_in_the_prefer_list():
-    assert route(TaskKind.REVIEW, default=GEMINI, candidates=TRUST) == SOL
+    assert route(TaskKind.REVIEW, default=GROK, candidates=TRUST) == SOL
 
 
 # -- the difficulty ladder ---------------------------------------------------
 
 
-def test_the_ladder_spans_all_four_subscriptions():
-    """The point is load-spreading: one lead per vendor window."""
+def test_the_ladder_spans_every_subscription():
+    """The point is load-spreading: no vendor window sits idle while another
+    exhausts."""
+    from quadratus.registry import VENDORS
+
     providers = {k.split(":")[0] for k in DIFFICULTY_LADDER.values()}
-    assert providers == {"claude", "openai", "grok", "gemini"}
+    assert providers == set(VENDORS)
+
+
+def test_the_doubled_vendor_is_the_least_contended_one():
+    """Four rungs across three vendors means somebody takes two. It should be
+    the vendor that is not also carrying an orchestrator seat or the pinned
+    kinds."""
+    from collections import Counter
+
+    from quadratus.registry import ORCHESTRATOR_CHAIN
+
+    counts = Counter(k.split(":")[0] for k in DIFFICULTY_LADDER.values())
+    doubled = [vendor for vendor, n in counts.items() if n > 1]
+    seat_vendors = {k.split(":")[0] for k in ORCHESTRATOR_CHAIN}
+    assert doubled == ["grok"]
+    assert "grok" not in seat_vendors
 
 
 def test_each_difficulty_maps_to_its_rung():
-    assert route(TaskKind.BACKEND, default=GEMINI, difficulty="complex") == OPUS
-    assert route(TaskKind.BACKEND, default=GEMINI, difficulty="standard") == SOL
-    assert route(TaskKind.BACKEND, default=OPUS, difficulty="simple") == "grok:grok-4.6"
-    assert route(TaskKind.BACKEND, default=OPUS, difficulty="rote") == GEMINI
+    assert route(TaskKind.BACKEND, default=GROK, difficulty="complex") == OPUS
+    assert route(TaskKind.BACKEND, default=GROK, difficulty="standard") == SOL
+    assert route(TaskKind.BACKEND, default=OPUS, difficulty="simple") == GROK
+    assert route(TaskKind.BACKEND, default=OPUS, difficulty="rote") == GROK_WORKER
 
 
 def test_an_unavailable_rung_escalates_upward_before_downward():
     """A stronger model can always do easier work; degrading is a last resort."""
-    got = route(TaskKind.BACKEND, default=GEMINI, difficulty="simple",
-                available=lambda k: k != "grok:grok-4.6")
+    got = route(TaskKind.BACKEND, default=GROK, difficulty="simple",
+                available=lambda k: k != GROK)
     assert got == SOL
-    got = route(TaskKind.BACKEND, default=GEMINI, difficulty="complex",
+    got = route(TaskKind.BACKEND, default=GROK, difficulty="complex",
                 available=lambda k: k != OPUS)
     assert got == SOL  # nothing above Opus; falls one rung down
 
 
 def test_an_excluded_rung_is_skipped():
-    """Rote mobile work must not land on Gemini; it climbs to the next rung."""
-    got = route(TaskKind.MOBILE, default=OPUS, difficulty="rote")
-    assert got == "grok:grok-4.6"
+    """Rote security work must not land on the excluded orchestrator; it
+    climbs rather than stalling."""
+    got = route(TaskKind.SECURITY, default=FABLE, difficulty="rote",
+                available=lambda k: k != SOL)
+    assert got != FABLE
 
 
 def test_kind_pins_beat_the_ladder():
     """Security and testing go to Sol whatever the difficulty says."""
     for difficulty in DIFFICULTY_LADDER:
-        assert route(TaskKind.SECURITY, default=GEMINI, difficulty=difficulty) == SOL
-        assert route(TaskKind.TEST, default=GEMINI, difficulty=difficulty) == SOL
+        assert route(TaskKind.SECURITY, default=GROK, difficulty=difficulty) == SOL
+        assert route(TaskKind.TEST, default=GROK, difficulty=difficulty) == SOL
 
 
 def test_no_difficulty_means_no_ladder():
-    assert route(TaskKind.BACKEND, default=GEMINI) == GEMINI
+    assert route(TaskKind.BACKEND, default=GROK) == GROK
 
 
 def test_only_a_handful_of_kinds_pin_at_all():

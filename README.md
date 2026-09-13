@@ -4,54 +4,106 @@
 
 <h1 align="center">Quadratus</h1>
 
-<p align="center"><em>Multi-LLM Workflow — four frontier models on one coding task</em></p>
+<p align="center"><em>Multi-LLM Workflow — rival frontier models on one coding task</em></p>
 
 
-A multi-model coding system: several frontier models collaborate on one
-coding task instead of one model working alone. It runs in two ways —
-against **billed APIs** (Anthropic, OpenAI, Google) or, more interestingly,
-against the **consumer subscriptions you already pay for** (Claude Pro/Max,
-ChatGPT Plus/Pro, Google AI Pro/Ultra, SuperGrok) by driving each vendor's
-coding-agent CLI, so a run draws on subscription rate-limit windows rather
-than per-token billing.
+A multi-model coding system: frontier models from competing vendors
+collaborate on one coding task instead of one model working alone. It is
+built for the **consumer subscriptions you already pay for** — Claude
+Pro/Max, ChatGPT Plus/Pro, SuperGrok — driving each vendor's coding-agent
+CLI so a run draws on subscription rate-limit windows rather than per-token
+billing. Billed API keys still work, per provider, for anything you would
+rather run that way.
 
-The repo contains two generations of the system:
+Today's lineup is **Anthropic, OpenAI and xAI**. Google was in it until
+2026-09-12; its roster rows are kept in `registry.RETIRED_ROSTER` with their
+notes, so restoring it is moving three rows back and adding a ladder rung.
 
-1. **The collaboration pipeline** (shipping today) — the `quadratus` CLI and
-   Gradio GUI run a four-phase plan → consensus → build-and-debate →
-   synthesis loop across the configured providers.
-2. **The session engine** (under active development) — a persistent
-   orchestrator that decomposes a project into sized tasks and routes each
-   one to the right model, with cross-vendor review, disposable worker
-   models, an append-only ledger, and deterministic gates. Its modules live
-   alongside the pipeline in `quadratus/` and are fully unit-tested, but it
-   is not yet wired to the CLI entry points.
+The primary workflow opens a **persistent local project**. The session engine
+reads its source, routes sized tasks to the existing model roster, saves granted
+edits into that folder, and runs checks in the same folder. The GUI opens on
+this project workflow. Code discussion remains available for snippets.
+
+```bash
+# Existing project; granted edits stay here, even after the run ends.
+quadratus "Fix the parser and add regression coverage" \
+  --project /path/to/repository --allow-writes --check "pytest -q"
+
+# Optional GitHub clone and new local branch; uses your existing Git credentials.
+quadratus "Implement the first task" --project /path/to/new-checkout \
+  --clone https://github.com/owner/repository.git --branch quadratus/task \
+  --allow-writes
+```
+
+Without `--allow-writes`, the project is supplied as disposable source copies
+for analysis. A nonexistent project folder is created and initialized with Git.
+Files live in the selected folder; reports, raw transcripts, ledger, usage and
+`changes.diff` live under `.quadratus/runs/<run-id>/`. An empty diff is reported
+explicitly, and failed checks prevent a completed result. `--check` and write
+grants require `--project`; they cannot accidentally test the launch directory.
+
+`--project` selects the session engine automatically. A bare
+`quadratus "<goal>"` retains the original four-phase discussion pipeline;
+`--session` without a project is also text-only. `-o` exports the report, not a
+source tree. No commit, push or pull request is created automatically.
+See [Project workflow](docs/PROJECT_WORKFLOW.md) for contracts and validation.
 
 ## Backends: API keys or subscription CLIs
 
 Every provider can be served by either backend, chosen per provider or
 globally (`LLM_BACKEND=api|cli`, or `CLAUDE_BACKEND`, `OPENAI_BACKEND`, …):
 
-| Provider | API backend | CLI backend (subscription) |
-|----------|-------------|----------------------------|
-| Claude | `ANTHROPIC_API_KEY` | `claude` (Claude Pro/Max) |
-| ChatGPT | `OPENAI_API_KEY` | `codex` (ChatGPT Plus/Pro) |
-| Gemini | `GOOGLE_API_KEY` | `agy` (Google AI Pro/Ultra) |
-| Grok | `XAI_API_KEY` | `grok` (SuperGrok / X Premium+) |
+| Provider | CLI backend (subscription, default) | API backend |
+|----------|-------------------------------------|-------------|
+| Claude | `claude` (Claude Pro/Max) | `ANTHROPIC_API_KEY` |
+| ChatGPT | `codex` (ChatGPT Plus/Pro) | `OPENAI_API_KEY` |
+| Grok | `grok` (SuperGrok / X Premium+) | `XAI_API_KEY` |
+
+A provider whose CLI is missing reports itself unavailable rather than
+quietly switching to billed transport — an unexpected invoice is a worse
+failure than a clear error.
 
 CLI specs are declarative (`quadratus/cli_providers.py`), so a vendor
-renaming a flag is a one-line fix. Each CLI agent runs sandboxed in a
-scratch directory with file writes denied unless explicitly granted —
-coding agents will otherwise happily edit your working tree while
-"reviewing" it.
+renaming a flag is a one-line fix — and the operator can make that fix from
+`.env` (`QUADRATUS_CLI_BINARY_<VENDOR>`, `QUADRATUS_CLI_ARGS_<VENDOR>`)
+without touching Python. The current specs include recorded signed-in checks
+against Claude 2.1.269, codex-cli 0.154.0 and Grok 1.0.30. Run
+`quadratus --probe` to check the aliases accepted by your installed CLIs.
+
+Project execution requires CLI transport; API providers remain available for
+code discussion. Editing calls receive the persistent project only with a write
+grant. Other calls receive fresh copies, and bounded editors return text patches
+for the harness to apply. Copies isolate relative file writes; they are not an
+operating-system sandbox against arbitrary absolute paths or malicious commands.
+
+### Models are addressed by line, not by release
+
+The orchestrator seats (`claude:fable`, `openai:gpt-6-astra`) carry
+*floating* aliases: they name a model line, and the
+vendor CLI resolves it to whatever the current release is. That is enforced
+at import — a pinned alias in `ORCHESTRATOR_CHAIN` raises. The seat is
+chosen once and held for a whole session, so it is the worst place in the
+system to freeze an iteration: nothing would revisit the choice until
+somebody noticed the run was still on last quarter's model.
+
+`quadratus/latest.py` resolves an alias from, in order: an operator override
+(`QUADRATUS_ALIAS_CLAUDE_FABLE=…`), what `quadratus --probe` last saw a CLI
+accept, and the registry seed. Pinned rows ignore the cache — they name one
+release deliberately.
+
+The strongest form of this is not an alias at all. `grok:default` carries
+`vendor_default=True`, which means the CLI is handed **no model flag** and
+applies its own current default — xAI moves the pointer, the run follows, and
+there is nothing to guess, probe, or edit. Available wherever a CLI has a
+default (`grok models` marks one); an operator override still wins.
 
 **Scope of use:** vendor terms permit driving your own subscription's CLI
 for ordinary individual use, on your own machine. Routing other people's
 prompts through your credential is prohibited by every vendor, so the GUI
-refuses to enable public sharing while a CLI backend is active. See the
+stays on localhost. Its project controls have local filesystem and command access, so public sharing is disabled on every backend. See the
 docstring in `quadratus/cli_providers.py` for the full reasoning.
 
-## The collaboration pipeline (current entry point)
+## The collaboration pipeline (code discussion)
 
 `quadratus/orchestrator.py` runs four phases:
 
@@ -67,24 +119,33 @@ It degrades gracefully: one configured provider gives a strong solo answer;
 a missing key or uninstalled CLI disables that provider instead of crashing
 the run.
 
-## The session engine (in progress)
+## The session engine (project workflow)
 
 The rebuild replaces the flat debate with an orchestrated session. The
 architecture, briefly:
 
 - **A persistent orchestrator** (Claude's top tier) is the only participant
   that lives for the whole session; it names the next task and rules on
-  questions. It is a hard dependency — unavailable means the run halts, not
-  substitutes.
+  questions. If Fable is unreachable the seat passes to GPT-6 Astra — the
+  only fallback, behind a different subscription — and if that is gone too
+  the run stops. Opus 5 is capable of the seat and deliberately never takes
+  it: it is a brain-trust peer and half the reviewer pair, and those roles
+  are worth more to the run. The substitution is recorded on the seat and
+  lapses by recomputation the moment the primary is back. A
+  security-classified segment yields the seat for a different reason and
+  lands on the same deputy, which defers the work to Sol; because both are
+  OpenAI's, the cross-vendor verification rule in `session.py` redraws the
+  check to Opus.
 - **A fixed brain trust** of frontier models leads individual tasks. A lead
   keeps full working memory for one task and is wiped when it closes;
   **worker bees** (each vendor's fast model, picked by errand type:
-  lookup / read / check / format) keep nothing. Three memory scopes, one
+  lookup / read / visual / check / format) keep nothing. Three memory scopes, one
   per role (`memory.py`, `workers.py`).
 - **Difficulty-ladder routing** (`task_kinds.py`, `registry.py`): task
-  difficulty picks the model; kind-based pins (security, review, mobile…)
+  difficulty picks the model; kind-based pins (security and testing to Sol,
+  review to the reviewer pair, scope and decomposition to the orchestrator)
   are the exception and each carries its evidence. The roster is a seed —
-  probe the installed CLIs rather than trusting hardcoded tables.
+  `quadratus --probe` replaces the guesses with what your CLIs accept.
 - **Task size beats model choice**: decomposition carries a hard size
   ceiling, because review quality collapses on large diffs faster than any
   gap between reviewers.
@@ -121,10 +182,28 @@ pip install -r requirements.txt   # or: pip install -e .
 cp .env.example .env
 ```
 
-Then either add at least one API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-`GOOGLE_API_KEY`, `XAI_API_KEY`) or set `LLM_BACKEND=cli` and sign in to the vendor CLIs
-you have subscriptions for. `.env.example` documents every setting,
-including per-provider backends and CLI model tiers.
+Subscription transport is the default, so setup is installing and signing in
+to the CLIs you have subscriptions for (commands verified on macOS,
+2026-09-12):
+
+```bash
+npm install -g @anthropic-ai/claude-code     # -> claude
+npm install -g @openai/codex                 # -> codex
+brew install --cask grok-build               # -> grok  (x.ai/build)
+
+claude          # then /login                  (Claude Pro/Max)
+codex login     # `codex login status` to check (ChatGPT Plus/Pro)
+grok login      # `grok models` lists what your account reaches
+
+quadratus --status    # what is configured — free
+quadratus --probe     # what the CLIs actually accept — spends a little budget
+```
+
+To use billed API keys instead, set `LLM_BACKEND=api` (or
+`CLAUDE_BACKEND=api` for one provider) and the matching key —
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`. `.env.example`
+documents every setting, including per-provider backends, CLI flag
+overrides, and alias overrides.
 
 ## Usage
 
@@ -132,11 +211,39 @@ including per-provider backends and CLI model tiers.
 # After `pip install -e .`:
 quadratus "Implement an LRU cache with O(1) get/put in Python, with tests"
 
-quadratus --status                 # which providers/backends are configured
+quadratus --status                 # which providers/backends are configured,
+                                   # and what each model resolves to today
+quadratus --probe                  # ask the installed CLIs which aliases they
+                                   # accept; caches the answers (costs a little
+                                   # subscription budget)
+quadratus --probe-all              # …for every model, not just the seats
 quadratus "..." --rounds 2         # more refinement rounds
 quadratus "..." --show-stages      # print every intermediate stage
 quadratus "..." -o solution.md     # save the full run to a file
 ```
+
+### The session engine
+
+```bash
+quadratus "Add rate limiting to the API, with tests" --project /path/to/repo
+
+  --plan-gate          # review the whole task list before any window is spent
+  --check 'pytest -q'  # run the project's own tests after each task's work
+  --max-tasks 20       # runaway backstop, not a quality gate
+  --mode solo          # adversarial (default) | collaborative | solo
+  --allow-writes       # let the agents edit files (off by default)
+  --state-dir DIR      # artifacts, codebase map, usage log (default .quadratus)
+```
+
+A run reports each seat and task as it moves, then prints every close-out and
+the API-price counterfactual. Everything it accumulated stays in the state
+directory: the artifact store holds the raw output that summaries only point
+at, the codebase map is cross-session memory about the repository, and
+each run's `usage.jsonl` is the cost ledger.
+
+If the orchestrator's own window is exhausted mid-run, the seat falls to the
+fallback and the run continues — availability is learned by calling, so the
+first request is often what discovers it.
 
 Web interface: `quadratus-gui` (or `python chat_gui.py`), then open
 http://127.0.0.1:7860. Conversation memory, file uploads, and a per-model
@@ -147,8 +254,11 @@ contribution breakdown. Sharing is disabled while a CLI backend is active.
 ```
 quadratus/
   config.py           # Settings dataclass, env loading, backend selection
-  providers.py        # API providers (Claude/ChatGPT/Gemini/Grok) + retries
-  cli_providers.py    # Subscription CLI providers (claude/codex/agy/grok)
+  providers.py        # API providers (Claude/ChatGPT/Grok) + retries
+  cli_providers.py    # Subscription CLI providers (claude/codex/grok)
+  runtime.py          # Fleet: roster keys -> the CLI that answers them
+  latest.py           # Floating aliases: addressing a line, not a release
+  probe.py            # Asks the installed CLIs what they actually accept
   prompts.py          # Prompts for the pipeline phases
   orchestrator.py     # Four-phase collaboration pipeline (current entry)
   cli.py, gui.py      # Command-line and Gradio interfaces

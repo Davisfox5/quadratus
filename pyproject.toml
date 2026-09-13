@@ -5,14 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "quadratus"
 version = "1.0.0"
-description = "Quadratus: Claude, ChatGPT, Gemini and Grok collaborate on one coding task (plan, consensus, build-and-debate, synthesis), on billed APIs or your own subscriptions via the vendor coding-agent CLIs."
+description = "Quadratus: Claude, ChatGPT and Grok collaborate on one coding task (plan, consensus, build-and-debate, synthesis), on your own consumer subscriptions via the vendor coding-agent CLIs, or on billed APIs."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
     "anthropic>=1.0.0",
     "openai>=1.40.0",
-    "google-genai>=0.3.0",
     "python-dotenv>=1.0.0",
     "colorama>=0.4.6",
     "gradio>=6,<7",

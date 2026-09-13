@@ -1,0 +1,417 @@
+"""The bridge between roster keys and the CLIs that actually answer.
+
+Everything above this module talks in roster keys -- ``claude:opus``,
+``openai:gpt-5.6-sol``. Everything below it talks to a subprocess. Until now
+nothing joined the two: :mod:`quadratus.session` took an ``invoke`` callable
+and the only implementations were test fakes, which is a fine way to develop
+a run loop and not a way to run one. :class:`Fleet` is that callable.
+
+What it is responsible for
+--------------------------
+* **One provider per vendor, not one per model.** A CLI provider resolves a
+  binary and owns a scratch directory; building one per roster key would
+  multiply both for no reason. Models are addressed by rebinding the alias
+  (``LLMProvider.for_model``), which is also what keeps a vendor's prompt
+  cache warm -- the cache is per subscription, and a cold invocation carries
+  roughly ten times the scaffolding cost of a warm one.
+* **Resolving the alias at call time**, through :mod:`quadratus.latest`, so a
+  floating seat follows its model line forward without an edit here.
+* **Liveness, honestly.** ``available`` is the predicate the seat logic and
+  the routing tables consult, and it answers from evidence: is the binary
+  there, and has this vendor already told us the window is spent? A model
+  that has not been tried is available, because assuming otherwise would
+  halt runs on a guess.
+
+What it deliberately does not do
+--------------------------------
+It does not fail over between vendors. Which model does what is decided by
+:mod:`quadratus.routing` and :mod:`quadratus.task_kinds`, with reasons, and a
+transport layer quietly substituting a different model would make those
+decisions unfalsifiable -- the run would look like it followed the policy
+while doing something else. A dead vendor surfaces as ``available() is
+False`` and the policy re-routes, or the run halts, as that policy says.
+
+Subscription transport, specifically
+------------------------------------
+Every provider here is the vendor's own coding-agent CLI, signed in with a
+consumer subscription. That means no API key is read, no per-token bill is
+incurred, and the binding constraint is each vendor's rate-limit window --
+which is why one exhausted window is a routing fact (``available`` goes
+False) rather than an error, and why the meter's dollar figures are a
+counterfactual rather than a bill.
+"""
+
+from __future__ import annotations
+
+import copy
+import logging
+import os
+import re
+import threading
+from dataclasses import replace
+from typing import Callable, Dict, List, Optional
+
+from .config import Settings
+from .latest import alias_for, resolution_source
+from .project import Project
+from .providers import LLMProvider, ProviderError, build_provider
+from .registry import VENDORS, resolve
+from .usage import UsageMeter
+
+log = logging.getLogger(__name__)
+
+__all__ = ["Fleet", "WindowExhausted", "UnknownModel", "new_session"]
+
+
+class UnknownModel(ProviderError):
+    """A roster key names a vendor this fleet has no provider for."""
+
+
+class WindowExhausted(ProviderError):
+    """A model reported its subscription rate-limit window spent.
+
+    Distinct from an ordinary transport failure because the response is
+    different: retrying spends nothing and gains nothing until the window
+    rolls over, so the model is marked down and the policy layers re-route
+    around it (or halt, where the policy says a seat cannot be substituted).
+
+    The marker attribute is how :mod:`quadratus.session` recognises this
+    without importing it. That module is handed an ``invoke`` callable
+    precisely so it knows nothing about transports, and making it catch a
+    transport's exception class would undo that for one special case. An
+    attribute any implementation can set keeps the seam intact.
+    """
+
+    #: Recognised by duck-typing upstream. See above.
+    window_exhausted = True
+
+
+#: Phrases a CLI uses when the *subscription* is out, as opposed to a
+#: momentary server-side rate limit. Matched on wording because every vendor
+#: exits 1 regardless. Deliberately narrow: treating a transient 429 as an
+#: exhausted window would take a healthy model out of the run for the session.
+#:
+#: The first entry is not a guess. Observed verbatim from the Claude CLI on
+#: 2026-09-12: "You've reached your Fable limit. Switch to another model, or
+#: manage usage credits at claude.ai/..." -- which matched none of the
+#: patterns written from imagination, so the run saw a generic transport
+#: error instead of an exhausted window. Add what you actually see here.
+_EXHAUSTION_MARKERS = (
+    "reached your",          # "You've reached your Fable limit" (Claude, seen)
+    "usage limit",
+    "usage limits",
+    "quota exceeded",
+    "out of credits",
+    "subscription limit",
+    "weekly limit",
+    "plan limit",
+    "limit reached",
+    "upgrade to continue",
+)
+
+
+class Fleet:
+    """The vendor CLIs, addressed by roster key.
+
+    Args:
+        settings: Transport configuration. Defaults to the environment.
+        allow_writes: Grant the agents file-write access. Off by default --
+            several models running concurrently in a shared tree is
+            write-thrash, and a reviewer asked to critique will otherwise
+            edit instead.
+        usage_meter: When given, every call is metered, using the CLI's real
+            token counts where it reports them and a character estimate
+            otherwise. Pass it here rather than to :class:`SessionConfig`,
+            which would meter the same calls a second time with estimates
+            only.
+        system: The system prompt handed to every call. The role each model
+            is playing arrives in the prompt itself.
+    """
+
+    def __init__(
+        self,
+        settings: Optional[Settings] = None,
+        *,
+        allow_writes: bool = False,
+        project=None,
+        usage_meter: Optional[UsageMeter] = None,
+        system: str = "You are collaborating on a software engineering task.",
+    ) -> None:
+        self.settings = settings or Settings.from_env()
+        self.allow_writes = allow_writes
+        self.project = project if isinstance(project, Project) else Project(project) if project else None
+        self.usage_meter = usage_meter
+        self.system = system
+        self._providers: Dict[str, Optional[LLMProvider]] = {}
+        self._exhausted: Dict[str, str] = {}
+        self._lock = threading.Lock()
+
+    # -- providers -----------------------------------------------------------
+    def _vendor_provider(self, vendor: str) -> Optional[LLMProvider]:
+        """Build (once) the provider for one vendor.
+
+        Cached including the failure case: a missing binary is a stable fact
+        about the machine, and re-running ``shutil.which`` on every call to
+        rediscover it would be noise in the logs and latency on the path.
+        """
+        with self._lock:
+            if vendor not in self._providers:
+                if vendor not in VENDORS:
+                    self._providers[vendor] = None
+                else:
+                    provider = build_provider(
+                        vendor, self.settings, allow_writes=False,
+                        workdir=self.project.root if self.project else None,
+                    )
+                    if provider is not None and not provider.available():
+                        log.warning("%s is not available: %s", vendor, provider.status)
+                    self._providers[vendor] = provider
+            return self._providers[vendor]
+
+    def provider_for(self, key: str) -> LLMProvider:
+        """The provider for ``key``, bound to the alias it resolves to today."""
+        vendor = key.partition(":")[0]
+        provider = self._vendor_provider(vendor)
+        if provider is None:
+            raise UnknownModel(
+                f"{key} names the vendor {vendor!r}, which is not in this "
+                f"lineup ({', '.join(VENDORS)})."
+            )
+        if not provider.available():
+            raise ProviderError(f"{key} is not usable: {provider.status}")
+        spec = resolve(key)
+        if spec is None:
+            raise UnknownModel(f"{key} is outside the active roster")
+        bound = provider.for_seat(
+            self._alias(key),
+            effort=spec.effort if spec else "",
+            restricted=spec.restricted if spec else False,
+        )
+        # Routing belongs to Session; the pipeline's per-provider fallback must
+        # never impersonate the named seat or validate a different model in probes.
+        if bound.refusal_fallback_model:
+            bound = copy.copy(bound)
+            bound.refusal_fallback_model = None
+        return bound
+
+    def _alias(self, key: str) -> str:
+        """What to call this model on the wire today.
+
+        On the CLI backend that is the line or release alias the binary
+        accepts; on the API backend it is the configured dated model ID, since
+        an API takes no aliases.
+        """
+        vendor = key.partition(":")[0]
+        if self.settings.backend_for(vendor) != "cli":
+            override = os.getenv("QUADRATUS_API_MODEL_" + re.sub(r"[^A-Z0-9]+", "_", key.upper()), "")
+            if override:
+                return override
+            spec = resolve(key)
+            if vendor == "openai":
+                return spec.alias
+            if vendor == "grok":
+                return self.settings.model_for(vendor)
+            if key == "claude:opus":
+                return self.settings.claude_model
+            raise UnknownModel(f"Set QUADRATUS_API_MODEL_{re.sub(r'[^A-Z0-9]+', '_', key.upper())} "
+                               "to the exact API model ID for this seat.")
+        return alias_for(key)
+
+    # -- liveness ------------------------------------------------------------
+    def available(self, key: str) -> bool:
+        """Is this model usable right now? The predicate seats and routing use.
+
+        False for a vendor with no CLI installed and no API key, for a model
+        outside the lineup, and for a model that has already said its own
+        window is spent. True for anything untried: a liveness check that
+        guessed pessimistically would halt runs that would have worked.
+        """
+        vendor = key.partition(":")[0]
+        if resolve(key) is None or vendor not in VENDORS:
+            return False
+        if self.project and self.settings.backend_for(vendor) != 'cli':
+            return False
+        if key in self._exhausted:
+            return False
+        try:
+            self._alias(key)
+        except UnknownModel:
+            return False
+        provider = self._vendor_provider(vendor)
+        return provider is not None and provider.available()
+
+    def mark_exhausted(self, key: str, detail: str = "") -> None:
+        """Record that one model's window is spent for the rest of this run.
+
+        Per *model*, not per vendor. These subscriptions meter each model
+        separately, which is not a theory: the Claude CLI returned "You've
+        reached your Fable limit. Switch to another model" in the same session
+        where Opus answered normally. Marking the vendor down there would have
+        taken the entire Anthropic lineup out of a run over one exhausted
+        model -- exactly the failure the orchestrator fallback exists to avoid,
+        caused by the code meant to detect it.
+        """
+        if key not in self._exhausted:
+            log.warning(
+                "%s reports its window exhausted; routing around it for the "
+                "rest of this run. %s",
+                key,
+                detail.strip()[:200],
+            )
+        self._exhausted[key] = detail
+
+    @property
+    def exhausted(self) -> Dict[str, str]:
+        return dict(self._exhausted)
+
+    # -- invocation ----------------------------------------------------------
+    def invoke(self, model_key: str, prompt: str, *, system: Optional[str] = None,
+               allow_writes: bool = False) -> str:
+        """One named seat; edit permission is explicit for each call."""
+        if allow_writes and (not self.allow_writes or self.project is None):
+            raise ProviderError("Writing requires a selected project and an operator write grant.")
+        provider = self.provider_for(model_key)
+        role = system or self.system
+        if self.project is None:
+            return self._generate(model_key, provider, prompt, role)
+        if self.settings.backend_for(model_key.partition(':')[0]) != 'cli':
+            raise ProviderError("Project sessions require CLI transport with filesystem access.")
+        if allow_writes and not provider.restricted:
+            view = provider.in_directory(self.project.root, allow_writes=True)
+            return self._generate(model_key, view, prompt, role +
+                                  "\nYour working directory is the persistent project. "
+                                  "Implement the requested changes in files. Do not commit, push, "
+                                  "or change branches. Return a concise account of the changes.")
+        with self.project.snapshot() as directory:
+            view = provider.in_directory(directory, allow_writes=False)
+            role += ("\nYour working directory is a fresh source copy. Read it to ground your "
+                     "answer. Do not change files, commit, push, or use paths outside this copy.")
+            if allow_writes:
+                role += ("\nYou are a bounded editor. Return exactly PATCH: followed by a fenced "
+                         "diff containing a standard unified diff with a/ and b/ paths. "
+                         "The harness applies it to the persistent project. For no required edits, "
+                         "return NO CHANGES: with a reason. FETCH, CONSULT and WORKER requests "
+                         "may be returned alone before the patch. You have no write tools.")
+            reply = self._generate(model_key, view, prompt, role)
+        if allow_writes:
+            match = re.fullmatch(r"\s*PATCH:\s*```(?:diff)?\n(.*?)```\s*", reply, re.DOTALL)
+            if match:
+                self.project.apply_patch(match.group(1))
+                return reply + "\nPatch applied to the project."
+            if not re.match(r"\s*(?:NO CHANGES:|FETCH:|CONSULT |WORKER )", reply):
+                raise ProviderError("Bounded editor returned no PATCH or explicit NO CHANGES result.")
+        return reply
+
+    def _generate(self, key, provider, prompt, system):
+        try:
+            reply = provider.generate(prompt, system=system)
+        except Exception as exc:
+            if _looks_exhausted(exc):
+                self.mark_exhausted(key, str(exc))
+                raise WindowExhausted(f"{key}: subscription window exhausted ({exc})") from exc
+            raise
+        self._meter(key, provider, prompt, reply)
+        return reply
+
+    def _meter(self, key: str, provider: LLMProvider, prompt: str, reply: str) -> None:
+        if self.usage_meter is None:
+            return
+        usage = getattr(provider, "last_usage", None) or {}
+        try:
+            self.usage_meter.record(
+                model=key,
+                prompt=prompt,
+                reply=reply,
+                input_tokens=usage.get("input_tokens"),
+                output_tokens=usage.get("output_tokens"),
+            )
+        except Exception:  # noqa: BLE001 -- metering must never fail a run
+            log.debug("metering failed for %s", key, exc_info=True)
+
+    def as_invoker(self) -> Callable[..., str]:
+        """The bare callable, for ``Session(invoke=...)``."""
+        return self.invoke
+
+    # -- reporting -----------------------------------------------------------
+    def status_lines(self) -> List[str]:
+        """One line per vendor: transport, binary, and whether it is usable."""
+        lines = []
+        for vendor in VENDORS:
+            backend = self.settings.backend_for(vendor)
+            provider = self._vendor_provider(vendor)
+            if provider is None:
+                lines.append(f"{vendor}: no provider ({backend} backend)")
+                continue
+            state = provider.status
+            spent = [k for k in self._exhausted if k.startswith(f"{vendor}:")]
+            if spent:
+                state += f" — window exhausted this run: {', '.join(sorted(spent))}"
+            lines.append(f"{vendor} [{backend}]: {state}")
+        return lines
+
+    def alias_lines(self) -> List[str]:
+        """What every roster key resolves to, and on whose authority."""
+        out = []
+        for vendor in VENDORS:
+            for key in (m.key for m in _roster_for(vendor)):
+                alias, source = resolution_source(key)
+                out.append(f"{key} -> {alias} ({source})")
+        return out
+
+    def close(self) -> None:
+        """Drop the scratch directories the CLI agents ran in."""
+        for provider in self._providers.values():
+            cleanup = getattr(provider, "cleanup", None)
+            if callable(cleanup):
+                cleanup()
+
+    def __enter__(self) -> "Fleet":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
+def new_session(goal, store, *, fleet=None, config=None, invariants=None, settings=None):
+    """A :class:`quadratus.session.Session` wired to the real vendor CLIs.
+
+    The session engine takes ``invoke`` and ``available`` as callables so the
+    run loop can be driven by a fake in tests. This is the other half: the
+    same two callables backed by subscriptions. Kept here rather than in
+    ``session`` so the run loop still imports nothing that knows what a
+    subprocess is.
+
+    The fleet's meter is used rather than the session's when one is
+    configured, because the fleet sees the CLI's own token counts and the
+    session only sees the strings -- and metering the same call twice would
+    double the counterfactual bill.
+    """
+    from .session import Session, SessionConfig
+
+    conf = config or SessionConfig()
+    active = fleet or Fleet(settings, project=conf.project, allow_writes=conf.allow_writes)
+    if getattr(active, "project", None) is not None:
+        conf = replace(conf, project=active.project.root,
+                       allow_writes=active.allow_writes)
+
+    if active.usage_meter is not None and conf.usage_meter is active.usage_meter:
+        conf = replace(conf, usage_meter=None)
+    return Session(
+        goal,
+        store,
+        active.invoke,
+        config=conf,
+        invariants=invariants,
+        available=active.available,
+    )
+
+
+def _roster_for(vendor: str):
+    from .registry import ROSTER
+
+    return [m for m in ROSTER if m.provider == vendor]
+
+
+def _looks_exhausted(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _EXHAUSTION_MARKERS)

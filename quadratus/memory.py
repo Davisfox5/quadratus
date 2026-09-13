@@ -124,11 +124,11 @@ class TaskMemory:
         self.record("assistant", f"[worker {worker_label}] {summary}")
         self._refs.extend(refs)
 
-    def keep(self, content: str, *, kind: str) -> Optional[ArtifactRef]:
+    def keep(self, content: str, *, kind: str, author: Optional[str] = None) -> Optional[ArtifactRef]:
         """Store raw output durably and hold a pointer to it."""
         if self._store is None:
             return None
-        ref = self._store.put(content, kind=kind, author=self.author)
+        ref = self._store.put(content, kind=kind, author=author or self.author)
         self._refs.append(ref)
         return ref
 

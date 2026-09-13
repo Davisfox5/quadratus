@@ -13,6 +13,8 @@ import sys
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
+from .registry import VENDORS
+
 try:  # Loading .env is best-effort; missing python-dotenv must not crash.
     from dotenv import load_dotenv
 
@@ -44,23 +46,27 @@ def env_with_legacy(name: str, legacy: str, default: str = "") -> str:
     return value
 
 
-# Top-tier defaults for the API backend, each checked against its vendor's
-# model documentation on 2026-09-06. Override via the environment as new
-# models ship or to match your account's access. Notes behind these choices:
+# Defaults for the API backend, each checked against its vendor's model
+# documentation on 2026-09-06. Override via the environment as new models ship
+# or to match your account's access. Notes behind these choices:
 #   * gpt-5.6-sol (alias gpt-5.6) is OpenAI's flagship and the model the
 #     registry already seats. It is served on both Responses and Chat
 #     Completions; the -pro models (gpt-5.5-pro) are Responses-only, which
 #     the OpenAI provider now speaks, so a -pro override also works.
-#   * Google publishes Gemini 3.1 Pro only as gemini-3.1-pro-preview -- there
-#     is no bare gemini-3.1-pro ID -- and named it the replacement when
-#     gemini-3-pro-preview was shut down on 2026-03-09.
 #   * grok-4.6 is xAI's documented frontier model (500K context).
+#
+# These are dated, pinned IDs on purpose: an API takes no aliases, so there is
+# nothing here that could follow a model line forward. That is one more reason
+# the CLI backend is the default -- see DEFAULT_BACKEND, and the floating
+# aliases in quadratus/registry.py.
 DEFAULT_CLAUDE_MODEL = "claude-opus-5"
 DEFAULT_OPENAI_MODEL = "gpt-5.6-sol"
-DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_GROK_MODEL = "grok-4.6"
 
-DEFAULT_PROVIDER_ORDER = "claude,openai,gemini,grok"
+# Three vendors, three subscriptions: Anthropic, OpenAI, xAI. Google left the
+# lineup on 2026-09-12; quadratus/registry.py records what that means and what
+# restoring it would take.
+DEFAULT_PROVIDER_ORDER = "claude,openai,grok"
 
 # CLI backends address models by the vendor CLI's own naming, which is usually
 # a short alias rather than a dated API model ID. Two tiers are configured per
@@ -75,16 +81,27 @@ DEFAULT_PROVIDER_ORDER = "claude,openai,gemini,grok"
 #   * GPT-5.6's tiers barely separate on coding (Sol->Luna is ~1.9pts on
 #     SWE-bench Pro for a 5x price difference), so Luna is a defensible low
 #     tier and arguably a defensible high tier for routine work.
-#   * Gemini's current Pro is still 3.1; no 3.5 Pro shipped. Current Flash is
-#     3.6 as of ~2026-07-21.
+#   * The Claude tiers are line names, not releases: `claude --model opus`
+#     resolves to whatever the current Opus is. Prefer that shape wherever a
+#     CLI offers it -- a tier that has to be edited when a vendor ships is a
+#     tier that will not be.
+#   * Grok's high tier is deliberately empty: sending no model flag makes the
+#     CLI apply its own default, which is how that seat stays on whatever xAI
+#     currently ships rather than on whichever iteration someone last typed
+#     here. Put an ID here only to pin it against the vendor's choice.
 DEFAULT_CLI_MODELS = {
     "claude": {"high": "opus", "low": "haiku"},
     "openai": {"high": "gpt-5.6-sol", "low": "gpt-5.6-luna"},
-    "gemini": {"high": "gemini-3.1-pro", "low": "gemini-3.6-flash"},
-    "grok": {"high": "grok-4.6", "low": "grok-4-1-fast"},
+    "grok": {"high": "", "low": ""},
 }
 
 #: Transport for every provider unless overridden per provider.
+#:
+#: Subscription CLIs are the default because they are what this system is for:
+#: the vendor windows are already paid for, and a run that silently fell back
+#: to billed API keys would be a surprise on somebody's invoice rather than a
+#: graceful degradation. A provider whose CLI is missing reports itself
+#: unavailable; it does not quietly switch transports.
 DEFAULT_BACKEND = "cli"
 
 _VALID_BACKENDS = ("cli", "api")
@@ -115,9 +132,6 @@ class Settings:
     anthropic_api_key: Optional[str] = field(
         default_factory=lambda: os.getenv("ANTHROPIC_API_KEY")
     )
-    google_api_key: Optional[str] = field(
-        default_factory=lambda: os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-    )
     xai_api_key: Optional[str] = field(
         default_factory=lambda: os.getenv("XAI_API_KEY") or os.getenv("GROK_API_KEY")
     )
@@ -128,9 +142,6 @@ class Settings:
     )
     openai_model: str = field(
         default_factory=lambda: os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
-    )
-    gemini_model: str = field(
-        default_factory=lambda: os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
     )
     grok_model: str = field(
         default_factory=lambda: os.getenv("GROK_MODEL", DEFAULT_GROK_MODEL)
@@ -169,11 +180,11 @@ class Settings:
     backend: str = field(
         default_factory=lambda: os.getenv("LLM_BACKEND", DEFAULT_BACKEND).strip().lower()
     )
-    #: Per-provider overrides, e.g. ``{"gemini": "api"}`` from GEMINI_BACKEND.
+    #: Per-provider overrides, e.g. ``{"grok": "api"}`` from GROK_BACKEND.
     backend_overrides: Dict[str, str] = field(
         default_factory=lambda: {
             name: value.strip().lower()
-            for name in ("claude", "openai", "gemini", "grok")
+            for name in VENDORS
             for value in (os.getenv(f"{name.upper()}_BACKEND", ""),)
             if value.strip()
         }
@@ -230,11 +241,14 @@ class Settings:
         """
         if self.backend_for(provider) == "cli":
             tiers = self.cli_models.get(provider, {})
-            return tiers.get(tier) or tiers.get("high") or ""
+            # An empty tier is a value, not a gap: it means "name no model and
+            # take the CLI's default". Only a *missing* tier falls back to high.
+            if tier in tiers:
+                return tiers[tier]
+            return tiers.get("high", "")
         return {
             "claude": self.claude_model,
             "openai": self.openai_model,
-            "gemini": self.gemini_model,
             "grok": self.grok_model,
         }.get(provider, "")
 
@@ -257,7 +271,7 @@ class Settings:
 
         Public Gradio sharing must stay off in that case: routing anyone else's
         prompts through your subscription credential violates the consumer
-        terms of all four vendors.
+        terms of every vendor in the lineup.
         """
         return any(
             self.backend_for(name) == "cli"

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import queue
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional
 
@@ -94,129 +96,139 @@ def _format_response(result) -> str:
     return "".join(parts)
 
 
+def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings):
+    """Stream progress while the shared project runner performs model calls."""
+    from .project_run import run_project
+    events = queue.Queue()
+    notes = []
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(run_project, goal, folder, settings,
+                             allow_writes=allow_writes, check=check,
+                             mode=mode, max_tasks=int(max_tasks),
+                             progress=events.put)
+        while not future.done():
+            try:
+                notes.append(events.get(timeout=0.25))
+                yield "\n\n".join(notes), '', []
+            except queue.Empty:
+                pass
+        try:
+            result = future.result()
+        except Exception as exc:
+            yield f"Run failed: {exc}", '', []
+            return
+    yield result.report, result.diff, [str(result.run_dir / name)
+                                      for name in ('report.md', 'changes.diff', 'ledger.md', 'result.json')]
+
+
 def build_interface(settings: Optional[Settings] = None):
     import gradio as gr
 
-    settings = settings or Settings.from_env()
-    orchestrator = Orchestrator(settings)
-    available = [p.status for p in orchestrator.available]
-    status_md = (
-        "**Active collaborators:** " + ", ".join(available)
-        if available
-        else "⚠️ **No providers configured.** Set at least one API key in `.env`."
-    )
+    from .project import Project
+    from .repo_scan import scan_repo
 
+    settings = settings or Settings.from_env()
     with gr.Blocks(title="Quadratus") as demo:
         svg = inline_mark(52)
-        if svg is None:
-            gr.Markdown("# Quadratus")
+        if svg:
+            gr.HTML('<div style="display:flex;align-items:center;gap:14px">' + svg +
+                    '<span style="font-family:Baskerville,Georgia,serif;font-size:30px;'
+                    'letter-spacing:4px">QUADRATUS</span></div>')
         else:
-            gr.HTML(
-                '<div style="display:flex;align-items:center;gap:14px">'
-                f"{svg}"
-                '<span style="font-family:Baskerville,Georgia,serif;font-size:30px;'
-                'font-weight:700;letter-spacing:4.6px">QUADRATUS</span>'
-                "</div>"
-            )
-        gr.Markdown(
-            "Claude, ChatGPT, Gemini and Grok on one coding task — every model plans, "
-            "a coordinator merges the plans, a lead drafts while the others review and "
-            "rebut, and a synthesizer folds it all into one answer. Runs on API keys or "
-            "on the subscriptions you already pay for."
-        )
-        gr.Markdown(status_md)
+            gr.Markdown('# Quadratus')
+        gr.Markdown('Open a project. Give the team a task. Review the files, diff, and test results.')
+        with gr.Tabs():
+            with gr.Tab('Project'):
+                selected = gr.State('')
+                project_path = gr.Textbox(label='Project folder', placeholder='/path/to/project')
+                with gr.Row():
+                    clone_url = gr.Textbox(label='GitHub URL (optional)', placeholder='https://github.com/owner/repo')
+                    branch = gr.Textbox(label='New branch (optional)')
+                open_button = gr.Button('Open or create project')
+                project_info = gr.Markdown('Choose an existing folder or a destination for a new project.')
+                source_files = gr.Textbox(label='Project files', lines=8, interactive=False)
+                goal = gr.Textbox(label='What should change?', lines=4)
+                with gr.Row():
+                    edits = gr.Checkbox(label='Allow changes to project files', value=False)
+                    mode = gr.Dropdown(['adversarial', 'collaborative', 'solo'], value='adversarial', label='Collaboration')
+                    max_tasks = gr.Number(value=20, minimum=1, precision=0, label='Task limit')
+                check = gr.Textbox(label='Test or build command (optional)',
+                                   placeholder='Auto-detect from the project, or enter a command')
+                run_button = gr.Button('Run project task', variant='primary', interactive=False)
+                report = gr.Markdown()
+                diff = gr.Code(label='Source changes', language=None, interactive=False)
+                downloads = gr.File(label='Saved run files', file_count='multiple', interactive=False)
 
-        chatbot = gr.Chatbot(height=520, label="Conversation")
+                def open_project(folder, url, new_branch):
+                    if not folder.strip():
+                        raise gr.Error('Enter the project folder first.')
+                    try:
+                        project = Project.open(folder, clone_url=url.strip(), branch=new_branch.strip())
+                        scan = scan_repo(project.root)
+                        files = [p.relative_to(project.root).as_posix() for p in project.files()]
+                    except (ValueError, ProviderError, OSError) as exc:
+                        raise gr.Error(str(exc)) from exc
+                    info = f'**Project:** {project.root}\n\n{scan.file_count} files found. '
+                    info += 'Source changes stay in this folder; reports are saved under `.quadratus/runs`.'
+                    return (str(project.root), info, '\n'.join(files[:150]), '', '',
+                            gr.update(interactive=True))
 
-        with gr.Row():
-            msg = gr.Textbox(
-                placeholder="Describe the coding task...",
-                label="Your message",
-                scale=4,
-                lines=2,
-            )
-            file_upload = gr.File(
-                label="Attach a file (optional)",
-                file_types=[".txt", ".md", ".py", ".js", ".ts", ".html", ".css", ".json", ".csv", ".yaml", ".yml"],
-                scale=1,
-            )
+                open_button.click(open_project, inputs=[project_path, clone_url, branch],
+                                  outputs=[selected, project_info, source_files, clone_url, branch, run_button])
 
-        with gr.Row():
-            submit_btn = gr.Button("Send", variant="primary")
-            clear_btn = gr.Button("Clear")
+                def run_selected(goal, folder, writes, command, mode, limit):
+                    if not folder:
+                        raise gr.Error('Open a project first.')
+                    yield from run_project_ui(goal, folder, writes, command, mode, limit, settings)
 
-        def respond(message, history):
-            history = history or []
-            if not message or not message.strip():
-                return history, ""
-            if not orchestrator.available:
-                history = history + [
-                    {"role": "user", "content": message},
-                    {
-                        "role": "assistant",
-                        "content": "⚠️ No providers are configured. Set an API key in `.env`.",
-                    },
-                ]
-                return history, ""
+                run_button.click(run_selected, inputs=[goal, selected, edits, check, mode, max_tasks],
+                                 outputs=[report, diff, downloads], concurrency_limit=1)
+            with gr.Tab('Code discussion'):
+                gr.Markdown('Discuss snippets without opening a project. Answers here do not create source files.')
+                chatbot = gr.Chatbot(height=420, label='Conversation')
+                msg = gr.Textbox(label='Your message', lines=2)
+                file_upload = gr.File(label='Attach context (optional)',
+                                      file_types=['.txt', '.md', '.py', '.js', '.ts', '.html', '.css', '.json', '.yaml'])
+                with gr.Row():
+                    submit_btn = gr.Button('Send')
+                    clear_btn = gr.Button('Clear')
 
-            turns = _history_to_turns(history, settings)
-            try:
-                result = orchestrator.run(message, history=turns)
-                reply = _format_response(result)
-            except ProviderError as exc:
-                reply = f"⚠️ {exc}"
-            history = history + [
-                {"role": "user", "content": message},
-                {"role": "assistant", "content": reply},
-            ]
-            return history, ""
+                def respond(message, history, file_obj):
+                    history = history or []
+                    content = read_file(file_obj, settings)
+                    if content:
+                        message = f'{message}\n\n=== Attached File ===\n{content}'
+                    if not message.strip():
+                        return history, '', None
+                    orchestrator = Orchestrator(settings)
+                    try:
+                        result = orchestrator.run(message, history=_history_to_turns(history, settings))
+                        reply = _format_response(result)
+                    except ProviderError as exc:
+                        reply = f'Error: {exc}'
+                    finally:
+                        for provider in orchestrator.providers:
+                            cleanup = getattr(provider, 'cleanup', None)
+                            if cleanup:
+                                cleanup()
+                    return history + [{'role': 'user', 'content': message},
+                                      {'role': 'assistant', 'content': reply}], '', None
 
-        def attach_and_respond(message, history, file_obj):
-            file_content = read_file(file_obj, settings)
-            if file_content:
-                message = f"{message}\n\n=== Attached File ===\n{file_content}"
-            return respond(message, history)
-
-        submit_btn.click(
-            attach_and_respond,
-            inputs=[msg, chatbot, file_upload],
-            outputs=[chatbot, msg],
-        )
-        msg.submit(
-            attach_and_respond,
-            inputs=[msg, chatbot, file_upload],
-            outputs=[chatbot, msg],
-        )
-        clear_btn.click(lambda: ([], ""), outputs=[chatbot, msg])
-
+                submit_btn.click(respond, inputs=[msg, chatbot, file_upload], outputs=[chatbot, msg, file_upload])
+                msg.submit(respond, inputs=[msg, chatbot, file_upload], outputs=[chatbot, msg, file_upload])
+                clear_btn.click(lambda: ([], '', None), outputs=[chatbot, msg, file_upload])
     return demo
 
 
 def resolve_share(settings) -> bool:
-    """Decide whether Gradio's public share tunnel may be enabled.
-
-    Subscription (CLI) transport authenticates as *you*. A public share link
-    would route strangers' prompts through your personal credential, which the
-    consumer terms of Anthropic, OpenAI, Google and xAI all prohibit -- and
-    which all four enforce server-side. Sharing is therefore refused outright
-    whenever any provider is on CLI transport, regardless of the opt-in
-    variable; on pure API transport the usage is billed to your key and the
-    opt-in is honoured.
-    """
+    """The project UI has local filesystem/command access and no remote auth."""
     raw = env_with_legacy("QUADRATUS_ALLOW_SHARE", "MULTI_LLM_ALLOW_SHARE")
     wants_share = raw.strip().lower() in ("1", "true", "yes")
     if not wants_share:
         return False
-    if settings.uses_cli():
-        print(
-            "Refusing to enable Gradio sharing: one or more providers use "
-            "subscription (CLI) transport, and exposing that publicly would "
-            "route other people's prompts through your personal subscription. "
-            "Set every provider to the 'api' backend to share.",
-            file=sys.stderr,
-        )
-        return False
-    return True
+    print("Refusing to enable Gradio sharing: the project interface can access "
+          "local files and run commands. It is available on localhost only.", file=sys.stderr)
+    return False
 
 
 def main() -> int:

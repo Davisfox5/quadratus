@@ -49,6 +49,11 @@ class Price:
 
 #: Seed price sheet, per model key, compiled 2026-08. Stale within months by
 #: design assumption -- correct it from the vendor pages, not from memory.
+#: Keys are roster keys, which are stable across a model line's releases, so a
+#: floating alias that moves to a new release keeps pricing at the old one's
+#: rate until someone edits here. That is the intended failure: a wrong dollar
+#: figure on a counterfactual meter costs nothing, and a key that moved would
+#: break the ledger and the routing tables at once.
 #: A missing model falls back to DEFAULT_PRICE so the meter keeps counting
 #: tokens even when the dollar figure is a shrug.
 PRICES: Dict[str, Price] = {
@@ -56,16 +61,21 @@ PRICES: Dict[str, Price] = {
     "claude:opus": Price(5.0, 25.0),
     "claude:sonnet": Price(2.0, 10.0),
     "claude:haiku": Price(1.0, 5.0),
+    # No published list price existed for Astra when this sheet was compiled;
+    # it is priced here at its own line's flagship rate as a placeholder that
+    # errs high. Every figure in this dict is a seed, but this one is a guess
+    # on top of a seed -- correct it before any decision turns on it.
+    "openai:gpt-6-astra": Price(2.5, 20.0),
     "openai:gpt-5.6-sol": Price(1.25, 10.0),
     "openai:gpt-5.6-terra": Price(0.6, 5.0),
     "openai:gpt-5.6-luna": Price(0.25, 2.0),
-    "gemini:gemini-3.1-pro-preview": Price(2.0, 12.0),
-    "gemini:gemini-3.6-flash": Price(0.3, 2.5),
-    "gemini:gemini-3.6-thinking": Price(2.0, 12.0),
-    "grok:grok-4.6": Price(2.0, 6.0),
-    "grok:grok-4-1-fast": Price(0.2, 0.5),
-    "grok:grok-4.3": Price(1.25, 2.5),
-    "grok:grok-4.20": Price(5.0, 25.0),
+    # Priced at what the default resolves to today (4.6). A vendor-default row
+    # is the one most likely to drift away from its price line, which is the
+    # accepted cost of not pinning the model: a wrong figure on a
+    # counterfactual meter is cheaper than a run stuck on last year's Grok.
+    "grok:default": Price(2.0, 6.0),
+    "grok:worker": Price(2.0, 6.0),
+    "grok:expert": Price(2.0, 6.0),
 }
 
 DEFAULT_PRICE = Price(3.0, 15.0)

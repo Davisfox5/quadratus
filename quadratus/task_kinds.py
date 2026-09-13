@@ -94,10 +94,12 @@ class TaskKind:
     """Kinds of coding work, split where the split changes the routing.
 
     Deliberately not a tidy taxonomy. ``BACKEND``/``FRONTEND``/``MOBILE`` are
-    separate only because the evidence separates them -- one model is measurably
-    behind on real mobile work and not on the others. Where no evidence
-    separates two kinds, they are one kind here, because a distinction that
-    changes nothing is a distinction that will drift out of sync.
+    separate because the evidence once separated them -- a model measurably
+    behind on real mobile work and not on the others -- and the split is kept
+    now that the model has left the lineup because the gate and the evidence
+    line differ, not merely the routing. Where no evidence separates two
+    kinds, they are one kind here, because a distinction that changes nothing
+    is a distinction that will drift out of sync.
     """
 
     #: Turning an operator's request into a stated goal and constraints.
@@ -179,8 +181,8 @@ OPUS = "claude:opus"
 SOL = "openai:gpt-5.6-sol"
 LUNA = "openai:gpt-5.6-luna"
 SONNET = "claude:sonnet"
-GEMINI_PRO = "gemini:gemini-3.1-pro-preview"
-GROK = "grok:grok-4.6"
+GROK = "grok:default"          # xAI's current default, whatever it is
+GROK_WORKER = "grok:worker"   # same line, bounded call, low effort
 FABLE = "claude:fable"
 
 
@@ -188,20 +190,34 @@ FABLE = "claude:fable"
 #:
 #: An earlier version of this table pinned most kinds to Opus or Sol on
 #: benchmark evidence. That was locally right and globally wrong: it
-#: concentrated nearly every invocation on two subscriptions while the Grok
-#: and Google windows sat idle, which is exactly how one window exhausts early
-#: and forces a degraded run while capacity elsewhere goes unspent. Routing by
-#: difficulty spreads the load across all four subscriptions *and* still puts
-#: the strongest model on the work that actually needs it.
+#: concentrated nearly every invocation on two subscriptions while another sat
+#: idle, which is exactly how one window exhausts early and forces a degraded
+#: run while capacity elsewhere goes unspent. Routing by difficulty spreads
+#: the load across every subscription *and* still puts the strongest model on
+#: the work that actually needs it.
 #:
 #: The rungs, per the operator's read of current capability:
-#: * COMPLEX -- many logical steps, high stakes -> Opus 5, top of the pack.
+#: * COMPLEX -- many logical steps, high stakes -> Opus, top of the pack.
 #: * STANDARD -- real judgement, not the hardest -> GPT-5.6 Sol.
-#: * SIMPLE -- the bulk of well-sized (<=100-line) tasks -> Grok 4.6, which is
-#:   capable at this grade and cheap against its own window; expected to close
-#:   the gap further with 4.7.
-#: * ROTE -- mechanical work -> Gemini 3.1 Pro, currently the least proven of
-#:   the four; revisit the rung when 3.5 Pro ships.
+#: * SIMPLE -- the bulk of well-sized (<=100-line) tasks -> Grok, addressed as
+#:   the CLI's current default rather than as an iteration; capable at this
+#:   grade and cheap against its own window.
+#: * ROTE -- mechanical work -> Grok, called as a bounded worker.
+#:
+#: Four rungs across three vendors means one vendor takes two, and xAI is the
+#: one that should: Anthropic already carries the orchestrator seat and every
+#: COMPLEX task, and OpenAI carries STANDARD plus the security, testing and
+#: review pins plus the fallback orchestrator seat. xAI was left holding a
+#: single rung, which under-spends the one window nothing else competes for.
+#: The rung held Grok 4.1 Fast until 2026-09-12, chosen because it was the
+#: cheapest model in the fleet. A probe found the Grok Build CLI rejects that
+#: ID outright, and the search for a cheap replacement was the wrong search:
+#: a consumer subscription reaches one Grok line, and cheapness there is not
+#: a model you pick but a *call you make*. ``grok:worker`` is that call --
+#: the same line as the brain-trust seat, with the file-writing tools absent
+#: and reasoning effort low, measured at ~6K fresh tokens against the full
+#: agent's 120K for the same task. The rung is cheap again, and it stopped
+#: being a claim about which model is smallest.
 #:
 #: A rung that is unavailable or excluded escalates upward (a stronger model
 #: can always do easier work) before it degrades downward.
@@ -209,11 +225,11 @@ DIFFICULTY_LADDER: Dict[str, str] = {
     "complex": OPUS,
     "standard": SOL,
     "simple": GROK,
-    "rote": GEMINI_PRO,
+    "rote": GROK_WORKER,
 }
 
 #: Least to most capable, for escalation.
-_LADDER_ORDER: Tuple[str, ...] = (GEMINI_PRO, GROK, SOL, OPUS)
+_LADDER_ORDER: Tuple[str, ...] = (GROK_WORKER, GROK, SOL, OPUS)
 
 
 #: The routing table. Read the ``evidence`` line before changing a row.
@@ -275,21 +291,25 @@ ROUTING: Dict[str, KindPolicy] = {
         ),
     ),
     TaskKind.MOBILE: KindPolicy(
-        exclude=(GEMINI_PRO,),
-        confidence=Confidence.HIGH,
+        confidence=Confidence.LOW,
         evidence=(
-            "The exclusion is the finding: on a real-world Android/Kotlin "
-            "benchmark run by the toolchain vendor, the excluded model landed "
-            "roughly 20 points behind. Directly verified, unlike most of this "
-            "table."
+            "This row used to carry the table's only directly verified "
+            "exclusion: on a real-world Android/Kotlin benchmark run by the "
+            "toolchain vendor, Gemini 3.1 Pro landed roughly 20 points behind. "
+            "That model left the lineup on 2026-09-12 and the exclusion left "
+            "with it -- an exclusion naming a model nothing can route to is "
+            "noise that outlives its evidence. Mobile now rides the ladder "
+            "like any other kind. Restore the exclusion with the model."
         ),
     ),
     TaskKind.BULK: KindPolicy(
         confidence=Confidence.LOW,
         evidence=(
             "Rides the ladder; bulk work is SIMPLE or ROTE by nature, which "
-            "lands it on Grok -- ~4x turn efficiency measured -- or Gemini "
-            "without needing a pin."
+            "lands it on Grok -- ~4x turn efficiency measured on 4.6 -- without "
+            "needing a pin. Both those rungs are xAI now, which is the point: "
+            "bulk is where volume actually accumulates, and it accumulates "
+            "against the least contended window."
         ),
     ),
     TaskKind.GLUE: KindPolicy(
@@ -404,7 +424,8 @@ ROUTING: Dict[str, KindPolicy] = {
         evidence=(
             "Rides the ladder as ROTE, which lands it on the least-loaded "
             "window. The earlier Sonnet pin spent the same Anthropic window "
-            "the orchestrator needs most."
+            "the orchestrator needs most -- and needs more now that two of "
+            "the three orchestrator seats are Anthropic."
         ),
     ),
     TaskKind.PERF: KindPolicy(
@@ -465,7 +486,7 @@ def route(
     exceptions with evidence or an operator directive behind them (security
     and testing to Sol, review to the pair, scope and decomposition to the
     orchestrator). Everything else routes by the difficulty ladder, which is
-    what spreads the load across all four subscriptions. An unavailable or
+    what spreads the load across every subscription. An unavailable or
     excluded rung escalates upward -- a stronger model can always do easier
     work -- before it degrades downward.
 

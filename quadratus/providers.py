@@ -1,4 +1,4 @@
-"""Unified provider abstraction for Claude, ChatGPT, Gemini and Grok.
+"""Unified provider abstraction for Claude, ChatGPT and Grok.
 
 Each provider sends the request shape its vendor documents *today* -- the
 endpoint, the token-cap parameter and the model ID format were each checked
@@ -136,6 +136,45 @@ class LLMProvider:
     def available(self) -> bool:
         return self._client is not None
 
+    #: How much reasoning the seat asks for, where the transport exposes a
+    #: dial. Empty means "whatever the CLI does by default".
+    effort: str = ""
+    #: Whether this seat gets a bounded call instead of a full agent loop.
+    #: Meaningless to an HTTP API, which is a completion already -- the
+    #: attribute lives on the base so routing can set it without knowing
+    #: which transport is underneath.
+    restricted: bool = False
+
+    def for_seat(
+        self,
+        model: Optional[str],
+        *,
+        effort: str = "",
+        restricted: bool = False,
+    ) -> "LLMProvider":
+        """A view of this provider bound to one seat's whole invocation.
+
+        A seat is not only a model. Two seats can address the same model and
+        still want different calls -- a brain-trust member exploring a
+        repository and a worker answering one question are the same weights
+        run very differently, and on a subscription the difference is most of
+        the cost. So the identity that matters here is (model, effort,
+        restricted), and a clone is made whenever any of the three differs.
+        """
+        same = (
+            (model is None or model == self.model)
+            and effort == self.effort
+            and restricted == self.restricted
+        )
+        if same:
+            return self
+        clone = copy.copy(self)
+        if model is not None:
+            clone.model = model
+        clone.effort = effort
+        clone.restricted = restricted
+        return clone
+
     def for_model(self, model: Optional[str]) -> "LLMProvider":
         """Return a view of this provider bound to a different model.
 
@@ -143,8 +182,13 @@ class LLMProvider:
         summarisation) to a smaller model on the same subscription. Copying the
         provider keeps the already-built client and avoids re-resolving a CLI
         binary or re-constructing an SDK client on every routed call.
+
+        ``None`` means "no change". The empty string is different and load
+        bearing: it means *name no model*, so the CLI applies its own current
+        default. Collapsing the two would silently send whichever model this
+        provider happened to be constructed with.
         """
-        if not model or model == self.model:
+        if model is None or model == self.model:
             return self
         clone = copy.copy(self)
         clone.model = model
@@ -152,9 +196,11 @@ class LLMProvider:
 
     @property
     def status(self) -> str:
-        if self.available():
-            return f"{self.label} ({self.model})"
-        return f"{self.label} unavailable ({self._init_error})"
+        if not self.available():
+            return f"{self.label} unavailable ({self._init_error})"
+        # An empty model is a value here, not a gap: it means the CLI picks,
+        # which is how a seat stays on whatever the vendor currently ships.
+        return f"{self.label} ({self.model or 'CLI default'})"
 
     def generate(
         self,
@@ -386,69 +432,31 @@ class GrokProvider(_OpenAISDKProvider):
         return resp.choices[0].message.content or ""
 
 
-class GeminiProvider(LLMProvider):
-    """Gemini over the google-genai SDK.
-
-    Verified against the SDK reference on 2026-09-06:
-    ``client.models.generate_content(model, contents, config)`` with
-    ``GenerateContentConfig(system_instruction=..., max_output_tokens=...)`` is
-    the documented, non-deprecated call, and conversation roles are ``user``
-    and ``model``. The newer Interactions API exists alongside it; nothing
-    steers text generation off ``generate_content``.
-    """
-
-    name = "gemini"
-    label = "Gemini"
-
-    def _build_client(self):
-        from google import genai
-
-        self._genai = genai
-        return genai.Client(api_key=self.api_key)
-
-    def _call(self, prompt, system, history):
-        from google.genai import types
-
-        contents = []
-        for t in history:
-            role = "model" if t.role == "assistant" else "user"
-            contents.append(types.Content(role=role, parts=[types.Part(text=t.content)]))
-        contents.append(types.Content(role="user", parts=[types.Part(text=prompt)]))
-        resp = self._client.models.generate_content(
-            model=self.model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                max_output_tokens=self.max_tokens,
-            ),
-        )
-        return resp.text or ""
-
-    def _retryable(self, exc):
-        code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-        if code in (408, 429, 500, 502, 503, 504):
-            return True
-        name = exc.__class__.__name__.lower()
-        return any(tok in name for tok in ("timeout", "connection", "servererror", "unavailable"))
-
-
 #: Registry mapping provider names to (class, key-attr, model-attr).
 _REGISTRY = {
     "claude": (ClaudeProvider, "anthropic_api_key", "claude_model"),
     "openai": (OpenAIProvider, "openai_api_key", "openai_model"),
-    "gemini": (GeminiProvider, "google_api_key", "gemini_model"),
     "grok": (GrokProvider, "xai_api_key", "grok_model"),
 }
 
 
-def build_provider(name: str, settings) -> Optional[LLMProvider]:
+def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=None) -> Optional[LLMProvider]:
     """Build a single provider by name from settings, or ``None`` if unknown.
 
     The transport is chosen per provider by ``settings.backend_for(name)``:
     ``"cli"`` drives the vendor's subscription-authenticated coding-agent CLI,
     ``"api"`` uses the billed HTTP SDK. Mixing is supported, so a provider
     whose CLI is not installed can fall back to an API key without forcing the
-    whole run onto billed transport.
+    whole run onto billed transport -- but only when the operator asks for it
+    in so many words. A missing CLI reports itself unavailable rather than
+    silently moving that provider onto billed transport, because the whole
+    point of the default is that a run costs nothing per token.
+
+    ``allow_writes`` reaches the CLI backends only. It is off by default and
+    should stay off for anything that is reviewing rather than building: a
+    coding agent asked merely to critique will edit the working tree, and
+    several of them at once is write-thrash. The API backends have no file
+    access to grant.
     """
     entry = _REGISTRY.get(name)
     if entry is None:
@@ -467,6 +475,8 @@ def build_provider(name: str, settings) -> Optional[LLMProvider]:
         else:
             return cli_cls(
                 model=settings.model_for(name),
+                allow_writes=allow_writes,
+                workdir=workdir,
                 max_tokens=settings.max_tokens,
                 timeout=settings.cli_timeout,
                 max_retries=settings.max_retries,

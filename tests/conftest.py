@@ -70,7 +70,8 @@ def settings() -> Settings:
     s = Settings(
         openai_api_key="x",
         anthropic_api_key="x",
-        google_api_key="x",
+        xai_api_key="x",
+        backend="api",
     )
     s.retry_base_delay = 0.0
     return s

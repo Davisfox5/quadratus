@@ -23,7 +23,7 @@ from .test_session import Recorder  # reuse the scripted fake
 FABLE = "claude:fable"
 OPUS = "claude:opus"
 SOL = "openai:gpt-5.6-sol"
-TRUST = [OPUS, SOL, "gemini:gemini-3.1-pro-preview", "grok:grok-4.6"]
+TRUST = [OPUS, SOL, "grok:default"]
 
 
 @pytest.fixture
@@ -271,17 +271,21 @@ from quadratus.workers import pick_worker, worker_menu  # noqa: E402
 
 
 def test_the_tree_picks_by_errand_and_spreads_vendors():
+    """Picking by skill also has to spread the windows, or the cheapest tier
+    exhausts the one subscription everything else needs."""
+    from quadratus.registry import VENDORS
+
     picks = {pick_worker(e) for e in ("lookup", "read", "check", "format")}
     vendors = {p.split(":")[0] for p in picks}
-    assert vendors == {"grok", "gemini", "claude", "openai"}
+    assert vendors == set(VENDORS)
 
 
 def test_demanding_errands_escalate_within_their_own_family():
     """The skill stays matched; the horsepower goes up one tier."""
     assert pick_worker("check", demanding=True) == "claude:sonnet"
-    assert pick_worker("read", demanding=True) == "gemini:gemini-3.6-thinking"
+    assert pick_worker("read", demanding=True) == "openai:gpt-5.6-terra"
     assert pick_worker("format", demanding=True) == "openai:gpt-5.6-terra"
-    assert pick_worker("lookup", demanding=True) == "grok:grok-4.20"
+    assert pick_worker("lookup", demanding=True) == "grok:expert"
 
 
 def test_a_bump_target_missing_from_the_roster_degrades_to_the_base():
@@ -326,7 +330,7 @@ def test_the_same_prompt_may_be_rerouted_to_a_different_worker(store):
     got = pool.commission(task=task, parent_key=OPUS, prompt="latest React API",
                           label="b", errand="lookup")
     assert got.summary == "found it"
-    assert got.model == "grok:grok-4-1-fast"
+    assert got.model == "grok:worker"
 
 
 def test_workers_actually_run_concurrently(store):

@@ -6,7 +6,7 @@ import pytest
 
 from quadratus.artifacts import ArtifactStore
 from quadratus.registry import MODE_ROSTERS
-from quadratus.routing import OrchestratorUnavailable, WorkClass
+from quadratus.routing import OrchestratorUnavailable, SeatReason, WorkClass
 from quadratus.session import Complexity, Session, SessionConfig, TaskSpec
 from quadratus.task_kinds import MAX_TASK_LINES, TaskKind
 from quadratus.workers import WorkerBudget
@@ -14,7 +14,9 @@ from quadratus.workers import WorkerBudget
 FABLE = "claude:fable"
 SOL = "openai:gpt-5.6-sol"
 OPUS = "claude:opus"
-GEMINI = "gemini:gemini-3.1-pro-preview"
+GROK = "grok:default"
+GROK_WORKER = "grok:worker"
+ASTRA = "openai:gpt-6-astra"
 
 
 class Recorder:
@@ -101,8 +103,8 @@ def test_difficulty_routes_up_the_ladder(store, rec):
     expect = {
         Complexity.COMPLEX: OPUS,
         Complexity.STANDARD: SOL,
-        Complexity.SIMPLE: "grok:grok-4.6",
-        Complexity.ROTE: GEMINI,
+        Complexity.SIMPLE: GROK,
+        Complexity.ROTE: GROK_WORKER,
     }
     for i, (difficulty, lead) in enumerate(expect.items()):
         got = s.run_task(TaskSpec(f"t{i}", "work", complexity=difficulty))
@@ -210,10 +212,42 @@ def test_tasks_accumulate_in_the_ledger_in_order(store):
 # -- seating and routing hold inside the loop --------------------------------
 
 
-def test_an_unavailable_orchestrator_halts_the_run(store, rec):
+def test_an_unavailable_orchestrator_hands_the_seat_to_the_fallback(store, rec):
+    """The seat is a hard dependency; the *primary* is not. The substitution
+    is recorded on the seat rather than being silent."""
+    rec = Recorder(next_tasks=["parse the numbers"])
     s = _session(store, rec, available=lambda k: k != FABLE)
+    seat = s.seat()
+    assert seat.key == ASTRA
+    assert seat.reason == SeatReason.FALLBACK_UNAVAILABLE
+    # And the run actually proceeds, with the deputy asked for the decision.
+    assert s.next_task() is not None
+    assert rec.models() == [ASTRA]
+
+
+def test_both_seats_gone_stops_the_run_even_with_peers_available(store, rec):
+    """Opus is up in this scenario and is still not seated: the seat has one
+    fallback, and borrowing a brain-trust peer is not on the menu."""
+    s = _session(store, rec, available=lambda k: k not in (FABLE, ASTRA))
     with pytest.raises(OrchestratorUnavailable):
         s.next_task()
+
+
+def test_the_run_halts_when_no_orchestrator_at_all_can_be_seated(store, rec):
+    from quadratus.registry import ORCHESTRATOR_CHAIN
+
+    s = _session(store, rec, available=lambda k: k not in set(ORCHESTRATOR_CHAIN))
+    with pytest.raises(OrchestratorUnavailable):
+        s.next_task()
+
+
+def test_the_fallback_seat_lapses_when_the_primary_returns(store, rec):
+    """Reversion by recomputation: no handback step to forget to call."""
+    down = {FABLE}
+    s = _session(store, rec, available=lambda k: k not in down)
+    assert s.seat().key == ASTRA
+    down.clear()
+    assert s.seat().key == FABLE
 
 
 def test_security_work_is_routed_away_from_the_rotation(store, rec):
@@ -242,7 +276,7 @@ def test_brain_trust_matches_the_mode_roster(store, rec):
 
 def test_an_unavailable_rung_escalates_upward(store, rec):
     """A stronger model can always do easier work; degrading is a last resort."""
-    down = {"grok:grok-4.6"}
+    down = {"grok:default"}
     s = _session(store, rec, available=lambda k: k not in down)
     got = s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
     assert got.author == SOL
@@ -267,17 +301,19 @@ def test_the_ladder_is_deterministic_not_rotating(store, rec):
         s.run_task(TaskSpec(f"t{i}", "work", complexity=Complexity.SIMPLE)).author
         for i in range(3)
     }
-    assert leads == {"grok:grok-4.6"}
+    assert leads == {GROK}
 
 
-def test_mobile_work_never_lands_on_the_excluded_model(store, rec):
+def test_mobile_work_rides_the_ladder_like_anything_else(store, rec):
+    """The exclusion this used to check named a model that left the lineup;
+    what has to keep holding is that the kind still routes and never stalls."""
     s = _session(store, rec)
     for i in range(len(s.brain_trust) + 1):
         got = s.run_task(
             TaskSpec(f"t{i}", "add the settings screen",
                      complexity=Complexity.SIMPLE, kind=TaskKind.MOBILE)
         )
-        assert got.author != GEMINI
+        assert got.author == GROK
 
 
 def test_review_work_always_draws_the_counterpart_reviewer(store, rec):
@@ -436,10 +472,10 @@ def test_a_labelled_done_still_ends_the_run(store):
 
 
 def test_an_unavailable_peer_is_not_drafted_as_a_collaborator(store, rec):
-    down = {GEMINI}
+    down = {GROK}
     s = _session(store, rec, available=lambda k: k not in down)
     spec = TaskSpec("t1", "work", complexity=Complexity.COMPLEX)
-    assert GEMINI not in s.collaborators_for(spec, s.brain_trust[0])
+    assert GROK not in s.collaborators_for(spec, s.brain_trust[0])
 
 
 # -- worker budget is enforced through the session ---------------------------
@@ -480,3 +516,76 @@ def test_closeout_with_no_dead_ends_is_fine(store):
     rec = Recorder(closeout="SUMMARY: clean run\nREASONING: nothing went wrong")
     s = _session(store, rec)
     assert s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE)).dead_ends == []
+
+
+# -- an exhausted seat re-seats instead of ending the run --------------------
+
+
+class _Spent(RuntimeError):
+    """What a transport raises when a model's own window is gone."""
+
+    window_exhausted = True
+
+
+def test_an_exhausted_primary_reseats_mid_decision(store):
+    """Availability is learned by calling: nothing knows a window is spent
+    until a request says so. Without a second look, the first call of a run
+    discovers the primary is out and dies on the very failure the fallback
+    exists for."""
+    down = set()
+
+    def invoke(model, prompt, system=None):
+        if model in down:
+            raise _Spent("You've reached your Fable limit.")
+        if "Name the single next task" in prompt:
+            return "parse the numbers"
+        return f"[{model}] output"
+
+    def available(key):
+        return key not in down
+
+    def spend_fable(model, prompt, system=None):
+        if model == FABLE:
+            down.add(FABLE)
+            raise _Spent("You've reached your Fable limit.")
+        return invoke(model, prompt, system)
+
+    s = Session("Build a parser", store, spend_fable, available=available)
+    spec = s.next_task()
+    assert spec is not None, "the run continued rather than dying on the 429"
+    assert s.seat().key == ASTRA
+
+
+def test_the_reseat_happens_once_not_in_a_loop(store):
+    """If the second seat is spent too, the error stands."""
+    def always_spent(model, prompt, system=None):
+        raise _Spent("window gone")
+
+    s = Session("Build a parser", store, always_spent, available=lambda k: True)
+    with pytest.raises(_Spent):
+        s.next_task()
+
+
+def test_an_ordinary_failure_is_not_treated_as_an_exhausted_window(store):
+    """Only the marker attribute re-seats; everything else propagates."""
+    def broken(model, prompt, system=None):
+        raise RuntimeError("connection reset")
+
+    s = Session("Build a parser", store, broken, available=lambda k: True)
+    with pytest.raises(RuntimeError, match="connection reset"):
+        s.next_task()
+
+
+def test_the_plan_reseats_too(store):
+    """The plan is usually a run's first request, so it is the likeliest place
+    to discover the primary is out."""
+    down = set()
+
+    def invoke(model, prompt, system=None):
+        if model == FABLE:
+            down.add(FABLE)
+            raise _Spent("You've reached your Fable limit.")
+        return "1. do the thing"
+
+    s = Session("Build a parser", store, invoke, available=lambda k: k not in down)
+    assert s.plan() == "1. do the thing"

@@ -130,8 +130,9 @@ class Orchestrator:
     ) -> CollaborationResult:
         if not self.available:
             raise ProviderError(
-                "No LLM providers are available. Set at least one of "
-                "ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY."
+                "No LLM providers are available. For CLI transport, install and sign in "
+                "to a vendor CLI; run quadratus --probe to diagnose it. For API transport, "
+                "configure ANTHROPIC_API_KEY, OPENAI_API_KEY, or XAI_API_KEY."
             )
 
         turns = self._to_turns(history)

@@ -68,3 +68,5 @@ Thumbs.db
 gradio_cached_examples/
 flagged/
 .gradio/
+.quadratus/
+.playwright-cli/
