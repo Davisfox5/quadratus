@@ -1,0 +1,16 @@
+{"at": 1789335024.987632, "event": "model_invoke", "model": "claude:fable", "write": false}
+{"at": 1789335024.998164, "event": "cli_start", "call": "d27d0259d1", "provider": "claude", "model": "fable", "effort": "", "restricted": false, "write": false, "cwd": "$LOCAL_TMP/quadratus-review-yaa1sbei"}
+{"at": 1789335063.165667, "event": "cli_end", "call": "d27d0259d1", "elapsed": 38.166878291987814, "outcome": "returned", "usage": {"input_tokens": 97732, "output_tokens": 2236}}
+{"at": 1789335063.1763048, "event": "task_roster", "task": "t1", "kind": "architect", "complexity": "complex", "lead": "claude:opus", "collaborators": ["openai:gpt-5.6-sol", "grok:default"]}
+{"at": 1789335063.194701, "event": "model_invoke", "model": "claude:opus", "write": true}
+{"at": 1789335063.194929, "event": "cli_start", "call": "1efc842967", "provider": "claude", "model": "opus", "effort": "", "restricted": false, "write": true, "cwd": "$LOCAL_REPOS/sports-video-tagger-acceptance"}
+{"at": 1789335225.177141, "event": "cli_end", "call": "1efc842967", "elapsed": 161.97972887498327, "outcome": "returned", "usage": {"input_tokens": 347744, "output_tokens": 14064}}
+{"at": 1789335225.179431, "event": "model_invoke", "model": "openai:gpt-5.6-luna", "write": true}
+{"at": 1789335225.205794, "event": "cli_start", "call": "24a97983a1", "provider": "openai", "model": "gpt-5.6-luna", "effort": "low", "restricted": true, "write": false, "cwd": "$LOCAL_TMP/quadratus-review-fhm7fwk_"}
+{"at": 1789335273.7453172, "event": "cli_end", "call": "24a97983a1", "elapsed": 48.538700332981534, "outcome": "returned", "usage": {"input_tokens": 20348, "output_tokens": 2331}}
+{"at": 1789335273.7983491, "event": "model_invoke", "model": "claude:opus", "write": true}
+{"at": 1789335273.798642, "event": "cli_start", "call": "3f5a3d46da", "provider": "claude", "model": "opus", "effort": "", "restricted": false, "write": true, "cwd": "$LOCAL_REPOS/sports-video-tagger-acceptance"}
+{"at": 1789335391.85553, "event": "cli_end", "call": "3f5a3d46da", "elapsed": 118.05517329205759, "outcome": "returned", "usage": {"input_tokens": 335314, "output_tokens": 10341}}
+{"at": 1789335391.857147, "event": "model_invoke", "model": "openai:gpt-5.6-luna", "write": true}
+{"at": 1789335391.880192, "event": "cli_start", "call": "82751514b9", "provider": "openai", "model": "gpt-5.6-luna", "effort": "low", "restricted": true, "write": false, "cwd": "$LOCAL_TMP/quadratus-review-eibhzi4p"}
+{"at": 1789335415.554958, "event": "cli_end", "call": "82751514b9", "elapsed": 23.6742378330091, "outcome": "KeyboardInterrupt", "error": "", "usage": null}

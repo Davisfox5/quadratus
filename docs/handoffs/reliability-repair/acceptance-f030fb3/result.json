@@ -1,0 +1,22 @@
+{
+  "project": "$LOCAL_REPOS/sports-video-tagger-acceptance",
+  "completed": false,
+  "allow_writes": true,
+  "error": "KeyboardInterrupt: ",
+  "checks": [],
+  "source_changed": true,
+  "source_fingerprint": "2caa99dd7c9b92702130917171bb62c1def6299150ea71df87c2d9725af0e012",
+  "tasks": 0,
+  "in_flight": {},
+  "delegation": {
+    "controlled_tokens": 830110,
+    "native_child_tokens": 0,
+    "auxiliary_tokens": 0,
+    "known_minimum_tokens": 830110,
+    "unknown_invocations": 0,
+    "unknown_detail": [],
+    "native_children": 0,
+    "note": "Subscription usage including cached and repeated input. Native children counted once at their highest cumulative reading, never summed across updates. Auxiliary vendor-internal usage is reported separately and is not Quadratus-dispatched work. Unknown usage is unknown, not zero."
+  },
+  "scope_reports": []
+}

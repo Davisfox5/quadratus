@@ -1,0 +1,14 @@
+{
+  "engine_commit": "f030fb387cb05284b9b69ba72f960035541f98a7",
+  "target": "$LOCAL_REPOS/sports-video-tagger-acceptance",
+  "target_base": "f93d8b1",
+  "goal_sha256": "17f872b03ff0e505d74a4a0a60dd3a432d82fceb5f6246e73029a0c0b78f211e",
+  "goal_unchanged": true,
+  "engine_tests": "634 passed",
+  "ruff": "passed",
+  "target_tests": "79 passed",
+  "target_javascript_syntax": "passed",
+  "max_tasks": 12,
+  "transport": "subscription CLI",
+  "observation": "External pass-through wrappers record outputs and invocation starts/ends; no routing/scope/retry settings altered."
+}
