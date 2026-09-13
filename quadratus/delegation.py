@@ -1,0 +1,396 @@
+"""Who actually ran, and what the harness cannot see.
+
+Two separate things were being conflated, and the 2026-09-13 review probe
+proved it. During its review Sol used the Codex CLI's own ``spawn_agent`` to
+create a second Sol. That child never passed through :class:`WorkerPool`, its
+errand tree, or its per-task budget. The parent's CLI return reported 203,199
+input and 6,350 output tokens; the child separately recorded 127,405 and
+7,700. Quadratus metered the parent and nothing else, so 135,105 tokens were
+spent inside an authorised run and were absent from every total it reported.
+
+The fix is not to forbid native delegation -- the harness cannot, it happens
+inside a vendor process it does not control, and pretending otherwise would
+make the report *more* wrong. The fix is to say so. This module gives the
+record three things it lacked:
+
+**A provenance for every invocation.** :class:`Origin` distinguishes a
+Quadratus-assigned seat, a Quadratus-commissioned worker, a vendor-native
+child the harness merely observed, and vendor-internal auxiliary activity
+(Claude's envelopes list Haiku usage that nobody dispatched). Counting those
+four together produced a number that was neither a budget nor a bill.
+
+**Unknown as a value.** A cancelled or timed-out call consumed a model window
+and reported nothing. The old meter had no way to record that: absent from the
+ledger reads as zero, and zero is a claim. :class:`InvocationEvent` carries
+``tokens=None`` and says ``unknown``.
+
+**Reconciliation that does not double count.** Vendor session files report
+usage *cumulatively* -- each update restates the session total, so summing the
+updates multiplies it. :func:`reconcile` takes the maximum per session id
+rather than the sum, and refuses to add a child whose id it has already seen.
+
+Nothing here is load-bearing on the hot path. Like :mod:`quadratus.usage`, a
+failure to account must never fail a run.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional
+
+log = logging.getLogger(__name__)
+
+__all__ = [
+    "Origin",
+    "InvocationEvent",
+    "NativeChild",
+    "DelegationLedger",
+    "reconcile",
+]
+
+
+class Origin:
+    """Where an invocation came from. Four kinds, deliberately not merged."""
+
+    #: A brain-trust seat or the orchestrator, dispatched by Quadratus.
+    SEAT = "seat"
+    #: A worker bee commissioned through :class:`quadratus.workers.WorkerPool`,
+    #: inside its errand tree and its per-task budget.
+    WORKER = "worker"
+    #: A child the vendor CLI spawned on its own (Codex ``spawn_agent`` and
+    #: friends). Observed, never dispatched; outside every Quadratus budget.
+    NATIVE = "native"
+    #: Vendor-internal activity appearing in a raw envelope -- Claude's Haiku
+    #: rows, for instance. Not proof that Quadratus dispatched anything.
+    AUXILIARY = "auxiliary"
+
+    ALL = (SEAT, WORKER, NATIVE, AUXILIARY)
+
+    #: The two the harness actually chose and can bound. Reported separately
+    #: from the two it can only witness.
+    CONTROLLED = (SEAT, WORKER)
+
+
+@dataclass
+class InvocationEvent:
+    """One model call or retry, as the harness saw it.
+
+    ``input_tokens``/``output_tokens`` are ``None`` when the call consumed a
+    window but reported nothing -- a cancellation, a timeout, a killed child.
+    That is recorded as unknown and stays unknown; substituting an estimate
+    would launder a gap into a figure.
+
+    ``requested_model`` and ``resolved_model`` differ whenever an alias,
+    escalation, or seat fallback moved the call. ``invoked`` is False for a
+    model that was *selected* but never reached -- the trial selected Grok as
+    a collaborator and never called it, and counting that as coverage is
+    exactly the claim this field exists to refuse.
+    """
+
+    task: str
+    role: str
+    origin: str = Origin.SEAT
+    requested_model: Optional[str] = None
+    resolved_model: Optional[str] = None
+    selected: bool = True
+    invoked: bool = False
+    outcome: str = "unknown"
+    seconds: Optional[float] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cached_input_tokens: Optional[int] = None
+    attempt: int = 1
+    #: Set when the failure happened after the vendor returned text (a bad
+    #: patch, an unparseable answer) rather than in transport. The two cost
+    #: different things and the old ledger could not tell them apart.
+    post_return_failure: bool = False
+    #: Vendor session id, where one is known. Used to de-duplicate a child
+    #: that several sources report.
+    session_id: Optional[str] = None
+    detail: str = ""
+
+    @property
+    def tokens_known(self) -> bool:
+        return self.input_tokens is not None and self.output_tokens is not None
+
+    @property
+    def total_tokens(self) -> Optional[int]:
+        if not self.tokens_known:
+            return None
+        return int(self.input_tokens or 0) + int(self.output_tokens or 0)
+
+    def render(self) -> str:
+        model = self.resolved_model or self.requested_model or "(unresolved)"
+        if self.requested_model and self.resolved_model and self.requested_model != self.resolved_model:
+            model = f"{self.requested_model} -> {self.resolved_model}"
+        state = "invoked" if self.invoked else "selected, never invoked"
+        tokens = (
+            f"{self.total_tokens:,} tokens" if self.tokens_known else "usage unknown"
+        )
+        timing = f"{self.seconds:.1f}s" if self.seconds is not None else "duration unknown"
+        bits = [
+            f"{self.task}/{self.role}", f"[{self.origin}]", model, state,
+            self.outcome, timing, tokens,
+        ]
+        if self.attempt > 1:
+            bits.append(f"attempt {self.attempt}")
+        if self.post_return_failure:
+            bits.append("failed after return")
+        if self.detail:
+            bits.append(self.detail[:120])
+        return " | ".join(bits)
+
+
+@dataclass
+class NativeChild:
+    """A vendor-native child session the harness observed but did not dispatch."""
+
+    session_id: str
+    model: Optional[str] = None
+    parent_session_id: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    tool_name: str = ""
+    detail: str = ""
+
+    @property
+    def total_tokens(self) -> Optional[int]:
+        if self.input_tokens is None or self.output_tokens is None:
+            return None
+        return int(self.input_tokens) + int(self.output_tokens)
+
+
+@dataclass
+class DelegationLedger:
+    """Every invocation and retry, plus what the harness could not control.
+
+    Append-only, like everything else that has to survive a run. Optionally
+    mirrored to JSONL so the record outlives the process.
+    """
+
+    path: Optional[Path] = None
+    events: List[InvocationEvent] = field(default_factory=list)
+    native_children: Dict[str, NativeChild] = field(default_factory=dict)
+    #: Free-text statements about what this run could not observe or bound.
+    #: Rendered verbatim; an honest gap beats a confident total.
+    blind_spots: List[str] = field(default_factory=list)
+
+    def record(self, event: InvocationEvent) -> InvocationEvent:
+        self.events.append(event)
+        if self.path is not None:
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                with self.path.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(asdict(event)) + "\n")
+            except OSError:  # noqa: BLE001 -- accounting never fails a run
+                log.debug("could not persist invocation event", exc_info=True)
+        return event
+
+    def observe_native(self, child: NativeChild) -> None:
+        """Record a vendor-native child, keeping the largest usage seen.
+
+        Vendor session files restate the session total on every update, so the
+        last or largest reading is the true one and summing readings inflates
+        it. Keyed by session id, so the same child arriving from two sources is
+        counted once.
+        """
+        existing = self.native_children.get(child.session_id)
+        if existing is None:
+            self.native_children[child.session_id] = child
+            self.note_blind_spot(
+                f"vendor-native child {child.session_id[:8]} "
+                f"({child.model or 'unknown model'}) ran outside Quadratus "
+                f"worker selection and budgets; observed, not controlled"
+            )
+            return
+        # Cumulative snapshots: take the maximum, never the sum.
+        self.native_children[child.session_id] = NativeChild(
+            session_id=child.session_id,
+            model=child.model or existing.model,
+            parent_session_id=child.parent_session_id or existing.parent_session_id,
+            input_tokens=_max_optional(existing.input_tokens, child.input_tokens),
+            output_tokens=_max_optional(existing.output_tokens, child.output_tokens),
+            tool_name=child.tool_name or existing.tool_name,
+            detail=child.detail or existing.detail,
+        )
+
+    def note_blind_spot(self, text: str) -> None:
+        if text not in self.blind_spots:
+            self.blind_spots.append(text)
+
+    # -- reporting -----------------------------------------------------------
+    def controlled_tokens(self) -> int:
+        """Tokens from calls Quadratus itself dispatched and can bound."""
+        return sum(
+            e.total_tokens or 0
+            for e in self.events
+            if e.origin in Origin.CONTROLLED and e.tokens_known
+        )
+
+    def native_tokens(self) -> int:
+        """Tokens from observed native children, counted once each."""
+        return sum(c.total_tokens or 0 for c in self.native_children.values())
+
+    def unknown_events(self) -> List[InvocationEvent]:
+        """Calls that consumed a window and reported nothing. Never zero."""
+        return [e for e in self.events if e.invoked and not e.tokens_known]
+
+    def invoked_models(self) -> List[str]:
+        return sorted({
+            e.resolved_model or e.requested_model or "(unresolved)"
+            for e in self.events if e.invoked
+        })
+
+    def selected_never_invoked(self) -> List[str]:
+        """Selected but never reached. Not coverage, and never reported as it."""
+        invoked = set(self.invoked_models())
+        return sorted({
+            (e.resolved_model or e.requested_model or "(unresolved)")
+            for e in self.events if e.selected and not e.invoked
+        } - invoked)
+
+    def render_report(self) -> str:
+        lines = ["# Delegation and invocation record", ""]
+        if not self.events and not self.native_children:
+            lines.append("No invocations recorded.")
+            return "\n".join(lines)
+
+        by_origin: Dict[str, List[InvocationEvent]] = {}
+        for event in self.events:
+            by_origin.setdefault(event.origin, []).append(event)
+        for origin in Origin.ALL:
+            group = by_origin.get(origin)
+            if not group:
+                continue
+            lines.append(f"## {origin}")
+            for event in group:
+                lines.append(f"- {event.render()}")
+            lines.append("")
+
+        if self.native_children:
+            lines.append("## Vendor-native children (observed, not dispatched)")
+            for child in self.native_children.values():
+                total = (
+                    f"{child.total_tokens:,} tokens"
+                    if child.total_tokens is not None else "usage unknown"
+                )
+                lines.append(
+                    f"- {child.session_id} ({child.model or 'unknown model'}) "
+                    f"via {child.tool_name or 'native delegation'}: {total}"
+                )
+            lines.append("")
+
+        controlled = self.controlled_tokens()
+        native = self.native_tokens()
+        lines.append("## Totals")
+        lines.append(f"- Quadratus-dispatched: {controlled:,} tokens")
+        if native:
+            lines.append(
+                f"- Vendor-native children (observed): {native:,} tokens, "
+                f"outside Quadratus budgets"
+            )
+            lines.append(f"- Known minimum: {controlled + native:,} tokens")
+        unknown = self.unknown_events()
+        if unknown:
+            lines.append(
+                f"- {len(unknown)} invocation(s) consumed a window and reported "
+                f"no usage. These remain **unknown**, not zero:"
+            )
+            for event in unknown:
+                lines.append(f"    - {event.render()}")
+        lines.append(
+            "- Subscription usage. Not an API charge; see usage.py for the "
+            "separate API-price counterfactual."
+        )
+        lines.append("")
+
+        never = self.selected_never_invoked()
+        if never:
+            lines.append("## Selected but never invoked")
+            lines.append(
+                "These models were chosen and never reached. This is not "
+                "coverage:"
+            )
+            for model in never:
+                lines.append(f"- {model}")
+            lines.append("")
+
+        if self.blind_spots:
+            lines.append("## Not observable or not controllable by the harness")
+            for spot in self.blind_spots:
+                lines.append(f"- {spot}")
+        return "\n".join(lines)
+
+
+def _max_optional(left: Optional[int], right: Optional[int]) -> Optional[int]:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return max(left, right)
+
+
+def reconcile(
+    events: Iterable[InvocationEvent],
+    children: Iterable[NativeChild],
+) -> Dict[str, object]:
+    """Fold invocations and observed children into one honest set of totals.
+
+    De-duplicates children by session id and takes the maximum reading for
+    each, because vendor session logs restate cumulative totals. A child whose
+    session id matches an event the harness itself dispatched is *not* added
+    again -- that is the double count this function exists to prevent.
+    """
+    events = list(events)
+    dispatched_sessions = {e.session_id for e in events if e.session_id}
+
+    folded: Dict[str, NativeChild] = {}
+    for child in children:
+        if child.session_id in dispatched_sessions:
+            # Already counted as a Quadratus invocation; adding it here would
+            # double it.
+            continue
+        existing = folded.get(child.session_id)
+        if existing is None:
+            folded[child.session_id] = child
+            continue
+        folded[child.session_id] = NativeChild(
+            session_id=child.session_id,
+            model=child.model or existing.model,
+            parent_session_id=child.parent_session_id or existing.parent_session_id,
+            input_tokens=_max_optional(existing.input_tokens, child.input_tokens),
+            output_tokens=_max_optional(existing.output_tokens, child.output_tokens),
+            tool_name=child.tool_name or existing.tool_name,
+            detail=child.detail or existing.detail,
+        )
+
+    controlled = sum(
+        e.total_tokens or 0 for e in events
+        if e.origin in Origin.CONTROLLED and e.tokens_known
+    )
+    auxiliary = sum(
+        e.total_tokens or 0 for e in events
+        if e.origin == Origin.AUXILIARY and e.tokens_known
+    )
+    native = sum(c.total_tokens or 0 for c in folded.values())
+    unknown = [e for e in events if e.invoked and not e.tokens_known]
+
+    return {
+        "controlled_tokens": controlled,
+        "native_child_tokens": native,
+        "auxiliary_tokens": auxiliary,
+        "known_minimum_tokens": controlled + native,
+        "unknown_invocations": len(unknown),
+        "unknown_detail": [e.render() for e in unknown],
+        "native_children": len(folded),
+        "note": (
+            "Subscription usage including cached and repeated input. Native "
+            "children counted once at their highest cumulative reading, never "
+            "summed across updates. Auxiliary vendor-internal usage is "
+            "reported separately and is not Quadratus-dispatched work. "
+            "Unknown usage is unknown, not zero."
+        ),
+    }

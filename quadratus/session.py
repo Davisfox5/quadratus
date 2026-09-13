@@ -31,7 +31,9 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 from .artifacts import ArtifactStore
 from .codebase_map import CodebaseMap
+from .delegation import DelegationLedger, InvocationEvent, Origin
 from .memory import PersistentMemory, TaskMemory, TaskSummary
+from .providers import PartialWorkSuspected
 from .registry import peers_for, resolve
 from .routing import (
     Seat,
@@ -41,15 +43,25 @@ from .routing import (
     open_security_excursion,
     orchestrator_seat,
 )
+from .scope import ScopeReport, TaskScope, changed_paths, count_change_lines
 from .task_kinds import MAX_TASK_LINES, ROUTING, TaskKind, guidance_for, policy_for
 from .task_kinds import route as route_kind
+from .taskmeta import AmbiguousMetadata, TaskMetadata, parse_control, parse_metadata
 from .usage import UsageMeter
-from .workers import WORKER_TREE, WorkerBudget, WorkerPool, worker_menu
+from .workers import (
+    WORKER_TREE,
+    FanOutExceeded,
+    RepeatedFailure,
+    WorkerBudget,
+    WorkerPool,
+    worker_menu,
+)
 
 log = logging.getLogger(__name__)
 
 __all__ = [
     "Complexity",
+    "PartialWorkStopped",
     "TaskSpec",
     "Session",
     "SessionConfig",
@@ -66,6 +78,34 @@ class OperatorInputNeeded(RuntimeError):
     flagged as operator-only has defeated the point of asking. The question
     is in ``args[0]``; answer it, add it to the session's rulings, and resume.
     """
+
+
+class PartialWorkStopped(RuntimeError):
+    """An editing call stopped and the tree was inspected before giving up.
+
+    Carries :attr:`partial` -- what was already written, as a JSON-shaped dict
+    -- so the run report can hand an honest, resumable picture to whoever picks
+    this up: which files moved, how much, and whether inspection was even
+    possible. Nothing has been rolled back.
+    """
+
+    def __init__(self, message: str, *, partial: Optional[dict] = None) -> None:
+        super().__init__(message)
+        self.partial = partial or {}
+
+    def render(self) -> str:
+        changed = self.partial.get("changed") or []
+        lines = [str(self)]
+        if changed:
+            lines.append(
+                f"Already written when the call stopped ({len(changed)} file(s), "
+                f"{self.partial.get('changed_lines', 0)} line(s)), and preserved: "
+                + ", ".join(changed[:20])
+            )
+        note = self.partial.get("note")
+        if note:
+            lines.append(note)
+        return "\n".join(lines)
 
 
 class RunStalled(RuntimeError):
@@ -137,6 +177,18 @@ class TaskSpec:
     kind: str = TaskKind.GENERAL
     #: Force a particular lead. Normally left to rotation.
     lead: Optional[str] = None
+    #: How the kind/difficulty above were arrived at: ``"labelled"`` when the
+    #: orchestrator said so, ``"defaulted"`` when nothing was found. Carried
+    #: so a defaulted route is visible in the record instead of being
+    #: indistinguishable from a stated one -- the shape of the silent misroute
+    #: this field was added to expose.
+    metadata_confidence: str = "labelled"
+    #: Provenance for the above, rendered into diagnostics.
+    metadata_notes: List[str] = field(default_factory=list)
+    #: What this task is allowed to touch and how far it may go. ``None``
+    #: means unbounded, which is the honest description of a task nobody
+    #: scoped. See :mod:`quadratus.scope`.
+    scope: Optional["TaskScope"] = None
 
     def __post_init__(self) -> None:
         # ``kind`` and ``work_class`` grew up in different modules and both can
@@ -211,6 +263,20 @@ class SessionConfig:
     #: rounds; the measured success case for iteration is external feedback on
     #: a concrete defect, which is exactly and only what this loop carries.
     max_fix_cycles: int = 2
+    #: How many worker errands may come back empty inside one task's drafting
+    #: loop before the lead is judged not to be converging. A failure is now an
+    #: outcome the lead can act on rather than a crash, which means a confused
+    #: lead could otherwise spend its whole worker budget re-asking; this is the
+    #: stall backstop for that, sitting below WorkerBudget.max_per_task so the
+    #: lead still has room to genuinely reroute.
+    max_worker_failures: int = 4
+    #: Records who actually ran, distinguishing Quadratus-dispatched work from
+    #: vendor-native children and vendor-internal auxiliary activity, and
+    #: carrying what the harness cannot observe or bound. Observational only.
+    delegation_ledger: Optional["DelegationLedger"] = None
+    #: Default bounds applied to a task the orchestrator did not scope. None
+    #: leaves such a task unbounded, which is at least recorded as unbounded.
+    default_scope: Optional["TaskScope"] = None
 
 
 class Session:
@@ -236,6 +302,9 @@ class Session:
         self.completed = False
         self.checks = []
         self.open_findings = []
+        #: One per task that declared a scope. Evidence for the operator; the
+        #: work itself is never reverted on the strength of these.
+        self.scope_reports: List[ScopeReport] = []
         self.store = store
         if self.config.usage_meter is not None:
             invoke = self.config.usage_meter.wrap(invoke)
@@ -258,8 +327,66 @@ class Session:
         return self.invoke(key, prompt)
 
     def _edit(self, key, prompt):
-        return self._invoke_model(key, prompt,
-                                  allow_writes=bool(self.project and self.config.allow_writes))
+        """An editing call, with the tree inspected before anything is replayed.
+
+        A timeout is not a null result. On 2026-09-13 a 900-second editing call
+        had already written its work when the transport gave up, and the retry
+        loop began re-sending the same writing prompt against the tree that
+        call had just changed -- a second, different edit wearing a retry's
+        name. :class:`PartialWorkSuspected` now stops that at the transport,
+        and this is where the harness decides what to do instead: look at the
+        tree, keep whatever is there, and tell the caller what it found.
+
+        Nothing is rolled back. Partial work is work, and the operator's edits
+        may be in the same tree; discarding either to reach a clean retry would
+        destroy more than it recovers.
+        """
+        allow_writes = bool(self.project and self.config.allow_writes)
+        before = self._capture_source() if allow_writes else None
+        try:
+            return self._invoke_model(key, prompt, allow_writes=allow_writes)
+        except PartialWorkSuspected as exc:
+            state = self._inspect_partial_edits(before)
+            raise PartialWorkStopped(str(exc), partial=state) from exc
+
+    def _inspect_partial_edits(self, before) -> dict:
+        """What, if anything, the stopped call had already written.
+
+        Returns a plain dict rather than a class: this is the in-flight state
+        that has to survive into the run report for a resumable handoff, so it
+        stays JSON-shaped.
+        """
+        state = {
+            "changed": [],
+            "changed_lines": 0,
+            "inspected": False,
+            "note": "",
+        }
+        if before is None or not self.project:
+            state["note"] = (
+                "No pre-call source capture was available, so it is unknown "
+                "whether the stopped call wrote anything. Unknown, not none."
+            )
+            return state
+        try:
+            from .project import Project
+            project = Project(self.project, exclude=self.config.project_excludes)
+            diff = project.diff(before)
+        except Exception:  # noqa: BLE001 -- inspection never fails harder
+            log.debug("could not inspect partial edits", exc_info=True)
+            state["note"] = "The project could not be inspected after the call stopped."
+            return state
+        state["inspected"] = True
+        state["changed"] = changed_paths(diff)
+        state["changed_lines"] = count_change_lines(diff)
+        state["note"] = (
+            "These changes were already on disk when the call stopped and have "
+            "been preserved. Re-sending the same prompt would apply a second "
+            "pass on top of them, not repeat the first."
+            if state["changed"] else
+            "The call stopped without writing anything; the tree is unchanged."
+        )
+        return state
 
     # -- seating -------------------------------------------------------------
     def seat(self, *, security: bool = False) -> Seat:
@@ -403,6 +530,7 @@ class Session:
     def _draft_with_channels(self, lead: str, spec: TaskSpec, task: TaskMemory) -> str:
         answers = []
         consults_used = 0
+        worker_failures = 0
 
         def build(fetched):
             extras = ["## Consult answers and worker evidence\n\n" + "\n\n".join(answers)] if answers else []
@@ -429,12 +557,58 @@ class Session:
                 writes = request.get('write', False)
                 if writes and not (self.project and self.config.allow_writes):
                     raise RunStalled("Worker requested edits without an operator write grant.")
-                result = self.workers.commission(
-                    task=task, parent_key=lead, prompt=request['instruction'],
-                    label=f"{request['errand']}-{self.workers.spawned(spec.task_id) + 1}",
-                    errand=request['errand'], demanding=request.get('demanding', False),
-                    allow_writes=writes,
-                )
+                label = f"{request['errand']}-{self.workers.spawned(spec.task_id) + 1}"
+                # A worker failure is an outcome, not the end of the run. The
+                # single-worker path used to let the exception escape: on
+                # 2026-09-13 a bounded editor returned prose wrapped around a
+                # corrupt diff, and that one malformed answer aborted the whole
+                # run before the lead could revise the errand, reroute it, or
+                # report an honest blocker. commission_many already reported
+                # errors as results; this path now agrees with it.
+                #
+                # What does *not* change: the patch is still rejected, the
+                # failed fingerprint is still recorded, the budget is still
+                # charged, and no tool is widened to make a bad answer apply.
+                # The lead gets the failure and decides.
+                try:
+                    result = self.workers.commission(
+                        task=task, parent_key=lead, prompt=request['instruction'],
+                        label=label,
+                        errand=request['errand'], demanding=request.get('demanding', False),
+                        allow_writes=writes,
+                    )
+                except (FanOutExceeded, RepeatedFailure) as exc:
+                    # Budget and repeated-failure guards are the lead's own
+                    # limits reported back to it, not a crash: it can still
+                    # close the task incomplete with what it has.
+                    worker_failures += 1
+                    answers.append(
+                        f"Worker errand {label!r} was refused: {exc}\n"
+                        f"{_WORKER_RECOVERY}"
+                    )
+                    task.record("user", f"[worker {label}] REFUSED: {str(exc)[:300]}")
+                    if worker_failures >= self.config.max_worker_failures:
+                        raise RunStalled(
+                            f"{worker_failures} worker errands failed for task "
+                            f"{spec.task_id!r} without producing a draft; the "
+                            f"lead is not converging. Last: {str(exc)[:200]}"
+                        ) from exc
+                    continue
+                except Exception as exc:  # noqa: BLE001 -- returned, not raised
+                    worker_failures += 1
+                    detail = str(exc)[:400]
+                    task.record("user", f"[worker {label}] FAILED: {detail}")
+                    answers.append(
+                        f"Worker errand {label!r} on {request['errand']} failed "
+                        f"and produced nothing: {detail}\n{_WORKER_RECOVERY}"
+                    )
+                    if worker_failures >= self.config.max_worker_failures:
+                        raise RunStalled(
+                            f"{worker_failures} worker errands failed for task "
+                            f"{spec.task_id!r} without producing a draft; the "
+                            f"lead is not converging. Last: {detail[:200]}"
+                        ) from exc
+                    continue
                 answers.append(f"Worker {result.model}: {result.summary}\n{result.ref.render()}")
                 continue
             requests = _parse_consults(body)
@@ -455,6 +629,71 @@ class Session:
                 task.keep(answer, kind=f"consult:{peer}", author=peer)
                 answers.append(f"[{peer}]\n{answer}")
 
+    def _record_selection(self, spec: TaskSpec, model: str, role: str) -> None:
+        """Note that a model was chosen for this task. Not that it ran."""
+        ledger = self.config.delegation_ledger
+        if ledger is None:
+            return
+        try:
+            ledger.record(InvocationEvent(
+                task=spec.task_id, role=role, origin=Origin.SEAT,
+                requested_model=model, resolved_model=model,
+                selected=True, invoked=False, outcome="selected",
+            ))
+        except Exception:  # noqa: BLE001 -- accounting never fails a run
+            log.debug("could not record the selection of %s", model, exc_info=True)
+
+    def _capture_source(self) -> Optional[dict]:
+        """The project's file contents, or None when no project is selected."""
+        if not self.project:
+            return None
+        try:
+            from .project import Project
+            return Project(self.project, exclude=self.config.project_excludes).contents()
+        except Exception:  # noqa: BLE001 -- observation never fails a run
+            log.debug("could not capture project source", exc_info=True)
+            return None
+
+    def _assess_scope(self, spec: TaskSpec, task: TaskMemory, before) -> Optional[ScopeReport]:
+        """Compare what the task actually changed against what it declared.
+
+        Reported to the lead and the record, never reverted. The 2026-09-13
+        over-wide change was also the only work that existed, and discarding it
+        to satisfy a bookkeeping rule would have destroyed real output; user
+        edits and partial work stay exactly where they are. An out-of-scope
+        *path* is the one case the operator explicitly bounded, so it is marked
+        blocking and carried into the close-out; a size overrun is loud and
+        advisory.
+        """
+        if spec.scope is None or before is None or not self.project:
+            return None
+        after = self._capture_source()
+        if after is None:
+            return None
+        from .project import Project
+        try:
+            diff = Project(self.project, exclude=self.config.project_excludes).diff(before)
+        except Exception:  # noqa: BLE001 -- observation never fails a run
+            log.debug("could not diff for the scope check", exc_info=True)
+            return None
+        report = spec.scope.assess(diff)
+        self.scope_reports.append(report)
+        if report.blocking or report.oversized:
+            task.record("user", report.render())
+            if report.blocking:
+                # Recorded as an open finding so the run cannot close clean
+                # while a task wrote somewhere it was told not to.
+                self.open_findings.append(
+                    f"Task {spec.task_id} changed paths outside its declared "
+                    f"scope: {', '.join(report.out_of_scope)}. The work is "
+                    f"preserved; decide whether it was wanted."
+                )
+            self._note(
+                f"task {spec.task_id} scope check: "
+                + ("out of scope" if report.blocking else "oversized")
+            )
+        return report
+
     def _consult_prompt(self, spec: TaskSpec, question: str, peer: str) -> str:
         label = resolve(peer)
         return (
@@ -474,15 +713,40 @@ class Session:
 
         lead = self._pick_lead(spec)
         collaborators = self.collaborators_for(spec, lead)
+        # Selection is recorded separately from invocation. The 2026-09-13
+        # feature task selected Grok as a collaborator and never reached it,
+        # because drafting failed first -- and a roster read as coverage would
+        # have reported Grok as exercised. It was not. The ledger keeps the
+        # two states apart so nothing downstream can conflate them.
+        self._record_selection(spec, lead, "lead")
+        for peer in collaborators:
+            self._record_selection(spec, peer, "collaborator")
 
         task = TaskMemory(spec.task_id, lead, self.store)
         task.record("user", spec.description)
+        if spec.metadata_confidence != "labelled":
+            # Carried into the task's own record, not only the progress line:
+            # a routing decision nobody stated should be visible to whoever
+            # reads the task later.
+            task.record(
+                "user",
+                f"[routing] kind and difficulty were not taken from a stated "
+                f"label ({spec.metadata_confidence}): "
+                + "; ".join(spec.metadata_notes),
+            )
+
+        # What the tree looked like before this task touched it. Two uses: the
+        # scope check compares against it, and a timed-out editing call is
+        # diagnosed against it rather than blindly replayed.
+        before = self._capture_source()
 
         # The lead drafts with full working memory, and with the fetch and
         # consult channels live: a reply that is a request gets served.
         draft = self._draft_with_channels(lead, spec, task)
         task.record("assistant", draft)
         task.keep(draft, kind="draft")
+
+        self._assess_scope(spec, task, before)
 
         # Collaborators contribute into the lead's working memory. They see the
         # task and the draft, not the whole session: their value is an
@@ -698,12 +962,34 @@ class Session:
                          + "\n\nWith that read, answer now.")
             return body
 
+        correction = ""
+
+        def build_with_correction(fetched):
+            body = build(fetched)
+            return body + correction if correction else body
+
         for _ in range(_MAX_ASKS_PER_DECISION):
-            seat, reply = self._ask_seat(seat, build)
-            stripped = _parse_kind(reply)[2].strip()
-            if not stripped.upper().startswith("ASK:"):
+            seat, reply = self._ask_seat(seat, build_with_correction)
+            correction = ""
+            # Control messages are recognised through a bounded preface scan.
+            # An ASK buried under a paragraph of reasoning used to read as a
+            # task description containing the word ASK, so the operator was
+            # never asked and the run continued on an unanswered question.
+            control = parse_control(reply)
+            if control is None or control.verb != "ASK":
                 break
-            question = stripped[4:].strip()
+            question = control.body
+            if not question:
+                correction = (
+                    "\n\n--- CORRECTION REQUIRED ---\n"
+                    "You replied ASK: with no question. State the one question "
+                    "the operator must answer, or name the task instead."
+                )
+                continue
+            if control.prefaced:
+                # Served, but the reasoning is recorded rather than dropped --
+                # it is usually why the question is being asked at all.
+                self._note(f"the orchestrator prefaced its ASK: {control.preface[:160]}")
             if self.config.ask_operator is None:
                 raise OperatorInputNeeded(question)
             answer = self.config.ask_operator(question)
@@ -714,19 +1000,57 @@ class Session:
                 f"questions without naming a task; it is interrogating, not "
                 f"deciding."
             )
-        # Strip any KIND label before testing for DONE: an orchestrator that
-        # dutifully labels its final reply must still be able to end the run,
-        # not spawn a task whose description is the word DONE.
-        kind, difficulty, description = _parse_kind(reply)
-        if description.strip().upper() == "DONE":
-            return None
-        if not description.strip() or description.strip().upper().startswith(('FETCH:', 'ASK:', 'CONSULT ', 'WORKER ')):
+
+        # DONE and the other control verbs are tested before the label is read:
+        # an orchestrator that dutifully labels its final reply must still be
+        # able to end the run, not spawn a task whose description is DONE.
+        if control is not None:
+            if control.verb == "DONE":
+                return None
+            raise RunStalled(
+                f"An unresolved {control.verb} request cannot become a task."
+            )
+
+        # One bounded correction, then an explicit failure. Defaulting here is
+        # what silently turned a pinned testing task into general/simple work.
+        try:
+            meta = _read_metadata(reply)
+        except AmbiguousMetadata as exc:
+            correction = (
+                "\n\n--- CORRECTION REQUIRED ---\n"
+                f"Your last reply could not be routed: {exc}.\n"
+                f"Reply again with a single 'KIND: <kind> <difficulty>' line "
+                f"first and the task on the following line."
+            )
+            seat, reply = self._ask_seat(seat, build_with_correction)
+            retry_control = parse_control(reply)
+            if retry_control is not None and retry_control.verb == "DONE":
+                return None
+            try:
+                meta = _read_metadata(reply)
+            except AmbiguousMetadata as second:
+                raise RunStalled(
+                    f"the orchestrator could not label this task even after a "
+                    f"correction ({second}). Routing it on a default would "
+                    f"silently drop whatever pin it meant to name."
+                ) from second
+
+        description = meta.description.strip()
+        if not description:
             raise RunStalled("An unresolved request cannot become a task.")
+        if meta.defaulted:
+            # Visible, not inferred later from a routing table.
+            self._note(
+                f"task metadata was not stated; routing as {meta.render()}"
+            )
         return TaskSpec(
             task_id=f"t{len(self.history) + 1}",
             description=description,
-            kind=kind,
-            complexity=difficulty,
+            kind=meta.kind,
+            complexity=meta.difficulty,
+            metadata_confidence=meta.confidence,
+            metadata_notes=list(meta.notes),
+            scope=self.config.default_scope,
         )
 
     def plan(self) -> str:
@@ -831,6 +1155,11 @@ class Session:
         if map_block:
             parts.append(map_block)
         parts.append("You are leading this task. Produce the complete work.")
+        # Stated before the work, checked after it. Telling a model its bound
+        # helps some; measuring the diff is what makes the bound real, and
+        # both happen -- see _assess_scope.
+        if spec.scope is not None:
+            parts.append(spec.scope.render())
         parts.append(worker_menu())
         parts.append('To commission one worker, reply only WORKER followed by JSON: '
                      '{"errand":"code","instruction":"one bounded request",'
@@ -896,6 +1225,7 @@ class Session:
             "with 'BLOCKING:' -- you will be asked to re-check exactly those "
             "against the revision. If you genuinely find nothing worth changing, "
             "reply exactly 'NO FINDINGS' and nothing else."
+            + _review_subject_note(spec)
         )
 
     def _revision_prompt(self, spec: TaskSpec, draft: str, notes: List[str]) -> str:
@@ -908,9 +1238,31 @@ class Session:
             "rebut it with a reason -- silence is not a response. A finding "
             "you cannot decide goes to the record as an open question, not "
             "into the void. "
-            + ("Update the project using the edit method in your role instructions."
-               if self.project else "Produce the complete revised work, not a diff.")
+            + self._revision_delivery()
         )
+
+    def _revision_delivery(self) -> str:
+        """How the lead should return a revision, given its actual grant.
+
+        A project being *selected* is not a grant to write to it. The old text
+        told the lead to update the project whenever a project was set, so a
+        read-only review run instructed its lead to edit files it had no
+        permission to touch -- a contradictory instruction that made a
+        correctly-completed review look like a thwarted implementation. The
+        grant, not the selection, decides.
+        """
+        if self.project and self.config.allow_writes:
+            return "Update the project using the edit method in your role instructions."
+        if self.project:
+            return (
+                "This run is read-only: you have no write grant for the "
+                "project, so do not attempt to edit it. Produce the complete "
+                "revised work as text. Reporting that the subject is not ready "
+                "is a complete, successful outcome -- it is not an unfinished "
+                "implementation, and you should not convert findings into "
+                "edits you are not authorised to make."
+            )
+        return "Produce the complete revised work, not a diff."
 
     def _recheck_blocking(
         self,
@@ -995,14 +1347,34 @@ class Session:
             )
 
     def _check(self, gate):
+        """Run the gate, and say *what* changed when the tree moved under it.
+
+        The same-tree check is unchanged: a fingerprint taken before and after,
+        with any difference invalidating the result. What changed is the
+        diagnostic. "Project source changed while the check ran" left the lead
+        with nowhere to start -- on 2026-09-13 that message sent a model
+        hunting for concurrent edits when the real cause was the test suite
+        writing into ``data/recordings/``, which one filename would have named
+        immediately.
+
+        Contents are captured before and after rather than only a digest, so
+        the comparison can name added, removed and modified paths. Unexpected
+        new source files are the point of the check, so they are reported, not
+        excluded -- narrowing the fingerprint to tracked files would have made
+        this failure invisible instead of merely unhelpful.
+        """
         from .integration import GateResult
         from .project import Project
         project = Project(self.project, exclude=self.config.project_excludes) if self.project else None
-        before = project.fingerprint() if project else None
+        before = project.contents() if project else None
         result = gate.run()
-        if project and before != project.fingerprint():
-            return GateResult(False, result.command, result.returncode,
-                              "Project source changed while the integration check ran; result is not valid.")
+        if project is not None:
+            after = project.contents()
+            if before != after:
+                return GateResult(
+                    False, result.command, result.returncode,
+                    _describe_tree_change(before, after),
+                )
         return result
 
     def _verifier_prompt(self, spec: TaskSpec, draft: str, verifier: str) -> str:
@@ -1044,6 +1416,65 @@ class Session:
                     topic=topic, note=note, author=lead, session=spec.task_id
                 )
         return summary, reasoning, dead_ends
+
+
+def _review_subject_note(spec: TaskSpec) -> str:
+    """Keep "this review is wrong" apart from "the thing reviewed is wrong".
+
+    When the task *is* a review, the work under critique is a review document,
+    and its correct conclusion may well be that its subject is not ready. A
+    reviewer that marks the subject's defects BLOCKING turns a finished review
+    into a revision obligation it can never discharge -- the defects are in
+    something this task is not allowed to touch, and in a read-only run is not
+    permitted to touch either. The 2026-09-13 probe came out right anyway, and
+    that outcome is worth protecting deliberately rather than by luck.
+    """
+    if spec.kind != TaskKind.REVIEW:
+        return ""
+    return (
+        " This task is itself a review. BLOCKING means a defect in the review "
+        "-- a missed problem, a wrong claim, unsupported evidence. A defect the "
+        "review correctly reports in the thing it reviewed is not a blocker "
+        "here: a review that concludes its subject is not ready is a complete "
+        "and successful review, not an unfinished one. Do not ask for the "
+        "subject to be fixed."
+    )
+
+
+def _describe_tree_change(before: dict, after: dict, *, limit: int = 20) -> str:
+    """Name the files that moved while the integration check was running.
+
+    Added, removed and modified are reported separately: a test suite leaving
+    artefacts behind looks nothing like a concurrent edit to a source file, and
+    the old undifferentiated message made the two indistinguishable.
+    """
+    before = before or {}
+    after = after or {}
+    added = sorted(set(after) - set(before))
+    removed = sorted(set(before) - set(after))
+    modified = sorted(
+        name for name in set(before) & set(after) if before[name] != after[name]
+    )
+
+    def show(names):
+        head = ", ".join(names[:limit])
+        extra = len(names) - limit
+        return head + (f", and {extra} more" if extra > 0 else "")
+
+    parts = []
+    if added:
+        parts.append(f"{len(added)} added ({show(added)})")
+    if modified:
+        parts.append(f"{len(modified)} modified ({show(modified)})")
+    if removed:
+        parts.append(f"{len(removed)} removed ({show(removed)})")
+    detail = "; ".join(parts) or "no files differ, but the contents compared unequal"
+    return (
+        "Project source changed while the integration check ran; the result is "
+        f"not valid. Changed paths: {detail}. A check that writes into the "
+        "project invalidates its own result -- isolate those writes (a "
+        "temporary directory or a fixture) rather than excluding the paths."
+    )
 
 
 def _parse_fetch(reply: str) -> Optional[str]:
@@ -1098,6 +1529,23 @@ def _parse_consults(reply: str):
     return out
 
 
+#: What a lead is told when a worker errand comes back empty. The rules it
+#: names are the ones already enforced by :class:`~quadratus.workers.WorkerPool`
+#: -- this text exists so the lead knows which moves are open to it rather than
+#: discovering the refusal by trying. Closing incomplete is listed last and
+#: explicitly, because a lead with no legal move left must have an honest exit
+#: that is not "keep trying".
+_WORKER_RECOVERY = (
+    "You may: rewrite the instruction and re-send it; send the same "
+    "instruction to a different worker; mark the errand demanding to bump it "
+    "one tier inside the same family; or stop delegating and produce the work "
+    "yourself. You may not re-send the identical instruction to the same "
+    "worker -- that is refused. If none of these will work, say so plainly and "
+    "close the task incomplete with what you have; do not invent the missing "
+    "result."
+)
+
+
 #: How many operator questions one decision may spend before it is judged to
 #: be interrogating rather than deciding. Three is generous: a decision that
 #: genuinely needs more operator input than that is a scoping conversation,
@@ -1119,33 +1567,41 @@ _KIND_REQUEST = (
 )
 
 
-def _parse_kind(reply: str) -> tuple:
-    """Split an optional leading ``KIND:`` line off the orchestrator's reply.
+def _read_metadata(reply: str) -> TaskMetadata:
+    """Recover kind, difficulty and description, tolerating a bounded preface.
 
-    Returns (kind, difficulty, description). Tolerant in the same way
-    close-out parsing is: an unrecognised or absent label degrades to the
-    default rather than failing the round. A mislabelled task costs a routing
-    preference; a rejected round costs the task. The difficulty default is
-    SIMPLE -- the bulk of well-sized tasks belong there, and the ladder puts
-    them on the subscription with capacity to spare.
+    Delegates to :mod:`quadratus.taskmeta`, which scans a few lines rather
+    than only the first. The old first-line-only rule is what let a prefaced
+    ``KIND: test rote`` fall through to general/simple, dropping the testing
+    pin without a word in the record; see that module for the full account.
+
+    Raises:
+        AmbiguousMetadata: on contradictory or unknown labels. The caller
+            re-asks once with a correction rather than defaulting, because the
+            default is precisely the silent misroute being fixed.
     """
-    text = (reply or "").strip()
-    lines = text.splitlines()
-    if lines and lines[0].strip().upper().startswith("KIND:"):
-        label = lines[0].split(":", 1)[1].strip().lower()
-        rest = "\n".join(lines[1:]).strip()
-        parts = label.split()
-        claimed = parts[0] if parts else ""
-        difficulty = next(
-            (p for p in parts[1:] if p in Complexity._COLLABORATORS),
-            Complexity.SIMPLE,
-        )
-        if claimed in ROUTING and rest:
-            return claimed, difficulty, rest
-        if rest:
-            log.debug("orchestrator proposed unknown task kind %r", claimed)
-            return TaskKind.GENERAL, difficulty, rest
-    return TaskKind.GENERAL, Complexity.SIMPLE, text
+    return parse_metadata(
+        reply,
+        known_kinds=set(ROUTING),
+        known_difficulties=set(Complexity._COLLABORATORS),
+        default_kind=TaskKind.GENERAL,
+        default_difficulty=Complexity.SIMPLE,
+    )
+
+
+def _parse_kind(reply: str) -> tuple:
+    """(kind, difficulty, description), degrading rather than raising.
+
+    The tolerant face of :func:`_read_metadata`, kept for the callers that
+    only want the description and have no way to re-ask -- an ambiguous label
+    there is still better handled as the documented default than as a crash.
+    Callers that *can* re-ask use :func:`_read_metadata` directly.
+    """
+    try:
+        meta = _read_metadata(reply)
+    except AmbiguousMetadata:
+        return TaskKind.GENERAL, Complexity.SIMPLE, (reply or "").strip()
+    return meta.kind, meta.difficulty, meta.description
 
 
 def _parse_closeout(reply: str):

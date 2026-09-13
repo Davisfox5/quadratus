@@ -48,10 +48,13 @@ import logging
 import os
 import re
 import threading
+import time
 from dataclasses import replace
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from .config import Settings
+from .delegation import DelegationLedger, InvocationEvent, Origin
 from .latest import alias_for, resolution_source
 from .project import Project
 from .providers import LLMProvider, ProviderError, build_provider
@@ -124,6 +127,11 @@ class Fleet:
             otherwise. Pass it here rather than to :class:`SessionConfig`,
             which would meter the same calls a second time with estimates
             only.
+        delegation_ledger: When given, every invocation and retry is recorded
+            with its origin, so Quadratus-dispatched work stays distinguishable
+            from vendor-native children and vendor-internal auxiliary activity,
+            and a call that reported no usage is recorded as unknown rather
+            than omitted. Observational only.
         system: The system prompt handed to every call. The role each model
             is playing arrives in the prompt itself.
     """
@@ -135,12 +143,14 @@ class Fleet:
         allow_writes: bool = False,
         project=None,
         usage_meter: Optional[UsageMeter] = None,
+        delegation_ledger: Optional[DelegationLedger] = None,
         system: str = "You are collaborating on a software engineering task.",
     ) -> None:
         self.settings = settings or Settings.from_env()
         self.allow_writes = allow_writes
         self.project = project if isinstance(project, Project) else Project(project) if project else None
         self.usage_meter = usage_meter
+        self.delegation_ledger = delegation_ledger
         self.system = system
         self._providers: Dict[str, Optional[LLMProvider]] = {}
         self._exhausted: Dict[str, str] = {}
@@ -285,7 +295,10 @@ class Fleet:
         with self.project.snapshot() as directory:
             view = provider.in_directory(directory, allow_writes=False)
             role += ("\nYour working directory is a fresh source copy. Read it to ground your "
-                     "answer. Do not change files, commit, push, or use paths outside this copy.")
+                     "answer. Do not change files, commit, push, or use paths outside this copy. "
+                     "Cite files by their path relative to the project root, not by the absolute "
+                     "path of this copy: this copy is deleted when your call ends, and an "
+                     "absolute path into it is a dead reference in the report.")
             if allow_writes:
                 role += ("\nYou are a bounded editor. Return exactly PATCH: followed by a fenced "
                          "diff containing a standard unified diff with a/ and b/ paths. "
@@ -293,6 +306,12 @@ class Fleet:
                          "return NO CHANGES: with a reason. FETCH, CONSULT and WORKER requests "
                          "may be returned alone before the patch. You have no write tools.")
             reply = self._generate(model_key, view, prompt, role)
+            # Rewritten while the copy still exists, because its path is the
+            # only thing that identifies which references need rewriting. A
+            # reviewer that cited the copy by absolute path would otherwise
+            # leave the operator holding links into a deleted directory --
+            # a reporting defect, separate from the isolation working correctly.
+            reply = _relativise_snapshot_paths(reply, directory)
         if allow_writes:
             match = re.fullmatch(r"\s*PATCH:\s*```(?:diff)?\n(.*?)```\s*", reply, re.DOTALL)
             if match:
@@ -302,16 +321,85 @@ class Fleet:
                 raise ProviderError("Bounded editor returned no PATCH or explicit NO CHANGES result.")
         return reply
 
-    def _generate(self, key, provider, prompt, system):
+    @staticmethod
+    def _relativise(reply: str, directory) -> str:
+        return _relativise_snapshot_paths(reply, directory)
+
+    def _generate(self, key, provider, prompt, system, *, role="", task="", origin=None):
+        started = time.monotonic()
         try:
             reply = provider.generate(prompt, system=system)
         except Exception as exc:
+            # A failed call still consumed a window. The old code recorded
+            # nothing here, and an invocation absent from the ledger reads as
+            # zero -- which is a claim, and on the 2026-09-13 trial a false
+            # one: cancelled and timed-out calls had burned real budget and
+            # appeared nowhere. Usage is recorded as *unknown* instead, which
+            # is what it actually is.
+            self._record_invocation(
+                key, provider, role=role, task=task, origin=origin,
+                seconds=time.monotonic() - started, invoked=True,
+                outcome=type(exc).__name__, detail=str(exc)[:200],
+                usage=getattr(provider, "last_usage", None),
+            )
             if _looks_exhausted(exc):
                 self.mark_exhausted(key, str(exc))
                 raise WindowExhausted(f"{key}: subscription window exhausted ({exc})") from exc
             raise
         self._meter(key, provider, prompt, reply)
+        self._record_invocation(
+            key, provider, role=role, task=task, origin=origin,
+            seconds=time.monotonic() - started, invoked=True, outcome="ok",
+            usage=getattr(provider, "last_usage", None),
+        )
+        self._observe_native(key, provider)
         return reply
+
+    def _record_invocation(self, key, provider, *, role, task, origin,
+                           seconds, invoked, outcome, usage=None, detail="",
+                           post_return_failure=False):
+        """Append one invocation to the delegation ledger. Never raises."""
+        if self.delegation_ledger is None:
+            return
+        try:
+            usage = usage or {}
+            self.delegation_ledger.record(InvocationEvent(
+                task=task or "-",
+                role=role or "-",
+                origin=origin or Origin.SEAT,
+                requested_model=key,
+                resolved_model=getattr(provider, "model", None) or key,
+                selected=True,
+                invoked=invoked,
+                outcome=outcome,
+                seconds=seconds,
+                # Absent stays absent: None is unknown, and unknown is not zero.
+                input_tokens=usage.get("input_tokens"),
+                output_tokens=usage.get("output_tokens"),
+                cached_input_tokens=usage.get("cached_input_tokens"),
+                session_id=getattr(provider, "last_session_id", None),
+                post_return_failure=post_return_failure,
+                detail=detail,
+            ))
+        except Exception:  # noqa: BLE001 -- accounting never fails a run
+            log.debug("could not record invocation for %s", key, exc_info=True)
+
+    def _observe_native(self, key, provider) -> None:
+        """Fold any vendor-native children the provider reported into the record.
+
+        The harness cannot prevent a CLI spawning its own sub-agents -- that
+        happens inside a vendor process -- so it records them instead, marked
+        as observed rather than dispatched, and keeps them out of the
+        Quadratus-dispatched totals. Silence here is what made 135,105 tokens
+        disappear from a run that was otherwise fully accounted.
+        """
+        if self.delegation_ledger is None:
+            return
+        try:
+            for child in getattr(provider, "native_children", None) or ():
+                self.delegation_ledger.observe_native(child)
+        except Exception:  # noqa: BLE001 -- accounting never fails a run
+            log.debug("could not record native children for %s", key, exc_info=True)
 
     def _meter(self, key: str, provider: LLMProvider, prompt: str, reply: str) -> None:
         if self.usage_meter is None:
@@ -410,6 +498,34 @@ def _roster_for(vendor: str):
     from .registry import ROSTER
 
     return [m for m in ROSTER if m.provider == vendor]
+
+
+def _relativise_snapshot_paths(reply: str, directory) -> str:
+    """Rewrite absolute paths into a disposable source copy as project paths.
+
+    A read-only call works inside a temporary copy that is deleted the moment
+    the call returns, so every ``/tmp/quadratus-review-xxxx/app.py`` a reviewer
+    writes into its findings is a dead link by the time an operator reads the
+    report. The isolation is working exactly as intended; the *reference* is
+    the defect.
+
+    Both the resolved and unresolved spellings of the directory are handled,
+    because macOS hands out ``/var/folders/...`` paths that resolve to
+    ``/private/var/folders/...`` and a model may echo either. Longest first,
+    so the longer spelling is not left half-rewritten by the shorter one.
+    """
+    if not reply:
+        return reply
+    root = Path(directory)
+    spellings = {str(root), str(root.resolve())}
+    for spelling in sorted(spellings, key=len, reverse=True):
+        if not spelling:
+            continue
+        # Trailing separator first: "/tmp/x/app.py" -> "app.py", and a bare
+        # mention of "/tmp/x" itself -> "the project root".
+        reply = reply.replace(spelling + os.sep, "")
+        reply = reply.replace(spelling, "the project root")
+    return reply
 
 
 def _looks_exhausted(exc: Exception) -> bool:

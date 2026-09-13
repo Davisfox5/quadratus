@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 import logging
 import random
+import subprocess
 import time
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
@@ -25,6 +26,28 @@ log = logging.getLogger(__name__)
 
 class ProviderError(RuntimeError):
     """A provider call failed permanently (after retries or non-retryable)."""
+
+
+class PartialWorkSuspected(ProviderError):
+    """An editing call stopped without saying what it had already written.
+
+    A timeout or a cancellation is not the same as a failure: the vendor
+    process may have saved most of its work before it stopped. The 2026-09-13
+    trial recorded exactly this -- a 900-second editing call whose output was
+    on disk while the transport layer, seeing only a timeout, began replaying
+    the same writing prompt against the tree that call had just changed.
+
+    A :class:`ProviderError` subclass so existing handlers still treat it as a
+    permanent call failure rather than something to retry, and so nothing that
+    catches ProviderError has to learn a new type to stay correct. What it adds
+    is the instruction not to replay, and ``cause`` for the caller that wants
+    to know which kind of stop it was.
+    """
+
+    def __init__(self, message: str, *, cause: Optional[Exception] = None) -> None:
+        super().__init__(message)
+        #: The transport-level exception underneath -- a TimeoutError, usually.
+        self.cause = cause
 
 
 class ProviderRefusal(ProviderError):
@@ -120,6 +143,27 @@ class LLMProvider:
 
     def _retryable(self, exc: Exception) -> bool:
         raise NotImplementedError
+
+    def _replay_would_be_unsafe(self, exc: Exception) -> bool:
+        """Whether retrying this failure could re-apply work already done.
+
+        Two conditions together, and both are needed. The call must be able to
+        write -- a read-only review that times out has changed nothing, and
+        re-sending it is a genuine retry. And the failure must be one that
+        leaves the outcome unknown rather than known-failed: a timeout or a
+        cancellation stopped a call that may have finished most of its work,
+        whereas a rate-limit response means the vendor never ran it.
+        """
+        if not getattr(self, "allow_writes", False):
+            return False
+        if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)):
+            return True
+        text = str(exc).lower()
+        return any(
+            token in text
+            for token in ("timed out", "timeout", "cancelled", "canceled",
+                          "interrupted", "killed")
+        )
 
     # -- helpers -------------------------------------------------------------
     @staticmethod
@@ -249,6 +293,24 @@ class LLMProvider:
                 raise
             except Exception as exc:
                 last_exc = exc
+                if self._replay_would_be_unsafe(exc):
+                    # A timeout or cancellation on a call that could write does
+                    # not mean nothing happened. On 2026-09-13 an editing call
+                    # hit its 900s ceiling with work already saved to disk, and
+                    # the retry loop began replaying the same writing prompt
+                    # against a tree that call had already changed -- doubling
+                    # edits, or applying a second pass to a first pass's
+                    # output. The tree moved, so the prompt is no longer the
+                    # prompt that was sent. Whether to retry is now the
+                    # caller's decision, made with the partial work in hand.
+                    raise PartialWorkSuspected(
+                        f"{self.label} did not complete ({exc}). This call could "
+                        f"write, so the working tree may already hold partial "
+                        f"work; it must be inspected before anything is retried. "
+                        f"Replaying the same prompt against a changed tree is "
+                        f"not a retry, it is a second, different edit.",
+                        cause=exc,
+                    ) from exc
                 if self._retryable(exc) and attempt < self.max_retries - 1:
                     delay = self.retry_base_delay * (2 ** attempt) + random.uniform(0, 1)
                     log.warning(

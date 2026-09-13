@@ -8,11 +8,11 @@ touches the network.
 from __future__ import annotations
 
 import json
-import subprocess
 from types import SimpleNamespace
 
 import pytest
 
+from quadratus import cli_providers
 from quadratus.cli_providers import ClaudeCLIProvider
 from quadratus.config import Settings
 from quadratus.orchestrator import Orchestrator
@@ -171,7 +171,7 @@ def test_cli_envelope_refusal_is_raised_once(monkeypatch):
         calls.append(1)
         return SimpleNamespace(stdout=envelope, stderr="", returncode=0)
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_providers, "_launch", fake_run)
     p = ClaudeCLIProvider(model="fable", retry_base_delay=0.0)
     with pytest.raises(ProviderRefusal) as info:
         p.generate("x")
@@ -193,7 +193,7 @@ def test_cli_refusal_falls_back_to_the_configured_alias(monkeypatch):
             body = {"type": "result", "result": "ok from opus", "stop_reason": "end_turn"}
         return SimpleNamespace(stdout=json.dumps(body), stderr="", returncode=0)
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_providers, "_launch", fake_run)
     p = ClaudeCLIProvider(model="fable", refusal_fallback_model="opus", retry_base_delay=0.0)
     assert p.generate("x") == "ok from opus"
     assert seen == ["fable", "opus"]

@@ -283,3 +283,63 @@ def test_autodetected_python_check_uses_project_environment(tmp_path):
     python.parent.mkdir(parents=True)
     python.symlink_to(sys.executable)
     assert scan_repo(tmp_path).check_command[0] == str(python)
+
+
+def test_a_real_run_records_who_actually_ran_and_what_it_could_not_observe(project_env):
+    """The delegation record is produced by a genuine run, not only in unit tests.
+
+    Drives the same scripted-vendor subprocesses as the rest of this module, so
+    the invocation ledger is exercised through the real Fleet path rather than
+    a fake session.
+    """
+    project, settings, trace, _caller = project_env
+    result = run_project('Fix addition', project, settings, allow_writes=True,
+                         check=check_command())
+
+    data = json.loads((result.run_dir / 'result.json').read_text())
+    delegation = data['delegation']
+
+    # The scripted vendors report no token counts, so this run is the
+    # unknown-not-zero case end to end: the calls happened, the usage did not
+    # come back, and nothing invents a figure for it.
+    assert delegation['controlled_tokens'] == 0
+    assert delegation['unknown_invocations'] > 0
+    assert delegation['native_child_tokens'] == 0
+    assert 'Unknown usage is unknown, not zero' in delegation['note']
+
+    # Every invocation is on disk, one JSON line each, with its origin.
+    events = [json.loads(line) for line
+              in (result.run_dir / 'invocations.jsonl').read_text().splitlines()]
+    assert events
+    assert any(e['invoked'] and e['outcome'] == 'ok' for e in events)
+    assert any(e['selected'] and not e['invoked'] for e in events), \
+        'selection must be recorded separately from invocation'
+
+    report = (result.run_dir / 'delegation.md').read_text()
+    assert '# Delegation and invocation record' in report
+    assert 'Not an API charge' in report
+    assert 'usage unknown' in report
+    assert 'remain **unknown**, not zero' in report
+    # The API-price counterfactual stays a separate number in a separate place.
+    assert 'Usage report (API-price counterfactual)' in result.report
+    assert 'Usage report (API-price counterfactual)' not in report
+
+
+def test_a_scope_breach_is_reported_without_reverting_the_work(project_env):
+    """Scope is evidence, never a rollback: the work and the operator's own
+    files both survive a breach."""
+    from quadratus.scope import TaskScope
+
+    project, settings, trace, _caller = project_env
+    (project.root / 'operator-note.txt').write_text('mine\n')
+    result = run_project('Fix addition', project, settings, allow_writes=True,
+                         check=check_command(),
+                         default_scope=TaskScope(permitted_paths=['docs'], max_lines=2))
+
+    data = json.loads((result.run_dir / 'result.json').read_text())
+    reports = data['scope_reports']
+    assert reports and any(r['out_of_scope'] for r in reports)
+    assert any('add.py' in r['out_of_scope'] for r in reports)
+    # Nothing rolled back.
+    assert 'return a + b' in (project.root / 'add.py').read_text()
+    assert (project.root / 'operator-note.txt').read_text() == 'mine\n'

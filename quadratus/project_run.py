@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .artifacts import ArtifactStore
 from .codebase_map import CodebaseMap
+from .delegation import DelegationLedger, reconcile
 from .integration import IntegrationGate
 from .project import Project
 from .providers import ProviderError
@@ -47,7 +48,8 @@ def _project_lock(project):
 
 def run_project(goal, project, settings, *, allow_writes=False, check='',
                 state_dir=None, max_tasks=20, mode='adversarial',
-                progress=None, ask_operator=None, plan_gate=None):
+                progress=None, ask_operator=None, plan_gate=None,
+                default_scope=None):
     """Keep both successful and interrupted runs next to their source tree."""
     from .runtime import Fleet, new_session
 
@@ -69,11 +71,13 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
         return _run(goal, project, settings, state=state, allow_writes=allow_writes,
                     check=check, max_tasks=max_tasks, mode=mode, progress=progress,
                     ask_operator=ask_operator, plan_gate=plan_gate,
+                    default_scope=default_scope,
                     fleet_type=Fleet, session_factory=new_session)
 
 
 def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
-         mode, progress, ask_operator, plan_gate, fleet_type, session_factory):
+         mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
+         default_scope=None):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
@@ -85,14 +89,18 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     gate = IntegrationGate(command, cwd=project.root) if command else None
     store = ArtifactStore(run_dir / 'artifacts')
     meter = UsageMeter(run_dir / 'usage.jsonl')
+    delegation = DelegationLedger(path=run_dir / 'invocations.jsonl')
     config = SessionConfig(
         project=project.root, project_excludes=tuple(project.exclude),
         allow_writes=allow_writes, mode=mode, integration_gate=gate,
         codebase_map=code_map, ask_operator=ask_operator, plan_gate=plan_gate,
-        progress=progress,
+        progress=progress, delegation_ledger=delegation,
+        default_scope=default_scope,
     )
     session, error = None, ''
-    fleet = fleet_type(settings, project=project, allow_writes=allow_writes, usage_meter=meter)
+    fleet = fleet_type(settings, project=project, allow_writes=allow_writes,
+                       usage_meter=meter, delegation_ledger=delegation)
+    in_flight = {}
     try:
         if progress:
             progress(f'Project: {project.root}; edits {"enabled" if allow_writes else "disabled"}')
@@ -104,6 +112,12 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         session.run(max_tasks=max_tasks)
     except (Exception, KeyboardInterrupt) as exc:  # persist partial work and its cause
         error = f'{type(exc).__name__}: {exc}'
+        # A stopped editing call already inspected the tree and kept whatever
+        # was there. Carrying that forward is what makes the handoff resumable
+        # rather than merely honest about having failed.
+        partial = getattr(exc, 'partial', None)
+        if partial:
+            in_flight = dict(partial)
     finally:
         fleet.close()
     diff = project.diff(before)
@@ -116,6 +130,14 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
              f'Run files: {run_dir}', '']
     if error:
         lines += [f'Error: {error}', '']
+    if in_flight:
+        changed = in_flight.get('changed') or []
+        lines += ['## In-flight work when the run stopped', '',
+                  in_flight.get('note', ''), '']
+        if changed:
+            lines += [f'Already written and preserved ({len(changed)} file(s), '
+                      f'{in_flight.get("changed_lines", 0)} line(s)):', '',
+                      *[f'- {name}' for name in changed], '']
     if not completed and not error:
         lines += ['The plan was declined, the task limit was reached, or findings/checks remain open.', '']
     lines += ['Source changes are saved in the project folder.' if diff else
@@ -126,7 +148,11 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                       '', f'Checked folder: {result["cwd"]}', '', result['output'], '']
     else:
         lines += ['No integration check ran; this result has not been test-verified.', '']
-    lines += [meter.render_report(), '', '## Task ledger', '', ledger]
+    lines += [meter.render_report(), '']
+    # Who actually ran, kept apart from who was selected, and from what the
+    # harness could only witness. Reported next to the API-price counterfactual
+    # rather than merged into it: they answer different questions.
+    lines += [delegation.render_report(), '', '## Task ledger', '', ledger]
     report = '\n'.join(lines)
     (run_dir / 'changes.diff').write_text(diff, encoding='utf-8')
     (run_dir / 'ledger.md').write_text(ledger, encoding='utf-8')
@@ -136,5 +162,14 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'allow_writes': allow_writes, 'error': error, 'checks': checks,
         'source_changed': bool(diff), 'source_fingerprint': project.fingerprint(),
         'tasks': len(session.history) if session else 0,
+        'in_flight': in_flight,
+        'delegation': reconcile(delegation.events, delegation.native_children.values()),
+        'scope_reports': [
+            {'within_scope': r.within_scope, 'out_of_scope': r.out_of_scope,
+             'changed': r.changed, 'changed_lines': r.changed_lines,
+             'oversized': r.oversized}
+            for r in (session.scope_reports if session else [])
+        ],
     }, indent=2), encoding='utf-8')
+    (run_dir / 'delegation.md').write_text(delegation.render_report(), encoding='utf-8')
     return ProjectResult(completed, report, run_dir, diff, error)

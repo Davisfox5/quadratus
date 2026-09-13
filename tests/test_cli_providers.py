@@ -1,6 +1,7 @@
 """Tests for the subscription-backed CLI providers.
 
-Every test fakes ``subprocess.run``; nothing here shells out to a real vendor
+Every test fakes ``cli_providers._launch``, the single seam where this
+package executes a vendor CLI; nothing here shells out to a real vendor
 CLI or touches the network.
 """
 
@@ -12,6 +13,7 @@ import subprocess
 
 import pytest
 
+from quadratus import cli_providers
 from quadratus.cli_providers import (
     ClaudeCLIProvider,
     CodexCLIProvider,
@@ -54,7 +56,7 @@ def test_unavailable_when_binary_missing(monkeypatch):
 
 def test_extracts_result_from_json_envelope(claude, monkeypatch):
     monkeypatch.setattr(
-        subprocess, "run", lambda *a, **k: _FakeCompleted(_claude_envelope("the answer"))
+        cli_providers, "_launch", lambda *a, **k: _FakeCompleted(_claude_envelope("the answer"))
     )
     assert claude.generate("question") == "the answer"
 
@@ -66,7 +68,7 @@ def test_error_envelope_is_not_retried(claude, monkeypatch):
         calls.append(1)
         return _FakeCompleted(_claude_envelope("refused to run", is_error=True))
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_providers, "_launch", fake_run)
     with pytest.raises(ProviderError):
         claude.generate("question")
     # ProviderError is terminal: one attempt, no backoff loop.
@@ -81,7 +83,7 @@ def test_system_prompt_is_passed_as_a_flag_not_inlined(claude, monkeypatch):
         seen["input"] = kwargs.get("input")
         return _FakeCompleted(_claude_envelope("ok"))
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_providers, "_launch", fake_run)
     claude.generate("do the thing", system="You are ARBITER.")
 
     argv = seen["argv"]
@@ -94,7 +96,7 @@ def test_system_prompt_is_passed_as_a_flag_not_inlined(claude, monkeypatch):
 def test_readonly_tools_denied_by_default(claude, monkeypatch):
     seen = {}
     monkeypatch.setattr(
-        subprocess, "run",
+        cli_providers, "_launch",
         lambda argv, **k: (seen.update(argv=argv), _FakeCompleted(_claude_envelope("ok")))[1],
     )
     claude.generate("review this")
@@ -105,7 +107,7 @@ def test_allow_writes_opts_out_of_the_sandbox(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/claude")
     seen = {}
     monkeypatch.setattr(
-        subprocess, "run",
+        cli_providers, "_launch",
         lambda argv, **k: (seen.update(argv=argv), _FakeCompleted(_claude_envelope("ok")))[1],
     )
     ClaudeCLIProvider(model="opus", allow_writes=True).generate("build it")
@@ -115,7 +117,7 @@ def test_allow_writes_opts_out_of_the_sandbox(monkeypatch):
 def test_runs_in_scratch_dir_not_cwd(claude, monkeypatch):
     seen = {}
     monkeypatch.setattr(
-        subprocess, "run",
+        cli_providers, "_launch",
         lambda argv, **k: (seen.update(cwd=k.get("cwd")), _FakeCompleted(_claude_envelope("ok")))[1],
     )
     claude.generate("review this")
@@ -137,7 +139,7 @@ def test_api_keys_are_stripped_from_child_env(claude, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
     seen = {}
     monkeypatch.setattr(
-        subprocess, "run",
+        cli_providers, "_launch",
         lambda argv, **k: (seen.update(env=k.get("env")), _FakeCompleted(_claude_envelope("ok")))[1],
     )
     claude.generate("question")
@@ -151,7 +153,7 @@ def test_every_vendors_key_is_stripped_not_just_anthropics(claude, monkeypatch):
         monkeypatch.setenv(var, "sk-should-not-leak")
     seen = {}
     monkeypatch.setattr(
-        subprocess, "run",
+        cli_providers, "_launch",
         lambda argv, **k: (seen.update(env=k.get("env")), _FakeCompleted(_claude_envelope("ok")))[1],
     )
     claude.generate("question")
@@ -163,7 +165,7 @@ def test_every_vendors_key_is_stripped_not_just_anthropics(claude, monkeypatch):
 def test_history_is_rendered_into_the_prompt(claude, monkeypatch):
     seen = {}
     monkeypatch.setattr(
-        subprocess, "run",
+        cli_providers, "_launch",
         lambda argv, **k: (seen.update(stdin=k.get("input")), _FakeCompleted(_claude_envelope("ok")))[1],
     )
     claude.generate("continue", history=[Turn("user", "first"), Turn("assistant", "second")])
@@ -179,7 +181,7 @@ def test_timeout_is_retried_then_surfaces(claude, monkeypatch):
         attempts.append(1)
         raise subprocess.TimeoutExpired(cmd="claude", timeout=1)
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_providers, "_launch", fake_run)
     with pytest.raises(ProviderError):
         claude.generate("question")
     assert len(attempts) == 2
@@ -196,7 +198,7 @@ def test_for_model_rebinds_without_rebuilding(claude, monkeypatch):
     assert claude.model == "opus"
     seen = {}
     monkeypatch.setattr(
-        subprocess, "run",
+        cli_providers, "_launch",
         lambda argv, **k: (seen.update(argv=argv), _FakeCompleted(_claude_envelope("ok")))[1],
     )
     cheap.generate("cheap task")
@@ -215,7 +217,7 @@ def test_codex_prompt_goes_on_stdin(monkeypatch):
             '{"id":"item_1","type":"agent_message","text":"codex answer"}}'
         )
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_providers, "_launch", fake_run)
     out = CodexCLIProvider(model="gpt-5.5-codex").generate("task", system="You are LEAD.")
 
     assert out == "codex answer"
@@ -232,7 +234,7 @@ def test_prompt_never_trails_a_variadic_flag(claude, monkeypatch):
     """
     seen = {}
     monkeypatch.setattr(
-        subprocess, "run",
+        cli_providers, "_launch",
         lambda argv, **k: (
             seen.update(argv=argv, stdin=k.get("input")),
             _FakeCompleted(_claude_envelope("ok")),
@@ -519,7 +521,7 @@ def test_grok_granted_edit_does_not_cancel_on_conflicting_permission_mode(monkey
         target.write_text("after")
         return _FakeCompleted(json.dumps({"stopReason": "end_turn", "text": "DONE"}))
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_providers, "_launch", fake_run)
     provider = GrokCLIProvider(model="x", workdir=str(tmp_path), allow_writes=True)
     assert provider.generate("Make the authorized edit.") == "DONE"
     provider.cleanup()

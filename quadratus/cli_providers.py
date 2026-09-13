@@ -50,11 +50,13 @@ import logging
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
+from .delegation import NativeChild
 from .providers import LLMProvider, ProviderError, ProviderRefusal, Turn
 
 log = logging.getLogger(__name__)
@@ -259,6 +261,89 @@ def _extract_codex_usage(stdout: str) -> Optional[Dict[str, int]]:
         if found["input_tokens"] or found["output_tokens"]:
             best = found
     return best
+
+
+def _extract_native_children(stdout: str) -> List[NativeChild]:
+    """Vendor-native sub-agents visible in a CLI's own event stream.
+
+    The Codex CLI can spawn its own agents (``spawn_agent``), which is how a
+    Sol review on 2026-09-13 created a second Sol that never passed through
+    Quadratus worker selection or any per-task budget. The parent's reported
+    usage covered the parent alone, so 135,105 child tokens were spent inside
+    an authorised run and appeared in no total it produced.
+
+    The harness cannot stop this -- it happens inside a vendor process -- so it
+    records it. Children are keyed by session id and their usage is taken as
+    the **maximum** seen, never the sum: these event streams restate the
+    session's cumulative total on every update, so summing the updates
+    multiplies the real figure.
+
+    Unparseable lines are skipped rather than raising. This is accounting, and
+    accounting must never fail a call.
+    """
+    found: Dict[str, NativeChild] = {}
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        name = str(event.get("name") or event.get("type") or "")
+        session_id = (
+            event.get("child_session")
+            or event.get("child_session_id")
+            or event.get("agent_session_id")
+        )
+        is_spawn = "spawn_agent" in name or "subagent" in name
+        if not session_id and not is_spawn:
+            continue
+        if not session_id:
+            # A spawn was observed but the child cannot be identified, so its
+            # usage cannot be attributed at all. Recorded under a synthetic id
+            # with unknown usage, which is the honest shape of what is known.
+            session_id = f"unidentified:{name}"
+        usage = event.get("usage") if isinstance(event.get("usage"), dict) else {}
+        child = NativeChild(
+            session_id=str(session_id),
+            model=event.get("child_model") or event.get("model"),
+            parent_session_id=event.get("session_id") or event.get("parent_session_id"),
+            input_tokens=_as_int(usage.get("input_tokens")),
+            output_tokens=_as_int(usage.get("output_tokens")),
+            tool_name=name or "spawn_agent",
+        )
+        existing = found.get(child.session_id)
+        if existing is None:
+            found[child.session_id] = child
+            continue
+        # Cumulative restatements: keep the largest reading, never add them.
+        found[child.session_id] = NativeChild(
+            session_id=child.session_id,
+            model=child.model or existing.model,
+            parent_session_id=child.parent_session_id or existing.parent_session_id,
+            input_tokens=_pick_max(existing.input_tokens, child.input_tokens),
+            output_tokens=_pick_max(existing.output_tokens, child.output_tokens),
+            tool_name=existing.tool_name or child.tool_name,
+        )
+    return list(found.values())
+
+
+def _as_int(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pick_max(left: Optional[int], right: Optional[int]) -> Optional[int]:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return max(left, right)
 
 
 def _extract_claude_usage(stdout: str) -> Optional[Dict[str, int]]:
@@ -563,6 +648,82 @@ CLI_SPECS: Dict[str, CLISpec] = {
 }
 
 
+def _launch(argv, *, input=None, timeout=None, cwd=None, env=None):  # noqa: A002
+    """The one place this module executes a vendor CLI.
+
+    ``subprocess.run`` that takes the CLI's whole process tree down on timeout.
+
+    ``subprocess.run`` kills only the process it started. Every vendor CLI here
+    is a launcher that spawns its own children -- a language runtime, MCP
+    servers, native sub-agents -- and those survive the parent being killed.
+    They keep holding the working tree, and on a long run they accumulate.
+
+    So the child gets its own process group and the timeout path signals the
+    group. TERM first so a CLI can flush what it has written, then KILL for
+    whatever ignored it. Output collected before the timeout is preserved on
+    the raised :class:`subprocess.TimeoutExpired`, because a timed-out editing
+    call's partial output is exactly what the caller needs in order to decide
+    whether anything was already written.
+
+    ``start_new_session`` is POSIX; on platforms without it the call degrades
+    to the old single-process behaviour rather than failing.
+    """
+    kwargs = {}
+    if hasattr(os, "killpg") and hasattr(os, "setsid"):
+        kwargs["start_new_session"] = True
+
+    proc = subprocess.Popen(  # noqa: S603 -- argv is built, never a shell string
+        argv,
+        stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
+        env=env,
+        **kwargs,
+    )
+    try:
+        stdout, stderr = proc.communicate(input=input, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _terminate_group(proc)
+        stdout, stderr = proc.communicate()
+        raise subprocess.TimeoutExpired(
+            argv, timeout, output=stdout, stderr=stderr
+        ) from None
+    except BaseException:
+        # KeyboardInterrupt included: an operator stopping the run must not
+        # leave a vendor CLI and its children running against the project.
+        _terminate_group(proc)
+        proc.communicate()
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+
+
+def _terminate_group(proc) -> None:
+    """TERM then KILL the child's process group, tolerating every race.
+
+    Every failure mode here is benign -- the process already exited, the
+    platform has no process groups, the group is gone -- and none of them is a
+    reason to fail a call that has already failed.
+    """
+    for signum, grace in ((signal.SIGTERM, 5.0), (signal.SIGKILL, 2.0)):
+        if proc.poll() is not None:
+            return
+        try:
+            if hasattr(os, "killpg"):
+                os.killpg(os.getpgid(proc.pid), signum)
+            else:  # pragma: no cover -- non-POSIX fallback
+                proc.terminate() if signum == signal.SIGTERM else proc.kill()
+        except (ProcessLookupError, PermissionError, OSError):
+            log.debug("could not signal the CLI process group", exc_info=True)
+            return
+        try:
+            proc.wait(timeout=grace)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
 def _render_history(history: Sequence[Turn]) -> str:
     if not history:
         return ""
@@ -591,6 +752,11 @@ class CLIProvider(LLMProvider):
         #: Real token counts from the most recent call, when the CLI reported
         #: them; None otherwise. Read by metering glue, never load-bearing.
         self.last_usage: Optional[Dict[str, int]] = None
+        #: Vendor-native sub-agents seen in the last call's event stream.
+        #: Observed, not dispatched: outside Quadratus worker selection and
+        #: outside every per-task budget. Kept distinct so they are never
+        #: folded into Quadratus-dispatched totals.
+        self.native_children: List[NativeChild] = []
         super().__init__(model, api_key="cli-oauth", **kwargs)
 
     # -- lifecycle -----------------------------------------------------------
@@ -737,15 +903,12 @@ class CLIProvider(LLMProvider):
 
         log.debug("%s invoking: %s", self.label, " ".join(argv[:6]))
         try:
-            proc = subprocess.run(
+            proc = _launch(
                 argv,
                 input=composed if self.spec.prompt_on_stdin else None,
-                capture_output=True,
-                text=True,
                 timeout=self.timeout,
                 cwd=self.workdir,
                 env=env,
-                check=False,
             )
         except subprocess.TimeoutExpired as exc:
             raise TimeoutError(
@@ -794,6 +957,13 @@ class CLIProvider(LLMProvider):
                 self.last_usage = self.spec.extract_usage(proc.stdout)
             except Exception:  # noqa: BLE001 -- metering must never fail a call
                 self.last_usage = None
+        # Observed, never dispatched: a vendor CLI that spawned its own
+        # sub-agents reports them here so they can be counted separately from
+        # Quadratus-assigned work instead of vanishing from the totals.
+        try:
+            self.native_children = _extract_native_children(proc.stdout)
+        except Exception:  # noqa: BLE001 -- accounting must never fail a call
+            self.native_children = []
         try:
             return self.spec.extract(proc.stdout)
         except ProviderRefusal as refusal:
