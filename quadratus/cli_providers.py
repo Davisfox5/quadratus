@@ -485,7 +485,7 @@ CODEX_SPEC = CLISpec(
 #:
 #: So the choice is tools-with-writes or no tools at all. Operator decision,
 #: 2026-09-12: take the tools. ``--always-approve`` is therefore in
-#: ``always_args`` rather than ``write_args`` -- it goes on every call,
+#: ``agentic_args`` rather than ``write_args`` -- it goes on every senior call,
 #: including read-only ones, because a grok that cancels the moment it reaches
 #: for a tool is not a worker at all, and the ROTE rung and the lookup errand
 #: are both grok's.
@@ -495,10 +495,12 @@ CODEX_SPEC = CLISpec(
 #: codex it is a ``--sandbox read-only``, while for grok "read-only" means
 #: only that the writes land in a ``mkdtemp`` scratch directory instead of the
 #: working tree. Containment, not prevention, and grok alone holds the weaker
-#: guarantee. The scratch directory was always the protection actually doing
-#: the work here; it is now the only one. ``write_args`` still carries
-#: ``--permission-mode acceptEdits``, which is the difference between a run
-#: that may edit the operator's tree and one that may not.
+#: guarantee. Fleet supplies the real project only for granted edits; other
+#: calls receive disposable source copies. On 2026-09-13 a live project trial
+#: showed that adding ``--permission-mode acceptEdits`` overrides the effective
+#: approval behavior: read tools succeed, but search_replace cancels. The same
+#: authorized edit succeeds with ``--always-approve`` alone. Directory selection
+#: and the existing per-call grant, not a second CLI flag, enforce this boundary.
 #:
 #: Recheck this on a Grok Build release that documents its tool names;
 #: ``QUADRATUS_CLI_ARGS_GROK`` is the place to try a fix without editing
@@ -543,9 +545,9 @@ GROK_SPEC = CLISpec(
     # must not get it -- there, the write tools are absent rather than denied,
     # and approving tools that do not exist would only re-admit the loop.
     agentic_args=["--always-approve"],
-    # Granting writes is still a separate, narrower thing: this is what lets
-    # edits reach the operator's tree rather than only the scratch directory.
-    write_args=["--permission-mode", "acceptEdits"],
+    # Fleet enforces edit grants by selecting the project or a source copy.
+    # acceptEdits conflicts with --always-approve and cancels headless edits.
+    write_args=[],
     prompt_file_flag="--prompt-file",
     extract=_extract_grok_result,
     extract_usage=_extract_grok_usage,

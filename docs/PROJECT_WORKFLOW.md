@@ -167,3 +167,24 @@ need the project's own installed dependencies; automatic detection is only a
 starting point. Source snapshots are capped at 100 MiB. Persistent records do
 not yet provide automatic continuation of a stopped run; GUI operator questions
 are reported as incomplete, while CLI sessions can answer them interactively.
+
+### GameTape trial: senior Grok edit transport correction
+
+The 2026-09-13 saved-filter trial exposed a separate path from the earlier
+bounded-worker patch proof. Two senior Grok editing calls read the selected
+project successfully, then cancelled on their first `search_replace` request.
+The saved vendor trace records `permission_cancelled`; neither call changed
+source, and Quadratus correctly persisted an incomplete result.
+
+A synthetic file-edit reproduction showed that combining `--always-approve`
+with `--permission-mode acceptEdits` cancels both prompt-file and argument
+invocations. Removing the conflicting `acceptEdits` flag lets the same edit
+complete. The corrected `GrokCLIProvider` was then exercised directly with its
+normal prompt-file transport: the source changed and survived cleanup.
+
+The fix retains existing model roles, bounded-worker restrictions, and Fleet's
+per-call project/snapshot selection. Grok's senior calls already used
+`--always-approve`; the extra mode was preventing an authorized edit rather
+than providing filesystem isolation. Regression checks cover the cancellation
+and verify that an editing view cannot redirect its owner's scratch directory.
+Local trial evidence lives under `output/gametape-trial/`.

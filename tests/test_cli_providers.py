@@ -506,13 +506,24 @@ def test_grok_sends_the_role_as_a_system_prompt_not_inlined(monkeypatch, tmp_pat
     assert "You are a reviewer." not in provider._compose_prompt("the prompt", "You are a reviewer.", [])
 
 
-def test_granting_writes_supplies_an_approval_mode_where_one_is_needed(monkeypatch):
-    """A non-interactive run with writes granted would otherwise stall waiting
-    for an approval nobody is there to give."""
+def test_grok_granted_edit_does_not_cancel_on_conflicting_permission_mode(monkeypatch, tmp_path):
+    """Reproduce the live CLI's acceptEdits + always-approve cancellation."""
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/grok")
-    argv = GrokCLIProvider(model="x", allow_writes=True)._build_argv("p", "")
-    assert argv[argv.index("--permission-mode") + 1] == "acceptEdits"
-    assert "--permission-mode" not in GrokCLIProvider(model="x")._build_argv("p", "")
+    target = tmp_path / "proof.txt"
+    target.write_text("before")
+
+    def fake_run(argv, **kwargs):
+        if "--permission-mode" in argv or "--always-approve" not in argv:
+            return _FakeCompleted(json.dumps({"stopReason": "cancelled", "text": "I'll edit."}))
+        assert kwargs["cwd"] == str(tmp_path)
+        target.write_text("after")
+        return _FakeCompleted(json.dumps({"stopReason": "end_turn", "text": "DONE"}))
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    provider = GrokCLIProvider(model="x", workdir=str(tmp_path), allow_writes=True)
+    assert provider.generate("Make the authorized edit.") == "DONE"
+    provider.cleanup()
+    assert target.read_text() == "after"
 
 
 # -- the grok envelope -------------------------------------------------------
@@ -601,14 +612,18 @@ def test_grok_approves_tools_on_every_call_including_read_only(monkeypatch):
         assert "--always-approve" in argv
 
 
-def test_granting_writes_is_still_separate_from_approving_tools(monkeypatch):
-    """--always-approve contains writes to the scratch directory; acceptEdits
-    is what lets them reach the operator's tree. Collapsing the two would make
-    every read-only grok call a write-granted one."""
+def test_grok_edit_view_does_not_redirect_its_readonly_owner(monkeypatch, tmp_path):
+    """Permission remains per call; a granted view cannot mutate owner cwd."""
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/grok")
-    assert "--permission-mode" not in GrokCLIProvider(model="x")._build_argv("p", "")
-    granted = GrokCLIProvider(model="x", allow_writes=True)._build_argv("p", "")
-    assert granted[granted.index("--permission-mode") + 1] == "acceptEdits"
+    owner = GrokCLIProvider(model="x")
+    scratch = owner.workdir
+    granted = owner.in_directory(tmp_path, allow_writes=True)
+    assert granted.workdir == str(tmp_path)
+    assert granted._allow_writes is True
+    assert owner.workdir == scratch
+    assert owner._allow_writes is False
+    owner.cleanup()
+    assert tmp_path.is_dir()
 
 
 def test_grok_asserts_no_read_only_protection_it_does_not_have():
