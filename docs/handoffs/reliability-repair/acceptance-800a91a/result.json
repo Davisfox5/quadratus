@@ -1,0 +1,108 @@
+{
+  "project": "/Users/davisfox/Documents/GitHub/sports-video-tagger-acceptance-v2",
+  "goal": "Add safe bulk tagging to GameTape so a coach can correct the tag type and/or player assignment for the currently filtered set of clips in one operation.\n\nThe existing saved review filters are already implemented. Build on them. Keep the Flask/vanilla-JavaScript stack, JSON persistence, current visual design, existing exports, and existing individual clip editing. Do not add dependencies.\n\nThe user flow is: filter clips, open bulk edit, choose a new tag type and/or player (including explicitly clearing a player), preview the exact affected clips and before/after values, then confirm. Changing a filter or switching projects must invalidate a pending preview. Show loading, empty, validation, conflict, and success states, accessible labels, and a visible nonconflicting keyboard shortcut.\n\nCorrectness is the main requirement. A preview must identify an explicit set of clip IDs and their relevant original state. If another browser edits or deletes any affected clip between preview and confirmation, reject the whole batch with a useful conflict response and ask the user to refresh; never partially apply or silently overwrite intervening work. Two simultaneous confirmations of the same preview must not both report that they applied the change. Unrelated clips and projects, annotations, clip timing, and filter presets must be preserved. Reject invalid IDs, foreign-project IDs, duplicate IDs, invalid tags, and unknown players before writing anything. Persist successful batches across reload. CSV/JSON exports must reflect the updated clips and existing filter semantics.\n\nFirst establish a concise design and request/response contract for preview, confirmation, and conflicts. Reason through concurrent requests and the existing load/modify/save persistence pattern before choosing an implementation. The supported deployment is one Flask process with concurrent request threads; explicitly document that boundary instead of claiming multi-process correctness. All existing mutation paths that can race with the new operation must preserve the stated guarantees. Keep changes focused on this feature.\n\nImplement the backend and compact user interface in small reviewable increments. Add regression tests covering successful persistence, validation, cross-project isolation, stale preview, deletion after preview, simultaneous confirmations, and interaction with individual clip edits. Use deterministic synchronization where needed; tests must detect lost updates rather than merely make sequential requests. Review the finished diff for correctness, race conditions, and browser state leakage, resolve findings, and document how to use the feature and its deployment boundary. Finish only when implementation, regression tests, and code review are complete; report limitations honestly.\n\nWork only inside the selected project. Use synthetic data and the existing isolated test fixtures. The Python environment is /tmp/gametape-trial-env/bin/python; verify with /tmp/gametape-trial-env/bin/python -m pytest -q and node --check static/js/app.js. Do not edit data/, .quadratus/, orchestrator.py, fail_logs.txt, test_output.log, credentials, or deployment configuration. Do not invoke the self-healing orchestrator, access another checkout, commit, push, publish, contact anyone, or call paid APIs. Source edits and local checks are authorized. The caller will perform final interactive browser acceptance separately.\n",
+  "completed": false,
+  "allow_writes": true,
+  "error": "KeyboardInterrupt: ",
+  "checks": [
+    {
+      "passed": true,
+      "command": "/tmp/gametape-trial-env/bin/python -m pytest -q",
+      "output": "........................................................................ [ 91%]\n.......                                                                  [100%]\n79 passed in 0.24s",
+      "cwd": "/Users/davisfox/Documents/GitHub/sports-video-tagger-acceptance-v2"
+    }
+  ],
+  "source_changed": true,
+  "source_fingerprint": "eabb7850553b5752ffda18bbccd35fab18996b71cf500027a75113bd17190c51",
+  "tasks": 1,
+  "in_flight": {
+    "changed": [
+      "app.py",
+      "tests/test_bulk_edit.py"
+    ],
+    "changed_lines": 125,
+    "inspected": true,
+    "note": "These changes were already on disk when the call stopped and have been preserved. Re-sending the same prompt would apply a second pass on top of them, not repeat the first.",
+    "task": "t2",
+    "description": "Slice 1 of the backend: implement the locking foundation that docs/BULK_EDIT.md \u00a7\"Why a lock\" already committed to, before any bulk_preview/bulk_apply route exists.\n\nIn `app.py`: add `import threading` and `import functools`; define `_STORE_LOCK = threading.RLock()` after `_save_projects` and a `_locked(fn)` decorator that acquires `_STORE_LOCK` around the whole handler call (`with _STORE_LOCK: return fn(*a, **kw)`), using `functools.wraps` so Flask endpoint names stay unique. Apply `@_locked` directly under `@app.route(...)` on every mutating route (the POST/PUT/DELETE list from the grep: projects create/delete, video upload, tag_types, players create/update/delete/import, filter_presets create/update/delete, clips create/update/delete, annotations create/update/delete/clear, recordings create/delete, video trim/split/cut, export/video). Do not lock GET routes. Do not change any handler body. The doc already accepts that ffmpeg routes block writes; do not add an exception.\n\nIn `tests/test_bulk_edit.py`: copy the fixture from `tests/test_basic.py` (lines 13\u201325). Write `test_concurrent_clip_updates_are_not_lost`: create a project with two clips; monkeypatch `application._load_projects` with a wrapper that calls the original, then waits on a `threading.Barrier(2, timeout=5)` \u2014 only for the two worker threads, keyed by a flag so the setup requests are unaffected (e.g. arm the barrier after setup). Start two threads, each using its own `app.test_client()` to PUT a different clip's `label`. Join them, then GET `/api/projects/<pid>` (or read projects.json) and assert both new labels are present. Because both threads block in `_load_projects` before saving, without the lock the second save overwrites the first; with the RLock the second thread cannot enter `_load_projects` until the first handler finishes, so the barrier must be structured so it cannot deadlock under the lock \u2014 use `barrier.wait()` wrapped in `try/except threading.BrokenBarrierError: pass` so the locked case (where the second thread arrives only after the first completes and the barrier times out) still proceeds. Note in a comment that the timeout path is the expected behaviour when the lock is present.\n\nRun `/tmp/gametape-trial-env/bin/python -m pytest -q`. Leave bulk_preview/bulk_apply, the preview store, and the frontend for later slices.",
+    "scope": {
+      "permitted_paths": [
+        "app.py",
+        "tests/test_bulk_edit.py"
+      ],
+      "forbidden_paths": [],
+      "intended_result": "app.py has a process-wide threading.RLock held across load-modify-save of every mutating route, and a new test file proves concurrent clip writes no longer lose updates",
+      "acceptance": [
+        "app.py imports threading, defines module-level _STORE_LOCK = threading.RLock() and a _locked decorator that wraps the handler body while preserving __name__ via functools.wraps",
+        "Every route in app.py with methods POST/PUT/DELETE that calls _save_projects or writes files (the 25 mutating routes at lines 56-1121, including video trim/split/cut and export/video) is decorated with @_locked placed between @app.route and def",
+        "tests/test_bulk_edit.py reuses the tmp_path/monkeypatch fixture pattern from tests/test_basic.py and contains one test that patches application._load_projects with a wrapper that makes two threads issuing PUT /clips/<id> to two different clips both load before either saves (threading.Barrier(2) or Event, no sleeps), then asserts both edits persist in projects.json; the test must fail if @_locked is removed from update_clip",
+        "/tmp/gametape-trial-env/bin/python -m pytest -q passes with no test removed or weakened",
+        "No file other than app.py and tests/test_bulk_edit.py is modified; no new route is added"
+      ],
+      "max_lines": 100
+    },
+    "invocation": {
+      "task": "t2",
+      "role": "lead",
+      "origin": "seat",
+      "model": "grok:default",
+      "allow_writes": true,
+      "prompt_artifact": "63f4ff7812ed"
+    }
+  },
+  "delegation": {
+    "controlled_tokens": 1764492,
+    "native_child_tokens": 0,
+    "auxiliary_tokens": 0,
+    "known_minimum_tokens": 1764492,
+    "unknown_invocations": 1,
+    "unknown_detail": [
+      "t2/lead | [seat] | grok:default | invoked | KeyboardInterrupt | 238.0s | usage unknown"
+    ],
+    "native_children": 0,
+    "unidentified_native_activity": 0,
+    "note": "Subscription usage including cached and repeated input. Native children counted once at their highest cumulative reading, never summed across updates. Auxiliary vendor-internal usage is reported separately and is not Quadratus-dispatched work. Unknown usage is unknown, not zero."
+  },
+  "scope_reports": [
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "docs/BULK_EDIT.md"
+      ],
+      "changed_lines": 113,
+      "max_lines": 90,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "docs/BULK_EDIT.md"
+      ],
+      "changed_lines": 113,
+      "max_lines": 90,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "docs/BULK_EDIT.md"
+      ],
+      "changed_lines": 121,
+      "max_lines": 90,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "docs/BULK_EDIT.md"
+      ],
+      "changed_lines": 121,
+      "max_lines": 90,
+      "oversized": false
+    }
+  ]
+}

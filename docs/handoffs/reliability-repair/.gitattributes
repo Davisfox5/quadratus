@@ -1,3 +1,6 @@
 # Preserve byte-exact captured inputs, including their original whitespace.
 evidence/BULK_TAGGING-first-applied.md -whitespace
 evidence/worker-second-rejected-response.txt -whitespace
+
+# Captured unified diff: blank context lines must retain their leading space.
+acceptance-800a91a/changes.diff -whitespace

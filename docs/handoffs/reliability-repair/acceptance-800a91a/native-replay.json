@@ -1,0 +1,36 @@
+{
+  "stream_observations": [
+    {
+      "session_id": "unidentified:session:item_6",
+      "model": null,
+      "parent_session_id": "01a09bfe-a8ab-7422-ab3e-99cfacf53362",
+      "input_tokens": null,
+      "output_tokens": null,
+      "tool_name": "wait",
+      "detail": "native activity observed; stream does not report child usage"
+    }
+  ],
+  "linked_session_children": [
+    {
+      "session_id": "01a09bfe-d4e3-78d3-bbec-8c0438c6ac62",
+      "model": "gpt-5.6-sol",
+      "parent_session_id": "01a09bfe-a8ab-7422-ab3e-99cfacf53362",
+      "input_tokens": 127405,
+      "output_tokens": 7700,
+      "tool_name": "spawn_agent",
+      "detail": "linked Codex rollout usage"
+    }
+  ],
+  "reconciliation": {
+    "controlled_tokens": 0,
+    "native_child_tokens": 135105,
+    "auxiliary_tokens": 0,
+    "known_minimum_tokens": 135105,
+    "unknown_invocations": 0,
+    "unknown_detail": [],
+    "native_children": 1,
+    "unidentified_native_activity": 1,
+    "note": "Subscription usage including cached and repeated input. Native children counted once at their highest cumulative reading, never summed across updates. Auxiliary vendor-internal usage is reported separately and is not Quadratus-dispatched work. Unknown usage is unknown, not zero."
+  },
+  "source": "Original captured nested stream plus original scoped parent/child session records, read only."
+}

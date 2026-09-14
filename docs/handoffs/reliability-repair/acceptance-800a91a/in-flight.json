@@ -1,0 +1,35 @@
+{
+  "changed": [
+    "app.py",
+    "tests/test_bulk_edit.py"
+  ],
+  "changed_lines": 125,
+  "inspected": true,
+  "note": "These changes were already on disk when the call stopped and have been preserved. Re-sending the same prompt would apply a second pass on top of them, not repeat the first.",
+  "task": "t2",
+  "description": "Slice 1 of the backend: implement the locking foundation that docs/BULK_EDIT.md \u00a7\"Why a lock\" already committed to, before any bulk_preview/bulk_apply route exists.\n\nIn `app.py`: add `import threading` and `import functools`; define `_STORE_LOCK = threading.RLock()` after `_save_projects` and a `_locked(fn)` decorator that acquires `_STORE_LOCK` around the whole handler call (`with _STORE_LOCK: return fn(*a, **kw)`), using `functools.wraps` so Flask endpoint names stay unique. Apply `@_locked` directly under `@app.route(...)` on every mutating route (the POST/PUT/DELETE list from the grep: projects create/delete, video upload, tag_types, players create/update/delete/import, filter_presets create/update/delete, clips create/update/delete, annotations create/update/delete/clear, recordings create/delete, video trim/split/cut, export/video). Do not lock GET routes. Do not change any handler body. The doc already accepts that ffmpeg routes block writes; do not add an exception.\n\nIn `tests/test_bulk_edit.py`: copy the fixture from `tests/test_basic.py` (lines 13\u201325). Write `test_concurrent_clip_updates_are_not_lost`: create a project with two clips; monkeypatch `application._load_projects` with a wrapper that calls the original, then waits on a `threading.Barrier(2, timeout=5)` \u2014 only for the two worker threads, keyed by a flag so the setup requests are unaffected (e.g. arm the barrier after setup). Start two threads, each using its own `app.test_client()` to PUT a different clip's `label`. Join them, then GET `/api/projects/<pid>` (or read projects.json) and assert both new labels are present. Because both threads block in `_load_projects` before saving, without the lock the second save overwrites the first; with the RLock the second thread cannot enter `_load_projects` until the first handler finishes, so the barrier must be structured so it cannot deadlock under the lock \u2014 use `barrier.wait()` wrapped in `try/except threading.BrokenBarrierError: pass` so the locked case (where the second thread arrives only after the first completes and the barrier times out) still proceeds. Note in a comment that the timeout path is the expected behaviour when the lock is present.\n\nRun `/tmp/gametape-trial-env/bin/python -m pytest -q`. Leave bulk_preview/bulk_apply, the preview store, and the frontend for later slices.",
+  "scope": {
+    "permitted_paths": [
+      "app.py",
+      "tests/test_bulk_edit.py"
+    ],
+    "forbidden_paths": [],
+    "intended_result": "app.py has a process-wide threading.RLock held across load-modify-save of every mutating route, and a new test file proves concurrent clip writes no longer lose updates",
+    "acceptance": [
+      "app.py imports threading, defines module-level _STORE_LOCK = threading.RLock() and a _locked decorator that wraps the handler body while preserving __name__ via functools.wraps",
+      "Every route in app.py with methods POST/PUT/DELETE that calls _save_projects or writes files (the 25 mutating routes at lines 56-1121, including video trim/split/cut and export/video) is decorated with @_locked placed between @app.route and def",
+      "tests/test_bulk_edit.py reuses the tmp_path/monkeypatch fixture pattern from tests/test_basic.py and contains one test that patches application._load_projects with a wrapper that makes two threads issuing PUT /clips/<id> to two different clips both load before either saves (threading.Barrier(2) or Event, no sleeps), then asserts both edits persist in projects.json; the test must fail if @_locked is removed from update_clip",
+      "/tmp/gametape-trial-env/bin/python -m pytest -q passes with no test removed or weakened",
+      "No file other than app.py and tests/test_bulk_edit.py is modified; no new route is added"
+    ],
+    "max_lines": 100
+  },
+  "invocation": {
+    "task": "t2",
+    "role": "lead",
+    "origin": "seat",
+    "model": "grok:default",
+    "allow_writes": true,
+    "prompt_artifact": "63f4ff7812ed"
+  }
+}

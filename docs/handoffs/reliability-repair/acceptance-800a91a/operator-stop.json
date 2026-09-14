@@ -1,0 +1,9 @@
+{
+  "at": 1789350938.547172,
+  "reason": "Controlled live interruption after task t2 saved partial work; verify cancellation telemetry and preservation.",
+  "hashes_before_stop": {
+    "app.py": "8bb7abe98f22534500761b6368b93dcf1d5fb7712e31519eb6d401c0a032329f",
+    "tests/test_bulk_edit.py": "6dd50e17af965c1e42c72123ec0d52269299178ed56fb5582c52afb398906554",
+    "docs/BULK_EDIT.md": "d6c4b50e3ef84243f4489d6bb69bca3f37e7b75ca0388d302f0e922ffe3467ad"
+  }
+}

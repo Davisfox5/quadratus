@@ -699,7 +699,7 @@ class Session:
         try:
             ledger.record(InvocationEvent(
                 task=spec.task_id, role=role, origin=Origin.SEAT,
-                requested_model=model, resolved_model=model,
+                requested_model=model, canonical_model=model,
                 selected=True, invoked=False, outcome="selected",
             ))
         except Exception:  # noqa: BLE001 -- accounting never fails a run

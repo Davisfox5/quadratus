@@ -311,6 +311,9 @@ def test_a_real_run_records_who_actually_ran_and_what_it_could_not_observe(proje
     events = [json.loads(line) for line
               in (result.run_dir / 'invocations.jsonl').read_text().splitlines()]
     assert events
+    selected = [e for e in events if not e['invoked']]
+    assert all(e['canonical_model'] == e['requested_model'] and e['resolved_model'] is None
+               for e in selected)
     assert any(e['invoked'] and e['outcome'] == 'ok' for e in events)
     assert any(e['selected'] and not e['invoked'] for e in events), \
         'selection must be recorded separately from invocation'
