@@ -1,0 +1,8 @@
+{
+  "scenario": "Restore original generation-based discard of committed success before caller test strengthening",
+  "exit_code": 0,
+  "output": "TAP version 13\n# Subtest: committed apply uses selector values captured at Confirm\nok 1 - committed apply uses selector values captured at Confirm\n  ---\n  duration_ms: 12.332666\n  type: 'test'\n  ...\n# Subtest: dismiss and reopen keeps same-project apply busy\nok 2 - dismiss and reopen keeps same-project apply busy\n  ---\n  duration_ms: 1.817375\n  type: 'test'\n  ...\n# Subtest: another project may preview but cannot confirm during pending apply\nok 3 - another project may preview but cannot confirm during pending apply\n  ---\n  duration_ms: 2.249209\n  type: 'test'\n  ...\n1..3\n# tests 3\n# suites 0\n# pass 3\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 45.838875\n",
+  "app_sha256": "a5613bc53459065dbac499f922cab6a0f44d056936c3673e57fc647dfa60707b",
+  "test_sha256": "6d4d8c1dc0f7a56cee9952e3e5e255adc1057c9cdebdb07c9d062065158da372",
+  "production_source_unchanged": true
+}

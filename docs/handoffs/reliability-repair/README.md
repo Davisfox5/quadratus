@@ -1,8 +1,8 @@
 # Cloud reliability repair handoff
 
-**Latest result:** the cloud repair at `f030fb3` was imported and tested on the Mac, but did not pass acceptance. Read `LIVE_ACCEPTANCE.md` and `acceptance-f030fb3/` for five reproducible remaining issues before treating `IMPLEMENTATION.md` as complete.
+**Latest result:** GameTape bulk tagging is accepted and checkpointed, with 100 Python tests, 8 UI tests, four detected application mutations and real-browser evidence. Read [GAMETAPE_COMPLETION.md](GAMETAPE_COMPLETION.md) for the deliverable, corrected usage accounting and a naturally triggered restricted-worker failure. The final pipeline run did not achieve an all-worker success. [REPAIR_FOLLOWUP.md](REPAIR_FOLLOWUP.md) records the earlier Mac repairs; the cloud failure reports remain historical evidence.
 
-This directory and its Git branch replace the earlier Mac-only prompt and ZIP import steps. All required code and selected trial evidence are now tracked in this repository. Read `TASK.md` and implement the combined repair. Missing Mac paths or vendor CLIs are not blockers for cloud implementation and offline regression testing.
+This directory and its Git branch replace the earlier Mac-only prompt and ZIP import steps. All required code and selected trial evidence are now tracked in this repository. The original assignment in `TASK.md` is retained for provenance; use `GAMETAPE_COMPLETION.md` for current results and follow-up work. Missing Mac paths or vendor CLIs are not blockers for cloud implementation and offline regression testing.
 
 ## Bring the cloud task branch up to date
 

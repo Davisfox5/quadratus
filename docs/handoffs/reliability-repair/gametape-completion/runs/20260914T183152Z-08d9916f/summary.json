@@ -1,0 +1,51 @@
+{
+  "completed": false,
+  "allow_writes": true,
+  "source_changed": true,
+  "source_fingerprint": "9b0b0bee6eb428a593157ce277942cdfaec3389d28d3a53a88b0966970d0909f",
+  "scope_reports": [
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 25,
+      "max_lines": 80,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 25,
+      "max_lines": 80,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 29,
+      "max_lines": 80,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 29,
+      "max_lines": 80,
+      "oversized": false
+    }
+  ],
+  "error": "KeyboardInterrupt: ",
+  "run": "20260914T183152Z-08d9916f",
+  "task_count": 1
+}

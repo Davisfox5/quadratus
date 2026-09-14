@@ -4,3 +4,5 @@ evidence/worker-second-rejected-response.txt -whitespace
 
 # Captured unified diff: blank context lines must retain their leading space.
 acceptance-800a91a/changes.diff -whitespace
+gametape-completion/changes.diff -whitespace
+gametape-completion/caller-adjustments.diff -whitespace

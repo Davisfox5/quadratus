@@ -1,0 +1,844 @@
+{
+  "quadratus_commit": "1bf3b0338dabfe01872c7cabef070847160913c7",
+  "gametape_base": "f93d8b1a4a75d0cdc128b59b650bd95d6bfc6731",
+  "gametape_commit": "832e50c0273d635b5030343691eae76410e051c2",
+  "pipeline_checkpoint": "82e09b3265c3ebc083901d6688e892e60adc8591",
+  "gametape_branch": "quadratus/reliability-acceptance-v2",
+  "source_sha256": {
+    ".claude/skills/.df-sync.txt": "5f07f051049ab04850e9f343495b930bfe99cb67e5867a5ef0128c02d9c2f523",
+    ".claude/skills/code-review/SKILL.md": "47f4e52c21694def9c7c11cbfbf891ca35eac7a93e395797515be3c8a409ae50",
+    ".claude/skills/code-review/agents/openai.yaml": "8229ca854e11dc8e6aef2131ee03f31fb1561cf905fab9ccc325180cf3331352",
+    ".claude/skills/df-design/SKILL.md": "4089df81865812843e253e8ac60e53353ca63e2487ee292ed5b02f21e1342efc",
+    ".claude/skills/df-design/claude-md-design-block.md": "da54b9b1049962e3e4159f0e4d426a0bc5f233d61c035152136442cca6cece73",
+    ".claude/skills/df-design/design-briefs.md": "bd64a36ae72eff4925a6f3b93c5fe779050c7a11bc57073e96c10a979bbef70f",
+    ".claude/skills/df-model-routing/SKILL.md": "18d3a9d39d97161a919ce4588996b1471dd03d4c9974e2801a8c0165d6c3d39a",
+    ".claude/skills/df-ship-check/SKILL.md": "fd8d4ad8a9751766926431afc4e74caaec0564c50599e83a0dbec3701467ba99",
+    ".claude/skills/df-writing/SKILL.md": "585d1fdaffc36f273b75dc35d60cf5a68f603b2e66d40c2821f29534f6f662a4",
+    ".claude/skills/df-writing/tells.md": "5e21a7676b71389df6ab57dbb5433f019db0fb97c680e10d53c26c5aac28f601",
+    ".claude/skills/domain-modeling/ADR-FORMAT.md": "944c92aa790e8fbdc9199640b170979abb8a34ba8d0fe18c2a01a63bce140ca0",
+    ".claude/skills/domain-modeling/CONTEXT-FORMAT.md": "17ab16ce783e4d2801ee52fd9acdf550cbf44de65ae76797a93943bbedf22a13",
+    ".claude/skills/domain-modeling/SKILL.md": "327a2b50620e2fd70abc6893cd6965e76b20f8d0adb0dc2c8d5eb3845efb643e",
+    ".claude/skills/domain-modeling/agents/openai.yaml": "f6bf2aa996c6e6f53fdd0708e18a0d16a56aed8322cca59fedbe3c0d2c75f06b",
+    ".claude/skills/grill-with-docs/SKILL.md": "7de372c13488f1ee96cc11cd8907b56b6809cc93eef776eeddd37de6b6cbe3fe",
+    ".claude/skills/grill-with-docs/agents/openai.yaml": "94cd0ab161fb468a836349f5ed482ba58ce8e709a05c57ce533d739dbd35cca9",
+    ".claude/skills/grilling/SKILL.md": "10ff989e7498b23b5acb49d5048f11dcd906757d2f79c5cdf8a00001381296f2",
+    ".claude/skills/grilling/agents/openai.yaml": "1411d7df7d99b7e621a1ff8283c8133cc2464be63d064e52d8ce169c6800ee9b",
+    ".claude/skills/handoff/SKILL.md": "7c62de979fdc7ac32fb5ddb2146156c917f80ee070d30fadc9d40343c4b6ed25",
+    ".claude/skills/handoff/agents/openai.yaml": "5c479fd562c691851690e8b18c8501045bef0943c10743d636b2fae26add1d28",
+    ".claude/skills/implement/SKILL.md": "6d3fd9e83b8f36e5213854779db49b256a457a7ebb4a503e53fa7dcff696adc3",
+    ".claude/skills/implement/agents/openai.yaml": "8970a8596ade0c28ab427f41a4ea242d6bdf6186c59ebf55e1238dbecaab79dc",
+    ".claude/skills/setup-matt-pocock-skills/SKILL.md": "2bcd89e97777cdb705914424e39c97d5db524c8eb4eafac8120778a07774f0ec",
+    ".claude/skills/setup-matt-pocock-skills/agents/openai.yaml": "9527de0110541c45712319025155aeab8dc7d77c6ed6e5e83271bab1851ab939",
+    ".claude/skills/setup-matt-pocock-skills/domain.md": "edc6d6131fdffc4b7135704f5262124fc43355c95f61b7399dc5a4db643e28ca",
+    ".claude/skills/setup-matt-pocock-skills/issue-tracker-github.md": "afd6852a80185217bd28aa5cbe456bef1e85be25be7bd1fba382d5b8ee428325",
+    ".claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md": "ea175f73d193b3f55819c0ed9bbccf6ee0e70ad8f928e3d7607596c53380acd6",
+    ".claude/skills/setup-matt-pocock-skills/issue-tracker-local.md": "7dcda20a2eb4bdc89b95d1143423c0691309921cadae3132e6424f371030506e",
+    ".claude/skills/setup-matt-pocock-skills/triage-labels.md": "4f53c9b40ce2651e3611aa090eaedbd6dbc9b71ef8c5f7e65eac0d8263190d0d",
+    ".claude/skills/tdd/SKILL.md": "cb01f66bebfaa25fa1f88e6b7e769cd9fd9f35b1120b8563749820738814c927",
+    ".claude/skills/tdd/agents/openai.yaml": "ea6f01cf1b8c06a4b0f5b649d74b1b8ce8685e72af1b38d70d877693e092af0b",
+    ".claude/skills/tdd/mocking.md": "3ceb807fdf4a47d6a93d4d9a891e5ba6d362a6247bd08adc451feebfc17361ef",
+    ".claude/skills/tdd/tests.md": "859f9e592c188fda4fc7277dd180e4ce9c7a2e13f6efe1f6f29eccc9d28c106a",
+    ".claude/skills/to-spec/SKILL.md": "43ad9cf318e5e7d3d1fa360253a37021796dc87a0c2e595ad262661a10f85088",
+    ".claude/skills/to-spec/agents/openai.yaml": "1c5b4d1e3d8e52287ef19cc2742fdbbfae1914ac75d33af3e4c8174f08cc55bb",
+    ".claude/skills/to-tickets/SKILL.md": "5c9fba69845c2519b9b35b9af42ae5142c21f8ca15ac2123dc2722002c8058ae",
+    ".claude/skills/to-tickets/agents/openai.yaml": "21bc6215fffcd7614e9f772bb1760e87cc5fc7dcc707e7d282bc9414267a6090",
+    ".github/workflows/ci-cd.yml": "bbc93d97dd577185674f2777214b7aba8cc76009e24a36d58e348158274ab01e",
+    ".gitignore": "0cd3d513ba4afa4762dce55f1fff650e5aad91b26b9b503ae7db48465291f263",
+    "CLAUDE.md": "01e6daa4bf4a46001bb737dca503c2bec28cb76f07b5155c31efb012cadd0c2f",
+    "README.md": "5a4d4f6e86243e0349f4e260243f2029b440eaf8167071b0ae5721c667b1c29a",
+    "app.py": "d2e764e90987366e1ccc8fe4cdb1ae83113c874f41cf52c5894512e52f9b2f1c",
+    "docs/BULK_EDIT.md": "119265b3adfbfcbb8276382e23ba5bf87bcbc3b4dd298580a6cd4f7652275819",
+    "docs/SAVED_FILTERS.md": "cbbe5bfbefc4b7c681e546db309f51b3af7e3063f25aa6daba531478970d63e6",
+    "fail_logs.txt": "d098bc18323181617a0fe07b539bac45682c017f170462e8634ed4b9ecf1b883",
+    "orchestrator.py": "c12d5741e1438334c7181c4fe6f0c12dafada2d2a69a3b8902a07ea4af6168b1",
+    "requirements.txt": "47fdd45b25d0c781c41314f317b5642f69032ceec71f06c0b2f80b58d269cc93",
+    "static/css/style.css": "2bf1087112cb6a836c65a77eebd3de6bbe1ae8e8cd7b2816577bd4d0c18e2d73",
+    "static/js/annotations.js": "a5560a18a6896550a65b2a0011426e0d71507139819af8b10e7a9b61c45e8359",
+    "static/js/app.js": "a5613bc53459065dbac499f922cab6a0f44d056936c3673e57fc647dfa60707b",
+    "static/js/recording.js": "64cc73181936b3fafbd1fbfe0b23006a2835e1998191d1c54b5b7cbd1d6de733",
+    "templates/index.html": "9a77161587860f17f9cf85535d0124ce442623442ee45361d32d86adb443f02c",
+    "test_output.log": "84a87cf49372120531f476faecc256a7b7b459f0f118287921819e7829c88540",
+    "tests/test_basic.py": "1151a478d85f92bdec50ac46ec1d8c7005d0150f0c949b07534614d5f06441a5",
+    "tests/test_bulk_edit.py": "b59108656393e0af5d6f745d562cfbdfd6ad2b74672eda52ee5be715e6c00ed7",
+    "tests/ui/bulk_keyboard.test.js": "0f1cdc6936dc514482d3ce6ea0a32b5c0a7aae7b45f9ded426b8d0b883e42fd6",
+    "tests/ui/bulk_serialization.test.js": "e65eaf165813a658a4448d9abcf62db66f393cd90816deae6722cc070b16abeb",
+    "tests/ui/fake_dom.js": "465533e3378ca44e1cebb97f6a3be2fd3c4237f63a446046084a1bc1deda530d",
+    "tests/ui/load_app.js": "e97ddc72c31ca82b79aabcd241e6857d56463c084d9cb1a8275c5f87339e35a2",
+    "tests/ui/load_app.test.js": "599b8cc5d1fc2f0dc868526fd3ff61121d72c427c5a9d594fa8ff8fd256f5ac5",
+    "tests/ui/mutation_check.js": "a9f9b6539f0164fb1b3fdafc3ec5994468682c46563c9e0906f81e6db9f1cf2b"
+  },
+  "runs": [
+    {
+      "completed": false,
+      "allow_writes": true,
+      "source_changed": true,
+      "source_fingerprint": "1f383ca61fb65f70872af26113f9383884cca315fccda0a10ee7cb7a49e3a4d2",
+      "scope_reports": [
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "app.py",
+            "docs/BULK_EDIT.md",
+            "tests/test_bulk_edit.py"
+          ],
+          "changed_lines": 118,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "app.py",
+            "docs/BULK_EDIT.md",
+            "tests/test_bulk_edit.py"
+          ],
+          "changed_lines": 118,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "app.py",
+            "docs/BULK_EDIT.md",
+            "tests/test_bulk_edit.py"
+          ],
+          "changed_lines": 118,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "app.py",
+            "docs/BULK_EDIT.md"
+          ],
+          "changed_lines": 110,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "app.py",
+            "docs/BULK_EDIT.md"
+          ],
+          "changed_lines": 110,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "app.py",
+            "docs/BULK_EDIT.md"
+          ],
+          "changed_lines": 131,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "app.py",
+            "docs/BULK_EDIT.md"
+          ],
+          "changed_lines": 131,
+          "max_lines": 100,
+          "oversized": false
+        }
+      ],
+      "error": "ProviderError: ChatGPT call failed: ChatGPT CLI exited 1: Reading prompt from stdin...\n2026-09-14T16:39:02.904243Z  WARN codex_skills::interface: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/\n2026-09-14T16:39:02.904258Z  WARN codex_skills::interface: ignoring interface.icon_large: icon path with '..' must resolve under plugin assets/\n2026-09-14T16:39:03.034421Z  WARN codex_mcp::rmcp_client: MCP server startup failed",
+      "run": "20260914T161220Z-5a94acce",
+      "task_count": 2
+    },
+    {
+      "completed": false,
+      "allow_writes": true,
+      "source_changed": true,
+      "source_fingerprint": "3cc7359810b3ac2472989b86b1ac1ac279a686e8353b5e8cf6b02670bd0d640b",
+      "scope_reports": [
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "app.py",
+            "docs/BULK_EDIT.md"
+          ],
+          "changed_lines": 48,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "app.py",
+            "docs/BULK_EDIT.md"
+          ],
+          "changed_lines": 48,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "app.py",
+            "docs/BULK_EDIT.md"
+          ],
+          "changed_lines": 48,
+          "max_lines": 100,
+          "oversized": false
+        }
+      ],
+      "error": "ProviderRefusal: claude declined the request.",
+      "run": "20260914T165905Z-55931eca",
+      "task_count": 1
+    },
+    {
+      "completed": true,
+      "allow_writes": true,
+      "source_changed": true,
+      "source_fingerprint": "056c1ec43b7769ff05a6dde8245f12e16d94ca1fdb392fb6926b79015fa45b8c",
+      "scope_reports": [
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/test_bulk_edit.py"
+          ],
+          "changed_lines": 122,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/test_bulk_edit.py"
+          ],
+          "changed_lines": 122,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/test_bulk_edit.py"
+          ],
+          "changed_lines": 122,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/test_bulk_edit.py"
+          ],
+          "changed_lines": 122,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/test_bulk_edit.py"
+          ],
+          "changed_lines": 122,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/test_bulk_edit.py"
+          ],
+          "changed_lines": 122,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/css/style.css",
+            "templates/index.html"
+          ],
+          "changed_lines": 108,
+          "max_lines": 90,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/css/style.css",
+            "templates/index.html"
+          ],
+          "changed_lines": 108,
+          "max_lines": 90,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/css/style.css",
+            "templates/index.html"
+          ],
+          "changed_lines": 108,
+          "max_lines": 90,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 134,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 134,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 150,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 150,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 115,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 115,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 140,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 140,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/test_bulk_edit.py"
+          ],
+          "changed_lines": 68,
+          "max_lines": 70,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/test_bulk_edit.py"
+          ],
+          "changed_lines": 68,
+          "max_lines": 70,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/test_bulk_edit.py"
+          ],
+          "changed_lines": 68,
+          "max_lines": 70,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 12,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 12,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/css/style.css",
+            "static/js/app.js",
+            "templates/index.html",
+            "tests/test_bulk_edit.py"
+          ],
+          "changed_lines": 53,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/css/style.css",
+            "static/js/app.js",
+            "templates/index.html",
+            "tests/test_bulk_edit.py"
+          ],
+          "changed_lines": 53,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "docs/BULK_EDIT.md"
+          ],
+          "changed_lines": 78,
+          "max_lines": 80,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "docs/BULK_EDIT.md"
+          ],
+          "changed_lines": 78,
+          "max_lines": 80,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "docs/BULK_EDIT.md"
+          ],
+          "changed_lines": 78,
+          "max_lines": 80,
+          "oversized": false
+        }
+      ],
+      "error": "",
+      "run": "20260914T170410Z-f7f94fb3",
+      "task_count": 8
+    },
+    {
+      "completed": false,
+      "allow_writes": true,
+      "source_changed": true,
+      "source_fingerprint": "9b0b0bee6eb428a593157ce277942cdfaec3389d28d3a53a88b0966970d0909f",
+      "scope_reports": [
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 25,
+          "max_lines": 80,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 25,
+          "max_lines": 80,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 29,
+          "max_lines": 80,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 29,
+          "max_lines": 80,
+          "oversized": false
+        }
+      ],
+      "error": "KeyboardInterrupt: ",
+      "run": "20260914T183152Z-08d9916f",
+      "task_count": 1
+    },
+    {
+      "completed": false,
+      "allow_writes": true,
+      "source_changed": true,
+      "source_fingerprint": "e9711f2d4aa87fd24a0c81251bf803905f1444796127dfca0a415c230cebe3ff",
+      "scope_reports": [
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 26,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 26,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 52,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 52,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 37,
+          "max_lines": 60,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 37,
+          "max_lines": 60,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 48,
+          "max_lines": 60,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 48,
+          "max_lines": 60,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "static/js/app.js"
+          ],
+          "changed_lines": 48,
+          "max_lines": 60,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/ui/fake_dom.js"
+          ],
+          "changed_lines": 138,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/ui/fake_dom.js"
+          ],
+          "changed_lines": 138,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/ui/fake_dom.js"
+          ],
+          "changed_lines": 166,
+          "max_lines": 100,
+          "oversized": true
+        }
+      ],
+      "error": "PartialWorkStopped: Task exceeded its declared scope; work preserved. Scope check passed: 1 file(s), 166 changed line(s).",
+      "run": "20260914T184459Z-26a958f2",
+      "task_count": 2
+    },
+    {
+      "completed": false,
+      "allow_writes": true,
+      "source_changed": true,
+      "source_fingerprint": "530c834ad4d152a3fe8287e7eb991bbafbb03fe9fea3b06aefb87d41ca320493",
+      "scope_reports": [
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/ui/load_app.js",
+            "tests/ui/load_app.test.js"
+          ],
+          "changed_lines": 99,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/ui/load_app.js",
+            "tests/ui/load_app.test.js"
+          ],
+          "changed_lines": 99,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/ui/load_app.js",
+            "tests/ui/load_app.test.js"
+          ],
+          "changed_lines": 99,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/ui/bulk_serialization.test.js"
+          ],
+          "changed_lines": 87,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/ui/bulk_serialization.test.js"
+          ],
+          "changed_lines": 87,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/ui/bulk_serialization.test.js"
+          ],
+          "changed_lines": 87,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/ui/bulk_keyboard.test.js"
+          ],
+          "changed_lines": 100,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/ui/bulk_keyboard.test.js"
+          ],
+          "changed_lines": 100,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/ui/bulk_keyboard.test.js"
+          ],
+          "changed_lines": 100,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/ui/mutation_check.js"
+          ],
+          "changed_lines": 98,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/ui/mutation_check.js"
+          ],
+          "changed_lines": 98,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "tests/ui/mutation_check.js"
+          ],
+          "changed_lines": 98,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "docs/BULK_EDIT.md"
+          ],
+          "changed_lines": 72,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "docs/BULK_EDIT.md"
+          ],
+          "changed_lines": 72,
+          "max_lines": 100,
+          "oversized": false
+        },
+        {
+          "within_scope": true,
+          "out_of_scope": [],
+          "changed": [
+            "docs/BULK_EDIT.md"
+          ],
+          "changed_lines": 72,
+          "max_lines": 100,
+          "oversized": false
+        }
+      ],
+      "error": "ProviderError: grok did not complete the turn (stopReason 'cancelled'): I'll read the Validation block and mutation harness, then we need two uncolored `mutation_check` runs plus the UI suite.Need two uncolored `mutation_check` runs and one UI-suite run from the project r",
+      "run": "20260914T193711Z-a3fd912a",
+      "task_count": 5
+    }
+  ],
+  "privacy": "Synthetic QA only. Vendor transcripts and private native instructions excluded."
+}

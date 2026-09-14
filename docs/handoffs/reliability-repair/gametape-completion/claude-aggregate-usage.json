@@ -1,0 +1,2132 @@
+{
+  "recorded_claude_sessions": 39,
+  "additional_vendor_tokens_over_parent_counters": 4586562,
+  "reported_native_subagents_spawned": 9,
+  "model_totals": {
+    "claude-haiku-4-5-20251001": {
+      "input_tokens": 271942,
+      "output_tokens": 628
+    },
+    "claude-fable-5-1": {
+      "input_tokens": 3048532,
+      "output_tokens": 82248
+    },
+    "claude-opus-5": {
+      "input_tokens": 8811781,
+      "output_tokens": 282033
+    }
+  },
+  "sessions": [
+    {
+      "session_id": "6d9afb97-8981-4298-8c12-8998b06cc23d",
+      "run": "20260914T161220Z-5a94acce",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 119544,
+      "vendor_input_tokens": 121426,
+      "vendor_output_tokens": 4125,
+      "vendor_total_tokens": 125551,
+      "difference_from_parent": 6007,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 5992,
+          "outputTokens": 15,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 98,
+          "outputTokens": 4110,
+          "cacheReadInputTokens": 92023,
+          "cacheCreationInputTokens": 23313,
+          "thinkingTokens": 926,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "9694837c-6282-4839-be46-fbd1189233e2",
+      "run": "20260914T161220Z-5a94acce",
+      "task": "t2",
+      "role": "recheck",
+      "seat_model": "claude:opus",
+      "parent_tokens": 48488,
+      "vendor_input_tokens": 53600,
+      "vendor_output_tokens": 580,
+      "vendor_total_tokens": 54180,
+      "difference_from_parent": 5692,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 5678,
+          "outputTokens": 14,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-opus-5": {
+          "inputTokens": 4,
+          "outputTokens": 566,
+          "cacheReadInputTokens": 33008,
+          "cacheCreationInputTokens": 14910,
+          "thinkingTokens": 155,
+          "canonicalModel": "claude-opus-5"
+        }
+      }
+    },
+    {
+      "session_id": "5ffa84de-1dc6-469f-9185-e4aea0c327ea",
+      "run": "20260914T161220Z-5a94acce",
+      "task": "t2",
+      "role": "collaborator",
+      "seat_model": "claude:opus",
+      "parent_tokens": 292486,
+      "vendor_input_tokens": 1530084,
+      "vendor_output_tokens": 49769,
+      "vendor_total_tokens": 1579853,
+      "difference_from_parent": 1287367,
+      "native_subagent_stats": {
+        "spawned": 4,
+        "requested": {
+          "background": 0,
+          "foreground": 4,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 3,
+        "spawned_by_subagents": 3,
+        "completed": 4,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {
+          "general-purpose": 4
+        }
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 2846,
+          "outputTokens": 13,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-opus-5": {
+          "inputTokens": 84,
+          "outputTokens": 49756,
+          "cacheReadInputTokens": 1287300,
+          "cacheCreationInputTokens": 239854,
+          "thinkingTokens": 21688,
+          "canonicalModel": "claude-opus-5"
+        }
+      }
+    },
+    {
+      "session_id": "85d4c554-ed57-445a-afa7-0b42b7101dd2",
+      "run": "20260914T161220Z-5a94acce",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 99642,
+      "vendor_input_tokens": 99214,
+      "vendor_output_tokens": 3265,
+      "vendor_total_tokens": 102479,
+      "difference_from_parent": 2837,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 2820,
+          "outputTokens": 17,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 98,
+          "outputTokens": 3248,
+          "cacheReadInputTokens": 67140,
+          "cacheCreationInputTokens": 29156,
+          "thinkingTokens": 589,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "a50835af-f08a-401d-84d2-39955383ec67",
+      "run": "20260914T161220Z-5a94acce",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 89974,
+      "vendor_input_tokens": 96096,
+      "vendor_output_tokens": 2159,
+      "vendor_total_tokens": 98255,
+      "difference_from_parent": 8281,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 8263,
+          "outputTokens": 18,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 66,
+          "outputTokens": 2141,
+          "cacheReadInputTokens": 65562,
+          "cacheCreationInputTokens": 22205,
+          "thinkingTokens": 185,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "efa2e477-6e9c-47e8-b718-e987b499c4f0",
+      "run": "20260914T165905Z-55931eca",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 111502,
+      "vendor_input_tokens": 111292,
+      "vendor_output_tokens": 3271,
+      "vendor_total_tokens": 114563,
+      "difference_from_parent": 3061,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 3045,
+          "outputTokens": 16,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 98,
+          "outputTokens": 3255,
+          "cacheReadInputTokens": 83837,
+          "cacheCreationInputTokens": 24312,
+          "thinkingTokens": 987,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "1b7e1b5c-0dda-46d9-b3db-65b5a2219ae3",
+      "run": "20260914T165905Z-55931eca",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 24369,
+      "vendor_input_tokens": 30575,
+      "vendor_output_tokens": 15,
+      "vendor_total_tokens": 30590,
+      "difference_from_parent": 6221,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 6206,
+          "outputTokens": 15,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 2,
+          "outputTokens": 0,
+          "cacheReadInputTokens": 9747,
+          "cacheCreationInputTokens": 14620,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "b61ef9ba-d437-4d0e-bfde-f056194e980e",
+      "run": "20260914T170410Z-f7f94fb3",
+      "task": "t5",
+      "role": "collaborator",
+      "seat_model": "claude:opus",
+      "parent_tokens": 520899,
+      "vendor_input_tokens": 505012,
+      "vendor_output_tokens": 18941,
+      "vendor_total_tokens": 523953,
+      "difference_from_parent": 3054,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 3036,
+          "outputTokens": 18,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-opus-5": {
+          "inputTokens": 22,
+          "outputTokens": 18923,
+          "cacheReadInputTokens": 450523,
+          "cacheCreationInputTokens": 51431,
+          "thinkingTokens": 12389,
+          "canonicalModel": "claude-opus-5"
+        }
+      }
+    },
+    {
+      "session_id": "5a8d203e-5f52-45c4-b576-74084063c4d2",
+      "run": "20260914T170410Z-f7f94fb3",
+      "task": "t5",
+      "role": "recheck",
+      "seat_model": "claude:opus",
+      "parent_tokens": 99798,
+      "vendor_input_tokens": 104544,
+      "vendor_output_tokens": 912,
+      "vendor_total_tokens": 105456,
+      "difference_from_parent": 5658,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 5640,
+          "outputTokens": 18,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-opus-5": {
+          "inputTokens": 8,
+          "outputTokens": 894,
+          "cacheReadInputTokens": 82204,
+          "cacheCreationInputTokens": 16692,
+          "thinkingTokens": 430,
+          "canonicalModel": "claude-opus-5"
+        }
+      }
+    },
+    {
+      "session_id": "c522d8a8-03a7-49ba-8ad0-fd2bfbb51e09",
+      "run": "20260914T170410Z-f7f94fb3",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 185054,
+      "vendor_input_tokens": 192499,
+      "vendor_output_tokens": 4021,
+      "vendor_total_tokens": 196520,
+      "difference_from_parent": 11466,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 11451,
+          "outputTokens": 15,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 130,
+          "outputTokens": 4006,
+          "cacheReadInputTokens": 151432,
+          "cacheCreationInputTokens": 29486,
+          "thinkingTokens": 558,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "63e93f98-c4b5-45f9-bb5e-6e627a7983e1",
+      "run": "20260914T170410Z-f7f94fb3",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 154152,
+      "vendor_input_tokens": 178115,
+      "vendor_output_tokens": 727,
+      "vendor_total_tokens": 178842,
+      "difference_from_parent": 24690,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 24676,
+          "outputTokens": 14,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 66,
+          "outputTokens": 713,
+          "cacheReadInputTokens": 110984,
+          "cacheCreationInputTokens": 42389,
+          "thinkingTokens": 216,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "6be59f89-18f6-4776-b663-a6e9dc7c2210",
+      "run": "20260914T170410Z-f7f94fb3",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 91213,
+      "vendor_input_tokens": 109845,
+      "vendor_output_tokens": 1828,
+      "vendor_total_tokens": 111673,
+      "difference_from_parent": 20460,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 20447,
+          "outputTokens": 13,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 34,
+          "outputTokens": 1815,
+          "cacheReadInputTokens": 51881,
+          "cacheCreationInputTokens": 37483,
+          "thinkingTokens": 182,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "b0fc03e8-e4eb-48b0-9828-71b9a15a7c15",
+      "run": "20260914T170410Z-f7f94fb3",
+      "task": "t4",
+      "role": "collaborator",
+      "seat_model": "claude:opus",
+      "parent_tokens": 305376,
+      "vendor_input_tokens": 287283,
+      "vendor_output_tokens": 20919,
+      "vendor_total_tokens": 308202,
+      "difference_from_parent": 2826,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 2809,
+          "outputTokens": 17,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-opus-5": {
+          "inputTokens": 12,
+          "outputTokens": 20902,
+          "cacheReadInputTokens": 219696,
+          "cacheCreationInputTokens": 64766,
+          "thinkingTokens": 16246,
+          "canonicalModel": "claude-opus-5"
+        }
+      }
+    },
+    {
+      "session_id": "4a76b2e8-d51c-41ec-9ddc-7325acb58845",
+      "run": "20260914T170410Z-f7f94fb3",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 132280,
+      "vendor_input_tokens": 144412,
+      "vendor_output_tokens": 3381,
+      "vendor_total_tokens": 147793,
+      "difference_from_parent": 15513,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 15497,
+          "outputTokens": 16,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 66,
+          "outputTokens": 3365,
+          "cacheReadInputTokens": 87232,
+          "cacheCreationInputTokens": 41617,
+          "thinkingTokens": 1156,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "e133d92a-80d2-41e3-9d1d-ea53463f005d",
+      "run": "20260914T170410Z-f7f94fb3",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 229979,
+      "vendor_input_tokens": 241918,
+      "vendor_output_tokens": 2361,
+      "vendor_total_tokens": 244279,
+      "difference_from_parent": 14300,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 14284,
+          "outputTokens": 16,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 162,
+          "outputTokens": 2345,
+          "cacheReadInputTokens": 193169,
+          "cacheCreationInputTokens": 34303,
+          "thinkingTokens": 403,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "2f3d8867-0bbf-411b-8ea6-658edcfa4df3",
+      "run": "20260914T170410Z-f7f94fb3",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 138692,
+      "vendor_input_tokens": 140702,
+      "vendor_output_tokens": 3320,
+      "vendor_total_tokens": 144022,
+      "difference_from_parent": 5330,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 5314,
+          "outputTokens": 16,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 130,
+          "outputTokens": 3304,
+          "cacheReadInputTokens": 114795,
+          "cacheCreationInputTokens": 20463,
+          "thinkingTokens": 205,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "c5dd2ee1-9547-4d8a-b262-fad103e79bc6",
+      "run": "20260914T170410Z-f7f94fb3",
+      "task": "t7",
+      "role": "collaborator",
+      "seat_model": "claude:opus",
+      "parent_tokens": 677215,
+      "vendor_input_tokens": 653406,
+      "vendor_output_tokens": 27389,
+      "vendor_total_tokens": 680795,
+      "difference_from_parent": 3580,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 3565,
+          "outputTokens": 15,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-opus-5": {
+          "inputTokens": 18,
+          "outputTokens": 27374,
+          "cacheReadInputTokens": 558298,
+          "cacheCreationInputTokens": 91525,
+          "thinkingTokens": 20219,
+          "canonicalModel": "claude-opus-5"
+        }
+      }
+    },
+    {
+      "session_id": "ece9a201-33e8-432e-b3a4-b18dc22b49e9",
+      "run": "20260914T170410Z-f7f94fb3",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 102705,
+      "vendor_input_tokens": 103370,
+      "vendor_output_tokens": 2326,
+      "vendor_total_tokens": 105696,
+      "difference_from_parent": 2991,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 2976,
+          "outputTokens": 15,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 98,
+          "outputTokens": 2311,
+          "cacheReadInputTokens": 79374,
+          "cacheCreationInputTokens": 20922,
+          "thinkingTokens": 214,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "41b70557-96fd-4a60-bb01-d35f5f6d1253",
+      "run": "20260914T170410Z-f7f94fb3",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 136425,
+      "vendor_input_tokens": 140324,
+      "vendor_output_tokens": 4830,
+      "vendor_total_tokens": 145154,
+      "difference_from_parent": 8729,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 8716,
+          "outputTokens": 13,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 98,
+          "outputTokens": 4817,
+          "cacheReadInputTokens": 102722,
+          "cacheCreationInputTokens": 28788,
+          "thinkingTokens": 1365,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "90c93d0d-840b-4da2-92f4-5a4c4ca262bb",
+      "run": "20260914T170410Z-f7f94fb3",
+      "task": "t7",
+      "role": "recheck",
+      "seat_model": "claude:opus",
+      "parent_tokens": 55048,
+      "vendor_input_tokens": 62052,
+      "vendor_output_tokens": 734,
+      "vendor_total_tokens": 62786,
+      "difference_from_parent": 7738,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 7723,
+          "outputTokens": 15,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-opus-5": {
+          "inputTokens": 4,
+          "outputTokens": 719,
+          "cacheReadInputTokens": 33679,
+          "cacheCreationInputTokens": 20646,
+          "thinkingTokens": 408,
+          "canonicalModel": "claude-opus-5"
+        }
+      }
+    },
+    {
+      "session_id": "a1528d8c-2aa9-4797-9344-a6ffe7f77255",
+      "run": "20260914T170410Z-f7f94fb3",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 79690,
+      "vendor_input_tokens": 80182,
+      "vendor_output_tokens": 3587,
+      "vendor_total_tokens": 83769,
+      "difference_from_parent": 4079,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 4061,
+          "outputTokens": 18,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 66,
+          "outputTokens": 3569,
+          "cacheReadInputTokens": 53979,
+          "cacheCreationInputTokens": 22076,
+          "thinkingTokens": 1126,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "a9e85aa1-98ba-449b-955a-d518ea099ace",
+      "run": "20260914T183152Z-08d9916f",
+      "task": "t1",
+      "role": "recheck",
+      "seat_model": "claude:opus",
+      "parent_tokens": 21933,
+      "vendor_input_tokens": 26432,
+      "vendor_output_tokens": 141,
+      "vendor_total_tokens": 26573,
+      "difference_from_parent": 4640,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 4623,
+          "outputTokens": 17,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-opus-5": {
+          "inputTokens": 2,
+          "outputTokens": 124,
+          "cacheReadInputTokens": 9747,
+          "cacheCreationInputTokens": 12060,
+          "thinkingTokens": 116,
+          "canonicalModel": "claude-opus-5"
+        }
+      }
+    },
+    {
+      "session_id": "08e673ef-9736-4167-940d-1893c6282148",
+      "run": "20260914T183152Z-08d9916f",
+      "task": "t1",
+      "role": "collaborator",
+      "seat_model": "claude:opus",
+      "parent_tokens": 484343,
+      "vendor_input_tokens": 461030,
+      "vendor_output_tokens": 25725,
+      "vendor_total_tokens": 486755,
+      "difference_from_parent": 2412,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 2393,
+          "outputTokens": 19,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-opus-5": {
+          "inputTokens": 22,
+          "outputTokens": 25706,
+          "cacheReadInputTokens": 405167,
+          "cacheCreationInputTokens": 53448,
+          "thinkingTokens": 20268,
+          "canonicalModel": "claude-opus-5"
+        }
+      }
+    },
+    {
+      "session_id": "ad5282a1-fecf-4400-b881-f6d7cdb33eb7",
+      "run": "20260914T183152Z-08d9916f",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 188186,
+      "vendor_input_tokens": 188934,
+      "vendor_output_tokens": 3428,
+      "vendor_total_tokens": 192362,
+      "difference_from_parent": 4176,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 4158,
+          "outputTokens": 18,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 194,
+          "outputTokens": 3410,
+          "cacheReadInputTokens": 165106,
+          "cacheCreationInputTokens": 19476,
+          "thinkingTokens": 1091,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "882803b9-bc72-487d-ba4b-da8e2bbf0522",
+      "run": "20260914T184459Z-26a958f2",
+      "task": "t2",
+      "role": "recheck",
+      "seat_model": "claude:opus",
+      "parent_tokens": 104152,
+      "vendor_input_tokens": 107131,
+      "vendor_output_tokens": 1411,
+      "vendor_total_tokens": 108542,
+      "difference_from_parent": 4390,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 4373,
+          "outputTokens": 17,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-opus-5": {
+          "inputTokens": 8,
+          "outputTokens": 1394,
+          "cacheReadInputTokens": 83342,
+          "cacheCreationInputTokens": 19408,
+          "thinkingTokens": 385,
+          "canonicalModel": "claude-opus-5"
+        }
+      }
+    },
+    {
+      "session_id": "9a707e27-67b8-4cbf-b602-18e5e65f9274",
+      "run": "20260914T184459Z-26a958f2",
+      "task": "t1",
+      "role": "collaborator",
+      "seat_model": "claude:opus",
+      "parent_tokens": 327015,
+      "vendor_input_tokens": 314138,
+      "vendor_output_tokens": 15222,
+      "vendor_total_tokens": 329360,
+      "difference_from_parent": 2345,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 2327,
+          "outputTokens": 18,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-opus-5": {
+          "inputTokens": 18,
+          "outputTokens": 15204,
+          "cacheReadInputTokens": 276615,
+          "cacheCreationInputTokens": 35178,
+          "thinkingTokens": 10713,
+          "canonicalModel": "claude-opus-5"
+        }
+      }
+    },
+    {
+      "session_id": "d84ecfce-0274-4eb8-9186-b4434ea1c5d2",
+      "run": "20260914T184459Z-26a958f2",
+      "task": "t3",
+      "role": "collaborator",
+      "seat_model": "claude:opus",
+      "parent_tokens": 1301625,
+      "vendor_input_tokens": 4237589,
+      "vendor_output_tokens": 97404,
+      "vendor_total_tokens": 4334993,
+      "difference_from_parent": 3033368,
+      "native_subagent_stats": {
+        "spawned": 5,
+        "requested": {
+          "background": 2,
+          "foreground": 2,
+          "unset": 1
+        },
+        "started_in_background": 3,
+        "max_depth": 3,
+        "spawned_by_subagents": 4,
+        "completed": 5,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {
+          "general-purpose": 5
+        }
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 3865,
+          "outputTokens": 19,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-opus-5": {
+          "inputTokens": 158,
+          "outputTokens": 97385,
+          "cacheReadInputTokens": 3962795,
+          "cacheCreationInputTokens": 270771,
+          "thinkingTokens": 51706,
+          "canonicalModel": "claude-opus-5"
+        }
+      }
+    },
+    {
+      "session_id": "b3de5eee-a86b-44b8-b422-cda643ae8de2",
+      "run": "20260914T184459Z-26a958f2",
+      "task": "t1",
+      "role": "recheck",
+      "seat_model": "claude:opus",
+      "parent_tokens": 93109,
+      "vendor_input_tokens": 96770,
+      "vendor_output_tokens": 680,
+      "vendor_total_tokens": 97450,
+      "difference_from_parent": 4341,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 4324,
+          "outputTokens": 17,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-opus-5": {
+          "inputTokens": 8,
+          "outputTokens": 663,
+          "cacheReadInputTokens": 77214,
+          "cacheCreationInputTokens": 15224,
+          "thinkingTokens": 283,
+          "canonicalModel": "claude-opus-5"
+        }
+      }
+    },
+    {
+      "session_id": "bba61f66-14f7-47bf-9925-e224a1f30795",
+      "run": "20260914T184459Z-26a958f2",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 116116,
+      "vendor_input_tokens": 119636,
+      "vendor_output_tokens": 3191,
+      "vendor_total_tokens": 122827,
+      "difference_from_parent": 6711,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 6696,
+          "outputTokens": 15,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 98,
+          "outputTokens": 3176,
+          "cacheReadInputTokens": 90104,
+          "cacheCreationInputTokens": 22738,
+          "thinkingTokens": 595,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "a2903abe-e01a-4378-93b0-65dfd01413dd",
+      "run": "20260914T184459Z-26a958f2",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 218816,
+      "vendor_input_tokens": 217363,
+      "vendor_output_tokens": 10775,
+      "vendor_total_tokens": 228138,
+      "difference_from_parent": 9322,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 9304,
+          "outputTokens": 18,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 130,
+          "outputTokens": 10757,
+          "cacheReadInputTokens": 158925,
+          "cacheCreationInputTokens": 49004,
+          "thinkingTokens": 4806,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "ab4dbae6-6666-494c-ba0c-6589b71d5d9c",
+      "run": "20260914T184459Z-26a958f2",
+      "task": "t2",
+      "role": "collaborator",
+      "seat_model": "claude:opus",
+      "parent_tokens": 343815,
+      "vendor_input_tokens": 324946,
+      "vendor_output_tokens": 21356,
+      "vendor_total_tokens": 346302,
+      "difference_from_parent": 2487,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 2473,
+          "outputTokens": 14,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-opus-5": {
+          "inputTokens": 18,
+          "outputTokens": 21342,
+          "cacheReadInputTokens": 281771,
+          "cacheCreationInputTokens": 40684,
+          "thinkingTokens": 16575,
+          "canonicalModel": "claude-opus-5"
+        }
+      }
+    },
+    {
+      "session_id": "b8d8f295-3897-4ba7-8f0b-5a00f0073ae8",
+      "run": "20260914T184459Z-26a958f2",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 123672,
+      "vendor_input_tokens": 122137,
+      "vendor_output_tokens": 6224,
+      "vendor_total_tokens": 128361,
+      "difference_from_parent": 4689,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 4672,
+          "outputTokens": 17,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 98,
+          "outputTokens": 6207,
+          "cacheReadInputTokens": 91486,
+          "cacheCreationInputTokens": 25881,
+          "thinkingTokens": 3168,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "e97445ec-5edd-4bb8-be7b-f6b999f71f9c",
+      "run": "20260914T184459Z-26a958f2",
+      "task": "t2",
+      "role": "recheck",
+      "seat_model": "claude:opus",
+      "parent_tokens": 104520,
+      "vendor_input_tokens": 107733,
+      "vendor_output_tokens": 1097,
+      "vendor_total_tokens": 108830,
+      "difference_from_parent": 4310,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 4294,
+          "outputTokens": 16,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-opus-5": {
+          "inputTokens": 8,
+          "outputTokens": 1081,
+          "cacheReadInputTokens": 83911,
+          "cacheCreationInputTokens": 19520,
+          "thinkingTokens": 263,
+          "canonicalModel": "claude-opus-5"
+        }
+      }
+    },
+    {
+      "session_id": "600c6ce2-bffe-4e77-ae35-1b7dde2e52b1",
+      "run": "20260914T193711Z-a3fd912a",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 121914,
+      "vendor_input_tokens": 125327,
+      "vendor_output_tokens": 3001,
+      "vendor_total_tokens": 128328,
+      "difference_from_parent": 6414,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 6399,
+          "outputTokens": 15,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 98,
+          "outputTokens": 2986,
+          "cacheReadInputTokens": 92611,
+          "cacheCreationInputTokens": 26219,
+          "thinkingTokens": 508,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "e6db145b-2425-4d08-b1e3-176840d288b7",
+      "run": "20260914T193711Z-a3fd912a",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 169590,
+      "vendor_input_tokens": 173459,
+      "vendor_output_tokens": 3953,
+      "vendor_total_tokens": 177412,
+      "difference_from_parent": 7822,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 7806,
+          "outputTokens": 16,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 130,
+          "outputTokens": 3937,
+          "cacheReadInputTokens": 133479,
+          "cacheCreationInputTokens": 32044,
+          "thinkingTokens": 141,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "2f0873a2-eeb0-4dbf-aa21-7d01eee4f43a",
+      "run": "20260914T193711Z-a3fd912a",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 111038,
+      "vendor_input_tokens": 122492,
+      "vendor_output_tokens": 2214,
+      "vendor_total_tokens": 124706,
+      "difference_from_parent": 13668,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 13651,
+          "outputTokens": 17,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 66,
+          "outputTokens": 2197,
+          "cacheReadInputTokens": 79597,
+          "cacheCreationInputTokens": 29178,
+          "thinkingTokens": 837,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "26ee33cb-8fcd-41ca-9039-dc5ffdaf792c",
+      "run": "20260914T193711Z-a3fd912a",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 105204,
+      "vendor_input_tokens": 114078,
+      "vendor_output_tokens": 2198,
+      "vendor_total_tokens": 116276,
+      "difference_from_parent": 11072,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 11058,
+          "outputTokens": 14,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 66,
+          "outputTokens": 2184,
+          "cacheReadInputTokens": 76169,
+          "cacheCreationInputTokens": 26785,
+          "thinkingTokens": 181,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "aea21f95-7d03-4a78-933b-4ac866074022",
+      "run": "20260914T193711Z-a3fd912a",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 128565,
+      "vendor_input_tokens": 134815,
+      "vendor_output_tokens": 3063,
+      "vendor_total_tokens": 137878,
+      "difference_from_parent": 9313,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 9296,
+          "outputTokens": 17,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 98,
+          "outputTokens": 3046,
+          "cacheReadInputTokens": 99666,
+          "cacheCreationInputTokens": 25755,
+          "thinkingTokens": 472,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    },
+    {
+      "session_id": "f278165d-8b54-4f7e-8903-ff59aa494f78",
+      "run": "20260914T193711Z-a3fd912a",
+      "task": "run",
+      "role": "orchestrator",
+      "seat_model": "claude:fable",
+      "parent_tokens": 152458,
+      "vendor_input_tokens": 152294,
+      "vendor_output_tokens": 5366,
+      "vendor_total_tokens": 157660,
+      "difference_from_parent": 5202,
+      "native_subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "models": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 5185,
+          "outputTokens": 17,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 130,
+          "outputTokens": 5349,
+          "cacheReadInputTokens": 120655,
+          "cacheCreationInputTokens": 26324,
+          "thinkingTokens": 1834,
+          "canonicalModel": "claude-fable-5-1"
+        }
+      }
+    }
+  ],
+  "interpretation": "modelUsage is the vendor aggregate. Compare it with the already-counted parent; do not add both totals. The difference includes native delegation and vendor internal activity, without task-level child attribution. Haiku entries are vendor internal activity, not Quadratus worker dispatch. Thinking tokens are already within output totals and are not added again. No dollar invoice is established."
+}

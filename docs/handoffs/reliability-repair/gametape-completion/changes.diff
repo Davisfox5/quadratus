@@ -1,0 +1,2475 @@
+diff --git a/app.py b/app.py
+index 6e25bb1..589bb6d 100644
+--- a/app.py
++++ b/app.py
+@@ -7,10 +7,15 @@ Tag clips in game footage, categorize them, and filter/review by type.
+ import os
+ import io
+ import csv
++import copy
+ import json
+ import uuid
+ import subprocess
+ import tempfile
++import threading
++import functools
++import time
++from collections import Counter
+ from flask import Flask, jsonify, request, send_from_directory, send_file, render_template
+ 
+ app = Flask(__name__, static_folder="static", template_folder="templates")
+@@ -34,8 +39,41 @@ def _load_projects():
+ 
+ 
+ def _save_projects(projects):
+-    with open(PROJECTS_FILE, "w") as f:
+-        json.dump(projects, f, indent=2)
++    tmp_path = None
++    try:
++        f = tempfile.NamedTemporaryFile(
++            mode="w",
++            dir=os.path.dirname(PROJECTS_FILE),
++            prefix=".projects-",
++            suffix=".tmp",
++            delete=False,
++        )
++        tmp_path = f.name
++        try:
++            json.dump(projects, f, indent=2)
++            f.flush()
++            os.fsync(f.fileno())
++        finally:
++            f.close()
++        os.replace(tmp_path, PROJECTS_FILE)
++    except BaseException:
++        if tmp_path is not None:
++            try:
++                os.unlink(tmp_path)
++            except FileNotFoundError:
++                pass
++        raise
++
++
++_STORE_LOCK = threading.RLock()
++
++
++def _locked(fn):
++    @functools.wraps(fn)
++    def wrapper(*a, **kw):
++        with _STORE_LOCK:
++            return fn(*a, **kw)
++    return wrapper
+ 
+ 
+ # ── Pages ──────────────────────────────────────────────────────────────────
+@@ -54,6 +92,7 @@ def list_projects():
+ 
+ 
+ @app.route("/api/projects", methods=["POST"])
++@_locked
+ def create_project():
+     data = request.json
+     name = data.get("name", "").strip()
+@@ -93,6 +132,7 @@ def get_project(project_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>", methods=["DELETE"])
++@_locked
+ def delete_project(project_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -111,6 +151,7 @@ def delete_project(project_id):
+ # ── Video upload ───────────────────────────────────────────────────────────
+ 
+ @app.route("/api/projects/<project_id>/video", methods=["POST"])
++@_locked
+ def upload_video(project_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -139,6 +180,7 @@ def serve_video(filename):
+ # ── Tag types ──────────────────────────────────────────────────────────────
+ 
+ @app.route("/api/projects/<project_id>/tag_types", methods=["PUT"])
++@_locked
+ def update_tag_types(project_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -167,6 +209,7 @@ def list_players(project_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/players", methods=["POST"])
++@_locked
+ def create_player(project_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -197,6 +240,7 @@ def create_player(project_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/players/<player_id>", methods=["PUT"])
++@_locked
+ def update_player(project_id, player_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -213,6 +257,7 @@ def update_player(project_id, player_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/players/<player_id>", methods=["DELETE"])
++@_locked
+ def delete_player(project_id, player_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -225,6 +270,7 @@ def delete_player(project_id, player_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/players/import", methods=["POST"])
++@_locked
+ def import_roster(project_id):
+     """Import players from an Excel (.xlsx/.xls) or CSV file.
+ 
+@@ -380,6 +426,7 @@ def list_filter_presets(project_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/filter_presets", methods=["POST"])
++@_locked
+ def create_filter_preset(project_id):
+     projects = _load_projects()
+     project = projects.get(project_id)
+@@ -415,6 +462,7 @@ def create_filter_preset(project_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/filter_presets/<preset_id>", methods=["PUT"])
++@_locked
+ def update_filter_preset(project_id, preset_id):
+     projects = _load_projects()
+     project = projects.get(project_id)
+@@ -449,6 +497,7 @@ def update_filter_preset(project_id, preset_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/filter_presets/<preset_id>", methods=["DELETE"])
++@_locked
+ def delete_filter_preset(project_id, preset_id):
+     projects = _load_projects()
+     project = projects.get(project_id)
+@@ -475,6 +524,7 @@ def list_clips(project_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips", methods=["POST"])
++@_locked
+ def create_clip(project_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -501,6 +551,7 @@ def create_clip(project_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>", methods=["PUT"])
++@_locked
+ def update_clip(project_id, clip_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -521,6 +572,7 @@ def update_clip(project_id, clip_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>", methods=["DELETE"])
++@_locked
+ def delete_clip(project_id, clip_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -532,6 +584,200 @@ def delete_clip(project_id, clip_id):
+     return jsonify({"ok": True})
+ 
+ 
++_BULK_PREVIEWS = {}
++_BULK_PREVIEW_TTL = 600
++
++
++def _prune_bulk_previews():
++    cutoff = time.time() - _BULK_PREVIEW_TTL
++    expired = [key for key, value in _BULK_PREVIEWS.items() if value["created"] <= cutoff]
++    for preview_id in expired:
++        del _BULK_PREVIEWS[preview_id]
++
++
++def _players_equal(a, b):
++    return set(a) == set(b)
++
++
++def _clip_fingerprint(clip):
++    snapshot = copy.deepcopy(clip)
++    snapshot["players"] = sorted(set(snapshot.get("players", [])))
++    snapshot.setdefault("notes", "")
++    snapshot.setdefault("annotations", [])
++    snapshot.setdefault("recordings", [])
++    return snapshot
++
++
++@app.route("/api/projects/<project_id>/clips/bulk_preview", methods=["POST"])
++@_locked
++def bulk_preview(project_id):
++    _prune_bulk_previews()
++    projects = _load_projects()
++    project = projects.get(project_id)
++    if not project:
++        return jsonify({"error": "Project not found"}), 404
++
++    data = request.get_json(silent=True)
++    if not isinstance(data, dict) or not set(data) <= {"clip_ids", "changes"}:
++        return jsonify({"error": "Invalid request body", "code": "bad_request"}), 400
++    clip_ids = data.get("clip_ids")
++    changes = data.get("changes", {})
++    if (not isinstance(clip_ids, list)
++            or any(not isinstance(clip_id, str) for clip_id in clip_ids)
++            or not isinstance(changes, dict)
++            or not set(changes) <= {"tag_type", "players"}
++            or ("tag_type" in changes and not isinstance(changes["tag_type"], str))
++            or ("players" in changes and (not isinstance(changes["players"], list)
++                or any(not isinstance(player_id, str) for player_id in changes["players"])))):
++        return jsonify({"error": "Invalid request body", "code": "bad_request"}), 400
++    if not changes:
++        return jsonify({"error": "No changes requested", "code": "no_changes"}), 400
++    if not clip_ids:
++        return jsonify({"error": "No clip IDs provided", "code": "empty_clip_ids"}), 400
++
++    duplicate_clip_ids = [clip_id for clip_id, count in Counter(clip_ids).items() if count > 1]
++    if duplicate_clip_ids:
++        return jsonify({"error": "Duplicate clip IDs", "code": "duplicate_clip_ids",
++                        "ids": duplicate_clip_ids}), 400
++    if "tag_type" in changes and changes["tag_type"] not in {
++            tag_type["name"] for tag_type in project["tag_types"]}:
++        return jsonify({"error": "Invalid tag type", "code": "invalid_tag_type"}), 400
++
++    player_ids = changes.get("players", [])
++    duplicate_players = [player_id for player_id, count in Counter(player_ids).items() if count > 1]
++    if duplicate_players:
++        return jsonify({"error": "Duplicate player IDs", "code": "duplicate_players",
++                        "ids": duplicate_players}), 400
++    known_player_ids = {player["id"] for player in project.get("players", [])}
++    unknown_players = [player_id for player_id in player_ids if player_id not in known_player_ids]
++    if unknown_players:
++        return jsonify({"error": "Unknown player IDs", "code": "unknown_players",
++                        "ids": unknown_players}), 400
++
++    clips_by_id = {clip["id"]: clip for clip in project["clips"]}
++    unknown_clip_ids = [clip_id for clip_id in clip_ids if clip_id not in clips_by_id]
++    if unknown_clip_ids:
++        return jsonify({"error": "Unknown clip IDs", "code": "unknown_clip_ids",
++                        "ids": unknown_clip_ids}), 400
++
++    response_clips = []
++    snapshots = []
++    for clip_id in clip_ids:
++        clip = clips_by_id[clip_id]
++        before_players = list(clip.get("players", []))
++        after = {
++            "tag_type": changes.get("tag_type", clip["tag_type"]),
++            "players": list(changes.get("players", before_players)),
++        }
++        if after["tag_type"] == clip["tag_type"] and _players_equal(after["players"], before_players):
++            continue
++        snapshot = _clip_fingerprint(clip)
++        snapshots.append(snapshot)
++        response_clips.append({
++            "id": clip_id, "start": clip["start"], "end": clip["end"], "label": clip["label"],
++            "before": {"tag_type": clip["tag_type"], "players": before_players},
++            "after": after,
++        })
++
++    response_clips.sort(key=lambda clip: clip["start"])
++    snapshots.sort(key=lambda clip: clip["start"])
++    response = {
++        "preview_id": None, "project_id": project_id, "changes": changes,
++        "count": len(response_clips), "expires_in": _BULK_PREVIEW_TTL, "clips": response_clips,
++    }
++    if snapshots:
++        response["preview_id"] = uuid.uuid4().hex
++        _BULK_PREVIEWS[response["preview_id"]] = {
++            "project_id": project_id, "changes": changes, "clips": snapshots,
++            "created": time.time(),
++        }
++    return jsonify(response)
++
++
++@app.route("/api/projects/<project_id>/clips/bulk_apply", methods=["POST"])
++@_locked
++def bulk_apply(project_id):
++    data = request.get_json(silent=True)
++    if (not isinstance(data, dict)
++            or not isinstance(data.get("preview_id"), str)
++            or not data["preview_id"]):
++        return jsonify({"error": "Invalid request body", "code": "bad_request"}), 400
++
++    preview_id = data["preview_id"]
++    _prune_bulk_previews()
++    preview = _BULK_PREVIEWS.get(preview_id)
++    if preview is None:
++        return jsonify({
++            "error": "Preview expired or already applied — refresh and preview again",
++            "code": "preview_missing",
++        }), 409
++    if preview["project_id"] != project_id:
++        return jsonify({
++            "error": "Preview belongs to a different project",
++            "code": "preview_project_mismatch",
++        }), 409
++    preview = _BULK_PREVIEWS.pop(preview_id)
++
++    projects = _load_projects()
++    project = projects.get(project_id)
++    if project is None:
++        return jsonify({"error": "Project not found"}), 404
++
++    changes = preview["changes"]
++    if ("tag_type" in changes
++            and changes["tag_type"] not in {
++                tag_type["name"] for tag_type in project["tag_types"]
++            }):
++        return jsonify({
++            "error": "Bulk changes are no longer valid",
++            "code": "changes_invalid",
++        }), 409
++    known_player_ids = {player["id"] for player in project.get("players", [])}
++    if ("players" in changes
++            and any(player_id not in known_player_ids for player_id in changes["players"])):
++        return jsonify({
++            "error": "Bulk changes are no longer valid",
++            "code": "changes_invalid",
++        }), 409
++
++    clips_by_id = {clip["id"]: clip for clip in project["clips"]}
++    conflicts = []
++    for snapshot in preview["clips"]:
++        clip = clips_by_id.get(snapshot["id"])
++        if clip is None:
++            conflicts.append({"id": snapshot["id"], "reason": "deleted", "current": None})
++            continue
++        current = {
++            "tag_type": clip["tag_type"],
++            "players": list(clip.get("players", [])),
++            "start": clip["start"],
++            "end": clip["end"],
++            "label": clip["label"],
++            "notes": clip.get("notes", ""),
++        }
++        if _clip_fingerprint(clip) != snapshot:
++            conflicts.append({
++                "id": snapshot["id"], "reason": "modified", "current": current,
++            })
++
++    if conflicts:
++        return jsonify({
++            "error": "Clips changed after preview; refresh and preview again",
++            "code": "stale",
++            "conflicts": conflicts,
++        }), 409
++
++    clip_ids = [snapshot["id"] for snapshot in preview["clips"]]
++    for clip_id in clip_ids:
++        clip = clips_by_id[clip_id]
++        if "tag_type" in changes:
++            clip["tag_type"] = changes["tag_type"]
++        if "players" in changes:
++            clip["players"] = list(changes["players"])
++    _save_projects(projects)
++    return jsonify({"updated": len(clip_ids), "clip_ids": clip_ids})
++
++
+ # ── Annotations CRUD ──────────────────────────────────────────────────
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>/annotations", methods=["GET"])
+@@ -546,6 +792,7 @@ def list_annotations(project_id, clip_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>/annotations", methods=["POST"])
++@_locked
+ def create_annotation(project_id, clip_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -574,6 +821,7 @@ def create_annotation(project_id, clip_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>/annotations/<ann_id>", methods=["PUT"])
++@_locked
+ def update_annotation(project_id, clip_id, ann_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -596,6 +844,7 @@ def update_annotation(project_id, clip_id, ann_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>/annotations/<ann_id>", methods=["DELETE"])
++@_locked
+ def delete_annotation(project_id, clip_id, ann_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -611,6 +860,7 @@ def delete_annotation(project_id, clip_id, ann_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>/annotations", methods=["DELETE"])
++@_locked
+ def clear_annotations(project_id, clip_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -638,6 +888,7 @@ def list_recordings(project_id, clip_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>/recordings", methods=["POST"])
++@_locked
+ def upload_recording(project_id, clip_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -673,6 +924,7 @@ def upload_recording(project_id, clip_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>/recordings/<rec_id>", methods=["DELETE"])
++@_locked
+ def delete_recording(project_id, clip_id, rec_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -813,6 +1065,7 @@ def _adjust_clips_after_edit(clips, time_offset, removed_ranges=None):
+ 
+ 
+ @app.route("/api/projects/<project_id>/video/trim", methods=["POST"])
++@_locked
+ def trim_video(project_id):
+     """Trim the video to keep only the segment between start and end."""
+     projects = _load_projects()
+@@ -849,6 +1102,7 @@ def trim_video(project_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/video/split", methods=["POST"])
++@_locked
+ def split_video(project_id):
+     """Split the video at a timestamp into two projects."""
+     projects = _load_projects()
+@@ -920,6 +1174,7 @@ def split_video(project_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/video/cut", methods=["POST"])
++@_locked
+ def cut_video(project_id):
+     """Remove a section from the middle of the video (e.g., halftime)."""
+     projects = _load_projects()
+@@ -1119,6 +1374,7 @@ def export_json(project_id):
+ 
+ 
+ @app.route("/api/projects/<project_id>/export/video", methods=["POST"])
++@_locked
+ def export_video(project_id):
+     projects = _load_projects()
+     if project_id not in projects:
+diff --git a/docs/BULK_EDIT.md b/docs/BULK_EDIT.md
+new file mode 100644
+index 0000000..12cdcf0
+--- /dev/null
++++ b/docs/BULK_EDIT.md
+@@ -0,0 +1,267 @@
++# Safe bulk tagging
++
++Bulk tagging changes tag type and/or players for the explicit filtered clips. Apply is all-or-nothing.
++
++## Why a lock
++
++`app.py` uses one module-level `threading.RLock`, `_STORE_LOCK`. A small `_locked` decorator holds it for the
++entire load-modify-save handler of every route that mutates the project store. Bulk preview and apply
++use the same lock. Reads stay unlocked. A clip mutation lands fully before apply and conflicts if it
++changed any snapshotted field, or lands fully afterward.
++
++This intentionally serializes writes. Video edit and upload handlers can hold the lock during ffmpeg
++or large file work, so these off-match operations can block live tagging for minutes. `_save_projects`
++writes to a same-directory temp file and `os.replace`s it, so unlocked reads always see a complete
++previous or new file (single-process, POSIX rename semantics).
++
++## Preview store
++
++`_BULK_PREVIEWS` is an in-memory dictionary keyed by a `uuid4().hex` `preview_id`. Each entry is
++`{project_id, changes, clips, created}`. `clips` holds a full canonical copy of each affected clip.
++Preview mutates this store, not the project store.
++
++The TTL is 10 minutes. Expiry is checked and expired entries are pruned at the start of every
++preview/apply; no timer removes idle entries. Abandoned previews remain until lazy pruning.
++`expires_in` is the constant 600 seconds at creation and is never refreshed.
++
++Apply pops the entry under `_STORE_LOCK` only when the preview belongs to the requested project.
++Simultaneous applies have one winner; the other gets `preview_missing`. Restart empties the store,
++so the user must preview again. Filter presets, annotations, recordings, clip timing, labels, and
++notes are never changed by apply. Preview timing and labels identify rows, and apply treats any
++change to persisted clip content since preview as a `stale` conflict. Response `before`/`after`
++values show only the fields the batch can change.
++
++## Contract
++
++### Preview
++
++`POST /api/projects/<pid>/clips/bulk_preview`
++
++```json
++{"clip_ids":["c1","c2"],"changes":{"tag_type":"Pass","players":["u1"]}}
++```
++
++`clip_ids` is the exact filtered set; the server never re-derives it. There is no separate cap; size
++is bounded by one project's clips. A non-empty `players` list replaces the full player set, `[]`
++clears it, and omission leaves it unchanged. Player equality is set-based; order is immaterial. At
++least one of `tag_type` or `players` is required.
++
++A missing project returns `404 {"error":"Project not found"}`. The missing `code` is deliberate;
++clients branch on status for 404.
++
++Invalid input returns `400 {"error":"...","code":"<code>"}`. ID-specific errors also include
++`"ids":[...]`, for example `{"error":"Duplicate clip IDs","code":"duplicate_clip_ids","ids":["c1"]}`.
++The first failing 400 check wins, in this order:
++
++1. `bad_request`: malformed JSON, a non-object body, a missing `clip_ids`, unsupported keys, or wrong
++   field/element types.
++2. `no_changes`: neither supported change key is present.
++3. `empty_clip_ids`.
++4. `duplicate_clip_ids`, listing each duplicate once.
++5. `invalid_tag_type`: no entry in `project["tag_types"]` has that `name`.
++6. `duplicate_players`, listing each duplicate once.
++7. `unknown_players`, listing IDs absent from the project.
++8. `unknown_clip_ids`, listing unknown or foreign-project IDs without revealing which case or project.
++
++Success is 200; clips are sorted by `start`:
++
++```json
++{"preview_id":"uuid4-hex-or-null","project_id":"p1","changes":{"tag_type":"Pass","players":["u1"]},
++ "count":1,"expires_in":600,"clips":[{"id":"c1","start":12.5,"end":18.0,"label":"Counterattack",
++ "before":{"tag_type":"Shot","players":[]},"after":{"tag_type":"Pass","players":["u1"]}}]}
++```
++
++Set-based player equality determines whether `before` equals `after`. Equal clips are excluded. If
++none changes, no preview is stored: `preview_id` is null, `count` is 0, and `clips` is empty.
++
++### Apply
++
++`POST /api/projects/<pid>/clips/bulk_apply` body: `{"preview_id":"uuid4-hex"}`.
++
++Malformed JSON, a non-object body, or a missing, null, empty, or non-string `preview_id` returns
++`400 {"error":"...","code":"bad_request"}` without consuming a preview. Otherwise, under
++`_STORE_LOCK`, apply prunes expired entries, peeks at the preview, and pops it only when it belongs
++to this project:
++
++- Missing, expired, or consumed: 409 `{"error":"Preview expired or already applied — refresh and preview again","code":"preview_missing"}`.
++- Different preview `project_id`: 409 `{"error":"...","code":"preview_project_mismatch"}`; `preview_project_mismatch` leaves the preview intact.
++- Deleted project: 404 `{"error":"Project not found"}`; no `code` by design.
++- Tag type or players no longer valid: 409 `{"error":"...","code":"changes_invalid"}`.
++
++Every preview clip must still exist with identical persisted content (tag_type, set-equal players, start, end, label, notes, annotations, recordings). Otherwise, apply returns 409 and writes nothing:
++
++```json
++{"error":"Clips changed after preview; refresh and preview again","code":"stale","conflicts":[
++ {"id":"c1","reason":"modified","current":{"tag_type":"Goal","players":[],"start":12.5,
++  "end":18.0,"label":"Counterattack","notes":""}},
++ {"id":"c2","reason":"deleted","current":null}]}
++```
++
++Success makes one `_save_projects()` call and returns `200 {"updated":2,"clip_ids":["c1","c2"]}`.
++
++## Frontend rules
++
++**B** outside an input (and not while another modal is open) opens bulk edit for the filtered
++list; existing bindings are I, O, P, and Space. Escape closes. The tagging screen is `inert`
++while `#bulk-modal` is active. Any filter/preset/project change, clip-list reload, or bulk
++select change discards the client preview without a server delete.
++
++The player select is labelled **Set players to**. Empty (`Keep players`) omits `players`;
++`__clear__` (**Clear players**) sends `[]`; a player ID replaces the full list with `[id]`
++(not append). **Refresh** re-fetches `/api/projects/<id>` and restores still-valid tag-type
++and player choices. Show loading, empty (0 affected), validation, conflict (IDs plus
++**Refresh**), and success (count), with accessible labels and a visible **B** binding.
++
++## Apply serialization
++
++`bulkApplyPending` is a single global marker. Confirm (`applyBulkEdit()`) sets it to
++`{projectId}` and the request `finally` clears it only when that project's apply
++settles. `bulkApplyBusy()` is project-scoped: true only when the marker matches
++`currentProject`. The busy UI — status `BULK_APPLY_STATUS` (`Applying… wait for the
++current batch`), Preview disabled, Confirm refused — therefore applies in the same
++project, including after dismiss/reopen (`closeBulkModal()` then `openBulkModal()`).
++
++Another project may Preview (`previewBulkEdit()` sends POST `bulk_preview`). Its
++Confirm is refused until the pending apply settles: `applyBulkEdit()` sees the global
++marker, sends no `bulk_apply`, shows `BULK_APPLY_STATUS`, and does not replace the
++marker.
++
++Tag type and player (`$bulkTagType.value`, `$bulkPlayer.value`) are captured at
++Confirm before `fetch`, so later selector changes do not alter the committed batch.
++A settled apply mutates clips and calls `renderClips()` only if that project is still
++current; the success status is written after `renderClips()` because rendering
++invalidates preview state and would clear it.
++
++## Keyboard and focus
++
++While `#bulk-modal` is `active`, Tab and Shift+Tab (without Ctrl/Meta/Alt) cycle only
++enabled, non-hidden `select`/`button` controls in DOM order
++(`bulkFocusableControls()`), wrap at both ends, and `preventDefault`. All other
++shortcuts (I/O/P/Space/B) are suppressed: the modal `keydown` branch returns without
++reaching those bindings. Escape closes the dialog (drops `active`,
++`$taggingScreen.inert` is false) and restores focus to `#btn-bulk-edit`.
++
++When Preview, Confirm, or Refresh disable or hide their button, focus is moved
++immediately to the next enabled modal control (`keepBulkFocusInside()`) rather than
++falling to `body`. Native Enter activation and layout are covered only by
++real-browser acceptance.
++
++## Deployment boundary
++
++Only one Flask process serving concurrent request threads is supported. The lock and preview store
++are per-process. Multiple workers, including Gunicorn `-w >1`, share neither, so neither lost-update
++prevention nor single-apply consumption holds. This is not file locking or multi-process correctness.
++
++## Usage
++
++Filter clips (tag type, player, search, or a saved preset). Press **B** or click **Bulk
++edit** (`#btn-bulk-edit`; visible hint `B bulk edit`). The dialog `#bulk-modal` opens
++(`role="dialog"` `aria-modal="true"` `aria-labelledby="bulk-modal-title"`), heading
++`Bulk edit N filtered clips`, focus on `#bulk-tag-type`.
++
++Choose `#bulk-tag-type`: `Keep tag type` (empty, omit the field) or a project tag type.
++Choose `#bulk-player`, labelled **Set players to**: `Keep players` (omit), `Clear players`
++(`__clear__`, send `[]`), or a named player (replace the full list with that one ID; not
++append). **Preview** posts `{clip_ids, changes}` for the current filter. Confirm starts
++disabled and enables only when a non-null preview is stored. The Clip / Before / After
++table shows `start–end label` and `tag_type · player names` (`no player` when empty).
++Press Enter on the focused **Confirm** button (native) or click it. Success writes
++`N clip(s) updated` and resets both selects to keep only if the preview generation
++is unchanged. If choices changed or the modal was reopened while applying, the
++committed result still appears, current choices are preserved, and the status asks
++for a new preview. **Cancel (Esc)** closes.
++
++`#bulk-status` (`role="status"` `aria-live="polite"`):
++
++- empty: `No clips match the current filter`
++- validation: `Choose a new tag type or player`
++- loading: `Previewing…`, `Applying…`
++- no-op: `All selected clips already have these values`
++- ready: `N clip(s) will change`
++- success: `N clip(s) updated`
++- stale: API `error` (normally `Clips changed after preview; refresh and preview again`)
++  plus up to five per-clip lines `label: modified (now tag_type · players)` or
++  `id: deleted`, then `+N more conflict(s)`; **Refresh** is shown
++- other 4xx/network: `error` or `Request failed`; **Refresh** is shown
++- refresh: `Refreshing…` then `Refreshed — preview again` (failure: `Refresh failed`)
++
++Changing a filter, preset, selection, project, or reloading the clip list discards the
++client preview without a server delete. The tagging screen is `inert` while the modal is
++open (I/O/P/Space suppressed; Escape closes).
++
++## Validation
++
++Measured in this slice:
++
++```
++$ /tmp/gametape-trial-env/bin/python -m pytest -q
++100 passed in 1.96s
++
++$ node --check static/js/app.js
++```
++
++`node --check` exited 0 with empty stdout.
++
++`tests/test_bulk_edit.py` groups: persistence of tag/player changes with timing, labels,
++notes, annotations, and recordings preserved; explicit player clear; eight 400 codes
++(`duplicate_clip_ids`, `unknown_clip_ids`, `invalid_tag_type`, `unknown_players`,
++`duplicate_players`, `no_changes`, `empty_clip_ids`, `bad_request`); isolation (untouched
++clip and second project); no-op preview; non-consuming `preview_project_mismatch`;
++stale-after-edit; deleted-after-preview; `changes_invalid` consumption without
++`_save_projects`; simultaneous confirmation (exactly one 200 `{updated: N}`, one 409
++`preview_missing`); concurrent unrelated individual edit (neither update lost);
++CSV/JSON exports under existing filter semantics and unchanged filter presets.
++
++The wrapped-`_load_projects` barrier parks both threads immediately after each load.
++With `@_locked` the second request never reaches that load until the first save
++finishes, so the barrier times out and each write sees the other's committed state.
++Without the lock both load the same snapshot, wait, then overwrite — a lost update
++the assertion would catch. The pattern therefore detects missing serialization rather
++than merely issuing sequential requests.
++
++Client interleavings run in a Node-builtins-only VM harness (`tests/ui/fake_dom.js`
++plus `tests/ui/load_app.js`): real `templates/index.html` and `static/js/app.js`,
++unrelated annotation/recording/video globals stubbed, fetch routes as controlled
++promises, no sleeps. `APP_JS_PATH` selects an alternate script.
++`tests/ui/load_app.test.js` writes a temporary copy and needs a writable
++`os.tmpdir()`.
++
++```
++$ node --test tests/ui/*.test.js
++ℹ tests 8
++ℹ pass 8
++ℹ fail 0
++```
++
++```
++$ node tests/ui/mutation_check.js
++```
++
++The mutation script copies `static/js/app.js` to disposable temp files, undoes named
++fixes by exact replacement, and runs `tests/ui/bulk_serialization.test.js` and
++`tests/ui/bulk_keyboard.test.js` with `APP_JS_PATH` set to each copy (not
++`load_app.test.js`). Production `static/js/app.js` is SHA-256 hashed before and after
++and remained `a5613bc53459065dbac499f922cab6a0f44d056936c3673e57fc647dfa60707b`.
++Final caller-verified results (the mutation subprocess uses uncolored TAP):
++
++```
++baseline:                7 passed, 0 failed
++late-success-discarded:   5 passed, 2 failed, killed
++guard-dropped:            4 passed, 3 failed, killed
++capture-after-await:     5 passed, 2 failed, killed
++tab-not-prevented:       4 passed, 3 failed, killed
++```
++
++The caller strengthened the serialization tests to dispatch real `change` events,
++check the committed clip state after dismissal/reopen, and assert the second
++request count before awaiting it. Before that correction, restoring the original
++generation-based lost-success bug passed all three serialization tests; now it
++fails both relevant cases. All four mutants complete with explicit failures and
++no cancelled tests. Production code is unchanged by these test corrections.
++
++Limitations: single-process only (see Deployment boundary). `_BULK_PREVIEWS` has no
++size cap; idle entries live until 600s lazy prune. `export_video`, `trim_video`,
++`split_video`, and `cut_video` hold `_STORE_LOCK` across ffmpeg, stalling every store
++mutation including bulk apply. Eight real-browser scenarios were accepted by the
++caller, including native Enter activation and layout. The Node harness covers the
++deterministic interleavings.
+diff --git a/static/css/style.css b/static/css/style.css
+index 26a5011..fcd1b55 100644
+--- a/static/css/style.css
++++ b/static/css/style.css
+@@ -345,7 +345,7 @@ input, select, button { font-family: inherit; font-size: 0.9rem; }
+ 
+ .preset-keys {
+   font-size: 0.72rem;
+-  color: #666;
++  color: #aaa;
+   letter-spacing: 0.2px;
+ }
+ 
+@@ -359,6 +359,14 @@ input, select, button { font-family: inherit; font-size: 0.9rem; }
+ .preset-status.error { color: #e74c3c; }
+ .preset-status.ok { color: #2ecc71; }
+ 
++.bulk-bar {
++  display: flex;
++  gap: 6px;
++  align-items: center;
++  margin-bottom: 10px;
++  flex-wrap: wrap;
++}
++
+ #clips-list {
+   flex: 1;
+   overflow-y: auto;
+@@ -457,6 +465,65 @@ input, select, button { font-family: inherit; font-size: 0.9rem; }
+ 
+ .modal h3 { margin-bottom: 16px; }
+ 
++.bulk-form {
++  display: flex;
++  flex-direction: row;
++  gap: 8px;
++  flex-wrap: wrap;
++  align-items: center;
++  margin-bottom: 12px;
++}
++
++.bulk-form label { font-size: 0.85rem; color: #888; }
++
++.bulk-form select {
++  padding: 6px 8px;
++  border: 1px solid #333;
++  border-radius: 5px;
++  background: #1a1d27;
++  color: #fff;
++  font-size: 0.85rem;
++}
++
++.bulk-preview-wrap {
++  max-height: 40vh;
++  overflow-y: auto;
++  margin-bottom: 8px;
++  border: 1px solid #333;
++  border-radius: 5px;
++}
++
++.bulk-preview-table {
++  width: 100%;
++  font-size: 0.8rem;
++  border-collapse: collapse;
++}
++
++.bulk-preview-table th,
++.bulk-preview-table td {
++  padding: 6px 8px;
++  text-align: left;
++  border-bottom: 1px solid #333;
++}
++
++.bulk-preview-table th {
++  color: #888;
++  font-weight: 600;
++}
++
++.bulk-preview-table tbody tr:last-child td { border-bottom: none; }
++
++#bulk-status.error { color: #e74c3c; }
++#bulk-status.ok { color: #2ecc71; }
++
++.bulk-actions {
++  display: flex;
++  flex-direction: row;
++  gap: 8px;
++  margin-top: 12px;
++  flex-wrap: wrap;
++}
++
+ .tag-type-row {
+   display: flex;
+   align-items: center;
+diff --git a/static/js/app.js b/static/js/app.js
+index 170016d..df84e9d 100644
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -6,6 +6,10 @@ let filterPresets = [];
+ let selectedPresetId = "";
+ let applyingPreset = false;
+ let projectViewVersion = 0;
++let bulkPreview = null;
++let bulkPreviewGeneration = 0;
++let bulkApplyPending = null;
++const BULK_APPLY_STATUS = "Applying… wait for the current batch";
+ 
+ /* ── DOM refs ─────────────────────────────────────────────────────── */
+ const $projectListScreen = document.getElementById("project-list-screen");
+@@ -45,6 +49,18 @@ const $btnPresetSave   = document.getElementById("btn-preset-save");
+ const $btnPresetRename = document.getElementById("btn-preset-rename");
+ const $btnPresetDelete = document.getElementById("btn-preset-delete");
+ 
++const $bulkModal      = document.getElementById("bulk-modal");
++const $bulkTagType    = document.getElementById("bulk-tag-type");
++const $bulkPlayer     = document.getElementById("bulk-player");
++const $bulkAffected   = document.getElementById("bulk-affected");
++const $bulkPreviewBody = document.getElementById("bulk-preview-body");
++const $bulkStatus     = document.getElementById("bulk-status");
++const $btnBulkEdit    = document.getElementById("btn-bulk-edit");
++const $btnBulkPreview = document.getElementById("btn-bulk-preview");
++const $btnBulkConfirm = document.getElementById("btn-bulk-confirm");
++const $btnBulkRefresh = document.getElementById("btn-bulk-refresh");
++const $btnBulkCancel  = document.getElementById("btn-bulk-cancel");
++
+ const $tagModal     = document.getElementById("tag-modal");
+ const $tagTypeList  = document.getElementById("tag-type-list");
+ 
+@@ -120,6 +136,9 @@ $newProjectName.addEventListener("keydown", (e) => {
+ /* ── Open / Close Project ─────────────────────────────────────────── */
+ async function openProject(id) {
+   const version = ++projectViewVersion;
++  $bulkModal.classList.remove("active");
++  $taggingScreen.inert = false;
++  invalidateBulkPreview();
+   const project = await api(`/api/projects/${id}`);
+   if (version !== projectViewVersion) return;
+   currentProject = project;
+@@ -164,8 +183,11 @@ async function openProject(id) {
+   loadFilterPresets();
+ }
+ 
+-document.getElementById("btn-back").addEventListener("click", () => {
++function closeProject() {
+   projectViewVersion++;
++  $bulkModal.classList.remove("active");
++  $taggingScreen.inert = false;
++  invalidateBulkPreview();
+   exitAnnotationMode();
+   currentProject = null;
+   filterPresets = [];
+@@ -181,7 +203,9 @@ document.getElementById("btn-back").addEventListener("click", () => {
+   $taggingScreen.classList.remove("active");
+   $projectListScreen.classList.add("active");
+   loadProjects();
+-});
++}
++
++document.getElementById("btn-back").addEventListener("click", closeProject);
+ 
+ /* ── Video Upload ─────────────────────────────────────────────────── */
+ $videoUpload.addEventListener("change", async (e) => {
+@@ -337,6 +361,7 @@ function filteredClips() {
+ }
+ 
+ function renderClips() {
++  invalidateBulkPreview();
+   const clips = filteredClips();
+   $clipCount.textContent = clips.length;
+   $clipsList.innerHTML = "";
+@@ -788,6 +813,347 @@ $presetName.addEventListener("keydown", (e) => {
+   }
+ });
+ 
++/* ── Bulk edit preview ────────────────────────────────────────────── */
++function setBulkStatus(message, kind) {
++  const text = message || "";
++  const whiteSpace = text.includes("\n") ? "pre-line" : "";
++  const className = "preset-status" + (kind ? ` ${kind}` : "");
++  if ($bulkStatus.textContent !== text) $bulkStatus.textContent = text;
++  if ($bulkStatus.style.whiteSpace !== whiteSpace) $bulkStatus.style.whiteSpace = whiteSpace;
++  if ($bulkStatus.className !== className) $bulkStatus.className = className;
++}
++
++function bulkApplyBusy() {
++  return Boolean(bulkApplyPending && currentProject
++    && bulkApplyPending.projectId === currentProject.id);
++}
++
++function bulkFocusableControls(
++  controls = $bulkModal.querySelectorAll("select, button")
++) {
++  return Array.from(controls)
++    .filter(control => !control.disabled && !control.hidden);
++}
++
++function keepBulkFocusInside(previouslyFocused = document.activeElement) {
++  if (!$bulkModal.classList.contains("active")) return;
++  const active = document.activeElement;
++  if ($bulkModal.contains(active) && !active.disabled && !active.hidden) return;
++
++  const controls = Array.from($bulkModal.querySelectorAll("select, button"));
++  const focusable = bulkFocusableControls(controls);
++  const focusableSet = new Set(focusable);
++  const previousIndex = controls.indexOf(previouslyFocused);
++  const next = previousIndex < 0 ? null : controls.slice(previousIndex + 1)
++    .find(control => focusableSet.has(control));
++  const fallback = focusableSet.has($btnBulkCancel) ? $btnBulkCancel : focusable[0];
++  (next || fallback)?.focus();
++}
++
++function invalidateBulkPreview() {
++  const previouslyFocused = document.activeElement;
++  bulkPreview = null;
++  bulkPreviewGeneration++;
++  const applyBusy = bulkApplyBusy();
++  setBulkStatus(applyBusy ? BULK_APPLY_STATUS : "");
++  $btnBulkPreview.disabled = applyBusy;
++  $btnBulkConfirm.disabled = true;
++  $btnBulkRefresh.hidden = true;
++  $bulkPreviewBody.innerHTML = "";
++  $bulkAffected.textContent = currentProject ? filteredClips().length : 0;
++  keepBulkFocusInside(previouslyFocused);
++}
++
++function addBulkOption(select, value, label) {
++  const option = document.createElement("option");
++  option.value = value;
++  option.innerHTML = esc(label);
++  select.appendChild(option);
++}
++
++function populateBulkSelects(tagType = "", playerId = "") {
++  $bulkTagType.innerHTML = '<option value="">Keep tag type</option>';
++  (currentProject.tag_types || []).forEach(type => addBulkOption($bulkTagType, type.name, type.name));
++  $bulkPlayer.innerHTML = '<option value="">Keep players</option><option value="__clear__">Clear players</option>';
++  (currentProject.players || []).forEach(player => addBulkOption(
++    $bulkPlayer, player.id, player.number ? `#${player.number} ${player.name}` : player.name
++  ));
++  if (Array.from($bulkTagType.options).some(option => option.value === tagType)) {
++    $bulkTagType.value = tagType;
++  }
++  if (Array.from($bulkPlayer.options).some(option => option.value === playerId)) {
++    $bulkPlayer.value = playerId;
++  }
++}
++
++function openBulkModal() {
++  if (!currentProject) return;
++  invalidateBulkPreview();
++  populateBulkSelects();
++  $bulkTagType.value = "";
++  $bulkPlayer.value = "";
++  const count = filteredClips().length;
++  $bulkAffected.textContent = count;
++  if (bulkApplyBusy()) setBulkStatus(BULK_APPLY_STATUS);
++  else setBulkStatus(count ? "" : "No clips match the current filter");
++  $bulkModal.classList.add("active");
++  $taggingScreen.inert = true;
++  $bulkTagType.focus();
++}
++
++function closeBulkModal() {
++  $bulkModal.classList.remove("active");
++  $taggingScreen.inert = false;
++  invalidateBulkPreview();
++  $btnBulkEdit.focus();
++}
++
++function formatBulkValues(values) {
++  const players = (values.players || []).map(playerId => esc(getPlayerDisplay(playerId))).join(", ") || "no player";
++  return `${esc(values.tag_type)} &middot; ${players}`;
++}
++
++async function previewBulkEdit() {
++  if (!currentProject) return;
++  if (bulkApplyBusy()) {
++    const previouslyFocused = document.activeElement;
++    $btnBulkPreview.disabled = true;
++    keepBulkFocusInside(previouslyFocused);
++    setBulkStatus(BULK_APPLY_STATUS);
++    return;
++  }
++  invalidateBulkPreview();
++  const clipIds = filteredClips().map(clip => clip.id);
++  $bulkAffected.textContent = clipIds.length;
++  if (!clipIds.length) {
++    setBulkStatus("No clips match the current filter");
++    return;
++  }
++  const changes = {};
++  if ($bulkTagType.value) changes.tag_type = $bulkTagType.value;
++  if ($bulkPlayer.value === "__clear__") changes.players = [];
++  else if ($bulkPlayer.value) changes.players = [$bulkPlayer.value];
++  if (!Object.keys(changes).length) {
++    setBulkStatus("Choose a new tag type or player", "error");
++    return;
++  }
++  const generation = bulkPreviewGeneration;
++  const projectId = currentProject.id;
++  setBulkStatus("Previewing…");
++  const previouslyFocused = document.activeElement;
++  $btnBulkPreview.disabled = true;
++  keepBulkFocusInside(previouslyFocused);
++  try {
++    const res = await fetch(`/api/projects/${projectId}/clips/bulk_preview`, {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({ clip_ids: clipIds, changes }),
++    });
++    if (generation !== bulkPreviewGeneration || !currentProject || currentProject.id !== projectId) return;
++    const data = await res.json();
++    if (generation !== bulkPreviewGeneration || !currentProject || currentProject.id !== projectId) return;
++    if (res.status !== 200) {
++      setBulkStatus(data.error || "Request failed", "error");
++      return;
++    }
++    if (!Number.isInteger(data.count) || data.count < 0 || !Array.isArray(data.clips))
++      return setBulkStatus("Request failed", "error");
++    if (data.count === 0) {
++      setBulkStatus("All selected clips already have these values");
++      return;
++    }
++    bulkPreview = { previewId: data.preview_id, projectId: data.project_id,
++      clipIds: data.clips.map(clip => clip.id) };
++    $bulkAffected.textContent = data.count;
++    $bulkPreviewBody.innerHTML = data.clips.map(clip => `
++      <tr>
++        <td>${fmt(clip.start)}–${fmt(clip.end)} ${esc(clip.label || "")}</td>
++        <td>${formatBulkValues(clip.before)}</td>
++        <td>${formatBulkValues(clip.after)}</td>
++      </tr>`).join("");
++    $btnBulkConfirm.disabled = false;
++    setBulkStatus(`${data.count} clip(s) will change`);
++  } catch (err) {
++    if (generation === bulkPreviewGeneration && currentProject && currentProject.id === projectId) {
++      setBulkStatus("Request failed", "error");
++    }
++  } finally {
++    if (generation === bulkPreviewGeneration && currentProject && currentProject.id === projectId
++        && !bulkApplyBusy()) {
++      $btnBulkPreview.disabled = false;
++    }
++  }
++}
++
++function showBulkRecovery(message) {
++  const previouslyFocused = document.activeElement;
++  bulkPreview = null;
++  $bulkPreviewBody.innerHTML = "";
++  $btnBulkConfirm.disabled = true;
++  $btnBulkRefresh.hidden = false;
++  setBulkStatus(message, "error");
++  keepBulkFocusInside(previouslyFocused);
++}
++
++async function applyBulkEdit() {
++  if (bulkApplyBusy()) {
++    const previouslyFocused = document.activeElement;
++    $btnBulkPreview.disabled = true;
++    $btnBulkConfirm.disabled = true;
++    keepBulkFocusInside(previouslyFocused);
++    setBulkStatus(BULK_APPLY_STATUS);
++    return;
++  }
++  if (!bulkPreview || !currentProject || bulkPreview.projectId !== currentProject.id) return;
++  // Keep the single pending marker from being overwritten after a project
++  // switch. Other projects can still preview while this request is pending.
++  if (bulkApplyPending) {
++    setBulkStatus(BULK_APPLY_STATUS);
++    return;
++  }
++  const generation = bulkPreviewGeneration;
++  const projectId = bulkPreview.projectId;
++  const previewId = bulkPreview.previewId;
++  const tagType = $bulkTagType.value;
++  const player = $bulkPlayer.value;
++  setBulkStatus(BULK_APPLY_STATUS);
++  const previouslyFocused = document.activeElement;
++  $btnBulkConfirm.disabled = true;
++  $btnBulkPreview.disabled = true;
++  keepBulkFocusInside(previouslyFocused);
++  bulkApplyPending = { projectId };
++  try {
++    const res = await fetch(`/api/projects/${projectId}/clips/bulk_apply`, {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({ preview_id: previewId }),
++    });
++    const data = await res.json();
++    if (!currentProject || currentProject.id !== projectId) return;
++    const stillCurrent = generation === bulkPreviewGeneration;
++    const modalOpen = $bulkModal.classList.contains("active");
++    if (res.status === 200 && Array.isArray(data.clip_ids)) {
++      const updated = Number.isInteger(data.updated) && data.updated >= 0
++        ? data.updated : data.clip_ids.length;
++      data.clip_ids.forEach(id => {
++        const clip = currentProject.clips.find(candidate => candidate.id === id);
++        if (!clip) return;
++        if (tagType) clip.tag_type = tagType;
++        if (player === "__clear__") clip.players = [];
++        else if (player) clip.players = [player];
++      });
++      // A committed success is authoritative for this project. Rendering also
++      // invalidates any newer preview before its confirmation can be reused.
++      renderClips();
++      renderTimeline();
++      if (modalOpen) {
++        if (stillCurrent) {
++          $bulkTagType.value = "";
++          $bulkPlayer.value = "";
++        }
++        setBulkStatus(stillCurrent
++          ? `${updated} clip(s) updated`
++          : `${updated} clip(s) updated — preview again`, "ok");
++        $btnBulkConfirm.disabled = true;
++        $btnBulkRefresh.hidden = true;
++        $btnBulkPreview.disabled = false;
++      }
++      return;
++    }
++    if (!stillCurrent) return;
++    if (res.status === 409 && data.code === "stale") {
++      const conflicts = Array.isArray(data.conflicts) ? data.conflicts : [];
++      const summaries = conflicts.slice(0, 5).map(conflict => {
++        if (conflict.reason === "deleted" || !conflict.current) return `${conflict.id}: deleted`;
++        const current = conflict.current;
++        const label = current.label || conflict.id;
++        const players = (current.players || []).map(getPlayerDisplay).join(", ") || "no player";
++        return `${label}: modified (now ${current.tag_type} · ${players})`;
++      });
++      if (conflicts.length > summaries.length) {
++        summaries.push(`+${conflicts.length - summaries.length} more conflict(s)`);
++      }
++      showBulkRecovery([data.error || "Clips changed after preview", ...summaries].join("\n"));
++      return;
++    }
++    showBulkRecovery(data.error || "Request failed");
++  } catch (err) {
++    if (generation !== bulkPreviewGeneration || !currentProject || currentProject.id !== projectId) return;
++    showBulkRecovery("Request failed");
++  } finally {
++    if (bulkApplyPending && bulkApplyPending.projectId === projectId) {
++      bulkApplyPending = null;
++    }
++    if (currentProject && currentProject.id === projectId
++        && $bulkModal.classList.contains("active")) {
++      $btnBulkPreview.disabled = false;
++    }
++  }
++}
++
++async function refreshBulkProject() {
++  if (!currentProject) return;
++  const version = projectViewVersion;
++  const generation = bulkPreviewGeneration;
++  const projectId = currentProject.id;
++  const bulkTagType = $bulkTagType.value;
++  const bulkPlayer = $bulkPlayer.value;
++  const clipTagType = $clipTagType.value;
++  const clipPlayers = new Set(getSelectedPlayerIds());
++  const annotationClipId = annClip ? annClip.id : null;
++  setBulkStatus("Refreshing…");
++  const previouslyFocused = document.activeElement;
++  $btnBulkPreview.disabled = true;
++  $btnBulkRefresh.hidden = true;
++  keepBulkFocusInside(previouslyFocused);
++  try {
++    const project = await api(`/api/projects/${projectId}`);
++    if (generation !== bulkPreviewGeneration || version !== projectViewVersion
++        || !currentProject || currentProject.id !== projectId) return;
++    if (!project || project.error || !Array.isArray(project.clips)) throw new Error("Refresh failed");
++    currentProject.clips = project.clips;
++    currentProject.players = project.players || [];
++    currentProject.tag_types = project.tag_types;
++    populateTagSelectors();
++    populatePlayerSelectors();
++    if (Array.from($clipTagType.options).some(option => option.value === clipTagType)) {
++      $clipTagType.value = clipTagType;
++    }
++    $playerChecks.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
++      checkbox.checked = clipPlayers.has(checkbox.value);
++      checkbox.closest(".player-chip").classList.toggle("selected", checkbox.checked);
++    });
++    if (annotationClipId) {
++      annClip = currentProject.clips.find(clip => clip.id === annotationClipId) || null;
++      if (!annClip) exitAnnotationMode();
++    }
++    renderClips();
++    renderTimeline();
++    populateBulkSelects(bulkTagType, bulkPlayer);
++    $bulkAffected.textContent = filteredClips().length;
++    $btnBulkRefresh.hidden = true;
++    setBulkStatus("Refreshed — preview again");
++  } catch (err) {
++    if (generation !== bulkPreviewGeneration || version !== projectViewVersion
++        || !currentProject || currentProject.id !== projectId) return;
++    setBulkStatus("Refresh failed", "error");
++    $btnBulkRefresh.hidden = false;
++  } finally {
++    if (generation === bulkPreviewGeneration && version === projectViewVersion
++        && currentProject && currentProject.id === projectId && !bulkApplyBusy()) {
++      $btnBulkPreview.disabled = false;
++    }
++  }
++}
++
++$btnBulkEdit.addEventListener("click", openBulkModal);
++$btnBulkCancel.addEventListener("click", closeBulkModal);
++$btnBulkPreview.addEventListener("click", previewBulkEdit);
++$btnBulkConfirm.addEventListener("click", applyBulkEdit);
++$btnBulkRefresh.addEventListener("click", refreshBulkProject);
++$bulkTagType.addEventListener("change", invalidateBulkPreview);
++$bulkPlayer.addEventListener("change", invalidateBulkPreview);
++
+ /* ── Export ────────────────────────────────────────────────────────── */
+ function buildFilterParams() {
+   const params = new URLSearchParams();
+@@ -1121,6 +1487,26 @@ function renderRecordingsList() {
+ 
+ /* ── Keyboard Shortcuts ───────────────────────────────────────────── */
+ document.addEventListener("keydown", (e) => {
++  if ($bulkModal.classList.contains("active")) {
++    if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
++      const controls = bulkFocusableControls();
++      if (controls.length) {
++        const currentIndex = controls.indexOf(document.activeElement);
++        const nextIndex = currentIndex < 0
++          ? (e.shiftKey ? controls.length - 1 : 0)
++          : (currentIndex + (e.shiftKey ? -1 : 1) + controls.length) % controls.length;
++        controls[nextIndex].focus();
++      }
++      e.preventDefault();
++      return;
++    }
++    if (e.key === "Escape") {
++      e.preventDefault();
++      closeBulkModal();
++    }
++    return;
++  }
++  if (e.ctrlKey || e.metaKey || e.altKey) return;
+   // Only on tagging screen, not in inputs
+   if (!currentProject) return;
+   if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
+@@ -1136,6 +1522,12 @@ document.addEventListener("keydown", (e) => {
+       e.preventDefault();
+       $presetSelect.focus();
+       break;
++    case "b":
++      if (!document.querySelector(".modal-overlay.active")) {
++        e.preventDefault();
++        openBulkModal();
++      }
++      break;
+     case " ":
+       e.preventDefault();
+       $video.paused ? $video.play() : $video.pause();
+diff --git a/templates/index.html b/templates/index.html
+index 88e7ea0..50532be 100644
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -135,6 +135,10 @@
+         <span class="preset-keys" title="Keyboard shortcuts">P select · Enter save</span>
+         <span id="preset-status" class="preset-status" role="status" aria-live="polite"></span>
+       </div>
++      <div class="bulk-bar">
++        <button type="button" id="btn-bulk-edit" class="preset-btn" title="Bulk edit filtered clips (B)">Bulk edit</button>
++        <span class="preset-keys">B bulk edit</span>
++      </div>
+       <div id="clips-list"></div>
+       <div class="clip-count"><span id="clip-count-num">0</span> clips</div>
+       <div class="export-bar">
+@@ -147,6 +151,43 @@
+   </div>
+ </div>
+ 
++<!-- ── Bulk Edit Modal ──────────────────────────────────────────────── -->
++<div id="bulk-modal" class="modal-overlay">
++  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="bulk-modal-title">
++    <h3 id="bulk-modal-title">Bulk edit <span id="bulk-affected">0</span> filtered clips</h3>
++    <div class="bulk-form">
++      <label for="bulk-tag-type">Tag type</label>
++      <select id="bulk-tag-type">
++        <option value="">Keep tag type</option>
++      </select>
++      <label for="bulk-player">Set players to</label>
++      <select id="bulk-player">
++        <option value="">Keep players</option>
++        <option value="__clear__">Clear players</option>
++      </select>
++    </div>
++    <div class="bulk-preview-wrap">
++      <table id="bulk-preview-table" class="bulk-preview-table" aria-label="Affected clips before and after">
++        <thead>
++          <tr>
++            <th>Clip</th>
++            <th>Before</th>
++            <th>After</th>
++          </tr>
++        </thead>
++        <tbody id="bulk-preview-body"></tbody>
++      </table>
++    </div>
++    <div id="bulk-status" class="preset-status" role="status" aria-live="polite"></div>
++    <div class="bulk-actions">
++      <button type="button" id="btn-bulk-preview" class="preset-btn">Preview</button>
++      <button type="button" id="btn-bulk-confirm" class="preset-btn" disabled>Confirm</button>
++      <button type="button" id="btn-bulk-refresh" class="preset-btn" hidden>Refresh</button>
++      <button type="button" id="btn-bulk-cancel" class="preset-btn">Cancel (Esc)</button>
++    </div>
++  </div>
++</div>
++
+ <!-- ── Tag Type Manager Modal ───────────────────────────────────────── -->
+ <div id="tag-modal" class="modal-overlay">
+   <div class="modal">
+diff --git a/tests/test_bulk_edit.py b/tests/test_bulk_edit.py
+new file mode 100644
+index 0000000..3ed453e
+--- /dev/null
++++ b/tests/test_bulk_edit.py
+@@ -0,0 +1,508 @@
++import json
++import os
++import sys
++import tempfile
++import threading
++
++import pytest
++
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
++
++import app as application
++
++
++@pytest.fixture
++def client(tmp_path, monkeypatch):
++    """Create a test client with a temp data directory."""
++    monkeypatch.setattr(application, "DATA_DIR", str(tmp_path))
++    monkeypatch.setattr(application, "VIDEOS_DIR", str(tmp_path / "videos"))
++    monkeypatch.setattr(application, "RECORDINGS_DIR", str(tmp_path / "recordings"))
++    monkeypatch.setattr(application, "PROJECTS_FILE", str(tmp_path / "projects.json"))
++    os.makedirs(tmp_path / "videos", exist_ok=True)
++    os.makedirs(tmp_path / "recordings", exist_ok=True)
++    application._BULK_PREVIEWS.clear()
++    application.app.config["TESTING"] = True
++    with application.app.test_client() as c:
++        yield c
++    application._BULK_PREVIEWS.clear()
++
++
++def test_concurrent_clip_updates_are_not_lost(client, monkeypatch):
++    rv = client.post("/api/projects", json={"name": "Concurrent"})
++    pid = rv.get_json()["id"]
++
++    rv = client.post(f"/api/projects/{pid}/clips", json={
++        "tag_type": "Pass", "start": 1, "end": 3, "label": "orig-a",
++    })
++    clip_a = rv.get_json()["id"]
++
++    rv = client.post(f"/api/projects/{pid}/clips", json={
++        "tag_type": "Shot", "start": 5, "end": 8, "label": "orig-b",
++    })
++    clip_b = rv.get_json()["id"]
++
++    armed = False
++    barrier = threading.Barrier(2, timeout=0.5)
++    original_load = application._load_projects
++
++    def wrapped_load():
++        projects = original_load()
++        if armed:
++            # With @_locked the second thread cannot enter _load_projects until
++            # the first handler finishes, so the barrier times out. That timeout
++            # path (BrokenBarrierError) is the expected behaviour when the lock
++            # is present.
++            try:
++                barrier.wait()
++            except threading.BrokenBarrierError:
++                pass
++        return projects
++
++    monkeypatch.setattr(application, "_load_projects", wrapped_load)
++    armed = True
++
++    errors = []
++
++    def put_label(clip_id, label):
++        try:
++            c = application.app.test_client()
++            resp = c.put(
++                f"/api/projects/{pid}/clips/{clip_id}",
++                json={"label": label},
++            )
++            if resp.status_code != 200:
++                errors.append((clip_id, resp.status_code, resp.get_data(as_text=True)))
++        except Exception as exc:
++            errors.append((clip_id, repr(exc)))
++
++    t1 = threading.Thread(target=put_label, args=(clip_a, "label-a"))
++    t2 = threading.Thread(target=put_label, args=(clip_b, "label-b"))
++    t1.start()
++    t2.start()
++    t1.join()
++    t2.join()
++
++    assert not errors, errors
++
++    rv = client.get(f"/api/projects/{pid}")
++    clips = {c["id"]: c["label"] for c in rv.get_json()["clips"]}
++    assert clips[clip_a] == "label-a"
++    assert clips[clip_b] == "label-b"
++
++
++def _projects_tmp_leftovers(directory):
++    return [
++        name for name in os.listdir(directory)
++        if name.startswith(".projects-") and name.endswith(".tmp")
++    ]
++
++
++def test_failed_save_leaves_prior_state_intact(client, tmp_path, monkeypatch):
++    rv = client.post("/api/projects", json={"name": "Atomic Fail"})
++    assert rv.status_code == 201
++    pid = rv.get_json()["id"]
++
++    prior = application._load_projects()
++    assert pid in prior
++
++    def exploding_dump(obj, fp, **kwargs):
++        fp.write("{")
++        raise RuntimeError("simulated dump failure")
++
++    monkeypatch.setattr(application.json, "dump", exploding_dump)
++    monkeypatch.setitem(application.app.config, "PROPAGATE_EXCEPTIONS", False)
++
++    rv = client.post(f"/api/projects/{pid}/clips", json={
++        "tag_type": "Pass", "start": 1, "end": 3, "label": "should-not-persist",
++    })
++    assert rv.status_code == 500
++
++    assert application._load_projects() == prior
++    assert _projects_tmp_leftovers(tmp_path) == []
++
++
++def test_reader_during_save_sees_complete_old_state(client, tmp_path, monkeypatch):
++    rv = client.post("/api/projects", json={"name": "Atomic Read"})
++    assert rv.status_code == 201
++    pid = rv.get_json()["id"]
++
++    prior = application._load_projects()
++    assert pid in prior
++    assert prior[pid]["clips"] == []
++
++    original_dump = application.json.dump
++    mid_save = threading.Event()
++    release = threading.Event()
++
++    def stalled_dump(obj, fp, *args, **kwargs):
++        original_dump(obj, fp, *args, **kwargs)
++        mid_save.set()
++        assert release.wait(timeout=5), "reader did not release in-progress save"
++
++    monkeypatch.setattr(application.json, "dump", stalled_dump)
++
++    result = {}
++
++    def post_clip():
++        try:
++            c = application.app.test_client()
++            resp = c.post(
++                f"/api/projects/{pid}/clips",
++                json={"tag_type": "Pass", "start": 1, "end": 3, "label": "new-clip"},
++            )
++            result["status"] = resp.status_code
++            result["body"] = resp.get_json()
++        except Exception as exc:
++            result["error"] = repr(exc)
++
++    t = threading.Thread(target=post_clip)
++    t.start()
++    try:
++        assert mid_save.wait(timeout=5), "save did not reach json.dump"
++        loaded = application._load_projects()
++        assert loaded == prior
++    finally:
++        release.set()
++        t.join(timeout=5)
++
++    assert not t.is_alive()
++    assert "error" not in result, result.get("error")
++    assert result["status"] == 201
++    new_id = result["body"]["id"]
++
++    after = application._load_projects()
++    clip_ids = [c["id"] for c in after[pid]["clips"]]
++    assert new_id in clip_ids
++    assert _projects_tmp_leftovers(tmp_path) == []
++
++
++def _seed(client):
++    project_a = client.post("/api/projects", json={"name": "Alpha"}).get_json()["id"]
++    project_b = client.post("/api/projects", json={"name": "Beta"}).get_json()["id"]
++    player_1 = client.post(f"/api/projects/{project_a}/players",
++                           json={"name": "Alex", "number": "7"}).get_json()["id"]
++    player_2 = client.post(f"/api/projects/{project_a}/players",
++                           json={"name": "Blair", "number": "11"}).get_json()["id"]
++
++    def clip(pid, tag, start, label, players=None, notes=""):
++        return client.post(f"/api/projects/{pid}/clips", json={
++            "tag_type": tag, "start": start, "end": start + 2,
++            "label": label, "notes": notes, "players": players or [],
++        }).get_json()["id"]
++
++    clip_1 = clip(project_a, "Pass", 10, "build-up", [player_1], "keep this")
++    clip_2 = clip(project_a, "Shot", 20, "chance", [player_2])
++    clip_3 = clip(project_a, "Goal", 30, "winner")
++    foreign = clip(project_b, "Pass", 40, "other project", notes="foreign note")
++    client.post(f"/api/projects/{project_a}/clips/{clip_1}/annotations",
++                json={"type": "text", "data": {"x": .5, "y": .5, "text": "press"}})
++    return {
++        "a": project_a, "b": project_b, "p1": player_1, "p2": player_2,
++        "c1": clip_1, "c2": clip_2, "c3": clip_3, "foreign": foreign,
++    }
++
++
++def test_bulk_preview_apply_persists_and_isolates(client):
++    ids = _seed(client)
++    before = application._load_projects()
++    selected = [ids["c2"], ids["c1"]]
++    rv = client.post(f"/api/projects/{ids['a']}/clips/bulk_preview",
++                     json={"clip_ids": selected, "changes": {
++                         "tag_type": "Goal", "players": [ids["p2"]]}})
++    assert rv.status_code == 200
++    preview = rv.get_json()
++    assert (preview["project_id"], preview["count"]) == (ids["a"], 2)
++    assert [clip["id"] for clip in preview["clips"]] == [ids["c1"], ids["c2"]]
++    assert preview["clips"][0]["before"] == {"tag_type": "Pass", "players": [ids["p1"]]}
++    assert all(clip["after"] == {"tag_type": "Goal", "players": [ids["p2"]]}
++               for clip in preview["clips"])
++
++    rv = client.post(f"/api/projects/{ids['a']}/clips/bulk_apply",
++                     json={"preview_id": preview["preview_id"]})
++    assert rv.status_code == 200
++    assert rv.get_json() == {"updated": 2, "clip_ids": [ids["c1"], ids["c2"]]}
++
++    for persisted in (application._load_projects(),
++                      {ids["a"]: client.get(f"/api/projects/{ids['a']}").get_json(),
++                       ids["b"]: client.get(f"/api/projects/{ids['b']}").get_json()}):
++        old_a = {clip["id"]: clip for clip in before[ids["a"]]["clips"]}
++        new_a = {clip["id"]: clip for clip in persisted[ids["a"]]["clips"]}
++        for clip_id in selected:
++            assert (new_a[clip_id]["tag_type"], new_a[clip_id]["players"]) == (
++                "Goal", [ids["p2"]])
++            for field in ("start", "end", "label", "notes", "annotations", "recordings"):
++                assert new_a[clip_id].get(field, []) == old_a[clip_id].get(field, [])
++        assert new_a[ids["c3"]] == old_a[ids["c3"]]
++        assert persisted[ids["b"]]["clips"] == before[ids["b"]]["clips"]
++
++
++def test_bulk_apply_can_explicitly_clear_players(client):
++    ids = _seed(client)
++    preview = client.post(f"/api/projects/{ids['a']}/clips/bulk_preview",
++                          json={"clip_ids": [ids["c1"]],
++                                "changes": {"players": []}}).get_json()
++    rv = client.post(f"/api/projects/{ids['a']}/clips/bulk_apply",
++                     json={"preview_id": preview["preview_id"]})
++    assert rv.status_code == 200
++    clip = next(c for c in client.get(f"/api/projects/{ids['a']}").get_json()["clips"]
++                if c["id"] == ids["c1"])
++    assert clip["players"] == []
++
++
++@pytest.mark.parametrize("case,code", [
++    ("duplicate_clip_ids", "duplicate_clip_ids"),
++    ("unknown_clip_ids", "unknown_clip_ids"),
++    ("invalid_tag_type", "invalid_tag_type"),
++    ("unknown_players", "unknown_players"),
++    ("duplicate_players", "duplicate_players"),
++    ("no_changes", "no_changes"),
++    ("empty_clip_ids", "empty_clip_ids"),
++    ("bad_request", "bad_request"),
++])
++def test_bulk_preview_validation(client, case, code):
++    ids = _seed(client)
++    bodies = {
++        "duplicate_clip_ids": {"clip_ids": [ids["c1"], ids["c1"]], "changes": {"tag_type": "Goal"}},
++        "unknown_clip_ids": {"clip_ids": [ids["foreign"], "missing"], "changes": {"tag_type": "Goal"}},
++        "invalid_tag_type": {"clip_ids": [ids["c1"]], "changes": {"tag_type": "Assist"}},
++        "unknown_players": {"clip_ids": [ids["c1"]], "changes": {"players": ["missing"]}},
++        "duplicate_players": {"clip_ids": [ids["c1"]], "changes": {"players": [ids["p1"], ids["p1"]]}},
++        "no_changes": {"clip_ids": [ids["c1"]], "changes": {}},
++        "empty_clip_ids": {"clip_ids": [], "changes": {"tag_type": "Goal"}},
++        "bad_request": {"clip_ids": [ids["c1"]], "changes": {"tag_type": "Goal"}, "extra": True},
++    }
++    rv = client.post(f"/api/projects/{ids['a']}/clips/bulk_preview", json=bodies[case])
++    assert rv.status_code == 400
++    assert rv.get_json()["code"] == code
++
++
++def test_bulk_noop_and_wrong_project_preview_is_not_consumed(client):
++    ids = _seed(client)
++    noop = client.post(f"/api/projects/{ids['a']}/clips/bulk_preview", json={
++        "clip_ids": [ids["c1"]], "changes": {
++            "tag_type": "Pass", "players": [ids["p1"]]}}).get_json()
++    assert (noop["count"], noop["preview_id"], noop["clips"]) == (0, None, [])
++
++    preview_id = client.post(f"/api/projects/{ids['a']}/clips/bulk_preview", json={
++        "clip_ids": [ids["c1"]], "changes": {"tag_type": "Shot"},
++    }).get_json()["preview_id"]
++    wrong = client.post(f"/api/projects/{ids['b']}/clips/bulk_apply",
++                        json={"preview_id": preview_id})
++    assert wrong.status_code == 409
++    assert wrong.get_json()["code"] == "preview_project_mismatch"
++    right = client.post(f"/api/projects/{ids['a']}/clips/bulk_apply",
++                        json={"preview_id": preview_id})
++    assert right.status_code == 200
++    assert right.get_json() == {"updated": 1, "clip_ids": [ids["c1"]]}
++
++
++def _goal_preview(client, ids):
++    return client.post(f"/api/projects/{ids['a']}/clips/bulk_preview", json={
++        "clip_ids": [ids["c1"], ids["c2"]], "changes": {"tag_type": "Goal"},
++    }).get_json()["preview_id"]
++
++
++def _probe_concurrent_loads(monkeypatch):
++    barrier = threading.Barrier(2, timeout=0.5)
++    original_load = application._load_projects
++
++    def wrapped_load():
++        projects = original_load()
++        try:
++            barrier.wait()
++        except threading.BrokenBarrierError:
++            pass
++        return projects
++
++    monkeypatch.setattr(application, "_load_projects", wrapped_load)
++    return original_load
++
++
++def _concurrent_requests(requests, start_together=False):
++    results = []
++    start = threading.Barrier(len(requests), timeout=5) if start_together else None
++
++    def send(method, path, body):
++        if start:
++            start.wait()
++        with application.app.test_client() as thread_client:
++            rv = getattr(thread_client, method)(path, json=body)
++            results.append((rv.status_code, rv.get_json()))
++
++    threads = [threading.Thread(target=send, args=request) for request in requests]
++    for thread in threads:
++        thread.start()
++    for thread in threads:
++        thread.join(timeout=10)
++    assert not any(thread.is_alive() for thread in threads)
++    return results
++
++
++def test_bulk_apply_rejects_clip_modified_after_preview(client):
++    ids = _seed(client)
++    preview_id = _goal_preview(client, ids)
++
++    edited = client.put(f"/api/projects/{ids['a']}/clips/{ids['c1']}",
++                        json={"notes": "edited elsewhere"})
++    assert edited.status_code == 200
++    rv = client.post(f"/api/projects/{ids['a']}/clips/bulk_apply",
++                     json={"preview_id": preview_id})
++    assert rv.status_code == 409
++    body = rv.get_json()
++    assert body["code"] == "stale"
++    assert len(body["conflicts"]) == 1
++    conflict = body["conflicts"][0]
++    assert (conflict["id"], conflict["reason"]) == (ids["c1"], "modified")
++    assert conflict["current"]["notes"] == "edited elsewhere"
++    assert conflict["current"]["tag_type"] == "Pass"
++
++    clips = {clip["id"]: clip for clip in application._load_projects()[ids["a"]]["clips"]}
++    assert clips[ids["c1"]]["tag_type"] == "Pass"
++    assert clips[ids["c2"]]["tag_type"] == "Shot"
++    retry = client.post(f"/api/projects/{ids['a']}/clips/bulk_apply",
++                        json={"preview_id": preview_id})
++    assert retry.status_code == 409
++    assert retry.get_json()["code"] == "preview_missing"
++
++
++def test_bulk_apply_consumes_invalid_changes_without_saving(client, monkeypatch):
++    ids = _seed(client)
++    preview_id = _goal_preview(client, ids)
++    assert client.put(f"/api/projects/{ids['a']}/tag_types", json={
++        "tag_types": [{"name": "Pass", "color": "#2ecc71"}],
++    }).status_code == 200
++
++    def unexpected_save(_projects):
++        pytest.fail("changes_invalid must not save projects")
++
++    monkeypatch.setattr(application, "_save_projects", unexpected_save)
++    invalid = client.post(f"/api/projects/{ids['a']}/clips/bulk_apply",
++                          json={"preview_id": preview_id})
++    assert invalid.status_code == 409
++    assert invalid.get_json()["code"] == "changes_invalid"
++
++    consumed = client.post(f"/api/projects/{ids['a']}/clips/bulk_apply",
++                           json={"preview_id": preview_id})
++    assert consumed.status_code == 409
++    assert consumed.get_json()["code"] == "preview_missing"
++
++
++def test_bulk_apply_rejects_clip_deleted_after_preview(client):
++    ids = _seed(client)
++    preview_id = _goal_preview(client, ids)
++    assert client.delete(
++        f"/api/projects/{ids['a']}/clips/{ids['c2']}").status_code == 200
++
++    rv = client.post(f"/api/projects/{ids['a']}/clips/bulk_apply",
++                     json={"preview_id": preview_id})
++    assert rv.status_code == 409
++    assert rv.get_json()["code"] == "stale"
++    assert rv.get_json()["conflicts"] == [
++        {"id": ids["c2"], "reason": "deleted", "current": None}]
++    clips = {clip["id"]: clip for clip in application._load_projects()[ids["a"]]["clips"]}
++    assert clips[ids["c1"]]["tag_type"] == "Pass"
++
++
++def test_simultaneous_bulk_confirmations_apply_once(client, monkeypatch):
++    ids = _seed(client)
++    before = application._load_projects()
++    preview_id = _goal_preview(client, ids)
++    original_load = _probe_concurrent_loads(monkeypatch)
++    request = ("post", f"/api/projects/{ids['a']}/clips/bulk_apply",
++               {"preview_id": preview_id})
++    results = _concurrent_requests([request, request], start_together=True)
++
++    assert sorted(status for status, _ in results) == [200, 409]
++    success = next(body for status, body in results if status == 200)
++    conflict = next(body for status, body in results if status == 409)
++    assert success["updated"] == 2
++    assert conflict["code"] == "preview_missing"
++    persisted = original_load()
++    clips = {clip["id"]: clip for clip in persisted[ids["a"]]["clips"]}
++    assert [clips[ids[key]]["tag_type"] for key in ("c1", "c2")] == ["Goal", "Goal"]
++    assert clips[ids["c3"]] == next(
++        clip for clip in before[ids["a"]]["clips"] if clip["id"] == ids["c3"])
++    assert persisted[ids["b"]] == before[ids["b"]]
++
++
++def test_bulk_apply_racing_unrelated_edit_loses_neither_update(client, monkeypatch):
++    ids = _seed(client)
++    preview_id = _goal_preview(client, ids)
++    original_load = _probe_concurrent_loads(monkeypatch)
++    results = _concurrent_requests([
++        ("post", f"/api/projects/{ids['a']}/clips/bulk_apply", {"preview_id": preview_id}),
++        ("put", f"/api/projects/{ids['a']}/clips/{ids['c3']}", {"label": "renamed"}),
++    ])
++    assert sorted(status for status, _ in results) == [200, 200]
++
++    clips = {clip["id"]: clip for clip in original_load()[ids["a"]]["clips"]}
++    assert [clips[ids[key]]["tag_type"] for key in ("c1", "c2")] == ["Goal", "Goal"]
++    assert clips[ids["c3"]]["label"] == "renamed"
++
++
++def test_bulk_apply_updates_exports_and_preserves_filter_presets(client):
++    ids = _seed(client)
++    created = client.post(f"/api/projects/{ids['a']}/filter_presets", json={
++        "name": "Blair winners", "tag_type": "Goal",
++        "player": ids["p2"], "search": "winner",
++    })
++    assert created.status_code == 201
++    preset = created.get_json()
++    presets_before = application._load_projects()[ids["a"]]["filter_presets"]
++
++    preview = client.post(f"/api/projects/{ids['a']}/clips/bulk_preview", json={
++        "clip_ids": [ids["c1"], ids["c2"]],
++        "changes": {"tag_type": "Goal", "players": [ids["p2"]]},
++    }).get_json()
++    applied = client.post(f"/api/projects/{ids['a']}/clips/bulk_apply",
++                          json={"preview_id": preview["preview_id"]})
++    assert applied.status_code == 200
++
++    goals = client.get(
++        f"/api/projects/{ids['a']}/export/json?tag_type=Goal").get_json()
++    assert goals["clip_count"] == 3
++    clips = {clip["id"]: clip for clip in goals["clips"]}
++    assert set(clips) == {ids["c1"], ids["c2"], ids["c3"]}
++    assert all(clip["tag_type"] == "Goal" for clip in clips.values())
++    blair = [{"id": ids["p2"], "name": "Blair", "number": "11"}]
++    assert clips[ids["c1"]]["players"] == blair
++    assert clips[ids["c2"]]["players"] == blair
++
++    passes = client.get(
++        f"/api/projects/{ids['a']}/export/json?tag_type=Pass").get_json()
++    assert passes["clip_count"] == 0
++
++    player_csv = client.get(
++        f"/api/projects/{ids['a']}/export/csv?player={ids['p2']}")
++    player_rows = player_csv.data.decode("utf-8").splitlines()
++    assert len(player_rows) == 3
++    assert all("Goal" in row and "#11 Blair" in row for row in player_rows[1:])
++    assert "Pass" not in player_csv.data.decode("utf-8")
++
++    search_csv = client.get(
++        f"/api/projects/{ids['a']}/export/csv?tag_type=Goal&search=winner")
++    search_rows = search_csv.data.decode("utf-8").splitlines()
++    assert len(search_rows) == 2
++    assert "winner" in search_rows[1]
++
++    assert client.get(
++        f"/api/projects/{ids['a']}/filter_presets").get_json() == [preset]
++    assert application._load_projects()[ids["a"]]["filter_presets"] == presets_before
++
++
++def test_bulk_player_clear_is_reflected_in_exports(client):
++    ids = _seed(client)
++    preview = client.post(f"/api/projects/{ids['a']}/clips/bulk_preview", json={
++        "clip_ids": [ids["c1"]], "changes": {"players": []},
++    }).get_json()
++    applied = client.post(f"/api/projects/{ids['a']}/clips/bulk_apply",
++                          json={"preview_id": preview["preview_id"]})
++    assert applied.status_code == 200
++
++    player_csv = client.get(
++        f"/api/projects/{ids['a']}/export/csv?player={ids['p1']}")
++    assert len(player_csv.data.decode("utf-8").splitlines()) == 1
++
++    exported = client.get(f"/api/projects/{ids['a']}/export/json").get_json()
++    clip = next(clip for clip in exported["clips"] if clip["id"] == ids["c1"])
++    assert clip["players"] == []
+diff --git a/tests/ui/bulk_keyboard.test.js b/tests/ui/bulk_keyboard.test.js
+new file mode 100644
+index 0000000..0808ab0
+--- /dev/null
++++ b/tests/ui/bulk_keyboard.test.js
+@@ -0,0 +1,100 @@
++const assert = require("node:assert/strict");
++const test = require("node:test"), { loadApp } = require("./load_app");
++function deferred() {
++  let resolve; const promise = new Promise(done => { resolve = done; });
++  return { promise, resolve };
++}
++const project = id => ({
++  id, name: `Project ${id}`,
++  clips: [{ id: `${id}-c1`, start: 1, end: 2, label: `${id} clip`, notes: "",
++    tag_type: "Pass", players: ["p1"] }],
++  tag_types: [{ name: "Pass" }, { name: "Shot" }],
++  players: [{ id: "p1", name: "Alex" }, { id: "p2", name: "Blair" }],
++});
++const previewResult = { count: 1, preview_id: "A-preview", project_id: "A", clips: [{
++  id: "A-c1", start: 1, end: 2, label: "A clip",
++  before: { tag_type: "Pass", players: ["p1"] },
++  after: { tag_type: "Shot", players: ["p1"] },
++}] };
++function setup() {
++  const gates = { preview: deferred(), apply: deferred(), refresh: deferred() };
++  let projectReads = 0;
++  const routes = {
++    "GET /api/projects/A": () => projectReads++ ? gates.refresh.promise : project("A"),
++    "GET /api/projects/A/filter_presets": [],
++    "POST /api/projects/A/clips/bulk_preview": () => gates.preview.promise,
++    "POST /api/projects/A/clips/bulk_apply": () => gates.apply.promise,
++  };
++  return { app: loadApp({ routes }), gates };
++}
++async function open(app) {
++  await app.evalInApp("openProject('A')");
++  app.evalInApp("openBulkModal(); document.getElementById('bulk-tag-type').value = 'Shot'");
++}
++function key(app, key, shiftKey = false) {
++  const event = app.document.createEvent("keydown", { key, shiftKey });
++  app.document.activeElement.dispatchEvent(event);
++  return event;
++}
++async function preview(app, gate) {
++  const pending = app.evalInApp("previewBulkEdit()");
++  gate.resolve(previewResult); await pending;
++}
++test("Tab wraps eligible controls and modal suppresses shortcuts", async () => {
++  const { app } = setup(); await open(app);
++  const get = id => app.document.getElementById(id);
++  assert.equal(app.document.activeElement, get("bulk-tag-type"));
++  assert.equal(get("btn-bulk-confirm").disabled, true);
++  assert.equal(get("btn-bulk-refresh").hidden, true);
++  get("btn-bulk-cancel").focus();
++  const forward = key(app, "Tab");
++  assert.equal(forward.defaultPrevented, true);
++  assert.equal(app.document.activeElement, get("bulk-tag-type"));
++  const backward = key(app, "Tab", true);
++  assert.equal(backward.defaultPrevented, true);
++  assert.equal(app.document.activeElement, get("btn-bulk-cancel"));
++  app.evalInApp("document.getElementById('video').currentTime = 7");
++  const calls = app.calls.fetch.length, shortcut = key(app, "i");
++  assert.equal(shortcut.defaultPrevented, false);
++  assert.equal(app.evalInApp("markIn"), null);
++  assert.equal(app.calls.fetch.length, calls);
++});
++test("Escape closes the modal and restores focus", async () => {
++  const { app } = setup(); await open(app);
++  const escape = key(app, "Escape");
++  assert.equal(escape.defaultPrevented, true);
++  assert.equal(app.document.getElementById("bulk-modal").classList.contains("active"), false);
++  assert.equal(app.evalInApp("document.getElementById('tagging-screen').inert"), false);
++  assert.equal(app.document.activeElement, app.document.getElementById("btn-bulk-edit"));
++  assert.equal(key(app, "Escape").defaultPrevented, false);
++});
++test("Preview recovers focus before its response", async () => {
++  const { app, gates } = setup(); await open(app);
++  const previewButton = app.document.getElementById("btn-bulk-preview");
++  previewButton.focus();
++  const pending = app.evalInApp("previewBulkEdit()");
++  assert.equal(app.document.activeElement.id, "btn-bulk-cancel");
++  gates.preview.resolve(previewResult); await pending;
++  assert.equal(app.document.getElementById("btn-bulk-confirm").disabled, false);
++  previewButton.focus(); assert.equal(key(app, "Tab").defaultPrevented, true);
++  assert.equal(app.document.activeElement.id, "btn-bulk-confirm");
++});
++test("Confirm and Refresh recover focus while controls disappear", async () => {
++  const { app, gates } = setup(); await open(app); await preview(app, gates.preview);
++  app.document.getElementById("btn-bulk-confirm").focus();
++  const applying = app.evalInApp("applyBulkEdit()");
++  assert.equal(app.document.activeElement.id, "btn-bulk-cancel");
++  assert.notEqual(app.document.activeElement, app.document.body);
++  gates.apply.resolve({ status: 409, body: { code: "stale", error: "Clips changed after preview", conflicts: [] } });
++  await applying;
++  const refresh = app.document.getElementById("btn-bulk-refresh");
++  assert.equal(refresh.hidden, false);
++  app.document.getElementById("btn-bulk-preview").focus();
++  assert.equal(key(app, "Tab").defaultPrevented, true);
++  assert.equal(app.document.activeElement, refresh);
++  const refreshing = app.evalInApp("refreshBulkProject()");
++  assert.equal(refresh.hidden, true);
++  assert.equal(app.document.activeElement.id, "btn-bulk-cancel");
++  gates.refresh.resolve(project("A")); await refreshing;
++  assert.equal(refresh.hidden, true); assert.equal(app.document.getElementById("btn-bulk-preview").disabled, false);
++});
+diff --git a/tests/ui/bulk_serialization.test.js b/tests/ui/bulk_serialization.test.js
+new file mode 100644
+index 0000000..40bdf52
+--- /dev/null
++++ b/tests/ui/bulk_serialization.test.js
+@@ -0,0 +1,98 @@
++const assert = require("node:assert/strict");
++const test = require("node:test");
++const { loadApp } = require("./load_app");
++
++function deferred() {
++  let resolve;
++  const promise = new Promise(done => { resolve = done; });
++  return { promise, resolve };
++}
++
++const project = id => ({
++  id, name: `Project ${id}`,
++  clips: [{ id: `${id}-c1`, start: 1, end: 2, label: `${id} clip`, notes: "",
++    tag_type: "Pass", players: ["p1"] }],
++  tag_types: [{ name: "Pass" }, { name: "Shot" }, { name: "Goal" }],
++  players: [{ id: "p1", name: "Alex" }, { id: "p2", name: "Blair" }],
++});
++
++function setup() {
++  const gates = { previewA: deferred(), previewB: deferred(), applyA: deferred(), applyB: deferred() };
++  const routes = {
++    "GET /api/projects/A": project("A"), "GET /api/projects/B": project("B"),
++    "GET /api/projects/A/filter_presets": [], "GET /api/projects/B/filter_presets": [],
++    "POST /api/projects/A/clips/bulk_preview": () => gates.previewA.promise,
++    "POST /api/projects/B/clips/bulk_preview": () => gates.previewB.promise,
++    "POST /api/projects/A/clips/bulk_apply": () => gates.applyA.promise,
++    "POST /api/projects/B/clips/bulk_apply": () => gates.applyB.promise,
++  };
++  return { app: loadApp({ routes }), gates };
++}
++
++async function preview(app, gate, id = "A") {
++  await app.evalInApp(`openProject('${id}')`);
++  app.evalInApp("openBulkModal(); document.getElementById('bulk-tag-type').value = 'Shot'; document.getElementById('bulk-player').value = 'p2'");
++  const pending = app.evalInApp("previewBulkEdit()");
++  gate.resolve({ count: 1, preview_id: `${id}-preview`, project_id: id, clips: [{
++    id: `${id}-c1`, start: 1, end: 2, label: `${id} clip`,
++    before: { tag_type: "Pass", players: ["p1"] },
++    after: { tag_type: "Shot", players: ["p2"] },
++  }] });
++  await pending;
++}
++
++const applyCalls = app => app.calls.fetch.filter(call => call.path.endsWith("/bulk_apply"));
++
++test("committed apply survives change events with captured values", async () => {
++  const { app, gates } = setup();
++  await preview(app, gates.previewA);
++  const applying = app.evalInApp("applyBulkEdit()");
++  app.evalInApp("document.getElementById('bulk-tag-type').value = 'Goal'; document.getElementById('bulk-player').value = '__clear__'");
++  for (const id of ["bulk-tag-type", "bulk-player"]) {
++    app.document.getElementById(id).dispatchEvent(app.document.createEvent("change"));
++  }
++  assert.equal(app.document.getElementById("btn-bulk-preview").disabled, true);
++  assert.equal(app.document.getElementById("btn-bulk-confirm").disabled, true);
++  gates.applyA.resolve({ updated: 1, clip_ids: ["A-c1"] });
++  await applying;
++  assert.equal(app.evalInApp("currentProject.clips[0].tag_type"), "Shot");
++  assert.equal(app.evalInApp("currentProject.clips[0].players.join(',')"), "p2");
++  assert.equal(app.document.getElementById("bulk-tag-type").value, "Goal");
++  assert.equal(app.document.getElementById("bulk-player").value, "__clear__");
++  assert.match(app.evalInApp("document.getElementById('bulk-status').textContent"), /updated/);
++  assert.equal(app.evalInApp("bulkApplyPending"), null);
++});
++
++test("dismiss and reopen keeps same-project apply busy", async () => {
++  const { app, gates } = setup();
++  await preview(app, gates.previewA);
++  const applying = app.evalInApp("applyBulkEdit()");
++  app.evalInApp("closeBulkModal(); openBulkModal()");
++  assert.equal(app.evalInApp("document.getElementById('bulk-status').textContent"), app.evalInApp("BULK_APPLY_STATUS"));
++  assert.equal(app.document.getElementById("btn-bulk-preview").disabled, true);
++  app.evalInApp("previewBulkEdit(); applyBulkEdit()");
++  assert.equal(applyCalls(app).length, 1);
++  gates.applyA.resolve({ updated: 1, clip_ids: ["A-c1"] });
++  await applying;
++  assert.equal(app.document.getElementById("btn-bulk-preview").disabled, false);
++  assert.equal(app.evalInApp("currentProject.clips[0].tag_type"), "Shot");
++  assert.equal(app.evalInApp("currentProject.clips[0].players.join(',')"), "p2");
++  assert.match(app.evalInApp("document.getElementById('bulk-status').textContent"), /updated/);
++  assert.equal(app.evalInApp("bulkApplyPending"), null);
++});
++
++test("another project may preview but cannot confirm during pending apply", async () => {
++  const { app, gates } = setup();
++  await preview(app, gates.previewA);
++  const applying = app.evalInApp("applyBulkEdit()");
++  await preview(app, gates.previewB, "B");
++  const secondApply = app.evalInApp("applyBulkEdit()");
++  assert.equal(applyCalls(app).length, 1);
++  await secondApply;
++  assert.equal(app.evalInApp("document.getElementById('bulk-status').textContent"), app.evalInApp("BULK_APPLY_STATUS"));
++  const displayed = app.evalInApp("JSON.stringify({ clips: currentProject.clips, status: document.getElementById('bulk-status').textContent })");
++  gates.applyA.resolve({ updated: 1, clip_ids: ["A-c1"] });
++  await applying;
++  assert.equal(app.evalInApp("JSON.stringify({ clips: currentProject.clips, status: document.getElementById('bulk-status').textContent })"), displayed);
++  assert.equal(app.evalInApp("bulkApplyPending"), null);
++});
+diff --git a/tests/ui/fake_dom.js b/tests/ui/fake_dom.js
+new file mode 100644
+index 0000000..417f1fb
+--- /dev/null
++++ b/tests/ui/fake_dom.js
+@@ -0,0 +1,166 @@
++"use strict";
++
++// Purpose-built app.js test DOM: supported selectors are tag/#id/.class chains,
++// attributes, :checked, and comma lists (combinators throw). Collections are
++// arrays; ids own stable detached stubs; there is no layout or text-node fidelity.
++function createDocument() {
++  const ids = Object.create(null), handlers = new Map();
++  const escapeHtml = value => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
++  const voidTags = new Set("area base br col embed hr img input link meta source track wbr".split(" "));
++  const createEvent = (type, props = {}) => Object.assign({ type, bubbles: true,
++    defaultPrevented: false, propagationStopped: false, immediatePropagationStopped: false,
++    preventDefault() { this.defaultPrevented = true; },
++    stopPropagation() { this.propagationStopped = true; },
++    stopImmediatePropagation() { this.propagationStopped = this.immediatePropagationStopped = true; },
++  }, props);
++  const addListener = (target, type, fn) => {
++    if (!handlers.has(target)) handlers.set(target, new Map());
++    const events = handlers.get(target); events.set(type, [...(events.get(type) || []), fn]);
++  };
++  const removeListener = (target, type, fn) => {
++    const events = handlers.get(target), list = events?.get(type); if (list) events.set(type, list.filter(item => item !== fn));
++  };
++  const dispatch = (target, input) => {
++    const e = typeof input === "string" ? createEvent(input) : input;
++    if (!e.target) e.target = target;
++    e.currentTarget = target;
++    for (const fn of [...(handlers.get(target)?.get(e.type) || [])]) {
++      fn.call(target, e); if (e.immediatePropagationStopped) break;
++    }
++    if (e.bubbles !== false && !e.propagationStopped && target.parentNode) dispatch(target.parentNode, e);
++    return !e.defaultPrevented;
++  };
++  const matches = (el, raw) => {
++    let selector = raw, checked = false;
++    if (selector.endsWith(":checked")) { selector = selector.slice(0, -8); checked = true; }
++    const attrs = [...selector.matchAll(/\[([\w-]+)(?:=["']?([^\]"']+)["']?)?\]/g)];
++    selector = selector.replace(/\[[^\]]+\]/g, "");
++    if (/[\s>+~]/.test(selector)) throw new Error(`fake_dom: unsupported selector: ${raw}`);
++    const id = selector.match(/#([\w-]+)/)?.[1], tag = selector.match(/^[\w-]+/)?.[0];
++    const classes = [...selector.matchAll(/\.([\w-]+)/g)].map(match => match[1]);
++    if ((tag && el.tagName !== tag.toUpperCase()) || (id && el.id !== id) || checked && !el.checked) return false;
++    if (classes.some(name => !el.classList.contains(name))) return false;
++    return attrs.every(([, name, expected]) => {
++      const key = name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
++      const actual = name.startsWith("data-") ? el.dataset[key] : el[name];
++      return expected === undefined ? actual !== undefined && actual !== false : String(actual) === expected;
++    });
++  };
++  const selectAll = (root, query, first = false) => {
++    const selectors = query.split(",").map(item => item.trim()).filter(Boolean), found = [];
++    const visit = node => { for (const child of node.children || []) {
++      if (selectors.some(selector => matches(child, selector))) found.push(child);
++      if (!first || !found.length) visit(child);
++      if (first && found.length) return;
++    } };
++    visit(root); return found;
++  };
++  const serialize = el => {
++    const attrs = [], tag = el.tagName.toLowerCase();
++    if (el.id) attrs.push(`id="${escapeHtml(el.id)}"`); if (el.className) attrs.push(`class="${escapeHtml(el.className)}"`);
++    if (el.tagName === "OPTION") attrs.push(`value="${escapeHtml(el.value)}"`);
++    for (const [key, value] of Object.entries(el.dataset))
++      attrs.push(`data-${key.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`)}="${escapeHtml(value)}"`);
++    return `<${tag}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${el.innerHTML}</${tag}>`;
++  };
++
++  class Element {
++    constructor(tag) {
++      this.tagName = String(tag).toUpperCase(); this.parentNode = null; this.children = [];
++      this.style = {}; this.dataset = {}; this.checked = false; this.selected = false;
++      this.paused = true; this.duration = 0; this.currentTime = 0;
++      this._id = this._value = this._text = this._html = "";
++      this._classes = new Set(); this._disabled = this._hidden = this._inert = false;
++      this.classList = {
++        add: (...names) => names.forEach(name => this._classes.add(name)),
++        remove: (...names) => names.forEach(name => this._classes.delete(name)),
++        contains: name => this._classes.has(name),
++        toggle: (name, force) => { const add = force === undefined ? !this._classes.has(name) : !!force;
++          add ? this._classes.add(name) : this._classes.delete(name); return add; },
++      };
++    }
++    get id() { return this._id; }
++    set id(value) { if (this._id && ids[this._id] === this) delete ids[this._id]; this._id = String(value); if (this._id) ids[this._id] = this; }
++    get className() { return [...this._classes].join(" "); }
++    set className(value) { this._classes = new Set(String(value).split(/\s+/).filter(Boolean)); }
++    get disabled() { return this._disabled; }
++    set disabled(value) { this._disabled = !!value; if (this._disabled && this.contains(doc._activeElement)) doc._activeElement = doc.body; }
++    get hidden() { return this._hidden; }
++    set hidden(value) { this._hidden = !!value; if (this._hidden && this.contains(doc._activeElement)) doc._activeElement = doc.body; }
++    get inert() { return this._inert; }
++    set inert(value) { this._inert = !!value; if (this._inert && this.contains(doc._activeElement)) doc._activeElement = doc.body; }
++    get value() { return this.tagName !== "SELECT" || this.options.some(o => o.value === this._value) ? this._value : ""; }
++    set value(value) { value = String(value); this._value = this.tagName !== "SELECT" || this.options.some(o => o.value === value) ? value : ""; }
++    get options() { return this.tagName === "SELECT" ? selectAll(this, "option") : []; }
++    get textContent() { return this._text; }
++    set textContent(value) { this._clear(); this._text = String(value ?? ""); this._html = escapeHtml(this._text); }
++    get innerHTML() { return this.children.length ? this.children.map(serialize).join("") : this._html; }
++    set innerHTML(value) {
++      this._clear(); this._text = ""; this._html = String(value ?? "");
++      const stack = [this];
++      for (const [, closing, tag, raw = ""] of this._html.matchAll(/<\s*(\/)?\s*([\w-]+)([^>]*)>/g)) {
++        const lower = tag.toLowerCase();
++        if (closing) { if (stack.length > 1) stack.pop(); continue; }
++        const child = doc.createElement(lower);
++        for (const match of raw.matchAll(/([\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) {
++          const name = match[1].toLowerCase(), value = match[2] ?? match[3] ?? match[4] ?? "";
++          if (name === "id") child.id = value; else if (name === "class") child.className = value;
++          else if (name === "value") child._value = value;
++          else if (["checked", "disabled", "hidden", "inert", "selected"].includes(name)) child[name] = true;
++          else if (name.startsWith("data-")) child.dataset[name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = value;
++          else if (name === "style") {
++            child.style.cssText = value;
++            for (const part of value.split(";")) {
++              const [property, ...rest] = part.split(":"); if (property && rest.length)
++                child.style[property.trim().replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = rest.join(":").trim();
++            }
++          } else child[name] = value;
++        }
++        stack.at(-1).appendChild(child);
++        if (!voidTags.has(lower) && !raw.trim().endsWith("/")) stack.push(child);
++      }
++      if (this.tagName === "SELECT" && !this.options.some(o => o.value === this._value)) this._value = this.options[0]?.value || "";
++    }
++    _clear() { if (this.children.some(child => child.contains(doc._activeElement))) doc._activeElement = doc.body;
++      this.children.forEach(child => { child.parentNode = null; }); this.children = []; }
++    appendChild(child) {
++      if (child === this || child.contains(this)) throw new Error("HierarchyRequestError");
++      const firstOption = this.tagName === "SELECT" && !this.options.length;
++      child.remove(); child.parentNode = this; this.children.push(child);
++      if (child.tagName === "OPTION" && (firstOption || child.selected)) this._value = child.value; return child;
++    }
++    remove() { if (this.contains(doc._activeElement)) doc._activeElement = doc.body;
++      if (this.parentNode?.children) this.parentNode.children = this.parentNode.children.filter(child => child !== this);
++      this.parentNode = null; }
++    contains(node) { return node === this || this.children.some(child => child.contains(node)); }
++    querySelector(query) { return selectAll(this, query, true)[0] || null; }
++    querySelectorAll(query) { return selectAll(this, query); }
++    closest(query) { for (let node = this; node instanceof Element; node = node.parentNode) if (matches(node, query)) return node; return null; }
++    addEventListener(type, fn) { addListener(this, type, fn); }
++    removeEventListener(type, fn) { removeListener(this, type, fn); }
++    dispatchEvent(e) { return dispatch(this, e); }
++    click() { if (!this.disabled) this.dispatchEvent(createEvent("click")); }
++    focus() { if (!doc.body.contains(this) || this.disabled) return;
++      for (let node = this; node instanceof Element; node = node.parentNode) if (node.hidden || node.inert) return;
++      doc._activeElement = this; }
++    blur() { if (doc._activeElement === this) doc._activeElement = doc.body; }
++    play() { this.paused = false; return Promise.resolve(); }
++    pause() { this.paused = true; }
++  }
++
++  const doc = {
++    ids, _activeElement: null, parentNode: null,
++    createElement: tag => new Element(tag), createEvent,
++    getElementById(id) { if (!ids[id]) { const stub = this.createElement("div"); stub.id = id; } return ids[id]; },
++    querySelector: query => selectAll(doc.body, query, true)[0] || null,
++    querySelectorAll: query => selectAll(doc.body, query),
++    addEventListener(type, fn) { addListener(this, type, fn); },
++    removeEventListener(type, fn) { removeListener(this, type, fn); },
++    dispatchEvent(e) { return dispatch(this, e); },
++  };
++  doc.body = new Element("body"); doc.body.parentNode = doc; doc._activeElement = doc.body;
++  Object.defineProperty(doc, "activeElement", { get: () => doc._activeElement });
++  return doc;
++}
++
++module.exports = { createDocument };
+diff --git a/tests/ui/load_app.js b/tests/ui/load_app.js
+new file mode 100644
+index 0000000..a8b00b6
+--- /dev/null
++++ b/tests/ui/load_app.js
+@@ -0,0 +1,66 @@
++// Loads the real template and app in a fresh VM. Route values are JSON bodies or
++// { status, body }; unknown routes return 404 JSON. Await two microtask turns
++// after loadApp() when initialization results must be rendered.
++const fs = require("node:fs");
++const path = require("node:path");
++const vm = require("node:vm");
++const { createDocument } = require("./fake_dom");
++
++function loadApp(options = {}) {
++  const root = path.resolve(__dirname, "../..");
++  const template = fs.readFileSync(path.join(root, "templates/index.html"), "utf8");
++  const body = template.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
++  if (!body) throw new Error("templates/index.html has no body");
++
++  const document = createDocument();
++  document.body.innerHTML = body[1].replace(/<script\b[^>]*>[\s\S]*?<\/script>\s*/gi, "");
++  const calls = { alert: [], confirm: [], prompt: [], fetch: [] };
++  const alert = (...args) => { calls.alert.push(args); };
++  const confirm = (...args) => {
++    calls.confirm.push(args);
++    return options.confirmResult ?? true;
++  };
++  const prompt = (...args) => {
++    calls.prompt.push(args);
++    return options.promptResult ?? "";
++  };
++  const routes = { "GET /api/projects": [], ...(options.routes || {}) };
++  const fetch = async (input, init = {}) => {
++    const method = String(init.method || "GET").toUpperCase();
++    const parsed = new URL(String(input), "http://app.test");
++    const call = { method, path: parsed.pathname + parsed.search, input, init };
++    calls.fetch.push(call);
++    if (options.fetch) return options.fetch(input, init);
++    const route = routes[`${method} ${call.path}`];
++    const value = route === undefined
++      ? { status: 404, body: { error: "Route not stubbed" } }
++      : typeof route === "function" ? await route(call) : route;
++    const response = value && Object.hasOwn(value, "body") ? value : { body: value };
++    const status = response.status ?? 200;
++    return {
++      ok: status >= 200 && status < 300,
++      status,
++      json: () => response.body,
++      blob: () => new Blob([JSON.stringify(response.body ?? null)]),
++    };
++  };
++  const noop = () => {};
++  const window = { location: { href: "" }, document };
++  const context = vm.createContext({
++    document, window, console, setTimeout, clearTimeout, URL, URLSearchParams, FormData,
++    alert, confirm, prompt, fetch,
++    initAnnotations: noop, initRecording: noop, toggleFreezeFrame: noop,
++    tickAnnotations: noop, onAnnMouseDown: noop, onAnnMouseMove: noop, onAnnMouseUp: noop,
++    exitAnnotationMode: noop, enterAnnotationMode: noop, clearAllAnnotations: noop,
++    isRecording: () => false, startRecording: async () => {}, stopRecording: async () => null,
++    isRecordingSupported: () => true, getRecordingDuration: () => 0,
++    annList: [], annClip: null, annActive: false, annTool: "pen", annColor: "#f00",
++    annLineWidth: 3, annFreezeDuration: 2,
++  });
++  const appPath = path.resolve(root, options.appPath || process.env.APP_JS_PATH || "static/js/app.js");
++  vm.runInContext(fs.readFileSync(appPath, "utf8"), context, { filename: appPath });
++  const evalInApp = expr => vm.runInContext(expr, context);
++  return { document, context, calls, evalInApp, fake: { alert, confirm, fetch } };
++}
++
++module.exports = { loadApp };
+diff --git a/tests/ui/load_app.test.js b/tests/ui/load_app.test.js
+new file mode 100644
+index 0000000..66f947b
+--- /dev/null
++++ b/tests/ui/load_app.test.js
+@@ -0,0 +1,33 @@
++const assert = require("node:assert/strict");
++const fs = require("node:fs");
++const os = require("node:os");
++const path = require("node:path");
++const test = require("node:test");
++const { loadApp } = require("./load_app");
++
++test("loads the template and real app, including an APP_JS_PATH override", async t => {
++  const app = loadApp();
++  await Promise.resolve();
++  await Promise.resolve();
++  assert.ok(app.document.getElementById("bulk-modal").parentNode);
++  assert.ok(app.document.getElementById("bulk-tag-type").parentNode);
++  assert.deepEqual(
++    { method: app.calls.fetch[0].method, path: app.calls.fetch[0].path },
++    { method: "GET", path: "/api/projects" },
++  );
++  assert.equal(app.evalInApp("typeof applyBulkEdit"), "function");
++
++  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "gametape-load-app-"));
++  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
++  const copy = path.join(temp, "app.js");
++  const source = fs.readFileSync(path.resolve(__dirname, "../../static/js/app.js"), "utf8");
++  fs.writeFileSync(copy, `${source}\nglobalThis.__sourceOverrideLoaded = true;\n`);
++  const previous = process.env.APP_JS_PATH;
++  process.env.APP_JS_PATH = copy;
++  try {
++    assert.equal(loadApp().evalInApp("__sourceOverrideLoaded"), true);
++  } finally {
++    if (previous === undefined) delete process.env.APP_JS_PATH;
++    else process.env.APP_JS_PATH = previous;
++  }
++});
+diff --git a/tests/ui/mutation_check.js b/tests/ui/mutation_check.js
+new file mode 100644
+index 0000000..442199f
+--- /dev/null
++++ b/tests/ui/mutation_check.js
+@@ -0,0 +1,115 @@
++// Run with: node tests/ui/mutation_check.js
++const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
++const crypto = require("node:crypto");
++const { spawnSync } = require("node:child_process");
++
++const ROOT = path.resolve(__dirname, "../.."), APP_PATH = path.join(ROOT, "static/js/app.js");
++const TEST_FILES = ["tests/ui/bulk_serialization.test.js", "tests/ui/bulk_keyboard.test.js"];
++
++function replaceExact(source, pattern, replacement, name, after = 0) {
++  const at = source.indexOf(pattern, after);
++  if (at < 0) throw new Error(`${name}: pattern absent: ${JSON.stringify(pattern)}`);
++  return source.slice(0, at) + replacement + source.slice(at + pattern.length);
++}
++
++const MUTANTS = [
++  {
++    name: "late-success-discarded",
++    apply(source) {
++      const start = source.indexOf("async function applyBulkEdit()");
++      const end = source.indexOf("async function refreshBulkProject()", start);
++      if (start < 0 || end < 0) throw new Error(`${this.name}: apply function not found`);
++      const body = replaceExact(source.slice(start, end),
++        "    if (!currentProject || currentProject.id !== projectId) return;",
++        "    if (generation !== bulkPreviewGeneration || !currentProject || currentProject.id !== projectId) return;",
++        this.name);
++      return source.slice(0, start) + body + source.slice(end);
++    },
++  },
++  {
++    name: "guard-dropped",
++    apply(source) {
++      return replaceExact(source, "bulkApplyPending = { projectId };",
++        "bulkApplyPending = null;", this.name);
++    },
++  },
++  {
++    name: "capture-after-await",
++    apply(source) {
++      let mutated = replaceExact(source,
++        "  const tagType = $bulkTagType.value;\n  const player = $bulkPlayer.value;",
++        "  let tagType, player;", this.name);
++      mutated = replaceExact(mutated, "    const data = await res.json();",
++        "    const data = await res.json();\n    tagType = $bulkTagType.value;\n    player = $bulkPlayer.value;",
++        this.name, mutated.indexOf("  let tagType, player;"));
++      return mutated;
++    },
++  },
++  {
++    name: "tab-not-prevented",
++    apply(source) {
++      return replaceExact(source,
++        "        controls[nextIndex].focus();\n      }\n      e.preventDefault();",
++        "        controls[nextIndex].focus();\n      }", this.name);
++    },
++  },
++];
++
++function runSuite(appPath) {
++  const run = spawnSync(process.execPath, ["--test", "--test-timeout=2000", "--test-reporter=tap", ...TEST_FILES], {
++    cwd: ROOT,
++    env: { ...process.env, APP_JS_PATH: appPath, FORCE_COLOR: "0" },
++    encoding: "utf8",
++    timeout: 10000,
++  });
++  if (run.error) throw run.error;
++  // Node 24's default spec reporter uses ℹ; TAP and earlier defaults use #.
++  const passed = run.stdout.match(/^(?:#|ℹ) pass (\d+)$/m);
++  const failed = run.stdout.match(/^(?:#|ℹ) fail (\d+)$/m);
++  if (!passed || !failed) {
++    throw new Error(`test summary missing for ${appPath}:\n${run.stdout}\n${run.stderr}`);
++  }
++  return {
++    tests_failed: Number(failed[1]), tests_passed: Number(passed[1]), exit_code: run.status,
++    failed_tests: [...run.stdout.matchAll(/^not ok \d+ - (.+)$/gm)].map(match => match[1]),
++  };
++}
++
++const hash = source => crypto.createHash("sha256").update(source).digest("hex");
++
++function main() {
++  const sourceBytes = fs.readFileSync(APP_PATH), source = sourceBytes.toString("utf8");
++  const before = hash(sourceBytes);
++  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "gametape-mutants-"));
++  let after;
++  let results;
++  try {
++    const baseline = {
++      name: "baseline", target_file: APP_PATH, replacement_applied: false,
++      ...runSuite(APP_PATH), killed: false,
++    };
++    const mutants = MUTANTS.map(mutant => {
++      const target = path.join(tempDir, `${mutant.name}.js`);
++      fs.writeFileSync(target, mutant.apply(source));
++      const outcome = runSuite(target);
++      return {
++        name: mutant.name, target_file: target, replacement_applied: true,
++        ...outcome, killed: outcome.tests_failed >= 1,
++      };
++    });
++    results = { baseline, mutants };
++  } finally {
++    fs.rmSync(tempDir, { recursive: true, force: true });
++    after = hash(fs.readFileSync(APP_PATH));
++    if (before !== after) throw new Error("static/js/app.js changed during mutation check");
++  }
++  results.source_sha256_before = before;
++  results.source_sha256_after = after;
++  results.source_unchanged = true;
++  console.log(JSON.stringify(results, null, 2));
++  if (results.baseline.exit_code !== 0 || !results.baseline.tests_passed || results.baseline.tests_failed || results.mutants.some(item => !item.killed)) {
++    process.exitCode = 1;
++  }
++}
++
++main();

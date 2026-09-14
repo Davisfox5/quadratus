@@ -1,0 +1,12 @@
+{
+  "mutation": "Remove only bulk_apply lock in disposable copy after synchronization timeout reduction",
+  "tests_sha256": "b59108656393e0af5d6f745d562cfbdfd6ad2b74672eda52ee5be715e6c00ed7",
+  "locked": {
+    "exit": 0,
+    "output": ".                                                                        [100%]\n1 passed in 0.65s\n"
+  },
+  "unlocked": {
+    "exit": 1,
+    "output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n__________ test_bulk_apply_racing_unrelated_edit_loses_neither_update __________\n\nclient = <FlaskClient <Flask 'app'>>\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1071d2fc0>\n\n    def test_bulk_apply_racing_unrelated_edit_loses_neither_update(client, monkeypatch):\n        ids = _seed(client)\n        preview_id = _goal_preview(client, ids)\n        original_load = _probe_concurrent_loads(monkeypatch)\n        results = _concurrent_requests([\n            (\"post\", f\"/api/projects/{ids['a']}/clips/bulk_apply\", {\"preview_id\": preview_id}),\n            (\"put\", f\"/api/projects/{ids['a']}/clips/{ids['c3']}\", {\"label\": \"renamed\"}),\n        ])\n        assert sorted(status for status, _ in results) == [200, 200]\n    \n        clips = {clip[\"id\"]: clip for clip in original_load()[ids[\"a\"]][\"clips\"]}\n        assert [clips[ids[key]][\"tag_type\"] for key in (\"c1\", \"c2\")] == [\"Goal\", \"Goal\"]\n>       assert clips[ids[\"c3\"]][\"label\"] == \"renamed\"\nE       AssertionError: assert 'winner' == 'renamed'\nE         \nE         - renamed\nE         + winner\n\ntests/test_bulk_edit.py:440: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_bulk_edit.py::test_bulk_apply_racing_unrelated_edit_loses_neither_update\n1 failed in 0.08s\n"
+  }
+}
