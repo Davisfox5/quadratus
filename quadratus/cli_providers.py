@@ -53,7 +53,10 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
 from .delegation import NativeChild
@@ -282,6 +285,7 @@ def _extract_native_children(stdout: str) -> List[NativeChild]:
     accounting must never fail a call.
     """
     found: Dict[str, NativeChild] = {}
+    parent_id = None
     for line in (stdout or "").splitlines():
         line = line.strip()
         if not line.startswith("{"):
@@ -292,6 +296,17 @@ def _extract_native_children(stdout: str) -> List[NativeChild]:
             continue
         if not isinstance(event, dict):
             continue
+        if event.get("type") == "thread.started":
+            parent_id = event.get("thread_id")
+        item = event.get("item")
+        if isinstance(item, dict) and item.get("type") == "collab_tool_call":
+            receivers = item.get("receiver_thread_ids") or []
+            for child_id in receivers or [f"unidentified:{parent_id or 'session'}:{item.get('id', 'native')}"]:
+                found[str(child_id)] = NativeChild(
+                    session_id=str(child_id), parent_session_id=item.get("sender_thread_id") or parent_id,
+                    tool_name=item.get("tool") or "collab_tool_call",
+                    detail="native activity observed; stream does not report child usage",
+                )
         name = str(event.get("name") or event.get("type") or "")
         session_id = (
             event.get("child_session")
@@ -684,9 +699,9 @@ def _launch(argv, *, input=None, timeout=None, cwd=None, env=None):  # noqa: A00
     )
     try:
         stdout, stderr = proc.communicate(input=input, timeout=timeout)
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         _terminate_group(proc)
-        stdout, stderr = proc.communicate()
+        stdout, stderr = _drain_output(proc, exc)
         raise subprocess.TimeoutExpired(
             argv, timeout, output=stdout, stderr=stderr
         ) from None
@@ -694,34 +709,55 @@ def _launch(argv, *, input=None, timeout=None, cwd=None, env=None):  # noqa: A00
         # KeyboardInterrupt included: an operator stopping the run must not
         # leave a vendor CLI and its children running against the project.
         _terminate_group(proc)
-        proc.communicate()
+        _drain_output(proc)
         raise
     return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 
 
-def _terminate_group(proc) -> None:
-    """TERM then KILL the child's process group, tolerating every race.
+def _drain_output(proc, previous=None):
+    """A detached descendant may retain pipes even after the group is gone."""
+    try:
+        return proc.communicate(timeout=2)
+    except subprocess.TimeoutExpired as exc:
+        for pipe in (proc.stdin, proc.stdout, proc.stderr):
+            if pipe is not None:
+                pipe.close()
+        def decoded(value):
+            return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
+        return (decoded(exc.output or getattr(previous, "output", None)),
+                decoded(exc.stderr or getattr(previous, "stderr", None)))
 
-    Every failure mode here is benign -- the process already exited, the
-    platform has no process groups, the group is gone -- and none of them is a
-    reason to fail a call that has already failed.
-    """
+
+def _terminate_group(proc) -> None:
+    """Signal our stable process group even after the launcher has exited."""
+    grouped = hasattr(os, "killpg") and hasattr(os, "setsid")
+    # _launch starts a new session: its PID is the PGID. getpgid(pid) fails
+    # once the launcher has exited, even while its children are still alive.
+    pgid = proc.pid
     for signum, grace in ((signal.SIGTERM, 5.0), (signal.SIGKILL, 2.0)):
-        if proc.poll() is not None:
-            return
         try:
-            if hasattr(os, "killpg"):
-                os.killpg(os.getpgid(proc.pid), signum)
-            else:  # pragma: no cover -- non-POSIX fallback
+            if grouped:
+                os.killpg(pgid, signum)
+            elif proc.poll() is None:  # pragma: no cover -- non-POSIX
                 proc.terminate() if signum == signal.SIGTERM else proc.kill()
-        except (ProcessLookupError, PermissionError, OSError):
-            log.debug("could not signal the CLI process group", exc_info=True)
+            else:
+                return
+        except OSError:
+            proc.poll()
             return
-        try:
-            proc.wait(timeout=grace)
-            return
-        except subprocess.TimeoutExpired:
-            continue
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            proc.poll()  # reap the parent, but do not mistake it for the group
+            try:
+                if grouped:
+                    os.killpg(pgid, 0)
+                elif proc.poll() is not None:  # pragma: no cover
+                    return
+            except OSError:
+                # macOS can report EPERM for a group whose last member just
+                # exited; still attempt KILL after the bounded grace.
+                break
+            time.sleep(0.05)
 
 
 def _render_history(history: Sequence[Turn]) -> str:
@@ -776,6 +812,10 @@ class CLIProvider(LLMProvider):
                 self.spec.binary,
             )
         return path
+
+    @property
+    def allow_writes(self):
+        return self._allow_writes
 
     @property
     def workdir(self) -> str:
@@ -911,6 +951,8 @@ class CLIProvider(LLMProvider):
                 env=env,
             )
         except subprocess.TimeoutExpired as exc:
+            output = exc.output.decode(errors="replace") if isinstance(exc.output, bytes) else exc.output
+            self._observe_output(output or "")
             raise TimeoutError(
                 f"{self.label} CLI timed out after {self.timeout}s"
             ) from exc
@@ -924,6 +966,8 @@ class CLIProvider(LLMProvider):
                 except FileNotFoundError:
                     pass
                 self._prompt_files.discard(path)
+
+        self._observe_output(proc.stdout)
 
         if proc.returncode != 0:
             # A failing exit code does not mean there is nothing to read. The
@@ -952,23 +996,43 @@ class CLIProvider(LLMProvider):
                 f"{self.label} CLI exited {proc.returncode}: {detail}"
             )
 
-        if self.spec.extract_usage is not None:
-            try:
-                self.last_usage = self.spec.extract_usage(proc.stdout)
-            except Exception:  # noqa: BLE001 -- metering must never fail a call
-                self.last_usage = None
-        # Observed, never dispatched: a vendor CLI that spawned its own
-        # sub-agents reports them here so they can be counted separately from
-        # Quadratus-assigned work instead of vanishing from the totals.
-        try:
-            self.native_children = _extract_native_children(proc.stdout)
-        except Exception:  # noqa: BLE001 -- accounting must never fail a call
-            self.native_children = []
         try:
             return self.spec.extract(proc.stdout)
         except ProviderRefusal as refusal:
             refusal.model = self.model
             raise
+
+    def _observe_output(self, stdout):
+        """Extract accounting even when response parsing later fails."""
+        try:
+            self.last_usage = self.spec.extract_usage(stdout) if self.spec.extract_usage else None
+            self.native_children = _extract_native_children(stdout)
+            for line in (stdout or "").splitlines():
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                if event.get("type") == "thread.started":
+                    self.last_session_id = event.get("thread_id")
+                elif event.get("session_id"):
+                    self.last_session_id = event["session_id"]
+                # A Claude result names concrete releases, while argv often
+                # uses a moving alias. Auxiliary modelUsage rows are not seats.
+                models = event.get("modelUsage") or {}
+                matching = [name for name in models if self.model and self.model in name]
+                if len(matching) == 1:
+                    self.resolved_model = matching[0]
+            if self.spec.vendor == "openai" and getattr(self, "last_session_id", None):
+                from .native_sessions import codex_children
+                root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "sessions"
+                self.native_children.extend(codex_children(
+                    root, self.last_session_id, self.workdir,
+                    ended=datetime.now(timezone.utc),
+                ))
+        except Exception:
+            log.debug("native accounting unavailable", exc_info=True)
 
     def _retryable(self, exc: Exception) -> bool:
         if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)):

@@ -280,12 +280,36 @@ class LLMProvider:
                     explanation=second.explanation,
                 ) from second
 
+    def _observed_call(self, prompt, system, turns, attempt):
+        self.last_usage = None
+        self.last_session_id = None
+        self.resolved_model = None
+        self.native_children = []
+        started = time.monotonic()
+        failure = None
+        text = ""
+        try:
+            text = self._call(prompt, system, turns)
+            if not text:
+                raise ProviderError(f"{self.label} returned an empty response.")
+            return text
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            observer = getattr(self, "attempt_observer", None)
+            if observer is not None:
+                try:
+                    observer(self, attempt, time.monotonic() - started, failure, text)
+                except Exception:
+                    log.debug("attempt accounting failed", exc_info=True)
+
     def _generate_once(self, prompt: str, system: str, turns: List[Turn]) -> str:
         """One model's attempt, with transport retries. Refusals pass through."""
         last_exc: Optional[Exception] = None
         for attempt in range(self.max_retries):
             try:
-                text = self._call(prompt, system, turns)
+                text = self._observed_call(prompt, system, turns, attempt + 1)
                 if not text:
                     raise ProviderError(f"{self.label} returned an empty response.")
                 return text

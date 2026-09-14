@@ -25,13 +25,14 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from functools import wraps
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
 from .artifacts import ArtifactStore
 from .codebase_map import CodebaseMap
-from .delegation import DelegationLedger, InvocationEvent, Origin
+from .delegation import DelegationLedger, InvocationEvent, Origin, invocation, invocation_context
 from .memory import PersistentMemory, TaskMemory, TaskSummary
 from .providers import PartialWorkSuspected
 from .registry import peers_for, resolve
@@ -274,9 +275,31 @@ class SessionConfig:
     #: vendor-native children and vendor-internal auxiliary activity, and
     #: carrying what the harness cannot observe or bound. Observational only.
     delegation_ledger: Optional["DelegationLedger"] = None
-    #: Default bounds applied to a task the orchestrator did not scope. None
+    #: Additional operator bounds, intersected with each task declaration. None
     #: leaves such a task unbounded, which is at least recorded as unbounded.
     default_scope: Optional["TaskScope"] = None
+
+
+_SCOPE_REQUEST = (
+    'After KIND, include one line: SCOPE: {"permitted_paths": ["relative/file.py"], '
+    '"intended_result": "one concrete result", "acceptance": ["verifiable condition"], '
+    '"max_lines": 100}. Then describe the task. Name narrow project-relative files or '
+    'directories; no absolute paths, parent traversal or project-wide wildcard. '
+    'max_lines must be a positive integer no greater than 100. Decompose larger work. '
+    'These bounds are measured after every editing call; an overrun stops the task '
+    'with its work preserved. The line estimate has 50 percent tolerance.'
+)
+
+
+def _invocation_role(role):
+    def decorate(method):
+        @wraps(method)
+        def wrapped(self, *args, **kwargs):
+            task_id = getattr(getattr(self, "_active_spec", None), "task_id", "run")
+            with invocation(task_id, role):
+                return method(self, *args, **kwargs)
+        return wrapped
+    return decorate
 
 
 class Session:
@@ -299,6 +322,11 @@ class Session:
         gate = self.config.integration_gate
         if self.project and gate and Path(getattr(gate, 'cwd', None) or Path.cwd()).resolve() != self.project:
             raise ValueError("The integration gate must run in the session project.")
+        self._active_spec = None
+        self._task_before = None
+        self._task_memory = None
+        self._active_call = {}
+        self.in_flight = {}
         self.completed = False
         self.checks = []
         self.open_findings = []
@@ -320,13 +348,41 @@ class Session:
         self.history: List[TaskSummary] = []
 
     def _invoke_model(self, key, prompt, *, allow_writes=False):
-        if self.project:
-            return self.invoke(key, prompt, allow_writes=bool(allow_writes and self.config.allow_writes))
-        if allow_writes:
-            return self.invoke(key, prompt, allow_writes=True)
-        return self.invoke(key, prompt)
+        context = invocation_context.get() or dict(task="run", role="direct", origin="seat")
+        self._active_call = dict(context, model=key, allow_writes=allow_writes)
+        spec = self._active_spec
+        if spec is not None and spec.scope is not None:
+            if spec.scope.render() not in prompt:
+                prompt += "\n\n" + spec.scope.render()
+            if self.config.default_scope is not None and spec.scope is not self.config.default_scope:
+                prompt += "\nOperator limits (also binding):\n" + self.config.default_scope.render()
+        try:
+            with invocation(**context):
+                if self.project:
+                    reply = self.invoke(key, prompt, allow_writes=bool(allow_writes and self.config.allow_writes))
+                elif allow_writes:
+                    reply = self.invoke(key, prompt, allow_writes=True)
+                else:
+                    reply = self.invoke(key, prompt)
+        except BaseException:
+            if self._task_memory is not None:
+                try:
+                    ref = self._task_memory.keep(prompt, kind="interrupted-prompt", author=key)
+                    self._active_call["prompt_artifact"] = ref.id
+                except Exception:
+                    log.debug("could not preserve interrupted prompt", exc_info=True)
+            raise
+        if allow_writes and spec is not None and self._task_memory is not None:
+            report = self._assess_scope(spec, self._task_memory, self._task_before)
+            if spec.scope is not None and report is None:
+                raise PartialWorkStopped("Scope could not be measured; edits preserved for inspection.")
+            if report and (report.blocking or report.oversized):
+                raise PartialWorkStopped("Task exceeded its declared scope; work preserved. " + report.render(),
+                                         partial=self._inspect_partial_edits(self._task_before))
+        self._active_call = {}
+        return reply
 
-    def _edit(self, key, prompt):
+    def _edit(self, key, prompt, *, role="revision"):
         """An editing call, with the tree inspected before anything is replayed.
 
         A timeout is not a null result. On 2026-09-13 a 900-second editing call
@@ -344,7 +400,8 @@ class Session:
         allow_writes = bool(self.project and self.config.allow_writes)
         before = self._capture_source() if allow_writes else None
         try:
-            return self._invoke_model(key, prompt, allow_writes=allow_writes)
+            with invocation(getattr(self._active_spec, "task_id", "run"), role):
+                return self._invoke_model(key, prompt, allow_writes=allow_writes)
         except PartialWorkSuspected as exc:
             state = self._inspect_partial_edits(before)
             raise PartialWorkStopped(str(exc), partial=state) from exc
@@ -446,6 +503,7 @@ class Session:
                     chosen.append(peer)
         return chosen
 
+    @_invocation_role("orchestrator")
     def _ask_seat(self, seat: Seat, build, *, task=None):
         """Ask the seated orchestrator, re-seating once if its window is spent.
 
@@ -490,7 +548,7 @@ class Session:
         fix a typo and the harness cannot.
         """
         fetched: List[tuple] = []
-        call = self._edit if editing else self._invoke_model
+        call = (lambda key, prompt: self._edit(key, prompt, role="lead")) if editing else self._invoke_model
         reply = call(model_key, build_prompt(fetched))
         for _ in range(self.config.max_fetches):
             artifact_id = _parse_fetch(reply)
@@ -527,6 +585,7 @@ class Session:
                 return key
         return None
 
+    @_invocation_role("lead")
     def _draft_with_channels(self, lead: str, spec: TaskSpec, task: TaskMemory) -> str:
         answers = []
         consults_used = 0
@@ -577,6 +636,8 @@ class Session:
                         errand=request['errand'], demanding=request.get('demanding', False),
                         allow_writes=writes,
                     )
+                except PartialWorkStopped:
+                    raise
                 except (FanOutExceeded, RepeatedFailure) as exc:
                     # Budget and repeated-failure guards are the lead's own
                     # limits reported back to it, not a crash: it can still
@@ -624,7 +685,8 @@ class Session:
                 if peer is None:
                     answers.append(f"{name} is not a member you can consult.")
                     continue
-                answer = self._invoke_model(peer, self._consult_prompt(spec, question, peer))
+                with invocation(spec.task_id, "consultant"):
+                    answer = self._invoke_model(peer, self._consult_prompt(spec, question, peer))
                 task.record("assistant", f"[consult {peer}] {answer}")
                 task.keep(answer, kind=f"consult:{peer}", author=peer)
                 answers.append(f"[{peer}]\n{answer}")
@@ -661,9 +723,8 @@ class Session:
         over-wide change was also the only work that existed, and discarding it
         to satisfy a bookkeeping rule would have destroyed real output; user
         edits and partial work stay exactly where they are. An out-of-scope
-        *path* is the one case the operator explicitly bounded, so it is marked
-        blocking and carried into the close-out; a size overrun is loud and
-        advisory.
+        path is marked blocking. The normal editing dispatcher also stops on
+        a size overrun, retaining this report and the unfinished task.
         """
         if spec.scope is None or before is None or not self.project:
             return None
@@ -677,6 +738,12 @@ class Session:
             log.debug("could not diff for the scope check", exc_info=True)
             return None
         report = spec.scope.assess(diff)
+        if self.config.default_scope is not None and spec.scope is not self.config.default_scope:
+            outer = self.config.default_scope.assess(diff)
+            out = sorted(set(report.out_of_scope + outer.out_of_scope))
+            limits = [v for v in (report.max_lines, outer.max_lines) if v is not None]
+            report = replace(report, out_of_scope=out, within_scope=not out,
+                             max_lines=min(limits) if limits else None)
         self.scope_reports.append(report)
         if report.blocking or report.oversized:
             task.record("user", report.render())
@@ -707,6 +774,33 @@ class Session:
 
     # -- one task ------------------------------------------------------------
     def run_task(self, spec: TaskSpec) -> TaskSummary:
+        if self.project and self.config.allow_writes and spec.scope is None:
+            raise RunStalled("Editing tasks must declare a scope before dispatch.")
+        self._active_spec = spec
+        self._task_before = self._capture_source()
+        if self.project and self.config.allow_writes and self._task_before is None:
+            raise RunStalled("Cannot capture source to measure this editing task.")
+        self.in_flight = {}
+        try:
+            result = self._run_task(spec)
+        except BaseException:
+            self.in_flight = self._inspect_partial_edits(self._task_before)
+            self.in_flight.update(task=spec.task_id, description=spec.description,
+                                  scope=spec.scope.to_dict() if spec.scope else None,
+                                  invocation=dict(self._active_call))
+            if self._task_memory is not None:
+                try:
+                    self._task_memory.keep(json.dumps(self.in_flight), kind="interrupted-task")
+                except Exception:
+                    log.debug("could not preserve interrupted task artifact", exc_info=True)
+            raise
+        else:
+            self._active_spec = None
+            self._task_memory = None
+            self._active_call = {}
+            return result
+
+    def _run_task(self, spec: TaskSpec) -> TaskSummary:
         """Work one task to completion and fold it into the ledger."""
         if spec.work_class == WorkClass.SECURITY:
             return self._run_security_task(spec)
@@ -723,7 +817,10 @@ class Session:
             self._record_selection(spec, peer, "collaborator")
 
         task = TaskMemory(spec.task_id, lead, self.store)
+        self._task_memory = task
         task.record("user", spec.description)
+        if spec.scope is not None:
+            task.keep(json.dumps(spec.scope.to_dict()), kind="task-scope")
         if spec.metadata_confidence != "labelled":
             # Carried into the task's own record, not only the progress line:
             # a routing decision nobody stated should be visible to whoever
@@ -738,7 +835,7 @@ class Session:
         # What the tree looked like before this task touched it. Two uses: the
         # scope check compares against it, and a timed-out editing call is
         # diagnosed against it rather than blindly replayed.
-        before = self._capture_source()
+        before = self._task_before
 
         # The lead drafts with full working memory, and with the fetch and
         # consult channels live: a reply that is a request gets served.
@@ -761,7 +858,8 @@ class Session:
                   for i, peer in enumerate(collaborators)}
         notes: List[tuple] = []
         for peer in collaborators:
-            note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
+            with invocation(spec.task_id, "collaborator"):
+                note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
             task.record("assistant", f"[{labels[peer]}] {note}")
             task.keep(note, kind=f"review:{peer}", author=peer)
             notes.append((peer, note))
@@ -834,6 +932,7 @@ class Session:
 
         self._run_integration_gate(lead, spec, task)
 
+        self._assess_scope(spec, task, before)
         summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
         summary = task.close(
             summary=summary_text, reasoning=reasoning, dead_ends=dead_ends
@@ -861,6 +960,8 @@ class Session:
         excursion = open_security_excursion(available=self._available)
         try:
             task = TaskMemory(spec.task_id, excursion.worker, self.store)
+            self._task_memory = task
+            self._record_selection(spec, excursion.worker, "lead")
             task.record("user", spec.description)
 
             # Fetch channel only: the excursion stays a straight line, so
@@ -894,9 +995,11 @@ class Session:
                 if crossed is not None:
                     verifier = crossed
             self._run_integration_gate(excursion.worker, spec, task)
-            verdict = self._invoke_model(
-                verifier, self._verifier_prompt(spec, draft, verifier)
-            )
+            self._record_selection(spec, verifier, "verifier")
+            with invocation(spec.task_id, "verifier"):
+                verdict = self._invoke_model(
+                    verifier, self._verifier_prompt(spec, draft, verifier)
+                )
             task.record("assistant", f"[{verifier}] {verdict}")
             task.keep(verdict, kind=f"verify:{verifier}", author=verifier)
 
@@ -953,6 +1056,7 @@ class Session:
                     "nothing else. If the decision turns on something only the "
                     "operator can answer, reply 'ASK: <one question>' instead."
                     f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}"
+                    + ("\n\n" + _SCOPE_REQUEST if self.project and self.config.allow_writes else "")
                 ),
                 recent=self.config.recent_entries,
                 extra=self._map_block(),
@@ -1035,7 +1139,23 @@ class Session:
                     f"silently drop whatever pin it meant to name."
                 ) from second
 
-        description = meta.description.strip()
+        scope = self.config.default_scope
+        if self.project and self.config.allow_writes:
+            from .scope import read_scope
+            for attempt in range(2):
+                try:
+                    scope, description = read_scope(meta.description, max_lines=MAX_TASK_LINES)
+                    break
+                except ValueError as exc:
+                    if attempt:
+                        raise RunStalled(f"Task scope remains invalid after correction: {exc}") from exc
+                    correction = f"\n\nCORRECTION REQUIRED: {exc}.\n{_SCOPE_REQUEST}"
+                    seat, reply = self._ask_seat(seat, build_with_correction)
+                    if (control := parse_control(reply)) is not None:
+                        raise RunStalled("Scope correction must supply a valid task, not a control reply.") from exc
+                    meta = _read_metadata(reply)
+        else:
+            description = meta.description.strip()
         if not description:
             raise RunStalled("An unresolved request cannot become a task.")
         if meta.defaulted:
@@ -1050,7 +1170,7 @@ class Session:
             complexity=meta.difficulty,
             metadata_confidence=meta.confidence,
             metadata_notes=list(meta.notes),
-            scope=self.config.default_scope,
+            scope=scope,
         )
 
     def plan(self) -> str:
@@ -1264,6 +1384,7 @@ class Session:
             )
         return "Produce the complete revised work, not a diff."
 
+    @_invocation_role("recheck")
     def _recheck_blocking(
         self,
         spec: TaskSpec,
@@ -1331,6 +1452,7 @@ class Session:
                 f"The project's own integration check failed after your "
                 f"work:\n{result.render()}\n\n"
                 "Fix the failure. Produce the complete revised work.",
+                role="gate-fix",
             )
             task.record("assistant", fix)
             task.keep(fix, kind="gate-fix")
@@ -1389,6 +1511,7 @@ class Session:
             "must change if not. Do not redo the work; verify it."
         )
 
+    @_invocation_role("closeout")
     def _close_out(self, lead: str, spec: TaskSpec, task: TaskMemory):
         """Have the lead write the one thing that survives the task."""
         transcript = "\n\n".join(f"[{t.role}] {t.content}" for t in task.turns())

@@ -24,9 +24,8 @@ Two rules govern the response, and both come from the trial:
 also the only work that existed; discarding it would have destroyed real
 output to satisfy a bookkeeping rule. :class:`ScopeReport` is evidence for the
 lead and the record, and :attr:`ScopeReport.blocking` marks only the case the
-operator actually forbade -- a write outside the permitted paths. Size overrun
-is loud and advisory, because a task that needed 140 lines instead of 100 is a
-sizing error, not a betrayal.
+operator actually forbade -- a write outside the permitted paths. Size allows a 50 percent tolerance; the project dispatcher stops when that
+tolerance is exceeded and preserves the unfinished task for review.
 
 **Bounds are advisory to the model and checked by the harness.** Telling a
 model its line ceiling helps a little; measuring the diff afterwards is what
@@ -37,7 +36,10 @@ makes the ceiling real. Both happen -- :meth:`render` goes into the prompt,
 from __future__ import annotations
 
 import fnmatch
+import json
+import re
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from typing import Dict, List, Optional, Sequence
 
 __all__ = ["TaskScope", "ScopeReport", "changed_paths", "count_change_lines"]
@@ -210,7 +212,7 @@ def _matches(path: str, pattern: str) -> bool:
     prefix = pattern.rstrip("/")
     if prefix and not any(ch in prefix for ch in "*?["):
         return path == prefix or path.startswith(prefix + "/")
-    # fnmatch's ``*`` does not cross ``/``; a ``**`` pattern should.
+    # Also accept a double-star directory wildcard matching zero levels.
     if "**" in pattern:
         return fnmatch.fnmatch(path, pattern.replace("**/", "*").replace("**", "*"))
     return False
@@ -226,6 +228,11 @@ def changed_paths(diff: str) -> List[str]:
     """
     seen: List[str] = []
     for line in (diff or "").splitlines():
+        if line.startswith(("Binary file changed: ", "Empty file added/deleted: ")):
+            name = line.partition(": ")[2]
+            if name not in seen:
+                seen.append(name)
+            continue
         if not (line.startswith("--- ") or line.startswith("+++ ")):
             continue
         raw = line[4:].strip().split("\t")[0]
@@ -252,3 +259,37 @@ def count_change_lines(diff: str) -> int:
         if line.startswith(("+", "-")):
             total += 1
     return total
+
+
+def read_scope(description: str, *, max_lines: int):
+    """Require a structured declaration before normal project dispatch."""
+    matches = list(re.finditer(r"^SCOPE:\s*(.+)$", description, re.MULTILINE))
+    if len(matches) != 1:
+        raise ValueError("Declare exactly one SCOPE JSON line")
+    try:
+        data = json.loads(matches[0].group(1))
+    except ValueError as exc:
+        raise ValueError("SCOPE must contain valid JSON") from exc
+    if not isinstance(data, dict):
+        raise ValueError("SCOPE must be an object")
+    paths = data.get("permitted_paths")
+    acceptance = data.get("acceptance")
+    result = data.get("intended_result")
+    bound = data.get("max_lines")
+    if not isinstance(paths, list) or not paths:
+        raise ValueError("SCOPE needs permitted_paths")
+    for name in paths:
+        if (not isinstance(name, str) or not name.strip() or name != name.strip()
+                or PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts
+                or "\\" in name or name.startswith(("~", ".quadratus"))
+                or name.strip("./*?[]") == ""):
+            raise ValueError("SCOPE paths must be narrow project-relative paths")
+    if not isinstance(result, str) or not result.strip():
+        raise ValueError("SCOPE needs an intended_result")
+    if (not isinstance(acceptance, list) or not acceptance
+            or any(not isinstance(x, str) or not x.strip() for x in acceptance)):
+        raise ValueError("SCOPE needs verifiable acceptance conditions")
+    if type(bound) is not int or not 0 < bound <= max_lines:
+        raise ValueError(f"SCOPE max_lines must be between 1 and {max_lines}")
+    body = (description[:matches[0].start()] + description[matches[0].end():]).strip()
+    return TaskScope(paths, result, acceptance, bound), body

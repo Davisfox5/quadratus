@@ -55,6 +55,7 @@ from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Sequence
 
 from .artifacts import ArtifactRef, ArtifactStore
+from .delegation import invocation
 from .memory import NoMemory, TaskMemory
 
 log = logging.getLogger(__name__)
@@ -327,7 +328,8 @@ class WorkerPool:
 
         scratch = NoMemory()  # explicit: a worker carries nothing in or out
         try:
-            raw = self._run(model_key, prompt, allow_writes=allow_writes)
+            with invocation(task.task_id, f"worker:{label}", "worker"):
+                raw = self._run(model_key, prompt, allow_writes=allow_writes)
         except Exception:
             with self._lock:
                 self._failed.add(fingerprint)

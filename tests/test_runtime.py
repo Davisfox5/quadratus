@@ -33,6 +33,7 @@ class FakeCLIProvider(LLMProvider):
         self.cleaned = False
         self._raises = raises
         self.last_usage = usage
+        self._usage = usage
         self._client = object() if installed else None
         self._init_error = None if installed else "'x' is not on PATH"
         self.max_retries = 1
@@ -48,6 +49,7 @@ class FakeCLIProvider(LLMProvider):
         self.calls.append({"model": self.model, "prompt": prompt, "system": system})
         if self._raises is not None:
             raise self._raises
+        self.last_usage = self._usage
         return f"[{self.name}:{self.model}] ok"
 
     def cleanup(self):

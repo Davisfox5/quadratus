@@ -5,6 +5,7 @@ import pytest
 from quadratus.artifacts import ArtifactStore
 from quadratus.config import Settings
 from quadratus.memory import TaskMemory
+from quadratus.scope import TaskScope
 from quadratus.session import Complexity, RunStalled, Session, SessionConfig, TaskSpec
 from quadratus.workers import WorkerPool
 
@@ -14,7 +15,7 @@ def test_lead_worker_request_reaches_runner_and_returns_evidence(tmp_path, write
     calls = []
     def invoke(key, prompt, *, allow_writes=False):
         calls.append((key, prompt, allow_writes))
-        if prompt == 'inspect this function':
+        if prompt.startswith('inspect this function'):
             return 'worker evidence: found the cause'
         if 'The task is finished' in prompt:
             return 'SUMMARY: fixed\nREASONING: evidence'
@@ -25,8 +26,9 @@ def test_lead_worker_request_reaches_runner_and_returns_evidence(tmp_path, write
     store = ArtifactStore(tmp_path / '.quadratus')
     session = Session('work', store, invoke=invoke, available=lambda key: True,
                       config=SessionConfig(project=tmp_path, allow_writes=write))
-    result = session.run_task(TaskSpec('t1', 'fix', complexity=Complexity.SIMPLE))
-    worker_call = next(c for c in calls if c[1] == 'inspect this function')
+    result = session.run_task(TaskSpec('t1', 'fix', complexity=Complexity.SIMPLE,
+                                       scope=TaskScope(permitted_paths=['app.py'], max_lines=10)))
+    worker_call = next(c for c in calls if c[1].startswith('inspect this function'))
     assert worker_call[0] == 'claude:haiku'
     assert worker_call[2] is write
     assert any(r.author == 'claude:haiku' for r in result.refs)

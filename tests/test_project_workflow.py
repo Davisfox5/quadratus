@@ -36,7 +36,7 @@ with trace.open('a') as stream:
 mode = os.environ.get('FAKE_MODE', 'success')
 if 'Name the single next task' in prompt:
     marker = trace.with_suffix('.turn')
-    reply = 'DONE' if marker.exists() else 'KIND: backend / standard\nFix add.py so add returns the sum.'
+    reply = 'DONE' if marker.exists() else 'KIND: backend / standard\nSCOPE: {"permitted_paths":["add.py"],"intended_result":"Correct addition","acceptance":["add(2,3) is 5"],"max_lines":10}\nFix add.py so add returns the sum.'
     marker.touch()
 elif 'The task is finished' in prompt:
     reply = 'SUMMARY: addition implemented\nREASONING: verified source\nDEAD ENDS: none'

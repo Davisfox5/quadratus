@@ -116,8 +116,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # was there. Carrying that forward is what makes the handoff resumable
         # rather than merely honest about having failed.
         partial = getattr(exc, 'partial', None)
-        if partial:
-            in_flight = dict(partial)
+        in_flight = dict(getattr(session, 'in_flight', {}) or partial or {})
+        if in_flight:
+            (run_dir / 'in-flight.json').write_text(json.dumps(in_flight, indent=2), encoding='utf-8')
     finally:
         fleet.close()
     diff = project.diff(before)
@@ -166,7 +167,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'delegation': reconcile(delegation.events, delegation.native_children.values()),
         'scope_reports': [
             {'within_scope': r.within_scope, 'out_of_scope': r.out_of_scope,
-             'changed': r.changed, 'changed_lines': r.changed_lines,
+             'changed': r.changed, 'changed_lines': r.changed_lines, 'max_lines': r.max_lines,
              'oversized': r.oversized}
             for r in (session.scope_reports if session else [])
         ],

@@ -49,12 +49,14 @@ import os
 import re
 import threading
 import time
+import uuid
+from contextvars import ContextVar
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from .config import Settings
-from .delegation import DelegationLedger, InvocationEvent, Origin
+from .delegation import DelegationLedger, InvocationEvent, Origin, invocation_context
 from .latest import alias_for, resolution_source
 from .project import Project
 from .providers import LLMProvider, ProviderError, build_provider
@@ -112,6 +114,8 @@ _EXHAUSTION_MARKERS = (
     "upgrade to continue",
 )
 
+
+_pending_invocations = ContextVar("pending_invocations", default=None)
 
 class Fleet:
     """The vendor CLIs, addressed by roster key.
@@ -275,7 +279,26 @@ class Fleet:
         return dict(self._exhausted)
 
     # -- invocation ----------------------------------------------------------
-    def invoke(self, model_key: str, prompt: str, *, system: Optional[str] = None,
+    def invoke(self, model_key, prompt, *, system=None, allow_writes=False):
+        pending = []
+        token = _pending_invocations.set(pending)
+        try:
+            return self._invoke(model_key, prompt, system=system, allow_writes=allow_writes)
+        except BaseException as exc:
+            if pending and pending[-1].outcome == "ok":
+                pending[-1].post_return_failure = True
+                pending[-1].outcome = type(exc).__name__
+                pending[-1].detail = str(exc)[:200]
+            raise
+        finally:
+            _pending_invocations.reset(token)
+            for event in pending:
+                try:
+                    self.delegation_ledger.record(event)
+                except Exception:
+                    log.debug("invocation persistence failed", exc_info=True)
+
+    def _invoke(self, model_key: str, prompt: str, *, system: Optional[str] = None,
                allow_writes: bool = False) -> str:
         """One named seat; edit permission is explicit for each call."""
         if allow_writes and (not self.allow_writes or self.project is None):
@@ -326,49 +349,62 @@ class Fleet:
         return _relativise_snapshot_paths(reply, directory)
 
     def _generate(self, key, provider, prompt, system, *, role="", task="", origin=None):
+        context = invocation_context.get() or {}
+        role = role or context.get("role", "direct")
+        task = task or context.get("task", "run")
+        origin = origin or context.get("origin", Origin.SEAT)
+        observed = []
+        def observe(view, attempt, seconds, failure, reply=""):
+            observed.append(attempt)
+            self._record_invocation(
+                key, view, role=role, task=task, origin=origin,
+                seconds=seconds, invoked=True, attempt=attempt,
+                outcome=type(failure).__name__ if failure else "ok",
+                detail=str(failure)[:200] if failure else "",
+                usage=getattr(view, "last_usage", None),
+            )
+            self._observe_native(key, view)
+            if not failure or getattr(view, "last_usage", None):
+                self._meter(key, view, prompt, reply)
+        previous = getattr(provider, "attempt_observer", None)
+        provider.attempt_observer = observe
         started = time.monotonic()
+        # A custom provider may implement generate directly; cover it too.
+        provider.last_usage = None
         try:
             reply = provider.generate(prompt, system=system)
-        except Exception as exc:
-            # A failed call still consumed a window. The old code recorded
-            # nothing here, and an invocation absent from the ledger reads as
-            # zero -- which is a claim, and on the 2026-09-13 trial a false
-            # one: cancelled and timed-out calls had burned real budget and
-            # appeared nowhere. Usage is recorded as *unknown* instead, which
-            # is what it actually is.
-            self._record_invocation(
-                key, provider, role=role, task=task, origin=origin,
-                seconds=time.monotonic() - started, invoked=True,
-                outcome=type(exc).__name__, detail=str(exc)[:200],
-                usage=getattr(provider, "last_usage", None),
-            )
-            if _looks_exhausted(exc):
+        except BaseException as exc:
+            if not observed:
+                observe(provider, 1, time.monotonic() - started, exc)
+            if isinstance(exc, Exception) and _looks_exhausted(exc):
                 self.mark_exhausted(key, str(exc))
                 raise WindowExhausted(f"{key}: subscription window exhausted ({exc})") from exc
             raise
-        self._meter(key, provider, prompt, reply)
-        self._record_invocation(
-            key, provider, role=role, task=task, origin=origin,
-            seconds=time.monotonic() - started, invoked=True, outcome="ok",
-            usage=getattr(provider, "last_usage", None),
-        )
-        self._observe_native(key, provider)
-        return reply
+        else:
+            if not observed:
+                observe(provider, 1, time.monotonic() - started, None, reply)
+            return reply
+        finally:
+            provider.attempt_observer = previous
 
     def _record_invocation(self, key, provider, *, role, task, origin,
                            seconds, invoked, outcome, usage=None, detail="",
-                           post_return_failure=False):
+                           post_return_failure=False, attempt=1):
         """Append one invocation to the delegation ledger. Never raises."""
         if self.delegation_ledger is None:
             return
         try:
             usage = usage or {}
-            self.delegation_ledger.record(InvocationEvent(
+            event = InvocationEvent(
                 task=task or "-",
                 role=role or "-",
                 origin=origin or Origin.SEAT,
                 requested_model=key,
-                resolved_model=getattr(provider, "model", None) or key,
+                canonical_model=key,
+                wire_model=getattr(provider, "model", None),
+                resolved_model=getattr(provider, "resolved_model", None),
+                invocation_id=uuid.uuid4().hex,
+                attempt=attempt,
                 selected=True,
                 invoked=invoked,
                 outcome=outcome,
@@ -380,7 +416,12 @@ class Fleet:
                 session_id=getattr(provider, "last_session_id", None),
                 post_return_failure=post_return_failure,
                 detail=detail,
-            ))
+            )
+            pending = _pending_invocations.get()
+            if pending is None:
+                self.delegation_ledger.record(event)
+            else:
+                pending.append(event)
         except Exception:  # noqa: BLE001 -- accounting never fails a run
             log.debug("could not record invocation for %s", key, exc_info=True)
 

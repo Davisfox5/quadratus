@@ -37,6 +37,8 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -50,6 +52,18 @@ __all__ = [
     "DelegationLedger",
     "reconcile",
 ]
+
+
+invocation_context = ContextVar("quadratus_invocation", default=None)
+
+
+@contextmanager
+def invocation(task, role, origin="seat"):
+    token = invocation_context.set(dict(task=task, role=role, origin=origin))
+    try:
+        yield
+    finally:
+        invocation_context.reset(token)
 
 
 class Origin:
@@ -102,6 +116,9 @@ class InvocationEvent:
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     cached_input_tokens: Optional[int] = None
+    canonical_model: Optional[str] = None
+    invocation_id: Optional[str] = None
+    wire_model: Optional[str] = None
     attempt: int = 1
     #: Set when the failure happened after the vendor returned text (a bad
     #: patch, an unparseable answer) rather than in transport. The two cost
@@ -197,6 +214,13 @@ class DelegationLedger:
         it. Keyed by session id, so the same child arriving from two sources is
         counted once.
         """
+        if self.path is not None:
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                with self.path.with_name("native-children.jsonl").open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(asdict(child)) + "\n")
+            except OSError:
+                log.debug("could not persist native observation", exc_info=True)
         existing = self.native_children.get(child.session_id)
         if existing is None:
             self.native_children[child.session_id] = child
@@ -246,11 +270,11 @@ class DelegationLedger:
 
     def selected_never_invoked(self) -> List[str]:
         """Selected but never reached. Not coverage, and never reported as it."""
-        invoked = set(self.invoked_models())
-        return sorted({
-            (e.resolved_model or e.requested_model or "(unresolved)")
-            for e in self.events if e.selected and not e.invoked
-        } - invoked)
+        def identity(e):
+            return (e.task, e.canonical_model or e.requested_model or e.resolved_model)
+        invoked = {identity(e) for e in self.events if e.invoked}
+        return sorted({identity(e)[1] or "(unresolved)" for e in self.events
+                       if e.selected and not e.invoked and identity(e) not in invoked})
 
     def render_report(self) -> str:
         lines = ["# Delegation and invocation record", ""]
@@ -385,7 +409,8 @@ def reconcile(
         "known_minimum_tokens": controlled + native,
         "unknown_invocations": len(unknown),
         "unknown_detail": [e.render() for e in unknown],
-        "native_children": len(folded),
+        "native_children": sum(not c.session_id.startswith("unidentified:") for c in folded.values()),
+        "unidentified_native_activity": sum(c.session_id.startswith("unidentified:") for c in folded.values()),
         "note": (
             "Subscription usage including cached and repeated input. Native "
             "children counted once at their highest cumulative reading, never "
