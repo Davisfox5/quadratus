@@ -34,6 +34,16 @@ live trial, budget change, role change or GameTape feature work was performed.
 - **Current owner: Claude independent scoring/review.** Review the unchanged
   private cases against attempt 2 output, decomposition/scope findings and the
   small Codex metadata patch. Codex owns disposition; no next live run is queued.
+- **Attempt-2 review scored and dispositioned (Claude, at Davis's direction
+  because Codex was out of context):** 0/9 private, 0/13 public, 111 app tests;
+  scope estimate error plus a self-contradicting task signature. Repairs
+  landed offline: a signature lint in `read_scope` that fails into the
+  existing correction round, a code/test split in the scope report and
+  `result.json`, a stop message that reports the measurement without a
+  cause, and decomposition-prompt text asking for final descriptions and a
+  separate code/test estimate. 934 passed, 7 skipped here; Ruff clean. No
+  live run queued; policy items (test lines counting fully, Grok per-step
+  cost) remain Davis's. See [Claude log](CLAUDE_LOG.md).
 - **Post-run patch:** retain whitelisted auxiliary metadata on successful
   invocations. Reproduced missing 2,815-token provenance with observed values;
   totals were already correct. Final full engine suite: 937 passed in 55.00s,

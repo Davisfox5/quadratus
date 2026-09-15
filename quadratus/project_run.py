@@ -181,7 +181,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'scope_reports': [
             {'within_scope': r.within_scope, 'out_of_scope': r.out_of_scope,
              'changed': r.changed, 'changed_lines': r.changed_lines, 'max_lines': r.max_lines,
-             'oversized': r.oversized}
+             'code_lines': r.code_lines, 'test_lines': r.test_lines, 'oversized': r.oversized}
             for r in (session.scope_reports if session else [])
         ],
     }, indent=2), encoding='utf-8')

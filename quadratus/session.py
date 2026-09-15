@@ -318,7 +318,14 @@ _SCOPE_REQUEST = (
     'directories; no absolute paths, parent traversal or project-wide wildcard. '
     'max_lines must be a positive integer no greater than 100. Decompose larger work. '
     'These bounds are measured after every editing call; an overrun stops the task '
-    'with its work preserved. The line estimate has 50 percent tolerance.'
+    'with its work preserved. The line estimate has 50 percent tolerance. '
+    'Estimate code lines and test lines separately and set max_lines to their sum: '
+    'test lines count in full, and a named list of test scenarios is usually the '
+    'larger half. The description is final text: write it once, with no revisions, '
+    'alternatives or thinking aloud; if you change your mind, rewrite the line. Give '
+    'each function exactly one signature, and quote that signature verbatim in '
+    'intended_result and acceptance. A declaration whose signatures disagree is '
+    'rejected and comes back for correction.'
 )
 
 _NEEDS_REQUEST = (

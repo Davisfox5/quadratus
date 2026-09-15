@@ -989,3 +989,71 @@ correctly still shows `diagnostics: {}` for that row.
 
 No application feature, private-case edit, role or budget change, or
 model run by this review.
+
+## 2026-09-15 — disposition of the attempt-2 review, run by Claude
+
+Davis asked me to run the disposition myself because Codex is running out
+of context. This entry implements repair items 1 and 2 from my attempt-2
+review. Item 3 was already pushed by Codex; item 4 stays a policy question
+for Davis and is unchanged. Nothing else: no app feature, no private-case
+edit, no budget, role or tolerance change, no model run.
+
+### What changed
+
+`quadratus/scope.py`
+- `lint_declaration(body, scope)` runs at the end of `read_scope`. A
+  function is *declared* when the description writes `def name(` or when
+  `intended_result`/`acceptance` quote `` `name(...)` ``. For declared
+  names, every `def` line and every backticked `name(args)` across the
+  whole declaration is collected with whitespace normalised; more than one
+  distinct form raises `ValueError` naming both. Incidental calls
+  (`float()`, `len(row)`) are never declared and cannot trip it. The
+  exact attempt-2 declaration from `result.json` is rejected:
+  `_validate_clip_row(project, cols, row)` versus
+  `(project, cols, width, row)`. The error feeds the existing single
+  correction round in `Session.next_task`; a second failure stalls.
+- `ScopeReport` carries `code_lines` and `test_lines`
+  (`count_change_lines_by_path` attributed per `+++`/`---` header;
+  `is_test_path` by convention: `tests/`, `test/`, `spec/`, `__tests__/`
+  directories or `test_*`, `*_test`, `*.spec`, `conftest` basenames).
+  Tests still count in full against `max_lines`; the split is reported,
+  not excused.
+- The oversized wording no longer asserts a cause. Attempt 2 now renders:
+  `223 changed lines (85 in code, 138 in tests) against a stated bound of
+  ~100, stopped past 150. Tests count in full. Say what the estimate
+  missed, or what grew.`
+
+`quadratus/session.py`: `_SCOPE_REQUEST` adds: estimate code and test
+lines separately and set `max_lines` to their sum, tests count in full; the
+description is final text with no revisions, alternatives or thinking
+aloud; one signature per function, quoted verbatim in `intended_result`
+and `acceptance`; a disagreeing declaration is rejected and comes back for
+correction. The same text is re-sent with the correction.
+
+`quadratus/project_run.py`: `result.json` scope reports gain
+`code_lines`/`test_lines`.
+
+`tests/test_scope_declaration_lint.py`: twelve tests plus a nine-case
+parametrised one. Rejection of the attempt-2 shape naming both forms;
+acceptance disagreeing with the description; a final description passes;
+incidental calls ignored; whitespace and trailing colon normalised; lint
+failure drives the correction round and a second failure stalls; assess
+splits code/test; the oversized message contains the measurement and no
+"expanding"/"whole feature"; test-path conventions; the decomposition
+prompt carries the new sentences.
+
+### Verification
+
+Suite 934 passed, 7 skipped (Docker and installed-CLI checks skipped
+here) in 44.58 s; ruff and diff-check clean. Lint re-run against the
+frozen attempt-2 `result.json` declaration and `changes.diff`: rejected,
+and the split is 85/138 of 223. Frozen evidence untouched.
+
+### Not done, on purpose
+
+- The lead-side bound ("say so and stop") that the Grok lead ignored is
+  unchanged; a pre-landing size check on the lead's PATCH text is a
+  larger change than this batch.
+- Whether test lines should count fully, and the Grok per-step cost
+  against the 500k threshold, remain Davis's calls.
+- No live attempt is queued. Any attempt 3 is a new authorisation.

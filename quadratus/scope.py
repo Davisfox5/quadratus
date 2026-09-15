@@ -42,7 +42,9 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Dict, List, Optional, Sequence
 
-__all__ = ["TaskScope", "ScopeReport", "changed_paths", "count_change_lines"]
+__all__ = ["TaskScope", "ScopeReport", "changed_paths", "count_change_lines",
+           "count_change_lines_by_path", "is_test_path", "declared_signatures",
+           "lint_declaration"]
 
 #: How far past ``max_lines`` a change may drift before it is called expansion
 #: rather than an estimate that ran long. A task sized at 100 lines landing at
@@ -67,6 +69,12 @@ class ScopeReport:
     changed_lines: int = 0
     max_lines: Optional[int] = None
     notes: List[str] = field(default_factory=list)
+    #: ``changed_lines`` split by whether the path is a test file. The bound is
+    #: a single figure and tests count in full against it; the split is
+    #: reported so the next estimate can be calibrated against what actually
+    #: happened, not so that either half is excused.
+    code_lines: int = 0
+    test_lines: int = 0
 
     @property
     def blocking(self) -> bool:
@@ -92,10 +100,17 @@ class ScopeReport:
                 + ", ".join(sorted(self.out_of_scope))
             )
         if self.oversized:
+            # A measurement, not a diagnosis. The overrun may be an estimate
+            # that missed (attempt 2 of the blind acceptance: a validator plus
+            # ten named test scenarios sized at 100 lines landed at 223, all
+            # inside the slice) or a task growing into the whole feature; the
+            # harness cannot tell which, so it reports the split and asks.
+            allowed = int(self.max_lines * _OVERRUN_TOLERANCE)
             lines.append(
-                f"  {self.changed_lines} changed lines against a stated bound "
-                f"of ~{self.max_lines}. This is the shape of a task expanding "
-                f"into the whole feature; say what grew and why."
+                f"  {self.changed_lines} changed lines ({self.code_lines} in "
+                f"code, {self.test_lines} in tests) against a stated bound of "
+                f"~{self.max_lines}, stopped past {allowed}. Tests count in "
+                f"full. Say what the estimate missed, or what grew."
             )
         for note in self.notes:
             lines.append(f"  {note}")
@@ -139,6 +154,8 @@ class TaskScope:
         """Compare an actual diff against what this task said it would do."""
         changed = changed_paths(diff)
         lines = count_change_lines(diff)
+        by_path = count_change_lines_by_path(diff)
+        test_lines = sum(n for path, n in by_path.items() if is_test_path(path))
         out = sorted(p for p in changed if not self.permits(p))
         notes: List[str] = []
         if not self.permitted_paths and not self.forbidden_paths:
@@ -153,6 +170,8 @@ class TaskScope:
             changed_lines=lines,
             max_lines=self.max_lines,
             notes=notes,
+            code_lines=lines - test_lines,
+            test_lines=test_lines,
         )
         return report
 
@@ -261,6 +280,117 @@ def count_change_lines(diff: str) -> int:
     return total
 
 
+def count_change_lines_by_path(diff: str) -> Dict[str, int]:
+    """:func:`count_change_lines`, attributed to the file each hunk belongs to.
+
+    Only ``+++``/``---`` headers name files (see :func:`changed_paths`), so a
+    hunk is attributed to the most recent header. Lines before any header
+    are counted under ``""``; a diff that lacks headers still sums correctly.
+    """
+    counts: Dict[str, int] = {}
+    current = ""
+    for line in (diff or "").splitlines():
+        if line.startswith(("--- ", "+++ ")):
+            raw = line[4:].strip().split("\t")[0]
+            if raw != "/dev/null" and raw:
+                current = raw[2:] if raw.startswith(("a/", "b/")) else raw
+            continue
+        if line.startswith(("@@", "diff --git", "index ")):
+            continue
+        if line.startswith(("+", "-")):
+            counts[current] = counts.get(current, 0) + 1
+    return counts
+
+
+_TEST_DIRS = frozenset({"test", "tests", "spec", "specs", "__tests__"})
+_TEST_NAMES = re.compile(
+    r"^(test_.*|.*_test|.*\.test|.*\.spec|.*_spec|conftest)\.[A-Za-z0-9]+$"
+)
+
+
+def is_test_path(path: str) -> bool:
+    """Whether a project-relative path is a test file by common convention.
+
+    A directory named ``tests``, ``test``, ``spec`` or ``__tests__`` anywhere
+    in the path, or a basename such as ``test_x.py``, ``x_test.go`` or
+    ``x.spec.ts``. Conventions only: a project with tests elsewhere gets them
+    counted as code, which errs toward the stricter reading.
+    """
+    parts = PurePosixPath(str(path).lstrip("./")).parts
+    if not parts:
+        return False
+    if any(part in _TEST_DIRS for part in parts[:-1]):
+        return True
+    return bool(_TEST_NAMES.match(parts[-1]))
+
+
+_DEFINED = re.compile(r"\bdef\s+([A-Za-z_][\w.]*)\s*\(")
+_DEFINED_WITH_ARGS = re.compile(r"\bdef\s+([A-Za-z_][\w.]*)\s*\(([^()]*)\)")
+_QUOTED = re.compile(r"`\s*(?:def\s+)?([A-Za-z_][\w.]*)\s*\(([^()`]*)\)\s*:?\s*`")
+
+
+def declared_signatures(description: str, *fields: Sequence[str]) -> Dict[str, List[str]]:
+    """Every signature the declaration gives each function it defines.
+
+    A function is *declared* when the description writes ``def name(`` or
+    when ``intended_result``/``acceptance`` quote ``name(...)`` in backticks.
+    For those names, every ``def`` line and every backticked ``name(args)``
+    across the whole declaration is collected, with whitespace normalised.
+    Incidental calls (``float()``, ``len(row)``) are never declared, so they
+    cannot trip the check.
+
+    Returns ``{name: [distinct signatures, in order of appearance]}``. More
+    than one entry for a name is the contradiction the decomposition prompt
+    forbids: attempt 2 of the blind acceptance wrote
+    ``def _validate_clip_row(project, cols, row)`` in a code block, revised it
+    mid-description to ``(project, cols, width, row)``, and emitted acceptance
+    from the first draft. The lead implemented one and was measured against
+    the other.
+    """
+    quoted_fields = [x for group in fields for x in group]
+    declared = set(_DEFINED.findall(description))
+    for text in quoted_fields:
+        declared.update(name for name, _ in _QUOTED.findall(text))
+    if not declared:
+        return {}
+    found: Dict[str, List[str]] = {}
+
+    def note(name: str, args: str) -> None:
+        if name not in declared:
+            return
+        normalised = ", ".join(a.strip() for a in args.split(",") if a.strip())
+        forms = found.setdefault(name, [])
+        if normalised not in forms:
+            forms.append(normalised)
+
+    for name, args in _DEFINED_WITH_ARGS.findall(description):
+        note(name, args)
+    for text in [description, *quoted_fields]:
+        for name, args in _QUOTED.findall(text):
+            note(name, args)
+    return found
+
+
+
+def lint_declaration(description: str, scope: "TaskScope") -> None:
+    """Deterministic checks a decomposition must pass before dispatch.
+
+    Raises :class:`ValueError` with a message the correction round can quote.
+    The prompt asks for a final description with one signature per function,
+    quoted verbatim in acceptance; this is the backstop for when the
+    orchestrator thinks aloud inside the description instead.
+    """
+    forms = declared_signatures(description, [scope.intended_result], scope.acceptance)
+    for name, variants in forms.items():
+        if len(variants) > 1:
+            listed = "; ".join(f"{name}({v})" for v in variants)
+            raise ValueError(
+                f"the declaration gives {name} more than one signature ({listed}); "
+                f"write the description as final text with exactly one signature "
+                f"per function and quote it verbatim in acceptance"
+            )
+
+
 def read_scope(description: str, *, max_lines: int):
     """Require a structured declaration before normal project dispatch."""
     matches = list(re.finditer(r"^SCOPE:\s*(.+)$", description, re.MULTILINE))
@@ -292,4 +422,6 @@ def read_scope(description: str, *, max_lines: int):
     if type(bound) is not int or not 0 < bound <= max_lines:
         raise ValueError(f"SCOPE max_lines must be between 1 and {max_lines}")
     body = (description[:matches[0].start()] + description[matches[0].end():]).strip()
-    return TaskScope(paths, result, acceptance, bound), body
+    scope = TaskScope(paths, result, acceptance, bound)
+    lint_declaration(body, scope)
+    return scope, body
