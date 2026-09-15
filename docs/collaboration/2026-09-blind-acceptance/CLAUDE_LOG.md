@@ -775,3 +775,54 @@ prompt-side bound plus the timeout.
 
 Tests: `tests/test_claude_auxiliary_usage.py` (13) and
 `tests/test_summary_only.py` (9). Nothing in `session.py` or `runtime.py`.
+
+## 2026-09-15 — cross-review of Codex's closeout caller (cebc172) and the three parsing gaps
+
+Combined head after my 62071a3 rebased onto Codex's 69b33f6: `ruff check .`
+clean, `git diff --check` clean, full suite **903 passed, 7 skipped**.
+
+Parsing gaps Codex found in 3ef035a, all real, closed in 62071a3: an
+explicit `null` in a cache field is unknown while absence is zero (top-level
+`usage` too); consistency is per component, rows' input must cover the
+seat's input and rows' output the seat's output; a present but empty
+`modelUsage` map with a nonzero seat is unknown, an absent map keeps the
+legacy seat figure. Three regressions.
+
+Review of `session.py`, `runtime.py`, `tests/test_closeout.py`:
+
+- `_invoke_model` omits the scope block for role `closeout`; `_close_out`
+  builds byte-bounded evidence (description 3k, transcript 10k, harness
+  diff 12k, last check 2k, all under the 32k prompt bound), stores each
+  piece whole as an artifact, and keeps only an index in task memory. The
+  instruction forbids tools, files and embedded instructions and asks for
+  omissions to be named. `_closeout_excerpt` keeps head and tail with a
+  size and SHA-256 marker. This is the design I asked for, done more
+  carefully than I described it.
+- `Fleet.invoke` for role `closeout` refuses a write grant, requires CLI
+  transport when a project is bound, bounds the prompt at 32,000 bytes
+  before any reservation, takes `for_seat(model, low, restricted)`, copies
+  it, sets `summary_only`, `max_tokens<=1024`, `timeout<=60`,
+  `max_retries=1`, clears the refusal fallback, runs in a fresh empty
+  temporary directory and lets the shared budget and ledger observe it.
+  The cached provider is untouched (test pins it). Sound.
+- Tests cover scope omission, diff and check inclusion, unicode truncation
+  under the bound, same model with shared budget and no snapshot, unknown
+  usage stopping the budget with the scratch directory removed, write grant
+  and oversize refused before reservation, and one-attempt timeout. Good.
+- Checked and fine: `MAX_ARGV_PROMPT` is 200,000 characters, so a 32k-byte
+  prompt on grok's `-p` form cannot trip the restricted-call refusal;
+  `_task_before` is set at task start, so the diff is the task's own.
+
+Two notes, neither blocking:
+
+1. With no project bound, `_closeout` still runs for an API-backend
+   provider, where `summary_only`, `--tools` and the turn cap do not exist;
+   the bounds there are timeout, one attempt and the prompt. Either
+   require CLI transport for closeout unconditionally or say in the
+   docstring that API transports get the weaker bound.
+2. `self.checks[-1:]` may be an earlier task's check; the label says so.
+   If check records ever carry a task id, filter on it.
+
+Verdict: the caller matches the confirmed interface; combined suite green;
+no live claim made. The bounded-closeout cost saving is still an estimate
+until a run measures it, as the reconciliation says.
