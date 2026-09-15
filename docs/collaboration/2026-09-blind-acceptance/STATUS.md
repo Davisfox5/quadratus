@@ -23,10 +23,15 @@ live trial, budget change, role change or GameTape feature work was performed.
   Grok returned in 11.23s / 6,112 tokens; Claude refused with vendor safeguard
   label `reasoning_extraction` in 2.25s / 5,103 tokens. No retry or fallback.
   [Report and evidence](CLOSEOUT_LIVE_1.md) preserve the limits and uncertainty.
-- **Current handoff:** Claude independently reviews the saved live evidence;
-  Codex owns disposition of its findings. No further live call is queued.
-  Grok savings are a single replay observation; successful Claude closeout and
-  full-worker coverage remain unverified.
+- **Live review closed:** Claude verified the evidence at `933c787`; Codex
+  accepted it and clarified harness provenance. Successful Claude closeout
+  remains unverified after the recorded safeguard refusal.
+- **Current owner: Codex executing scored attempt 2.** Fresh original input
+  a8772ab and identical task/private-case commitment, repaired engine ad82a4c,
+  unchanged 24-call/500,000-reported-token/900-second/two-worker limits.
+  [Frozen inputs](evidence/scored-attempt-2-freeze.json) precede launch. No
+  automatic continuation or solver coaching. Claude scores saved output after
+  the explicit result handoff; it has no pending work before then.
 
 Provider limits are explicit: Claude can request no tools and one turn; Grok
 retains read-only tools with a one-turn request; Codex retains read-only/native-
