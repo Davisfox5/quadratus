@@ -276,3 +276,80 @@ my lane:
 
 Verification: ruff clean, `git diff --check` clean, full suite **852 passed,
 6 skipped**. No runtime files outside my lane touched; no scored attempt.
+
+## 2026-09-15 — live control failure on codex: root cause and the enforceable control
+
+Codex's clean-image probe (parent 01a0a5bd-af5e…, child 01a0a5bd-c623…,
+codex-cli 0.154.0, both feature switches reported `false` by preflight) showed
+Sol spawning Sol. I read the codex source at tag `rust-v0.154.0` rather than
+guess. The cause is precedence, not a broken flag.
+
+`core/src/config/mod.rs`:
+
+```rust
+fn multi_agent_version_override(&self) -> Option<MultiAgentVersion> {
+    if self.features.enabled(Feature::MultiAgentV2) { Some(V2) }
+    else if !self.agents_enabled { Some(Disabled) }
+    else { None }
+}
+fn multi_agent_version_for_model(&self, model: Option<MultiAgentVersion>) -> MultiAgentVersion {
+    self.multi_agent_version_override()
+        .or(model)
+        .unwrap_or_else(|| self.multi_agent_version_from_features())
+}
+```
+
+Highest first: `features.multi_agent_v2` on forces V2; `agents.enabled =
+false` forces Disabled; otherwise the model's own declared version applies
+(the built-in table leaves it `None`; the value comes with the model
+metadata the CLI fetches and caches from the server); and only when the
+model declares nothing do the feature flags decide. `--disable` edits that
+last resort. GPT-5.6 evidently declares a version, so the flags were never
+consulted, and `tools/spec_plan.rs` adds `spawn_agent` and friends whenever
+the resolved version is not `Disabled`. `features list` printing `false` was
+true and irrelevant. The config schema says the same in one line:
+"agents.enabled: Whether multi-agent tools are enabled. Defaults to true.
+An enabled features.multi_agent_v2 setting takes precedence."
+
+Change (my lane, `cli_providers.py` + `tests/test_native_control.py`):
+
+- `CODEX_NATIVE_DELEGATION_CONTROL` is now `--disable multi_agent --disable
+  multi_agent_v2 -c agents.enabled=false`. The `--disable multi_agent_v2`
+  stays because an enabled V2 feature is the one thing that outranks the
+  agents override, and the scanner already refuses any operator attempt to
+  enable it or to touch the `agents` table (an agreeing `-c
+  agents.enabled=false` from `.env` is still refused: the harness sends its
+  own, and the only reason to touch that table from outside is to re-admit
+  something). `-c` beats profile and config-file values, which the earlier
+  precedence probe already showed for `features`.
+- Spec comments now carry the precedence chain and the source location, and
+  say plainly that on this vendor a switch that reads `false` has already
+  been shown not to be the switch. The opt-in `features list` test says the
+  same.
+- Suite **853 passed, 6 skipped**; ruff and diff-check clean.
+
+What I could not verify here: no codex binary, no Docker, no subscription.
+`agents.enabled` is accepted by 0.154.0 (your earlier note: it takes
+`agents.enabled`, rejects `agents.bogus`), and the source says it forces
+`Disabled`; that the model then has no `spawn_agent` is the live claim.
+
+**Proposed single follow-up probe** (one unscored call, low effort, no
+spawn attempted, so no child can cost anything):
+
+```
+codex exec --skip-git-repo-check --json --sandbox read-only \
+  --disable multi_agent --disable multi_agent_v2 -c agents.enabled=false \
+  -c model_reasoning_effort=low -m gpt-5.6-sol \
+  "List the exact names of every tool available to you in this session, one per line, and nothing else."
+```
+
+Pass: no `spawn_agent`, `send_input`, `wait_agent`, `resume_agent`,
+`close_agent`, `send_message`, `followup_task`, `interrupt_agent`,
+`list_agents` in the reply, and no `collab_tool_call` item in the stream.
+Control: the same command without `-c agents.enabled=false` should list
+them (that is the failure you observed, restated cheaply). If the pass
+holds, a second call may repeat the spawn-provoking prompt under the full
+control; if the first fails, stop, because then the resolver differs from
+the tagged source and I want the reply text before proposing anything else.
+Keep the parent's `thread_id`, the `item.completed` items and `usage` from
+both calls; that is all the evidence this needs.

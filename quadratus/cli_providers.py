@@ -77,6 +77,7 @@ __all__ = [
     "CLI_SPECS",
     "CODEX_NATIVE_DELEGATION_CONTROL",
     "CODEX_NATIVE_DELEGATION_FEATURES",
+    "CODEX_NATIVE_DELEGATION_OVERRIDE",
     "cli_provider_classes",
     "codex_override_conflicts",
     "native_delegation_mode",
@@ -668,9 +669,39 @@ CLAUDE_SPEC = CLISpec(
 #:   one wanted here: a codex release that renames the switch fails every
 #:   call and says why, rather than quietly running with spawning back on.
 #:
-#: Configuration proof only. ``features list`` reporting ``false`` is the
-#: binary's own statement of the switch; that no child can then be spawned in
-#: a live ``exec`` turn is still to be shown by a bounded probe.
+#: **The two feature switches are not the control** (live finding,
+#: 2026-09-15). In a clean image with both reported ``false``, Sol spawned
+#: Sol. The reason is in codex-rs at tag ``rust-v0.154.0``,
+#: ``core/src/config/mod.rs``::
+#:
+#:     fn multi_agent_version_override(&self) -> Option<MultiAgentVersion> {
+#:         if self.features.enabled(Feature::MultiAgentV2) { Some(V2) }
+#:         else if !self.agents_enabled { Some(Disabled) }
+#:         else { None }
+#:     }
+#:     fn multi_agent_version_for_model(&self, model: Option<MultiAgentVersion>) {
+#:         self.multi_agent_version_override()
+#:             .or(model)
+#:             .unwrap_or_else(|| self.multi_agent_version_from_features())
+#:     }
+#:
+#: Precedence, highest first: ``features.multi_agent_v2`` on forces V2;
+#: ``agents.enabled = false`` forces Disabled; otherwise the *model's own
+#: declared version* (server-supplied model metadata, ``None`` in the
+#: built-in table) applies; and only when the model declares nothing do the
+#: feature flags decide. ``--disable`` edits the last resort. A model that
+#: ships with a multi-agent version, as GPT-5.6 evidently does, never reaches
+#: it. ``spec_plan.rs`` then adds ``spawn_agent`` and the rest whenever the
+#: resolved version is not ``Disabled``.
+#:
+#: So the control is ``agents.enabled = false`` (schema: "Whether multi-agent
+#: tools are enabled. Defaults to true. An enabled features.multi_agent_v2
+#: setting takes precedence"), sent as a ``-c`` override, *with* the two
+#: ``--disable`` switches kept so that nothing can force V2 over it. The
+#: conflict scanner refuses any operator override of ``features.multi_agent*``
+#: or of the ``agents`` table for the same reason. Still configuration
+#: until the bounded tool-list probe below has run: on this vendor a switch
+#: that reads ``false`` has already been shown not to be the switch.
 CODEX_NATIVE_DELEGATION_FEATURES = ("multi_agent", "multi_agent_v2")
 #: Config tables whose only purpose is to shape native sub-agents
 #: (``agents.enabled``, ``agents.max_threads``, ...). The 0.154.0 binary
@@ -678,10 +709,15 @@ CODEX_NATIVE_DELEGATION_FEATURES = ("multi_agent", "multi_agent_v2")
 #: real; with spawning disabled any override of it is at best inert and at
 #: worst an attempt to re-admit it, and both are refused.
 CODEX_NATIVE_DELEGATION_TABLES = ("agents",)
-#: The control itself, in the form the precedence probe showed to win.
+#: The one override that sits ahead of the model's declared version.
+CODEX_NATIVE_DELEGATION_OVERRIDE = "agents.enabled=false"
+#: The control itself: both feature switches off (so nothing forces V2) and
+#: the agents table disabled (so the model's own default cannot re-admit
+#: the tools). Order is irrelevant to codex for these; kept stable for the
+#: record.
 CODEX_NATIVE_DELEGATION_CONTROL = [
     flag for name in CODEX_NATIVE_DELEGATION_FEATURES for flag in ("--disable", name)
-]
+] + ["-c", CODEX_NATIVE_DELEGATION_OVERRIDE]
 
 
 def _config_override_value(tokens: Sequence[str], index: int):

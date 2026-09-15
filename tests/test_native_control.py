@@ -1,8 +1,13 @@
 """Native-delegation control on the OpenAI (codex) transport.
 
 Every Quadratus codex call sends ``--disable multi_agent --disable
-multi_agent_v2`` and refuses an operator override that would undo or hide
-it. Nothing here shells out: ``cli_providers._launch`` is faked, and the one
+multi_agent_v2 -c agents.enabled=false`` and refuses an operator override
+that would undo or hide it. The ``agents.enabled`` override is the actual
+control: the 2026-09-15 live probe showed Sol spawning Sol with both feature
+switches reading ``false``, and the codex source at ``rust-v0.154.0``
+explains why (the model's declared multi-agent version outranks the feature
+flags; only ``agents.enabled = false`` or an enabled ``multi_agent_v2``
+outranks the model). Nothing here shells out: ``cli_providers._launch`` is faked, and the one
 test that touches a real binary is opt-in and reads configuration only
 (``codex features list``), never a model.
 
@@ -35,7 +40,8 @@ from quadratus.cli_providers import (
 from quadratus.providers import ProviderError
 from quadratus.registry import resolve
 
-CONTROL = ["--disable", "multi_agent", "--disable", "multi_agent_v2"]
+CONTROL = ["--disable", "multi_agent", "--disable", "multi_agent_v2",
+           "-c", "agents.enabled=false"]
 INSTALLED_CODEX = shutil.which('codex')
 
 
@@ -59,15 +65,29 @@ def _control_positions(argv):
 
 def _has_control(argv):
     joined = " ".join(argv)
-    return "--disable multi_agent " in joined + " " and "--disable multi_agent_v2" in joined
+    return ("--disable multi_agent " in joined + " " and "--disable multi_agent_v2" in joined
+            and "-c agents.enabled=false" in joined)
 
 
 # -- the control is on every permission mode ----------------------------------
 
 
-def test_the_control_names_both_codex_switches():
+def test_the_control_names_both_codex_switches_and_the_agents_override():
     assert CODEX_NATIVE_DELEGATION_CONTROL == CONTROL
     assert CODEX_SPEC.control_args == CONTROL
+
+
+def test_the_agents_override_is_harness_owned_not_operator_supplied(monkeypatch):
+    """An operator ``-c agents.enabled=false`` agrees with the control, but the
+    agents table is refused wholesale: the harness sends its own, and the only
+    reason to touch the table from .env is to re-admit something."""
+    monkeypatch.setenv("QUADRATUS_CLI_ARGS_OPENAI", "-c agents.enabled=false")
+    with pytest.raises(ProviderError, match="native sub-agents"):
+        _codex()._build_argv("p", "s")
+    monkeypatch.delenv("QUADRATUS_CLI_ARGS_OPENAI")
+    argv = _codex()._build_argv("p", "s")
+    assert argv.count("agents.enabled=false") == 1
+    assert argv[argv.index("agents.enabled=false") - 1] == "-c"
 
 
 def test_a_read_only_call_sends_the_control():
@@ -273,6 +293,9 @@ def test_senior_claude_and_grok_seats_can_still_delegate_natively():
     reason="set QUADRATUS_LIVE_CODEX_FEATURES=1 with codex on PATH; reads config, no model call",
 )
 def test_installed_codex_reports_both_switches_off_even_under_enable():
+    """``features list`` reads the feature flags only. It does not show
+    ``agents.enabled`` and, per the 2026-09-15 finding, ``false`` here does not
+    mean the tools are absent; the tool-list probe in the log is the check."""
     argv = [INSTALLED_CODEX, *CONTROL, "--enable", "multi_agent",
             "--enable", "multi_agent_v2", "features", "list"]
     out = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=True).stdout
