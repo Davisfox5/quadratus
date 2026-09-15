@@ -41,5 +41,16 @@
     "restricted Grok probe",
     "private held-out scoring cases",
     "application completion"
-  ]
+  ],
+  "hosted_ci": {
+    "url": "https://github.com/Davisfox5/quadratus/actions/runs/34972145866",
+    "head": "85a20188ec8782ba2599981908c08943ff57a4b4",
+    "python_versions": [
+      "3.11",
+      "3.12"
+    ],
+    "passed_per_job": 861,
+    "skipped_per_job": 3,
+    "conclusion": "success"
+  }
 }

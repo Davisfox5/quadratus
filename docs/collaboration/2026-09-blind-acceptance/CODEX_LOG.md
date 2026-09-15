@@ -127,3 +127,7 @@
   SHA256SUMS updated together, without changing the test assertions.
 - STATUS.md and evidence/local-validation.json bind this result to source.
   The three-vendor authenticated launcher and fresh private cases remain gates.
+
+- Hosted CI independently verified at 85a2018: Python 3.11 **861 passed,
+  3 skipped in 52.52s**; Python 3.12 **861 passed, 3 skipped in 55.57s**.
+  Optional Docker/config checks ran locally instead. Later commits are docs only.

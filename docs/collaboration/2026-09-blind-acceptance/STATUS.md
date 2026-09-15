@@ -32,7 +32,10 @@ See [local validation evidence](evidence/local-validation.json),
 [Codex log](CODEX_LOG.md), [cloud Claude log](CLAUDE_LOG.md),
 [local Claude log](CLAUDE_LOCAL_LOG.md), and
 [Claude's independent review](CLAUDE_CONTROL_REVIEW.md).
-Hosted CI is tracked on PR #11; do not substitute a local result for hosted proof.
+Hosted [CI at 85a2018](https://github.com/Davisfox5/quadratus/actions/runs/34972145866)
+passed on Python 3.11 and 3.12: **861 passed, 3 skipped** on each. The skips
+are the two real-Docker checks and installed-Codex config check, which passed
+locally. Subsequent documentation commits do not change the tested source.
 
 ## Required before the scored run
 
