@@ -19,10 +19,14 @@ live trial, budget change, role change or GameTape feature work was performed.
   and installed-CLI checks enabled; Ruff and diff-check clean. No model calls.
   Archived usage-field replay yields 68,382 tokens including 2,817 Haiku
   tokens once; original run records remain unchanged.
-- **Next owner:** Codex owns any subsequent live-verification proposal and
-  launch handoff. Neither agent is waiting for the other on this batch.
-  A later bounded live check must measure savings and vendor behavior before
-  another scored worker-coverage attempt; this checkpoint does not claim either.
+- **Live verification completed:** two unscored calls, 11,215 reported tokens.
+  Grok returned in 11.23s / 6,112 tokens; Claude refused with vendor safeguard
+  label `reasoning_extraction` in 2.25s / 5,103 tokens. No retry or fallback.
+  [Report and evidence](CLOSEOUT_LIVE_1.md) preserve the limits and uncertainty.
+- **Current handoff:** Claude independently reviews the saved live evidence;
+  Codex owns disposition of its findings. No further live call is queued.
+  Grok savings are a single replay observation; successful Claude closeout and
+  full-worker coverage remain unverified.
 
 Provider limits are explicit: Claude can request no tools and one turn; Grok
 retains read-only tools with a one-turn request; Codex retains read-only/native-
@@ -30,8 +34,8 @@ off controls but no known generic tools-off or turn cap. The latter is bounded
 by time/attempt count. CLI output-token ceilings are not hard-enforced by
 max_tokens. Empty CWD is not a filesystem isolation boundary. Without a bound project,
 existing API-provider support retains prompt/output/time/attempt bounds, but
-CLI-specific tool and turn controls do not apply. No new live
-savings or complete native-tool suppression claim is being made.
+CLI-specific tool and turn controls do not apply. The live replay records scoped Grok savings; no general savings or complete
+native-tool suppression claim is being made.
 
 Scoring/reconciliation from the prior run is complete. All-worker coverage
 remains unvalidated; the saved original output and private cases are unchanged.

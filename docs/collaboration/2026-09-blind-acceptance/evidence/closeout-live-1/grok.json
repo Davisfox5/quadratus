@@ -1,0 +1,70 @@
+{
+  "seat": "grok:default",
+  "scored": false,
+  "prompt_bytes": 11456,
+  "prompt_sha256": "b93e8d9c612a6665efcde13a80f26850fe9307e37994608000e526140a20cf42",
+  "outcome": "returned",
+  "elapsed_seconds": 11.231675214017741,
+  "budget": {
+    "limits": {
+      "max_calls": 1,
+      "max_reported_tokens": 50000,
+      "wall_seconds": 70,
+      "max_concurrent_workers": 1
+    },
+    "reserved_attempts": 1,
+    "in_flight": 0,
+    "input_tokens": 5660,
+    "output_tokens": 452,
+    "reported_tokens": 6112,
+    "unknown_usage_attempts": 0,
+    "stop_reason": "",
+    "preserved_responses": [],
+    "elapsed_seconds": 11.231811379897408,
+    "token_boundary": "post-return threshold; in-flight calls can overshoot",
+    "input_boundary": "normalized provider input includes cached input; do not add it again",
+    "wall_boundary": "attempt timeout plus required external process supervisor"
+  },
+  "launches": [
+    {
+      "cwd_empty": true,
+      "timeout": 60.0,
+      "argv_sha256": "0f675310d995a873089d80307f850c3f3f20d79959bbc0871997290a151bbfcb",
+      "summary_flags": {
+        "--max-turns": "1",
+        "--tools": "read_file,grep,list_dir,web_search,web_fetch",
+        "--effort": "low"
+      }
+    }
+  ],
+  "vendor_envelope": {
+    "stopReason": "end_turn",
+    "num_turns": 1,
+    "usage": {
+      "input_tokens": 5532,
+      "cache_read_input_tokens": 128,
+      "cache_creation_input_tokens": 0,
+      "output_tokens": 452,
+      "reasoning_tokens": 34,
+      "total_tokens": 6112
+    },
+    "modelUsage": {
+      "grok-4.6-build": {
+        "inputTokens": 5532,
+        "outputTokens": 452,
+        "cacheReadInputTokens": 128,
+        "cacheCreationInputTokens": 0,
+        "modelCalls": 1,
+        "costUSD": 0.0047056
+      }
+    }
+  },
+  "private_stdout_sha256": "5541487cb324c0b4604f55d02a7fa8df64e0a259602ba16110145371c31ac402",
+  "stderr_bytes": 0,
+  "supervisor": {
+    "outcome": "success",
+    "exit_code": 0,
+    "image_id": "sha256:d1f99331a1639f5ff364faf9e4c027943613fadba733d452191296b873a390e2",
+    "container_name": "quadratus-blind-4a90c81be4c74bafbdafb32bcfbcf5e8"
+  }
+}

@@ -474,3 +474,27 @@ zero skips, with the same Docker/installed-CLI opt-ins. Ruff and both worktree
 and staged diff checks passed. This supersedes the pre-merge 933 result above.
 No live model call was made. STATUS and PR description now reflect the finished
 repair batch rather than old launch/scoring gates.
+
+## 2026-09-15 — authorized bounded live verification
+
+User explicitly requested execution after ownership was clarified. Added
+closeout_probe.py and used existing run_isolated/image/auth-only setup. Prepared
+one shared prompt through current Session._close_out from saved task/transcript,
+reconstructed two-file diff and historical test result. Host setup first failed
+on missing PYTHONPATH, then the archive's source/ prefix; both corrected before
+any provider launch. Mounted only runtime and prompt/evidence output tree.
+
+Executed one Grok and one Claude call, each at one attempt/50k probe threshold,
+60s CLI/70s controller/80s external watchdog. Grok: returned 6,112 tokens,
+11.23s, one model call, summary retains incomplete work. Claude: ProviderRefusal,
+5,103 tokens, 2.25s, vendor reasoning_extraction safeguard; no retry, model swap
+or rephrasing attempted. Batch stopped. Both containers/credential seeds removed.
+45 focused tests and harness Ruff/diff checks pass; no production code change.
+
+Published CLOSEOUT_LIVE_1.md and selected evidence with hashes; raw stdout and
+vendor thought fields remain private. Old 258,413 versus 6,112 is 97.6% fewer
+reported tokens in one replay, not a controlled benchmark. Live Claude had no
+auxiliary row and refused, so successful Claude closeout remains unverified;
+archived auxiliary accounting proof remains distinct. Claude owns independent
+review of the published results; Codex owns findings disposition. No further
+live call is queued and all-worker coverage remains unvalidated.
