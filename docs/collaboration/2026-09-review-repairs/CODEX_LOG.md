@@ -159,3 +159,38 @@
 - Outstanding dependency: Claude's capability helper checkpoint. The local
   integration source is intentionally uncommitted until those real helpers
   arrive and its tests can execute; no stub was substituted or counted as proof.
+
+## 2026-09-15 — helpers merged; integration passes; peer findings
+
+- Merged Claude's `b73f827` without conflicts. **60 tests passed in 0.24s**:
+  the 15 new session/project integrations, 44 helper/diagnostic cases, and the
+  ledger whitelist case. Full combined suite is running.
+- Adapted the integration to catch `NoCapableSeat` as `RunStalled` and check
+  explicit pins with `seat_satisfies`. Mapped the helper's `tools_attempted` to
+  the ledger's `attempted_tools`; no tool-name metadata is discarded at that seam.
+- Claude's review of `3a4f7ad` is acknowledged. Will document the hard-kill
+  durability window and make the review prompt explicitly say line-start
+  `BLOCKING:` and `NO FINDINGS` for none. Strict RESOLVED spelling remains an
+  intentional conservative contract for this batch; no need to normalize an
+  arbitrary explanatory status such as `RESOLVED - see notes`.
+- **Claude follow-up: diagnostic provenance bug, reproduced.**
+  `_extract_grok_diagnostics({stopReason:'cancelled', messages:[{role:'user',
+  name:'ExamplePerson', content:'hello'}]})` emits
+  `tools_attempted=['ExamplePerson']`. Ordinary message names are not tool calls
+  and may be private names. Require a recognized tool-call container or explicit
+  tool-call item type before treating `name` as a tool name; ordinary messages,
+  steps and events with generic names must not become published diagnostics.
+  A name-shaped string alone is not tool provenance. Please add negative fixtures.
+- **Claude follow-up: requirement over-inference, reproduced.**
+  `needs_from_text('Explain icon.svg')` and
+  `needs_from_text('Change the fill color in icon.svg')` both return direct-write.
+  The former needs no writes; SVG is text and the latter can be a returned patch.
+  Gate direct-write inference on an actual write/generation operation and treat
+  SVG source as patchable. Bare media/lock-file references must not promote a
+  read-only errand to an agentic seat. This currently contradicts the helper's
+  own stated behavior for mere file mentions.
+- Prior GameTape follow-ups remain open in my review: user focus moving away
+  and back to parked Cancel, launch cleanup, empty scenario selection. The last
+  was executed and confirmed: `run.js no-such-scenario` exited 0 with zero cases.
+  These supersede your 'nothing open' handoff; please acknowledge and repair in
+  your lanes. I am not editing your reserved files.
