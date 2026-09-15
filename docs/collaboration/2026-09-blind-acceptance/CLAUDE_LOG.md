@@ -553,3 +553,122 @@ normal and restricted off-mode argv byte for byte and the default-mode argv
 as before. Full suite passes; ruff and diff-check clean. Codex runs one
 grok tool-list check from this commit; pass means the five names are
 absent and read_file, run_terminal_command, search_replace, write remain.
+
+## 2026-09-15 — independent scoring of scored attempt 1 (run b7ccbd24)
+
+Archive `source-after.tar.gz` sha256 `517fb2ff…d7f9` matches the posted
+value; all 31 file hashes match `source-after-sha256.json`; extracted into a
+fresh scratch directory; nothing overlaid; private cases unchanged (archive
+hash `71cb8b06…71a` re-verified). Machine-readable summary in
+`evidence/scored-attempt-1/claude-independent-scoring.json`.
+
+### Correctness
+
+- **Private set: 7 of 9.** Fails: `p3_duplicates` (no duplicate detection;
+  every row reported valid) and `p4_players` (players always `[]`; an
+  unknown player not flagged). Passes: extra columns, number forms, tag
+  names and the 5000-row limit, UTF-16 and Latin-1 rejected as
+  `bad_request`, BOM with trailing newline. Both failures are the two
+  sub-features the orchestrator's own slice description deferred, so the
+  slice that was built is correct for what it claims.
+- **Public examiner: 9 of 13** (fails on duplicates, clip-id collisions,
+  the duplicate row of the mixed manifest, and the missing
+  `docs/CSV_IMPORT.md`). **Browser: 0 of 17**; no UI was written, the
+  runner stops at the first missing control.
+- **Application suite: 102 passed**, `node --check` clean. Regression
+  preservation confirmed independently, matching Codex's container run.
+- Verdict: **incomplete, partially correct.** One of four planned slices
+  landed, and that slice holds up against held-out cases it never saw.
+
+### Routing and coverage
+
+Fable planned and decomposed into four slices (required columns; players
+and duplicates; UI; docs), which is a sound decomposition. The ladder sent
+"backend/simple" to `grok:default`, as `DIFFICULTY_LADDER` says it should.
+No workers were commissioned, no OpenAI seat, no Opus review: the run
+stopped before the first task closed, so review never came due. Coverage
+of the roster is therefore one of three vendors invoked, by budget
+exhaustion rather than by routing.
+
+### Control enforcement
+
+Native-off held on every vendor invoked: Claude `subagent_stats.spawned=0`,
+grok 10 and 8 model calls with no observed child, codex never called. Scope
+held: 132 lines in exactly the two permitted paths, inside the 150-line
+tolerance. Store byte-identical. The budget latched after the closeout
+returned, preserved the reply, and refused a fourth attempt; wall 439 s of
+900. No unknown-usage attempt. Pass on every control.
+
+### Usage, and the two questions Codex asked
+
+**1. Closeout: 8 grok model calls, 258,413 reported tokens, for a record the
+transcript already contained.** Cause, from the evidence:
+
+- `session._close_out` calls `_invoke_model(lead, …)` on the lead's seat.
+  For grok that is the full agent form: `--always-approve`, every tool,
+  effort high (`invocations.jsonl` role `closeout`, `allow_writes: false`
+  in `in-flight.json`, yet the same seat).
+- The prompt (`closeout-prompt.txt`) carries the scope block ("You may
+  change only these paths…", the acceptance list, the size bound) and the
+  standing rule "Use actual files as evidence", appended by the invocation
+  wrapper regardless of the read-only grant. The model read it as an
+  invitation: its reply opens "I'll inspect the finished endpoint and tests
+  so the record matches what actually shipped", then "skim nearby helpers
+  and imports", eight turns in all.
+- Grok re-sends the conversation on every turn. `vendor-usage-extract`
+  shows 214,400 of the 258,413 as cache reads, which the protocol counts at
+  full weight. Eight turns times a ~27k context is the whole bill.
+
+The record it produced is good, and every fact in it is derivable from the
+transcript plus the 132-line diff. Proposed fix, small, role policy
+unchanged (same model line, same seat holder):
+
+- Invoke closeout through the vendor's *bounded* call form (the shape the
+  restricted seat already uses: `-p`, no write tools, effort low), with
+  the task diff pasted inline and the scope block and evidence rule omitted
+  for this role. Closeout is a record-writing errand, not a judgment, so
+  bounding it does not conflict with "senior seats are never restricted";
+  say so in the rule. Expected cost: one or two model calls, roughly 30 to
+  40k tokens instead of 258k. Evidence for the estimate: the lead's own
+  final message plus the diff is under 10k tokens of input.
+
+**2. Haiku 2,817 auxiliary tokens outside the controller total.**
+`_extract_claude_usage` reads the envelope's top-level `usage`, which is
+the seat model's usage only. `modelUsage` carries one row per model the
+CLI used; the Haiku row is Claude Code's own auxiliary call, not a
+Quadratus worker. Budget coverage gap: 0.5 percent here, unbounded in
+principle. Proposed fix, in my file: when `modelUsage` is present, sum
+every row's input (including cache) and output into the reported usage,
+keep the seat model's row for `resolved_model`, and record the other rows
+by name and totals only under a new whitelisted diagnostics key
+(`auxiliary_models`). The original ledger for this run stays as written.
+
+**Observability limits, stated once:** Claude's json envelope shows turns
+and denials but not tool calls; grok's envelope shows tool names only on a
+cancelled turn; codex alone reports children. "Three attempts" and "23
+vendor model calls" are both true and measure different things; the ledger
+should carry both, which it now does via `vendor-usage-extract.json`.
+
+**A policy question for Davis, not a defect:** 386,560 of the 614,386
+counted tokens were cache reads. Under this protocol an agentic grok step
+costs roughly 250k, so a 500k threshold buys two steps of a four-slice
+plan. Either the threshold is raised for grok-led work, or cache reads are
+weighted below fresh input for the stop rule while still being reported
+raw. I would report both totals in `budget.json` and let the operator
+choose which one stops the run; the run itself behaved exactly as agreed.
+
+### Repair batch (recommended, not implemented)
+
+1. Closeout on the bounded call form with inline diff; scope block and
+   evidence rule omitted for the closeout role (`session._close_out`,
+   Codex's file; the seat form is in mine).
+2. Claude usage sums `modelUsage`; auxiliary rows to diagnostics
+   (`cli_providers.py`, `delegation.py`, mine).
+3. `budget.json` reports raw and cache-weighted totals side by side;
+   the stop rule stays on raw until Davis decides (`run_budget.py`, Codex).
+4. Optional: a pre-call guard that refuses to start an attempt when the
+   remaining threshold is below the seat's last observed call, which would
+   have avoided the 114k overshoot at the cost of one fewer attempt.
+
+Nothing in the application, the private cases or the model roles was
+changed by this review. No new trial.
