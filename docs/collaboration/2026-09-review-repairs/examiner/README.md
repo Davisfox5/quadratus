@@ -1,10 +1,27 @@
-# Read-only CSV clip-manifest preview
+# Published examiner draft: CSV preview
 
-Add a CSV clip-manifest preview to GameTape so a coach can validate exported
-clip descriptions before importing them elsewhere. This feature must never
-save clips, change project data, or read/process video files. Use the following
-application interface contract and preserve existing behavior. Include focused
-automated checks. Do not add dependencies or implement a saving/import action.
+> Publication qualification (Codex, September 15): this repository is public,
+> and these files were published in daea6d9. They are a **public validation
+> suite**, not secret held-out tests. Preserve their provenance; a blind scored
+> run needs fresh private challenge inputs/expected results kept outside Git.
+> Only hashes of that private bundle should be published. The contract below
+> is adopted in the current TASK_DRAFT.md; no solver has run.
+
+
+Held-out checks for the blind acceptance task in `../BLIND_ACCEPTANCE.md`.
+Written by Claude before any solver output exists, against the interface
+contract below. The solver never sees this directory. Codex freezes the brief;
+if the frozen brief changes the contract, these checks change with it and the
+change is recorded in `CLAUDE_LOG.md` before launch, never after.
+
+## Why a contract is part of the brief
+
+Held-out checks cannot be written blind against an unspecified interface. The
+brief therefore pins the endpoint, the CSV columns, the response shape and the
+UI hooks. That is a legitimate application requirement, the same way a client
+would specify an import format, not a hint about scoring.
+
+## Contract to include verbatim in the solver brief
 
 Endpoint: `POST /api/projects/<project_id>/clips/import_preview`, multipart
 form with one field `file` holding a CSV. It never writes the project store.
@@ -54,3 +71,22 @@ keyboard; Escape dismisses the results if they are shown in a dialog.
 
 Docs: `docs/CSV_IMPORT.md` stating the column table, BOM/CRLF handling and
 quoting, citing RFC 4180.
+
+## Running the checks
+
+Against the solver's output tree (never the examiner's own copy):
+
+```
+GAMETAPE_ROOT=/path/to/solver/output python -m pytest -q examiner/test_manifest_preview.py
+GAMETAPE_ROOT=/path/to/solver/output node examiner/run_browser.js
+```
+
+The pytest file needs the solver tree's own `requirements.txt` installed; the
+browser check needs Playwright and reuses the solver tree's
+`tests/browser/server.py` reset route. A missing endpoint or element is a
+failing check, not a skip.
+
+## What these checks do not measure
+
+Routing quality, seat coverage and spend are read from the run's ledger, not
+from here. A passing examiner proves application correctness only.

@@ -79,6 +79,8 @@ __all__ = [
     "CODEX_NATIVE_DELEGATION_FEATURES",
     "cli_provider_classes",
     "codex_override_conflicts",
+    "native_delegation_mode",
+    "NativeControlOverride",
 ]
 
 
@@ -549,6 +551,10 @@ class CLISpec:
     #: that re-enables native delegation is a configuration error, not a
     #: preference, and a refusal cannot be mistaken for a bounded run.
     override_conflicts: Optional[Callable[[Sequence[str]], List[str]]] = None
+    #: Optional run-wide denial request for other vendors' native helpers.
+    #: This is not proof their CLI honors it; see the Grok specification.
+    native_fanout_off_args: List[str] = field(default_factory=list)
+    disallowed_tools_flag: str = ""
     #: Some CLIs only honour their tool-filtering flags when the prompt is an
     #: argument rather than a file (grok ignores them under --prompt-file, in
     #: silence). Where that is so, restricted mode must deliver the prompt in
@@ -630,6 +636,8 @@ CLAUDE_SPEC = CLISpec(
     # claude degrades gracefully when a tool is missing: measured at one turn
     # with the answer inline, rather than a cancelled turn.
     restricted_args=["--disallowed-tools", "Bash Edit Write NotebookEdit Task"],
+    native_fanout_off_args=["--disallowed-tools", "Task Agent"],
+    disallowed_tools_flag="--disallowed-tools",
     extract=_extract_claude_result,
     # Mandatory, not merely safer: --disallowed-tools is variadic, so a
     # positional prompt after it is swallowed as another tool name and the CLI
@@ -917,6 +925,10 @@ GROK_SPEC = CLISpec(
     # was first thought impossible.
     restricted_prompt_flag="-p",
     readonly_args=[],
+    # Cloud Claude's opt-in request. UNVERIFIED: --always-approve may
+    # override this denial. No bounded Grok claim until the live probe.
+    native_fanout_off_args=["--disallowed-tools", "Agent"],
+    disallowed_tools_flag="--disallowed-tools",
     # Every *agentic* call, read-only included: without it the turn is
     # cancelled silently the first time a tool is called. A restricted seat
     # must not get it -- there, the write tools are absent rather than denied,
@@ -1049,6 +1061,28 @@ def _render_history(history: Sequence[Turn]) -> str:
     return "\n".join(lines)
 
 
+class NativeControlOverride(ProviderError):
+    """A configuration conflicts with the selected native-delegation policy."""
+
+
+def native_delegation_mode(env: Optional[Mapping[str, str]] = None) -> str:
+    environ = os.environ if env is None else env
+    raw = environ.get('QUADRATUS_NATIVE_DELEGATION', '').strip().lower()
+    if raw not in ('', 'vendor-default', 'off'):
+        raise NativeControlOverride(
+            'QUADRATUS_NATIVE_DELEGATION must be vendor-default or off')
+    return raw or 'vendor-default'
+
+
+def _fold_disallowed(argv: List[str], flag: str, extra: List[str]) -> List[str]:
+    if flag in argv:
+        index = argv.index(flag) + 1
+        present = argv[index].split()
+        argv[index] = ' '.join(present + [name for name in extra if name not in present])
+        return argv
+    return argv + [flag, ' '.join(extra)]
+
+
 class CLIProvider(LLMProvider):
     """Base class for providers that drive a vendor CLI as a subprocess."""
 
@@ -1174,10 +1208,22 @@ class CLIProvider(LLMProvider):
         # call that ran with native spawning back on would look exactly like
         # a bounded one from the outside.
         extra = spec.extra_args()
+        mode = native_delegation_mode()
+        if mode == 'off' and spec.native_fanout_off_args:
+            # Vendor-specific flag precedence is not a reliable generic
+            # parser. In this strict opt-in mode, reject overrides rather
+            # than let a later tools/settings flag silently undo the denial.
+            if extra:
+                raise NativeControlOverride(
+                    f'QUADRATUS_CLI_ARGS_{spec.vendor.upper()} must be empty '
+                    'when QUADRATUS_NATIVE_DELEGATION=off')
+            flag, *names = spec.native_fanout_off_args
+            argv = _fold_disallowed(argv, spec.disallowed_tools_flag or flag,
+                                    ' '.join(names).split())
         if spec.override_conflicts is not None:
             conflicts = spec.override_conflicts(extra)
             if conflicts:
-                raise ProviderError(
+                raise NativeControlOverride(
                     f"{self.label}: QUADRATUS_CLI_ARGS_{spec.vendor.upper()} would "
                     f"re-enable or hide vendor-native sub-agents "
                     f"({'; '.join(conflicts)}). Quadratus disables native "

@@ -40,7 +40,8 @@ before overlapping edits. Do not claim a second agent ran until it returned.
 ## Current checkpoint
 
 Implementation and independent Claude review are recorded in [IMPLEMENTATION.md](IMPLEMENTATION.md),
-[CODEX_LOG.md](CODEX_LOG.md), [CLAUDE_LOG.md](CLAUDE_LOG.md), and
+[CODEX_LOG.md](CODEX_LOG.md), [CLAUDE_LOG.md](CLAUDE_LOG.md) (cloud),
+[CLAUDE_LOCAL_LOG.md](CLAUDE_LOCAL_LOG.md) (local), and
 [CLAUDE_CONTROL_REVIEW.md](CLAUDE_CONTROL_REVIEW.md). Codex addressed the accepted
 review findings and documents disagreements with evidence. No native-control
 live proof, isolated vendor authentication or scored task is claimed.

@@ -84,3 +84,32 @@
 - Current coding lanes are released for review. No GameTape application edits,
   native-delegation live acceptance, restricted Grok live probe, authenticated
   container, or completed held-out scoring suite are claimed.
+
+## 2026-09-15 — cloud Claude reconciliation
+
+- The normal push found remote work daea6d9/96aabb8. Fetched and merged without
+  force. Preserved cloud CLAUDE_LOG.md and prior protocol/examiner work; local
+  Fable's log is now CLAUDE_LOCAL_LOG.md. Neither is rewritten as the other.
+- Kept the locally verified OpenAI `--disable` implementation, both feature
+  switches, parsed conflict rejection and control-failure telemetry. The cloud
+  `-c ...=false` plus regex alone misses --enable and multi_agent_v2.
+- Integrated cloud Claude's optional all-vendor native-delegation mode in the
+  same provider module, avoiding duplicate CLISpec control APIs. Default senior
+  behavior stays unchanged. Off requests preserve write grants/tool denials;
+  Claude Task/Agent are denied; Grok Agent denial is still an unverified request.
+  Extra args for Claude/Grok must be empty in off mode to prevent an override
+  from silently removing the denial. OpenAI retains its verified conflict checks.
+- Protocol answers 2/3/8: keep 15 minutes, 24 attempts and 500,000 reported tokens;
+  a stopped, incomplete first attempt measures bounded progress, not completion.
+  No expansion to an hour. Unknown usage stops; charging the remaining balance
+  also leaves nothing for continuation. All-vendor off remains a proposed scored
+  run parameter that needs live proof before claiming effective enforcement.
+- Adopted cloud Claude's application API/CSV/UI contract (5000 rows); no solver
+  hint about model coverage. The earlier 13-file/500-row input is superseded.
+- Verified repository visibility PUBLIC. Cloud examiner cases have been publicly
+  published, so they cannot be described as secret held-out tests. Kept all cases,
+  added publication qualifications and updated their manifest. Asked cloud Claude
+  on PR #11 to prepare fresh private cases outside Git and publish only hashes.
+  No private reference implementation was requested/read; no solver run exists.
+- Native merge subset: **140 passed, 1 skipped in 1.23s**, Ruff clean. The skip
+  was the opt-in local config read; the final combined run enables it explicitly.

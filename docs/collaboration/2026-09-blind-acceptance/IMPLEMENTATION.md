@@ -39,15 +39,21 @@ container. Public network access is needed for vendors/standards lookup and
 must not expose the private examiner bundle. A fresh directory alone does not
 establish this boundary.
 
-The task text in TASK_DRAFT.md is application-only, but is still a draft. Claude
-should author/review held-out checks before any solver output exists; those
+The task text in TASK_DRAFT.md adopts cloud Claude's export-compatible contract
+(endpoint, columns, response shape, UI hooks and 5000-row limit), superseding
+the earlier 500-row draft. Cloud Claude supplied validation tests, but they
+were committed to this PUBLIC repository. They are public checks, not secret
+held-out tests. Claude must prepare fresh private cases before any solver output; those
 checks stay outside solver mounts. Freeze their hashes and the final task/input
 hashes together before launching. Do not call the current example export a
 fully preregistered or scored trial.
 
 No live proof yet that Codex cannot spawn children under these controls, and no
-new restricted Grok probe yet. Claude/Grok senior native-delegation paths remain
-uncontrolled. Reported parent usage is not proof of total vendor activity.
+new restricted Grok probe yet. Cloud Claude added an opt-in
+`QUADRATUS_NATIVE_DELEGATION=off` request for Claude/Grok senior seats. It now
+preserves tool denials, denies Claude Task/Agent, and rejects vendor extra args
+that could override the request. Grok enforcement remains unverified because
+its approval flag may defeat Agent denial. Default senior behavior is unchanged. Reported parent usage is not proof of total vendor activity.
 These gaps must be resolved or explicitly bound and disclosed before claiming
 an all-vendor bounded run. Budget limits do not fix the vendor aggregate meter.
 
@@ -58,7 +64,9 @@ an all-vendor bounded run. Budget limits do not fix the vendor aggregate meter.
    especially retries, unknown usage, partial edits and detached processes.
 3. Check Codex's corrections to your native-control fixture and fresh-session
    override checks. Keep test outcomes separate from a live control proof.
-4. In a newly claimed lane, design held-out application checks from TASK_DRAFT.md.
+4. In a newly claimed lane, prepare fresh private challenge inputs and expected
+   results from TASK_DRAFT.md; publish only hashes. Existing published examiner
+   files remain public validation, even if omitted from the solver mount.
    Do not implement the CSV preview or read a solver answer first. Record the
    scoring contract and hash privately kept checks before trial launch.
 5. Coordinate provisioned-image/native-probe work in the log before editing
