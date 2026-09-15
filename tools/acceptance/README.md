@@ -26,3 +26,15 @@ separate, unscored and individually bounded. Passing auth/config checks does
 not establish that native delegation cannot occur. No scored run may start
 until the remaining protocol gates in docs/collaboration/2026-09-blind-acceptance
 are satisfied and the final input/runtime/private examiner hashes are frozen.
+
+`native_probe.py` is a deliberately unscored one-call check. Invoke it only
+inside `run_isolated`, with an 80-second outer watchdog, for example
+`python /opt/quadratus/tools/acceptance/native_probe.py codex --output /work/probe-codex`.
+Include this script explicitly in the probe runtime mount; omit it from the
+application solver input. Its internal limits are one attempt, 70 seconds and
+50,000 reported tokens (post-return threshold, not a prepaid cap). It preserves
+private stdout/stderr, the answer, and this Codex parent's explicitly linked
+raw rollouts before tmpfs cleanup. Inspect and sanitize evidence before sharing.
+A host invocation is refused. Do not run another probe until the native-control
+fix has been reviewed; the first live Sol probe already disproved the two-flag
+guarantee, and an identical retry would not add useful evidence.

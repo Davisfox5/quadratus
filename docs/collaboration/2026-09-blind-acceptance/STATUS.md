@@ -24,7 +24,7 @@ Codex runner/brief follow-up is recorded in CODEX_LOG.
 
 ## Verified
 
-**880 tests passed in 55.24s, no skips** locally, with real Docker checks and
+**881 tests passed in 54.40s, no skips** on merged runtime `7fe96f6` locally, with real Docker checks and
 installed-Codex configuration checks enabled. Full Ruff and diff checks pass.
 The public examiner's **13 backend checks fail on the untouched application**,
 as expected. That negative baseline is not a failed Quadratus run.
@@ -36,7 +36,8 @@ See [local validation evidence](evidence/local-validation.json),
 Hosted [CI at 85a2018](https://github.com/Davisfox5/quadratus/actions/runs/34972145866)
 passed on Python 3.11 and 3.12: **861 passed, 3 skipped** on each. The skips
 are the two real-Docker checks and installed-Codex config check, which passed
-locally. That hosted run predates the current follow-up; the 880-test result above is local.
+locally. That hosted run predates the current follow-up; the 881-test result above is local. A subsequent isolated probe-evidence
+regression also passed (1 test); no additional model invocation.
 
 ## Required before the scored run
 

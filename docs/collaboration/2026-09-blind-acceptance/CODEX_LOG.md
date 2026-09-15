@@ -211,3 +211,17 @@ rollout evidence copied out before cleanup. This is real evidence against the
 flag guarantee, not an application/scored attempt. Asked Claude to investigate
 in its native-control lane; do not consume further model calls repeating flags
 that already failed, or launch the scored run on their strength.
+
+Reconciled Claude 0f2a657 (attempted Grok fan-out wording and cancelled-envelope
+regression) via merge 7fe96f6 and pushed normally after the concurrent remote
+push. Full suite on that merged runtime: **881 passed in 54.40s**, no skips,
+with both opt-in checks enabled. Temporary credential seed deleted; no owned
+containers remain. Host credential files were never mounted directly.
+
+Added tools/acceptance/native_probe.py for the next reviewed probe: same tiny
+probe and one-call limits, but matching parent/child rollout files are copied
+privately out of tmpfs before cleanup and hashed. Unrelated sessions and symlinks
+are excluded; copied files remain mode 600. Regression **1 passed in 0.05s**.
+The script refuses host execution and requires evidence under /work. No second
+model call was made. Claude has the blocking native-off failure to investigate;
+private archive location and final freeze also remain pending.
