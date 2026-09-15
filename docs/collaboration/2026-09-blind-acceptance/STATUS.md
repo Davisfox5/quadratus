@@ -5,27 +5,32 @@ Frozen runtime: **a001c1b**. Scored attempt **b7ccbd24** is saved and stopped.
 
 ## Current owner and handoff
 
-**The two-fix repair batch is active.** User authorized implementation; no new
-live trial or budget change is part of this batch.
+**The two-fix repair batch is complete and verified offline.** No new
+live trial, budget change, role change or GameTape feature work was performed.
 
-- **Codex:** session/runtime closeout caller and integration regressions. Same
-  model, compact inline evidence, empty scratch directory, low effort, one
-  attempt and at most 60 seconds. Scope grants and source-discovery instructions
-  omitted for closeout only. Normal review/edit calls retain their behavior.
-- **Claude:** provider summary_only controls and robust auxiliary usage parsing.
-  Initial accounting patch 32356f1/8bdc49a is pulled. Codex found that malformed
-  auxiliary metadata must stop the budget rather than return a partial total;
-  Claude acknowledged the correction and exact caller interface in
-  [comment5685567221](https://github.com/Davisfox5/quadratus/pull/11#issuecomment-5685567221).
-- **Next trigger:** both lanes pushed, then independent cross-review and the
-  combined offline suite. Codex owns this integration step; Claude reviews the
-  caller while Codex reviews provider accounting/control changes.
+- **Codex:** bounded session/runtime closeout from supplied evidence, plus
+  integration tests (`cebc172`). Independently reviewed Claude's provider
+  changes and closed the final finite-positive timeout/exactly-one-attempt
+  guard after explicitly taking ownership on PR #11.
+- **Claude:** summary-only provider controls and complete auxiliary accounting
+  (`3ef035a`, `62071a3`). Independently approved the caller in `0c2d172` and
+  [its review](https://github.com/Davisfox5/quadratus/pull/11#issuecomment-5685746701).
+- **Final verification:** 933 tests passed in 56.17s, zero skips, with Docker
+  and installed-CLI checks enabled; Ruff and diff-check clean. No model calls.
+  Archived usage-field replay yields 68,382 tokens including 2,817 Haiku
+  tokens once; original run records remain unchanged.
+- **Next owner:** Codex owns any subsequent live-verification proposal and
+  launch handoff. Neither agent is waiting for the other on this batch.
+  A later bounded live check must measure savings and vendor behavior before
+  another scored worker-coverage attempt; this checkpoint does not claim either.
 
 Provider limits are explicit: Claude can request no tools and one turn; Grok
 retains read-only tools with a one-turn request; Codex retains read-only/native-
 off controls but no known generic tools-off or turn cap. The latter is bounded
 by time/attempt count. CLI output-token ceilings are not hard-enforced by
-max_tokens. Empty CWD is not a filesystem isolation boundary. No new live
+max_tokens. Empty CWD is not a filesystem isolation boundary. Without a bound project,
+existing API-provider support retains prompt/output/time/attempt bounds, but
+CLI-specific tool and turn controls do not apply. No new live
 savings or complete native-tool suppression claim is being made.
 
 Scoring/reconciliation from the prior run is complete. All-worker coverage

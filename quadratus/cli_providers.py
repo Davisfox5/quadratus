@@ -50,6 +50,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import math
 import os
 import re
 import shlex
@@ -1566,9 +1567,9 @@ class CLIProvider(LLMProvider):
             if extra:
                 raise NativeControlOverride(
                     f"QUADRATUS_CLI_ARGS_{spec.vendor.upper()} must be empty for a summary-only call")
-            if self.max_retries > 1:
+            if self.max_retries != 1:
                 raise ProviderError(f"{self.label}: summary_only allows one attempt, not {self.max_retries}")
-            if self.timeout is None or self.timeout > 60:
+            if self.timeout is None or not math.isfinite(self.timeout) or not 0 < self.timeout <= 60:
                 raise ProviderError(f"{self.label}: summary_only allows at most 60s, not {self.timeout}")
             if os.listdir(self.workdir):
                 raise ProviderError(f"{self.label}: summary_only requires an empty working directory")

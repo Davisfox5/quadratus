@@ -428,3 +428,34 @@ unchanged cached provider, and pre-invocation refusal of write/oversize requests
 A timeout retains the original ProviderError while the budget latches unknown;
 test now asserts that behavior instead of incorrectly requiring replacement by
 a budget exception. Provider summary flags still await Claude's patch.
+
+## 2026-09-15 — two-fix batch integrated and cross-reviewed
+
+Merged Claude provider controls and accounting, then pulled 62071a3 and its
+independent caller approval in 0c2d172. Own review required malformed/null/
+partial modelUsage to latch unknown usage, per-component consistency, and
+unambiguous seat attribution; those corrections have regression coverage.
+Claude found no blocking caller defect. Documented its API-without-project
+limitation in the runtime docstring; the latest check remains honestly labelled
+as potentially predating the task, rather than implying a task-specific check.
+
+Explicitly took ownership of the remaining provider guard in PR comment
+5685814473 to avoid overlapping edits or another waiting cycle. Require a
+finite positive timeout <=60s and exactly one attempt; eight rejection cases
+cover None, zero, negative, NaN/infinite timeouts and nonpositive attempts.
+Normal calls remain unchanged. Claude's own log is untouched.
+
+Final combined validation: QUADRATUS_TEST_DOCKER=1
+QUADRATUS_LIVE_CODEX_FEATURES=1 /tmp/quadratus-review-env/bin/python -m pytest -q
+=> 933 passed in 56.17s, zero skips. /tmp/quadratus-review-env/bin/ruff check
+quadratus tests and git diff --check both passed. Docker/installed-CLI checks
+do not make model calls. Earlier regression proof against old session/runtime
+(8bdc49a, with only the excerpt helper supplied for collection) produced five
+failures and one pass; the new tests detect the old closeout behavior.
+
+Replayed archived vendor-usage-extract.json's first call through the current
+parser: input 65,539 + output 2,843 = 68,382; auxiliary_tokens 2,817, model Haiku.
+Top-level seat usage is not added again. Original evidence and private examiner
+archive remain unchanged; no private cases opened, no GameTape edits or live
+provider run. Savings and all-worker coverage remain unverified. This offline
+repair batch is complete; Codex owns a subsequent live-validation handoff.

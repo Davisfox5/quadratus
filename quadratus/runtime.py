@@ -356,6 +356,9 @@ class Fleet:
         The empty directory removes automatic project discovery; it is not an
         OS read boundary. Vendor-specific summary controls and the enclosing
         project's isolation still determine which tools/paths are reachable.
+        Without a bound project, API providers retain their existing support:
+        CLI-only tool/turn controls do not apply, but the prompt, output limit,
+        timeout and single attempt remain bounded.
         """
         if len(prompt.encode('utf-8')) > 32_000:
             raise ProviderError("Closeout evidence exceeds its 32,000-byte prompt bound.")

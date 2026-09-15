@@ -113,6 +113,22 @@ def test_more_than_one_attempt_or_over_a_minute_is_refused(tmp_path):
         view._build_argv("p", "")
 
 
+@pytest.mark.parametrize("timeout", [None, 0, -1, float("nan"), float("inf"), -float("inf")])
+def test_unbounded_or_nonpositive_timeout_is_refused(tmp_path, timeout):
+    view = _summary(ClaudeCLIProvider, "opus", tmp_path)
+    view.timeout = timeout
+    with pytest.raises(ProviderError, match="at most 60s"):
+        view._build_argv("p", "")
+
+
+@pytest.mark.parametrize("attempts", [0, -1])
+def test_zero_or_negative_attempt_count_is_refused(tmp_path, attempts):
+    view = _summary(ClaudeCLIProvider, "opus", tmp_path)
+    view.max_retries = attempts
+    with pytest.raises(ProviderError, match="one attempt"):
+        view._build_argv("p", "")
+
+
 def test_the_unrestricted_seat_cannot_be_summary_only(tmp_path):
     provider = ClaudeCLIProvider(model="opus", workdir=str(tmp_path / "empty"), timeout=60, max_retries=1)
     provider.summary_only = True

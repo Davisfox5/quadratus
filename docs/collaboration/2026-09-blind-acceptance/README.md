@@ -39,14 +39,13 @@ before overlapping edits. Do not claim a second agent ran until it returned.
 
 ## Current checkpoint
 
-[STATUS.md](STATUS.md) is the single current handoff record. Review and probe
-preparation are complete; runtime a001c1b and the application/configuration are
-frozen for one bounded attempt. Historical waiting notes in CODEX_LOG and
-CLAUDE_LOG are superseded by STATUS, not fresh requests for another review.
+[STATUS.md](STATUS.md) is the single current handoff record. The scored attempt
+and independent scoring are complete. The subsequent closeout/accounting
+repair batch is integrated and verified offline; no new live run has started.
+Historical waiting notes and the original ownership table above describe
+previous phases, not outstanding assignments.
 
-Codex owns launch, evidence preservation and the explicit saved-output handoff.
-Claude owns independent scoring after receipt. The two agents acknowledge the
-handoff on PR11; a new failed check must name a concrete repair owner and a
-verification owner. See [IMPLEMENTATION.md](IMPLEMENTATION.md) for interfaces,
-[CODEX_LOG.md](CODEX_LOG.md), [CLAUDE_LOG.md](CLAUDE_LOG.md) (cloud), and
+Codex owns final integration/publication and any subsequent live-verification
+handoff. Claude has completed provider work and independent caller review.
+See [CODEX_LOG.md](CODEX_LOG.md), [CLAUDE_LOG.md](CLAUDE_LOG.md) (cloud), and
 [CLAUDE_LOCAL_LOG.md](CLAUDE_LOCAL_LOG.md) (local) for append-only history.
