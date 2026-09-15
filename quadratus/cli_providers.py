@@ -482,13 +482,20 @@ def _pick_max(left: Optional[int], right: Optional[int]) -> Optional[int]:
     return max(left, right)
 
 
-def _strict_count(value, *, missing_ok: bool) -> Optional[int]:
+_ABSENT = object()
+
+
+def _strict_count(mapping, key: str, *, missing_ok: bool) -> Optional[int]:
     """A token count as the envelope must state it: a non-negative int.
 
-    Strings, floats, booleans and negatives are malformed, not coerced; a
-    missing optional field is zero, a missing required one is malformed.
+    Strings, floats, booleans, negatives and an explicit ``null`` are
+    malformed, not coerced. An absent optional field is zero; an absent
+    required one is malformed. Absence and ``null`` are different claims:
+    the first says nothing, the second says "no value", which for a count
+    is not a number.
     """
-    if value is None:
+    value = mapping.get(key, _ABSENT)
+    if value is _ABSENT:
         return 0 if missing_ok else None
     if type(value) is not int or value < 0:
         return None
@@ -500,10 +507,10 @@ def _claude_row_totals(row) -> Optional[Dict[str, int]]:
     if not isinstance(row, dict):
         return None
     fields = [
-        _strict_count(row.get("inputTokens"), missing_ok=False),
-        _strict_count(row.get("cacheReadInputTokens"), missing_ok=True),
-        _strict_count(row.get("cacheCreationInputTokens"), missing_ok=True),
-        _strict_count(row.get("outputTokens"), missing_ok=False),
+        _strict_count(row, "inputTokens", missing_ok=False),
+        _strict_count(row, "cacheReadInputTokens", missing_ok=True),
+        _strict_count(row, "cacheCreationInputTokens", missing_ok=True),
+        _strict_count(row, "outputTokens", missing_ok=False),
     ]
     if any(f is None for f in fields):
         return None
@@ -535,10 +542,10 @@ def _claude_usage_parts(stdout: str):
     usage = payload.get("usage")
     if isinstance(usage, dict):
         counts = [
-            _strict_count(usage.get("input_tokens"), missing_ok=True),
-            _strict_count(usage.get("cache_read_input_tokens"), missing_ok=True),
-            _strict_count(usage.get("cache_creation_input_tokens"), missing_ok=True),
-            _strict_count(usage.get("output_tokens"), missing_ok=True),
+            _strict_count(usage, "input_tokens", missing_ok=True),
+            _strict_count(usage, "cache_read_input_tokens", missing_ok=True),
+            _strict_count(usage, "cache_creation_input_tokens", missing_ok=True),
+            _strict_count(usage, "output_tokens", missing_ok=True),
         ]
         if any(c is None for c in counts):
             malformed = True
@@ -549,20 +556,25 @@ def _claude_usage_parts(stdout: str):
     elif usage is not None:
         malformed = True
     rows: Dict[str, Dict[str, int]] = {}
-    model_usage = payload.get("modelUsage")
+    model_usage = payload.get("modelUsage", _ABSENT)
     if isinstance(model_usage, dict):
+        if not model_usage and seat is not None:
+            # Present and empty is a claim of "no models", which a nonzero
+            # seat contradicts. Absent says nothing and keeps the seat.
+            malformed = True
         for name, row in model_usage.items():
             totals = _claude_row_totals(row)
             if totals is None or not isinstance(name, str) or not name:
                 malformed = True
                 continue
             rows[name] = totals
-    elif model_usage is not None:
+    elif model_usage is not _ABSENT:
         malformed = True
     if rows and seat is not None:
-        total_in = sum(r["input_tokens"] for r in rows.values())
-        total_out = sum(r["output_tokens"] for r in rows.values())
-        if total_in + total_out < seat["input_tokens"] + seat["output_tokens"]:
+        # Per component, not grand total: the seat is one of the rows, so the
+        # rows' input must cover the seat's input and likewise for output.
+        if (sum(r["input_tokens"] for r in rows.values()) < seat["input_tokens"]
+                or sum(r["output_tokens"] for r in rows.values()) < seat["output_tokens"]):
             malformed = True
     return seat, rows, malformed
 

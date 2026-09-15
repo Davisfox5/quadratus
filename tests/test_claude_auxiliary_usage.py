@@ -138,3 +138,35 @@ def test_whitelist_filters_provenance_like_tool_names():
     got = safe_diagnostics({"auxiliary_models": ["claude-haiku-4-5", "bad name", 3], "auxiliary_tokens": -1,
                             "auxiliary_usage": "guess"})
     assert got == {"auxiliary_models": ["claude-haiku-4-5"]}
+
+
+def test_explicit_null_in_a_cache_field_is_unknown_but_absence_is_zero():
+    absent = {"inputTokens": 2801, "outputTokens": 16}
+    out = _envelope(modelUsage={"claude-fable-5-1": FABLE, "claude-haiku-4-5-20251001": absent})
+    assert _extract_claude_usage(out) == {"input_tokens": 62738 + 2801, "output_tokens": 2827 + 16}
+    null = dict(HAIKU, cacheReadInputTokens=None)
+    out = _envelope(modelUsage={"claude-fable-5-1": FABLE, "claude-haiku-4-5-20251001": null})
+    assert _extract_claude_usage(out) is None
+    assert _extract_claude_diagnostics(out)["auxiliary_usage"] == "unknown"
+    top_null = json.dumps({"type": "result", "result": "ok",
+                           "usage": dict(USAGE, cache_read_input_tokens=None)})
+    assert _extract_claude_usage(top_null) is None
+
+
+def test_consistency_is_checked_per_component_not_by_grand_total():
+    # rows' output exceeds the seat's, rows' input falls short: the grand total
+    # would pass, the input component does not.
+    out = json.dumps({"type": "result", "result": "ok",
+                      "usage": {"input_tokens": 100, "output_tokens": 20},
+                      "modelUsage": {"seat": {"inputTokens": 1, "outputTokens": 120}}})
+    assert _extract_claude_usage(out) is None
+    assert _extract_claude_diagnostics(out) == {"auxiliary_usage": "unknown", "seat_tokens": 120}
+
+
+def test_an_empty_model_usage_map_is_unknown_but_absence_keeps_the_seat():
+    assert _extract_claude_usage(_envelope(modelUsage={})) is None
+    assert _extract_claude_diagnostics(_envelope(modelUsage={})) == {"auxiliary_usage": "unknown",
+                                                                     "seat_tokens": 65565}
+    assert _extract_claude_usage(_envelope()) == {"input_tokens": 62738, "output_tokens": 2827}
+    # An empty map with no seat figure at all is simply nothing reported.
+    assert _extract_claude_usage(json.dumps({"type": "result", "result": "ok", "modelUsage": {}})) is None
