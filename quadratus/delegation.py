@@ -249,6 +249,21 @@ def safe_diagnostics(value) -> dict:
         ))[:32]
         if held:
             result['denied_tools'] = held
+    # Usage provenance from the claude envelope: model names and one integer,
+    # so a run's reported total can be traced to the rows it was built from.
+    models = value.get('auxiliary_models')
+    if isinstance(models, list):
+        named = list(dict.fromkeys(
+            name for name in models[:32] if isinstance(name, str) and atom.fullmatch(name)
+        ))[:16]
+        if named:
+            result['auxiliary_models'] = named
+    aux = value.get('auxiliary_tokens')
+    if type(aux) is int and 0 <= aux <= 1_000_000_000:
+        result['auxiliary_tokens'] = aux
+    state = value.get('auxiliary_usage')
+    if state in ('unknown', 'unattributed'):
+        result['auxiliary_usage'] = state
     return result
 
 

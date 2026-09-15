@@ -482,6 +482,64 @@ def _pick_max(left: Optional[int], right: Optional[int]) -> Optional[int]:
     return max(left, right)
 
 
+def _claude_row_totals(row) -> Optional[Dict[str, int]]:
+    """One ``modelUsage`` row as (input incl. cache, output), or None if malformed."""
+    if not isinstance(row, dict):
+        return None
+    try:
+        input_tokens = (int(row.get("inputTokens", 0)) + int(row.get("cacheReadInputTokens", 0))
+                        + int(row.get("cacheCreationInputTokens", 0)))
+        output_tokens = int(row.get("outputTokens", 0))
+    except (ValueError, TypeError):
+        return None
+    if input_tokens < 0 or output_tokens < 0:
+        return None
+    return {"input_tokens": input_tokens, "output_tokens": output_tokens}
+
+
+def _claude_usage_parts(stdout: str):
+    """(seat usage from top-level ``usage``, per-model rows, malformed flag).
+
+    Scored attempt 1 (2026-09-15) showed why both are read: the envelope's
+    top-level ``usage`` is the seat model's alone, while ``modelUsage`` also
+    carried a Haiku row (2,817 tokens) for the CLI's own auxiliary call. That
+    row was real subscription usage the run budget never saw.
+    """
+    try:
+        payload = json.loads(stdout)
+    except (ValueError, TypeError):
+        return None, {}, False
+    if not isinstance(payload, dict):
+        return None, {}, False
+    seat = None
+    usage = payload.get("usage")
+    if isinstance(usage, dict):
+        try:
+            seat = {
+                "input_tokens": (int(usage.get("input_tokens", 0))
+                                 + int(usage.get("cache_read_input_tokens", 0))
+                                 + int(usage.get("cache_creation_input_tokens", 0))),
+                "output_tokens": int(usage.get("output_tokens", 0)),
+            }
+        except (ValueError, TypeError):
+            seat = None
+        if seat and seat["input_tokens"] == 0 and seat["output_tokens"] == 0:
+            seat = None
+    rows: Dict[str, Dict[str, int]] = {}
+    malformed = False
+    model_usage = payload.get("modelUsage")
+    if isinstance(model_usage, dict):
+        for name, row in model_usage.items():
+            totals = _claude_row_totals(row)
+            if totals is None or not isinstance(name, str):
+                malformed = True
+                continue
+            rows[name] = totals
+    elif model_usage is not None:
+        malformed = True
+    return seat, rows, malformed
+
+
 def _extract_claude_usage(stdout: str) -> Optional[Dict[str, int]]:
     """Real token counts from the claude JSON envelope, when present.
 
@@ -489,20 +547,56 @@ def _extract_claude_usage(stdout: str) -> Optional[Dict[str, int]]:
     question is what the call would have cost on API keys, and cached input is
     still billed input there (at a different rate the seed sheet does not try
     to model -- the counterfactual is deliberately the conservative one).
+
+    The reported figure is the larger of the top-level ``usage`` (the seat
+    model) and the sum of every ``modelUsage`` row (seat plus the CLI's own
+    auxiliary models). The two are never added to each other: the seat's row
+    is inside the sum already, so taking the sum counts each token once.
+    Malformed rows are skipped and flagged in the diagnostics, never guessed;
+    the seat's own figure is still reported so a known part stays known.
     """
-    try:
-        usage = json.loads(stdout).get("usage") or {}
-        input_tokens = (
-            int(usage.get("input_tokens", 0))
-            + int(usage.get("cache_read_input_tokens", 0))
-            + int(usage.get("cache_creation_input_tokens", 0))
-        )
-        output_tokens = int(usage.get("output_tokens", 0))
-    except (ValueError, TypeError, AttributeError):
-        return None
-    if input_tokens == 0 and output_tokens == 0:
-        return None
-    return {"input_tokens": input_tokens, "output_tokens": output_tokens}
+    seat, rows, _ = _claude_usage_parts(stdout)
+    if rows:
+        total = {"input_tokens": sum(r["input_tokens"] for r in rows.values()),
+                 "output_tokens": sum(r["output_tokens"] for r in rows.values())}
+        if seat is None:
+            return total if (total["input_tokens"] or total["output_tokens"]) else None
+        if total["input_tokens"] + total["output_tokens"] >= seat["input_tokens"] + seat["output_tokens"]:
+            return total
+    return seat
+
+
+def _extract_claude_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
+    """Provenance for the usage figure: which rows beyond the seat were counted.
+
+    ``auxiliary_models`` names the ``modelUsage`` rows that are not the seat
+    (identified as the row whose totals equal the top-level ``usage``), and
+    ``auxiliary_tokens`` is their input plus output. When no row matches the
+    seat exactly the rows are ``unattributed`` and the figure is the excess of
+    the rows' sum over the seat. A malformed row sets ``auxiliary_usage`` to
+    ``unknown``: what could not be parsed is reported as missing, not as zero.
+    Names and integers only; nothing from the envelope's text reaches here.
+    """
+    seat, rows, malformed = _claude_usage_parts(stdout)
+    diagnostics: Dict[str, object] = {}
+    if rows:
+        seat_rows = [name for name, r in rows.items() if seat is not None and r == seat]
+        if seat is None or seat_rows:
+            aux = {name: r for name, r in rows.items() if name not in seat_rows[:1]}
+            if seat is None:
+                aux = dict(rows)
+            if aux:
+                diagnostics["auxiliary_models"] = sorted(aux)
+                diagnostics["auxiliary_tokens"] = sum(r["input_tokens"] + r["output_tokens"] for r in aux.values())
+        else:
+            excess = (sum(r["input_tokens"] + r["output_tokens"] for r in rows.values())
+                      - seat["input_tokens"] - seat["output_tokens"])
+            diagnostics["auxiliary_models"] = sorted(rows)
+            diagnostics["auxiliary_tokens"] = max(excess, 0)
+            diagnostics["auxiliary_usage"] = "unattributed"
+    if malformed:
+        diagnostics["auxiliary_usage"] = "unknown"
+    return diagnostics or None
 
 
 @dataclass
@@ -679,6 +773,7 @@ CLAUDE_SPEC = CLISpec(
     prompt_on_stdin=True,
     verified=True,
     extract_usage=_extract_claude_usage,
+    extract_diagnostics=_extract_claude_diagnostics,
 )
 
 #: Codex feature switches that admit vendor-native sub-agents (``spawn_agent``

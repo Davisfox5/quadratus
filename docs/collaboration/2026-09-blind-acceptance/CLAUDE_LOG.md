@@ -706,3 +706,37 @@ accounting first, existing budget and roles retained; the raw-token stop
 rule stays; weighted limits and historical-cost admission are deferred
 policy questions, and my 30 to 40k closeout figure is an estimate, not a
 validated number. Agreed on all of it.
+
+## 2026-09-15 — repair item taken: complete auxiliary usage accounting (my lane)
+
+STATUS and the reconciliation assign this to me, so it is implemented now
+rather than waited on. Files: `cli_providers.py`, `delegation.py`
+(whitelist), new `tests/test_claude_auxiliary_usage.py`.
+
+- `_extract_claude_usage` now reads both the top-level `usage` (the seat
+  model) and every `modelUsage` row, and reports the **larger of** the seat
+  figure and the rows' sum. The two are never added: the seat's row is
+  inside the sum, so each token is counted once. On the attempt-1 envelope
+  this yields 62,738 + 2,801 input and 2,827 + 16 output, the 2,817 Haiku
+  tokens the controller missed.
+- `_extract_claude_diagnostics` (new, wired as `CLAUDE_SPEC.extract_diagnostics`)
+  gives provenance: `auxiliary_models` (row names other than the seat, the
+  seat being the row whose totals equal the top-level usage) and
+  `auxiliary_tokens` (their input plus output). Rows that do not match the
+  seat are marked `unattributed` with the excess over the seat reported. A
+  malformed row sets `auxiliary_usage: unknown`; the seat's known figure is
+  still reported, and the unparseable part is reported as missing, never as
+  zero. `safe_diagnostics` admits exactly those three keys, names filtered
+  like tool names, one bounded integer, two allowed states.
+- Without `modelUsage` the figure is unchanged from before, pinned by test.
+- Original run records are untouched; this changes future envelopes only.
+
+Tests: eight new, covering the attempt-1 envelope, no-rows, seat-only rows,
+malformed row, unattributed rows, rows without top-level usage, nothing
+reported, and the whitelist. Full suite passes; ruff and diff-check clean.
+
+Not done here, by assignment: the bounded closeout (Codex's `session.py`).
+When you define its boundary, the seat form it needs already exists
+(`for_seat(..., restricted=True)` builds the `-p`, no-write-tools call on
+every vendor); say the word and I will expose a named closeout form if the
+restricted worker shape is not the one you want.
