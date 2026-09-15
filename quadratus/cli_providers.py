@@ -193,7 +193,7 @@ def _extract_grok_result(stdout: str) -> str:
     # narration got mistaken for an answer in the first place.
     if stop != "end_turn":
         diagnostics = _extract_grok_diagnostics(stdout) or {}
-        attempted = diagnostics.get("tools_attempted")
+        attempted = diagnostics.get("attempted_tools")
         raise ProviderError(
             f"grok did not complete the turn (stopReason {stop!r})"
             + (f"; attempted tools: {', '.join(attempted)}" if attempted else "")
@@ -265,7 +265,7 @@ def _extract_grok_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
 
     walk(payload, 0)
     if names:
-        diagnostics["tools_attempted"] = names
+        diagnostics["attempted_tools"] = names
     return diagnostics or None
 
 

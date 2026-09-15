@@ -44,7 +44,7 @@ _CANCELLED = json.dumps({
 def test_diagnostics_hold_stop_reason_model_calls_and_tool_names_only():
     got = _extract_grok_diagnostics(_CANCELLED)
     assert got == {"stop_reason": "cancelled", "model_calls": 2,
-                   "tools_attempted": ["bash", "read_file", "grep"]}
+                   "attempted_tools": ["bash", "read_file", "grep"]}
 
 
 def test_nothing_but_names_leaks():
@@ -62,7 +62,7 @@ def test_a_completed_turn_is_recorded_too():
 def test_an_absent_transcript_is_not_reported_as_no_tools():
     got = _extract_grok_diagnostics(json.dumps({"text": "x", "stopReason": "cancelled"}))
     assert got == {"stop_reason": "cancelled"}
-    assert "tools_attempted" not in got
+    assert "attempted_tools" not in got
 
 
 def test_narration_and_junk_yield_no_record():
@@ -74,14 +74,14 @@ def test_narration_and_junk_yield_no_record():
 def test_the_tool_list_is_bounded_and_deduplicated():
     calls = [{"name": f"tool{i % 5}"} for i in range(200)] + [{"name": f"x{i}"} for i in range(200)]
     got = _extract_grok_diagnostics(json.dumps({"stopReason": "cancelled", "steps": calls}))
-    assert len(got["tools_attempted"]) == cli_providers._MAX_DIAGNOSTIC_TOOLS
-    assert got["tools_attempted"][:5] == ["tool0", "tool1", "tool2", "tool3", "tool4"]
+    assert len(got["attempted_tools"]) == cli_providers._MAX_DIAGNOSTIC_TOOLS
+    assert got["attempted_tools"][:5] == ["tool0", "tool1", "tool2", "tool3", "tool4"]
 
 
 def test_names_that_are_not_names_are_dropped():
     got = _extract_grok_diagnostics(json.dumps({"stopReason": "cancelled", "tools": [
         {"name": "rm -rf /"}, {"name": "/etc/passwd"}, {"name": "ok_tool"}, {"name": "x" * 80}]}))
-    assert got["tools_attempted"] == ["ok_tool"]
+    assert got["attempted_tools"] == ["ok_tool"]
 
 
 def test_the_cancellation_error_names_the_attempted_tools():
@@ -101,7 +101,7 @@ def test_the_provider_exposes_diagnostics_and_resets_them_per_attempt(monkeypatc
         with pytest.raises(ProviderError) as caught:
             provider._call("go", "", [])
         assert caught.value.diagnostics == provider.last_diagnostics
-        assert provider.last_diagnostics["tools_attempted"] == ["bash", "read_file", "grep"]
+        assert provider.last_diagnostics["attempted_tools"] == ["bash", "read_file", "grep"]
         with pytest.raises(ProviderError):
             provider._call("go", "", [])
         assert provider.last_diagnostics is None, "a stale record must not describe a later call"

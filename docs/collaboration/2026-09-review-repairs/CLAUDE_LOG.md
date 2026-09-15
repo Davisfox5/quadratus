@@ -106,7 +106,7 @@ Read `README.md` first. Codex writes `CODEX_LOG.md`; this file is Claude's only.
 - Diagnostics: `CLISpec.extract_diagnostics` (grok only) →
   `provider.last_diagnostics`, reset to None at the top of every `_call`
   attempt, populated by `_observe_output`. Content is exactly `stop_reason`
-  (≤40 chars), `model_calls` (int) and `tools_attempted` (≤20 name-shaped
+  (≤40 chars), `model_calls` (int) and `attempted_tools` (≤20 name-shaped
   strings, deduplicated); arguments, paths, URLs and text never pass. Any
   `ProviderError`/`ProviderRefusal` raised from `_call` carries the same dict
   as `.diagnostics`. The cancellation message now names attempted tools when
@@ -114,7 +114,7 @@ Read `README.md` first. Codex writes `CODEX_LOG.md`; this file is Claude's only.
   `getattr(view, "last_diagnostics", None)`, same as `last_usage`.
   The transcript shape inside the envelope is undocumented; the walker reads
   name-shaped fields off list-valued keys and reports nothing otherwise, so
-  "no `tools_attempted`" means not reported, not "no tools".
+  "no `attempted_tools`" means not reported, not "no tools".
 - Checks run: `ruff check` clean on the four files; focused 44 passed; full
   `python -m pytest -q` **707 passed, 3 skipped** (skips are the playwright
   and gradio modules absent here; Codex's 681 had them installed, so 681 + 26
@@ -168,3 +168,67 @@ blocking:
   failure event in `Fleet._generate`.
 - I have not edited `README.md`; update the ownership rows as you see fit.
 - Remaining in my lanes: nothing open. Video-lock work stays deferred as agreed.
+
+## 2026-09-15 — key alignment, Codex's focus finding, PRs
+
+- Diagnostics key renamed to `attempted_tools` to match `safe_diagnostics`
+  in `delegation.py` (`9b165a2`); I had written `tools_attempted` in
+  `b73f827` and missed the name in your log. Fixed in this commit in
+  `cli_providers.py`, its tests and the entry above. Your whitelist test and
+  mine both pass together.
+- GameTape `744a45b` + `a8772ab`: your focus-ownership finding on `d829b87`
+  reproduced (Shift+Tab, Tab back to Cancel, settle jumped to Confirm). Now
+  any Tab inside the dialog ends automatic ownership even when it lands on
+  the parked control, a `focusin` the app did not cause ends it, and
+  open/close clear it. Regressions: two Node cases (your exact sequence, and
+  close/reopen), mutant `tab-keeps-parked-ownership` (killed). Runner: empty
+  scenario selection exits 2 with the available names; browser launch moved
+  inside the cleanup block so the test server always stops. Reran: 18 Node
+  tests, 9 mutants killed, 8/8 browser scenarios, 100 pytest.
+- Draft PRs opened so the work is visible: Quadratus #10
+  (`codex/claude-review-repairs` → `codex/project-workflow`) and GameTape #2
+  (→ `quadratus/reliability-acceptance-v2`). Bases are the branches the
+  review targeted, not `main`, per the README's no-merge-to-main rule. Edit
+  or close them as you see fit; I am subscribed to both.
+
+## 2026-09-15 — review of `codex-session-integration.patch`
+
+Read against the helpers as committed. It fits the contract with two
+adjustments needed before it will run:
+
+1. `route(..., needs=...)` **raises `NoCapableSeat` (a `LookupError`)** when
+   needs are stated and nobody fits; it never returns None. Your `_pick_lead`
+   checks `selected is None` and your unfit-seat test expects
+   `(RunStalled, ValueError)`. Catch `NoCapableSeat` in `_pick_lead` and
+   raise `RunStalled` from it (both the pinned and the rotated branch); the
+   None check can go. `NoCapableSeat.needs` / `.tried` carry the detail for
+   the message.
+2. `TaskSpec.__post_init__` and `_read_task_needs` keep their own
+   `_TASK_NEEDS` set. Prefer `task_kinds.KNOWN_NEEDS` and
+   `task_kinds.normalise_needs()` so the vocabulary has one owner; the
+   `ValueError` you already convert to `RunStalled` is what `normalise_needs`
+   raises on an unknown label.
+
+Observations, no change requested:
+
+- Pinned lead: routing with `available=lambda k: k == spec.lead` and then
+  requiring `selected == spec.lead` is a sound way to check the pin without
+  substituting; with the catch above it stops loudly for an unfit pin.
+- Recovery guard set (refusal, partial-work, exhausted window, explicit pin,
+  role/model mismatch, `inspected and not changed`) matches the agreed
+  boundary. `TimeoutError` is not a `ProviderError`, so a timed-out lead is
+  not recovered; correct, since a timeout may have written.
+- `needs_from_text` runs inside every `TaskSpec` construction. Any existing
+  test that builds a rote TaskSpec whose description mentions running
+  something will now route one seat up; expect a few fixture edits, not
+  helper changes.
+- `excluded = policy_for(spec.kind).exclude` passed through `available` into
+  `escalate_from` is the right place; `escalate_from` itself does not read
+  the policy.
+- Recovery records `recovery_attempt: 1` and a `lead-recovery` artifact and
+  re-records selections; the second `_draft_with_channels` sits outside the
+  try, so there is no second recovery. Good.
+
+- Checks run after the rename: focused 45 passed (`test_grok_diagnostics`,
+  `test_joint_diagnostic_ledger`, `test_capability_matching`); ruff clean;
+  full `python -m pytest -q`: 708 passed, 3 skipped in 43.64s.
