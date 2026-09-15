@@ -1,7 +1,8 @@
 # Joint blind-acceptance checkpoint
 
 Shared branch: `codex/blind-worker-acceptance`, [PR #11](https://github.com/Davisfox5/quadratus/pull/11).
-Claude control/review baseline: `fdcbd99`. No scored application run has started.
+Frozen scored runtime: `a001c1b`. Attempt 1 started 2026-09-15 17:24:15 UTC.
+Current owner: **Codex** until saved output is handed to Claude.
 
 ## Verified this round
 

@@ -37,43 +37,26 @@
   reject conflicting config/enable/resume/fork arguments. Native observations
   remain visible as possible control failures. See Claude's implementation log.
 
-## What remains before the trial
+## Current execution handoff
 
-The provisioned Linux arm64 image now has the application dependencies and
-passes the full existing application baseline offline. See STATUS.md and
-evidence/application-preflight.json for the exact immutable image and source
-hashes. An earlier build's Node Playwright was absent because its CLI path
-collided with Python Playwright; the final recipe installs the Node package
-under /opt/browser-tools and exposes that module via NODE_PATH.
+See STATUS.md for current ownership. The app baseline, isolated subscription
+authentication, private archive transfer, independent control review and live
+control probes are complete. A real Grok delimiter failure was preserved and
+repaired before freezing; do not infer a pass from the earlier failed list.
+The final frozen input/runtime/image/configuration and examiner archive hash
+are in evidence/scored-attempt-1-freeze.json. No private cases are mounted.
 
-Live Sol tool-list and spawn checks passed with agents.enabled=false in
-addition to both feature switches. Claude/Grok also returned unavailable to the
-native spawn prompt; their telemetry cannot prove absence of every hidden
-activity. Claude is reviewing whether the remaining workflow/messaging tools
-can reach other sessions. The budget still stops on unknown usage or observed
-uncontrolled native activity; it is not a global vendor billing guarantee.
+Codex executes one uncoached attempt with the approved limits, saves all partial
+work and telemetry, and publishes a precise result handoff. Claude then scores
+the saved output against its already precommitted private cases and reviews
+routing/usage separately. Neither agent changes private cases or coaches the
+solver. A run that stops is a recorded partial result, not a reason for an
+automatic continuation or another preflight cycle.
 
-The private archive has been downloaded from Claude's attachment and its
-original commitment verified. Contents are outside both repositories and have
-not been opened. The v3 source export includes all existing application tests
-(30 files), correcting the earlier omission of tests/ui. Final trial freeze
-must bind that source/task, runtime, image/config and archive commitment before
-launch. No scored run or solver-written application feature is claimed.
-
-## Claude review handoff
-
-1. Fetch `codex/blind-worker-acceptance`; read README and both logs.
-2. Review Codex's controller/provider/project seams and isolation/export helpers,
-   especially retries, unknown usage, partial edits and detached processes.
-3. Check Codex's corrections to your native-control fixture and fresh-session
-   override checks. Keep test outcomes separate from a live control proof.
-4. In a newly claimed lane, prepare fresh private challenge inputs and expected
-   results from TASK_DRAFT.md; publish only hashes. Existing published examiner
-   files remain public validation, even if omitted from the solver mount.
-   Do not implement the CSV preview or read a solver answer first. Record the
-   scoring contract and hash privately kept checks before trial launch.
-5. Coordinate provisioned-image/native-probe work in the log before editing
-   reserved files. A successful application alone is not orchestration proof.
+Native checks are scoped live evidence; unknown usage or observed uncontrolled
+native activity still stops the run. They do not prove global vendor billing.
+Only STATUS and explicit PR handoffs assign the next action. Historical review
+requests in logs do not create new gates.
 
 ## Verification commands
 

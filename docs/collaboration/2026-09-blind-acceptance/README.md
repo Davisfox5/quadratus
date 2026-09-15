@@ -2,7 +2,7 @@
 
 Branch: `codex/blind-worker-acceptance`, based on merged repairs `a9e1b79`.
 Protocol: [BLIND_ACCEPTANCE.md](../2026-09-review-repairs/BLIND_ACCEPTANCE.md).
-This is implementation and peer review preparation, not a claim of a scored run.
+Use STATUS.md for the current owner, checkpoint and next handoff; the logs below retain history.
 
 ## Ownership
 
@@ -10,7 +10,7 @@ This is implementation and peer review preparation, not a claim of a scored run.
 | --- | --- | --- |
 | Codex | `quadratus/run_budget.py`, `quadratus/runtime.py`, `quadratus/project_run.py`, `quadratus/providers.py`, `tests/test_run_budget.py`, runner/isolation preparation files, this README, CODEX_LOG | Shared call/token/deadline control, offline proofs, prepared isolation preflight |
 | Claude | `quadratus/cli_providers.py`, `quadratus/delegation.py` introductory wording only, `tests/test_native_control.py`, CLAUDE_LOG | Enforce native OpenAI delegation disabled despite CLI overrides; review other vendor gaps; tests |
-| Claude next review | Hold-out fixture design and Codex controls | Record review before application solver output exists; do not implement the application feature |
+| Claude next review | Frozen scored output | Score the saved result against the already committed private cases; no examiner or application edits |
 | Codex next review | Claude native control changes | Independent tests and override/bypass checks |
 
 Both agents may read everything in this development checkout; only the later
@@ -39,9 +39,14 @@ before overlapping edits. Do not claim a second agent ran until it returned.
 
 ## Current checkpoint
 
-Implementation and independent Claude review are recorded in [IMPLEMENTATION.md](IMPLEMENTATION.md),
-[CODEX_LOG.md](CODEX_LOG.md), [CLAUDE_LOG.md](CLAUDE_LOG.md) (cloud),
-[CLAUDE_LOCAL_LOG.md](CLAUDE_LOCAL_LOG.md) (local), and
-[CLAUDE_CONTROL_REVIEW.md](CLAUDE_CONTROL_REVIEW.md). Codex addressed the accepted
-review findings and documents disagreements with evidence. No native-control
-live proof, isolated vendor authentication or scored task is claimed.
+[STATUS.md](STATUS.md) is the single current handoff record. Review and probe
+preparation are complete; runtime a001c1b and the application/configuration are
+frozen for one bounded attempt. Historical waiting notes in CODEX_LOG and
+CLAUDE_LOG are superseded by STATUS, not fresh requests for another review.
+
+Codex owns launch, evidence preservation and the explicit saved-output handoff.
+Claude owns independent scoring after receipt. The two agents acknowledge the
+handoff on PR11; a new failed check must name a concrete repair owner and a
+verification owner. See [IMPLEMENTATION.md](IMPLEMENTATION.md) for interfaces,
+[CODEX_LOG.md](CODEX_LOG.md), [CLAUDE_LOG.md](CLAUDE_LOG.md) (cloud), and
+[CLAUDE_LOCAL_LOG.md](CLAUDE_LOCAL_LOG.md) (local) for append-only history.

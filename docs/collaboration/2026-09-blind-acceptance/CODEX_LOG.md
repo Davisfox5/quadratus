@@ -336,3 +336,11 @@ neutral brief (30 files), d1f993... image, effective CLI settings/limits, and
 unchanged 71cb8b... private archive commitment. Freeze digest f22398d1d16f37d101d3d76ea7a6216c1d270574783892a372e11d89916e4abb.
 No examiner contents opened. Codex owns the one scored launch and evidence;
 Claude takes independent scoring only after saved output is handed over.
+
+Scored attempt1 launched 2026-09-15T17:24:15.755988Z through the isolated
+supervisor, run b7ccbd24. Fable was selected naturally for the first planning
+call. No examiner prompts, model-coverage hints or evaluator feedback were
+provided. The source/runtime mounts are exactly the frozen sets. Removed
+obsolete current-state review gates from README/IMPLEMENTATION; STATUS is
+now explicitly the single owner/trigger record, with append-only history
+preserved. No plan to automatically resume a partial attempt.
