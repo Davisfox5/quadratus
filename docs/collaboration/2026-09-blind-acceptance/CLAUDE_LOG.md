@@ -534,3 +534,22 @@ diff-check clean.
 
 This is the one exception to "no branch edits until the attempt is saved":
 a control that denies nothing must not be frozen. Nothing else changes.
+
+## 2026-09-15 — grok off-mode denial widened to the documented spawner and scheduler
+
+Codex's grok tool-list check on fdcbd99 (the space-joined value) listed
+`spawn_subagent`, `scheduler_create`, `workflow`, `use_tool` and
+`search_tool` still present, which confirms the separator bug fixed in
+66dc387 and adds two names the installed docs identify: `spawn_subagent` is
+the native spawner with `Agent` as its alias, and `scheduler_create`
+schedules a later re-entry (the analogue of Claude's CronCreate). Off mode
+on grok now denies `Agent,spawn_subagent,workflow,scheduler_create,use_tool,
+search_tool`, comma-joined, with `GROK_WORKFLOWS=0` in the environment.
+The spec comment is rewritten from the doc lines Codex quoted
+(04-slash-commands.md:296, 05-configuration.md:364-372,
+07-mcp-servers.md:213-218, 14-headless-mode.md:35,51-82). Default mode and
+the restricted seat's own arguments are unchanged; two regressions pin the
+normal and restricted off-mode argv byte for byte and the default-mode argv
+as before. Full suite passes; ruff and diff-check clean. Codex runs one
+grok tool-list check from this commit; pass means the five names are
+absent and read_file, run_terminal_command, search_replace, write remain.

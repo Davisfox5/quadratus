@@ -993,21 +993,32 @@ GROK_SPEC = CLISpec(
     # was first thought impossible.
     restricted_prompt_flag="-p",
     readonly_args=[],
-    # Run-wide off mode. The 2026-09-15 live probe under this denial listed no
-    # Agent tool and answered "native delegation unavailable", but the same
-    # listing showed ``workflow``, ``use_tool`` and ``search_tool``, whose
-    # documentation this harness could not reach (docs.x.ai is unreachable
-    # from the review environment). A tool that runs a workflow or invokes a
-    # tool by name is a possible route around a denied name, so all three are
-    # denied as well until the shipped README says what they do. UNVERIFIED
-    # for those three; the direct read/write/exec tools are separate names and
-    # are not touched.
-    native_fanout_off_args=["--disallowed-tools", "Agent,workflow,use_tool,search_tool"],
+    # Run-wide off mode, from the installed grok 1.0.30 documentation as
+    # quoted by Codex on PR #11 (2026-09-15), since docs.x.ai is unreachable
+    # from the review environment:
+    #   spawn_subagent   the native spawner (user guide); Agent is its alias,
+    #                    so both names are denied
+    #   workflow         every workflow agent() call and parallel() item
+    #                    spends a child-agent slot (04-slash-commands.md:296);
+    #                    on by default, GROK_WORKFLOWS=0 disables it
+    #                    (05-configuration.md:364-372)
+    #   scheduler_create schedules a later re-entry, the analogue of Claude's
+    #                    CronCreate; a way past the one turn asked for
+    #   search_tool,     MCP discovery and calling an integration by qualified
+    #   use_tool         name (07-mcp-servers.md:213-218): integration
+    #                    dispatchers, not shown to be an Agent bypass, denied
+    #                    because a fresh HOME has no vetted integrations
+    # --disallowed-tools removes built-in tools and is comma-separated
+    # (--help; 14-headless-mode.md:35,51-82). Direct read_file,
+    # run_terminal_command, search_replace, write, grep, list_dir and the web
+    # tools are separate names and are untouched. The 2026-09-15 live check
+    # of the space-joined form listed spawn_subagent, scheduler_create,
+    # workflow, use_tool and search_tool still present, which is what a
+    # single nonsense name denies: nothing. Hence the separator field.
+    native_fanout_off_args=["--disallowed-tools",
+                            "Agent,spawn_subagent,workflow,scheduler_create,use_tool,search_tool"],
     disallowed_tools_separator=",",
-    # Vendor guide (05-configuration.md, per the 2026-09-15 documentation
-    # read): workflow is on by default and GROK_WORKFLOWS=0 disables it, and
-    # every workflow agent() call spends a child-agent slot. Removed at
-    # startup as well as denied by name.
+    # Workflows removed at startup as well as denied by name.
     native_fanout_off_env={"GROK_WORKFLOWS": "0"},
     disallowed_tools_flag="--disallowed-tools",
     # Every *agentic* call, read-only included: without it the turn is

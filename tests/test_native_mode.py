@@ -29,7 +29,7 @@ def _pair(argv, flag):
 #: Every documented route from one claude -p call to work outside itself.
 CLAUDE_OFF_DENIALS = ["Task", "Agent", "Workflow", "SendMessage", "ListAgents",
                       "RemoteTrigger", "CronCreate", "mcp__*"]
-GROK_OFF_DENIALS = ["Agent", "workflow", "use_tool", "search_tool"]
+GROK_OFF_DENIALS = ["Agent", "spawn_subagent", "workflow", "scheduler_create", "use_tool", "search_tool"]
 
 
 def test_default_mode_leaves_claude_and_grok_senior_seats_alone():
@@ -135,7 +135,8 @@ def test_grok_agent_call_after_the_denial_is_an_observed_child(monkeypatch):
     assert child.total_tokens is None, "the vendor reports nothing for the child"
     assert child.detail.startswith(
         "CONTROL FAILURE (suspected): a denied fan-out tool was attempted although "
-        "the call sent --disallowed-tools Agent workflow use_tool search_tool; "
+        "the call sent --disallowed-tools Agent spawn_subagent workflow scheduler_create "
+        "use_tool search_tool; "
         "execution and usage unknown")
     assert grok._native_fanout_denied == GROK_OFF_DENIALS
     assert ATTEMPTED_DELEGATION in child.detail and " ran " not in child.detail
@@ -296,7 +297,7 @@ def test_off_mode_sets_grok_workflow_kill_switch_and_comma_denials(monkeypatch, 
     seen = _captured_launch(monkeypatch, _grok_envelope(["read_file"]))
     GrokCLIProvider(model="", allow_writes=True, workdir=tmp_path).generate("p")
     assert seen["env"]["GROK_WORKFLOWS"] == "0"
-    assert _pair(seen["argv"], "--disallowed-tools") == "Agent,workflow,use_tool,search_tool"
+    assert _pair(seen["argv"], "--disallowed-tools") == ",".join(GROK_OFF_DENIALS)
     assert _pair(seen["argv"], "--tools") if "--tools" in seen["argv"] else True
 
 
@@ -307,3 +308,29 @@ def test_fold_respects_the_vendor_separator():
     assert _fold_disallowed(["x"], "--disallowed-tools", ["a", "b"], ",") == ["x", "--disallowed-tools", "a,b"]
     assert _fold_disallowed(["--disallowed-tools", "Bash Edit"], "--disallowed-tools",
                             ["Task", "Edit"]) == ["--disallowed-tools", "Bash Edit Task"]
+
+
+def test_grok_off_mode_argv_is_pinned_byte_for_byte(monkeypatch):
+    """The normal and restricted grok argv under off mode, exactly. A change
+    here is a change to the live control and must be deliberate."""
+    monkeypatch.setenv("QUADRATUS_NATIVE_DELEGATION", "off")
+    normal = GrokCLIProvider(model="", allow_writes=True)._build_argv("p", "")
+    assert normal[1:] == ["--output-format", "json", "--always-approve",
+                          "--disallowed-tools",
+                          "Agent,spawn_subagent,workflow,scheduler_create,use_tool,search_tool",
+                          "--prompt-file", normal[-1]]
+    worker = GrokCLIProvider(model="").for_seat("", restricted=True)._build_argv("p", "")
+    assert worker[1:] == ["--output-format", "json",
+                          "--tools", "read_file,grep,list_dir,web_search,web_fetch",
+                          "--disallowed-tools",
+                          "Agent,spawn_subagent,workflow,scheduler_create,use_tool,search_tool",
+                          "-p", "p"]
+    for argv in (normal, worker):
+        assert " " not in argv[argv.index("--disallowed-tools") + 1]
+
+
+def test_grok_default_mode_argv_is_unchanged_by_the_widening():
+    normal = GrokCLIProvider(model="", allow_writes=True)._build_argv("p", "")
+    assert "--disallowed-tools" not in normal
+    worker = GrokCLIProvider(model="").for_seat("", restricted=True)._build_argv("p", "")
+    assert worker[worker.index("--disallowed-tools") + 1] == "Agent"
