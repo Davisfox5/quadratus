@@ -305,3 +305,19 @@ Full local suite on fdcbd99 plus probe option: **887 passed in 55.68s**, zero
 skips, including Docker/installed-Codex checks. This passing suite did not
 catch the vendor delimiter defect. Both temporary auth seeds removed and
 probe containers removed. Evidence: wider-denial-probes.json.
+
+Prepared tools/acceptance/blind_trial.py while Claude repairs the control. It
+uses the approved limits and normal run_project routing with a neutral TASK.md,
+CLI-only Settings, native-off mode, and no evaluator callbacks. Saves private
+vendor envelopes and fresh-HOME session evidence, excluding auth files. Host
+execution is refused. Offline isolated smoke (no credentials, no network,
+mocked run_project, zero model calls) proved limits/settings passed correctly,
+incomplete-result persistence, progress/envelope capture, owner-only evidence,
+and export of session canary without exporting a credential canary. Ruff and
+compile passed. An initial host invocation without PYTHONPATH stopped at import;
+with the runtime import path it reached the intended container-only refusal.
+
+Application input exported fresh from a8772ab (30 files including neutral task)
+and archive SHA-256 reverified unchanged. This is source preparation; final
+runtime/config freeze awaits the targeted control fix and single Grok check.
+Claude explicitly acknowledged ownership in PR comment5684764349.

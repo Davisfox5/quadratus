@@ -48,3 +48,15 @@ once to challenge enforcement. Both modes retain usage and private rollouts.
 
 Use `--mode tools --writable-tools` when checking that an off-mode denial
 preserves ordinary read/write/exec availability. It still requests no tool calls.
+
+`blind_trial.py` is the scored launcher. Include it with only the engine source
+in the read-only runtime, then run `python /opt/quadratus/blind_trial.py` with
+`run_isolated(..., wall_seconds=900, network=True, credentials=seed)`. It reads
+only /work/TASK.md as the application request, selects CLI transport, disables
+native delegation, and sets the approved 24-attempt/500,000-reported-token/
+900-second/two-helper limits. A result of 2 means the workflow is incomplete;
+partial work and its reason are retained under .quadratus. It captures vendor
+envelopes and sessions from the fresh HOME as private evidence; none of that
+raw material should be published without inspection. The outer watchdog may
+terminate before final session-copy/result steps, so distinguish an outer stop
+from a cleanly persisted controller result. Do not rerun automatically.
