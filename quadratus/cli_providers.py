@@ -482,19 +482,32 @@ def _pick_max(left: Optional[int], right: Optional[int]) -> Optional[int]:
     return max(left, right)
 
 
+def _strict_count(value, *, missing_ok: bool) -> Optional[int]:
+    """A token count as the envelope must state it: a non-negative int.
+
+    Strings, floats, booleans and negatives are malformed, not coerced; a
+    missing optional field is zero, a missing required one is malformed.
+    """
+    if value is None:
+        return 0 if missing_ok else None
+    if type(value) is not int or value < 0:
+        return None
+    return value
+
+
 def _claude_row_totals(row) -> Optional[Dict[str, int]]:
     """One ``modelUsage`` row as (input incl. cache, output), or None if malformed."""
     if not isinstance(row, dict):
         return None
-    try:
-        input_tokens = (int(row.get("inputTokens", 0)) + int(row.get("cacheReadInputTokens", 0))
-                        + int(row.get("cacheCreationInputTokens", 0)))
-        output_tokens = int(row.get("outputTokens", 0))
-    except (ValueError, TypeError):
+    fields = [
+        _strict_count(row.get("inputTokens"), missing_ok=False),
+        _strict_count(row.get("cacheReadInputTokens"), missing_ok=True),
+        _strict_count(row.get("cacheCreationInputTokens"), missing_ok=True),
+        _strict_count(row.get("outputTokens"), missing_ok=False),
+    ]
+    if any(f is None for f in fields):
         return None
-    if input_tokens < 0 or output_tokens < 0:
-        return None
-    return {"input_tokens": input_tokens, "output_tokens": output_tokens}
+    return {"input_tokens": fields[0] + fields[1] + fields[2], "output_tokens": fields[3]}
 
 
 def _claude_usage_parts(stdout: str):
@@ -504,6 +517,12 @@ def _claude_usage_parts(stdout: str):
     top-level ``usage`` is the seat model's alone, while ``modelUsage`` also
     carried a Haiku row (2,817 tokens) for the CLI's own auxiliary call. That
     row was real subscription usage the run budget never saw.
+
+    ``malformed`` is true when any part of the metadata could not be read as
+    stated: a row that is not a mapping, a count that is not a non-negative
+    integer, a ``modelUsage`` that is not a mapping, or rows whose sum is
+    smaller than the seat's own figure (the seat is one of the rows, so a
+    smaller sum means rows are missing).
     """
     try:
         payload = json.loads(stdout)
@@ -512,31 +531,39 @@ def _claude_usage_parts(stdout: str):
     if not isinstance(payload, dict):
         return None, {}, False
     seat = None
+    malformed = False
     usage = payload.get("usage")
     if isinstance(usage, dict):
-        try:
-            seat = {
-                "input_tokens": (int(usage.get("input_tokens", 0))
-                                 + int(usage.get("cache_read_input_tokens", 0))
-                                 + int(usage.get("cache_creation_input_tokens", 0))),
-                "output_tokens": int(usage.get("output_tokens", 0)),
-            }
-        except (ValueError, TypeError):
-            seat = None
-        if seat and seat["input_tokens"] == 0 and seat["output_tokens"] == 0:
-            seat = None
+        counts = [
+            _strict_count(usage.get("input_tokens"), missing_ok=True),
+            _strict_count(usage.get("cache_read_input_tokens"), missing_ok=True),
+            _strict_count(usage.get("cache_creation_input_tokens"), missing_ok=True),
+            _strict_count(usage.get("output_tokens"), missing_ok=True),
+        ]
+        if any(c is None for c in counts):
+            malformed = True
+        else:
+            seat = {"input_tokens": counts[0] + counts[1] + counts[2], "output_tokens": counts[3]}
+            if seat["input_tokens"] == 0 and seat["output_tokens"] == 0:
+                seat = None
+    elif usage is not None:
+        malformed = True
     rows: Dict[str, Dict[str, int]] = {}
-    malformed = False
     model_usage = payload.get("modelUsage")
     if isinstance(model_usage, dict):
         for name, row in model_usage.items():
             totals = _claude_row_totals(row)
-            if totals is None or not isinstance(name, str):
+            if totals is None or not isinstance(name, str) or not name:
                 malformed = True
                 continue
             rows[name] = totals
     elif model_usage is not None:
         malformed = True
+    if rows and seat is not None:
+        total_in = sum(r["input_tokens"] for r in rows.values())
+        total_out = sum(r["output_tokens"] for r in rows.values())
+        if total_in + total_out < seat["input_tokens"] + seat["output_tokens"]:
+            malformed = True
     return seat, rows, malformed
 
 
@@ -548,55 +575,65 @@ def _extract_claude_usage(stdout: str) -> Optional[Dict[str, int]]:
     still billed input there (at a different rate the seed sheet does not try
     to model -- the counterfactual is deliberately the conservative one).
 
-    The reported figure is the larger of the top-level ``usage`` (the seat
-    model) and the sum of every ``modelUsage`` row (seat plus the CLI's own
-    auxiliary models). The two are never added to each other: the seat's row
-    is inside the sum already, so taking the sum counts each token once.
-    Malformed rows are skipped and flagged in the diagnostics, never guessed;
-    the seat's own figure is still reported so a known part stays known.
+    The reported figure is the sum of every ``modelUsage`` row (seat plus the
+    CLI's own auxiliary models) when rows are present, else the top-level
+    ``usage`` (the seat alone). The two are never added to each other: the
+    seat's row is inside the sum, so each token is counted once.
+
+    Malformed or partial metadata makes the whole figure **unknown** (None),
+    so the run budget stops rather than continue on a count that is known to
+    be incomplete. The known seat part is preserved in the diagnostics for
+    the record; it is not presented as the total.
     """
-    seat, rows, _ = _claude_usage_parts(stdout)
+    seat, rows, malformed = _claude_usage_parts(stdout)
+    if malformed:
+        return None
     if rows:
-        total = {"input_tokens": sum(r["input_tokens"] for r in rows.values()),
-                 "output_tokens": sum(r["output_tokens"] for r in rows.values())}
-        if seat is None:
-            return total if (total["input_tokens"] or total["output_tokens"]) else None
-        if total["input_tokens"] + total["output_tokens"] >= seat["input_tokens"] + seat["output_tokens"]:
-            return total
+        return {"input_tokens": sum(r["input_tokens"] for r in rows.values()),
+                "output_tokens": sum(r["output_tokens"] for r in rows.values())}
     return seat
 
 
 def _extract_claude_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
     """Provenance for the usage figure: which rows beyond the seat were counted.
 
-    ``auxiliary_models`` names the ``modelUsage`` rows that are not the seat
-    (identified as the row whose totals equal the top-level ``usage``), and
+    ``auxiliary_models`` names the ``modelUsage`` rows that are not the seat,
+    the seat being the one row whose totals equal the top-level ``usage``;
     ``auxiliary_tokens`` is their input plus output. When no row matches the
-    seat exactly the rows are ``unattributed`` and the figure is the excess of
-    the rows' sum over the seat. A malformed row sets ``auxiliary_usage`` to
-    ``unknown``: what could not be parsed is reported as missing, not as zero.
-    Names and integers only; nothing from the envelope's text reaches here.
+    seat, or more than one does (a tie is not an identity), the rows are
+    ``unattributed`` and the figure is the excess of the rows' sum over the
+    seat. Malformed metadata sets ``auxiliary_usage`` to ``unknown`` and
+    reports the seat's own known figure as ``seat_tokens``: what could not be
+    parsed is missing, not zero, and the run budget sees None. Names and
+    integers only; nothing from the envelope's text reaches here.
     """
     seat, rows, malformed = _claude_usage_parts(stdout)
     diagnostics: Dict[str, object] = {}
-    if rows:
-        seat_rows = [name for name, r in rows.items() if seat is not None and r == seat]
-        if seat is None or seat_rows:
-            aux = {name: r for name, r in rows.items() if name not in seat_rows[:1]}
-            if seat is None:
-                aux = dict(rows)
-            if aux:
-                diagnostics["auxiliary_models"] = sorted(aux)
-                diagnostics["auxiliary_tokens"] = sum(r["input_tokens"] + r["output_tokens"] for r in aux.values())
-        else:
-            excess = (sum(r["input_tokens"] + r["output_tokens"] for r in rows.values())
-                      - seat["input_tokens"] - seat["output_tokens"])
-            diagnostics["auxiliary_models"] = sorted(rows)
-            diagnostics["auxiliary_tokens"] = max(excess, 0)
-            diagnostics["auxiliary_usage"] = "unattributed"
     if malformed:
         diagnostics["auxiliary_usage"] = "unknown"
-    return diagnostics or None
+        if seat is not None:
+            diagnostics["seat_tokens"] = seat["input_tokens"] + seat["output_tokens"]
+        return diagnostics
+    if not rows:
+        return None
+    total = sum(r["input_tokens"] + r["output_tokens"] for r in rows.values())
+    if seat is None:
+        diagnostics["auxiliary_models"] = sorted(rows)
+        diagnostics["auxiliary_tokens"] = total
+        diagnostics["auxiliary_usage"] = "unattributed"
+        return diagnostics
+    seat_rows = [name for name, r in rows.items() if r == seat]
+    if len(seat_rows) == 1:
+        aux = {name: r for name, r in rows.items() if name != seat_rows[0]}
+        if not aux:
+            return None
+        diagnostics["auxiliary_models"] = sorted(aux)
+        diagnostics["auxiliary_tokens"] = sum(r["input_tokens"] + r["output_tokens"] for r in aux.values())
+        return diagnostics
+    diagnostics["auxiliary_models"] = sorted(rows)
+    diagnostics["auxiliary_tokens"] = total - seat["input_tokens"] - seat["output_tokens"]
+    diagnostics["auxiliary_usage"] = "unattributed"
+    return diagnostics
 
 
 @dataclass
@@ -655,6 +692,10 @@ class CLISpec:
     #: argued with either.
     native_fanout_off_env: Dict[str, str] = field(default_factory=dict)
     disallowed_tools_flag: str = ""
+    #: Arguments that turn the restricted seat into a one-turn, tool-less (or
+    #: as close as the CLI documents) summary call. Sent only when a provider
+    #: view carries ``summary_only=True``; see ``CLIProvider._build_argv``.
+    summary_only_args: List[str] = field(default_factory=list)
     #: How the CLI separates several names in one ``disallowed_tools_flag``
     #: value. Claude takes whitespace; grok's ``--help`` says comma-separated,
     #: and a space-joined list would reach it as one nonsense tool name that
@@ -765,6 +806,11 @@ CLAUDE_SPEC = CLISpec(
         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "0",
     },
     disallowed_tools_flag="--disallowed-tools",
+    # Summary-only form (cli-reference, read 2026-09-15): ``--tools ""``
+    # "disables all tools"; ``--max-turns 1`` limits agentic turns in print
+    # mode and "exits with an error when the limit is reached". Together they
+    # make the closeout a single model call over the prompt it was given.
+    summary_only_args=["--tools", "", "--max-turns", "1"],
     extract=_extract_claude_result,
     # Mandatory, not merely safer: --disallowed-tools is variadic, so a
     # positional prompt after it is swallowed as another tool name and the CLI
@@ -989,6 +1035,11 @@ CODEX_SPEC = CLISpec(
     # still needs a live probe, so observed children remain in the telemetry.
     control_args=list(CODEX_NATIVE_DELEGATION_CONTROL),
     override_conflicts=codex_override_conflicts,
+    # Summary-only form: codex exec has no tool allowlist and no turn cap in
+    # this spec, so the bound is ``--sandbox read-only`` plus the native
+    # controls plus the caller's 60 s / one-attempt limits. Stated, not
+    # papered over with a flag this file has never seen accepted.
+    summary_only_args=[],
     extract=_extract_codex_result,
     extract_usage=_extract_codex_usage,
     prompt_on_stdin=True,
@@ -1115,6 +1166,11 @@ GROK_SPEC = CLISpec(
     disallowed_tools_separator=",",
     # Workflows removed at startup as well as denied by name.
     native_fanout_off_env={"GROK_WORKFLOWS": "0"},
+    # Summary-only form: the guide documents ``--max-turns`` on the ``-p``
+    # form, and no tool-less form, so the bound is one turn on top of the
+    # restricted read-only allowlist and the full denial. A read tool that
+    # is present but has no turn to run in is the honest description.
+    summary_only_args=["--max-turns", "1"],
     disallowed_tools_flag="--disallowed-tools",
     # Every *agentic* call, read-only included: without it the turn is
     # cancelled silently the first time a tool is called. A restricted seat
@@ -1366,6 +1422,9 @@ class CLIProvider(LLMProvider):
         self._workdir = workdir
         self._owned_workdir: Optional[str] = None
         self._allow_writes = allow_writes
+        #: One-turn, tool-less summary call on the restricted seat (closeout).
+        #: Off by default; a per-call view sets it. See ``_build_argv``.
+        self.summary_only: bool = bool(kwargs.pop("summary_only", False))
         self._prompt_files = set()
         #: Real token counts from the most recent call, when the CLI reported
         #: them; None otherwise. Read by metering glue, never load-bearing.
@@ -1482,6 +1541,26 @@ class CLIProvider(LLMProvider):
         # a bounded one from the outside.
         extra = spec.extra_args()
         mode = native_delegation_mode()
+        if self.summary_only:
+            # The closeout form (2026-09-15): the record that survives a task
+            # is written from the transcript and diff the caller supplies,
+            # never by re-reading the project. Scored attempt 1 spent 258k
+            # tokens on exactly that re-reading. So this view refuses to be
+            # anything but bounded: restricted seat, empty directory, one
+            # attempt, a minute, no operator override, and native fan-out
+            # off whatever the run-wide mode says.
+            if not self.restricted:
+                raise ProviderError(f"{self.label}: summary_only requires the restricted seat form")
+            if extra:
+                raise NativeControlOverride(
+                    f"QUADRATUS_CLI_ARGS_{spec.vendor.upper()} must be empty for a summary-only call")
+            if self.max_retries > 1:
+                raise ProviderError(f"{self.label}: summary_only allows one attempt, not {self.max_retries}")
+            if self.timeout is None or self.timeout > 60:
+                raise ProviderError(f"{self.label}: summary_only allows at most 60s, not {self.timeout}")
+            if os.listdir(self.workdir):
+                raise ProviderError(f"{self.label}: summary_only requires an empty working directory")
+            mode = 'off'
         if mode == 'off' and spec.native_fanout_off_args:
             # Vendor-specific flag precedence is not a reliable generic
             # parser. In this strict opt-in mode, reject overrides rather
@@ -1515,6 +1594,8 @@ class CLIProvider(LLMProvider):
         # promises.
         argv += list(spec.control_args)
         argv += extra
+        if self.summary_only:
+            argv += list(spec.summary_only_args)
         if self.restricted and spec.restricted_prompt_flag:
             if len(prompt) > MAX_ARGV_PROMPT:
                 # Falling back to a prompt file here would silently drop the
