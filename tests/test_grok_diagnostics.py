@@ -141,7 +141,11 @@ def test_the_provider_exposes_diagnostics_and_resets_them_per_attempt(monkeypatc
         provider.cleanup()
 
 
-def test_other_vendors_carry_no_diagnostics():
-    assert cli_providers.CLAUDE_SPEC.extract_diagnostics is None
+def test_codex_carries_no_diagnostics_and_claude_only_usage_provenance():
+    """Grok's extractor reads tool names from an undocumented envelope shape;
+    claude's (added 2026-09-15) reads only usage provenance from ``modelUsage``;
+    codex has none. Adding one elsewhere is a deliberate whitelist decision."""
     assert cli_providers.CODEX_SPEC.extract_diagnostics is None
+    assert cli_providers.CLAUDE_SPEC.extract_diagnostics is cli_providers._extract_claude_diagnostics
+    assert cli_providers.CLAUDE_SPEC.extract_diagnostics('{"result": "ok"}') is None
     assert cli_providers.GROK_SPEC.extract_diagnostics is _extract_grok_diagnostics
