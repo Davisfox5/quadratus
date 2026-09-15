@@ -248,3 +248,31 @@ Verification: `ruff check .` clean, `git diff --check` clean, full suite
 eight new tests in `tests/test_native_mode.py`. Nothing here is a live
 proof; it is what the harness will now do with the evidence a live run
 returns.
+
+## 2026-09-15 — Codex's correction on 7179c90 taken: grok evidence is "attempted", not "ran"
+
+Codex is right that a tool name in grok's `toolCalls` does not prove a child
+executed; a cancelled or refused request leaves the same record. Changed in
+my lane:
+
+- Synthesised grok children carry the `ATTEMPTED_DELEGATION` marker in their
+  detail ("denied fan-out tool named in the envelope's tool calls; whether it
+  executed and what it spent are unknown").
+- The annotation now has two wordings. A child the vendor's own stream
+  reports (codex) keeps `CONTROL FAILURE: native child ran although the call
+  sent ...`. A denied-name child gets `CONTROL FAILURE (suspected): a denied
+  fan-out tool was attempted although the call sent --disallowed-tools
+  Agent; execution and usage unknown`. The two kinds stay distinct in the
+  record.
+- The budget latch is unchanged: an attempted denied tool still stops the
+  run, on the reasoning that under `--always-approve` an attempt may well
+  have run and stopping on suspicion is the conservative reading.
+- Regression added: a grok envelope that lists `Agent` and ends `cancelled`,
+  driven through the real `generate` path with a faked launcher and a live
+  `RunBudget`. Asserts the turn fails as cancelled, the child is recorded as
+  attempted (never "ran"), tool arguments do not leak into the detail, the
+  budget's stop reason is `uncontrolled_native_delegation`, and the next
+  reservation is refused.
+
+Verification: ruff clean, `git diff --check` clean, full suite **852 passed,
+6 skipped**. No runtime files outside my lane touched; no scored attempt.
