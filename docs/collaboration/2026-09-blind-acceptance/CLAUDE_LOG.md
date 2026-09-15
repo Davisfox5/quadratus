@@ -826,3 +826,73 @@ Two notes, neither blocking:
 Verdict: the caller matches the confirmed interface; combined suite green;
 no live claim made. The bounded-closeout cost saving is still an estimate
 until a run measures it, as the reconciliation says.
+
+## 2026-09-15 — independent review of the live closeout replay (af9aa96, bbd7b75)
+
+Evidence in `evidence/closeout-live-1/`, record in `CLOSEOUT_LIVE_1.md`.
+Everything below was recomputed here, not read off the record.
+
+**Verified.**
+
+- Hashes: all seven published files match `sha256.json`; the prompt hash
+  `b93e8d9c…cf42` is identical in `grok.json`, `claude.json` and
+  `freeze.json`; the prompt is 11,456 bytes, under the 32,000 bound.
+- Freeze: 35 of 36 runtime file hashes match the `c3a47c2` tree exactly.
+  The 36th, `closeout_probe.py`, matches the committed harness
+  (`714de05e…`) but was added at af9aa96, after c3a47c2; the record should
+  say the harness postdates the frozen engine commit it ran with. The
+  harness itself is small and does what it says: `Fleet.invoke` inside
+  `invocation(…, 'closeout')`, one-call budget, ledger, launch capture.
+- argv: rebuilt for both seats from the committed engine and the published
+  prompt (restricted seat, `summary_only`, low effort, closeout system
+  text from `runtime._closeout`); `sha256(json.dumps(argv))` equals the
+  recorded `argv_sha256` for grok and for claude. So the live calls sent
+  exactly: grok `--system-prompt-override … --output-format json --effort
+  low --tools read_file,grep,list_dir,web_search,web_fetch
+  --disallowed-tools Agent,spawn_subagent,workflow,scheduler_create,use_tool,search_tool
+  --max-turns 1 -p <prompt>`, no `--always-approve`; claude `-p
+  --system-prompt … --model fable --output-format json --effort low
+  --disallowed-tools <off-mode denial> --tools "" --max-turns 1`. Both ran
+  in an empty directory (`cwd_empty: true`) with a 60 s timeout.
+- Usage arithmetic: the current extractors applied to the published
+  envelope fields give grok 5,660 in (5,532 + 128 cache read) and 452 out,
+  6,112 total, one model call; claude 5,103 in (2 + 5,101 cache creation)
+  and 0 out. Claude's single `modelUsage` row equals the seat, so no
+  auxiliary row, diagnostics None. Totals 11,215 as recorded.
+- Prompt provenance: the structure is `_close_out`'s (instruction block,
+  historical task description, transcript, harness diff, last check
+  labelled "saved attempt; not rerun by this probe"); no scope block, no
+  "use actual files as evidence" rule. The diff is attempt 1's (71 lines
+  added in `app.py`, 61 in the test file).
+- Summary fidelity: every checkable claim in `grok-reply.txt` holds
+  against the prompt: ~70-line endpoint (71), 61-line tests, error strings
+  differing from the spec's placeholders, `players` always `[]`,
+  `duplicate` always 0, the four deferred items named, the old test result
+  kept distinct from a new check. "DEAD ENDS: none recorded" is right for
+  the supplied evidence (the 200-assertion note appears under REASONING as
+  a recorded alternative).
+
+**Refusal, reviewed without any attempt around it.** Claude returned
+`stop_reason: refusal`, label `reasoning_extraction`, one turn, zero
+output tokens, `subagent_stats.spawned 0`, no permission denials. The
+provider raised `ProviderRefusal`, the budget counted the input, no
+fallback ran because the caller cleared it. Observation only: the prompt
+asks for a section titled REASONING derived from another model's
+transcript, and the label names reasoning extraction; that association is
+plausible and unproven, and whether the section wording changes is a
+product decision for the disposition owner, not a workaround I recommend.
+Successful Claude closeout remains unverified.
+
+**On the comparison.** 6,112 against 258,413 is one observation under a
+different prompt (the old call carried the scope block and ran eight
+tool-using turns whose re-sent context was the dominant term; this one
+was a single turn). The reduction is the design working as intended, not
+a benchmark. Agreed with the record's qualification.
+
+**Limits.** Grok's envelope carries no tool-call trace, so "no tools used"
+is inferred from `--max-turns 1`, `modelCalls: 1` and 11 s, not observed.
+One sample per vendor. Worker coverage untouched by this probe.
+
+Verdict: the record is accurate and its claims are supported by the
+evidence; two record notes above (harness postdates c3a47c2; inferred, not
+observed, tool absence on grok). No implementation, no new run.
