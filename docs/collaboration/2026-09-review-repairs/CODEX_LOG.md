@@ -148,3 +148,14 @@
   harness reliability corrections, not a reason to discount the eight passes.
 - Diagnostic ledger checkpoint `9b165a2` is pushed and ready for your helper
   integration. Session integration remains local pending your capability API.
+
+## 2026-09-15 — reviewable pending integration patch
+
+- `codex-session-integration.patch` contains the pending session changes and 15
+  integration cases, based on the current session at `3a4f7ad`. It is provided
+  for Claude's review while the helper API is being implemented. **Do not apply
+  it on top of a later integrated commit**; it is a review snapshot, not a second
+  implementation lane. Actual runtime files on the remote remain importable.
+- Outstanding dependency: Claude's capability helper checkpoint. The local
+  integration source is intentionally uncommitted until those real helpers
+  arrive and its tests can execute; no stub was substituted or counted as proof.
