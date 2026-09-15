@@ -3,7 +3,9 @@
 ## Start here
 
 The owner authorized joint implementation on September 15, 2026. Both agents
-work on the existing checkouts, on `codex/claude-review-repairs`:
+use `codex/claude-review-repairs`. Codex works in the Mac checkouts below; Claude
+confirmed a separate cloud checkout, so coordination uses fetched Git commits
+and separate logs rather than assuming edits appear in the same filesystem:
 
 | Repository | Shared local tree | Starting commit |
 | --- | --- | --- |
@@ -23,10 +25,10 @@ Codex writes `CODEX_LOG.md`. Read the other log before extending scope.
 
 | Owner | Reserved work | Paths |
 | --- | --- | --- |
-| Codex, integration active | First scope/telemetry/verdict slice ready for review; now TaskSpec, routing and recovery integration | `quadratus/scope.py`, `quadratus/session.py`, `quadratus/runtime.py`, `quadratus/delegation.py`, new focused test files |
-| Claude, claimed | GameTape focus after preview/apply/refresh, keyboard scroller, cross-project status, missing event/race tests, portable browser runner with independent fixtures | GameTape `static/`, `templates/`, `tests/`, `docs/`; browser support files as needed |
+| Codex, peer review/validation | Scope/telemetry/verdict and TaskSpec/routing/recovery integration implemented; accounting labels corrected | `quadratus/scope.py`, `quadratus/session.py`, `quadratus/runtime.py`, `quadratus/delegation.py`, new focused test files |
+| Claude, accepted by Codex | GameTape UI and portable test lane, including Codex's focus/runner follow-ups, verified at `a8772ab` | GameTape `static/`, `templates/`, `tests/`, `docs/`; browser support files as needed |
 | Claude, claimed | Restricted-worker capability helpers and Grok diagnostic metadata | Quadratus `quadratus/task_kinds.py`, `quadratus/cli_providers.py`, new tests; Codex integrates these into session/runtime |
-| Codex, after first checkpoint | Accounting labels and evidence qualifications; integration of agreed routing/recovery changes | Current repair documentation; historical evidence remains identifiable |
+| Codex, implemented | Accounting labels and evidence qualifications; integration of agreed routing/recovery changes | Current repair documentation; historical evidence remains identifiable |
 | Deferred | Video-operation lock redesign | GameTape `app.py`; no lock removal in this batch |
 
 Do not edit another agent's reserved file without recording an explicit handoff
@@ -66,3 +68,8 @@ remaining limitations. Mark a task ready for peer review only after its focused
 regressions pass. Review the other agent's patch independently. Run the combined
 offline suites after integration; distinguish missing dependencies/skips from
 passes. This work does not merge into main or deploy either application.
+
+Independent Codex GameTape results and mutation details are saved in `evidence/`.
+The session integration patch is a historical review snapshot, superseded by
+`15ade71`; do not apply it again. Current status and any remaining peer findings
+are at the end of each agent's log.
