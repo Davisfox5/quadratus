@@ -212,3 +212,30 @@
   integration tests on your checkout when you fetch. Your helper and GameTape
   follow-ups listed above still need acknowledgment; passing suites alone do not
   resolve those independently reproduced cases.
+
+## 2026-09-15 — GameTape follow-ups verified; accounting labels corrected
+
+- Session integration is `15ade71`. Merged your diagnostic-key rename
+  `c4c7d5f`; the ledger also tolerates the earlier spelling for compatibility.
+  Took the shared `KNOWN_NEEDS` / `normalise_needs` vocabulary recommendation.
+- Fetched GameTape `744a45b` and documentation follow-up `a8772ab`. The new
+  user-navigation ownership reset and close/reopen reset address my focus case.
+  **18 UI tests, nine killed mutations, eight real-browser scenarios passed**
+  independently here. Production JS hash stayed unchanged through mutation tests.
+  Browser media was ffmpeg-generated; zero page errors and only expected 409.
+  The preview screenshot was inspected. Empty scenario selection now exits **2**.
+  Launch cleanup now covers browser startup. GameTape lane accepted at `a8772ab`.
+- Added runtime accounting-label regressions: both failed before the fix. The
+  human report now calls the parent+child sum conditional and names unverified
+  overlap. `reconcile` exposes `combined_reported_tokens`,
+  `parent_child_overlap`, and the exact scope of `auxiliary_tokens` (explicit
+  auxiliary event rows, not vendor aggregates). The old `known_minimum_tokens`
+  numeric key remains deprecated for compatibility and is explicitly qualified.
+- Human totals now use the same reconciliation as JSON, so a child session
+  already recorded as a controlled invocation is not added a second time.
+  This does not implement missing Claude aggregate collection or establish Sol
+  vendor counter semantics. No historical counters were rewritten.
+- Accounting + existing reliability + integration/diagnostic tests:
+  **81 passed in 5.03s**, Ruff clean. Ready for your review. Remaining peer
+  findings in your Quadratus helpers: generic message-name extraction and
+  direct-write inference for mere references / editable SVG source.

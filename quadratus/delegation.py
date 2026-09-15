@@ -225,7 +225,7 @@ def safe_diagnostics(value) -> dict:
     count = value.get('model_calls')
     if type(count) is int and 0 <= count <= 1_000_000:
         result['model_calls'] = count
-    # CLI extraction uses tools_attempted; the ledger keeps one stable name.
+    # Accept the older extractor spelling while keeping one stable ledger key.
     names = value.get('attempted_tools', value.get('tools_attempted'))
     if isinstance(names, list):
         result['attempted_tools'] = list(dict.fromkeys(
@@ -380,8 +380,9 @@ class DelegationLedger:
                 )
             lines.append("")
 
-        controlled = self.controlled_tokens()
-        native = self.native_tokens()
+        totals = reconcile(self.events, self.native_children.values())
+        controlled = totals['controlled_tokens']
+        native = totals['native_child_tokens']
         lines.append("## Totals")
         lines.append(f"- Quadratus-dispatched: {controlled:,} tokens")
         if native:
@@ -389,7 +390,11 @@ class DelegationLedger:
                 f"- Vendor-native children (observed): {native:,} tokens, "
                 f"outside Quadratus budgets"
             )
-            lines.append(f"- Known minimum: {controlled + native:,} tokens")
+            lines.append(
+                f"- Combined reported sum (conditional): {controlled + native:,} tokens. "
+                "Parent/child counter overlap is unverified; this is not an "
+                "established non-overlapping minimum."
+            )
         unknown = self.unknown_events()
         if unknown:
             lines.append(
@@ -439,7 +444,9 @@ def reconcile(
     De-duplicates children by session id and takes the maximum reading for
     each, because vendor session logs restate cumulative totals. A child whose
     session id matches an event the harness itself dispatched is *not* added
-    again -- that is the double count this function exists to prevent.
+    again. Different session IDs alone do not prove that a vendor's parent
+    counter excludes children. The combined sum remains conditional until
+    that accounting contract is established.
     """
     events = list(events)
     dispatched_sessions = {e.session_id for e in events if e.session_id}
@@ -479,6 +486,11 @@ def reconcile(
         "controlled_tokens": controlled,
         "native_child_tokens": native,
         "auxiliary_tokens": auxiliary,
+        "auxiliary_tokens_scope": "Explicit auxiliary InvocationEvent rows only; vendor aggregates are not included.",
+        "combined_reported_tokens": controlled + native,
+        "parent_child_overlap": "unverified" if native else "not_applicable",
+        # Deprecated compatibility key: not a verified lower bound when child
+        # counters may overlap their parents. New consumers use fields above.
         "known_minimum_tokens": controlled + native,
         "unknown_invocations": len(unknown),
         "unknown_detail": [e.render() for e in unknown],
@@ -487,8 +499,11 @@ def reconcile(
         "note": (
             "Subscription usage including cached and repeated input. Native "
             "children counted once at their highest cumulative reading, never "
-            "summed across updates. Auxiliary vendor-internal usage is "
-            "reported separately and is not Quadratus-dispatched work. "
+            "summed across updates. The combined sum assumes child counters "
+            "are additional to parent counters; that overlap is unverified. "
+            "known_minimum_tokens is a deprecated compatibility key for that "
+            "conditional sum, not an established lower bound. Auxiliary usage "
+            "covers explicit auxiliary event rows only, not vendor aggregates. "
             "Unknown usage is unknown, not zero."
         ),
     }

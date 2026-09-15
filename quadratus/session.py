@@ -54,6 +54,7 @@ from .routing import (
 )
 from .scope import ScopeReport, TaskScope, changed_paths, count_change_lines
 from .task_kinds import (
+    KNOWN_NEEDS,
     MAX_TASK_LINES,
     ROUTING,
     NoCapableSeat,
@@ -61,6 +62,7 @@ from .task_kinds import (
     escalate_from,
     guidance_for,
     needs_from_text,
+    normalise_needs,
     policy_for,
     seat_satisfies,
 )
@@ -215,11 +217,11 @@ class TaskSpec:
         declared, self.description = _read_task_needs(self.description)
         if isinstance(self.needs, str):
             raise ValueError("Task needs must be a collection, not a string.")
-        self.needs = frozenset(self.needs) | declared | frozenset(needs_from_text(
+        self.needs = normalise_needs(self.needs) | declared | frozenset(needs_from_text(
             self.description, self.scope.acceptance if self.scope else (),
         ))
-        if self.needs - _TASK_NEEDS:
-            raise ValueError(f"Unknown task needs: {sorted(self.needs - _TASK_NEEDS)}")
+        if self.needs - KNOWN_NEEDS:
+            raise ValueError(f"Unknown task needs: {sorted(self.needs - KNOWN_NEEDS)}")
         # ``kind`` and ``work_class`` grew up in different modules and both can
         # say "security". Keeping them synchronised here means no caller can
         # construct a task that one security mechanism sees and the other
@@ -318,7 +320,6 @@ _SCOPE_REQUEST = (
     'with its work preserved. The line estimate has 50 percent tolerance.'
 )
 
-_TASK_NEEDS = frozenset({"execute", "patch", "direct-write"})
 _NEEDS_REQUEST = (
     'After KIND, optionally include NEEDS: ["execute", "patch", "direct-write"] '
     'with only the operations required for this task (or [] for none). '
@@ -340,9 +341,9 @@ def _read_task_needs(description: str):
         except ValueError as exc:
             raise ValueError("NEEDS must be a JSON list of operation names.") from exc
         if (not isinstance(values, list) or any(not isinstance(v, str) for v in values)
-                or set(values) - _TASK_NEEDS):
+                or set(values) - KNOWN_NEEDS):
             raise ValueError("NEEDS allows only execute, patch, and direct-write.")
-        declarations.append(frozenset(values))
+        declarations.append(normalise_needs(values))
     if len(set(declarations)) > 1:
         raise ValueError("Conflicting NEEDS declarations.")
     return (declarations[0] if declarations else frozenset()), "\n".join(lines).strip()
