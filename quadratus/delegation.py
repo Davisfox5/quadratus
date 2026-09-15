@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
@@ -55,6 +56,51 @@ __all__ = [
 
 
 invocation_context = ContextVar("quadratus_invocation", default=None)
+_pending_invocations = ContextVar("pending_invocations", default=None)
+
+
+@contextmanager
+def capture_invocations():
+    """Finalize calls after the enclosing caller's acceptance checks.
+
+    Fleet also uses this boundary on its own. Nested Fleet calls join the
+    session boundary, so a successful provider response followed by a scope
+    stop is persisted once, with usage and both outcomes intact.
+
+    Persistence waits for this short acceptance boundary. A hard process kill
+    during scope assessment can lose the pending row; ordinary exceptions and
+    interrupts flush it. This is not a write-ahead journal.
+    """
+    if _pending_invocations.get() is not None:
+        yield
+        return
+    pending = []
+    token = _pending_invocations.set(pending)
+    try:
+        yield
+    except BaseException as exc:
+        if pending and pending[-1][1].outcome == "ok":
+            event = pending[-1][1]
+            event.post_return_failure = True
+            event.outcome = type(exc).__name__
+            event.detail = str(exc)[:200]
+        raise
+    finally:
+        _pending_invocations.reset(token)
+        for ledger, event in pending:
+            try:
+                ledger.record(event)
+            except Exception:
+                log.debug("invocation persistence failed", exc_info=True)
+
+
+def record_invocation(ledger, event):
+    """Queue an event for its acceptance boundary, or record a direct call."""
+    pending = _pending_invocations.get()
+    if pending is None:
+        ledger.record(event)
+    else:
+        pending.append((ledger, event))
 
 
 @contextmanager
@@ -124,6 +170,10 @@ class InvocationEvent:
     #: patch, an unparseable answer) rather than in transport. The two cost
     #: different things and the old ledger could not tell them apart.
     post_return_failure: bool = False
+    #: Transport result before patch/scope acceptance. Older records lack it.
+    provider_outcome: Optional[str] = None
+    #: Bounded provider failure metadata; no tool arguments or transcript text.
+    diagnostics: dict = field(default_factory=dict)
     #: Vendor session id, where one is known. Used to de-duplicate a child
     #: that several sources report.
     session_id: Optional[str] = None
@@ -156,9 +206,32 @@ class InvocationEvent:
             bits.append(f"attempt {self.attempt}")
         if self.post_return_failure:
             bits.append("failed after return")
+            if self.provider_outcome:
+                bits.append(f"provider: {self.provider_outcome}")
         if self.detail:
             bits.append(self.detail[:120])
         return " | ".join(bits)
+
+
+def safe_diagnostics(value) -> dict:
+    """Whitelist provider metadata again at the durable event boundary."""
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    atom = re.compile(r"[A-Za-z_][A-Za-z0-9_.:-]{0,63}\Z")
+    reason = value.get('stop_reason')
+    if isinstance(reason, str) and atom.fullmatch(reason):
+        result['stop_reason'] = reason
+    count = value.get('model_calls')
+    if type(count) is int and 0 <= count <= 1_000_000:
+        result['model_calls'] = count
+    # Accept the older extractor spelling while keeping one stable ledger key.
+    names = value.get('attempted_tools', value.get('tools_attempted'))
+    if isinstance(names, list):
+        result['attempted_tools'] = list(dict.fromkeys(
+            name for name in names[:128] if isinstance(name, str) and atom.fullmatch(name)
+        ))[:32]
+    return result
 
 
 @dataclass
@@ -307,8 +380,9 @@ class DelegationLedger:
                 )
             lines.append("")
 
-        controlled = self.controlled_tokens()
-        native = self.native_tokens()
+        totals = reconcile(self.events, self.native_children.values())
+        controlled = totals['controlled_tokens']
+        native = totals['native_child_tokens']
         lines.append("## Totals")
         lines.append(f"- Quadratus-dispatched: {controlled:,} tokens")
         if native:
@@ -316,7 +390,11 @@ class DelegationLedger:
                 f"- Vendor-native children (observed): {native:,} tokens, "
                 f"outside Quadratus budgets"
             )
-            lines.append(f"- Known minimum: {controlled + native:,} tokens")
+            lines.append(
+                f"- Combined reported sum (conditional): {controlled + native:,} tokens. "
+                "Parent/child counter overlap is unverified; this is not an "
+                "established non-overlapping minimum."
+            )
         unknown = self.unknown_events()
         if unknown:
             lines.append(
@@ -366,7 +444,9 @@ def reconcile(
     De-duplicates children by session id and takes the maximum reading for
     each, because vendor session logs restate cumulative totals. A child whose
     session id matches an event the harness itself dispatched is *not* added
-    again -- that is the double count this function exists to prevent.
+    again. Different session IDs alone do not prove that a vendor's parent
+    counter excludes children. The combined sum remains conditional until
+    that accounting contract is established.
     """
     events = list(events)
     dispatched_sessions = {e.session_id for e in events if e.session_id}
@@ -406,6 +486,11 @@ def reconcile(
         "controlled_tokens": controlled,
         "native_child_tokens": native,
         "auxiliary_tokens": auxiliary,
+        "auxiliary_tokens_scope": "Explicit auxiliary InvocationEvent rows only; vendor aggregates are not included.",
+        "combined_reported_tokens": controlled + native,
+        "parent_child_overlap": "unverified" if native else "not_applicable",
+        # Deprecated compatibility key: not a verified lower bound when child
+        # counters may overlap their parents. New consumers use fields above.
         "known_minimum_tokens": controlled + native,
         "unknown_invocations": len(unknown),
         "unknown_detail": [e.render() for e in unknown],
@@ -414,8 +499,11 @@ def reconcile(
         "note": (
             "Subscription usage including cached and repeated input. Native "
             "children counted once at their highest cumulative reading, never "
-            "summed across updates. Auxiliary vendor-internal usage is "
-            "reported separately and is not Quadratus-dispatched work. "
+            "summed across updates. The combined sum assumes child counters "
+            "are additional to parent counters; that overlap is unverified. "
+            "known_minimum_tokens is a deprecated compatibility key for that "
+            "conditional sum, not an established lower bound. Auxiliary usage "
+            "covers explicit auxiliary event rows only, not vendor aggregates. "
             "Unknown usage is unknown, not zero."
         ),
     }

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field, replace
 from functools import wraps
 from pathlib import Path
@@ -32,9 +33,16 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 from .artifacts import ArtifactStore
 from .codebase_map import CodebaseMap
-from .delegation import DelegationLedger, InvocationEvent, Origin, invocation, invocation_context
+from .delegation import (
+    DelegationLedger,
+    InvocationEvent,
+    Origin,
+    capture_invocations,
+    invocation,
+    invocation_context,
+)
 from .memory import PersistentMemory, TaskMemory, TaskSummary
-from .providers import PartialWorkSuspected
+from .providers import PartialWorkSuspected, ProviderError, ProviderRefusal
 from .registry import peers_for, resolve
 from .routing import (
     Seat,
@@ -45,7 +53,19 @@ from .routing import (
     orchestrator_seat,
 )
 from .scope import ScopeReport, TaskScope, changed_paths, count_change_lines
-from .task_kinds import MAX_TASK_LINES, ROUTING, TaskKind, guidance_for, policy_for
+from .task_kinds import (
+    KNOWN_NEEDS,
+    MAX_TASK_LINES,
+    ROUTING,
+    NoCapableSeat,
+    TaskKind,
+    escalate_from,
+    guidance_for,
+    needs_from_text,
+    normalise_needs,
+    policy_for,
+    seat_satisfies,
+)
 from .task_kinds import route as route_kind
 from .taskmeta import AmbiguousMetadata, TaskMetadata, parse_control, parse_metadata
 from .usage import UsageMeter
@@ -190,8 +210,18 @@ class TaskSpec:
     #: means unbounded, which is the honest description of a task nobody
     #: scoped. See :mod:`quadratus.scope`.
     scope: Optional["TaskScope"] = None
+    #: Required operations, independent of difficulty or the write grant.
+    needs: frozenset[str] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
+        declared, self.description = _read_task_needs(self.description)
+        if isinstance(self.needs, str):
+            raise ValueError("Task needs must be a collection, not a string.")
+        self.needs = normalise_needs(self.needs) | declared | frozenset(needs_from_text(
+            self.description, self.scope.acceptance if self.scope else (),
+        ))
+        if self.needs - KNOWN_NEEDS:
+            raise ValueError(f"Unknown task needs: {sorted(self.needs - KNOWN_NEEDS)}")
         # ``kind`` and ``work_class`` grew up in different modules and both can
         # say "security". Keeping them synchronised here means no caller can
         # construct a task that one security mechanism sees and the other
@@ -290,6 +320,34 @@ _SCOPE_REQUEST = (
     'with its work preserved. The line estimate has 50 percent tolerance.'
 )
 
+_NEEDS_REQUEST = (
+    'After KIND, optionally include NEEDS: ["execute", "patch", "direct-write"] '
+    'with only the operations required for this task (or [] for none). '
+    'execute means running commands; patch means producing edits the harness can '
+    'apply; direct-write means the tool itself must write files. A docs/rote '
+    'task that runs tests still needs execute. Requirements do not grant permission.'
+)
+
+
+def _read_task_needs(description: str):
+    lines, declarations = [], []
+    for line in description.splitlines():
+        match = re.match(r"\s*NEEDS\s*:(.*)$", line, re.IGNORECASE)
+        if match is None:
+            lines.append(line)
+            continue
+        try:
+            values = json.loads(match.group(1))
+        except ValueError as exc:
+            raise ValueError("NEEDS must be a JSON list of operation names.") from exc
+        if (not isinstance(values, list) or any(not isinstance(v, str) for v in values)
+                or set(values) - KNOWN_NEEDS):
+            raise ValueError("NEEDS allows only execute, patch, and direct-write.")
+        declarations.append(normalise_needs(values))
+    if len(set(declarations)) > 1:
+        raise ValueError("Conflicting NEEDS declarations.")
+    return (declarations[0] if declarations else frozenset()), "\n".join(lines).strip()
+
 
 def _invocation_role(role):
     def decorate(method):
@@ -300,6 +358,30 @@ def _invocation_role(role):
                 return method(self, *args, **kwargs)
         return wrapped
     return decorate
+
+
+def _has_blocking_finding(text: str) -> bool:
+    """Only a finding's explicit prefix controls the recheck loop."""
+    return any(re.match(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?BLOCKING\s*:",
+                        line.replace("**", ""), re.IGNORECASE)
+               for line in text.splitlines())
+
+
+def _resolved_verdict(text: str) -> bool:
+    """Accept one standalone boundary verdict, rejecting conflicting markers.
+
+    The requested response remains exactly RESOLVED or UNRESOLVED: <finding>.
+    Explanations around a boundary verdict are tolerated, but a prefix match,
+    duplicate verdict, or explicit unresolved finding cannot clear a review.
+    This parses the declared verdict; it does not validate explanatory prose.
+    """
+    lines = [line.strip().upper() for line in text.splitlines() if line.strip()]
+    if not lines or lines.count("RESOLVED") != 1:
+        return False
+    if lines[0] != "RESOLVED" and lines[-1] != "RESOLVED":
+        return False
+    return not (_has_blocking_finding(text)
+                or re.search(r"\bUNRESOLVED\b|\bNOT\s+RESOLVED\b", text, re.IGNORECASE))
 
 
 class Session:
@@ -357,13 +439,20 @@ class Session:
             if self.config.default_scope is not None and spec.scope is not self.config.default_scope:
                 prompt += "\nOperator limits (also binding):\n" + self.config.default_scope.render()
         try:
-            with invocation(**context):
+            with capture_invocations(), invocation(**context):
                 if self.project:
                     reply = self.invoke(key, prompt, allow_writes=bool(allow_writes and self.config.allow_writes))
                 elif allow_writes:
                     reply = self.invoke(key, prompt, allow_writes=True)
                 else:
                     reply = self.invoke(key, prompt)
+                if allow_writes and spec is not None and self._task_memory is not None:
+                    report = self._assess_scope(spec, self._task_memory, self._task_before)
+                    if spec.scope is not None and report is None:
+                        raise PartialWorkStopped("Scope could not be measured; edits preserved for inspection.")
+                    if report and (report.blocking or report.oversized):
+                        raise PartialWorkStopped("Task exceeded its declared scope; work preserved. " + report.render(),
+                                                 partial=self._inspect_partial_edits(self._task_before))
         except BaseException:
             if self._task_memory is not None:
                 try:
@@ -372,13 +461,6 @@ class Session:
                 except Exception:
                     log.debug("could not preserve interrupted prompt", exc_info=True)
             raise
-        if allow_writes and spec is not None and self._task_memory is not None:
-            report = self._assess_scope(spec, self._task_memory, self._task_before)
-            if spec.scope is not None and report is None:
-                raise PartialWorkStopped("Scope could not be measured; edits preserved for inspection.")
-            if report and (report.blocking or report.oversized):
-                raise PartialWorkStopped("Task exceeded its declared scope; work preserved. " + report.render(),
-                                         partial=self._inspect_partial_edits(self._task_before))
         self._active_call = {}
         return reply
 
@@ -470,17 +552,27 @@ class Session:
         scoreboard the rotation exists to fill.
         """
         if spec.lead:
+            # An explicit pin is not permission to ignore task requirements.
+            if not self._available(spec.lead) or not seat_satisfies(spec.lead, spec.needs):
+                raise RunStalled("The pinned lead cannot satisfy this task's requirements.")
             return spec.lead
         trust = self.brain_trust
         rotated = trust[self._rotation % len(trust)]
         self._rotation += 1
-        return route_kind(
-            spec.kind,
-            difficulty=spec.complexity,
-            default=rotated,
-            candidates=trust,
-            available=self._available,
-        )
+        try:
+            selected = route_kind(
+                spec.kind,
+                difficulty=spec.complexity,
+                default=rotated,
+                candidates=trust,
+                available=self._available,
+                needs=spec.needs,
+            )
+        except NoCapableSeat as exc:
+            raise RunStalled(str(exc)) from exc
+        if selected is None:
+            raise RunStalled("No available lead satisfies this task's requirements.")
+        return selected
 
     def collaborators_for(self, spec: TaskSpec, lead: str) -> List[str]:
         """Which other peers help with this task.
@@ -786,6 +878,7 @@ class Session:
         except BaseException:
             self.in_flight = self._inspect_partial_edits(self._task_before)
             self.in_flight.update(task=spec.task_id, description=spec.description,
+                                  needs=sorted(spec.needs),
                                   scope=spec.scope.to_dict() if spec.scope else None,
                                   invocation=dict(self._active_call))
             if self._task_memory is not None:
@@ -819,6 +912,7 @@ class Session:
         task = TaskMemory(spec.task_id, lead, self.store)
         self._task_memory = task
         task.record("user", spec.description)
+        task.keep(json.dumps({'needs': sorted(spec.needs)}), kind='task-needs')
         if spec.scope is not None:
             task.keep(json.dumps(spec.scope.to_dict()), kind="task-scope")
         if spec.metadata_confidence != "labelled":
@@ -839,7 +933,41 @@ class Session:
 
         # The lead drafts with full working memory, and with the fetch and
         # consult channels live: a reply that is a request gets served.
-        draft = self._draft_with_channels(lead, spec, task)
+        try:
+            draft = self._draft_with_channels(lead, spec, task)
+        except ProviderError as exc:
+            # Only a failed lead, not a consultant/worker or policy refusal,
+            # may be replaced. Never replay partial or uninspectable edits.
+            if (isinstance(exc, (ProviderRefusal, PartialWorkSuspected))
+                    or getattr(exc, 'window_exhausted', False) or spec.lead
+                    or self._active_call.get('model') != lead
+                    or self._active_call.get('role') != 'lead'):
+                raise
+            state = self._inspect_partial_edits(before)
+            if not state['inspected'] or state['changed']:
+                raise PartialWorkStopped(
+                    'Lead failed; source is changed or unverified. Work preserved.',
+                    partial=state,
+                ) from exc
+            excluded = policy_for(spec.kind).exclude
+            fresh = escalate_from(lead, needs=spec.needs,
+                                  available=lambda key: key not in excluded and self._available(key))
+            if fresh is None:
+                raise
+            recovery = dict(task=spec.task_id, failed_lead=lead, next_lead=fresh,
+                            failure=type(exc).__name__, source_unchanged=True,
+                            needs=sorted(spec.needs), recovery_attempt=1)
+            task.keep(json.dumps(recovery), kind='lead-recovery', author=lead)
+            task.record('user', f'Lead {lead} failed without changing source; retrying once on {fresh}.')
+            self._note(f'{lead} failed without changing source; one recovery on {fresh}')
+            lead = fresh
+            task.author = lead
+            self._record_selection(spec, lead, 'lead')
+            collaborators = self.collaborators_for(spec, lead)
+            for peer in collaborators:
+                self._record_selection(spec, peer, 'collaborator')
+            # Deliberately outside the first call's try: no second recovery.
+            draft = self._draft_with_channels(lead, spec, task)
         task.record("assistant", draft)
         task.keep(draft, kind="draft")
 
@@ -898,7 +1026,7 @@ class Session:
             task.record("assistant", revision)
             task.keep(revision, kind="revision")
 
-            blocking = [(p, n) for p, n in notes if "BLOCKING" in n.upper()]
+            blocking = [(p, n) for p, n in notes if _has_blocking_finding(n)]
             cycles = 1
             unresolved = self._recheck_blocking(
                 spec, blocking, revision, task, labels=labels
@@ -1055,7 +1183,7 @@ class Session:
                     "first, reply with exactly 'FETCH: <artifact-id>' and "
                     "nothing else. If the decision turns on something only the "
                     "operator can answer, reply 'ASK: <one question>' instead."
-                    f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}"
+                    f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}\n\n{_NEEDS_REQUEST}"
                     + ("\n\n" + _SCOPE_REQUEST if self.project and self.config.allow_writes else "")
                 ),
                 recent=self.config.recent_entries,
@@ -1163,15 +1291,18 @@ class Session:
             self._note(
                 f"task metadata was not stated; routing as {meta.render()}"
             )
-        return TaskSpec(
-            task_id=f"t{len(self.history) + 1}",
-            description=description,
-            kind=meta.kind,
-            complexity=meta.difficulty,
-            metadata_confidence=meta.confidence,
-            metadata_notes=list(meta.notes),
-            scope=scope,
-        )
+        try:
+            return TaskSpec(
+                task_id=f"t{len(self.history) + 1}",
+                description=description,
+                kind=meta.kind,
+                complexity=meta.difficulty,
+                metadata_confidence=meta.confidence,
+                metadata_notes=list(meta.notes),
+                scope=scope,
+            )
+        except ValueError as exc:
+            raise RunStalled(f"Invalid task requirements: {exc}") from exc
 
     def plan(self) -> str:
         """Ask the orchestrator for the full expected task list, without running.
@@ -1341,10 +1472,10 @@ class Session:
             "read. Report everything you find with a severity and a confidence; do "
             "not filter to only the important ones. Filtering happens downstream, "
             "and a reviewer told to be selective suppresses its own findings. "
-            "Prefix any finding that must be fixed before this work is acceptable "
-            "with 'BLOCKING:' -- you will be asked to re-check exactly those "
+            "Start each finding that must be fixed before this work is acceptable "
+            "on its own line with 'BLOCKING:' -- you will be asked to re-check exactly those "
             "against the revision. If you genuinely find nothing worth changing, "
-            "reply exactly 'NO FINDINGS' and nothing else."
+            "reply exactly 'NO FINDINGS' and nothing else; do not write 'BLOCKING: none'."
             + _review_subject_note(spec)
         )
 
@@ -1416,7 +1547,7 @@ class Session:
             )
             shown = (labels or {}).get(peer, peer)
             task.record("assistant", f"[{shown} recheck] {verdict}")
-            if not verdict.strip().upper().startswith("RESOLVED"):
+            if not _resolved_verdict(verdict):
                 unresolved.append((peer, verdict.strip()))
         return unresolved
 

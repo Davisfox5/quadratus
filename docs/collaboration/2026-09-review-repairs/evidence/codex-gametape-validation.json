@@ -1,0 +1,21 @@
+{
+  "reviewer": "Codex",
+  "commit": "a8772ab32f28dd96d06fda8152504b0b9f15e262",
+  "node": "24.15.0",
+  "python": "3.12.14",
+  "browser": "Chromium headless shell 1234",
+  "media": "ffmpeg-generated synthetic video",
+  "python_tests": 100,
+  "node_tests": 18,
+  "mutants_killed": 9,
+  "browser_scenarios": 8,
+  "empty_selection_exit_code": 2,
+  "source_sha256": {
+    "app.py": "d2e764e90987366e1ccc8fe4cdb1ae83113c874f41cf52c5894512e52f9b2f1c",
+    "static/js/app.js": "b4202b2199ddd0ce3515617fe3cdb3842ca0fbfa5ce428717b7e2507aba03cf6",
+    "templates/index.html": "8375b0d561a2e4c708522e2cb61d1e85654b4f1e31899941482f8bacb2cfb83d",
+    "static/css/style.css": "d0ea746fed626607b5d83ff89d55d6194c7e3efb8a3318a8c9a43c9c013f85a5",
+    "tests/browser/run.js": "02b19320abc6fa5825b4de8fb23c847240489a71a952f85db93cf1f527b5b592"
+  },
+  "note": "Backend tests ran at d829b87; app.py is unchanged through this commit. Node, mutation and browser checks reran after the UI follow-up."
+}

@@ -248,6 +248,9 @@ def test_real_cli_write_grant_prevents_timeout_replay(tmp_path, monkeypatch):
     from quadratus.cli_providers import ClaudeCLIProvider
     from quadratus.providers import PartialWorkSuspected
     monkeypatch.setattr(CLIProvider, 'available', lambda _: True)
+    # The binary is resolved from PATH when argv is built; CI runners have no
+    # Claude CLI, so pin it like the other CLI provider tests do.
+    monkeypatch.setattr('shutil.which', lambda _: '/usr/bin/claude')
     count = []
     def launch(*args, **kwargs):
         count.append(1)

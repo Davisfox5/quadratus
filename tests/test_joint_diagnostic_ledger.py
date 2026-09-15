@@ -1,0 +1,74 @@
+"""Persist only bounded failure metadata, never raw provider contents."""
+
+import json
+
+import pytest
+
+from quadratus.cli_providers import GrokCLIProvider
+from quadratus.config import Settings
+from quadratus.delegation import DelegationLedger
+from quadratus.providers import LLMProvider, ProviderError
+from quadratus.runtime import Fleet
+
+
+def test_failure_diagnostics_are_whitelisted_and_do_not_leak_to_next_call(tmp_path, monkeypatch):
+    class Provider(LLMProvider):
+        def _build_client(self):
+            return object()
+
+        def _call(self, *args):
+            self.last_usage = {'input_tokens': 3, 'output_tokens': 1}
+            if self.fail:
+                self.last_diagnostics = {
+                    'stop_reason': 'cancelled', 'model_calls': 2,
+                    'attempted_tools': ['read_file', 'Agent', 'read_file', '/private/file',
+                                        {'arguments': 'secret'}, 'x' * 500],
+                    'raw_response': 'private transcript', 'arguments': 'secret',
+                }
+                raise ProviderError('cancelled')
+            return 'ok'
+
+    provider = Provider('grok', api_key='test', max_retries=1)
+    provider.fail = True
+    path = tmp_path / 'invocations.jsonl'
+    fleet = Fleet(Settings(backend='cli'), delegation_ledger=DelegationLedger(path=path))
+    monkeypatch.setattr(fleet, 'provider_for', lambda _: provider)
+    with pytest.raises(ProviderError):
+        fleet.invoke('grok:worker', 'read')
+    provider.fail = False
+    fleet.invoke('grok:worker', 'read again')
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert rows[0]['diagnostics'] == {
+        'stop_reason': 'cancelled', 'model_calls': 2,
+        'attempted_tools': ['read_file', 'Agent'],
+    }
+    assert rows[1]['diagnostics'] == {}
+    assert 'private' not in path.read_text() and 'secret' not in path.read_text()
+
+
+def test_real_cli_extractor_metadata_reaches_the_ledger(tmp_path, monkeypatch):
+    from subprocess import CompletedProcess
+
+    monkeypatch.setattr('shutil.which', lambda _: '/unused/grok')
+    envelope = json.dumps({
+        'text': 'Stopped', 'stopReason': 'cancelled', 'modelCalls': 2,
+        'toolCalls': [{'name': 'read_file', 'arguments': {'path': '/private/secret'}}],
+        'usage': {'input_tokens': 7, 'output_tokens': 2},
+    })
+    monkeypatch.setattr('quadratus.cli_providers._launch',
+                        lambda *a, **kw: CompletedProcess([], 0, envelope, ''))
+    provider = GrokCLIProvider(model='grok', workdir=str(tmp_path), max_retries=1)
+    path = tmp_path / 'invocations.jsonl'
+    fleet = Fleet(Settings(backend='cli'), delegation_ledger=DelegationLedger(path=path))
+    monkeypatch.setattr(fleet, 'provider_for', lambda _: provider)
+    try:
+        with pytest.raises(ProviderError):
+            fleet.invoke('grok:worker', 'read')
+        row = json.loads(path.read_text())
+        assert row['diagnostics'] == {
+            'stop_reason': 'cancelled', 'model_calls': 2, 'attempted_tools': ['read_file'],
+        }
+        assert row['input_tokens'] == 7 and row['output_tokens'] == 2
+        assert '/private' not in path.read_text() and 'secret' not in path.read_text()
+    finally:
+        provider.cleanup()
