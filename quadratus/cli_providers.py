@@ -48,6 +48,7 @@ import copy
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -191,13 +192,81 @@ def _extract_grok_result(stdout: str) -> str:
     # has never seen: guessing that an unknown one is benign is how the
     # narration got mistaken for an answer in the first place.
     if stop != "end_turn":
+        diagnostics = _extract_grok_diagnostics(stdout) or {}
+        attempted = diagnostics.get("tools_attempted")
         raise ProviderError(
             f"grok did not complete the turn (stopReason {stop!r})"
+            + (f"; attempted tools: {', '.join(attempted)}" if attempted else "")
             + (f": {text.strip()[:200]}" if isinstance(text, str) and text.strip() else ".")
         )
     if not isinstance(text, str) or not text.strip():
         raise ProviderError("grok completed the turn with no answer text.")
     return text
+
+
+_DIAGNOSTIC_LIST_KEYS = ("toolCalls", "tool_calls", "tools", "steps", "events", "messages", "items", "turns")
+_DIAGNOSTIC_NAME_KEYS = ("toolName", "tool_name", "tool", "name")
+_DIAGNOSTIC_NAME_RE = re.compile(r"^[A-Za-z][\w.-]{0,63}$")
+_MAX_DIAGNOSTIC_TOOLS = 20
+
+
+def _extract_grok_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
+    """Bounded facts about how a grok turn ended, from its JSON envelope.
+
+    Exactly three things, and nothing else: the stop reason, the model-call
+    count, and the *names* of tools the turn attempted. No arguments, no
+    paths, no URLs, no response text -- this is written into the ledger and
+    published in evidence bundles, so the whitelist is the point. The
+    2026-09-14 restricted-worker cancellation left no record of *what* the
+    turn tried before the vendor cancelled it; the report had to say the
+    trigger was not recorded. This is that record.
+
+    The tool-call shape inside the envelope is not documented by the vendor.
+    The walk therefore looks for list-valued keys a transcript would use and
+    reads a name-like field off each entry, and stays silent when it finds
+    none. A recorded name is a fact; an absent list is "not reported", never
+    "no tools were called".
+    """
+    try:
+        payload = json.loads(stdout)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    diagnostics: Dict[str, object] = {}
+    stop = payload.get("stopReason")
+    if isinstance(stop, str) and stop.strip():
+        diagnostics["stop_reason"] = stop.strip()[:40]
+    calls = payload.get("modelCalls")
+    if isinstance(calls, int) and not isinstance(calls, bool) and calls >= 0:
+        diagnostics["model_calls"] = calls
+    names: List[str] = []
+
+    def walk(node, depth):
+        if depth > 3 or len(names) >= _MAX_DIAGNOSTIC_TOOLS:
+            return
+        if isinstance(node, dict):
+            for key in _DIAGNOSTIC_LIST_KEYS:
+                items = node.get(key)
+                if isinstance(items, list):
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        name = next(
+                            (item[k] for k in _DIAGNOSTIC_NAME_KEYS if isinstance(item.get(k), str)),
+                            None,
+                        )
+                        if name is None and isinstance(item.get("function"), dict):
+                            name = item["function"].get("name")
+                        if (isinstance(name, str) and _DIAGNOSTIC_NAME_RE.match(name)
+                                and name not in names and len(names) < _MAX_DIAGNOSTIC_TOOLS):
+                            names.append(name)
+                        walk(item, depth + 1)
+
+    walk(payload, 0)
+    if names:
+        diagnostics["tools_attempted"] = names
+    return diagnostics or None
 
 
 def _extract_grok_usage(stdout: str) -> Optional[Dict[str, int]]:
@@ -443,6 +512,10 @@ class CLISpec:
     #: them). Measured counts beat any character estimate, so a spec that can
     #: provide this should.
     extract_usage: Optional[Callable[[str], Optional[Dict[str, int]]]] = None
+    #: Bounded facts about how the turn ended (stop reason, model-call
+    #: count, attempted tool names), for the ledger. None where the CLI's
+    #: output carries nothing of the kind.
+    extract_diagnostics: Optional[Callable[[str], Optional[Dict[str, object]]]] = None
     #: Whether these flags have been checked against a real binary.
     verified: bool = False
     #: Environment variables to set for the subprocess.
@@ -651,6 +724,7 @@ GROK_SPEC = CLISpec(
     prompt_file_flag="--prompt-file",
     extract=_extract_grok_result,
     extract_usage=_extract_grok_usage,
+    extract_diagnostics=_extract_grok_diagnostics,
     verified=True,
 )
 
@@ -793,6 +867,11 @@ class CLIProvider(LLMProvider):
         #: outside every per-task budget. Kept distinct so they are never
         #: folded into Quadratus-dispatched totals.
         self.native_children: List[NativeChild] = []
+        #: How the most recent call ended, in the bounded form the ledger may
+        #: keep: stop reason, model-call count, attempted tool names. Reset at
+        #: the start of every attempt so a stale record never describes a
+        #: later call. Attached to a raised ProviderError as ``diagnostics``.
+        self.last_diagnostics: Optional[Dict[str, object]] = None
         super().__init__(model, api_key="cli-oauth", **kwargs)
 
     # -- lifecycle -----------------------------------------------------------
@@ -932,6 +1011,7 @@ class CLIProvider(LLMProvider):
         return "\n\n".join(parts)
 
     def _call(self, prompt: str, system: str, history: Sequence[Turn]) -> str:
+        self.last_diagnostics = None  # per attempt: a stale record must not describe this call
         composed = self._compose_prompt(prompt, system, history)
         argv = self._build_argv(composed, system)
         env = {**os.environ, **self.spec.env}
@@ -982,6 +1062,7 @@ class CLIProvider(LLMProvider):
             try:
                 self.spec.extract(proc.stdout)
             except (ProviderError, ProviderRefusal) as parsed:
+                parsed.diagnostics = self.last_diagnostics
                 if isinstance(parsed, ProviderRefusal):
                     parsed.model = self.model
                     raise
@@ -999,13 +1080,20 @@ class CLIProvider(LLMProvider):
         try:
             return self.spec.extract(proc.stdout)
         except ProviderRefusal as refusal:
+            refusal.diagnostics = self.last_diagnostics
             refusal.model = self.model
+            raise
+        except ProviderError as failure:
+            failure.diagnostics = self.last_diagnostics
             raise
 
     def _observe_output(self, stdout):
         """Extract accounting even when response parsing later fails."""
         try:
             self.last_usage = self.spec.extract_usage(stdout) if self.spec.extract_usage else None
+            self.last_diagnostics = (
+                self.spec.extract_diagnostics(stdout) if self.spec.extract_diagnostics else None
+            )
             self.native_children = _extract_native_children(stdout)
             for line in (stdout or "").splitlines():
                 try:
