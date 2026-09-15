@@ -48,7 +48,7 @@ Counts include cached and repeated input and exclude the supervising Codex sessi
 
 ## Checkpoints and reproduction
 
-Quadratus runtime code was `1bf3b03`. The isolated GameTape branch is `quadratus/reliability-acceptance-v2`: `82e09b3` checkpoints the pipeline output, and `832e50c` adds the caller's regression corrections and measured documentation. No GameTape remote was pushed and no deployment was changed.
+Quadratus runtime code was `1bf3b03`. The isolated GameTape branch is `quadratus/reliability-acceptance-v2`: `82e09b3` checkpoints the pipeline output, and `832e50c` adds the caller's regression corrections and measured documentation. The application was initially checkpointed locally. For independent Claude review, `quadratus/reliability-acceptance-v2` has now been pushed to `Davisfox5/sports-video-tagger` at `832e50c0273d635b5030343691eae76410e051c2`. No deployment was changed.
 
 The caller found that restoring the original generation-based lost-success bug still passed all three serialization tests: the first test only assigned select values, and the reopen test did not assert updated clips. The final correction dispatches the real change handlers, asserts post-response clip state and preserved choices, and adds that original bug as a fourth mutation. [Before-proof](gametape-completion/original-response-mutation-before.json), [final mutation results](gametape-completion/ui-mutations.json), and the [caller-only patch](gametape-completion/caller-adjustments.diff) make that contribution explicit. No production application code was changed by the caller's final correction.
 
@@ -61,7 +61,7 @@ node --test tests/ui/*.test.js
 node tests/ui/mutation_check.js
 ```
 
-The GameTape commit IDs are local provenance, not objects to find in Quadratus's Git history. The archive and full patch reconstruct the deliverable without the Mac worktree: [reconstruction verification](gametape-completion/reconstruction.json) matched **all 61 tracked file hashes** to `832e50c`. Browser scripts use the supplied synthetic server with `GAMETAPE_ROOT` pointing at that extracted source. Raw vendor outputs are not needed for reproduction.
+The GameTape commit IDs belong to `Davisfox5/sports-video-tagger`, not Quadratus's Git history. Fetch its `quadratus/reliability-acceptance-v2` branch for direct source review. The archive and full patch reconstruct the deliverable without the Mac worktree: [reconstruction verification](gametape-completion/reconstruction.json) matched **all 61 tracked file hashes** to `832e50c`. Browser scripts use the supplied synthetic server with `GAMETAPE_ROOT` pointing at that extracted source. Raw vendor outputs are not needed for reproduction.
 
 ## Pipeline follow-up
 
