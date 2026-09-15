@@ -9,7 +9,8 @@ branch was merged or deployment changed.
 | Quadratus | `4c0cea51923fe687476c6d1b78490cda0abf8c69` | [Draft PR #10](https://github.com/Davisfox5/quadratus/pull/10), base `codex/project-workflow` |
 | GameTape | `a8772ab32f28dd96d06fda8152504b0b9f15e262` | [Draft PR #2](https://github.com/Davisfox5/sports-video-tagger/pull/2), base `quadratus/reliability-acceptance-v2` |
 
-Subsequent documentation commits do not change these tested source files.
+Subsequent documentation and lint-configuration commits do not change these
+tested runtime source files.
 
 ## What changed
 
@@ -42,6 +43,9 @@ Subsequent documentation commits do not change these tested source files.
 Codex's final local Quadratus run: **753 passed in 48.15s, no skips**. Full
 `ruff check quadratus tests` and diff checks passed. Provider calls in these
 tests are scripted; this is offline regression proof, not a new live worker run.
+Claude's CI repair `99271c5` excludes captured historical handoffs from lint
+discovery; `ruff check .` also passes locally. Hosted Python 3.11/3.12 checks
+are tracked on the draft PR; do not infer a hosted result from the local run.
 
 GameTape: **100 Python tests, 18 Node tests, nine detected application mutations,
 eight real-browser scenarios**. Browser checks used Node 24.15.0, Chromium
@@ -55,8 +59,8 @@ integration. Codex independently reviewed and ran Claude's GameTape and
 capability/diagnostic changes. That review found a focus ownership edge case,
 two runner defects, message-name leakage into diagnostic tool names, and excess
 direct-write inference for SVG. Claude fixed them; Codex verified the corrections.
-Accounting labels were subsequently corrected and tested by Codex; do not read
-the earlier peer sign-off as a separate Claude review of that later label change.
+Claude subsequently reviewed the accounting-label correction at `a5adac4` and
+accepted it in `811ddd8`; its optional deduplication-label note remains in the log.
 
 Reproducible commands/results, evolving findings, ownership and intermediate
 failures are in [CODEX_LOG.md](CODEX_LOG.md) and [CLAUDE_LOG.md](CLAUDE_LOG.md).

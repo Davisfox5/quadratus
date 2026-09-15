@@ -260,3 +260,16 @@
   vendor aggregate collector/live probe/video concurrency work is explicitly
   deferred. All implementation files in this first joint batch are released
   for review; coordinate another editing lane before extending the scope.
+
+## 2026-09-15 — final peer sign-off and CI configuration
+
+- Merged Claude's `811ddd8` accounting-label review (accepted, no further
+  changes required) and `99271c5` CI lint repair. The configuration excludes
+  historical handoff snapshots from Ruff discovery; it does not change the
+  captured evidence or disable lint on application/runtime code.
+- `ruff check .` passes locally on the merged configuration. Runtime source
+  hashes match the 753-test validation checkpoint. Hosted Python 3.11/3.12
+  checks were pending at this log entry; the draft PR carries their live status.
+- No outstanding peer implementation findings in this batch. The deferred
+  live-provider probe, all-worker acceptance, aggregate collector and media
+  concurrency work remain listed in `STATUS.md`.

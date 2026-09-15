@@ -16,6 +16,10 @@
     {
       "command": "git diff --check",
       "exit_code": 0
+    },
+    {
+      "command": "ruff check .",
+      "exit_code": 0
     }
   ],
   "source_sha256": {
@@ -26,5 +30,7 @@
     "quadratus/task_kinds.py": "24d1b65454785071f4d3c38f827fbeeb3fa122ee09994e387d1c9bd91992983f",
     "quadratus/cli_providers.py": "e3d25d77055da43efb17a02c77c84847a6574d209467ee10ebaa0b17369372c4"
   },
-  "provider_execution": "scripted offline regressions; no new live vendor run"
+  "provider_execution": "scripted offline regressions; no new live vendor run",
+  "lint_config_commit": "99271c5",
+  "lint_config_sha256": "bce5192634b5337d20cf68a99f983bf87de49764623498ed40044b08617db1ad"
 }
