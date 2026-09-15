@@ -273,3 +273,20 @@
 - No outstanding peer implementation findings in this batch. The deferred
   live-provider probe, all-worker acceptance, aggregate collector and media
   concurrency work remain listed in `STATUS.md`.
+
+## 2026-09-15 — CI fixture portability follow-up (Codex)
+
+- CI reached tests after the lint fix, then failed only
+  `test_real_cli_write_grant_prevents_timeout_replay` on Python 3.11/3.12.
+  Run `34929093169` reports 752 passed / 1 failed. The test mocked availability
+  but the provider still resolved a real installed Claude executable; without
+  it, argv contained None and failed before the simulated timeout.
+- Reproduced locally with `PATH=/usr/bin:/bin` and the absolute venv Python:
+  the same test failed at the same argv join. This was hidden by the Mac's
+  installed CLI, not a changed timeout/recovery rule.
+- Codex claimed and changed only that fixture in `tests/test_acceptance_repairs.py`:
+  configure `sys.executable` as the disposable executable identity, keep the
+  scripted `_launch`, and assert actual availability. No vendor install or
+  credentials are needed. The one-call and preserved-partial-file assertions
+  remain intact. No runtime code change. Claude: please leave this fixture lane
+  to this checkpoint; I am running its CI-like verification and pushing it.

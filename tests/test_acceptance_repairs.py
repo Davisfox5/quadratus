@@ -247,7 +247,9 @@ def test_stop_kills_term_ignoring_child_even_if_parent_exits(tmp_path, parent_ig
 def test_real_cli_write_grant_prevents_timeout_replay(tmp_path, monkeypatch):
     from quadratus.cli_providers import ClaudeCLIProvider
     from quadratus.providers import PartialWorkSuspected
-    monkeypatch.setattr(CLIProvider, 'available', lambda _: True)
+    # _launch is scripted below; resolve a real executable without requiring a
+    # vendor installation. Mocking available() alone leaves _client=None in CI.
+    monkeypatch.setenv('QUADRATUS_CLI_BINARY_CLAUDE', sys.executable)
     count = []
     def launch(*args, **kwargs):
         count.append(1)
@@ -255,6 +257,7 @@ def test_real_cli_write_grant_prevents_timeout_replay(tmp_path, monkeypatch):
         raise subprocess.TimeoutExpired(args[0], 1)
     monkeypatch.setattr('quadratus.cli_providers._launch', launch)
     provider = ClaudeCLIProvider('opus', workdir=tmp_path, allow_writes=True, max_retries=3)
+    assert provider.available()
     with pytest.raises(PartialWorkSuspected):
         provider.generate('edit')
     assert len(count) == 1 and (tmp_path / 'partial.py').exists()
