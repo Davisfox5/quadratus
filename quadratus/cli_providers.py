@@ -555,6 +555,11 @@ class CLISpec:
     #: Optional run-wide denial request for other vendors' native helpers.
     #: This is not proof their CLI honors it; see the Grok specification.
     native_fanout_off_args: List[str] = field(default_factory=list)
+    #: Environment set on the subprocess only when the off-mode denial was
+    #: folded into this call's argv. Documented kill switches that remove a
+    #: fan-out path at startup, so a denial the model never sees cannot be
+    #: argued with either.
+    native_fanout_off_env: Dict[str, str] = field(default_factory=dict)
     disallowed_tools_flag: str = ""
     #: Some CLIs only honour their tool-filtering flags when the prompt is an
     #: argument rather than a file (grok ignores them under --prompt-file, in
@@ -637,7 +642,29 @@ CLAUDE_SPEC = CLISpec(
     # claude degrades gracefully when a tool is missing: measured at one turn
     # with the answer inline, rather than a cancelled turn.
     restricted_args=["--disallowed-tools", "Bash Edit Write NotebookEdit Task"],
-    native_fanout_off_args=["--disallowed-tools", "Task Agent"],
+    # Run-wide off mode. Every name here is a documented way for one claude
+    # call to start work outside itself or reach another session, and a bare
+    # name in --disallowed-tools removes the tool from the model's context
+    # (code.claude.com/docs/en/cli-reference, read 2026-09-15):
+    #   Task, Agent      subagents (Task is the older name, kept for older CLIs)
+    #   Workflow         "orchestrates many subagents in the background"
+    #   SendMessage,     cross-session messaging: other sessions in the same
+    #   ListAgents       filesystem, and cloud / Remote Control sessions
+    #   RemoteTrigger    claude.ai Routines, which can start fresh sessions
+    #   CronCreate       a scheduled prompt that re-enters this session later
+    #   mcp__*           every MCP tool; a project .mcp.json is not vetted
+    # Ordinary source read/write/exec/web tools are untouched. TaskOutput,
+    # TaskStop, ToolSearch and ScheduleWakeup stay: the docs scope them to
+    # this session, and a denied tool stays denied however its schema was
+    # loaded. Agent teams are off unless CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+    # is set and never form under -p; pinned to 0 below anyway.
+    native_fanout_off_args=["--disallowed-tools",
+                            "Task Agent Workflow SendMessage ListAgents RemoteTrigger CronCreate mcp__*"],
+    native_fanout_off_env={
+        # Read at startup: workflows unavailable, not merely denied.
+        "CLAUDE_CODE_DISABLE_WORKFLOWS": "1",
+        "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "0",
+    },
     disallowed_tools_flag="--disallowed-tools",
     extract=_extract_claude_result,
     # Mandatory, not merely safer: --disallowed-tools is variadic, so a
@@ -961,9 +988,16 @@ GROK_SPEC = CLISpec(
     # was first thought impossible.
     restricted_prompt_flag="-p",
     readonly_args=[],
-    # Cloud Claude's opt-in request. UNVERIFIED: --always-approve may
-    # override this denial. No bounded Grok claim until the live probe.
-    native_fanout_off_args=["--disallowed-tools", "Agent"],
+    # Run-wide off mode. The 2026-09-15 live probe under this denial listed no
+    # Agent tool and answered "native delegation unavailable", but the same
+    # listing showed ``workflow``, ``use_tool`` and ``search_tool``, whose
+    # documentation this harness could not reach (docs.x.ai is unreachable
+    # from the review environment). A tool that runs a workflow or invokes a
+    # tool by name is a possible route around a denied name, so all three are
+    # denied as well until the shipped README says what they do. UNVERIFIED
+    # for those three; the direct read/write/exec tools are separate names and
+    # are not touched.
+    native_fanout_off_args=["--disallowed-tools", "Agent workflow use_tool search_tool"],
     disallowed_tools_flag="--disallowed-tools",
     # Every *agentic* call, read-only included: without it the turn is
     # cancelled silently the first time a tool is called. A restricted seat
@@ -1406,6 +1440,8 @@ class CLIProvider(LLMProvider):
         composed = self._compose_prompt(prompt, system, history)
         argv = self._build_argv(composed, system)
         env = {**os.environ, **self.spec.env}
+        if getattr(self, "_native_fanout_denied", None):
+            env.update(self.spec.native_fanout_off_env)
         # An inherited ANTHROPIC_API_KEY would silently divert a subscription
         # run onto billed API credits, so clear key vars for the child.
         for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",

@@ -26,6 +26,12 @@ def _pair(argv, flag):
     return argv[argv.index(flag) + 1]
 
 
+#: Every documented route from one claude -p call to work outside itself.
+CLAUDE_OFF_DENIALS = ["Task", "Agent", "Workflow", "SendMessage", "ListAgents",
+                      "RemoteTrigger", "CronCreate", "mcp__*"]
+GROK_OFF_DENIALS = ["Agent", "workflow", "use_tool", "search_tool"]
+
+
 def test_default_mode_leaves_claude_and_grok_senior_seats_alone():
     claude = ClaudeCLIProvider(model="opus", allow_writes=False)._build_argv("p", "")
     assert _pair(claude, "--disallowed-tools") == "Bash Edit Write NotebookEdit"
@@ -39,9 +45,10 @@ def test_off_mode_folds_task_into_claude_denials_without_dropping_the_others(mon
     monkeypatch.setenv("QUADRATUS_NATIVE_DELEGATION", "off")
     readonly = ClaudeCLIProvider(model="opus", allow_writes=False)._build_argv("p", "")
     assert readonly.count("--disallowed-tools") == 1
-    assert _pair(readonly, "--disallowed-tools").split() == ["Bash", "Edit", "Write", "NotebookEdit", "Task", "Agent"]
+    assert _pair(readonly, "--disallowed-tools").split() == [
+        "Bash", "Edit", "Write", "NotebookEdit", *CLAUDE_OFF_DENIALS]
     writer = ClaudeCLIProvider(model="opus", allow_writes=True)._build_argv("p", "")
-    assert _pair(writer, "--disallowed-tools") == "Task Agent"
+    assert _pair(writer, "--disallowed-tools").split() == CLAUDE_OFF_DENIALS
     assert "Edit" not in _pair(writer, "--disallowed-tools"), "the write grant survives"
 
 
@@ -56,11 +63,13 @@ def test_off_mode_asks_grok_to_deny_agent_but_keeps_its_approval(monkeypatch):
     monkeypatch.setenv("QUADRATUS_NATIVE_DELEGATION", "off")
     argv = GrokCLIProvider(model="", allow_writes=True)._build_argv("p", "")
     assert "--always-approve" in argv
-    assert _pair(argv, "--disallowed-tools") == "Agent"
+    assert _pair(argv, "--disallowed-tools").split() == GROK_OFF_DENIALS
     # The restricted worker already denies Agent; the fold must not repeat it.
     worker = GrokCLIProvider(model="").for_seat("", restricted=True)._build_argv("p", "")
     assert worker.count("--disallowed-tools") == 1
-    assert _pair(worker, "--disallowed-tools") == "Agent"
+    assert _pair(worker, "--disallowed-tools").split() == GROK_OFF_DENIALS
+    assert _pair(worker, "--tools") == "read_file,grep,list_dir,web_search,web_fetch", \
+        "the worker's read tools are untouched"
 
 
 def test_off_mode_changes_nothing_for_codex(monkeypatch):
@@ -124,7 +133,8 @@ def test_grok_agent_call_after_the_denial_is_an_observed_child(monkeypatch):
     assert child.total_tokens is None, "the vendor reports nothing for the child"
     assert child.detail.startswith(
         "CONTROL FAILURE (suspected): a denied fan-out tool was attempted although "
-        "the call sent --disallowed-tools Agent; execution and usage unknown")
+        "the call sent --disallowed-tools Agent workflow use_tool search_tool; "
+        "execution and usage unknown")
     assert ATTEMPTED_DELEGATION in child.detail and " ran " not in child.detail
 
 
@@ -226,3 +236,53 @@ def test_safe_diagnostics_filters_denied_tools_like_attempted_tools():
     got = safe_diagnostics({"denied_tools": ["Task", "bad name", 3, "Agent", "Task"], "attempted_tools": ["bash"]})
     assert got == {"attempted_tools": ["bash"], "denied_tools": ["Task", "Agent"]}
     assert safe_diagnostics({"denied_tools": ["  "]}) == {}
+
+
+# --- Off mode also closes the paths a denied tool name cannot ------------------
+
+
+def _captured_launch(monkeypatch, stdout):
+    from quadratus import cli_providers
+    seen = {}
+
+    def fake(argv, **kw):
+        seen["argv"], seen["env"] = argv, kw.get("env") or {}
+
+        class _Done:
+            returncode = 0
+            stderr = ""
+        _Done.stdout = stdout
+        return _Done()
+    monkeypatch.setattr(cli_providers, "_launch", fake)
+    return seen
+
+
+def test_off_mode_sets_claude_kill_switches_in_the_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUADRATUS_NATIVE_DELEGATION", "off")
+    seen = _captured_launch(monkeypatch, json.dumps({"type": "result", "result": "ok",
+                                                     "usage": {"input_tokens": 1, "output_tokens": 1}}))
+    ClaudeCLIProvider(model="opus", allow_writes=True, workdir=tmp_path).generate("p")
+    assert seen["env"]["CLAUDE_CODE_DISABLE_WORKFLOWS"] == "1"
+    assert seen["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] == "0"
+    denied = _pair(seen["argv"], "--disallowed-tools").split()
+    assert {"Workflow", "SendMessage", "ListAgents", "RemoteTrigger", "mcp__*"} <= set(denied)
+    for kept in ("Bash", "Edit", "Write", "Read", "WebFetch", "TaskOutput", "ToolSearch"):
+        assert kept not in denied
+
+
+def test_default_mode_sets_no_kill_switches(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAUDE_CODE_DISABLE_WORKFLOWS", raising=False)
+    seen = _captured_launch(monkeypatch, json.dumps({"type": "result", "result": "ok",
+                                                     "usage": {"input_tokens": 1, "output_tokens": 1}}))
+    ClaudeCLIProvider(model="opus", allow_writes=True, workdir=tmp_path).generate("p")
+    assert "CLAUDE_CODE_DISABLE_WORKFLOWS" not in seen["env"]
+    assert "--disallowed-tools" not in seen["argv"]
+
+
+def test_a_denied_grok_meta_tool_is_read_as_attempted_delegation(monkeypatch):
+    monkeypatch.setenv("QUADRATUS_NATIVE_DELEGATION", "off")
+    grok = GrokCLIProvider(model="", allow_writes=True)
+    grok._build_argv("p", "")
+    grok._observe_output(_grok_envelope(["read_file", "workflow"]))
+    assert [c.session_id for c in grok.native_children] == ["unidentified:grok:workflow"]
+    assert grok.native_children[0].detail.startswith("CONTROL FAILURE (suspected)")

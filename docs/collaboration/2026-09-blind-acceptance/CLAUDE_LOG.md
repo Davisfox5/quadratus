@@ -402,3 +402,64 @@ Two notes, neither blocking:
 
 No solver output exists; nothing read. Waiting on the tool-list probe result
 before anything else in my lane.
+
+## 2026-09-15 — scope check: the tools left after the Agent/Task denial
+
+Codex's question: can Claude's ListAgents, SendMessage, Workflow,
+TaskOutput, TaskStop, ToolSearch and scheduling tools, or Grok's workflow,
+search_tool and use_tool, reach another session or start work despite the
+denial? Read against code.claude.com/docs (cli-reference, tools-reference,
+workflows, agent-teams, cross-session-messaging, env-vars) on 2026-09-15.
+Grok's docs (docs.x.ai) are unreachable from this environment.
+
+Claude, verified from the docs:
+
+- **Workflow** "orchestrates many subagents in the background"; under `-p`
+  the call goes through ordinary permission evaluation, so a deny rule
+  stops it, and `CLAUDE_CODE_DISABLE_WORKFLOWS=1` removes it at startup.
+  A real bridge; now closed both ways.
+- **SendMessage / ListAgents** reach other sessions on the same filesystem
+  (two solver calls in one container could message each other) and, only
+  while connected to Remote Control, cloud and other-machine sessions. A
+  container cannot see host sessions. The documented off switch is a bare
+  deny of both names. Closed.
+- **RemoteTrigger** creates and runs claude.ai Routines, which can start
+  fresh sessions. Closed.
+- **CronCreate** schedules a prompt that re-enters the same session;
+  session-scoped, but it is a way to continue past the one turn the
+  harness asked for. Closed.
+- **mcp__\*** every MCP tool. The fresh HOME carries no MCP config, but the
+  export does not exclude a project `.mcp.json`; the deny costs nothing.
+- **TaskOutput, TaskStop, ToolSearch, ScheduleWakeup**: session-scoped per
+  the tools reference; a denied tool stays denied however its schema was
+  loaded. Left available.
+- **Agent teams** are off unless `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
+  and never form under `-p`; pinned to `0` in the call environment anyway.
+- A bare name in `--disallowed-tools` "removes the matching tools from
+  Claude's context", so the model never sees them (cli-reference).
+
+Change in my lane (`cli_providers.py`, `tests/test_native_mode.py`):
+`CLISpec.native_fanout_off_env`, applied only when the denial was folded
+into that call; claude off mode now denies
+`Task Agent Workflow SendMessage ListAgents RemoteTrigger CronCreate mcp__*`
+and sets `CLAUDE_CODE_DISABLE_WORKFLOWS=1`,
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=0`. Bash, Edit, Write, Read, WebFetch
+and the rest are untouched and a test pins that. Default mode is unchanged.
+
+Grok, **unverified**: `workflow`, `use_tool` and `search_tool` read as a
+workflow runner and a by-name tool dispatcher, which is exactly the shape
+that can route around a denied name. Off mode now denies all three next to
+`Agent`; the direct read/write/exec tools are separate names and stay. Ask:
+paste the shipped README's and `--help`'s lines for those three tools (no
+model call) so this can move from suspicion to a reading; and re-run the
+tool-list probe once under the wider denial to confirm read_file, bash and
+write tools are still listed. A grok envelope naming any denied tool is
+read as attempted delegation, same as Agent.
+
+Not changed, for your decision: `--bare` would also skip hooks, skills,
+plugins, MCP and CLAUDE.md discovery and not bind the inbox socket, which is
+attractive for blindness, but it narrows the tool set to Bash and file
+tools and is a bigger behavioural change than this lane should make alone.
+
+Verification: ruff and `git diff --check` clean, full suite **864 passed,
+7 skipped**.
