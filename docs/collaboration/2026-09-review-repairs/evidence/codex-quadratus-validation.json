@@ -1,0 +1,30 @@
+{
+  "source_commit": "4c0cea51923fe687476c6d1b78490cda0abf8c69",
+  "reviewer": "Codex",
+  "checks": [
+    {
+      "command": "/tmp/quadratus-review-env/bin/python -m pytest -q",
+      "exit_code": 0,
+      "passed": 753,
+      "skipped": 0,
+      "seconds": 48.15
+    },
+    {
+      "command": "ruff check quadratus tests",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "source_sha256": {
+    "quadratus/delegation.py": "cae9525260b268fe09a2774e56368d51017d4b0cf50b29b5dd00dc29de3773d6",
+    "quadratus/runtime.py": "4e98a39701d4d177cdcee6850e016bba6baf8c547d2f1624047112aa27cea94b",
+    "quadratus/scope.py": "4cfef7c5aeac77546efe40ce9682d68b50946d673d7168ed4348e59e98d0bb03",
+    "quadratus/session.py": "7b300d3ab81697bdcca3195aa0d14fbea2d296c75a27a65b384b526975672a00",
+    "quadratus/task_kinds.py": "24d1b65454785071f4d3c38f827fbeeb3fa122ee09994e387d1c9bd91992983f",
+    "quadratus/cli_providers.py": "e3d25d77055da43efb17a02c77c84847a6574d209467ee10ebaa0b17369372c4"
+  },
+  "provider_execution": "scripted offline regressions; no new live vendor run"
+}

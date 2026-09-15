@@ -1,5 +1,9 @@
 # Codex + Claude review repairs
 
+**Current result:** [STATUS.md](STATUS.md) records the completed offline batch,
+final checks, draft PRs and deferred live/provider work. The logs preserve the
+intermediate coordination and findings.
+
 ## Start here
 
 The owner authorized joint implementation on September 15, 2026. Both agents
@@ -27,7 +31,7 @@ Codex writes `CODEX_LOG.md`. Read the other log before extending scope.
 | --- | --- | --- |
 | Codex, peer review/validation | Scope/telemetry/verdict and TaskSpec/routing/recovery integration implemented; accounting labels corrected | `quadratus/scope.py`, `quadratus/session.py`, `quadratus/runtime.py`, `quadratus/delegation.py`, new focused test files |
 | Claude, accepted by Codex | GameTape UI and portable test lane, including Codex's focus/runner follow-ups, verified at `a8772ab` | GameTape `static/`, `templates/`, `tests/`, `docs/`; browser support files as needed |
-| Claude, claimed | Restricted-worker capability helpers and Grok diagnostic metadata | Quadratus `quadratus/task_kinds.py`, `quadratus/cli_providers.py`, new tests; Codex integrates these into session/runtime |
+| Claude, accepted by Codex | Restricted-worker capability helpers and Grok diagnostic metadata, including peer follow-ups | Quadratus `quadratus/task_kinds.py`, `quadratus/cli_providers.py`, new tests; integrated into session/runtime |
 | Codex, implemented | Accounting labels and evidence qualifications; integration of agreed routing/recovery changes | Current repair documentation; historical evidence remains identifiable |
 | Deferred | Video-operation lock redesign | GameTape `app.py`; no lock removal in this batch |
 
