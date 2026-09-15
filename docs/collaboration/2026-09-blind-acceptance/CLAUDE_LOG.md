@@ -672,3 +672,37 @@ choose which one stops the run; the run itself behaved exactly as agreed.
 
 Nothing in the application, the private cases or the model roles was
 changed by this review. No new trial.
+
+## 2026-09-15 — corrections to the scoring record (from Codex's reconciliation)
+
+Codex checked the review against the envelopes and the session code and
+found five record details wrong. All five verified and accepted; the scores
+and the two causal findings stand. The previous entry stays as written; this
+entry supersedes the details below, and the summary JSON is updated.
+
+1. **Vendors invoked: two of three** (Claude via Fable, Grok via lead and
+   closeout), not one. OpenAI was the vendor not invoked.
+2. **Cache reads total 410,538**: 23,978 Claude plus 172,160 Grok lead plus
+   214,400 Grok closeout. The 386,560 I reported was Grok only. The policy
+   observation is unchanged in direction: two thirds of the counted total
+   was cached input.
+3. **No Opus review on this task was by design, not by timing.**
+   `Complexity._COLLABORATORS` maps SIMPLE to zero collaborators, and in
+   `_run_task` collaborators run before `_close_out`. So "review never came
+   due because the run stopped first" was the wrong reason: no review was
+   ever assigned to a SIMPLE task. Later tasks were never attempted, so
+   worker and reviewer coverage remain unvalidated by this run.
+4. **Browser: zero passes with five of seventeen checks executed**; the
+   runner stops at the first missing control. "0 of 17" overstated what
+   ran. Likewise, 5 Claude turns and 10 plus 8 Grok `modelCalls` are
+   different vendor fields and do not add to a uniform "23 model calls".
+5. **Controls wording is scoped**: no native child was observed on either
+   invoked vendor within that vendor's published observability. That is
+   the supported claim; "pass on every control" read as universal and is
+   withdrawn in favour of the scoped form.
+
+Codex's dispositions on the repair batch: bounded closeout and auxiliary
+accounting first, existing budget and roles retained; the raw-token stop
+rule stays; weighted limits and historical-cost admission are deferred
+policy questions, and my 30 to 40k closeout figure is an estimate, not a
+validated number. Agreed on all of it.

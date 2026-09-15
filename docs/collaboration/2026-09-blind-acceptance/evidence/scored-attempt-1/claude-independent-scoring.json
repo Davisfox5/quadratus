@@ -33,9 +33,10 @@
       ]
     },
     "browser": {
-      "total": 17,
+      "checks_defined": 17,
+      "checks_executed": 5,
       "passed": 0,
-      "note": "UI absent; runner stopped after the first five checks"
+      "note": "UI absent; runner stopped at the first missing control after five checks"
     }
   },
   "application_suite": {
@@ -48,17 +49,39 @@
     "scope": "132 changed lines in the two permitted paths; within the 150-line tolerance",
     "store_unchanged": true,
     "budget_stop": "reported_token_threshold after 3 attempts, reply preserved, no fourth attempt",
-    "wall_seconds": 438.94
+    "wall_seconds": 438.94,
+    "wording": "no native child observed on either invoked vendor, within each vendor's published observability; not a universal enforcement claim"
   },
   "usage": {
     "controller_reported": 614386,
-    "cache_read_input_within_that": 386560,
+    "cache_read_input_within_that": {
+      "total": 410538,
+      "claude_fable": 23978,
+      "grok_lead": 172160,
+      "grok_closeout": 214400
+    },
     "haiku_auxiliary_outside_controller": 2817,
-    "attempts": 3,
-    "vendor_model_calls": {
-      "claude": 5,
-      "grok_lead": 10,
-      "grok_closeout": 8
+    "provider_attempts": 3,
+    "vendor_fields_not_uniform": {
+      "claude_num_turns": 5,
+      "grok_modelCalls": {
+        "lead": 10,
+        "closeout": 8
+      }
     }
-  }
+  },
+  "routing_coverage": {
+    "vendors_invoked": [
+      "claude (Fable, orchestrator)",
+      "grok (lead and closeout)"
+    ],
+    "vendors_not_invoked": [
+      "openai"
+    ],
+    "collaborators_for_this_task": 0,
+    "why_no_opus_review": "Complexity._COLLABORATORS maps SIMPLE to 0; collaborators run before closeout in _run_task, so no review was ever assigned to this task",
+    "later_tasks_attempted": 0,
+    "worker_coverage": "unvalidated"
+  },
+  "corrections": "2026-09-15: five record details corrected after Codex's reconciliation (comment 5685233xxx); scores unchanged"
 }
