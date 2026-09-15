@@ -1090,19 +1090,31 @@ def _fold_disallowed(argv: List[str], flag: str, extra: List[str]) -> List[str]:
     return argv + [flag, ' '.join(extra)]
 
 
+#: Prefix on a synthesised child's detail that marks it as *attempted*
+#: delegation: a denied fan-out tool was named in the envelope, and whether it
+#: executed or what it spent is unknown. Distinct from a codex child, which
+#: the vendor's own stream reports as having run.
+ATTEMPTED_DELEGATION = "ATTEMPTED native delegation"
+
+
 def _denied_fanout_children(vendor: str, denied: List[str], stdout: str,
                             diagnostics) -> List[NativeChild]:
-    """Native children on the vendors whose control is a tool denial.
+    """Suspected native children on the vendors whose control is a tool denial.
 
     Codex reports its own agents in its event stream; claude and grok do not.
-    Under ``QUADRATUS_NATIVE_DELEGATION=off`` the only evidence that a denied
-    fan-out tool ran anyway is the envelope's own record of tool calls:
+    Under ``QUADRATUS_NATIVE_DELEGATION=off`` the only evidence about a denied
+    fan-out tool is the envelope's own record of tool calls:
 
     * grok's ``toolCalls`` (read through the diagnostics whitelist, names
-      only). A denied name that still appears there is a child that ran with
-      unknown usage, which is exactly the case the run budget must stop on,
-      because the 2026-09-12 experiment showed ``--always-approve`` overrides
-      ``--disallowed-tools``.
+      only). A denied name that still appears there is an *attempt*: the
+      turn asked for the tool. A cancelled or refused request leaves the
+      same record as one that ran, so this does not establish that a child
+      executed, and the child carries unknown usage and the
+      ``ATTEMPTED_DELEGATION`` marker. The run still stops on it, because
+      the 2026-09-12 experiment showed ``--always-approve`` overrides
+      ``--disallowed-tools`` and an attempt under that flag may well have
+      run; stopping on suspicion is the conservative reading and the
+      record says "attempted", not "ran".
     * claude's ``--output-format json`` envelope carries no tool calls at all,
       only ``permission_denials``. A denial naming Task/Agent is the control
       *holding*, not a child, so it is recorded in the diagnostics
@@ -1122,8 +1134,9 @@ def _denied_fanout_children(vendor: str, denied: List[str], stdout: str,
                 children.append(NativeChild(
                     session_id=f"unidentified:grok:{name}",
                     tool_name=name,
-                    detail="denied fan-out tool still appears in the envelope's tool "
-                           "calls; the vendor does not report the child's usage",
+                    detail=f"{ATTEMPTED_DELEGATION}: denied fan-out tool named in the "
+                           "envelope's tool calls; whether it executed and what it "
+                           "spent are unknown",
                 ))
     return children
 
@@ -1473,23 +1486,32 @@ class CLIProvider(LLMProvider):
                     ended=datetime.now(timezone.utc),
                 ))
             if self.native_children and self.native_delegation_disabled:
-                # The switch was sent and a child ran anyway. Say so on the
-                # record itself, where the ledger and the evidence bundle
-                # will carry it; a child silently filed under "observed"
-                # would read as the expected state of a vendor without a
-                # switch, which this vendor no longer is.
-                sent = list(self.spec.control_args) or (
-                    [self.spec.disallowed_tools_flag or (self.spec.native_fanout_off_args or [""])[0]]
-                    + list(getattr(self, "_native_fanout_denied", []) or [])
+                # The switch was sent and the record shows native activity
+                # anyway. Say so on the record itself, where the ledger and
+                # the evidence bundle will carry it; a child silently filed
+                # under "observed" would read as the expected state of a
+                # vendor without a switch, which this vendor no longer is.
+                # Two wordings, because two kinds of evidence: a child the
+                # vendor's own stream reports (codex) *ran*; a denied tool
+                # name in an envelope (grok) was *attempted*, and the
+                # public record must not claim execution from a name.
+                sent = " ".join(token for token in (
+                    list(self.spec.control_args) or (
+                        [self.spec.disallowed_tools_flag or (self.spec.native_fanout_off_args or [""])[0]]
+                        + list(getattr(self, "_native_fanout_denied", []) or [])
+                    )
+                ) if token)
+                ran = f"CONTROL FAILURE: native child ran although the call sent {sent}"
+                attempted = (
+                    "CONTROL FAILURE (suspected): a denied fan-out tool was attempted "
+                    f"although the call sent {sent}; execution and usage unknown"
                 )
-                note = (
-                    "CONTROL FAILURE: native child ran although the call sent "
-                    + " ".join(token for token in sent if token)
-                )
-                log.warning("%s: %s", self.label, note)
-                self.native_children = [
-                    _annotate_child(child, note) for child in self.native_children
-                ]
+                annotated = []
+                for child in self.native_children:
+                    note = attempted if child.detail.startswith(ATTEMPTED_DELEGATION) else ran
+                    log.warning("%s: %s", self.label, note)
+                    annotated.append(_annotate_child(child, note))
+                self.native_children = annotated
         except Exception:
             log.debug("native accounting unavailable", exc_info=True)
 
@@ -1503,12 +1525,13 @@ class CLIProvider(LLMProvider):
         is reported as such rather than assumed bounded.
 
         What each is evidence of differs. Codex reports its children in its
-        own stream, so a child seen there is a control failure. Grok's
-        denial is unverified and its envelope lists tool calls, so a denied
-        tool seen there is likewise a failure. Claude's json envelope shows
-        only denials, so on claude a child that was *not* denied is not
-        observable here at all; that is a live-probe question, not one this
-        property answers.
+        own stream, so a child seen there is a confirmed control failure.
+        Grok's denial is unverified and its envelope lists tool calls, so a
+        denied tool named there is a *suspected* failure: an attempt with
+        unknown execution and usage, stopped on conservatively and recorded
+        as attempted. Claude's json envelope shows only denials, so on
+        claude a child that was *not* denied is not observable here at all;
+        that is a live-probe question, not one this property answers.
         """
         return bool(self.spec.control_args) or bool(getattr(self, "_native_fanout_denied", []))
 

@@ -101,7 +101,7 @@ def test_off_requests_cannot_be_overridden_by_extra_args(monkeypatch, vendor, pr
 
 import json  # noqa: E402
 
-from quadratus.cli_providers import _fold_disallowed  # noqa: E402
+from quadratus.cli_providers import ATTEMPTED_DELEGATION, _fold_disallowed  # noqa: E402
 from quadratus.delegation import safe_diagnostics  # noqa: E402
 
 
@@ -122,8 +122,41 @@ def test_grok_agent_call_after_the_denial_is_an_observed_child(monkeypatch):
     assert [child.session_id for child in grok.native_children] == ["unidentified:grok:Agent"]
     child = grok.native_children[0]
     assert child.total_tokens is None, "the vendor reports nothing for the child"
-    assert child.detail.startswith("CONTROL FAILURE: native child ran although the call sent "
-                                   "--disallowed-tools Agent")
+    assert child.detail.startswith(
+        "CONTROL FAILURE (suspected): a denied fan-out tool was attempted although "
+        "the call sent --disallowed-tools Agent; execution and usage unknown")
+    assert ATTEMPTED_DELEGATION in child.detail and " ran " not in child.detail
+
+
+def test_a_cancelled_grok_turn_naming_agent_is_attempted_not_proven(monkeypatch, tmp_path):
+    """A denied request and an executed one leave the same tool name in the
+    envelope, so the record says attempted; the budget still stops."""
+    from quadratus import cli_providers
+    from quadratus.run_budget import RunBudget, RunBudgetExceeded, RunLimits
+
+    monkeypatch.setenv("QUADRATUS_NATIVE_DELEGATION", "off")
+    cancelled = json.dumps({
+        "text": "I'll delegate this to a sub-agent.", "stopReason": "cancelled",
+        "modelCalls": 1, "usage": {"input_tokens": 40, "output_tokens": 8},
+        "toolCalls": [{"name": "Agent", "arguments": {"prompt": "/Users/x/secret"}}],
+    })
+
+    class _Completed:
+        stdout, stderr, returncode = cancelled, "", 0
+
+    monkeypatch.setattr(cli_providers, "_launch", lambda *a, **k: _Completed())
+    grok = GrokCLIProvider(model="", allow_writes=True, workdir=tmp_path)
+    grok.run_budget = RunBudget(RunLimits(), path=tmp_path / "budget.json")
+    with pytest.raises(ProviderError, match="cancelled"):
+        grok.generate("do it")
+    (child,) = grok.native_children
+    assert child.session_id == "unidentified:grok:Agent" and child.total_tokens is None
+    assert child.detail.startswith("CONTROL FAILURE (suspected)")
+    assert "native child ran" not in child.detail
+    assert "secret" not in child.detail
+    assert grok.run_budget.snapshot()["stop_reason"] == "uncontrolled_native_delegation"
+    with pytest.raises(RunBudgetExceeded):
+        grok.run_budget.reserve()
 
 
 def test_grok_ordinary_tools_after_the_denial_are_not_children(monkeypatch):
