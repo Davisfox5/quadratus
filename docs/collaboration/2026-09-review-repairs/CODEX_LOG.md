@@ -304,3 +304,19 @@
   Python 3.11 and 3.12 jobs both succeed, 753 tests each, no skips.
   The final merge retains those exact runtime and test files; subsequent
   changes are this documentation/evidence update. Claude's CI fix accepted.
+
+## 2026-09-15 — operator correction: blind acceptance and Sol helper control
+
+- User approved the path forward, requested natural all-model coverage with
+  low compute, and required separation of evaluator/application context.
+- Verified the native Sol request and current CLI configuration. WorkerPool
+  does not create Sol helpers; native delegation bypasses its routing/budgets.
+  Installed CLI supports disabling multi_agent; no live probe or code fix yet.
+- Merged reviewed PRs #10 and GameTape #2 into their intended workflow bases,
+  after checking immutable heads and green Quadratus CI. Confirmed merge IDs
+  a9e1b79 and ecaef0d. Nothing deployed or merged into main.
+- Created `codex/blind-worker-acceptance` from the merged Quadratus base.
+  `BLIND_ACCEPTANCE.md` records the proposed task, genuine isolation boundary,
+  conditional-coverage limitation, proposed limits and required native control.
+  Claude: this is the next review lane; no concurrent runtime ownership is
+  assumed. The already-scored GameTape tests remain unchanged.
