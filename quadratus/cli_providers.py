@@ -204,8 +204,14 @@ def _extract_grok_result(stdout: str) -> str:
     return text
 
 
-_DIAGNOSTIC_LIST_KEYS = ("toolCalls", "tool_calls", "tools", "steps", "events", "messages", "items", "turns")
-_DIAGNOSTIC_NAME_KEYS = ("toolName", "tool_name", "tool", "name")
+#: Containers whose entries *are* tool calls by construction.
+_DIAGNOSTIC_TOOL_CONTAINERS = ("toolCalls", "tool_calls", "toolUses", "tool_uses")
+#: Containers that hold mixed transcript entries; an entry there counts only
+#: when it says it is a tool call (``type``) or carries a tool-specific name
+#: field. A bare ``name`` on a message is an author, not a tool.
+_DIAGNOSTIC_MIXED_CONTAINERS = ("steps", "events", "messages", "items", "turns", "content")
+_DIAGNOSTIC_TOOL_TYPES = frozenset({"tool_call", "toolcall", "tool_use", "tooluse", "function_call", "functioncall", "tool"})
+_DIAGNOSTIC_TOOL_NAME_KEYS = ("toolName", "tool_name", "tool")
 _DIAGNOSTIC_NAME_RE = re.compile(r"^[A-Za-z][\w.-]{0,63}$")
 _MAX_DIAGNOSTIC_TOOLS = 20
 
@@ -222,10 +228,13 @@ def _extract_grok_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
     trigger was not recorded. This is that record.
 
     The tool-call shape inside the envelope is not documented by the vendor.
-    The walk therefore looks for list-valued keys a transcript would use and
-    reads a name-like field off each entry, and stays silent when it finds
-    none. A recorded name is a fact; an absent list is "not reported", never
-    "no tools were called".
+    The walk therefore reads names only where the envelope says they are
+    tool calls: entries of a tool-call container (``toolCalls`` and
+    spellings), or entries of a mixed transcript list that carry a tool-call
+    ``type`` or a tool-specific name field (``toolName``, ``tool``, or
+    ``function.name``). A bare ``name`` on a message or event is an author
+    or a label, possibly a person, and never a tool. A recorded name is a
+    fact; an absent list is "not reported", never "no tools were called".
     """
     try:
         payload = json.loads(stdout)
@@ -242,26 +251,42 @@ def _extract_grok_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
         diagnostics["model_calls"] = calls
     names: List[str] = []
 
+    def tool_name(item, certain):
+        """The tool this entry names, or None when it is not a tool call."""
+        for key in _DIAGNOSTIC_TOOL_NAME_KEYS:
+            if isinstance(item.get(key), str):
+                return item[key]
+        function = item.get("function")
+        if isinstance(function, dict) and isinstance(function.get("name"), str):
+            return function["name"]
+        kind = item.get("type")
+        typed = isinstance(kind, str) and kind.strip().lower().replace("-", "_") in _DIAGNOSTIC_TOOL_TYPES
+        if (certain or typed) and isinstance(item.get("name"), str):
+            return item["name"]
+        return None
+
+    def record(name):
+        if (isinstance(name, str) and _DIAGNOSTIC_NAME_RE.match(name)
+                and name not in names and len(names) < _MAX_DIAGNOSTIC_TOOLS):
+            names.append(name)
+
     def walk(node, depth):
-        if depth > 3 or len(names) >= _MAX_DIAGNOSTIC_TOOLS:
+        if depth > 3 or len(names) >= _MAX_DIAGNOSTIC_TOOLS or not isinstance(node, dict):
             return
-        if isinstance(node, dict):
-            for key in _DIAGNOSTIC_LIST_KEYS:
-                items = node.get(key)
-                if isinstance(items, list):
-                    for item in items:
-                        if not isinstance(item, dict):
-                            continue
-                        name = next(
-                            (item[k] for k in _DIAGNOSTIC_NAME_KEYS if isinstance(item.get(k), str)),
-                            None,
-                        )
-                        if name is None and isinstance(item.get("function"), dict):
-                            name = item["function"].get("name")
-                        if (isinstance(name, str) and _DIAGNOSTIC_NAME_RE.match(name)
-                                and name not in names and len(names) < _MAX_DIAGNOSTIC_TOOLS):
-                            names.append(name)
-                        walk(item, depth + 1)
+        # Envelope order, so the record reads as the turn happened.
+        for key, items in node.items():
+            if key in _DIAGNOSTIC_TOOL_CONTAINERS:
+                certain = True
+            elif key in _DIAGNOSTIC_MIXED_CONTAINERS:
+                certain = False
+            else:
+                continue
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if isinstance(item, dict):
+                    record(tool_name(item, certain))
+                    walk(item, depth + 1)
 
     walk(payload, 0)
     if names:

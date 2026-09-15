@@ -123,10 +123,23 @@ def test_files_that_cannot_travel_as_text_need_direct_writes(text):
     "Explain what the mutation harness measures.",
     "Summarise the difference between the two records in docs/BULK_EDIT.md.",
     "Which node version was used? Answer in one line.",
+    "Explain icon.svg.",
+    "Describe what fixtures/sample.mp4 is used for.",
+    "Is package-lock.json checked in?",
     "",
 ])
 def test_prose_that_merely_mentions_things_infers_nothing(text):
     assert needs_from_text(text) == frozenset()
+
+
+@pytest.mark.parametrize("text", [
+    "Change the fill color in icon.svg.",
+    "Fix the viewBox in static/logo.svg.",
+])
+def test_svg_is_text_and_travels_as_a_patch(text):
+    """Codex's finding on b73f827: SVG source is patchable, and a bare media
+    mention must not promote a read-only errand to an agentic seat."""
+    assert needs_from_text(text) == {Need.PATCH}
 
 
 def test_acceptance_criteria_count_as_much_as_the_description():
