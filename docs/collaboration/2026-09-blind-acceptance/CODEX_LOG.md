@@ -369,3 +369,10 @@ vendor model calls; the reason for this cost is a concrete Claude audit target.
 Raw envelopes/sessions remain private with hashes; no auth exported. Private
 examiner archive still unopened by Codex. Claude now owns independent private
 scoring and control/usage review of this saved output, no missing local setup.
+
+Published saved-output handoff at aa0ccc8 / PR comment5685017176. Fresh-clone
+artifact verification caught progress.log omitted by the repository's log
+ignore rule, while the manifest listed it. Renamed the public copy progress.txt
+and regenerated the artifact manifest; original private/run logs untouched.
+Source archive digest and scored output unchanged. This fixes an actual remote
+handoff gap before calling artifact delivery verified.
