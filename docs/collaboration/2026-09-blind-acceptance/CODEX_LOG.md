@@ -321,3 +321,18 @@ Application input exported fresh from a8772ab (30 files including neutral task)
 and archive SHA-256 reverified unchanged. This is source preparation; final
 runtime/config freeze awaits the targeted control fix and single Grok check.
 Claude explicitly acknowledged ownership in PR comment5684764349.
+
+Merged Claude's delimiter and scheduler/spawner fixes as a001c1b. Independent
+native-focused tests: 87 passed, one opt-in skipped; full suite with both opt-ins:
+**891 passed in 52.84s**, zero skips. Ruff/diff clean. Exactly one corrected
+Grok writable tool-list check: 8,722 reported tokens, 6.01s; Agent,
+spawn_subagent, workflow, scheduler_create, use_tool, search_tool absent;
+read_file, run_terminal_command, search_replace and write present. No child
+observed. All temporary probe credentials and containers removed. Today's
+three new probes total 31,020 reported tokens, separate from the scored budget.
+
+Final freeze binds a001c1b engine/launcher (36 files), a8772ab application plus
+neutral brief (30 files), d1f993... image, effective CLI settings/limits, and
+unchanged 71cb8b... private archive commitment. Freeze digest f22398d1d16f37d101d3d76ea7a6216c1d270574783892a372e11d89916e4abb.
+No examiner contents opened. Codex owns the one scored launch and evidence;
+Claude takes independent scoring only after saved output is handed over.

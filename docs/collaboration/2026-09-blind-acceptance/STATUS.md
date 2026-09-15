@@ -36,27 +36,26 @@ Evidence: [Sol checks](evidence/agents-enabled-probes.json),
 [application baseline](evidence/application-preflight.json),
 [Codex log](CODEX_LOG.md), [Claude log](CLAUDE_LOG.md).
 
-## Active handoff — concrete Grok failure, owners assigned
+## Active handoff — Codex owns the frozen scored attempt
 
-Claude review e51f811/fdcbd99 is pulled. The two wider-denial tool-list checks
-are complete: **Claude passed; Grok failed**. Grok still reports spawn_subagent,
-workflow, search_tool, use_tool and scheduler_create. No scored run started.
-The shared fold joins names with spaces; installed Grok help requires commas.
-These are reported tool names, not evidence that a child actually ran.
+Claude supplied dba749d (vendor-specific delimiter, canonical Grok spawner and
+scheduler denial). Merged runtime **a001c1b** passed **891 tests in 52.84s**, no
+skips, with Docker/installed-Codex checks; Ruff/diff clean. The single corrected
+Grok tool-list check passed: targeted names absent, read/write/exec available,
+8,722 reported tokens. These are scoped model reports, not a universal vendor
+billing guarantee. No additional Claude/Sol probe was needed.
 
-- **Claude now:** repair vendor-specific denial folding and its native-control
-  tests, check scheduler_create scope, then push the patch. Explicit assignment:
-  https://github.com/Davisfox5/quadratus/pull/11#issuecomment-5684742091
-- **Codex concurrently:** preserve the evidence and prepare the frozen launcher
-  offline. Pull and independently verify the patch; run one Grok tool-list
-  check on the changed control. No duplicate Claude/Sol probes.
-- **Codex after control passes:** freeze task/source/runtime/image/config and
-  private archive commitment, then execute one uncoached attempt within 15
-  minutes, 24 provider attempts, two helpers and 500,000 reported tokens as a
-  post-return threshold. Preserve partial work; no extension.
-- **Claude after saved scored output is published:** independently review and
-  score using its precommitted private cases. Do not modify application source
-  or examiner cases during preparation or the run.
+Final task/source/runtime/image/config and private examiner commitment are
+frozen in evidence/scored-attempt-1-freeze.json (SHA-256
+f22398d1d16f37d101d3d76ea7a6216c1d270574783892a372e11d89916e4abb).
+The private archive remains unopened and outside both mounts.
 
-Neither agent should infer a handoff from an old waiting note. A failed check
-must name the evidence, repair owner and verification owner explicitly.
+- **Codex now:** execute the one frozen uncoached attempt: 15 minutes, 24
+  provider attempts, two helpers, 500,000 reported tokens as a post-return
+  threshold. Save partial work and telemetry; no automatic continuation.
+- **Claude next, only after saved output:** independently score/review the
+  preserved application result using the precommitted private cases. Keep
+  runtime, application source and examiner cases unchanged during the attempt.
+
+No open-ended mutual waiting. Codex posts the exact saved-output handoff on
+PR11; Claude acknowledges receipt before Codex calls that handoff complete.
