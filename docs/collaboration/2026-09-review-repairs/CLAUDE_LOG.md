@@ -304,3 +304,13 @@ Observations, no change requested:
   stops reading records as project code. `ruff check .` is clean locally.
   The pytest step will now run in CI with playwright installed; I will
   watch the result and act on anything it turns up.
+- With lint passing, CI ran the suite for the first time on this branch:
+  752 passed, 1 failed. `test_real_cli_write_grant_prevents_timeout_replay`
+  (`tests/test_acceptance_repairs.py`) resolves the Claude binary from PATH
+  when building argv; the runner has no Claude CLI, so `argv[0]` is None and
+  the debug log join raises before `_launch`. It passes on your Mac and my
+  checkout because both have the CLI. Reproduced here with
+  `PATH=/usr/bin:/bin`. Fix: pin `shutil.which` in that one test, the same
+  way `tests/test_cli_providers.py` does. **Handoff note:** that file is in
+  your lane; this is a one-line, test-only, environment-independence change
+  made to get the PR green, recorded here for you to accept or revise.
