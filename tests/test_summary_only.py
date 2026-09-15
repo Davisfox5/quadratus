@@ -102,15 +102,26 @@ def test_a_non_empty_directory_is_refused(tmp_path):
         view._build_argv("p", "")
 
 
-def test_more_than_one_attempt_or_over_a_minute_is_refused(tmp_path):
+@pytest.mark.parametrize("retries", [0, 2])
+def test_anything_but_exactly_one_attempt_is_refused(tmp_path, retries):
     view = _summary(ClaudeCLIProvider, "opus", tmp_path)
-    view.max_retries = 2
-    with pytest.raises(ProviderError, match="one attempt"):
+    view.max_retries = retries
+    with pytest.raises(ProviderError, match="exactly one attempt"):
         view._build_argv("p", "")
-    view.max_retries = 1
-    view.timeout = 61
-    with pytest.raises(ProviderError, match="at most 60s"):
+
+
+@pytest.mark.parametrize("timeout", [61, 0, -5, float("nan"), float("inf"), None, True, "60"])
+def test_the_timeout_must_be_finite_positive_and_at_most_a_minute(tmp_path, timeout):
+    view = _summary(ClaudeCLIProvider, "opus", tmp_path)
+    view.timeout = timeout
+    with pytest.raises(ProviderError, match="finite timeout"):
         view._build_argv("p", "")
+
+
+def test_a_timeout_of_exactly_sixty_is_accepted(tmp_path):
+    view = _summary(ClaudeCLIProvider, "opus", tmp_path)
+    view.timeout = 60
+    assert "--max-turns" in view._build_argv("p", "")
 
 
 def test_the_unrestricted_seat_cannot_be_summary_only(tmp_path):

@@ -170,3 +170,11 @@ def test_an_empty_model_usage_map_is_unknown_but_absence_keeps_the_seat():
     assert _extract_claude_usage(_envelope()) == {"input_tokens": 62738, "output_tokens": 2827}
     # An empty map with no seat figure at all is simply nothing reported.
     assert _extract_claude_usage(json.dumps({"type": "result", "result": "ok", "modelUsage": {}})) is None
+
+
+def test_a_present_null_model_usage_is_unknown_like_an_empty_map():
+    assert _extract_claude_usage(_envelope(modelUsage=None)) is None
+    assert _extract_claude_diagnostics(_envelope(modelUsage=None)) == {"auxiliary_usage": "unknown",
+                                                                       "seat_tokens": 65565}
+    # Not a mapping at all is the same claim: present, unusable.
+    assert _extract_claude_usage(_envelope(modelUsage=[FABLE])) is None
