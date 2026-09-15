@@ -30,7 +30,10 @@ Design notes
   rather than from a binary: the likeliest failure on a fresh machine is one
   wrong flag, and the difference between a config line and a patch is the
   difference between a working evening and a blocked one. ``quadratus probe``
-  is how you find out which it is.
+  is how you find out which it is. The one thing an override may not do is
+  undo a control the harness sends on every call -- today, codex's native
+  sub-agent switch -- and an override that would is refused, not out-ordered
+  (see :data:`CODEX_NATIVE_DELEGATION_FEATURES`).
 * **Project access is explicit.** Fleet gives editing calls the persistent
   project and other calls fresh source copies. Vendor tool restrictions still
   apply. Copies isolate relative writes; they are not an operating-system
@@ -72,7 +75,10 @@ __all__ = [
     "CodexCLIProvider",
     "GrokCLIProvider",
     "CLI_SPECS",
+    "CODEX_NATIVE_DELEGATION_CONTROL",
+    "CODEX_NATIVE_DELEGATION_FEATURES",
     "cli_provider_classes",
+    "codex_override_conflicts",
 ]
 
 
@@ -369,9 +375,12 @@ def _extract_native_children(stdout: str) -> List[NativeChild]:
     usage covered the parent alone, so 135,105 child tokens were spent inside
     an authorised run and appeared in no total it produced.
 
-    The harness cannot stop this -- it happens inside a vendor process -- so it
-    records it. Children are keyed by session id and their usage is taken as
-    the **maximum** seen, never the sum: these event streams restate the
+    On codex the harness now switches this off at the CLI
+    (``CODEX_SPEC.control_args``), so a child observed here is a *control
+    failure* and is marked as one. The observation stays regardless: it is
+    the check that the control held, and on the other two vendors it is still
+    all there is. Children are keyed by session id and their usage is taken
+    as the **maximum** seen, never the sum: these event streams restate the
     session's cumulative total on every update, so summing the updates
     multiplies the real figure.
 
@@ -438,6 +447,21 @@ def _extract_native_children(stdout: str) -> List[NativeChild]:
             tool_name=existing.tool_name or child.tool_name,
         )
     return list(found.values())
+
+
+def _annotate_child(child: NativeChild, note: str) -> NativeChild:
+    """The same observation with the control verdict prepended to its detail."""
+    if note in child.detail:
+        return child
+    return NativeChild(
+        session_id=child.session_id,
+        model=child.model,
+        parent_session_id=child.parent_session_id,
+        input_tokens=child.input_tokens,
+        output_tokens=child.output_tokens,
+        tool_name=child.tool_name,
+        detail=f"{note}; {child.detail}" if child.detail else note,
+    )
 
 
 def _as_int(value) -> Optional[int]:
@@ -512,6 +536,19 @@ class CLISpec:
     #: ``--skip-git-repo-check`` has to survive into a restricted call, while
     #: grok's ``--always-approve`` is the very thing being withheld.
     agentic_args: List[str] = field(default_factory=list)
+    #: Flags that hold a harness invariant on *every* call, whatever the seat,
+    #: the permission mode or the operator's overrides say. Today this is one
+    #: thing: codex is told not to spawn its own agents, so that every helper
+    #: passes through WorkerPool and its budgets. Sent after the permission
+    #: axis and before ``extra_args``; ``override_conflicts`` is what stops an
+    #: operator override from undoing them. Empty for a vendor whose CLI
+    #: offers no such switch -- which is a gap, and is documented as one.
+    control_args: List[str] = field(default_factory=list)
+    #: Given the operator's extra arguments, the tokens that would undo or
+    #: hide ``control_args``. A non-empty answer refuses the call: an override
+    #: that re-enables native delegation is a configuration error, not a
+    #: preference, and a refusal cannot be mistaken for a bounded run.
+    override_conflicts: Optional[Callable[[Sequence[str]], List[str]]] = None
     #: Some CLIs only honour their tool-filtering flags when the prompt is an
     #: argument rather than a file (grok ignores them under --prompt-file, in
     #: silence). Where that is so, restricted mode must deliver the prompt in
@@ -603,6 +640,138 @@ CLAUDE_SPEC = CLISpec(
     extract_usage=_extract_claude_usage,
 )
 
+#: Codex feature switches that admit vendor-native sub-agents (``spawn_agent``
+#: and friends). Both are governed by ``--disable <name>`` on codex-cli
+#: 0.154.0, and the precedence was probed on 2026-09-15 with ``features
+#: list`` (a configuration read, not a model call):
+#:
+#: * ``--disable multi_agent`` wins over ``--enable multi_agent``, over
+#:   ``-c features.multi_agent=true`` in every spelling tried (``-c``,
+#:   ``-cKEY=``, ``--config``, an inline ``features={...}`` table, spaces
+#:   around ``=``), and over ``[features] multi_agent = true`` in a
+#:   ``CODEX_HOME`` config file -- *regardless of argument order*.
+#: * ``-c features.multi_agent=false`` alone does not: a later ``-c ...=true``
+#:   wins, and ``--enable`` beats it wherever it sits. So the control is the
+#:   ``--disable`` form, and the ``-c`` form is not relied on.
+#: * ``multi_agent_v2`` is a separate switch (present, off by default) that
+#:   disabling the first leaves alone, so both are disabled.
+#: * ``--disable <unknown>`` errors ("Unknown feature flag"), whereas ``-c
+#:   features.<unknown>=false`` is ignored in silence. The loud form is the
+#:   one wanted here: a codex release that renames the switch fails every
+#:   call and says why, rather than quietly running with spawning back on.
+#:
+#: Configuration proof only. ``features list`` reporting ``false`` is the
+#: binary's own statement of the switch; that no child can then be spawned in
+#: a live ``exec`` turn is still to be shown by a bounded probe.
+CODEX_NATIVE_DELEGATION_FEATURES = ("multi_agent", "multi_agent_v2")
+#: Config tables whose only purpose is to shape native sub-agents
+#: (``agents.enabled``, ``agents.max_threads``, ...). The 0.154.0 binary
+#: accepts ``agents.enabled`` and rejects ``agents.bogus``, so the table is
+#: real; with spawning disabled any override of it is at best inert and at
+#: worst an attempt to re-admit it, and both are refused.
+CODEX_NATIVE_DELEGATION_TABLES = ("agents",)
+#: The control itself, in the form the precedence probe showed to win.
+CODEX_NATIVE_DELEGATION_CONTROL = [
+    flag for name in CODEX_NATIVE_DELEGATION_FEATURES for flag in ("--disable", name)
+]
+
+
+def _config_override_value(tokens: Sequence[str], index: int):
+    """The ``key=value`` payload of a ``-c``/``--config`` at ``index``, and
+    how many tokens it spans. None when the token is not a config override."""
+    token = tokens[index]
+    if token in ("-c", "--config"):
+        if index + 1 < len(tokens):
+            return tokens[index + 1], 2
+        return None, 1
+    if token.startswith("--config="):
+        return token[len("--config="):], 1
+    if token.startswith("-c") and len(token) > 2 and not token.startswith("--"):
+        # clap accepts both ``-cKEY=VAL`` and ``-c=KEY=VAL``.
+        return token[2:].lstrip("="), 1
+    return None, 0
+
+
+def _feature_switch_value(tokens: Sequence[str], index: int):
+    """The feature named by an ``--enable`` at ``index``, and its span."""
+    token = tokens[index]
+    if token == "--enable":
+        if index + 1 < len(tokens):
+            return tokens[index + 1], 2
+        return None, 1
+    if token.startswith("--enable="):
+        return token[len("--enable="):], 1
+    return None, 0
+
+
+def codex_override_conflicts(args: Sequence[str]) -> List[str]:
+    """Operator arguments that would undo or hide the native-delegation control.
+
+    Three shapes, each rendered back as the tokens that caused it:
+
+    * ``--enable <feature>`` for a feature in
+      :data:`CODEX_NATIVE_DELEGATION_FEATURES`. On 0.154.0 it would *lose* to
+      the ``--disable`` the harness sends, but an override whose only effect is
+      to lose is a misunderstanding worth stopping on rather than a no-op.
+    * A ``-c``/``--config`` override of ``features.<feature>`` to anything but
+      ``false``, of the whole ``features`` table naming one, or of anything
+      under an ``agents`` table. Keys are normalised by stripping quotes and
+      whitespace, since TOML allows both.
+    * A bare ``--``. Everything after an argument terminator is positional to
+      the CLI and invisible to this check, so the terminator itself is refused.
+
+    An agreeing override (``--disable multi_agent``, ``-c
+    features.multi_agent=false``) is not a conflict; neither is anything
+    unrelated, which is most of what ``QUADRATUS_CLI_ARGS_OPENAI`` is for.
+    """
+    tokens = list(args)
+    conflicts: List[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in ("--", "resume", "fork"):
+            conflicts.append(token)
+            index += 1
+            continue
+        feature, span = _feature_switch_value(tokens, index)
+        if span:
+            if feature in CODEX_NATIVE_DELEGATION_FEATURES:
+                conflicts.append(" ".join(tokens[index:index + span]))
+            index += span
+            continue
+        payload, span = _config_override_value(tokens, index)
+        if span:
+            if payload is not None and _config_override_conflicts(payload):
+                # The key only. An override's value can carry private
+                # configuration, and this string ends up in an error message
+                # and a log.
+                conflicts.append(f"{token.split('=', 1)[0][:8]} {_override_key(payload)}=…")
+            index += span
+            continue
+        index += 1
+    return conflicts
+
+
+def _override_key(payload: str) -> str:
+    return re.sub(r"""[\s"']""", "", payload.partition("=")[0])
+
+
+def _config_override_conflicts(payload: str) -> bool:
+    key, _, value = payload.partition("=")
+    key = _override_key(payload)
+    value = value.strip().strip("\"'").lower()
+    if key in CODEX_NATIVE_DELEGATION_TABLES or any(
+        key.startswith(f"{table}.") for table in CODEX_NATIVE_DELEGATION_TABLES
+    ):
+        return True
+    for name in CODEX_NATIVE_DELEGATION_FEATURES:
+        if key == f"features.{name}" and value != "false":
+            return True
+        if key == "features" and name in value:
+            return True
+    return False
+
+
 #: Verified end to end against codex-cli 0.154.0 on 2026-09-12: a signed-in
 #: ``codex exec`` round trip through these exact flags, with the JSONL event
 #: shape captured from the run and encoded in the extractors and their tests.
@@ -639,6 +808,16 @@ CODEX_SPEC = CLISpec(
     # implied by an empty list.
     restricted_args=["--sandbox", "read-only"],
     always_args=["--skip-git-repo-check"],
+    # No seat on this transport may spawn its own agents. A Sol review on
+    # 2026-09-13 used the CLI's spawn_agent to create a second Sol that passed
+    # through no worker selection and no budget; see delegation.py. The
+    # switch is sent on every call -- read-only, writable and restricted
+    # alike -- and an operator override that would undo it is refused rather
+    # than out-ordered. Helpers on this vendor are Luna and Terra, dispatched
+    # by WorkerPool. Configuration is checked locally; runtime enforcement
+    # still needs a live probe, so observed children remain in the telemetry.
+    control_args=list(CODEX_NATIVE_DELEGATION_CONTROL),
+    override_conflicts=codex_override_conflicts,
     extract=_extract_codex_result,
     extract_usage=_extract_codex_usage,
     prompt_on_stdin=True,
@@ -989,8 +1168,30 @@ class CLIProvider(LLMProvider):
                 spec.readonly_args if not self._allow_writes else spec.write_args
             )
         # Operator overrides go last, so they can also correct something the
-        # spec got wrong above -- most CLIs let a later flag win.
-        argv += spec.extra_args()
+        # spec got wrong above -- most CLIs let a later flag win. The one
+        # thing they may not correct is the control: it is checked against
+        # them first, and a conflict is a refusal, not a warning, because a
+        # call that ran with native spawning back on would look exactly like
+        # a bounded one from the outside.
+        extra = spec.extra_args()
+        if spec.override_conflicts is not None:
+            conflicts = spec.override_conflicts(extra)
+            if conflicts:
+                raise ProviderError(
+                    f"{self.label}: QUADRATUS_CLI_ARGS_{spec.vendor.upper()} would "
+                    f"re-enable or hide vendor-native sub-agents "
+                    f"({'; '.join(conflicts)}). Quadratus disables native "
+                    f"spawning on every {spec.binary} call so that helpers pass "
+                    f"through WorkerPool; remove the override, not the control."
+                )
+        # Before the overrides rather than after them, and deliberately so:
+        # the precedence probe (see CODEX_NATIVE_DELEGATION_FEATURES) showed
+        # --disable wins from any position, the conflict check above covers
+        # the spellings that could out-order a weaker form, and the operator
+        # contract that overrides land last is one this module already
+        # promises.
+        argv += list(spec.control_args)
+        argv += extra
         if self.restricted and spec.restricted_prompt_flag:
             if len(prompt) > MAX_ARGV_PROMPT:
                 # Falling back to a prompt file here would silently drop the
@@ -1144,8 +1345,31 @@ class CLIProvider(LLMProvider):
                     root, self.last_session_id, self.workdir,
                     ended=datetime.now(timezone.utc),
                 ))
+            if self.native_children and self.native_delegation_disabled:
+                # The switch was sent and a child ran anyway. Say so on the
+                # record itself, where the ledger and the evidence bundle
+                # will carry it; a child silently filed under "observed"
+                # would read as the expected state of a vendor without a
+                # switch, which this vendor no longer is.
+                note = (
+                    "CONTROL FAILURE: native child ran although the call sent "
+                    + " ".join(self.spec.control_args)
+                )
+                log.warning("%s: %s", self.label, note)
+                self.native_children = [
+                    _annotate_child(child, note) for child in self.native_children
+                ]
         except Exception:
             log.debug("native accounting unavailable", exc_info=True)
+
+    @property
+    def native_delegation_disabled(self) -> bool:
+        """Whether this transport tells the CLI not to spawn its own agents.
+
+        True only where the spec carries a control; a vendor without one is
+        reported as such rather than assumed bounded.
+        """
+        return bool(self.spec.control_args)
 
     def _retryable(self, exc: Exception) -> bool:
         if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)):

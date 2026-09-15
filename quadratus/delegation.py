@@ -8,10 +8,19 @@ input and 6,350 output tokens; the child separately recorded 127,405 and
 7,700. Quadratus metered the parent and nothing else, so 135,105 tokens were
 spent inside an authorised run and were absent from every total it reported.
 
-The fix is not to forbid native delegation -- the harness cannot, it happens
-inside a vendor process it does not control, and pretending otherwise would
-make the report *more* wrong. The fix is to say so. This module gives the
-record three things it lacked:
+Two fixes, in order. Where the vendor offers a switch, the harness now throws
+it: every Codex call carries ``--disable multi_agent`` (and its successor
+switch) from ``cli_providers.CODEX_SPEC.control_args``, and an operator
+override that would undo it is refused rather than out-ordered. OpenAI helpers
+are intended to pass through :class:`WorkerPool`; runtime enforcement still
+needs the live probe, and native observations must remain visible. An earlier version
+of this text said the harness could not forbid native delegation at all; that
+was too broad, and is the second design error this file has had to retract.
+It remains true for the other two vendors' senior seats -- Claude's ``Task``
+and Grok's ``Agent`` are denied only on restricted seats -- and for a control
+that fails on codex, where a child would still run inside a vendor process.
+For those the record is the check, and pretending otherwise would make the
+report *more* wrong. This module gives that record three things it lacked:
 
 **A provenance for every invocation.** :class:`Origin` distinguishes a
 Quadratus-assigned seat, a Quadratus-commissioned worker, a vendor-native
