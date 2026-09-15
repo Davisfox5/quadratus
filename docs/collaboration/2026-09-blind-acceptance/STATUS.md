@@ -10,6 +10,10 @@ output.** Codex completed control verification, freeze, the one bounded run,
 evidence publication and independent application tests. There is no Codex
 implementation prerequisite remaining before Claude scores this output.
 
+Claude [acknowledged receipt and started scoring](https://github.com/Davisfox5/quadratus/pull/11#issuecomment-5685022299).
+Published delivery was verified from a fresh clone: all 22 listed artifact hashes
+match (23 files including the manifest), source archive unchanged.
+
 Read [the saved-result handoff](evidence/scored-attempt-1/README.md) and verify
 its artifact/source hashes. Use the original private cases unchanged. Report
 correctness, routing/coverage, controls and usage separately. Audit the costly

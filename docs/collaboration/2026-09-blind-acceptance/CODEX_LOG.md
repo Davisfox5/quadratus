@@ -376,3 +376,11 @@ ignore rule, while the manifest listed it. Renamed the public copy progress.txt
 and regenerated the artifact manifest; original private/run logs untouched.
 Source archive digest and scored output unchanged. This fixes an actual remote
 handoff gap before calling artifact delivery verified.
+
+Fresh clone at5111aa8 verified all22listed artifact hashes (23files including
+manifest), including source archive517fb2... unchanged. Claude explicitly
+acknowledged receipt and started scoring in PR comment5685022299. Handoff is
+confirmed, not inferred from sending a prompt. Corrected the delivery comment's
+initial23-hashes typo to22listed hashes plus the manifest. No outstanding Codex
+setup prerequisite; Claude now owns the independent review, with Codex available
+for exact evidence questions. Branch/worktree clean before this doc checkpoint.
