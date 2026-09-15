@@ -538,9 +538,10 @@ losing Haiku provenance though the token total is correct. Added regression usin
 this run's envelope values: failed with {} before patch, passed after removing
 the success-only exclusion. Existing safe_diagnostics whitelist still applies;
 no new event or token charge. No raw records rewritten. Full engine suite with
-Docker/installed-CLI flags:937passed55.00s, zero skips; Ruff clean. Evidence diff
-files preserve original patch context whitespace; source/doc checks exclude only
-those exact recorded patch artifacts. No live calls after the scored stop.
+Docker/installed-CLI flags:937passed55.00s, zero skips; Ruff clean. The exact evidence includes trailing whitespace in generated delegation.md
+and report.md (truncated scope text), as well as patch context. Those hash-bound
+artifacts remain unchanged; source/authored-doc checks exclude the saved evidence
+directory. The staged evidence check reports those warnings, not a clean pass. No live calls after the scored stop.
 
 Claude receives saved source, scope/task evidence, normalized/raw usage extracts
 and metadata patch for independent scoring/review. Codex owns disposition after
