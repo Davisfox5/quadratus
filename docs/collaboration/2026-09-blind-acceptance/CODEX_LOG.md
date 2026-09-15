@@ -459,3 +459,18 @@ Top-level seat usage is not added again. Original evidence and private examiner
 archive remain unchanged; no private cases opened, no GameTape edits or live
 provider run. Savings and all-worker coverage remain unverified. This offline
 repair batch is complete; Codex owns a subsequent live-validation handoff.
+
+### Final merge correction
+
+Claude's 8c4a39a crossed the ownership message and push of local 9737645.
+Retained Claude's provider guard and summary tests exactly, dropping the local
+versions; its guard additionally rejects bool/string timeouts and tests exactly
+60 seconds. Also included its explicit-null/nonmapping modelUsage regressions.
+Acknowledged resolution in PR comment5686065036; Claude has no outstanding
+assignment. Normal merge preserved both histories and the API docstring note.
+
+Re-ran the full combined suite on the resolved tree: **936 passed in 53.95s**,
+zero skips, with the same Docker/installed-CLI opt-ins. Ruff and both worktree
+and staged diff checks passed. This supersedes the pre-merge 933 result above.
+No live model call was made. STATUS and PR description now reflect the finished
+repair batch rather than old launch/scoring gates.

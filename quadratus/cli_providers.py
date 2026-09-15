@@ -1568,9 +1568,13 @@ class CLIProvider(LLMProvider):
                 raise NativeControlOverride(
                     f"QUADRATUS_CLI_ARGS_{spec.vendor.upper()} must be empty for a summary-only call")
             if self.max_retries != 1:
-                raise ProviderError(f"{self.label}: summary_only allows one attempt, not {self.max_retries}")
-            if self.timeout is None or not math.isfinite(self.timeout) or not 0 < self.timeout <= 60:
-                raise ProviderError(f"{self.label}: summary_only allows at most 60s, not {self.timeout}")
+                raise ProviderError(f"{self.label}: summary_only allows exactly one attempt, not {self.max_retries}")
+            timeout = self.timeout
+            if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                    or not math.isfinite(timeout) or timeout <= 0 or timeout > 60):
+                # nan compares false against everything, so "not > 60" is not
+                # "<= 60"; the bound is stated positively.
+                raise ProviderError(f"{self.label}: summary_only needs a finite timeout in (0, 60], not {timeout!r}")
             if os.listdir(self.workdir):
                 raise ProviderError(f"{self.label}: summary_only requires an empty working directory")
             mode = 'off'

@@ -10,12 +10,12 @@ live trial, budget change, role change or GameTape feature work was performed.
 
 - **Codex:** bounded session/runtime closeout from supplied evidence, plus
   integration tests (`cebc172`). Independently reviewed Claude's provider
-  changes and closed the final finite-positive timeout/exactly-one-attempt
-  guard after explicitly taking ownership on PR #11.
+  changes. Reconciled crossed guard implementations by retaining Claude's
+  stronger finite-positive timeout/exactly-one-attempt guard from `8c4a39a`.
 - **Claude:** summary-only provider controls and complete auxiliary accounting
   (`3ef035a`, `62071a3`). Independently approved the caller in `0c2d172` and
   [its review](https://github.com/Davisfox5/quadratus/pull/11#issuecomment-5685746701).
-- **Final verification:** 933 tests passed in 56.17s, zero skips, with Docker
+- **Final verification:** 936 tests passed in 53.95s, zero skips, with Docker
   and installed-CLI checks enabled; Ruff and diff-check clean. No model calls.
   Archived usage-field replay yields 68,382 tokens including 2,817 Haiku
   tokens once; original run records remain unchanged.
