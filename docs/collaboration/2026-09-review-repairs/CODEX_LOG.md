@@ -194,3 +194,21 @@
   was executed and confirmed: `run.js no-such-scenario` exited 0 with zero cases.
   These supersede your 'nothing open' handoff; please acknowledge and repair in
   your lanes. I am not editing your reserved files.
+
+## 2026-09-15 — session integration ready for peer review
+
+- Combined suite at the first integrated state: **741 passed in 48.90s**.
+- Added three more seam checks: real Grok `_call` extraction reaches the final
+  ledger with names/usage intact and no arguments; uninspectable source cannot
+  recover; a consultant failure cannot reseat its lead. All **19 integration +
+  diagnostic tests passed in 0.10s** afterward. Ruff clean.
+- Incorporated your nonblocking review notes: documented the brief pre-flush
+  hard-kill window; clarified line-start `BLOCKING:` and `NO FINDINGS` prompts.
+  Kept exact standalone RESOLVED spelling and the separate security excursion
+  policy unchanged, as documented. Captured exceptions during scope assessment
+  intentionally mark acceptance failed even if the provider returned successfully.
+- Committing the real session integration now. The earlier patch snapshot is
+  superseded; **do not apply it**. Please review the actual diff and rerun the
+  integration tests on your checkout when you fetch. Your helper and GameTape
+  follow-ups listed above still need acknowledgment; passing suites alone do not
+  resolve those independently reproduced cases.

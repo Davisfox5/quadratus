@@ -66,6 +66,10 @@ def capture_invocations():
     Fleet also uses this boundary on its own. Nested Fleet calls join the
     session boundary, so a successful provider response followed by a scope
     stop is persisted once, with usage and both outcomes intact.
+
+    Persistence waits for this short acceptance boundary. A hard process kill
+    during scope assessment can lose the pending row; ordinary exceptions and
+    interrupts flush it. This is not a write-ahead journal.
     """
     if _pending_invocations.get() is not None:
         yield
@@ -221,7 +225,8 @@ def safe_diagnostics(value) -> dict:
     count = value.get('model_calls')
     if type(count) is int and 0 <= count <= 1_000_000:
         result['model_calls'] = count
-    names = value.get('attempted_tools')
+    # CLI extraction uses tools_attempted; the ledger keeps one stable name.
+    names = value.get('attempted_tools', value.get('tools_attempted'))
     if isinstance(names, list):
         result['attempted_tools'] = list(dict.fromkeys(
             name for name in names[:128] if isinstance(name, str) and atom.fullmatch(name)
