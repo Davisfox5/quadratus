@@ -450,8 +450,7 @@ class Fleet:
                 invoked=invoked,
                 outcome=outcome,
                 provider_outcome=provider_outcome or outcome,
-                diagnostics=safe_diagnostics(getattr(provider, "last_diagnostics", None))
-                if outcome != "ok" else {},
+                diagnostics=safe_diagnostics(getattr(provider, "last_diagnostics", None)),
                 seconds=seconds,
                 # Absent stays absent: None is unknown, and unknown is not zero.
                 input_tokens=usage.get("input_tokens"),

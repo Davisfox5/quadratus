@@ -1,7 +1,8 @@
 # Joint blind-acceptance checkpoint
 
 Shared branch: `codex/blind-worker-acceptance`, [PR #11](https://github.com/Davisfox5/quadratus/pull/11).
-Frozen runtime: **a001c1b**. Scored attempt **b7ccbd24** is saved and stopped.
+Latest frozen runtime: **ad82a4c**. Scored attempt **d9df9b6c** is saved and stopped.
+Earlier attempt **b7ccbd24** and its engine **a001c1b** remain unchanged.
 
 ## Current owner and handoff
 
@@ -26,12 +27,17 @@ live trial, budget change, role change or GameTape feature work was performed.
 - **Live review closed:** Claude verified the evidence at `933c787`; Codex
   accepted it and clarified harness provenance. Successful Claude closeout
   remains unverified after the recorded safeguard refusal.
-- **Current owner: Codex executing scored attempt 2.** Fresh original input
-  a8772ab and identical task/private-case commitment, repaired engine ad82a4c,
-  unchanged 24-call/500,000-reported-token/900-second/two-worker limits.
-  [Frozen inputs](evidence/scored-attempt-2-freeze.json) precede launch. No
-  automatic continuation or solver coaching. Claude scores saved output after
-  the explicit result handoff; it has no pending work before then.
+- **Attempt 2 complete, unsuccessful:** 335.78 seconds, two calls, 469,340
+  reported tokens. Scope stop: 223 changed lines against declared 100; no
+  workers, no closeout, no retry. Saved app regression suite: 111 passed with
+  source hashes unchanged. [Result and review assignment](evidence/scored-attempt-2/README.md).
+- **Current owner: Claude independent scoring/review.** Review the unchanged
+  private cases against attempt 2 output, decomposition/scope findings and the
+  small Codex metadata patch. Codex owns disposition; no next live run is queued.
+- **Post-run patch:** retain whitelisted auxiliary metadata on successful
+  invocations. Reproduced missing 2,815-token provenance with observed values;
+  totals were already correct. Final full engine suite: 937 passed in 55.00s,
+  zero skips with Docker/installed-CLI checks; Ruff clean. Frozen output unchanged.
 
 Provider limits are explicit: Claude can request no tools and one turn; Grok
 retains read-only tools with a one-turn request; Codex retains read-only/native-

@@ -515,3 +515,33 @@ and identical brief/private-case commitment, with repaired engine and unchanged
 24-call/500k-reported-token/900s/two-worker limits. This is newly authorized
 execution, not automatic continuation of either stopped run. Claude owns scoring
 after saved output arrives; no model names or prior findings enter solver input.
+
+## 2026-09-15 — attempt 2 saved; metadata omission repaired offline
+
+Frozen ad82a4c engine with identical 30-file a8772ab input/task; private archive
+hash unchanged, contents unopened. Published freeze ca5a7e3 before launch.
+95 focused preflight tests passed including Docker/installed-CLI checks.
+One isolated run d9df9b6c stopped after 335.78s, two attempts, 469,340 tokens.
+Fable89,963 includes Haiku2,815 once; Grok379,377. No worker, review, or closeout
+calls observed. Native absence remains bounded by available telemetry.
+
+Scope stopped 223 changed lines against100, all within app.py/tests path grants.
+Grok ledger row correctly records PartialWorkStopped, post_return_failure true,
+provider_outcome ok and usage. The pure row-validator slice remained incomplete
+as a feature; body/acceptance signatures conflict (four arguments vs three).
+No scope-limit relaxation, solver coaching or continuation performed. Container
+and credential seed removed. Fresh offline/no-credential reconstruction: all31
+source hashes verified; 111 tests passed in2.07s, source unchanged afterward.
+
+Found successful event diagnostics deliberately dropped in runtime._record_invocation,
+losing Haiku provenance though the token total is correct. Added regression using
+this run's envelope values: failed with {} before patch, passed after removing
+the success-only exclusion. Existing safe_diagnostics whitelist still applies;
+no new event or token charge. No raw records rewritten. Full engine suite with
+Docker/installed-CLI flags:937passed55.00s, zero skips; Ruff clean. Evidence diff
+files preserve original patch context whitespace; source/doc checks exclude only
+those exact recorded patch artifacts. No live calls after the scored stop.
+
+Claude receives saved source, scope/task evidence, normalized/raw usage extracts
+and metadata patch for independent scoring/review. Codex owns disposition after
+its concrete findings. No new execution or provider-prompt adjustment is queued.

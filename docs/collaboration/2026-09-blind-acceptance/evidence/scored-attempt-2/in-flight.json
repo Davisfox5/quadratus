@@ -1,0 +1,38 @@
+{
+  "changed": [
+    "app.py",
+    "tests/test_import_preview.py"
+  ],
+  "changed_lines": 223,
+  "inspected": true,
+  "note": "These changes were already on disk when the call stopped and have been preserved. Re-sending the same prompt would apply a second pass on top of them, not repeat the first.",
+  "task": "t1",
+  "description": "Add the first backend slice of the CSV clip-manifest preview: the per-row validator only (the HTTP route, CSV decoding, blank-line skipping, duplicate detection and summary come in the next slice).\n\nIn `app.py`, next to the existing clip/export helpers (e.g. just above `_filter_clips`, which already shows the export column names `Clip ID, Tag Type, Start (s), End (s), Duration (s), Label, Notes, Players`), add:\n\n```python\ndef _validate_clip_row(project, cols, row):\n    \"\"\"Validate one CSV data row. cols maps normalised header name\n    (lower-cased, trimmed) -> column index. Returns (clip, reasons).\"\"\"\n```\n\nRules (from TASK.md column table):\n- `cols` will contain at least `tag type`, `start (s)`, `end (s)`; optional `label`, `notes`, `players`, `clip id`. Its `width` (number of header columns) is passed as `len(cols)`? No \u2014 headers may include ignored columns, so take the expected width from a `cols[\"__width__\"]`-style hack is ugly; instead give the function signature `_validate_clip_row(project, cols, width, row)` and reject `len(row) != width` with reason `\"wrong column count\"`. Return immediately on that reason.\n- Cell values are `str.strip()`-ed before checks.\n- `Tag Type`: must equal (exact, after trim) a name in `project[\"tag_types\"]`, else `\"unknown tag type\"`.\n- `Start (s)`: `float()` parse, must be finite (`math.isfinite`) and `>= 0`, else `\"start must be a number >= 0\"`.\n- `End (s)`: finite number, and if start parsed, `> start`, else `\"end must be greater than start\"` (use `\"end must be a number\"` when unparsable).\n- `Players`: split on `;`, drop empty tokens after trim; a token starting with `#` matches players whose `number == token[1:].strip()`, otherwise matches players whose `name == token` (exact after trim); a token matching zero or more than one player yields `\"unknown player: <token>\"`. Resolved ids keep CSV order.\n- `Clip ID`: if column present and non-empty, must not equal any id in `project[\"clips\"]`, else `\"clip id already exists\"`.\n- Collect all reasons (do not stop at the first, except for column count). If `reasons` is non-empty return `(None, reasons)`; otherwise return `({\"tag_type\", \"start\", \"end\", \"label\", \"notes\", \"players\"}, [])` with `start`/`end` as floats, `label`/`notes` as `\"\"` when the column is absent, `players` as list of ids. Also return the trimmed clip id in the reasons-free path some way the next slice can use for duplicate detection \u2014 simplest: add a `\"clip_id\"` key to the returned dict (the route will pop it before responding; note that in the docstring).\n\nDo not touch `_load_projects`/`_save_projects` or any route. Add `import math` if needed.\n\nCreate `tests/test_import_preview.py` (reuse the `client` fixture pattern from `tests/test_basic.py` only if needed; these are pure unit tests, so build a project dict literally: tag types `Pass`/`Shot`, players `{\"id\":\"p1\",\"name\":\"Alice\",\"number\":\"10\"}` and `{\"id\":\"p2\",\"name\":\"Bob\",\"number\":\"7\"}`, one clip with id `\"c1\"`). Cover: valid row with `Alice;#7` resolving to `[\"p1\",\"p2\"]`; wrong column count; unknown tag type; negative and `nan` start; end equal to start; unknown player token; ambiguous `#number` when two players share a number; existing clip id `c1`; malformed row accumulating multiple reasons. Run `/usr/local/bin/python -m pytest -q` and keep the whole suite green.",
+  "needs": [
+    "execute",
+    "patch"
+  ],
+  "scope": {
+    "permitted_paths": [
+      "app.py",
+      "tests/test_import_preview.py"
+    ],
+    "forbidden_paths": [],
+    "intended_result": "A pure, unit-tested row validator `_validate_clip_row(project, cols, row)` in app.py that turns one parsed CSV data row into either a clip dict or a list of malformed reasons, per the CSV column rules",
+    "acceptance": [
+      "app.py defines `_validate_clip_row(project, cols, row)` returning `(clip_or_None, reasons)` and no route is added yet",
+      "wrong column count, unknown tag type, non-finite/negative start, end <= start, unresolvable/ambiguous player token, and Clip ID equal to an existing project clip id each yield a reason and `clip=None`",
+      "a good row yields `{tag_type, start, end, label, notes, players}` with floats for start/end and player ids resolved from `Name` or `#number` tokens; missing optional columns default to empty",
+      "new tests/test_import_preview.py covers those cases and `/usr/local/bin/python -m pytest -q` passes"
+    ],
+    "max_lines": 100
+  },
+  "invocation": {
+    "task": "t1",
+    "role": "lead",
+    "origin": "seat",
+    "model": "grok:default",
+    "allow_writes": true,
+    "prompt_artifact": "7ef21203508b"
+  }
+}
