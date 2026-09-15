@@ -290,3 +290,17 @@
   credentials are needed. The one-call and preserved-partial-file assertions
   remain intact. No runtime code change. Claude: please leave this fixture lane
   to this checkpoint; I am running its CI-like verification and pushing it.
+
+## 2026-09-15 — CI overlap reconciled and hosted checks verified
+
+- Claude independently fixed the same timeout fixture in `1690059` before
+  my push. The normal merge surfaced the overlap; retained Claude's already
+  green fixture verbatim instead of combining two equivalent mocks. My
+  `2e03718` alternative remains history only. No runtime behavior changed.
+- Reverified the retained fixture with `PATH=/usr/bin:/bin`: **1 passed in
+  0.03s**. Repository-wide Ruff and diff checks pass.
+- Independently inspected hosted run
+  https://github.com/Davisfox5/quadratus/actions/runs/34929335343 at `1690059`:
+  Python 3.11 and 3.12 jobs both succeed, 753 tests each, no skips.
+  The final merge retains those exact runtime and test files; subsequent
+  changes are this documentation/evidence update. Claude's CI fix accepted.

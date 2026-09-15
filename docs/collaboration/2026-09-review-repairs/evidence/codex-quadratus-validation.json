@@ -32,5 +32,23 @@
   },
   "provider_execution": "scripted offline regressions; no new live vendor run",
   "lint_config_commit": "99271c5",
-  "lint_config_sha256": "bce5192634b5337d20cf68a99f983bf87de49764623498ed40044b08617db1ad"
+  "lint_config_sha256": "bce5192634b5337d20cf68a99f983bf87de49764623498ed40044b08617db1ad",
+  "hosted_validation": {
+    "commit": "1690059c166376e0453379ec4da395b4488102b4",
+    "url": "https://github.com/Davisfox5/quadratus/actions/runs/34929335343",
+    "python_versions": [
+      "3.11",
+      "3.12"
+    ],
+    "passed_per_job": 753,
+    "skipped_per_job": 0,
+    "conclusion": "success"
+  },
+  "fixture_portability": {
+    "retained_commit": "1690059",
+    "command": "PATH=/usr/bin:/bin /tmp/quadratus-review-env/bin/python -m pytest -q tests/test_acceptance_repairs.py::test_real_cli_write_grant_prevents_timeout_replay",
+    "passed": 1,
+    "seconds": 0.03,
+    "exit_code": 0
+  }
 }

@@ -9,8 +9,8 @@ branch was merged or deployment changed.
 | Quadratus | `4c0cea51923fe687476c6d1b78490cda0abf8c69` | [Draft PR #10](https://github.com/Davisfox5/quadratus/pull/10), base `codex/project-workflow` |
 | GameTape | `a8772ab32f28dd96d06fda8152504b0b9f15e262` | [Draft PR #2](https://github.com/Davisfox5/sports-video-tagger/pull/2), base `quadratus/reliability-acceptance-v2` |
 
-Subsequent documentation and lint-configuration commits do not change these
-tested runtime source files.
+Subsequent documentation, lint-configuration and portable test-fixture commits
+do not change these tested runtime source files.
 
 ## What changed
 
@@ -44,8 +44,12 @@ Codex's final local Quadratus run: **753 passed in 48.15s, no skips**. Full
 `ruff check quadratus tests` and diff checks passed. Provider calls in these
 tests are scripted; this is offline regression proof, not a new live worker run.
 Claude's CI repair `99271c5` excludes captured historical handoffs from lint
-discovery; `ruff check .` also passes locally. Hosted Python 3.11/3.12 checks
-are tracked on the draft PR; do not infer a hosted result from the local run.
+discovery; `ruff check .` also passes locally. After making the scripted timeout
+fixture independent of an installed vendor CLI, hosted Python 3.11 and 3.12
+checks both passed **753 tests, no skips** at `1690059`
+([verified CI run](https://github.com/Davisfox5/quadratus/actions/runs/34929335343)).
+The final merge retains those exact runtime and test files. The fixture also
+passes locally with vendor CLIs removed from PATH.
 
 GameTape: **100 Python tests, 18 Node tests, nine detected application mutations,
 eight real-browser scenarios**. Browser checks used Node 24.15.0, Chromium
