@@ -62,6 +62,7 @@ from .delegation import (
     capture_invocations,
     invocation_context,
     record_invocation,
+    safe_diagnostics,
 )
 from .latest import alias_for, resolution_source
 from .project import Project
@@ -360,6 +361,7 @@ class Fleet:
         started = time.monotonic()
         # A custom provider may implement generate directly; cover it too.
         provider.last_usage = None
+        provider.last_diagnostics = None
         try:
             reply = provider.generate(prompt, system=system)
         except BaseException as exc:
@@ -398,6 +400,8 @@ class Fleet:
                 invoked=invoked,
                 outcome=outcome,
                 provider_outcome=outcome,
+                diagnostics=safe_diagnostics(getattr(provider, "last_diagnostics", None))
+                if outcome != "ok" else {},
                 seconds=seconds,
                 # Absent stays absent: None is unknown, and unknown is not zero.
                 input_tokens=usage.get("input_tokens"),

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
@@ -167,6 +168,8 @@ class InvocationEvent:
     post_return_failure: bool = False
     #: Transport result before patch/scope acceptance. Older records lack it.
     provider_outcome: Optional[str] = None
+    #: Bounded provider failure metadata; no tool arguments or transcript text.
+    diagnostics: dict = field(default_factory=dict)
     #: Vendor session id, where one is known. Used to de-duplicate a child
     #: that several sources report.
     session_id: Optional[str] = None
@@ -204,6 +207,26 @@ class InvocationEvent:
         if self.detail:
             bits.append(self.detail[:120])
         return " | ".join(bits)
+
+
+def safe_diagnostics(value) -> dict:
+    """Whitelist provider metadata again at the durable event boundary."""
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    atom = re.compile(r"[A-Za-z_][A-Za-z0-9_.:-]{0,63}\Z")
+    reason = value.get('stop_reason')
+    if isinstance(reason, str) and atom.fullmatch(reason):
+        result['stop_reason'] = reason
+    count = value.get('model_calls')
+    if type(count) is int and 0 <= count <= 1_000_000:
+        result['model_calls'] = count
+    names = value.get('attempted_tools')
+    if isinstance(names, list):
+        result['attempted_tools'] = list(dict.fromkeys(
+            name for name in names[:128] if isinstance(name, str) and atom.fullmatch(name)
+        ))[:32]
+    return result
 
 
 @dataclass
