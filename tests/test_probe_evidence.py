@@ -43,4 +43,4 @@ def test_grok_probe_uses_vendor_default_without_sending_literal_default(tmp_path
     assert '--model' not in argv
     assert '--disallowed-tools' in argv
     # One value, several names: Agent plus the meta-tools denied since e51f811.
-    assert 'Agent' in argv[argv.index('--disallowed-tools') + 1].split()
+    assert 'Agent' in argv[argv.index('--disallowed-tools') + 1].split(',')

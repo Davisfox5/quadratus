@@ -561,6 +561,11 @@ class CLISpec:
     #: argued with either.
     native_fanout_off_env: Dict[str, str] = field(default_factory=dict)
     disallowed_tools_flag: str = ""
+    #: How the CLI separates several names in one ``disallowed_tools_flag``
+    #: value. Claude takes whitespace; grok's ``--help`` says comma-separated,
+    #: and a space-joined list would reach it as one nonsense tool name that
+    #: denies nothing (caught 2026-09-15 before the live check).
+    disallowed_tools_separator: str = " "
     #: Some CLIs only honour their tool-filtering flags when the prompt is an
     #: argument rather than a file (grok ignores them under --prompt-file, in
     #: silence). Where that is so, restricted mode must deliver the prompt in
@@ -997,7 +1002,13 @@ GROK_SPEC = CLISpec(
     # denied as well until the shipped README says what they do. UNVERIFIED
     # for those three; the direct read/write/exec tools are separate names and
     # are not touched.
-    native_fanout_off_args=["--disallowed-tools", "Agent workflow use_tool search_tool"],
+    native_fanout_off_args=["--disallowed-tools", "Agent,workflow,use_tool,search_tool"],
+    disallowed_tools_separator=",",
+    # Vendor guide (05-configuration.md, per the 2026-09-15 documentation
+    # read): workflow is on by default and GROK_WORKFLOWS=0 disables it, and
+    # every workflow agent() call spends a child-agent slot. Removed at
+    # startup as well as denied by name.
+    native_fanout_off_env={"GROK_WORKFLOWS": "0"},
     disallowed_tools_flag="--disallowed-tools",
     # Every *agentic* call, read-only included: without it the turn is
     # cancelled silently the first time a tool is called. A restricted seat
@@ -1144,20 +1155,26 @@ def native_delegation_mode(env: Optional[Mapping[str, str]] = None) -> str:
     return raw or 'vendor-default'
 
 
-def _fold_disallowed(argv: List[str], flag: str, extra: List[str]) -> List[str]:
+def _split_tool_names(value: str, separator: str = " ") -> List[str]:
+    """The names in one tool-list value, whichever separator the CLI uses."""
+    return [name for name in re.split(r"[\s,]+" if separator.strip() == "" else re.escape(separator) + r"|\s+", value) if name]
+
+
+def _fold_disallowed(argv: List[str], flag: str, extra: List[str], separator: str = " ") -> List[str]:
     """Add ``extra`` to an existing ``flag`` value rather than repeating the flag.
 
     Neither CLI documents that a repeated ``--disallowed-tools`` merges, so the
-    names are folded into the one value. A flag with no value after it (last
-    token) is left alone and the denial appended as its own pair.
+    names are folded into the one value, joined with the CLI's own separator.
+    A flag with no value after it (last token) is left alone and the denial
+    appended as its own pair.
     """
     if flag in argv:
         index = argv.index(flag) + 1
         if index < len(argv):
-            present = argv[index].split()
-            argv[index] = ' '.join(present + [name for name in extra if name not in present])
+            present = _split_tool_names(argv[index], separator)
+            argv[index] = separator.join(present + [name for name in extra if name not in present])
             return argv
-    return argv + [flag, ' '.join(extra)]
+    return argv + [flag, separator.join(extra)]
 
 
 #: Prefix on a synthesised child's detail that marks it as *attempted*
@@ -1368,9 +1385,10 @@ class CLIProvider(LLMProvider):
                     f'QUADRATUS_CLI_ARGS_{spec.vendor.upper()} must be empty '
                     'when QUADRATUS_NATIVE_DELEGATION=off')
             flag, *names = spec.native_fanout_off_args
-            argv = _fold_disallowed(argv, spec.disallowed_tools_flag or flag,
-                                    ' '.join(names).split())
-            self._native_fanout_denied = ' '.join(names).split()
+            denied = _split_tool_names(" ".join(names), spec.disallowed_tools_separator)
+            argv = _fold_disallowed(argv, spec.disallowed_tools_flag or flag, denied,
+                                    spec.disallowed_tools_separator)
+            self._native_fanout_denied = denied
         else:
             self._native_fanout_denied = []
         if spec.override_conflicts is not None:

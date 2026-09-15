@@ -63,11 +63,13 @@ def test_off_mode_asks_grok_to_deny_agent_but_keeps_its_approval(monkeypatch):
     monkeypatch.setenv("QUADRATUS_NATIVE_DELEGATION", "off")
     argv = GrokCLIProvider(model="", allow_writes=True)._build_argv("p", "")
     assert "--always-approve" in argv
-    assert _pair(argv, "--disallowed-tools").split() == GROK_OFF_DENIALS
+    # grok --help: comma-separated. A space-joined list would be one bogus name.
+    assert _pair(argv, "--disallowed-tools") == ",".join(GROK_OFF_DENIALS)
+    assert " " not in _pair(argv, "--disallowed-tools")
     # The restricted worker already denies Agent; the fold must not repeat it.
     worker = GrokCLIProvider(model="").for_seat("", restricted=True)._build_argv("p", "")
     assert worker.count("--disallowed-tools") == 1
-    assert _pair(worker, "--disallowed-tools").split() == GROK_OFF_DENIALS
+    assert _pair(worker, "--disallowed-tools") == ",".join(GROK_OFF_DENIALS)
     assert _pair(worker, "--tools") == "read_file,grep,list_dir,web_search,web_fetch", \
         "the worker's read tools are untouched"
 
@@ -135,6 +137,7 @@ def test_grok_agent_call_after_the_denial_is_an_observed_child(monkeypatch):
         "CONTROL FAILURE (suspected): a denied fan-out tool was attempted although "
         "the call sent --disallowed-tools Agent workflow use_tool search_tool; "
         "execution and usage unknown")
+    assert grok._native_fanout_denied == GROK_OFF_DENIALS
     assert ATTEMPTED_DELEGATION in child.detail and " ran " not in child.detail
 
 
@@ -286,3 +289,21 @@ def test_a_denied_grok_meta_tool_is_read_as_attempted_delegation(monkeypatch):
     grok._observe_output(_grok_envelope(["read_file", "workflow"]))
     assert [c.session_id for c in grok.native_children] == ["unidentified:grok:workflow"]
     assert grok.native_children[0].detail.startswith("CONTROL FAILURE (suspected)")
+
+
+def test_off_mode_sets_grok_workflow_kill_switch_and_comma_denials(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUADRATUS_NATIVE_DELEGATION", "off")
+    seen = _captured_launch(monkeypatch, _grok_envelope(["read_file"]))
+    GrokCLIProvider(model="", allow_writes=True, workdir=tmp_path).generate("p")
+    assert seen["env"]["GROK_WORKFLOWS"] == "0"
+    assert _pair(seen["argv"], "--disallowed-tools") == "Agent,workflow,use_tool,search_tool"
+    assert _pair(seen["argv"], "--tools") if "--tools" in seen["argv"] else True
+
+
+def test_fold_respects_the_vendor_separator():
+    from quadratus.cli_providers import _fold_disallowed
+    assert _fold_disallowed(["--disallowed-tools", "Agent"], "--disallowed-tools",
+                            ["Agent", "workflow"], ",") == ["--disallowed-tools", "Agent,workflow"]
+    assert _fold_disallowed(["x"], "--disallowed-tools", ["a", "b"], ",") == ["x", "--disallowed-tools", "a,b"]
+    assert _fold_disallowed(["--disallowed-tools", "Bash Edit"], "--disallowed-tools",
+                            ["Task", "Edit"]) == ["--disallowed-tools", "Bash Edit Task"]

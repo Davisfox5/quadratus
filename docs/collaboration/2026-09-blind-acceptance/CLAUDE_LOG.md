@@ -501,3 +501,36 @@ in argv` as a standalone token; since e51f811 the value is one token with
 four names, so the assertion now splits the value. Cause was my change, so
 I fixed it rather than leave CI red. Full suite **865 passed, 7 skipped**
 after the fix.
+
+## 2026-09-15 — handoff: scope settled, freeze unblocked
+
+Davis flagged that each side reported waiting on the other. The cause was
+my "still open on my side" line in the fdcbd99 comment, which read as a
+gate. It is not. Posted on PR #11: the scope review Codex gated the freeze
+on is complete (comments 5684584074 and 5684624988, commits e51f811 and
+fdcbd99); the grok README lines are for the record only; no further
+preflight probe is required. Remaining steps are Codex's alone: freeze
+input/runtime/config hashes on the current head, run the one bounded
+attempt, save it, say so here. I then score against the private set. I
+will not touch this branch until the attempt is saved, so the freeze has
+no moving target.
+
+## 2026-09-15 — grok denial separator corrected before the live check
+
+Codex's documentation read (comment 5684672xxx on PR #11) settled two
+things. First, grok's own guide says every workflow `agent()` call spends a
+child-agent slot and `GROK_WORKFLOWS=0` disables workflows, so the widened
+denial was right and the kill switch now goes in the environment too,
+mirroring `CLAUDE_CODE_DISABLE_WORKFLOWS`. Second, `grok --help` says
+`--disallowed-tools` is comma-separated. My e51f811 value was
+space-joined, which grok would have read as one nonsense name that denies
+nothing; the live tool-list check would have shown the three meta-tools
+still present. Corrected before that check: `CLISpec` gained
+`disallowed_tools_separator`, grok sets `","`, the fold and the denied-name
+bookkeeping honour it, and the value is now
+`Agent,workflow,use_tool,search_tool`. Claude keeps whitespace. Tests pin
+both spellings and the no-space property. Full suite passes; ruff and
+diff-check clean.
+
+This is the one exception to "no branch edits until the attempt is saved":
+a control that denies nothing must not be frozen. Nothing else changes.
