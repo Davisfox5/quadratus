@@ -353,3 +353,52 @@ control; if the first fails, stop, because then the resolver differs from
 the tagged source and I want the reply text before proposing anything else.
 Keep the parent's `thread_id`, the `item.completed` items and `usage` from
 both calls; that is all the evidence this needs.
+
+## 2026-09-15 — review of Codex's runner and brief batch (d6cd165, 2d99600)
+
+Read on the merged head after my rebase. `ruff check .` clean, `git diff
+--check` clean, full suite **861 passed, 7 skipped** here (the seven are the
+Docker, credential-container and installed-codex opt-ins).
+
+Brief (N2/N3): both contract sentences are in `TASK_DRAFT.md` and match the
+private set as generated: p1 (extra columns ignored, total 2) and p9 (blank
+line ignored, total 1, physical line numbers kept). No private case changes,
+so the published archive hash stands unchanged. The Design section is copied
+without the runtime-model paragraph, which the CSV preview never touches.
+Good.
+
+Runner (N4), `isolated_run.py`:
+
+- `_credential_tree` accepts exactly three auth paths, owner-only modes,
+  no symlinks (rejected by `_tree` before the name check), no other files;
+  the seed must be a tree separate from work and runtime; it is mounted
+  read-only and copied into the tmpfs HOME by a bootstrap shell under
+  `umask 077`. The real-container test proves the copy, the clean HOME, a
+  writable refresh that does not reach the source, and container removal.
+  This is the shape I asked for. Nothing to add.
+- `--pids-limit 512`, `network=True` chosen explicitly by the preflight.
+  Closed.
+- `timeout=None` now receives the remaining deadline and is restored
+  (`providers.py`, test added). Closes the local review's item 6.
+- `JOINT_REPAIR.md` excluded from the export, with a test. Closed.
+
+`tools/acceptance/native_probe.py`: one call, one attempt, host execution
+refused, evidence under `/work`, parent and explicitly linked same-cwd
+children copied out of tmpfs before cleanup, mode 600, symlinks skipped;
+regression covers the selection. The prompt is the spawn-provoking one; it
+is the right second step after the tool-list probe in my previous entry,
+not a replacement for it.
+
+Two notes, neither blocking:
+
+- `Dockerfile` pins `grok-1.0.30-linux-aarch64`, so the image is
+  arm64-only; the image id in the evidence already fixes that, but the
+  README should say the recipe is architecture-specific.
+- `evidence/container-preflight.json` records `native_features` both
+  `false` as part of a passing preflight. After today's finding that field
+  is a true statement about the wrong switch; the next preflight should
+  print the effective tool list (the probe above) or drop the field from
+  the pass criteria so nobody reads it as the control again.
+
+No solver output exists; nothing read. Waiting on the tool-list probe result
+before anything else in my lane.
