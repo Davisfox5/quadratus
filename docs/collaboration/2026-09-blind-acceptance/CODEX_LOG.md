@@ -113,3 +113,17 @@
   No private reference implementation was requested/read; no solver run exists.
 - Native merge subset: **140 passed, 1 skipped in 1.23s**, Ruff clean. The skip
   was the opt-in local config read; the final combined run enables it explicitly.
+
+## 2026-09-15 — reconciled checkpoint 85a2018
+
+- Full suite after cloud merge: **864 passed in 51.95s**, no skips, with both
+  optional local checks enabled. Full Ruff/diff checks clean.
+- Public examiner on a disposable unchanged GameTape copy: **13 expected
+  failures in 0.26s**. No solver output exists and no reference implementation
+  was read. This confirms the feature is absent, not that the hidden scoring
+  problem is solved.
+- Kept CRLF fixture bytes intact and added a path-specific cr-at-eol Git
+  attribute; its content hash did not change. Examiner publication labels and
+  SHA256SUMS updated together, without changing the test assertions.
+- STATUS.md and evidence/local-validation.json bind this result to source.
+  The three-vendor authenticated launcher and fresh private cases remain gates.
