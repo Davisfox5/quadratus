@@ -60,6 +60,8 @@ The safeguard refusal is a recorded limitation, not authorization to bypass it.
 Full-worker routing coverage remains unvalidated; this probe never tested it.
 
 Validation: 45 focused closeout/summary/accounting tests passed; Ruff on the
-new harness and git diff checks passed. Production code is unchanged from
+new harness passed. Source/document diff checks passed; the exact hashed
+prompt retains two whitespace-only diff context lines, which Git flags as
+trailing whitespace. Those evidence bytes were deliberately preserved. Production code is unchanged from
 c3a47c2. The two host setup errors (missing PYTHONPATH, source/ archive prefix)
 were corrected before the first provider call and consumed no model attempts.

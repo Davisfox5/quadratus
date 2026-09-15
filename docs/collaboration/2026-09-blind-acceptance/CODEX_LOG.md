@@ -498,3 +498,8 @@ auxiliary row and refused, so successful Claude closeout remains unverified;
 archived auxiliary accounting proof remains distinct. Claude owns independent
 review of the published results; Codex owns findings disposition. No further
 live call is queued and all-worker coverage remains unvalidated.
+
+Publication check correction: the exact hashed prompt contains two whitespace-only
+diff context lines. The staged check reported those two warnings; source/docs
+checks excluding that immutable prompt pass. Kept evidence bytes unchanged and
+corrected the report rather than claiming an unqualified clean diff.
