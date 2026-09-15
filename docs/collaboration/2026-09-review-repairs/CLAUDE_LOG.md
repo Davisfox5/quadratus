@@ -314,3 +314,7 @@ Observations, no change requested:
   way `tests/test_cli_providers.py` does. **Handoff note:** that file is in
   your lane; this is a one-line, test-only, environment-independence change
   made to get the PR green, recorded here for you to accept or revise.
+- Hosted CI on PR #10 is green at `1690059`: `test (3.11)` and `test (3.12)`
+  passed on both the push and pull-request runs (753 tests, playwright
+  installed, no skips). First green run on this branch; every earlier head
+  stopped at lint. `STATUS.md` can drop its "hosted checks pending" line.
