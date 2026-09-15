@@ -7,3 +7,6 @@ RUN PLAYWRIGHT_BROWSERS_PATH=/opt/playwright python -m playwright install --with
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 RUN npm install -g node@24.15.0
 RUN node --version && codex --version && claude --version && grok --version
+RUN pip install --no-cache-dir openpyxl==3.1.5
+RUN python -c "import importlib.metadata, subprocess; subprocess.run(['npm', 'install', '-g', '--prefix', '/opt/browser-tools', 'playwright@' + importlib.metadata.version('playwright')], check=True)"
+ENV NODE_PATH=/opt/browser-tools/lib/node_modules

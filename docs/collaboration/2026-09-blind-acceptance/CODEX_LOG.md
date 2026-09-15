@@ -225,3 +225,58 @@ are excluded; copied files remain mode 600. Regression **1 passed in 0.05s**.
 The script refuses host execution and requires evidence under /work. No second
 model call was made. Claude has the blocking native-off failure to investigate;
 private archive location and final freeze also remain pending.
+
+## 2026-09-15 — agents.enabled live checks and archive received
+
+Pulled Claude c8bafa7/b1a6ff9 by fast-forward. Asked Claude for the actual archive
+delivery location on PR #11; it confirmed a cloud attachment and resent it.
+Downloaded through the user's Claude desktop Code session to Downloads,
+verified the full archive SHA-256 against the original commitment, set mode
+600, and left its contents unopened. No manual user transfer remains needed.
+
+Both sequential Sol checks under the full control passed in the same isolated
+image as the failed probe: tools reply listed only functions.wait,
+functions.request_user_input and functions.exec; spawn-provoking reply was
+"Native delegation unavailable". No collaboration events or native children
+observed. Each parent rollout now survives privately with its hash. Reported
+usage: 12,666 + 12,778 = 25,444; wall time 9.03 + 7.65s. The exact limited
+claim and event/usage evidence are in evidence/agents-enabled-probes.json.
+
+Claude Fable and Grok tool-list/spawn checks also returned without an observed
+child. These are narrow live checks, not proof that their JSON envelopes expose
+all hidden activity. Initial Grok probe failed because my script sent the
+literal ledger alias "default". Production Fleet already omits that model flag;
+fixed the probe to use Fleet's alias_for and added a regression. The failed
+attempt is retained with unknown usage, not erased or counted as free. The
+corrected probe is a separately recorded preflight, not an automatic retry.
+
+Restricted Grok read check: the generated random value from probe.txt appears
+in the reply and the source stayed unchanged, so read access was demonstrated.
+The strict exact-reply check FAILED because Grok prefixed narration. No direct
+tool name is present in its envelope, so the record does not invent one.
+Seven returned probes reported 75,135 tokens in total; one additional failed
+probe has unknown usage. No scored application attempt has started.
+
+Full suite after Claude's control fix and the tool-list mode: **883 passed in
+56.91s**, no skips, with Docker/installed-Codex checks enabled. Later probe alias
+regressions: **2 passed**. Image recipe now states arm64 and adds the app's
+missing openpyxl dependency and Node Playwright matching the Python version.
+The feature readout is explicitly not a native-off pass criterion. Final image
+and application baseline checks are next; do not infer them from the earlier
+image's preflight.
+
+Final image preflight passed offline: image
+`sha256:d1f99331a1639f5ff364faf9e4c027943613fadba733d452191296b873a390e2`,
+100 Python, 18 Node, 9 mutants killed, 8 Chromium scenarios passed. All 30
+exported file hashes match after testing. The baseline used a disposable copy;
+v3 input remains untouched. The initial app preflight on the old image skipped
+browser checks (exit 2): Node Playwright was missing. Two installer attempts
+hit the Python/Node CLI filename collision; installing the matching Node module
+under /opt/browser-tools fixed it without overwriting Python's CLI. Final
+recipe, image ID, dependency versions and checks are recorded in application-
+preflight.json. No model call was used for provisioning or these app checks.
+
+Asked Claude to review the remaining workflow/messaging tool scope before a
+blind-ready claim; the observed tool names alone are not proof of cross-session
+access. Final freeze and scored attempt remain pending that review. Archive
+transfer and hash verification are complete; do not ask Davis to repeat them.

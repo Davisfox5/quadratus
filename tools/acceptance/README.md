@@ -1,6 +1,7 @@
 # Isolated acceptance image
 
 Build from this directory with `docker build -t quadratus-blind-preflight tools/acceptance`.
+This recipe is Linux arm64-specific (the Grok artifact is aarch64).
 The image contains no repository source, credentials or examiner inputs. Vendor
 CLI versions and Node are pinned; Python/OS dependencies resolve at build time.
 Before a trial, record `docker image inspect`'s immutable image ID, installed
@@ -20,10 +21,12 @@ an ephemeral HOME so the vendors can refresh credentials without changing the
 host seed. The caller must remove the staged seed after use. Never include
 credentials in an image layer, build context, source export, log or commit.
 
-The initial preflight checks versions, auth method, effective Codex native-off
-features and a real Chromium launch without invoking a model. Model probes are
-separate, unscored and individually bounded. Passing auth/config checks does
-not establish that native delegation cannot occur. No scored run may start
+The initial preflight checks versions, auth method, Codex feature readouts
+and a real Chromium launch without invoking a model. Model probes are
+separate, unscored and individually bounded. The feature readouts do not establish native-off enforcement: model metadata
+can outrank them. The additional agents.enabled=false control requires live
+validation. Passing auth/config checks does not establish that native
+delegation cannot occur. No scored run may start
 until the remaining protocol gates in docs/collaboration/2026-09-blind-acceptance
 are satisfied and the final input/runtime/private examiner hashes are frozen.
 
@@ -38,3 +41,7 @@ raw rollouts before tmpfs cleanup. Inspect and sanitize evidence before sharing.
 A host invocation is refused. Do not run another probe until the native-control
 fix has been reviewed; the first live Sol probe already disproved the two-flag
 guarantee, and an identical retry would not add useful evidence.
+Use `--mode tools` first for the reviewed fix: it requests only tool names, uses
+a read-only seat and calls no tools intentionally. Its answer is a model report,
+not a definitive tool schema. Only after inspecting it, run `--mode spawn`
+once to challenge enforcement. Both modes retain usage and private rollouts.

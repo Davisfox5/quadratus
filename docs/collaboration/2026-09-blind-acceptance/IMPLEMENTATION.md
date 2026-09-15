@@ -37,34 +37,28 @@
   reject conflicting config/enable/resume/fork arguments. Native observations
   remain visible as possible control failures. See Claude's implementation log.
 
-## What is not complete
+## What remains before the trial
 
-This is a tested control foundation, not an authenticated blind acceptance run.
-The base Python Docker image used for isolation tests has no signed-in vendor
-CLIs. Auth provisioning must expose only the credentials needed, with no home
-instructions/session state; vendor readiness must be checked in that exact
-container. Public network access is needed for vendors/standards lookup and
-must not expose the private examiner bundle. A fresh directory alone does not
-establish this boundary.
+The provisioned Linux arm64 image now has the application dependencies and
+passes the full existing application baseline offline. See STATUS.md and
+evidence/application-preflight.json for the exact immutable image and source
+hashes. An earlier build's Node Playwright was absent because its CLI path
+collided with Python Playwright; the final recipe installs the Node package
+under /opt/browser-tools and exposes that module via NODE_PATH.
 
-The task text in TASK_DRAFT.md adopts cloud Claude's export-compatible contract
-(endpoint, columns, response shape, UI hooks and 5000-row limit), superseding
-the earlier 500-row draft. Cloud Claude supplied validation tests, but they
-were committed to this PUBLIC repository. They are public checks, not secret
-held-out tests. Claude reports nine fresh private cases prepared before solver output and
-posted commitment hashes on PR #11. The user-held archive still needs to be
-located and verified locally; those checks stay outside solver mounts. Freeze their hashes and the final task/input
-hashes together before launching. Do not call the current example export a
-fully preregistered or scored trial.
+Live Sol tool-list and spawn checks passed with agents.enabled=false in
+addition to both feature switches. Claude/Grok also returned unavailable to the
+native spawn prompt; their telemetry cannot prove absence of every hidden
+activity. Claude is reviewing whether the remaining workflow/messaging tools
+can reach other sessions. The budget still stops on unknown usage or observed
+uncontrolled native activity; it is not a global vendor billing guarantee.
 
-No live proof yet that Codex cannot spawn children under these controls, and no
-new restricted Grok probe yet. Cloud Claude added an opt-in
-`QUADRATUS_NATIVE_DELEGATION=off` request for Claude/Grok senior seats. It now
-preserves tool denials, denies Claude Task/Agent, and rejects vendor extra args
-that could override the request. Grok enforcement remains unverified because
-its approval flag may defeat Agent denial. Default senior behavior is unchanged. Reported parent usage is not proof of total vendor activity.
-These gaps must be resolved or explicitly bound and disclosed before claiming
-an all-vendor bounded run. Budget limits do not fix the vendor aggregate meter.
+The private archive has been downloaded from Claude's attachment and its
+original commitment verified. Contents are outside both repositories and have
+not been opened. The v3 source export includes all existing application tests
+(30 files), correcting the earlier omission of tests/ui. Final trial freeze
+must bind that source/task, runtime, image/config and archive commitment before
+launch. No scored run or solver-written application feature is claimed.
 
 ## Claude review handoff
 

@@ -1,62 +1,50 @@
 # Joint blind-acceptance checkpoint
 
-Implemented and pushed on `codex/blind-worker-acceptance`. Review:
-[Quadratus PR #11](https://github.com/Davisfox5/quadratus/pull/11), against
-`codex/project-workflow`. Latest pulled peer checkpoint: `7179c9016570561e40df470f9cc74087724dcec6`.
-Codex runner/brief follow-up is recorded in CODEX_LOG.
+Shared branch: `codex/blind-worker-acceptance`, [PR #11](https://github.com/Davisfox5/quadratus/pull/11).
+Claude control/review baseline: `b1a6ff9`. No scored application run has started.
 
-## Completed here
+## Verified this round
 
-- Enforced OpenAI native-delegation disable flags with override/fresh-session
-  checks. Opt-in native-off requests for Claude/Grok are integrated; Grok
-  enforcement remains unverified and is not claimed from argv inspection.
-- Shared attempt/token/deadline controls, worker concurrency settings and durable
-  budget evidence. Missing usage stops; retries with usage count. Replies and
-  source edits survive post-return budget stops. No free unknown usage.
-- Non-root Docker isolation and external workload termination, including
-  detached children; explicit Git input exports omit agent/history context.
-- Local Claude implementation, fresh independent Claude control review and
-  cloud Claude contributions reconciled. Both implementation logs retained;
-  accepted review findings fixed and tested. Final fixes await peer re-review.
-- Application brief aligned to cloud Claude's export-compatible CSV/API/UI
-  contract. A 23-file example input is prepared under ignored output. No
-  GameTape application feature was implemented by the evaluators.
+- **Sol fix passed two small live checks.** `agents.enabled=false` plus both
+  disable flags removed the native-agent tools from its reported list; a direct
+  spawn challenge returned unavailable, with no native children or collaboration
+  events observed. Parent rollouts retained privately and hashed.
+- Claude Fable and Grok returned unavailable on their native spawn challenges.
+  Their envelopes have weaker observability; these are scoped live results,
+  not proof against all hidden vendor activity.
+- Restricted Grok retrieved a fresh random file value without changing source.
+  Exact-response formatting failed because it added a preface. Initial Grok
+  probe used the wrong wire alias; fixed in the probe, with a regression, while
+  retaining that failed attempt and its unknown usage.
+- **883 Quadratus tests passed in 56.91s**, no skips, on the pulled control fix
+  with Docker/installed-Codex checks enabled. Later probe-only tests: 2 passed.
+  Ruff and diff checks clean.
+- Final application image `sha256:d1f99331a1639f5ff364faf9e4c027943613fadba733d452191296b873a390e2`
+  passed **100 Python tests, 18 Node tests, 9 mutation checks and all 8 browser
+  scenarios**, offline, with unchanged source. Includes openpyxl and both
+  Python/Node Playwright. The image is Linux arm64-specific.
+- Claude resent its private archive. Codex downloaded it from the Claude Code
+  attachment, verified its original SHA-256, and saved it outside both repos
+  with owner-only permissions. Contents remain unopened.
 
-## Verified
+This round used **75,135 known reported tokens across seven returned probes**,
+plus one failed attempt with unknown usage. All were unscored. No automatic
+retry, forced coverage run or application implementation by either evaluator.
 
-**881 tests passed in 54.40s, no skips** on merged runtime `7fe96f6` locally, with real Docker checks and
-installed-Codex configuration checks enabled. Full Ruff and diff checks pass.
-The public examiner's **13 backend checks fail on the untouched application**,
-as expected. That negative baseline is not a failed Quadratus run.
+Evidence: [Sol checks](evidence/agents-enabled-probes.json),
+[vendor checks and archive commitment](evidence/vendor-control-probes.json),
+[application baseline](evidence/application-preflight.json),
+[Codex log](CODEX_LOG.md), [Claude log](CLAUDE_LOG.md).
 
-See [local validation evidence](evidence/local-validation.json),
-[Codex log](CODEX_LOG.md), [cloud Claude log](CLAUDE_LOG.md),
-[local Claude log](CLAUDE_LOCAL_LOG.md), and
-[Claude's independent review](CLAUDE_CONTROL_REVIEW.md).
-Hosted [CI at 85a2018](https://github.com/Davisfox5/quadratus/actions/runs/34972145866)
-passed on Python 3.11 and 3.12: **861 passed, 3 skipped** on each. The skips
-are the two real-Docker checks and installed-Codex config check, which passed
-locally. That hosted run predates the current follow-up; the 881-test result above is local. A subsequent isolated probe-evidence
-regression also passed (1 test); no additional model invocation.
+## Before the scored attempt
 
-## Required before the scored run
-
-1. **Live Sol probe FAILED native-off enforcement:** both flags report false,
-   but a linked Sol child was observed. RunBudget stopped after one invocation.
-   Resolve this before the scored run; Grok/Claude live probes are still pending.
-   See evidence/sol-native-probe.json. Config checks are insufficient.
-2. The provisioned image passed isolated Codex/Claude subscription-auth checks,
-   effective Codex flags and Chromium smoke. Live Grok auth and native behavior
-   remain to be checked. See evidence/container-preflight.json.
-3. Locate and hash-check Claude's replacement private archive (nine cases,
-   commitment posted on PR #11). Its initial public cases remain public
-   validation. Freeze the final solver input and runtime/config with the
-   private commitment before launch. The user has been asked for the archive path.
-4. One uncoached, bounded attempt: 15 minutes, 24 provider attempts, two helpers,
-   500,000 reported tokens as a post-return stop threshold. Partial progress is
-   an honest result. No automatic budget increase, forced coverage or fallback
-   failure injection in the natural run.
-
-The isolated image and credential-only HOME passed preflight. A scored run
-has not started; live control evidence and private archive verification remain. See [implementation and
-handoff](IMPLEMENTATION.md) for interfaces and remaining ownership.
+1. Claude reviews the published probe evidence and the scope of remaining
+   workflow/messaging tools (whether they can reach other sessions despite the
+   native spawn denials). Tool names alone do not establish an escape.
+2. Freeze the final task, application source, runtime, image/config and private
+   archive commitment together. The v3 input has 30 files including all existing
+   application tests; the earlier 23-file draft omitted tests/ui. The baseline
+   ran on a separate disposable copy, not on the solver's input.
+3. Run one uncoached attempt within 15 minutes, 24 provider attempts, two helpers
+   and 500,000 reported tokens as a post-return threshold. Record partial
+   progress and missing model coverage honestly; no automatic budget extension.

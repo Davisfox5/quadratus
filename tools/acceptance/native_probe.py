@@ -10,11 +10,13 @@ import json
 import os
 import shutil
 import time
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 
 from quadratus import cli_providers as cli
 from quadratus.delegation import safe_diagnostics
+from quadratus.latest import alias_for
 from quadratus.run_budget import RunBudget, RunLimits
 
 PROMPT = (
@@ -56,13 +58,28 @@ def retain_rollouts(root, parent_id, workdir, destination):
     return retained
 
 
+
+def probe_provider(vendor, workspace, *, allow_writes):
+    providers = {'codex': (cli.CodexCLIProvider, 'openai:gpt-5.6-sol'),
+                 'grok': (cli.GrokCLIProvider, 'grok:default'),
+                 'claude': (cli.ClaudeCLIProvider, 'claude:fable')}
+    cls, seat = providers[vendor]
+    # Use the same wire alias resolver as Fleet; grok:default means no model flag.
+    provider = cls(model=alias_for(seat), workdir=str(workspace), allow_writes=allow_writes,
+                   timeout=65, max_retries=1, max_tokens=256)
+    provider.effort = 'low'
+    return seat, provider
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('vendor', choices=['codex', 'grok', 'claude'])
+    parser.add_argument('--mode', choices=['tools', 'spawn', 'restricted-read'], default='spawn')
     parser.add_argument('--output', type=Path, required=True, help='New private evidence directory')
     args = parser.parse_args()
     if not Path('/.dockerenv').exists() or os.environ.get('HOME') != '/tmp/solver-home':
         parser.error('Run this probe inside run_isolated with its external watchdog')
+    if args.mode == 'restricted-read' and args.vendor != 'grok':
+        parser.error('The restricted-read check targets the Grok worker seat')
     os.umask(0o077)
     root = args.output.resolve()
     if not root.is_relative_to('/work'):
@@ -71,10 +88,6 @@ def main():
     workspace = root / 'workspace'
     workspace.mkdir(mode=0o700)
     os.environ['QUADRATUS_NATIVE_DELEGATION'] = 'off'
-    providers = {'codex': (cli.CodexCLIProvider, 'gpt-5.6-sol'),
-                 'grok': (cli.GrokCLIProvider, 'default'),
-                 'claude': (cli.ClaudeCLIProvider, 'fable')}
-    cls, model = providers[args.vendor]
     original = cli._launch
 
     def capture(*positional, **keyword):
@@ -84,19 +97,34 @@ def main():
         return result
 
     cli._launch = capture
-    provider = cls(model=model, workdir=str(workspace), allow_writes=True,
-                   timeout=65, max_retries=1, max_tokens=256)
-    provider.effort = 'low'
+    seat, provider = probe_provider(args.vendor, workspace, allow_writes=args.mode == 'spawn')
     budget = RunBudget(RunLimits(max_calls=1, max_reported_tokens=50_000,
                                 wall_seconds=70, max_concurrent_workers=1), path=root / 'budget.json')
     provider.run_budget = budget
-    (root / 'prompt.txt').write_text(PROMPT)
-    result = {'vendor': args.vendor, 'requested_model': model, 'scored': False}
+    canary = None
+    if args.mode == 'restricted-read':
+        seat = 'grok:worker'
+        provider.restricted = True
+        canary = 'read-proof-' + uuid.uuid4().hex
+        (workspace / 'probe.txt').write_text(canary + '\n')
+    prompt = (
+        'List the exact names of every tool available to you in this session, one per line, '
+        'and nothing else. Do not call any tools.' if args.mode == 'tools' else PROMPT
+    )
+    if args.mode == 'restricted-read':
+        prompt = ('Use your read-only filesystem tool to read probe.txt in the working directory. '
+                  'Reply with its exact contents and nothing else. Do not write files, execute '
+                  'shell commands, search the web or delegate to another agent.')
+    (root / 'prompt.txt').write_text(prompt)
+    result = {'vendor': args.vendor, 'requested_seat': seat, 'requested_model': provider.model, 'scored': False, 'mode': args.mode}
     started = time.monotonic()
     try:
-        reply = provider.generate(PROMPT)
+        reply = provider.generate(prompt)
         (root / 'reply.private').write_text(reply)
         result['outcome'] = 'returned'
+        if canary is not None:
+            result['read_canary_matches'] = reply.strip() == canary
+            result['source_unchanged'] = (workspace / 'probe.txt').read_text() == canary + '\n'
     except BaseException as exc:
         result['outcome'] = type(exc).__name__
         (root / 'error.private').write_text(str(exc))

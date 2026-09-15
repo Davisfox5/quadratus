@@ -31,3 +31,15 @@ def test_retains_only_exact_parent_and_explicitly_linked_same_workspace_child(tm
         assert (destination / name).read_bytes() == (dated / name).read_bytes()
         assert (destination / name).stat().st_mode & 0o077 == 0
     assert destination.stat().st_mode & 0o077 == 0
+
+
+def test_grok_probe_uses_vendor_default_without_sending_literal_default(tmp_path, monkeypatch):
+    monkeypatch.setattr('shutil.which', lambda _: '/usr/bin/fixture')
+    monkeypatch.setenv('QUADRATUS_NATIVE_DELEGATION', 'off')
+    seat, provider = probe.probe_provider('grok', tmp_path, allow_writes=False)
+    assert seat == 'grok:default'
+    assert provider.model == ''
+    argv = provider._build_argv('list tools', '')
+    assert '--model' not in argv
+    assert '--disallowed-tools' in argv
+    assert 'Agent' in argv
