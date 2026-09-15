@@ -6,6 +6,17 @@ Earlier attempt **b7ccbd24** and its engine **a001c1b** remain unchanged.
 
 ## Current owner and handoff
 
+**Attempt 3 is authorised and frozen, awaiting launch on the authenticated
+host.** Davis ruled: test lines count in full (already the engine's
+behaviour, unchanged) and Grok stays in the lineup (roles, ladder and the
+500k threshold unchanged). Freeze:
+[scored-attempt-3-freeze.json](evidence/scored-attempt-3-freeze.json), engine
+`4795062`, identical `a8772ab` input and brief, private commitment unchanged.
+Cloud Claude cannot launch (no Codex/Grok CLIs or credentials, x86_64); the
+launch steps are in [CLAUDE_LOG.md](CLAUDE_LOG.md). Claude scores and reviews
+after the artifact handoff.
+
+
 **The two-fix repair batch is complete and verified offline.** No new
 live trial, budget change, role change or GameTape feature work was performed.
 

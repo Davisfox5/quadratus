@@ -1057,3 +1057,63 @@ and the split is 85/138 of 223. Frozen evidence untouched.
 - Whether test lines should count fully, and the Grok per-step cost
   against the 500k threshold, remain Davis's calls.
 - No live attempt is queued. Any attempt 3 is a new authorisation.
+
+## 2026-09-15 — operator rulings and attempt-3 preparation
+
+Davis ruled on the two open policy items:
+
+1. **Test lines count in full.** They are written code; no reason to
+   exclude them unless it obstructs testing. This is already the engine's
+   behaviour (`count_change_lines` counts every added or removed line, the
+   report only splits the figure). No change made. Standing ruling.
+2. **Grok stays.** The point is an end-to-end test of the whole lineup on
+   subscription windows; token spend is what the subscription is for.
+   Roles, ladder and the 500k reported-token threshold are unchanged.
+   Standing ruling.
+
+Davis then authorised attempt 3 ("start the process of testing the product
+as we had initially intended").
+
+### What is prepared here
+
+`evidence/scored-attempt-3-freeze.json`: runtime commit 4795062 with all 36
+runtime file hashes recomputed from the tree; four differ from the
+attempt-2 freeze and each is named with its commit (Codex's runtime.py
+provenance fix, my scope.py/session.py/project_run.py disposition). Input
+re-verified: all 29 application files hash-match `a8772ab` from the
+GameTape checkout, and `TASK_DRAFT.md` hashes to the frozen `TASK.md`
+commitment (71909dad…). Private archive commitment unchanged
+(71cb8b06…), contents unopened by the launcher. Configuration and limits
+copied verbatim from attempt 2: 24 calls, 500,000 reported tokens, 900 s,
+two workers, native delegation off, `python -m pytest -q` as the check.
+The two rulings are recorded in the freeze as `operator_rulings`.
+
+### What cannot happen from this container
+
+This session runs on a cloud x86_64 container with only the `claude`
+binary installed, no `codex` or `grok` CLI, no subscription credentials
+for any vendor, and the acceptance image is Linux arm64. A scored run
+needs all three authenticated CLIs (Davis just confirmed Grok is
+required), so the launch must happen on the authenticated host as before.
+The freeze's `image_id` is carried from attempt 2 and must be re-inspected
+there; a different ID re-issues the freeze.
+
+### Launch handoff (for Codex or Davis on the Mac)
+
+1. `git fetch && git checkout <freeze commit>`; confirm
+   `sha256sum` of the 36 runtime files against the freeze.
+2. `docker image inspect quadratus-blind-preflight` and compare the ID.
+3. Export `a8772ab` with the frozen path list and `TASK_DRAFT.md` as
+   `TASK.md` (as for attempt 2); verify the file hashes.
+4. Stage the auth-only credential seed; run
+   `python /opt/quadratus/blind_trial.py` under `run_isolated(...,
+   wall_seconds=900, network=True, credentials=seed)`.
+5. Remove the container and seed; save `.quadratus/runs/<id>` plus the
+   source-after archive under `evidence/scored-attempt-3/` with
+   `artifact-sha256.json` and `source-after-sha256.json`, as for attempt 2.
+6. Post the handoff on PR #11. I score against the unchanged private set
+   and review the run, as before; disposition afterwards is mine unless
+   Codex is back.
+
+No solver coaching, no prior output, no model names in the solver input.
+Not a retry of attempt 2: a fresh run from the original input.
