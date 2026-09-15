@@ -1075,12 +1075,76 @@ def native_delegation_mode(env: Optional[Mapping[str, str]] = None) -> str:
 
 
 def _fold_disallowed(argv: List[str], flag: str, extra: List[str]) -> List[str]:
+    """Add ``extra`` to an existing ``flag`` value rather than repeating the flag.
+
+    Neither CLI documents that a repeated ``--disallowed-tools`` merges, so the
+    names are folded into the one value. A flag with no value after it (last
+    token) is left alone and the denial appended as its own pair.
+    """
     if flag in argv:
         index = argv.index(flag) + 1
-        present = argv[index].split()
-        argv[index] = ' '.join(present + [name for name in extra if name not in present])
-        return argv
+        if index < len(argv):
+            present = argv[index].split()
+            argv[index] = ' '.join(present + [name for name in extra if name not in present])
+            return argv
     return argv + [flag, ' '.join(extra)]
+
+
+def _denied_fanout_children(vendor: str, denied: List[str], stdout: str,
+                            diagnostics) -> List[NativeChild]:
+    """Native children on the vendors whose control is a tool denial.
+
+    Codex reports its own agents in its event stream; claude and grok do not.
+    Under ``QUADRATUS_NATIVE_DELEGATION=off`` the only evidence that a denied
+    fan-out tool ran anyway is the envelope's own record of tool calls:
+
+    * grok's ``toolCalls`` (read through the diagnostics whitelist, names
+      only). A denied name that still appears there is a child that ran with
+      unknown usage, which is exactly the case the run budget must stop on,
+      because the 2026-09-12 experiment showed ``--always-approve`` overrides
+      ``--disallowed-tools``.
+    * claude's ``--output-format json`` envelope carries no tool calls at all,
+      only ``permission_denials``. A denial naming Task/Agent is the control
+      *holding*, not a child, so it is recorded in the diagnostics
+      (``denied_tools``) and not as a child. A claude child that was not
+      denied is invisible in this output format; that gap is documented in
+      the property below and is closed only by a live probe or stream-json.
+
+    Nothing here is trusted as complete: an empty list means "no evidence",
+    never "no child ran".
+    """
+    children: List[NativeChild] = []
+    wanted = {name.lower() for name in denied}
+    if vendor == "grok":
+        names = (diagnostics or {}).get("attempted_tools") or []
+        for name in names:
+            if isinstance(name, str) and name.lower() in wanted:
+                children.append(NativeChild(
+                    session_id=f"unidentified:grok:{name}",
+                    tool_name=name,
+                    detail="denied fan-out tool still appears in the envelope's tool "
+                           "calls; the vendor does not report the child's usage",
+                ))
+    return children
+
+
+def _claude_denied_fanout(stdout: str, denied: List[str]) -> List[str]:
+    """Names in the claude result envelope's ``permission_denials`` that match a denied fan-out tool."""
+    try:
+        payload = json.loads(stdout)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    wanted = {name.lower() for name in denied}
+    found: List[str] = []
+    for entry in payload.get("permission_denials") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("tool_name") or entry.get("toolName") or entry.get("name")
+        if isinstance(name, str) and name.lower() in wanted and name not in found:
+            found.append(name)
+    return found
 
 
 class CLIProvider(LLMProvider):
@@ -1105,6 +1169,9 @@ class CLIProvider(LLMProvider):
         #: outside every per-task budget. Kept distinct so they are never
         #: folded into Quadratus-dispatched totals.
         self.native_children: List[NativeChild] = []
+        #: Fan-out tool names this call denied under the run-wide off mode;
+        #: set by ``_build_argv`` per call, empty when the mode is not on.
+        self._native_fanout_denied: List[str] = []
         #: How the most recent call ended, in the bounded form the ledger may
         #: keep: stop reason, model-call count, attempted tool names. Reset at
         #: the start of every attempt so a stale record never describes a
@@ -1220,6 +1287,9 @@ class CLIProvider(LLMProvider):
             flag, *names = spec.native_fanout_off_args
             argv = _fold_disallowed(argv, spec.disallowed_tools_flag or flag,
                                     ' '.join(names).split())
+            self._native_fanout_denied = ' '.join(names).split()
+        else:
+            self._native_fanout_denied = []
         if spec.override_conflicts is not None:
             conflicts = spec.override_conflicts(extra)
             if conflicts:
@@ -1367,6 +1437,17 @@ class CLIProvider(LLMProvider):
                 self.spec.extract_diagnostics(stdout) if self.spec.extract_diagnostics else None
             )
             self.native_children = _extract_native_children(stdout)
+            denied = list(getattr(self, "_native_fanout_denied", []) or [])
+            if denied:
+                self.native_children.extend(_denied_fanout_children(
+                    self.spec.vendor, denied, stdout, self.last_diagnostics
+                ))
+                if self.spec.vendor == "claude":
+                    held = _claude_denied_fanout(stdout, denied)
+                    if held:
+                        diagnostics = dict(self.last_diagnostics or {})
+                        diagnostics["denied_tools"] = held
+                        self.last_diagnostics = diagnostics
             for line in (stdout or "").splitlines():
                 try:
                     event = json.loads(line)
@@ -1397,9 +1478,13 @@ class CLIProvider(LLMProvider):
                 # will carry it; a child silently filed under "observed"
                 # would read as the expected state of a vendor without a
                 # switch, which this vendor no longer is.
+                sent = list(self.spec.control_args) or (
+                    [self.spec.disallowed_tools_flag or (self.spec.native_fanout_off_args or [""])[0]]
+                    + list(getattr(self, "_native_fanout_denied", []) or [])
+                )
                 note = (
                     "CONTROL FAILURE: native child ran although the call sent "
-                    + " ".join(self.spec.control_args)
+                    + " ".join(token for token in sent if token)
                 )
                 log.warning("%s: %s", self.label, note)
                 self.native_children = [
@@ -1412,10 +1497,20 @@ class CLIProvider(LLMProvider):
     def native_delegation_disabled(self) -> bool:
         """Whether this transport tells the CLI not to spawn its own agents.
 
-        True only where the spec carries a control; a vendor without one is
-        reported as such rather than assumed bounded.
+        True where the spec carries a control (codex's ``--disable`` pair), or
+        where this call folded the run-wide off-mode denial into its argv
+        (claude's and grok's ``--disallowed-tools``). A vendor without either
+        is reported as such rather than assumed bounded.
+
+        What each is evidence of differs. Codex reports its children in its
+        own stream, so a child seen there is a control failure. Grok's
+        denial is unverified and its envelope lists tool calls, so a denied
+        tool seen there is likewise a failure. Claude's json envelope shows
+        only denials, so on claude a child that was *not* denied is not
+        observable here at all; that is a live-probe question, not one this
+        property answers.
         """
-        return bool(self.spec.control_args)
+        return bool(self.spec.control_args) or bool(getattr(self, "_native_fanout_denied", []))
 
     def _retryable(self, exc: Exception) -> bool:
         if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)):

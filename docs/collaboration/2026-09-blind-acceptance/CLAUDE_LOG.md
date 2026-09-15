@@ -211,3 +211,40 @@ Two-line guard; I will include it in the N1 commit since the file is mine.
 No live control proof, no scored attempt, no solver output read. Docker and
 installed-codex checks were not executable here. The private challenge set
 stays outside Git; only the hashes on PR #11 are public.
+
+## 2026-09-15 — N1 and N5 implemented (my lane: `cli_providers.py`, `delegation.py` whitelist, `tests/test_native_mode.py`)
+
+Separate commit, easy to revert. What changed and what it is evidence of:
+
+- **Grok, off mode.** A folded `--disallowed-tools Agent` is now remembered
+  on the provider for that call (`_native_fanout_denied`, reset on every
+  `_build_argv`). If the envelope's tool calls (read through the existing
+  diagnostics whitelist, names only) still contain a denied name, it becomes
+  a `NativeChild` `unidentified:grok:Agent` with unknown usage, annotated
+  `CONTROL FAILURE: native child ran although the call sent
+  --disallowed-tools Agent`, and flows into `finish(native_children=...)`,
+  so the run budget latches `uncontrolled_native_delegation` on the first
+  such call. This is the case the 2026-09-12 `--always-approve` experiment
+  predicts, so it is the one that needed a stop, not a log line.
+- **Claude, off mode.** `--output-format json` carries no tool calls, only
+  `permission_denials`. A denial naming `Task`/`Agent` is the control
+  holding, so it is recorded as `denied_tools` in the diagnostics (whitelist
+  extended, same name filter as `attempted_tools`; tool inputs never reach
+  the record) and not as a child. A claude child that was *not* denied is
+  not observable in this output format. That gap stays open and is now
+  stated in `native_delegation_disabled`'s docstring; closing it is either
+  a live probe or a switch to `stream-json`, which changes the result
+  parser and is not in this lane.
+- **Default mode** is untouched: no denial sent means an `Agent` call is the
+  vendor's default, not a failure, and produces no child.
+- `native_delegation_disabled` is true for codex (control args) and for a
+  claude/grok call that folded the denial. The CONTROL FAILURE note names
+  whichever was sent.
+- `_fold_disallowed` regained its index guard (a valueless trailing flag gets
+  a fresh pair appended rather than an `IndexError`).
+
+Verification: `ruff check .` clean, `git diff --check` clean, full suite
+**851 passed, 6 skipped** (same six opt-in Docker/installed-codex checks),
+eight new tests in `tests/test_native_mode.py`. Nothing here is a live
+proof; it is what the harness will now do with the evidence a live run
+returns.

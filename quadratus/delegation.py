@@ -240,6 +240,15 @@ def safe_diagnostics(value) -> dict:
         result['attempted_tools'] = list(dict.fromkeys(
             name for name in names[:128] if isinstance(name, str) and atom.fullmatch(name)
         ))[:32]
+    # Fan-out tools the CLI itself refused under the run-wide off mode: the
+    # control holding, recorded by name only, same filter as attempted_tools.
+    denied = value.get('denied_tools')
+    if isinstance(denied, list):
+        held = list(dict.fromkeys(
+            name for name in denied[:128] if isinstance(name, str) and atom.fullmatch(name)
+        ))[:32]
+        if held:
+            result['denied_tools'] = held
     return result
 
 

@@ -91,3 +91,105 @@ def test_off_requests_cannot_be_overridden_by_extra_args(monkeypatch, vendor, pr
     monkeypatch.setenv(f'QUADRATUS_CLI_ARGS_{vendor}', '--disallowed-tools ""')
     with pytest.raises(ProviderError, match='must be empty'):
         provider(model='')._build_argv('task', 'role')
+
+
+# --- Evidence that a folded denial held, or did not -------------------------
+#
+# Codex reports its own children in its event stream. Claude and grok do not,
+# so under off mode the only evidence is the envelope's own record: grok lists
+# tool calls, claude lists permission denials. These pin what each is read as.
+
+import json  # noqa: E402
+
+from quadratus.cli_providers import _fold_disallowed  # noqa: E402
+from quadratus.delegation import safe_diagnostics  # noqa: E402
+
+
+def _grok_envelope(tools):
+    return json.dumps({
+        "text": "done", "stopReason": "end_turn", "modelCalls": 3,
+        "usage": {"input_tokens": 100, "output_tokens": 10},
+        "toolCalls": [{"name": name} for name in tools],
+    })
+
+
+def test_grok_agent_call_after_the_denial_is_an_observed_child(monkeypatch):
+    monkeypatch.setenv("QUADRATUS_NATIVE_DELEGATION", "off")
+    grok = GrokCLIProvider(model="", allow_writes=True)
+    grok._build_argv("p", "")
+    assert grok.native_delegation_disabled
+    grok._observe_output(_grok_envelope(["read_file", "Agent", "bash"]))
+    assert [child.session_id for child in grok.native_children] == ["unidentified:grok:Agent"]
+    child = grok.native_children[0]
+    assert child.total_tokens is None, "the vendor reports nothing for the child"
+    assert child.detail.startswith("CONTROL FAILURE: native child ran although the call sent "
+                                   "--disallowed-tools Agent")
+
+
+def test_grok_ordinary_tools_after_the_denial_are_not_children(monkeypatch):
+    monkeypatch.setenv("QUADRATUS_NATIVE_DELEGATION", "off")
+    grok = GrokCLIProvider(model="", allow_writes=True)
+    grok._build_argv("p", "")
+    grok._observe_output(_grok_envelope(["read_file", "bash"]))
+    assert grok.native_children == []
+
+
+def test_grok_agent_call_in_default_mode_is_not_a_control_failure():
+    """No denial was sent, so nothing failed; the default is the vendor's."""
+    grok = GrokCLIProvider(model="", allow_writes=True)
+    grok._build_argv("p", "")
+    assert not grok.native_delegation_disabled
+    grok._observe_output(_grok_envelope(["Agent"]))
+    assert grok.native_children == []
+
+
+def test_claude_denied_task_is_the_control_holding_not_a_child(monkeypatch):
+    monkeypatch.setenv("QUADRATUS_NATIVE_DELEGATION", "off")
+    claude = ClaudeCLIProvider(model="opus", allow_writes=True)
+    claude._build_argv("p", "")
+    assert claude.native_delegation_disabled
+    claude._observe_output(json.dumps({
+        "type": "result", "result": "ok", "session_id": "s1",
+        "usage": {"input_tokens": 50, "output_tokens": 5},
+        "permission_denials": [
+            {"tool_name": "Task", "tool_use_id": "t1", "tool_input": {"prompt": "/Users/x/secret"}},
+            {"tool_name": "Bash", "tool_use_id": "t2", "tool_input": {"command": "rm -rf"}},
+        ],
+    }))
+    assert claude.native_children == []
+    assert claude.last_diagnostics == {"denied_tools": ["Task"]}
+    assert safe_diagnostics(claude.last_diagnostics) == {"denied_tools": ["Task"]}
+    assert "secret" not in json.dumps(claude.last_diagnostics)
+
+
+def test_claude_envelope_without_denials_records_nothing(monkeypatch):
+    monkeypatch.setenv("QUADRATUS_NATIVE_DELEGATION", "off")
+    claude = ClaudeCLIProvider(model="opus", allow_writes=True)
+    claude._build_argv("p", "")
+    claude._observe_output(json.dumps({"type": "result", "result": "ok",
+                                       "usage": {"input_tokens": 1, "output_tokens": 1}}))
+    assert claude.native_children == [] and claude.last_diagnostics is None
+
+
+def test_denial_is_reset_when_the_next_call_is_not_in_off_mode(monkeypatch):
+    monkeypatch.setenv("QUADRATUS_NATIVE_DELEGATION", "off")
+    grok = GrokCLIProvider(model="", allow_writes=True)
+    grok._build_argv("p", "")
+    monkeypatch.delenv("QUADRATUS_NATIVE_DELEGATION")
+    grok._build_argv("p", "")
+    assert not grok.native_delegation_disabled
+    grok._observe_output(_grok_envelope(["Agent"]))
+    assert grok.native_children == []
+
+
+def test_fold_disallowed_with_a_valueless_trailing_flag_appends_a_pair():
+    assert _fold_disallowed(["x", "--disallowed-tools"], "--disallowed-tools", ["Task"]) == \
+        ["x", "--disallowed-tools", "--disallowed-tools", "Task"]
+    assert _fold_disallowed(["--disallowed-tools", "Bash"], "--disallowed-tools", ["Task", "Bash"]) == \
+        ["--disallowed-tools", "Bash Task"]
+
+
+def test_safe_diagnostics_filters_denied_tools_like_attempted_tools():
+    got = safe_diagnostics({"denied_tools": ["Task", "bad name", 3, "Agent", "Task"], "attempted_tools": ["bash"]})
+    assert got == {"attempted_tools": ["bash"], "denied_tools": ["Task", "Agent"]}
+    assert safe_diagnostics({"denied_tools": ["  "]}) == {}
