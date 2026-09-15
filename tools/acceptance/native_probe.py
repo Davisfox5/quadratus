@@ -74,12 +74,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('vendor', choices=['codex', 'grok', 'claude'])
     parser.add_argument('--mode', choices=['tools', 'spawn', 'restricted-read'], default='spawn')
+    parser.add_argument('--writable-tools', action='store_true',
+                        help='List tools with normal write/exec permissions (tools mode only)')
     parser.add_argument('--output', type=Path, required=True, help='New private evidence directory')
     args = parser.parse_args()
     if not Path('/.dockerenv').exists() or os.environ.get('HOME') != '/tmp/solver-home':
         parser.error('Run this probe inside run_isolated with its external watchdog')
     if args.mode == 'restricted-read' and args.vendor != 'grok':
         parser.error('The restricted-read check targets the Grok worker seat')
+    if args.writable_tools and args.mode != 'tools':
+        parser.error('--writable-tools requires --mode tools')
     os.umask(0o077)
     root = args.output.resolve()
     if not root.is_relative_to('/work'):
@@ -97,7 +101,7 @@ def main():
         return result
 
     cli._launch = capture
-    seat, provider = probe_provider(args.vendor, workspace, allow_writes=args.mode == 'spawn')
+    seat, provider = probe_provider(args.vendor, workspace, allow_writes=args.mode == 'spawn' or args.writable_tools)
     budget = RunBudget(RunLimits(max_calls=1, max_reported_tokens=50_000,
                                 wall_seconds=70, max_concurrent_workers=1), path=root / 'budget.json')
     provider.run_budget = budget
@@ -116,7 +120,8 @@ def main():
                   'Reply with its exact contents and nothing else. Do not write files, execute '
                   'shell commands, search the web or delegate to another agent.')
     (root / 'prompt.txt').write_text(prompt)
-    result = {'vendor': args.vendor, 'requested_seat': seat, 'requested_model': provider.model, 'scored': False, 'mode': args.mode}
+    result = {'vendor': args.vendor, 'requested_seat': seat, 'requested_model': provider.model, 'scored': False, 'mode': args.mode,
+              'allow_writes': args.mode == 'spawn' or args.writable_tools}
     started = time.monotonic()
     try:
         reply = provider.generate(prompt)

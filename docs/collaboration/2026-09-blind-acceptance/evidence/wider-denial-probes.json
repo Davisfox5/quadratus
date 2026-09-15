@@ -1,0 +1,166 @@
+{
+  "runtime_commit": "fdcbd99",
+  "scored": false,
+  "known_reported_tokens": 22298,
+  "attempts": [
+    {
+      "vendor": "claude",
+      "requested_seat": "claude:fable",
+      "requested_model": "fable",
+      "scored": false,
+      "mode": "tools",
+      "allow_writes": true,
+      "outcome": "returned",
+      "elapsed_seconds": 3.439550917944871,
+      "usage": {
+        "input_tokens": 9253,
+        "output_tokens": 119
+      },
+      "resolved_model": "claude-fable-5-1",
+      "diagnostics": {},
+      "native_children": [],
+      "private_rollout_hashes": {},
+      "budget": {
+        "limits": {
+          "max_calls": 1,
+          "max_reported_tokens": 50000,
+          "wall_seconds": 70,
+          "max_concurrent_workers": 1
+        },
+        "reserved_attempts": 1,
+        "in_flight": 0,
+        "input_tokens": 9253,
+        "output_tokens": 119,
+        "reported_tokens": 9372,
+        "unknown_usage_attempts": 0,
+        "stop_reason": "",
+        "preserved_responses": [],
+        "elapsed_seconds": 3.4398211269872263,
+        "token_boundary": "post-return threshold; in-flight calls can overshoot",
+        "input_boundary": "normalized provider input includes cached input; do not add it again",
+        "wall_boundary": "attempt timeout plus required external process supervisor"
+      },
+      "reported_tools": [
+        "Bash",
+        "Edit",
+        "Read",
+        "ReportFindings",
+        "ScheduleWakeup",
+        "Skill",
+        "ToolSearch",
+        "Write",
+        "CronDelete",
+        "CronList",
+        "DesignSync",
+        "EnterWorktree",
+        "ExitWorktree",
+        "Monitor",
+        "NotebookEdit",
+        "PushNotification",
+        "TaskOutput",
+        "TaskStop",
+        "WebFetch",
+        "WebSearch"
+      ],
+      "private_evidence_sha256": {
+        "stdout.private": "9d5407f9b1e5284ab67c87832e167c96cfb5c75c4cbea0ca988506eb36c0d6cb",
+        "stderr.private": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "reply.private": "63b6d045104cdaf8d87a9470c65df2e9c5f6a2d9f18b3eeb9c29a783168626cc"
+      },
+      "supervisor": {
+        "outcome": "success",
+        "exit_code": 0,
+        "image_id": "sha256:d1f99331a1639f5ff364faf9e4c027943613fadba733d452191296b873a390e2",
+        "container_name": "quadratus-blind-c98cd5934469438289927102c2f984c9"
+      },
+      "control_check": "pass: targeted denied names absent; read/write/exec reported"
+    },
+    {
+      "vendor": "grok",
+      "requested_seat": "grok:default",
+      "requested_model": "",
+      "scored": false,
+      "mode": "tools",
+      "allow_writes": true,
+      "outcome": "returned",
+      "elapsed_seconds": 4.587317959987558,
+      "usage": {
+        "input_tokens": 12715,
+        "output_tokens": 211
+      },
+      "resolved_model": null,
+      "diagnostics": {
+        "stop_reason": "end_turn"
+      },
+      "native_children": [],
+      "private_rollout_hashes": {},
+      "budget": {
+        "limits": {
+          "max_calls": 1,
+          "max_reported_tokens": 50000,
+          "wall_seconds": 70,
+          "max_concurrent_workers": 1
+        },
+        "reserved_attempts": 1,
+        "in_flight": 0,
+        "input_tokens": 12715,
+        "output_tokens": 211,
+        "reported_tokens": 12926,
+        "unknown_usage_attempts": 0,
+        "stop_reason": "",
+        "preserved_responses": [],
+        "elapsed_seconds": 4.587836751947179,
+        "token_boundary": "post-return threshold; in-flight calls can overshoot",
+        "input_boundary": "normalized provider input includes cached input; do not add it again",
+        "wall_boundary": "attempt timeout plus required external process supervisor"
+      },
+      "reported_tools": [
+        "web_search",
+        "open_page",
+        "open_page_with_find",
+        "x_user_search",
+        "x_semantic_search",
+        "x_keyword_search",
+        "x_thread_fetch",
+        "run_terminal_command",
+        "read_file",
+        "search_replace",
+        "list_dir",
+        "grep",
+        "kill_command_or_subagent",
+        "todo_write",
+        "get_command_or_subagent_output",
+        "spawn_subagent",
+        "scheduler_create",
+        "scheduler_delete",
+        "scheduler_list",
+        "monitor",
+        "search_tool",
+        "use_tool",
+        "workflow",
+        "enter_plan_mode",
+        "exit_plan_mode",
+        "ask_user_question",
+        "send_feedback",
+        "image_gen",
+        "image_edit",
+        "image_to_video",
+        "reference_to_video",
+        "write"
+      ],
+      "private_evidence_sha256": {
+        "stdout.private": "1b65c45c61c164ae85bb299b293e063f1bc5c8ebb4730546b5158ef1c24a2c3e",
+        "stderr.private": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "reply.private": "0ee6aa52c11b0337b1d26287d85433e8a68972557fe6532c7d9e51792f7965f1"
+      },
+      "supervisor": {
+        "outcome": "success",
+        "exit_code": 0,
+        "image_id": "sha256:d1f99331a1639f5ff364faf9e4c027943613fadba733d452191296b873a390e2",
+        "container_name": "quadratus-blind-862f60f54aef487dbabda45b94f40d93"
+      },
+      "control_check": "FAIL: native spawner and workflow/MCP tools still reported"
+    }
+  ],
+  "limitation": "Tool lists are model reports, not independently dumped schemas or executed delegation; no child observed."
+}

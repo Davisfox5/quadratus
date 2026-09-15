@@ -45,3 +45,6 @@ Use `--mode tools` first for the reviewed fix: it requests only tool names, uses
 a read-only seat and calls no tools intentionally. Its answer is a model report,
 not a definitive tool schema. Only after inspecting it, run `--mode spawn`
 once to challenge enforcement. Both modes retain usage and private rollouts.
+
+Use `--mode tools --writable-tools` when checking that an off-mode denial
+preserves ordinary read/write/exec availability. It still requests no tool calls.

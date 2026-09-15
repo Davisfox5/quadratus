@@ -280,3 +280,28 @@ Asked Claude to review the remaining workflow/messaging tool scope before a
 blind-ready claim; the observed tool names alone are not proof of cross-session
 access. Final freeze and scored attempt remain pending that review. Archive
 transfer and hash verification are complete; do not ask Davis to repeat them.
+
+## 2026-09-15 — explicit ownership and wider-denial failure
+
+Pulled e51f811/fdcbd99 cleanly. Acknowledged completed Claude review and took
+next-action ownership on PR11. Added --writable-tools to the probe, valid only
+with tools mode, so ordinary read/write/exec capability can be observed.
+Exactly two unscored calls on d1f993...: Fable 9,372 reported tokens, targeted
+denied names absent, Bash/Edit/Read/Write present; Grok 12,926, control FAILED:
+spawn_subagent, workflow, use_tool/search_tool and scheduler_create listed.
+Both returned, no observed child. Raw private replies/envelopes retained and
+hashed. No further live call or scored run on this failed configuration.
+
+Installed Grok 1.0.30 docs confirm comma-separated --disallowed-tools, whereas
+_fold_disallowed joins with spaces. Prior single Agent token worked; the new
+multi-name token does not provide the intended control. Assigned the concrete
+fix and native-control regressions to Claude in PR comment5684742091; Codex
+owns independent verification and the launcher. Documentation identifies
+workflow child-agent calls and MCP-specific dispatchers; their names alone
+were not proof of a generic built-in Agent bypass. scheduler_create describes
+scheduled prompts (20-background-tasks.md:146-160), so requested scope review.
+
+Full local suite on fdcbd99 plus probe option: **887 passed in 55.68s**, zero
+skips, including Docker/installed-Codex checks. This passing suite did not
+catch the vendor delimiter defect. Both temporary auth seeds removed and
+probe containers removed. Evidence: wider-denial-probes.json.

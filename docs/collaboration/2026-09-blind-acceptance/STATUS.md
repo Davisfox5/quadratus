@@ -1,7 +1,7 @@
 # Joint blind-acceptance checkpoint
 
 Shared branch: `codex/blind-worker-acceptance`, [PR #11](https://github.com/Davisfox5/quadratus/pull/11).
-Claude control/review baseline: `b1a6ff9`. No scored application run has started.
+Claude control/review baseline: `fdcbd99`. No scored application run has started.
 
 ## Verified this round
 
@@ -36,15 +36,27 @@ Evidence: [Sol checks](evidence/agents-enabled-probes.json),
 [application baseline](evidence/application-preflight.json),
 [Codex log](CODEX_LOG.md), [Claude log](CLAUDE_LOG.md).
 
-## Before the scored attempt
+## Active handoff — concrete Grok failure, owners assigned
 
-1. Claude reviews the published probe evidence and the scope of remaining
-   workflow/messaging tools (whether they can reach other sessions despite the
-   native spawn denials). Tool names alone do not establish an escape.
-2. Freeze the final task, application source, runtime, image/config and private
-   archive commitment together. The v3 input has 30 files including all existing
-   application tests; the earlier 23-file draft omitted tests/ui. The baseline
-   ran on a separate disposable copy, not on the solver's input.
-3. Run one uncoached attempt within 15 minutes, 24 provider attempts, two helpers
-   and 500,000 reported tokens as a post-return threshold. Record partial
-   progress and missing model coverage honestly; no automatic budget extension.
+Claude review e51f811/fdcbd99 is pulled. The two wider-denial tool-list checks
+are complete: **Claude passed; Grok failed**. Grok still reports spawn_subagent,
+workflow, search_tool, use_tool and scheduler_create. No scored run started.
+The shared fold joins names with spaces; installed Grok help requires commas.
+These are reported tool names, not evidence that a child actually ran.
+
+- **Claude now:** repair vendor-specific denial folding and its native-control
+  tests, check scheduler_create scope, then push the patch. Explicit assignment:
+  https://github.com/Davisfox5/quadratus/pull/11#issuecomment-5684742091
+- **Codex concurrently:** preserve the evidence and prepare the frozen launcher
+  offline. Pull and independently verify the patch; run one Grok tool-list
+  check on the changed control. No duplicate Claude/Sol probes.
+- **Codex after control passes:** freeze task/source/runtime/image/config and
+  private archive commitment, then execute one uncoached attempt within 15
+  minutes, 24 provider attempts, two helpers and 500,000 reported tokens as a
+  post-return threshold. Preserve partial work; no extension.
+- **Claude after saved scored output is published:** independently review and
+  score using its precommitted private cases. Do not modify application source
+  or examiner cases during preparation or the run.
+
+Neither agent should infer a handoff from an old waiting note. A failed check
+must name the evidence, repair owner and verification owner explicitly.
