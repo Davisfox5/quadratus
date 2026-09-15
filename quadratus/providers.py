@@ -281,6 +281,11 @@ class LLMProvider:
                 ) from second
 
     def _observed_call(self, prompt, system, turns, attempt):
+        control = getattr(self, 'run_budget', None)
+        ticket, remaining = control.reserve() if control is not None else (None, None)
+        previous_timeout = self.timeout if control is not None else None
+        if control is not None:
+            self.timeout = min(previous_timeout, remaining)
         self.last_usage = None
         self.last_session_id = None
         self.resolved_model = None
@@ -297,15 +302,36 @@ class LLMProvider:
             failure = exc
             raise
         finally:
+            budget_failure = None
+            if control is not None:
+                try:
+                    control.finish(ticket, self.last_usage, native_children=self.native_children,
+                                   reply=text)
+                except Exception as exc:
+                    # Preserve an original interruption/partial-work failure.
+                    # The shared controller is latched, so no retry can start.
+                    if failure is None:
+                        failure = budget_failure = exc
+                        exc.provider_outcome = 'ok'
+                        exc.post_return_failure = True
+                        # Also retain it on the exception for direct callers
+                        # whose controller has no on-disk run directory.
+                        exc.provider_response = text
+            if control is not None:
+                self.timeout = previous_timeout
             observer = getattr(self, "attempt_observer", None)
             if observer is not None:
                 try:
                     observer(self, attempt, time.monotonic() - started, failure, text)
                 except Exception:
                     log.debug("attempt accounting failed", exc_info=True)
+            if budget_failure is not None:
+                raise budget_failure
 
     def _generate_once(self, prompt: str, system: str, turns: List[Turn]) -> str:
         """One model's attempt, with transport retries. Refusals pass through."""
+        from .run_budget import RunBudgetExceeded
+
         last_exc: Optional[Exception] = None
         for attempt in range(self.max_retries):
             try:
@@ -313,7 +339,7 @@ class LLMProvider:
                 if not text:
                     raise ProviderError(f"{self.label} returned an empty response.")
                 return text
-            except ProviderError:
+            except (ProviderError, RunBudgetExceeded):
                 raise
             except Exception as exc:
                 last_exc = exc

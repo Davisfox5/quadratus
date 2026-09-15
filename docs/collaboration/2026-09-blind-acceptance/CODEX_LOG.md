@@ -9,3 +9,78 @@
   call for the native-control lane; separate from the scored Quadratus run.
 - Codex begins shared runtime budget controls and checks isolation prerequisites.
   No application feature edits or large provider run in this checkpoint.
+
+## 2026-09-15 — first implementation and peer checks
+
+- Claude Fable 5.1 worked locally in the reserved native-control files. First
+  420-second window stopped after implementation; a bounded finishing window
+  added tests/log and ended on its turn limit. No subagents or scored run.
+- Budget/controller tests plus real Docker checks: **23 passed in 4.74s**.
+  Runtime/provider/project/recovery regression subset: **97 passed in 5.98s**.
+  Git input freezer + budget checks: **30 passed in 0.63s**.
+- Docker canary check denied examiner/host-home reads and runtime writes;
+  watchdog killed a child in a separate process group and preserved its file.
+- Codex found the opt-in Claude config test was still using the autouse fake
+  binary `/usr/bin/x`: **1 failed, 86 passed**, a fixture bug, not a failed CLI
+  control. With Claude's editing windows complete, Codex takes the focused
+  fixture correction and rejection of resume/fork overrides for fresh runs.
+  Also qualifying pre-probe source comments; Claude's original log is preserved.
+- Token controls reserve before attempts, include retries, stop on missing
+  usage/native observations and record a provider success followed by a budget
+  stop on the same invocation. These controls are opt-in, not yet a fully
+  provisioned three-vendor blind runner. Strict unknown usage is intentional;
+  an invalid CLI configuration stops the bounded run rather than retrying free.
+
+## 2026-09-15 — Claude independent review received
+
+- Fresh, tools-disabled Claude review returned successfully (one response,
+  separate from its implementation session). Saved its exact final review in
+  CLAUDE_CONTROL_REVIEW.md; no reasoning transcript or credentials published.
+- Accepted: preserve final responses when the budget stops after provider
+  success; run containers as non-root; fail closed/roll back reservations when
+  durable budget state cannot be written; check overridden observed-attempt
+  methods; tighten known instruction-file and image/entrypoint validation.
+- Finding 1's proposed zero/estimated usage is rejected: the user-approved
+  protocol explicitly stops on unknown usage. Retries with reported usage are
+  counted and tested; failed calls with no usage cannot safely be retried.
+- Other review qualifications: provider native_children is initialized before
+  each call; Fleet copies the shared provider for every budgeted view and a
+  second copy retains the same controller; SessionConfig is not frozen.
+  Denied retries are not actual calls and are explained by budget.json rather
+  than adding a fake invocation. The reviewer had code text, not an execution
+  environment; speculative items are distinguished from reproduced defects.
+
+## 2026-09-15 — peer findings resolved and validation
+
+- Corrected Claude's opt-in config-test fixture; real installed CLI configuration
+  proof and budget tests: **79 passed in 0.20s**. Added rejection of resume/fork
+  extras and qualified pre-probe native-control comments. No live model probe.
+- The first full suite found a compatibility regression in my hook: accessing
+  timeout even without a budget broke three minimal provider adapters. Fixed
+  the optional path, not the old tests. Affected tests: **81 passed in 6.01s**;
+  then full suite **845 passed in 51.93s**, real Docker/config checks enabled.
+- Implemented the accepted Claude follow-ups: completed final replies retained
+  under budget-responses (not published), non-root containers, storage failures
+  stop before launch with reservations rolled back, observed-path override
+  guards, additional instruction-file exclusions, strict image/entrypoint checks.
+- Follow-up tests including Docker: **42 passed in 5.85s**, Ruff/diff clean.
+  Final full-suite rerun is being recorded at the next checkpoint.
+- Prepared a 13-file example input export from GameTape a8772ab under ignored
+  output/blind-acceptance-preparation/v1. It contains application code, ordinary
+  docs/tests and TASK.md, no Git history, agent settings or joint repair logs.
+  It is a draft; held-out checks/authenticated runtime are not yet frozen.
+- Claude's review is independent code review, not a blind scored application
+  attempt. No implementation file in GameTape was changed by this batch.
+
+## 2026-09-15 — final local checkpoint
+
+- Full combined suite after peer corrections: **853 passed in 52.66s**, zero
+  skips with QUADRATUS_TEST_DOCKER=1 and QUADRATUS_LIVE_CODEX_FEATURES=1.
+  `ruff check .` and `git diff --check` passed. No owned container remains.
+- Claude's native implementation plus Codex's focused corrections are accepted
+  for this offline checkpoint. Codex implemented the accepted independent
+  review findings and ran the final regressions; Claude has not re-reviewed
+  those final follow-ups. Raw provider transcripts remain under ignored output.
+- Current coding lanes are released for review. No GameTape application edits,
+  native-delegation live acceptance, restricted Grok live probe, authenticated
+  container, or completed held-out scoring suite are claimed.

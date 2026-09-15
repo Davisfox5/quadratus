@@ -1,6 +1,7 @@
 # Next acceptance: independent routing with bounded spend
 
-Status: protocol and delegation gap recorded; no new model run started.
+Status: control foundation implemented and tested; no scored model run started.
+Current implementation and remaining gates: [joint checkpoint](../2026-09-blind-acceptance/IMPLEMENTATION.md).
 Branch: `codex/blind-worker-acceptance`.
 
 ## Objective and operator correction
@@ -70,12 +71,13 @@ reported crossing or unknown usage, with an independent wall-clock watchdog
 for in-flight work. No automatic continuation or paid API fallback. Report
 cached/uncached/output separately where the vendor supplies them.
 
-## Sol delegation defect: verified, not yet fixed
+## Original Sol delegation finding (before this implementation)
 
 `quadratus/delegation.py` and published native-delegation evidence show Sol
 using vendor-native `spawn_agent`, outside WorkerPool. One recorded request
-uses `fork_turns: all` without a model override; the child is Sol. Current
-CODEX_SPEC has no disable setting. Local codex-cli 0.154.0 reports multi_agent
+uses `fork_turns: all` without a model override; the child is Sol. At the planning checkpoint,
+CODEX_SPEC had no disable setting. The new implementation adds enforced controls;
+live runtime proof remains pending. Local codex-cli 0.154.0 reports multi_agent
 true; `codex -c features.multi_agent=false features list` reports false.
 That is local configuration proof, not yet live proof that no child can run.
 
@@ -85,7 +87,7 @@ parent model when no override is supplied:
 - https://learn.chatgpt.com/docs/config-file/config-reference
 - https://learn.chatgpt.com/docs/agent-configuration/subagents
 
-Required next implementation: disable native Codex spawning on Quadratus
+Implementation requirement, now addressed offline: disable native Codex spawning on Quadratus
 calls and require helpers to pass through WorkerPool. Enforce this after
 operator extra arguments or reject conflicting overrides; do not merely add
 a prompt instruction or a default child model that can be overridden.

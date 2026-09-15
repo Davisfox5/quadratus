@@ -153,6 +153,7 @@ class Fleet:
         project=None,
         usage_meter: Optional[UsageMeter] = None,
         delegation_ledger: Optional[DelegationLedger] = None,
+        run_budget=None,
         system: str = "You are collaborating on a software engineering task.",
     ) -> None:
         self.settings = settings or Settings.from_env()
@@ -160,6 +161,7 @@ class Fleet:
         self.project = project if isinstance(project, Project) else Project(project) if project else None
         self.usage_meter = usage_meter
         self.delegation_ledger = delegation_ledger
+        self.run_budget = run_budget
         self.system = system
         self._providers: Dict[str, Optional[LLMProvider]] = {}
         self._exhausted: Dict[str, str] = {}
@@ -206,6 +208,13 @@ class Fleet:
             effort=spec.effort if spec else "",
             restricted=spec.restricted if spec else False,
         )
+        if self.run_budget is not None:
+            if any(getattr(type(bound), method) is not getattr(LLMProvider, method)
+                   for method in ('generate', '_generate_once', '_observed_call')):
+                from .run_budget import RunBudgetExceeded
+                raise RunBudgetExceeded('Bounded runs require the observed provider attempt path')
+            bound = copy.copy(bound)
+            bound.run_budget = self.run_budget
         # Routing belongs to Session; the pipeline's per-provider fallback must
         # never impersonate the named seat or validate a different model in probes.
         if bound.refusal_fallback_model:
@@ -344,12 +353,14 @@ class Fleet:
         task = task or context.get("task", "run")
         origin = origin or context.get("origin", Origin.SEAT)
         observed = []
-        def observe(view, attempt, seconds, failure, reply=""):
+        def observe(view, attempt, seconds, failure, reply="", *, invoked=True):
             observed.append(attempt)
             self._record_invocation(
                 key, view, role=role, task=task, origin=origin,
-                seconds=seconds, invoked=True, attempt=attempt,
+                seconds=seconds, invoked=invoked, attempt=attempt,
                 outcome=type(failure).__name__ if failure else "ok",
+                provider_outcome=getattr(failure, 'provider_outcome', None),
+                post_return_failure=getattr(failure, 'post_return_failure', False),
                 detail=str(failure)[:200] if failure else "",
                 usage=getattr(view, "last_usage", None),
             )
@@ -362,11 +373,14 @@ class Fleet:
         # A custom provider may implement generate directly; cover it too.
         provider.last_usage = None
         provider.last_diagnostics = None
+        provider.native_children = []
         try:
             reply = provider.generate(prompt, system=system)
         except BaseException as exc:
             if not observed:
-                observe(provider, 1, time.monotonic() - started, exc)
+                from .run_budget import RunBudgetExceeded
+                observe(provider, 1, time.monotonic() - started, exc,
+                        invoked=not isinstance(exc, RunBudgetExceeded))
             if isinstance(exc, Exception) and _looks_exhausted(exc):
                 self.mark_exhausted(key, str(exc))
                 raise WindowExhausted(f"{key}: subscription window exhausted ({exc})") from exc
@@ -380,7 +394,7 @@ class Fleet:
 
     def _record_invocation(self, key, provider, *, role, task, origin,
                            seconds, invoked, outcome, usage=None, detail="",
-                           post_return_failure=False, attempt=1):
+                           post_return_failure=False, attempt=1, provider_outcome=None):
         """Append one invocation to the delegation ledger. Never raises."""
         if self.delegation_ledger is None:
             return
@@ -399,7 +413,7 @@ class Fleet:
                 selected=True,
                 invoked=invoked,
                 outcome=outcome,
-                provider_outcome=outcome,
+                provider_outcome=provider_outcome or outcome,
                 diagnostics=safe_diagnostics(getattr(provider, "last_diagnostics", None))
                 if outcome != "ok" else {},
                 seconds=seconds,
@@ -418,8 +432,8 @@ class Fleet:
     def _observe_native(self, key, provider) -> None:
         """Fold any vendor-native children the provider reported into the record.
 
-        The harness cannot prevent a CLI spawning its own sub-agents -- that
-        happens inside a vendor process -- so it records them instead, marked
+        Native controls are transport-specific. Preserve any observed children
+        even when a control was intended to disable spawning, marked
         as observed rather than dispatched, and keeps them out of the
         Quadratus-dispatched totals. Silence here is what made 135,105 tokens
         disappear from a run that was otherwise fully accounted.
