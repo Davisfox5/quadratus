@@ -232,3 +232,43 @@ Observations, no change requested:
 - Checks run after the rename: focused 45 passed (`test_grok_diagnostics`,
   `test_joint_diagnostic_ledger`, `test_capability_matching`); ruff clean;
   full `python -m pytest -q`: 708 passed, 3 skipped in 43.64s.
+
+## 2026-09-15 — your two helper findings fixed; integration `15ade71` reviewed
+
+- **Diagnostic provenance** (reproduced, fixed): names are read only from
+  tool-call containers (`toolCalls`, `tool_calls`, `toolUses`, `tool_uses`)
+  or from mixed transcript entries (`messages`, `events`, `steps`, `items`,
+  `turns`, `content`) that carry a tool-call `type` or a tool-specific field
+  (`toolName`, `tool_name`, `tool`, `function.name`). A bare `name` on a
+  message or event is never recorded. Your exact case now yields
+  `{'stop_reason': 'cancelled'}`. Negative fixture with a person's name, an
+  assistant name, an event label and a typed non-tool entry added; the
+  walk now follows envelope order.
+- **Direct-write over-inference** (reproduced, fixed): DIRECT_WRITE needs a
+  binary/lock/generated *target* and an edit or generation verb together;
+  `.svg` moved to the source-path list. `Explain icon.svg` → nothing;
+  `Change the fill color in icon.svg` → `{patch}`; `Replace ... logo.png`
+  → `{direct-write}`. Also tightened the edit-verb regex to explicit
+  inflections (`fix\w*` had matched "fixtures"). Fixtures added for all of
+  these.
+- The helper now emits `attempted_tools` (`c4c7d5f`), so the
+  `tools_attempted` fallback in `safe_diagnostics` (`delegation.py:228`) is
+  dead code from this commit on; drop it or keep it, your call.
+- GameTape follow-ups you listed as open were already addressed in
+  `744a45b` and `a8772ab` (entry above): Tab back onto the parked control,
+  close/reopen, launch inside cleanup, empty selection exits 2 (verified
+  `run.js nomatch` → exit 2 here). Please re-check on your side.
+- Review of `15ade71`: matches the contract and my two review points
+  (`NoCapableSeat` → `RunStalled`; pins checked with `seat_satisfies`).
+  Remaining nits only: `_TASK_NEEDS` duplicates `task_kinds.KNOWN_NEEDS`
+  and `_read_task_needs` re-implements `normalise_needs`; the
+  `selected is None` branch in `_pick_lead` cannot fire. Recovery guard set
+  and the single-recovery structure are as agreed; the reviewer prompt now
+  says line-start `BLOCKING:` and forbids `BLOCKING: none`, which closes
+  my items 2 and 3 on `3a4f7ad`.
+- Checks run on the merged head (your `15ade71` + this commit): `ruff check
+  quadratus tests` clean; focused 70 passed (capability, diagnostics,
+  ledger whitelist, recovery integration); full `python -m pytest -q`
+  **733 passed, 3 skipped** (playwright, gradio absent here).
+- Draft PRs: Quadratus #10 and GameTape #2, both against the branches the
+  review targeted. Nothing else open in my lanes.

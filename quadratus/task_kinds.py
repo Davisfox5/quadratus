@@ -371,20 +371,32 @@ _RUN_OUTCOME_RE = re.compile(
     r"|capture\s+(?:the\s+)?(?:raw\s+)?output|observed\s+(?:pass|fail)|from\s+a\s+fresh\s+run)",
     re.IGNORECASE,
 )
+#: Explicit inflections rather than ``\w*`` suffixes: ``fix\w*`` matched
+#: "fixtures" and ``add\w*`` matched "additional".
 _EDIT_VERB_RE = re.compile(
-    r"\b(?:edit|change|modify|update|add|remove|delete|fix|correct|implement|write|"
-    r"rewrite|refactor|rename|replace|insert|adjust|amend|patch)\w*\b",
+    r"\b(?:edit(?:s|ed|ing)?|chang(?:e|es|ed|ing)|modif(?:y|ies|ied|ying)|updat(?:e|es|ed|ing)|"
+    r"add(?:s|ed|ing)?|remov(?:e|es|ed|ing)|delet(?:e|es|ed|ing)|fix(?:es|ed|ing)?|"
+    r"correct(?:s|ed|ing)?|implement(?:s|ed|ing)?|(?:re)?writ(?:e|es|ing|ten)|"
+    r"refactor(?:s|ed|ing)?|renam(?:e|es|ed|ing)|replac(?:e|es|ed|ing)|insert(?:s|ed|ing)?|"
+    r"adjust(?:s|ed|ing)?|amend(?:s|ed|ing)?|patch(?:es|ed|ing)?)\b",
     re.IGNORECASE,
 )
 _SOURCE_PATH_RE = re.compile(
     r"(?<![\w/])[\w./-]+\.(?:py|js|mjs|cjs|ts|tsx|jsx|md|rst|txt|html|css|scss|json|ya?ml|toml|"
-    r"ini|cfg|sh|sql|go|rs|java|kt|swift|c|h|cpp|hpp|cs|rb|php)\b",
+    r"ini|cfg|sh|sql|go|rs|java|kt|swift|c|h|cpp|hpp|cs|rb|php|svg)\b",
 )
-_DIRECT_WRITE_RE = re.compile(
-    r"\b(?:binary\s+file|binary\s+asset|regenerat\w+|lock\s*file|package-lock\.json|"
-    r"yarn\.lock|pnpm-lock\.yaml|poetry\.lock|cargo\.lock|uv\.lock|generated\s+file|"
-    r"screenshot|image\s+file)\b"
-    r"|(?<![\w/])[\w./-]+\.(?:png|jpe?g|gif|webp|ico|svg|mp4|webm|mov|mp3|wav|zip|gz|tar|pdf|"
+#: Verbs that produce or replace a file wholesale, as opposed to editing text.
+_GENERATE_VERB_RE = re.compile(
+    r"\b(?:re-?generat\w*|generat\w*|re-?build\w*|re-?encod\w*|convert\w*|export\w*|"
+    r"render\w*|record\w*|captur\w*|upload\w*|copy|copies|copied|overwrit\w*)\b",
+    re.IGNORECASE,
+)
+#: Targets a text patch cannot carry. SVG is text and is deliberately absent.
+_DIRECT_WRITE_TARGET_RE = re.compile(
+    r"\b(?:binary\s+(?:file|asset)s?|lock\s*files?|package-lock\.json|yarn\.lock|"
+    r"pnpm-lock\.yaml|poetry\.lock|cargo\.lock|uv\.lock|generated\s+files?|"
+    r"screenshots?|image\s+files?|video\s+files?|audio\s+files?)\b"
+    r"|(?<![\w/])[\w./-]+\.(?:png|jpe?g|gif|webp|ico|mp4|webm|mov|mp3|wav|zip|gz|tar|pdf|"
     r"woff2?|ttf|so|dylib|dll|bin)\b",
     re.IGNORECASE,
 )
@@ -397,9 +409,10 @@ def needs_from_text(description: str, acceptance: Iterable[str] = ()) -> FrozenS
     run verb before a known runner, a backticked command literal, or an
     outcome only a run produces (exit code, tests passed). PATCH needs an
     edit verb *and* a source path. DIRECT_WRITE needs a binary, generated or
-    lock file. Prose that merely mentions a file, or asks for an explanation,
-    infers nothing: an under-inferred need costs one failed call, an
-    over-inferred one quietly promotes rote work off the cheap rung.
+    lock-file target *and* a verb that writes or produces it; SVG is text and
+    counts as source. Prose that merely mentions a file, or asks for an
+    explanation, infers nothing: an under-inferred need costs one failed
+    call, an over-inferred one quietly promotes rote work off the cheap rung.
     """
     text = "\n".join([description or "", *[str(a) for a in acceptance or ()]])
     needs = set()
@@ -407,7 +420,7 @@ def needs_from_text(description: str, acceptance: Iterable[str] = ()) -> FrozenS
         needs.add(Need.EXECUTE)
     if _EDIT_VERB_RE.search(text) and _SOURCE_PATH_RE.search(text):
         needs.add(Need.PATCH)
-    if _DIRECT_WRITE_RE.search(text):
+    if _DIRECT_WRITE_TARGET_RE.search(text) and (_EDIT_VERB_RE.search(text) or _GENERATE_VERB_RE.search(text)):
         needs.add(Need.DIRECT_WRITE)
     return frozenset(needs)
 
