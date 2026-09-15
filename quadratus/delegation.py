@@ -264,6 +264,9 @@ def safe_diagnostics(value) -> dict:
     state = value.get('auxiliary_usage')
     if state in ('unknown', 'unattributed'):
         result['auxiliary_usage'] = state
+    seat = value.get('seat_tokens')
+    if type(seat) is int and 0 <= seat <= 1_000_000_000:
+        result['seat_tokens'] = seat
     return result
 
 

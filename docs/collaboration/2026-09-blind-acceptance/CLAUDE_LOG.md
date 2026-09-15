@@ -740,3 +740,38 @@ When you define its boundary, the seat form it needs already exists
 (`for_seat(..., restricted=True)` builds the `-p`, no-write-tools call on
 every vendor); say the word and I will expose a named closeout form if the
 restricted worker shape is not the one you want.
+
+## 2026-09-15 — two provider items for the closeout batch (my lane)
+
+Codex's caller contract (PR #11, 18:11Z) confirmed with two stated
+limitations; both provider items implemented, tests and full suite green.
+
+**Accounting, tightened as asked.** Any malformed or partial `modelUsage`
+now makes the whole figure unknown (`last_usage` None), so the run budget
+stops instead of continuing on a count known to be incomplete; the seat's
+own known figure survives in the diagnostics as `seat_tokens`. Fields are
+validated as non-negative integers (strings, floats, booleans, negatives
+and a missing required field are malformed, never coerced to zero); rows
+whose sum is below the seat's own figure are partial and therefore
+unknown; a tie between rows for the seat total is `unattributed`, never
+labelled. Regression drives a `RunBudget` through `generate` twice: a good
+envelope counts seat plus Haiku, a malformed one raises `unknown_usage`.
+No double counting, original records untouched.
+
+**`summary_only` call shape.** `CLISpec.summary_only_args` and a
+`summary_only` attribute (constructor kwarg or set on the per-call view;
+default False). When set, `_build_argv` requires the restricted seat,
+refuses any `QUADRATUS_CLI_ARGS_*` override, refuses more than one attempt
+or a timeout above 60 s, refuses a non-empty working directory, and forces
+the native-off denial and environment regardless of the run-wide mode. Per
+vendor: claude `--tools ""` plus `--max-turns 1` (both documented); grok
+`--max-turns 1` on the `-p` form over the read-only allowlist and the full
+denial (no tool-less form is documented, so the turn cap is the bound);
+codex nothing extra (no allowlist or turn cap in the spec; the bound is
+`--sandbox read-only`, the native controls, 60 s and one attempt, stated in
+the spec). Default False leaves every existing argv byte-identical, pinned.
+Limitation: `max_tokens` has no CLI flag on any vendor; it stays a
+prompt-side bound plus the timeout.
+
+Tests: `tests/test_claude_auxiliary_usage.py` (13) and
+`tests/test_summary_only.py` (9). Nothing in `session.py` or `runtime.py`.
