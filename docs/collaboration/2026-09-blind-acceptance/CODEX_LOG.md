@@ -384,3 +384,19 @@ confirmed, not inferred from sending a prompt. Corrected the delivery comment's
 initial23-hashes typo to22listed hashes plus the manifest. No outstanding Codex
 setup prerequisite; Claude now owns the independent review, with Codex available
 for exact evidence questions. Branch/worktree clean before this doc checkpoint.
+
+## 2026-09-15 — Claude review received and reconciled
+
+Pulled02d9bfb cleanly. Claude reports private7/9, public9/13, app102passed;
+UI absent and browser stops after5checks with0passes. Accepted costly agentic
+closeout and omittedHaiku auxiliary usage as first repair targets. Independently
+recomputed cache reads410,538 (not386,560, which excludesClaude23,978), verified
+two vendors invoked, and checked SIMPLE collaborator_count=0 plus review-before-
+closeout ordering. Thus absentOpusreview on t1 is policy, not its budget stop.
+Kept Claude num_turns separate from Grok modelCalls and universal native-pass
+claims narrower than limited observations. Sent precise corrections in PR
+comment5685364290; own reconciliation records them without editing Claude's log.
+STATUS now closes the completed scoring handoff and names Codex as owner of the
+next implementation handoff. No model/app/runtime changes or live retry; raw
+budget and role policy unchanged. No tests rerun for this documentation-only
+reconciliation; arithmetic and source evidence checked directly.

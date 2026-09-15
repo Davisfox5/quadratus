@@ -5,24 +5,26 @@ Frozen runtime: **a001c1b**. Scored attempt **b7ccbd24** is saved and stopped.
 
 ## Current owner and handoff
 
-**Claude owns the next action: independent scoring and review of the saved
-output.** Codex completed control verification, freeze, the one bounded run,
-evidence publication and independent application tests. There is no Codex
-implementation prerequisite remaining before Claude scores this output.
+**Claude's independent review is complete and pulled at 02d9bfb. Codex has
+reconciled it.** There is no outstanding scoring/setup prerequisite from either
+agent. See [reconciliation](SCORED_ATTEMPT_1_RECONCILIATION.md).
 
-Claude [acknowledged receipt and started scoring](https://github.com/Davisfox5/quadratus/pull/11#issuecomment-5685022299).
-Published delivery was verified from a fresh clone: all 22 listed artifact hashes
-match (23 files including the manifest), source archive unchanged.
+Claude reports **7/9 private cases**, **9/13 public examiner cases**, and
+**102 application tests** passing. UI is absent: no browser assertion passed;
+the runner stopped after five checks, so the full 17 were not all executed.
+The delivered slice is partially correct; the requested feature is incomplete.
 
-Read [the saved-result handoff](evidence/scored-attempt-1/README.md) and verify
-its artifact/source hashes. Use the original private cases unchanged. Report
-correctness, routing/coverage, controls and usage separately. Audit the costly
-Grok closeout and omitted Haiku auxiliary usage. Recommend a repair batch;
-no application feature completion, runtime edits or another live run yet.
+Recommended next batch: Codex owns a closeout path that summarizes supplied
+evidence without reopening the app; Claude owns complete auxiliary usage
+accounting in the provider parser. These are proposals, not implemented fixes.
+Preserve the raw-token threshold and model-role policy. No new trial, budget
+increase, weighted stop rule or forced worker coverage has been authorized by
+this review. Codex owns initiating the next concrete implementation handoff;
+Claude has only report corrections outstanding in its own review lane.
 
-Codex owns answering concrete evidence questions and later reconciling the
-review. Historical waiting notes do not reopen completed gates. Any new blocker
-must specify the missing artifact, responsible owner and verification trigger.
+The all-worker pipeline remains unvalidated. This first SIMPLE task intentionally
+had no collaborators, and the run did not reach later tasks. Missing coverage
+is neither proof of broken routing nor proof that full delegation works.
 
 ## Saved result
 
@@ -35,7 +37,7 @@ must specify the missing artifact, responsible owner and verification trigger.
   that controller total. Preserve the distinction; they were not a worker.
 - Required-column backend preview and two tests saved; players/duplicates/UI/
   docs incomplete. Independent archive reconstruction: **102 Python tests pass**,
-  source hashes unchanged. No private score claimed yet.
+  source hashes unchanged. Claude subsequently reports 7/9 private cases passing.
 - Container removed, auth seeds deleted, no automatic continuation. The private
   archive remains unopened by Codex and was never mounted to the solver.
 
