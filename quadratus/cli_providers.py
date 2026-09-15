@@ -503,6 +503,28 @@ class CLISpec:
     write_args: List[str] = field(default_factory=list)
     #: Args sent on every invocation regardless of mode.
     always_args: List[str] = field(default_factory=list)
+    #: Args that switch the vendor's *native* delegation off (the CLI
+    #: spawning its own sub-agents outside :class:`~quadratus.workers.WorkerPool`).
+    #: Sent on every seat and every mode, like ``always_args``, because a
+    #: helper that bypasses the pool bypasses its budget and its record: on
+    #: 2026-09-13 a review call spawned a second Sol that spent 135,105 tokens
+    #: nobody metered. Empty where the vendor offers no switch.
+    native_control_args: List[str] = field(default_factory=list)
+    #: Regular expressions an operator override may not match. An operator
+    #: extra argument that re-enables native delegation is refused before the
+    #: process starts, never quietly appended, because "later flag wins" would
+    #: make the control lie in the report.
+    native_control_conflicts: List[str] = field(default_factory=list)
+    #: Extra denial for the vendor's sub-agent tool on *agentic* seats, applied
+    #: only when the operator asks for it (``QUADRATUS_NATIVE_DELEGATION=off``).
+    #: Restricted seats already carry their denial in ``restricted_args``.
+    #: Senior seats keep their fan-out by default: bounding them is an operator
+    #: decision about spend, recorded per run, not a spec default.
+    native_fanout_off_args: List[str] = field(default_factory=list)
+    #: The flag whose value lists denied tools, where the CLI takes a single
+    #: space-separated list (claude, grok). Repeating the flag is not known to
+    #: merge, so a second denial is folded into the existing value instead.
+    disallowed_tools_flag: str = ""
     #: Flags that turn one call into a bounded, read-only one instead of an
     #: agent loop. Empty means the vendor offers no such mode and every seat
     #: gets the full agent.
@@ -593,6 +615,13 @@ CLAUDE_SPEC = CLISpec(
     # claude degrades gracefully when a tool is missing: measured at one turn
     # with the answer inline, rather than a cancelled turn.
     restricted_args=["--disallowed-tools", "Bash Edit Write NotebookEdit Task"],
+    # With QUADRATUS_NATIVE_DELEGATION=off, senior seats lose Task too. Not
+    # the default: Fable and Opus exploring a tree with sub-agents is what a
+    # brain-trust seat is for, and nine native sub-agents across two Opus
+    # reviews on 2026-09-14 were real work. They were also unmetered spend,
+    # which is why a scored run may switch them off.
+    native_fanout_off_args=["--disallowed-tools", "Task"],
+    disallowed_tools_flag="--disallowed-tools",
     extract=_extract_claude_result,
     # Mandatory, not merely safer: --disallowed-tools is variadic, so a
     # positional prompt after it is swallowed as another tool name and the CLI
@@ -639,6 +668,17 @@ CODEX_SPEC = CLISpec(
     # implied by an empty list.
     restricted_args=["--sandbox", "read-only"],
     always_args=["--skip-git-repo-check"],
+    # Operator directive (BLIND_ACCEPTANCE.md): one Sol parent per unit of
+    # work, no native fan-out. codex-cli 0.154.0 documents the switch
+    # (`codex -c features.multi_agent=false features list` reports false);
+    # subagents inherit the parent model when no override names one, so a
+    # spawned child is a second Sol on the same window. Sent in every mode.
+    # Local configuration proof only until a live probe shows no child runs.
+    native_control_args=["-c", "features.multi_agent=false"],
+    native_control_conflicts=[
+        r"features\.multi_agent\s*=\s*(?!false\b)",
+        r"(?:^|\s)--?(?:enable[-_])?multi[-_]?agent\b",
+    ],
     extract=_extract_codex_result,
     extract_usage=_extract_codex_usage,
     prompt_on_stdin=True,
@@ -738,6 +778,13 @@ GROK_SPEC = CLISpec(
     # was first thought impossible.
     restricted_prompt_flag="-p",
     readonly_args=[],
+    # With QUADRATUS_NATIVE_DELEGATION=off the agentic seat is also told to
+    # deny Agent. UNVERIFIED: the 2026-09-12 experiment found --always-approve
+    # overrides --disallowed-tools for file writes, and nothing has shown
+    # whether Agent is different. Until a live probe says otherwise, treat
+    # this as a request the CLI may ignore and read the native telemetry.
+    native_fanout_off_args=["--disallowed-tools", "Agent"],
+    disallowed_tools_flag="--disallowed-tools",
     # Every *agentic* call, read-only included: without it the turn is
     # cancelled silently the first time a tool is called. A restricted seat
     # must not get it -- there, the write tools are absent rather than denied,
@@ -870,6 +917,53 @@ def _render_history(history: Sequence[Turn]) -> str:
     return "\n".join(lines)
 
 
+class NativeControlOverride(ProviderError):
+    """An operator override tried to re-enable a vendor's native delegation.
+
+    Refused before launch. The alternative -- appending the override and
+    letting the CLI's last-flag-wins decide -- would leave the run report
+    saying delegation was off while the vendor spawned freely.
+    """
+
+
+_NATIVE_DELEGATION_ENV = "QUADRATUS_NATIVE_DELEGATION"
+_NATIVE_DELEGATION_MODES = ("", "vendor-default", "off")
+
+
+def native_delegation_mode(env: Optional[Mapping[str, str]] = None) -> str:
+    """The operator's run-wide stance on vendor-native sub-agents.
+
+    ``vendor-default`` (or unset): each vendor's own switch applies -- codex
+    is always off by directive, claude and grok senior seats keep theirs.
+    ``off``: every agentic seat of every vendor is also told to deny its
+    sub-agent tool. Anything else is refused rather than read as one of the
+    two, for the same reason an unknown need label is refused upstream.
+    """
+    environ = os.environ if env is None else env
+    raw = environ.get(_NATIVE_DELEGATION_ENV, "").strip().lower()
+    if raw not in _NATIVE_DELEGATION_MODES:
+        raise ProviderError(
+            f"{_NATIVE_DELEGATION_ENV}={raw!r} is not one of "
+            f"{', '.join(repr(m) for m in _NATIVE_DELEGATION_MODES if m)}"
+        )
+    return raw or "vendor-default"
+
+
+def _fold_disallowed(argv: List[str], flag: str, extra: List[str]) -> List[str]:
+    """Add ``extra`` denials to an existing ``flag <names>`` pair, or append one.
+
+    The claude and grok flags take one space-separated value; repeating the
+    flag is not documented to merge, so the existing value is extended.
+    """
+    if flag and flag in argv:
+        index = argv.index(flag) + 1
+        if index < len(argv):
+            present = argv[index].split()
+            argv[index] = " ".join(present + [name for name in extra if name not in present])
+            return argv
+    return argv + [flag, " ".join(extra)]
+
+
 class CLIProvider(LLMProvider):
     """Base class for providers that drive a vendor CLI as a subprocess."""
 
@@ -977,6 +1071,18 @@ class CLIProvider(LLMProvider):
         if spec.effort_flag and self.effort:
             argv += [spec.effort_flag, spec.effort_template.format(level=self.effort)]
         argv += list(spec.always_args)
+        # Native delegation off is not a mode: it rides every seat like
+        # always_args, and an operator extra argument may not undo it.
+        argv += list(spec.native_control_args)
+        extra = spec.extra_args()
+        joined = " ".join(extra)
+        for pattern in spec.native_control_conflicts:
+            if re.search(pattern, joined):
+                raise NativeControlOverride(
+                    f"{self.label}: operator arguments {joined!r} would re-enable "
+                    "native delegation, which this seat keeps off. Remove the "
+                    f"override from QUADRATUS_CLI_ARGS_{spec.vendor.upper()}."
+                )
         if self.restricted and spec.restricted_args:
             # A bounded call, not an agent. The permission axis does not apply:
             # readonly_args and write_args both describe what an agent may do
@@ -988,9 +1094,16 @@ class CLIProvider(LLMProvider):
             argv += list(
                 spec.readonly_args if not self._allow_writes else spec.write_args
             )
+        if (native_delegation_mode() == "off" and spec.native_fanout_off_args
+                and not (self.restricted and spec.restricted_args)):
+            # The operator asked every seat to keep its sub-agents off for
+            # this run. Restricted seats already deny theirs above.
+            flag, names = spec.native_fanout_off_args[0], spec.native_fanout_off_args[1:]
+            argv = _fold_disallowed(argv, spec.disallowed_tools_flag or flag, " ".join(names).split())
         # Operator overrides go last, so they can also correct something the
-        # spec got wrong above -- most CLIs let a later flag win.
-        argv += spec.extra_args()
+        # spec got wrong above -- most CLIs let a later flag win. The one
+        # thing they may not correct was refused above.
+        argv += extra
         if self.restricted and spec.restricted_prompt_flag:
             if len(prompt) > MAX_ARGV_PROMPT:
                 # Falling back to a prompt file here would silently drop the

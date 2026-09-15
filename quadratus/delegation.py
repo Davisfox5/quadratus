@@ -8,10 +8,15 @@ input and 6,350 output tokens; the child separately recorded 127,405 and
 7,700. Quadratus metered the parent and nothing else, so 135,105 tokens were
 spent inside an authorised run and were absent from every total it reported.
 
-The fix is not to forbid native delegation -- the harness cannot, it happens
-inside a vendor process it does not control, and pretending otherwise would
-make the report *more* wrong. The fix is to say so. This module gives the
-record three things it lacked:
+Forbidding it is possible for one vendor and unproven for the others. The
+Codex CLI documents a switch, and :mod:`quadratus.cli_providers` now sends
+``features.multi_agent=false`` on every Codex seat and refuses an operator
+override that would undo it; the claude and grok sub-agent tools can be
+denied on every seat with ``QUADRATUS_NATIVE_DELEGATION=off``, though grok's
+``--always-approve`` has been seen to override its denials, so that one is a
+request until a live probe says otherwise. A control can fail, so this record
+stays and must keep saying what actually ran. This module gives the record
+three things it lacked:
 
 **A provenance for every invocation.** :class:`Origin` distinguishes a
 Quadratus-assigned seat, a Quadratus-commissioned worker, a vendor-native
