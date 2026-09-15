@@ -896,3 +896,96 @@ One sample per vendor. Worker coverage untouched by this probe.
 Verdict: the record is accurate and its claims are supported by the
 evidence; two record notes above (harness postdates c3a47c2; inferred, not
 observed, tool absence on grok). No implementation, no new run.
+
+## 2026-09-15 — independent scoring and review of scored attempt 2 (run d9df9b6c)
+
+Archive `source-after.tar.gz` sha256 `5ffac782…3891`; all 31 source hashes
+and all 19 artifact hashes match; extracted fresh; private set unchanged
+(archive hash re-verified, 14 of 14 fixture and script hashes OK). Summary
+JSON in `evidence/scored-attempt-2/claude-independent-scoring.json`.
+
+### Correctness
+
+- **Private set: 0 of 9.** Every case gets `405`: no endpoint exists. The
+  run wrote a per-row validator helper (`_validate_clip_row`, 85 lines)
+  and nine unit tests (138 lines), nothing the contract can observe.
+- **Public examiner: 0 of 13**; browser not run (no UI, no endpoint).
+- **Application suite: 111 passed** (102 existing plus 9 new). Regression
+  preservation holds, matching Codex's container run.
+- Verdict: **incomplete, unobservable at the contract level.** Attempt 1
+  delivered an endpoint scoring 7 of 9; attempt 2 delivered less, because
+  the decomposition chose a lower-level first slice and then under-sized
+  it. The engine repairs were never reached: no closeout ran, and the
+  accounting fix only had the orchestrator call to count.
+
+### Scope sizing (finding 1)
+
+The orchestrator declared 100 lines for "a validator plus tests covering
+ten named cases" and the lead delivered 223 within the two permitted
+paths, split 85 code and 138 tests. The stop is the rule working as
+written; the estimate was the error. Ten named test scenarios in the
+task's own text cannot fit a 100-line budget with the function they test.
+Two points follow:
+
+- The stop message ("the shape of a task expanding into the whole
+  feature") asserts a cause the evidence does not show; the work stayed
+  inside the slice. The message should state the measurement and leave
+  the cause to the record.
+- The lead was told "if the work genuinely needs substantially more, say
+  so and stop", and did not. That is the lead ignoring a bound, and it
+  cost 379,377 tokens before the harness caught it. A cheaper catch is a
+  size check on the lead's own PATCH text before it lands, but that is a
+  larger change than this batch.
+
+### The contradictory signature (finding 2)
+
+The task description revises itself mid-text ("`len(cols)`? No — …
+instead give the function signature `_validate_clip_row(project, cols,
+width, row)`") while `intended_result` and the acceptance list still name
+`(project, cols, row)`. The lead implemented the four-argument form the
+prose settled on; a literal reading of acceptance would fail it. Cause:
+the orchestrator thought aloud inside a task description and emitted SCOPE
+from its first draft. Smallest repair: the decomposition prompt requires
+the description to be final text (no self-corrections), and a harness
+check that any code signature quoted in acceptance appears verbatim in
+the description, failing into the existing one-correction round.
+
+### Usage and worker evidence (finding 3)
+
+- Fable: 66 + 60,660 + 23,500 + 2,801 = 87,027 input, 2,922 + 14 = 2,936
+  output, 89,963 total with the Haiku row counted exactly once. Verified
+  against `vendor-usage-extract.json`; my parser's rule gives the same.
+- Grok lead: 85,448 + 281,984 = 367,432 input, 11,945 output, 379,377
+  total, nine model calls, `end_turn`; cache reads are 74 percent of it.
+  Same cost shape as attempt 1's lead: under this counting a Grok lead
+  step costs 300 to 400k, and the 500k threshold permits about one. Noted,
+  not re-argued; the policy question stands as recorded earlier.
+- No workers, no OpenAI seat, no Opus review: SIMPLE task, zero
+  collaborators, stopped before any second task. Worker coverage remains
+  unvalidated by this run too. Controls: Claude `subagent_stats.spawned 0`,
+  no grok child within its observability, store untouched, budget not
+  crossed, wall 336 s, ledger row `PartialWorkStopped` with
+  `provider_outcome ok` and `post_return_failure true`, usage retained.
+
+### Post-run fix review (finding 4)
+
+`runtime.py` now keeps `safe_diagnostics(...)` on successful rows instead
+of `{}`; one-line change, correct, and the regression pins the Fable row's
+`auxiliary_models`/`auxiliary_tokens`, the unchanged 89,963 total, one
+ledger event, and persistence. Approved. The frozen attempt-2 evidence
+correctly still shows `diagnostics: {}` for that row.
+
+### Smallest repair batch (recommended, not implemented)
+
+1. Decomposition prompt: description is final text; acceptance must quote
+   the description's signatures verbatim; estimate code and test lines
+   separately (Codex, `session.py`/prompt text, plus a scope lint).
+2. Scope stop message: measurement only, no asserted cause; report the
+   code/test split (Codex, `scope.py`).
+3. Runtime provenance fix: approved as pushed (no further work).
+4. Policy for Davis, unchanged from before: Grok lead cost per step versus
+   the 500k threshold, and whether test lines count fully against a
+   declared code estimate.
+
+No application feature, private-case edit, role or budget change, or
+model run by this review.
