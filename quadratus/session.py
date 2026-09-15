@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field, replace
 from functools import wraps
 from pathlib import Path
@@ -32,7 +33,14 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 from .artifacts import ArtifactStore
 from .codebase_map import CodebaseMap
-from .delegation import DelegationLedger, InvocationEvent, Origin, invocation, invocation_context
+from .delegation import (
+    DelegationLedger,
+    InvocationEvent,
+    Origin,
+    capture_invocations,
+    invocation,
+    invocation_context,
+)
 from .memory import PersistentMemory, TaskMemory, TaskSummary
 from .providers import PartialWorkSuspected
 from .registry import peers_for, resolve
@@ -302,6 +310,30 @@ def _invocation_role(role):
     return decorate
 
 
+def _has_blocking_finding(text: str) -> bool:
+    """Only a finding's explicit prefix controls the recheck loop."""
+    return any(re.match(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?BLOCKING\s*:",
+                        line.replace("**", ""), re.IGNORECASE)
+               for line in text.splitlines())
+
+
+def _resolved_verdict(text: str) -> bool:
+    """Accept one standalone boundary verdict, rejecting conflicting markers.
+
+    The requested response remains exactly RESOLVED or UNRESOLVED: <finding>.
+    Explanations around a boundary verdict are tolerated, but a prefix match,
+    duplicate verdict, or explicit unresolved finding cannot clear a review.
+    This parses the declared verdict; it does not validate explanatory prose.
+    """
+    lines = [line.strip().upper() for line in text.splitlines() if line.strip()]
+    if not lines or lines.count("RESOLVED") != 1:
+        return False
+    if lines[0] != "RESOLVED" and lines[-1] != "RESOLVED":
+        return False
+    return not (_has_blocking_finding(text)
+                or re.search(r"\bUNRESOLVED\b|\bNOT\s+RESOLVED\b", text, re.IGNORECASE))
+
+
 class Session:
     """A run: one orchestrator, one brain trust, many tasks."""
 
@@ -357,13 +389,20 @@ class Session:
             if self.config.default_scope is not None and spec.scope is not self.config.default_scope:
                 prompt += "\nOperator limits (also binding):\n" + self.config.default_scope.render()
         try:
-            with invocation(**context):
+            with capture_invocations(), invocation(**context):
                 if self.project:
                     reply = self.invoke(key, prompt, allow_writes=bool(allow_writes and self.config.allow_writes))
                 elif allow_writes:
                     reply = self.invoke(key, prompt, allow_writes=True)
                 else:
                     reply = self.invoke(key, prompt)
+                if allow_writes and spec is not None and self._task_memory is not None:
+                    report = self._assess_scope(spec, self._task_memory, self._task_before)
+                    if spec.scope is not None and report is None:
+                        raise PartialWorkStopped("Scope could not be measured; edits preserved for inspection.")
+                    if report and (report.blocking or report.oversized):
+                        raise PartialWorkStopped("Task exceeded its declared scope; work preserved. " + report.render(),
+                                                 partial=self._inspect_partial_edits(self._task_before))
         except BaseException:
             if self._task_memory is not None:
                 try:
@@ -372,13 +411,6 @@ class Session:
                 except Exception:
                     log.debug("could not preserve interrupted prompt", exc_info=True)
             raise
-        if allow_writes and spec is not None and self._task_memory is not None:
-            report = self._assess_scope(spec, self._task_memory, self._task_before)
-            if spec.scope is not None and report is None:
-                raise PartialWorkStopped("Scope could not be measured; edits preserved for inspection.")
-            if report and (report.blocking or report.oversized):
-                raise PartialWorkStopped("Task exceeded its declared scope; work preserved. " + report.render(),
-                                         partial=self._inspect_partial_edits(self._task_before))
         self._active_call = {}
         return reply
 
@@ -898,7 +930,7 @@ class Session:
             task.record("assistant", revision)
             task.keep(revision, kind="revision")
 
-            blocking = [(p, n) for p, n in notes if "BLOCKING" in n.upper()]
+            blocking = [(p, n) for p, n in notes if _has_blocking_finding(n)]
             cycles = 1
             unresolved = self._recheck_blocking(
                 spec, blocking, revision, task, labels=labels
@@ -1416,7 +1448,7 @@ class Session:
             )
             shown = (labels or {}).get(peer, peer)
             task.record("assistant", f"[{shown} recheck] {verdict}")
-            if not verdict.strip().upper().startswith("RESOLVED"):
+            if not _resolved_verdict(verdict):
                 unresolved.append((peer, verdict.strip()))
         return unresolved
 

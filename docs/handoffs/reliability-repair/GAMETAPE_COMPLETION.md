@@ -1,5 +1,14 @@
 # GameTape bulk-tagging completion
 
+**September 15 review qualification:** independent review reproduced the recorded
+application checks and identified additional repair work. The 33,413,777-token
+reconciliation below assumes Sol child usage is not included in its parent;
+the published records do not establish that assumption. Read the current
+[review reconciliation](../../collaboration/2026-09-review-repairs/REVIEW_RECONCILIATION.md)
+and [joint repair work log](../../collaboration/2026-09-review-repairs/CODEX_LOG.md).
+The remainder is the historical completion report, not a claim that the new
+repair batch or all-worker acceptance is complete.
+
 **GameTape bulk tagging is accepted and checkpointed at `832e50c`.** The final Quadratus run stopped on a naturally selected restricted Grok worker; that failure remains recorded. This is an accepted application deliverable, not an all-worker pipeline success.
 
 ## Application behavior

@@ -55,6 +55,47 @@ __all__ = [
 
 
 invocation_context = ContextVar("quadratus_invocation", default=None)
+_pending_invocations = ContextVar("pending_invocations", default=None)
+
+
+@contextmanager
+def capture_invocations():
+    """Finalize calls after the enclosing caller's acceptance checks.
+
+    Fleet also uses this boundary on its own. Nested Fleet calls join the
+    session boundary, so a successful provider response followed by a scope
+    stop is persisted once, with usage and both outcomes intact.
+    """
+    if _pending_invocations.get() is not None:
+        yield
+        return
+    pending = []
+    token = _pending_invocations.set(pending)
+    try:
+        yield
+    except BaseException as exc:
+        if pending and pending[-1][1].outcome == "ok":
+            event = pending[-1][1]
+            event.post_return_failure = True
+            event.outcome = type(exc).__name__
+            event.detail = str(exc)[:200]
+        raise
+    finally:
+        _pending_invocations.reset(token)
+        for ledger, event in pending:
+            try:
+                ledger.record(event)
+            except Exception:
+                log.debug("invocation persistence failed", exc_info=True)
+
+
+def record_invocation(ledger, event):
+    """Queue an event for its acceptance boundary, or record a direct call."""
+    pending = _pending_invocations.get()
+    if pending is None:
+        ledger.record(event)
+    else:
+        pending.append((ledger, event))
 
 
 @contextmanager
@@ -124,6 +165,8 @@ class InvocationEvent:
     #: patch, an unparseable answer) rather than in transport. The two cost
     #: different things and the old ledger could not tell them apart.
     post_return_failure: bool = False
+    #: Transport result before patch/scope acceptance. Older records lack it.
+    provider_outcome: Optional[str] = None
     #: Vendor session id, where one is known. Used to de-duplicate a child
     #: that several sources report.
     session_id: Optional[str] = None
@@ -156,6 +199,8 @@ class InvocationEvent:
             bits.append(f"attempt {self.attempt}")
         if self.post_return_failure:
             bits.append("failed after return")
+            if self.provider_outcome:
+                bits.append(f"provider: {self.provider_outcome}")
         if self.detail:
             bits.append(self.detail[:120])
         return " | ".join(bits)

@@ -56,9 +56,9 @@ class ScopeReport:
 
     ``blocking`` is deliberately narrow. Out-of-scope *paths* block: the
     operator named where edits may land, and a write elsewhere is the grant
-    being exceeded. Everything else -- size overrun, an unmet acceptance
-    criterion -- is reported to the lead and carried into the close-out, where
-    a person decides.
+    being exceeded. ``oversized`` is a separate size-budget result. The normal
+    editing dispatcher stops on either result and preserves the partial work.
+    Acceptance criteria are still checked by the task's reviews and gates.
     """
 
     within_scope: bool
@@ -80,7 +80,7 @@ class ScopeReport:
         )
 
     def render(self) -> str:
-        if self.within_scope and not self.notes:
+        if self.within_scope and not self.oversized and not self.notes:
             return (
                 f"Scope check passed: {len(self.changed)} file(s), "
                 f"{self.changed_lines} changed line(s)."

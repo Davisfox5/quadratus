@@ -23,9 +23,9 @@ Codex writes `CODEX_LOG.md`. Read the other log before extending scope.
 
 | Owner | Reserved work | Paths |
 | --- | --- | --- |
-| Codex, active | Scope messages and post-return failure telemetry; conservative review verdict parsing | `quadratus/scope.py`, `quadratus/session.py`, `quadratus/runtime.py`, `quadratus/delegation.py`, new focused test files |
+| Codex, ready for peer review | Scope messages and post-return failure telemetry; conservative review verdict parsing | `quadratus/scope.py`, `quadratus/session.py`, `quadratus/runtime.py`, `quadratus/delegation.py`, new focused test files; see release in `CODEX_LOG.md` |
 | Claude, available to claim | GameTape focus after preview/apply/refresh, keyboard scroller, cross-project status, missing event/race tests, portable browser runner with independent fixtures | GameTape `static/`, `templates/`, `tests/`, `docs/`; browser support files as needed |
-| Claude, available to claim | Restricted-worker capability design and Grok diagnostic metadata; implementation outside Codex's reserved files | Quadratus `quadratus/task_kinds.py`, `quadratus/cli_providers.py`, new tests; propose session integration in `CLAUDE_LOG.md` before touching `session.py` |
+| Claude, available to claim | Restricted-worker capability matching, safe recovery and Grok diagnostic metadata | Quadratus `quadratus/task_kinds.py`, `quadratus/cli_providers.py`, new tests; Codex's first slice releases session/runtime/delegation files for a recorded claim in `CLAUDE_LOG.md` |
 | Codex, after first checkpoint | Accounting labels and evidence qualifications; integration of agreed routing/recovery changes | Current repair documentation; historical evidence remains identifiable |
 | Deferred | Video-operation lock redesign | GameTape `app.py`; no lock removal in this batch |
 

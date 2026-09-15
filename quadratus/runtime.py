@@ -50,13 +50,19 @@ import re
 import threading
 import time
 import uuid
-from contextvars import ContextVar
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from .config import Settings
-from .delegation import DelegationLedger, InvocationEvent, Origin, invocation_context
+from .delegation import (
+    DelegationLedger,
+    InvocationEvent,
+    Origin,
+    capture_invocations,
+    invocation_context,
+    record_invocation,
+)
 from .latest import alias_for, resolution_source
 from .project import Project
 from .providers import LLMProvider, ProviderError, build_provider
@@ -114,8 +120,6 @@ _EXHAUSTION_MARKERS = (
     "upgrade to continue",
 )
 
-
-_pending_invocations = ContextVar("pending_invocations", default=None)
 
 class Fleet:
     """The vendor CLIs, addressed by roster key.
@@ -280,23 +284,8 @@ class Fleet:
 
     # -- invocation ----------------------------------------------------------
     def invoke(self, model_key, prompt, *, system=None, allow_writes=False):
-        pending = []
-        token = _pending_invocations.set(pending)
-        try:
+        with capture_invocations():
             return self._invoke(model_key, prompt, system=system, allow_writes=allow_writes)
-        except BaseException as exc:
-            if pending and pending[-1].outcome == "ok":
-                pending[-1].post_return_failure = True
-                pending[-1].outcome = type(exc).__name__
-                pending[-1].detail = str(exc)[:200]
-            raise
-        finally:
-            _pending_invocations.reset(token)
-            for event in pending:
-                try:
-                    self.delegation_ledger.record(event)
-                except Exception:
-                    log.debug("invocation persistence failed", exc_info=True)
 
     def _invoke(self, model_key: str, prompt: str, *, system: Optional[str] = None,
                allow_writes: bool = False) -> str:
@@ -408,6 +397,7 @@ class Fleet:
                 selected=True,
                 invoked=invoked,
                 outcome=outcome,
+                provider_outcome=outcome,
                 seconds=seconds,
                 # Absent stays absent: None is unknown, and unknown is not zero.
                 input_tokens=usage.get("input_tokens"),
@@ -417,11 +407,7 @@ class Fleet:
                 post_return_failure=post_return_failure,
                 detail=detail,
             )
-            pending = _pending_invocations.get()
-            if pending is None:
-                self.delegation_ledger.record(event)
-            else:
-                pending.append(event)
+            record_invocation(self.delegation_ledger, event)
         except Exception:  # noqa: BLE001 -- accounting never fails a run
             log.debug("could not record invocation for %s", key, exc_info=True)
 
