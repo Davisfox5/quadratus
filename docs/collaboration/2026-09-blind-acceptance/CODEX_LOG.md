@@ -344,3 +344,28 @@ provided. The source/runtime mounts are exactly the frozen sets. Removed
 obsolete current-state review gates from README/IMPLEMENTATION; STATUS is
 now explicitly the single owner/trigger record, with append-only history
 preserved. No plan to automatically resume a partial attempt.
+
+Scored attempt b7ccbd24 stopped cleanly after 438.94s at reported_token_threshold.
+Three attempts: Fable planning65,565; Grok lead290,408; Grok closeout258,413.
+Controller total614,386 (114,386 over the post-return500k threshold). No fourth
+attempt; unknown count0; no controlled worker or native child observed. The
+last invocation correctly records provider_outcome ok, post_return_failure true,
+outcome RunBudgetExceeded. Preserved its response, source and private vendor
+sessions/envelopes; supervisor exit2 means incomplete, not a crashed cleanup.
+The container and credential seed are removed. No live continuation.
+
+Saved source-only archive has31 files, SHA256517fb2ff983b68c26a49e3ec423b7215425ea9400842734479c1d7469c84d7f9.
+Original GameTape checkout unchanged. Independent new extraction, all31 hashes
+verified, offline/no-auth pytest: **102 passed2.07s**, source unchanged. Frontend
+files unchanged, so no redundant browser run. Full feature not delivered: only
+required-column endpoint and2 tests; players/ClipID/duplicates/UI/docs missing.
+Scope132lines/declared100 is below existing1.5x tolerance, not a scope-stop bug.
+
+Published original ledgers/results plus closeout prompt/response and sanitized
+vendor usage fields. Found2,817Haiku auxiliary tokens in Claude's modelUsage
+outside614,386controller total; keep separate from controlled workers and do
+not silently rewrite original evidence. Grok closeout re-read the app over8
+vendor model calls; the reason for this cost is a concrete Claude audit target.
+Raw envelopes/sessions remain private with hashes; no auth exported. Private
+examiner archive still unopened by Codex. Claude now owns independent private
+scoring and control/usage review of this saved output, no missing local setup.
