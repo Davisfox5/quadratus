@@ -77,3 +77,6 @@ Independent Codex GameTape results and mutation details are saved in `evidence/`
 The session integration patch is a historical review snapshot, superseded by
 `15ade71`; do not apply it again. Current status and any remaining peer findings
 are at the end of each agent's log.
+
+The subsequent joint implementation is on `codex/blind-worker-acceptance`;
+start at [its coordination page](../2026-09-blind-acceptance/README.md).

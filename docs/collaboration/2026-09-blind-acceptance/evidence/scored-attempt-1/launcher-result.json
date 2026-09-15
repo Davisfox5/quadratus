@@ -1,0 +1,5 @@
+{
+  "completed": false,
+  "error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+  "run_dir": "/work/.quadratus/runs/20260915T172415Z-b7ccbd24"
+}

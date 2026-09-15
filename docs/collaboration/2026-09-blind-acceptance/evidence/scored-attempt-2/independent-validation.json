@@ -1,0 +1,14 @@
+{
+  "supervisor": {
+    "outcome": "success",
+    "exit_code": 0,
+    "image_id": "sha256:d1f99331a1639f5ff364faf9e4c027943613fadba733d452191296b873a390e2",
+    "container_name": "quadratus-blind-0276307b59994bb2b6bb616385c18b10"
+  },
+  "command": "python -m pytest -q",
+  "network": false,
+  "credentials": false,
+  "source_hashes_match_before": true,
+  "source_hashes_unchanged_after": true,
+  "output": "........................................................................ [ 64%]\n.......................................                                  [100%]\n111 passed in 2.07s\n"
+}

@@ -8,10 +8,19 @@ input and 6,350 output tokens; the child separately recorded 127,405 and
 7,700. Quadratus metered the parent and nothing else, so 135,105 tokens were
 spent inside an authorised run and were absent from every total it reported.
 
-The fix is not to forbid native delegation -- the harness cannot, it happens
-inside a vendor process it does not control, and pretending otherwise would
-make the report *more* wrong. The fix is to say so. This module gives the
-record three things it lacked:
+Two fixes, in order. Where the vendor offers a switch, the harness now throws
+it: every Codex call carries ``--disable multi_agent`` (and its successor
+switch) from ``cli_providers.CODEX_SPEC.control_args``, and an operator
+override that would undo it is refused rather than out-ordered. OpenAI helpers
+are intended to pass through :class:`WorkerPool`; runtime enforcement still
+needs the live probe, and native observations must remain visible. An earlier version
+of this text said the harness could not forbid native delegation at all; that
+was too broad, and is the second design error this file has had to retract.
+It remains true for the other two vendors' senior seats -- Claude's ``Task``
+and Grok's ``Agent`` are denied only on restricted seats -- and for a control
+that fails on codex, where a child would still run inside a vendor process.
+For those the record is the check, and pretending otherwise would make the
+report *more* wrong. This module gives that record three things it lacked:
 
 **A provenance for every invocation.** :class:`Origin` distinguishes a
 Quadratus-assigned seat, a Quadratus-commissioned worker, a vendor-native
@@ -231,6 +240,33 @@ def safe_diagnostics(value) -> dict:
         result['attempted_tools'] = list(dict.fromkeys(
             name for name in names[:128] if isinstance(name, str) and atom.fullmatch(name)
         ))[:32]
+    # Fan-out tools the CLI itself refused under the run-wide off mode: the
+    # control holding, recorded by name only, same filter as attempted_tools.
+    denied = value.get('denied_tools')
+    if isinstance(denied, list):
+        held = list(dict.fromkeys(
+            name for name in denied[:128] if isinstance(name, str) and atom.fullmatch(name)
+        ))[:32]
+        if held:
+            result['denied_tools'] = held
+    # Usage provenance from the claude envelope: model names and one integer,
+    # so a run's reported total can be traced to the rows it was built from.
+    models = value.get('auxiliary_models')
+    if isinstance(models, list):
+        named = list(dict.fromkeys(
+            name for name in models[:32] if isinstance(name, str) and atom.fullmatch(name)
+        ))[:16]
+        if named:
+            result['auxiliary_models'] = named
+    aux = value.get('auxiliary_tokens')
+    if type(aux) is int and 0 <= aux <= 1_000_000_000:
+        result['auxiliary_tokens'] = aux
+    state = value.get('auxiliary_usage')
+    if state in ('unknown', 'unattributed'):
+        result['auxiliary_usage'] = state
+    seat = value.get('seat_tokens')
+    if type(seat) is int and 0 <= seat <= 1_000_000_000:
+        result['seat_tokens'] = seat
     return result
 
 

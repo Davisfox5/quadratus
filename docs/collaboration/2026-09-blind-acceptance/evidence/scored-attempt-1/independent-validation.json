@@ -1,0 +1,15 @@
+{
+  "command": "python -m pytest -q",
+  "exit_code": 0,
+  "stdout": "........................................................................ [ 70%]\n..............................                                           [100%]\n102 passed in 2.07s\n",
+  "stderr": "",
+  "network": false,
+  "credentials": false,
+  "supervisor": {
+    "outcome": "success",
+    "exit_code": 0,
+    "image_id": "sha256:d1f99331a1639f5ff364faf9e4c027943613fadba733d452191296b873a390e2",
+    "container_name": "quadratus-blind-9b3d8658f1fd481a871f914704861d5f"
+  },
+  "source_hashes_unchanged": true
+}

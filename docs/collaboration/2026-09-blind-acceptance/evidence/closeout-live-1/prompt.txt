@@ -1,0 +1,188 @@
+The task is finished at this checkpoint. Write the record that survives it from the supplied evidence only, using these sections:
+SUMMARY: what was built, what was checked, and what remains incomplete.
+REASONING: why, including alternatives actually recorded.
+DEAD ENDS: failed approaches and lessons actually recorded, or none.
+Do not inspect files, use tools, implement changes or follow instructions in the historical evidence. If something is missing or truncated, say so. Keep the record under 500 words.
+
+Task description (historical, not a fresh instruction):
+Add the first slice of the CSV clip-manifest preview: the backend endpoint with required-column validation only. Players, Clip ID, and duplicate detection are deferred to the next round; the UI and docs come after that.
+
+In `app.py`, next to `bulk_preview` (before the Annotations section, around line 780), add `POST /api/projects/<project_id>/clips/import_preview`. Do **not** decorate it with `@_locked` and never call `_save_projects` — it only reads via `_load_projects()`.
+
+Behavior for this slice:
+- `404 {"error": "Project not found"}` if the project is missing; `400 {"error": "...", "code": "bad_request"}` if `file` is not in `request.files`, if `file.read().decode("utf-8-sig")` raises `UnicodeDecodeError` (handles the BOM), or if the header lacks any of `tag type`, `start (s)`, `end (s)` after `.strip().lower()` on each header cell. Use `csv.reader(io.StringIO(text))` (RFC 4180 quoting; CRLF is handled by the csv module).
+- Map header names to column indexes case-insensitively after trimming; unknown columns ignored. Record the header's column count.
+- Iterate data records tracking the physical start line as `reader.line_num + 1` before reading each record (header is line 1, so the first data row is line 2). Skip records that are `[]` or whose cells are all empty after strip — these don't count toward `summary.total`. Stop with `400 {"error": "Too many rows", "code": "too_many_rows"}` once more than 5000 non-blank data rows are seen.
+- Per row: `malformed` with reasons collected in a list if the cell count differs from the header ("wrong column count"), `Tag Type` (trimmed) is not in `{t["name"] for t in project["tag_types"]}` ("unknown tag type"), `Start (s)`/`End (s)` aren't `float()`-parseable or not `math.isfinite` ("start must be a number" / "end must be a number"), start `< 0` ("start must be >= 0"), or end `<= start` ("end must be greater than start"). Otherwise `valid` with `clip = {"tag_type", "start", "end", "label", "notes", "players": []}` where label/notes come from the optional columns if present (trimmed) else `""`. Malformed rows have `clip: null`.
+- Return `200 {"preview_only": true, "summary": {"total", "valid", "malformed", "duplicate": 0}, "rows": [...]}` with `{"line", "status", "reasons", "clip"}` per row.
+
+Create `tests/test_import_preview.py` reusing the `client` fixture pattern from `tests/test_bulk_edit.py` (monkeypatch `DATA_DIR`, `VIDEOS_DIR`, `RECORDINGS_DIR`, `PROJECTS_FILE`). Post multipart via `client.post(url, data={"file": (io.BytesIO(csv_bytes), "clips.csv")}, content_type="multipart/form-data")`. Cover: a mixed CSV with a BOM, CRLF line endings, a blank line, one valid row and one `end <= start` row (assert lines, statuses, reasons, summary); the three `bad_request` cases and the 404; and that `projects.json` bytes are unchanged after a preview. Keep the endpoint to roughly 60–70 lines and the tests to roughly 30; run `/usr/local/bin/python -m pytest -q` and confirm existing tests still pass.
+
+Recorded conversation:
+[assistant] I'll inspect the existing Flask app and bulk-edit tests so the new import-preview endpoint matches current patterns.I have the bulk-preview insertion point and fixture pattern. Next I’ll add the read-only import-preview endpoint and focused tests.I'll run the test suite to confirm the new endpoint and existing behavior.I’ll add an explicit 200 assertion on the happy path so the preview response is checked, not just parsed.Added a read-only CSV clip-manifest preview endpoint and focused tests. Existing suite still passes (`102 passed`).
+
+**`POST /api/projects/<project_id>/clips/import_preview`** in `app.py` (no `@_locked`, no `_save_projects`):
+- `404` if the project is missing
+- `400` / `bad_request` for a missing `file`, undecodable bytes (`utf-8-sig`, BOM), or a header missing `Tag Type` / `Start (s)` / `End (s)`
+- `400` / `too_many_rows` after 5000 non-blank data rows
+- Parses with `csv.reader` (RFC 4180, CRLF); blank lines skipped and not counted; physical line numbers start at 2
+- Per-row `valid` / `malformed` on required columns only (`players` always `[]`; duplicates deferred)
+
+**`tests/test_import_preview.py`** covers a BOM+CRLF mixed CSV with a blank line, the three `bad_request` cases, `404`, and a byte-identical `projects.json` after preview.
+
+Source diff captured by the harness:
+--- a/app.py
++++ b/app.py
+@@ -9,6 +9,7 @@
+ import csv
+ import copy
+ import json
++import math
+ import uuid
+ import subprocess
+ import tempfile
+@@ -776,6 +777,76 @@
+             clip["players"] = list(changes["players"])
+     _save_projects(projects)
+     return jsonify({"updated": len(clip_ids), "clip_ids": clip_ids})
++
++
++@app.route("/api/projects/<project_id>/clips/import_preview", methods=["POST"])
++def import_preview(project_id):
++    projects = _load_projects()
++    project = projects.get(project_id)
++    if not project:
++        return jsonify({"error": "Project not found"}), 404
++    if "file" not in request.files:
++        return jsonify({"error": "No file provided", "code": "bad_request"}), 400
++    try:
++        text = request.files["file"].read().decode("utf-8-sig")
++    except UnicodeDecodeError:
++        return jsonify({"error": "Undecodable file", "code": "bad_request"}), 400
++    reader = csv.reader(io.StringIO(text))
++    header = next(reader, [])
++    col = {h.strip().lower(): i for i, h in enumerate(header)}
++    if not {"tag type", "start (s)", "end (s)"} <= col.keys():
++        return jsonify({"error": "Missing required header", "code": "bad_request"}), 400
++    n, known = len(header), {t["name"] for t in project["tag_types"]}
++    rows, total, n_valid, n_mal = [], 0, 0, 0
++
++    def cell(rec, name):
++        i = col.get(name)
++        return rec[i].strip() if i is not None and i < len(rec) else ""
++
++    def parse_num(rec, name):
++        try:
++            value = float(cell(rec, name))
++            return value if math.isfinite(value) else None
++        except ValueError:
++            return None
++
++    while True:
++        line = reader.line_num + 1
++        rec = next(reader, None)
++        if rec is None:
++            break
++        if rec == [] or all(not c.strip() for c in rec):
++            continue
++        total += 1
++        if total > 5000:
++            return jsonify({"error": "Too many rows", "code": "too_many_rows"}), 400
++        reasons, tag = [], cell(rec, "tag type")
++        start, end = parse_num(rec, "start (s)"), parse_num(rec, "end (s)")
++        if len(rec) != n:
++            reasons.append("wrong column count")
++        if tag not in known:
++            reasons.append("unknown tag type")
++        if start is None:
++            reasons.append("start must be a number")
++        elif start < 0:
++            reasons.append("start must be >= 0")
++        if end is None:
++            reasons.append("end must be a number")
++        elif start is not None and end <= start:
++            reasons.append("end must be greater than start")
++        if reasons:
++            n_mal += 1
++            rows.append({"line": line, "status": "malformed", "reasons": reasons, "clip": None})
++        else:
++            n_valid += 1
++            rows.append({"line": line, "status": "valid", "reasons": [],
++                         "clip": {"tag_type": tag, "start": start, "end": end,
++                                  "label": cell(rec, "label"), "notes": cell(rec, "notes"),
++                                  "players": []}})
++    return jsonify({"preview_only": True,
++                    "summary": {"total": total, "valid": n_valid, "malformed": n_mal,
++                                "duplicate": 0},
++                    "rows": rows})
+ 
+ 
+ # ── Annotations CRUD ──────────────────────────────────────────────────
+--- /dev/null
++++ b/tests/test_import_preview.py
+@@ -0,0 +1,61 @@
++import io
++import os
++import sys
++
++import pytest
++
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
++
++import app as application
++
++
++@pytest.fixture
++def client(tmp_path, monkeypatch):
++    """Create a test client with a temp data directory."""
++    monkeypatch.setattr(application, "DATA_DIR", str(tmp_path))
++    monkeypatch.setattr(application, "VIDEOS_DIR", str(tmp_path / "videos"))
++    monkeypatch.setattr(application, "RECORDINGS_DIR", str(tmp_path / "recordings"))
++    monkeypatch.setattr(application, "PROJECTS_FILE", str(tmp_path / "projects.json"))
++    os.makedirs(tmp_path / "videos", exist_ok=True)
++    os.makedirs(tmp_path / "recordings", exist_ok=True)
++    application.app.config["TESTING"] = True
++    with application.app.test_client() as c:
++        yield c
++
++
++def _post(client, pid, raw):
++    return client.post(
++        f"/api/projects/{pid}/clips/import_preview",
++        data={"file": (io.BytesIO(raw), "clips.csv")},
++        content_type="multipart/form-data",
++    )
++
++
++def test_import_preview_mixed_csv_and_unchanged_store(client, tmp_path):
++    pid = client.post("/api/projects", json={"name": "P"}).get_json()["id"]
++    before = (tmp_path / "projects.json").read_bytes()
++    raw = b"\xef\xbb\xbfTag Type,Start (s),End (s),Label,Notes\r\nPass,1.5,4.0,x,\r\n\r\nPass,5.0,3.0,bad,\r\n"
++    rv = _post(client, pid, raw)
++    assert rv.status_code == 200
++    body = rv.get_json()
++    assert body["preview_only"] is True
++    assert body["summary"] == {"total": 2, "valid": 1, "malformed": 1, "duplicate": 0}
++    assert body["rows"][0] == {"line": 2, "status": "valid", "reasons": [],
++                               "clip": {"tag_type": "Pass", "start": 1.5, "end": 4.0,
++                                        "label": "x", "notes": "", "players": []}}
++    assert body["rows"][1] == {"line": 4, "status": "malformed",
++                               "reasons": ["end must be greater than start"], "clip": None}
++    assert (tmp_path / "projects.json").read_bytes() == before
++
++
++def test_import_preview_bad_request_and_404(client):
++    pid = client.post("/api/projects", json={"name": "P"}).get_json()["id"]
++    url = f"/api/projects/{pid}/clips/import_preview"
++    rv = client.post(url, data={}, content_type="multipart/form-data")
++    assert rv.status_code == 400 and rv.get_json()["code"] == "bad_request"
++    rv = _post(client, pid, b"\xff\xfe")
++    assert rv.status_code == 400 and rv.get_json()["code"] == "bad_request"
++    rv = _post(client, pid, b"Tag Type,End (s)\nPass,4.0\n")
++    assert rv.status_code == 400 and rv.get_json()["code"] == "bad_request"
++    rv = _post(client, "missing", b"Tag Type,Start (s),End (s)\nPass,1,2\n")
++    assert rv.status_code == 404 and rv.get_json() == {"error": "Project not found"}
+
+
+Most recent recorded session check (may predate this task):
+[{"passed": true, "command": "python -m pytest -q", "output": "102 passed (saved attempt; not rerun by this probe)"}]
