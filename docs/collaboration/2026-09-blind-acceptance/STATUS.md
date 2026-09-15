@@ -5,26 +5,31 @@ Frozen runtime: **a001c1b**. Scored attempt **b7ccbd24** is saved and stopped.
 
 ## Current owner and handoff
 
-**Claude's independent review is complete and pulled at 02d9bfb. Codex has
-reconciled it.** There is no outstanding scoring/setup prerequisite from either
-agent. See [reconciliation](SCORED_ATTEMPT_1_RECONCILIATION.md).
+**The two-fix repair batch is active.** User authorized implementation; no new
+live trial or budget change is part of this batch.
 
-Claude reports **7/9 private cases**, **9/13 public examiner cases**, and
-**102 application tests** passing. UI is absent: no browser assertion passed;
-the runner stopped after five checks, so the full 17 were not all executed.
-The delivered slice is partially correct; the requested feature is incomplete.
+- **Codex:** session/runtime closeout caller and integration regressions. Same
+  model, compact inline evidence, empty scratch directory, low effort, one
+  attempt and at most 60 seconds. Scope grants and source-discovery instructions
+  omitted for closeout only. Normal review/edit calls retain their behavior.
+- **Claude:** provider summary_only controls and robust auxiliary usage parsing.
+  Initial accounting patch 32356f1/8bdc49a is pulled. Codex found that malformed
+  auxiliary metadata must stop the budget rather than return a partial total;
+  Claude acknowledged the correction and exact caller interface in
+  [comment5685567221](https://github.com/Davisfox5/quadratus/pull/11#issuecomment-5685567221).
+- **Next trigger:** both lanes pushed, then independent cross-review and the
+  combined offline suite. Codex owns this integration step; Claude reviews the
+  caller while Codex reviews provider accounting/control changes.
 
-Recommended next batch: Codex owns a closeout path that summarizes supplied
-evidence without reopening the app; Claude owns complete auxiliary usage
-accounting in the provider parser. These are proposals, not implemented fixes.
-Preserve the raw-token threshold and model-role policy. No new trial, budget
-increase, weighted stop rule or forced worker coverage has been authorized by
-this review. Codex owns initiating the next concrete implementation handoff;
-Claude has only report corrections outstanding in its own review lane.
+Provider limits are explicit: Claude can request no tools and one turn; Grok
+retains read-only tools with a one-turn request; Codex retains read-only/native-
+off controls but no known generic tools-off or turn cap. The latter is bounded
+by time/attempt count. CLI output-token ceilings are not hard-enforced by
+max_tokens. Empty CWD is not a filesystem isolation boundary. No new live
+savings or complete native-tool suppression claim is being made.
 
-The all-worker pipeline remains unvalidated. This first SIMPLE task intentionally
-had no collaborators, and the run did not reach later tasks. Missing coverage
-is neither proof of broken routing nor proof that full delegation works.
+Scoring/reconciliation from the prior run is complete. All-worker coverage
+remains unvalidated; the saved original output and private cases are unchanged.
 
 ## Saved result
 

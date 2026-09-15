@@ -400,3 +400,31 @@ STATUS now closes the completed scoring handoff and names Codex as owner of the
 next implementation handoff. No model/app/runtime changes or live retry; raw
 budget and role policy unchanged. No tests rerun for this documentation-only
 reconciliation; arithmetic and source evidence checked directly.
+
+## 2026-09-15 — resumed authorized closeout/accounting repair batch
+
+Pulled ab0c51a corrections, then 32356f1/8bdc49a accounting from Claude. Own
+review found partial/malformed modelUsage can still permit budget continuation
+with a partial count; sent fail-closed, strict integer/missing-field and tied
+identity requirements. Defined summary_only per-call provider interface and
+assigned provider controls to Claude; it acknowledged in comment5685567221.
+The PR comment list now uses per_page=100: the default first page was omitting
+new comments once the thread exceeded30, a coordination retrieval issue.
+
+Implemented session/runtime caller: same model key, low effort, private clone,
+max_retries1, timeout<=60s, max_tokens<=1024 (CLI not a hard output cap), no
+refusal substitution. Empty scratch CWD replaces project snapshot; closeout
+has no default scope grant or inspect-source role. Source diff, transcript and
+latest recorded check are supplied inline; per-section UTF-8 byte truncation
+with SHA256 markers keeps the whole prompt below32kB. Complete evidence remains
+in the artifact store. Only a short pointer index goes into persistent memory:
+an initial test caught raw evidence previews leaking working turns back into
+the orchestrator; fixed without weakening the existing memory regression.
+
+New tests cover actual diff/check evidence, omitted scope with unchanged normal
+review scopes, Unicode bounds and preserved full evidence, same-model/shared
+budget behavior, no snapshot, empty-CWD cleanup, unknown usage and timeouts,
+unchanged cached provider, and pre-invocation refusal of write/oversize requests.
+A timeout retains the original ProviderError while the budget latches unknown;
+test now asserts that behavior instead of incorrectly requiring replacement by
+a budget exception. Provider summary flags still await Claude's patch.
