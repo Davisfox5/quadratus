@@ -41,6 +41,10 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Published evidence bundles carry scripts exactly as they ran (sys.path
+# before import, Mac paths); they are records, not project code, and CI was
+# red from the first bundle until they were excluded.
+extend-exclude = ["docs/handoffs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B"]
