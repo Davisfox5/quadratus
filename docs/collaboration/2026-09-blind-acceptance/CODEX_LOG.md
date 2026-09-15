@@ -503,3 +503,15 @@ Publication check correction: the exact hashed prompt contains two whitespace-on
 diff context lines. The staged check reported those two warnings; source/docs
 checks excluding that immutable prompt pass. Kept evidence bytes unchanged and
 corrected the report rather than claiming an unqualified clean diff.
+
+## 2026-09-15 — live review disposition and next controlled attempt
+
+Pulled Claude review 933c787. Accepted its independently recomputed hash/argv/usage
+and summary-fidelity findings; clarified harness af9aa96 versus engine c3a47c2.
+No production repair requested by the review. Vendor safeguard cause stays
+unproven; no rephrasing/retry/substitution to bypass it. Following user direction
+to continue, Codex prepares one fresh application attempt from original a8772ab
+and identical brief/private-case commitment, with repaired engine and unchanged
+24-call/500k-reported-token/900s/two-worker limits. This is newly authorized
+execution, not automatic continuation of either stopped run. Claude owns scoring
+after saved output arrives; no model names or prior findings enter solver input.

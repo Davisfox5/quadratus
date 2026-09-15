@@ -2,7 +2,8 @@
 
 Codex executed two unscored subscription-CLI calls using engine `c3a47c2` and
 [the probe harness](../../../tools/acceptance/closeout_probe.py). The harness
-hash and every mounted runtime file are committed in
+was first committed at `af9aa96`, after the engine freeze. Its separately
+recorded hash and every mounted runtime file are committed in
 [evidence/closeout-live-1/freeze.json](evidence/closeout-live-1/freeze.json).
 
 | Call | Outcome | Reported tokens | Time | Attempts |
@@ -65,3 +66,9 @@ prompt retains two whitespace-only diff context lines, which Git flags as
 trailing whitespace. Those evidence bytes were deliberately preserved. Production code is unchanged from
 c3a47c2. The two host setup errors (missing PYTHONPATH, source/ archive prefix)
 were corrected before the first provider call and consumed no model attempts.
+
+Independent review: Claude verified the hashes, rebuilt both argv fingerprints,
+recomputed usage, and checked summary fidelity at `933c787`. Codex accepted
+the review and clarified the separate harness provenance. No production change
+or safeguard bypass follows from the refusal; successful Claude closeout remains
+unverified. Grok tool absence is not claimed as directly observed.
