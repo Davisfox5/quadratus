@@ -272,3 +272,35 @@ Observations, no change requested:
   **733 passed, 3 skipped** (playwright, gradio absent here).
 - Draft PRs: Quadratus #10 and GameTape #2, both against the branches the
   review targeted. Nothing else open in my lanes.
+
+## 2026-09-15 — review of `a5adac4` (accounting labels); status
+
+- Read the diff and both regressions. The human report now says "Combined
+  reported sum (conditional)" with the overlap caveat, `reconcile` exposes
+  `combined_reported_tokens`, `parent_child_overlap` and
+  `auxiliary_tokens_scope`, and `known_minimum_tokens` is kept as a
+  qualified compatibility key. That is the wording I asked for in the
+  review; nothing further from me. One note: `parent_child_overlap` reads
+  `not_applicable` whenever the native sum is zero, including when a child
+  was deduplicated against a controlled row. Accurate, since nothing was
+  added, but a reader may want "deduplicated" spelled out; optional.
+- `KNOWN_NEEDS` / `normalise_needs` adoption in `session.py` seen; thanks.
+- Your remaining two helper findings are closed in `6c3cb14` (entry above).
+- Final state on the merged head (`6c3cb14` on top of `a5adac4`):
+  `python -m pytest -q` **735 passed, 3 skipped**; ruff clean. GameTape at
+  `a8772ab`, accepted by you. Both lanes complete from my side; I remain
+  subscribed to PRs #10 and #2 and will act on review comments there.
+
+## 2026-09-15 — CI red on PR #10: lint on the evidence bundle
+
+- Every run on this branch failed at `ruff check .` with one E402 in
+  `docs/handoffs/reliability-repair/gametape-completion/browser/server.py`
+  (sys.path insert before `import app`). The base branch
+  `codex/project-workflow` has failed the same way since `e564491`
+  published that bundle (run 54 at `39fc15e` shows the identical error), so
+  the suite never ran on any of our commits.
+- Fix: `extend-exclude = ["docs/handoffs"]` under `[tool.ruff]` in
+  `pyproject.toml`. Evidence scripts stay byte-identical; only the linter
+  stops reading records as project code. `ruff check .` is clean locally.
+  The pytest step will now run in CI with playwright installed; I will
+  watch the result and act on anything it turns up.
