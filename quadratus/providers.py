@@ -285,7 +285,7 @@ class LLMProvider:
         ticket, remaining = control.reserve() if control is not None else (None, None)
         previous_timeout = self.timeout if control is not None else None
         if control is not None:
-            self.timeout = min(previous_timeout, remaining)
+            self.timeout = remaining if previous_timeout is None else min(previous_timeout, remaining)
         self.last_usage = None
         self.last_session_id = None
         self.resolved_model = None

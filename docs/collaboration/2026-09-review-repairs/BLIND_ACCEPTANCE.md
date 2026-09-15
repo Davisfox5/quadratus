@@ -113,3 +113,7 @@ Any broader change to that routing policy must be explicit and documented.
 4. Publish correctness, justified routing, all-model coverage and usage as
    separate results, including missing coverage and uncertainty.
 5. Repair observed failures as one bounded batch; media locking remains separate.
+
+Under a run budget, a failed provider attempt with no reported usage ends the
+run and cannot be retried. Failed attempts with known usage may retry only
+within the same shared attempt, token and time limits.

@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from quadratus.isolated_run import run_isolated
+from quadratus.isolated_run import _credential_tree, run_isolated
 
 
 def test_requires_immutable_image_and_separate_ordinary_trees(tmp_path):
@@ -83,3 +83,65 @@ def test_watchdog_kills_detached_children_and_preserves_partial_files(container_
     assert (work / 'tick').read_text() == tick
     probe = subprocess.run(['docker', 'inspect', result.container_name], capture_output=True)
     assert probe.returncode != 0
+
+
+@pytest.mark.parametrize('extra', ['.codex/config.toml', '.claude/CLAUDE.md',
+                                 '.codex/sessions', 'examiner.json'])
+def test_credentials_reject_configuration_history_and_other_files(tmp_path, extra):
+    root = tmp_path / 'auth'
+    root.mkdir(mode=0o700)
+    extra = root / extra
+    extra.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    extra.write_text('must not reach solver')
+    extra.chmod(0o600)
+    with pytest.raises(ValueError, match='only supported'):
+        _credential_tree(root)
+
+
+def test_credentials_reject_shared_permissions_and_symlinks(tmp_path):
+    root = tmp_path / 'auth'
+    root.mkdir(mode=0o700)
+    vendor = root / '.codex'
+    vendor.mkdir(mode=0o700)
+    auth = vendor / 'auth.json'
+    auth.write_text('{}')
+    auth.chmod(0o644)
+    with pytest.raises(ValueError, match='private'):
+        _credential_tree(root)
+    auth.unlink()
+    auth.symlink_to(tmp_path / 'host-auth')
+    with pytest.raises(ValueError, match='ordinary'):
+        _credential_tree(root)
+
+
+def test_real_container_copies_only_auth_into_ephemeral_home(container_trees):
+    image, work, runtime = container_trees
+    credentials = work.parent / 'auth'
+    credentials.mkdir(mode=0o700)
+    vendor = credentials / '.codex'
+    vendor.mkdir(mode=0o700)
+    source = vendor / 'auth.json'
+    source.write_text('{"fixture": true}')
+    source.chmod(0o600)
+    (work / 'auth_probe.py').write_text('''import json, os
+from pathlib import Path
+home = Path(os.environ['HOME'])
+auth = home / '.codex/auth.json'
+result = {'seed_read': json.loads(auth.read_text()) == {'fixture': True},
+          'home_files': sorted(str(p.relative_to(home)) for p in home.rglob('*') if p.is_file())}
+auth.write_text('refreshed fixture')
+try:
+    Path('/run/solver-auth/.codex/auth.json').write_text('changed')
+    result['seed_writable'] = True
+except OSError:
+    result['seed_writable'] = False
+Path('/work/auth-probe.json').write_text(json.dumps(result))
+''')
+    result = run_isolated(image=image, work=work, runtime=runtime,
+                          credentials=credentials, network=True,
+                          command=['python', '/work/auth_probe.py'], wall_seconds=20)
+    assert result.outcome == 'success'
+    assert json.loads((work / 'auth-probe.json').read_text()) == {
+        'seed_read': True, 'home_files': ['.codex/auth.json'], 'seed_writable': False}
+    assert source.read_text() == '{"fixture": true}'
+    assert subprocess.run(['docker', 'inspect', result.container_name], capture_output=True).returncode != 0

@@ -2,7 +2,8 @@
 
 Implemented and pushed on `codex/blind-worker-acceptance`. Review:
 [Quadratus PR #11](https://github.com/Davisfox5/quadratus/pull/11), against
-`codex/project-workflow`. Tested runtime source: `85a20188ec8782ba2599981908c08943ff57a4b4`.
+`codex/project-workflow`. Latest pulled peer checkpoint: `7179c9016570561e40df470f9cc74087724dcec6`.
+Codex runner/brief follow-up is recorded in CODEX_LOG.
 
 ## Completed here
 
@@ -23,7 +24,7 @@ Implemented and pushed on `codex/blind-worker-acceptance`. Review:
 
 ## Verified
 
-**864 tests passed in 51.95s, no skips** locally, with real Docker checks and
+**880 tests passed in 55.24s, no skips** locally, with real Docker checks and
 installed-Codex configuration checks enabled. Full Ruff and diff checks pass.
 The public examiner's **13 backend checks fail on the untouched application**,
 as expected. That negative baseline is not a failed Quadratus run.
@@ -35,24 +36,26 @@ See [local validation evidence](evidence/local-validation.json),
 Hosted [CI at 85a2018](https://github.com/Davisfox5/quadratus/actions/runs/34972145866)
 passed on Python 3.11 and 3.12: **861 passed, 3 skipped** on each. The skips
 are the two real-Docker checks and installed-Codex config check, which passed
-locally. Subsequent documentation commits do not change the tested source.
+locally. That hosted run predates the current follow-up; the 880-test result above is local.
 
 ## Required before the scored run
 
-1. Live Codex/Grok control probes and verification of effective native-off
-   behavior across the vendor seats. An ignored Grok denial blocks a claim of
-   bounded native activity.
-2. A provisioned, authenticated container with only necessary vendor credentials,
-   clean instruction/session state, and preflight in that exact image.
-3. Fresh private examiner cases: cloud Claude's initial cases were published to
-   this PUBLIC repo. They remain public validation, not secret held-out tests.
-   Publish hashes only for the replacement private cases; freeze those hashes,
-   the final solver input and the runtime/config before launch.
+1. **Live Sol probe FAILED native-off enforcement:** both flags report false,
+   but a linked Sol child was observed. RunBudget stopped after one invocation.
+   Resolve this before the scored run; Grok/Claude live probes are still pending.
+   See evidence/sol-native-probe.json. Config checks are insufficient.
+2. The provisioned image passed isolated Codex/Claude subscription-auth checks,
+   effective Codex flags and Chromium smoke. Live Grok auth and native behavior
+   remain to be checked. See evidence/container-preflight.json.
+3. Locate and hash-check Claude's replacement private archive (nine cases,
+   commitment posted on PR #11). Its initial public cases remain public
+   validation. Freeze the final solver input and runtime/config with the
+   private commitment before launch. The user has been asked for the archive path.
 4. One uncoached, bounded attempt: 15 minutes, 24 provider attempts, two helpers,
    500,000 reported tokens as a post-return stop threshold. Partial progress is
    an honest result. No automatic budget increase, forced coverage or fallback
    failure injection in the natural run.
 
-The controllers and isolation helper are tested building blocks; the complete
-live blind-run launch path is not yet provisioned. See [implementation and
+The isolated image and credential-only HOME passed preflight. A scored run
+has not started; live control evidence and private archive verification remain. See [implementation and
 handoff](IMPLEMENTATION.md) for interfaces and remaining ownership.

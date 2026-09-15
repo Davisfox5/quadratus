@@ -36,7 +36,7 @@ def test_export_uses_committed_source_and_excludes_all_unselected_context(source
 
 
 @pytest.mark.parametrize('selected', ['.', '../other', '/tmp/secret', '.env', 'CLAUDE.md',
-                                     '.codex/config.toml', 'docs/handoffs/evidence',
+                                     '.codex/config.toml', 'docs/handoffs/evidence', 'docs/JOINT_REPAIR.md',
                                      '.cursor/rules/work.mdc', '.cursorrules', 'GEMINI.md',
                                      '.github/copilot-instructions.md', '.aider.chat.history.md'])
 def test_rejects_context_or_escaping_selections(source, tmp_path, selected):

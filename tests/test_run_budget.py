@@ -233,3 +233,12 @@ def test_fleet_rejects_a_provider_that_skips_the_controlled_attempt_path(monkeyp
     fleet = Fleet(Settings(backend='cli'), run_budget=RunBudget(RunLimits()))
     with pytest.raises(RunBudgetExceeded, match='observed provider attempt'):
         fleet.invoke('openai:gpt-5.6-sol', 'must not bypass')
+
+
+def test_unspecified_transport_timeout_is_bounded_and_restored():
+    b = RunBudget(RunLimits(wall_seconds=5), clock=lambda: 0)
+    p = provider(b, usage={'input_tokens': 1, 'output_tokens': 0})
+    p.timeout = None
+    assert p.generate('bounded') == 'answer'
+    assert p.calls == [5]
+    assert p.timeout is None

@@ -20,8 +20,16 @@
   reused output trees. The working checkout's edits do not leak into the export.
 - `run_isolated(image=..., work=..., runtime=..., command=[...])` requires an
   immutable local Docker image ID and separate ordinary directories. It mounts
-  only writable disposable input and read-only runtime, using a non-root UID/GID. No home, Docker socket,
-  examiner, Git history or credentials are mounted. Network is off by default.
+  only writable disposable input and read-only runtime, using a non-root UID/GID. No host home, Docker socket, examiner or Git history is mounted. Network
+  is off by default; vendor preflight explicitly selects `network=True`.
+  Optional `credentials=` accepts a separate private tree containing only
+  `.codex/auth.json`, `.claude/.credentials.json`, and/or `.grok/auth.json`.
+  It mounts the seed read-only and copies it into a fresh tmpfs HOME for
+  credential refresh; neither refreshed credentials nor new sessions are
+  copied back to the host. The caller removes its private seed after use.
+  This validates paths and permissions, not the auth method inside the files.
+  Stage subscription credentials only and check vendor readiness separately.
+  The process limit is explicitly 512 to allow browser checks.
   A host watchdog removes the entire container, including detached descendants;
   partial work remains. Docker cleanup has a bounded grace; a failed cleanup
   raises instead of claiming the workload was stopped.
@@ -43,8 +51,9 @@ The task text in TASK_DRAFT.md adopts cloud Claude's export-compatible contract
 (endpoint, columns, response shape, UI hooks and 5000-row limit), superseding
 the earlier 500-row draft. Cloud Claude supplied validation tests, but they
 were committed to this PUBLIC repository. They are public checks, not secret
-held-out tests. Claude must prepare fresh private cases before any solver output; those
-checks stay outside solver mounts. Freeze their hashes and the final task/input
+held-out tests. Claude reports nine fresh private cases prepared before solver output and
+posted commitment hashes on PR #11. The user-held archive still needs to be
+located and verified locally; those checks stay outside solver mounts. Freeze their hashes and the final task/input
 hashes together before launching. Do not call the current example export a
 fully preregistered or scored trial.
 

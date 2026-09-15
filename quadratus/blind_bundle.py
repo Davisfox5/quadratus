@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 _EXCLUDED_PARTS = {'.git', '.quadratus', '.claude', '.codex', '.cursor', '.gemini',
                    '.aider', 'node_modules',
                    '__pycache__', '.venv', 'collaboration', 'handoffs'}
-_EXCLUDED_NAMES = {'CLAUDE.md', 'AGENTS.md', 'MEMORY.md', 'GEMINI.md', '.env',
+_EXCLUDED_NAMES = {'CLAUDE.md', 'AGENTS.md', 'JOINT_REPAIR.md', 'MEMORY.md', 'GEMINI.md', '.env',
                    '.cursorrules', '.windsurfrules', 'copilot-instructions.md'}
 
 

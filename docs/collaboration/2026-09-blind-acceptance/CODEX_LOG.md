@@ -131,3 +131,83 @@
 - Hosted CI independently verified at 85a2018: Python 3.11 **861 passed,
   3 skipped in 52.52s**; Python 3.12 **861 passed, 3 skipped in 55.57s**.
   Optional Docker/config checks ran locally instead. Later commits are docs only.
+
+## 2026-09-15 — resumed directly with cloud Claude, 7179c90 reconciliation
+
+Pulled 64a02ef and 7179c90 by fast-forward on the clean shared branch. Sent
+coordination and review comments on PR #11 (5683171942 and 5683227424).
+Claude retains the native-transport and independent examiner lanes; Codex owns
+the task brief, run controls and isolated runner. No private reference or test
+contents were requested or read. The archive was not found by filename in
+Downloads or Quadratus; asked Davis for its local path while continuing work.
+Claude reports a nine-case private set and committed the archive SHA-256 in
+PR comment 5680554247:
+`71cb8b06a34ed94d6936bd9dfc45ed3889a0f6c5a80be1424850f1140e66371a`.
+That is a remote claim/commitment; local hash verification is pending.
+
+Applied N2/N3: copied the app CLAUDE.md Design section into neutral application
+constraints, without its runtime model discussion; added unknown-column and
+blank-line rules exactly. The previous v2 example is now superseded, not
+silently overwritten or represented as the final trial input. Added
+JOINT_REPAIR.md to explicit export exclusions. Documented that unknown-usage
+failures stop; known-usage retries still count against the shared limits.
+Closed low review items: timeout=None now receives the remaining deadline and
+is restored after return; documented why the per-task worker ceiling cannot
+widen the global provider-attempt cap.
+
+Runner N4: added optional auth-only staging. Only three exact vendor auth-file
+paths are accepted, owner-only permissions are required, and symlinks/config/
+history/other files fail before launch. Credentials must be a separate tree.
+The read-only seed copies into ephemeral HOME; refreshes cannot write back to
+source. PIDs explicitly raised to 512. No host home or examiner is mounted.
+Added real-container proof of auth copying, clean home, writable temporary
+refresh, immutable source and container removal. Synthetic credentials only
+in that test. Live credentials were staged privately outside all repositories
+for preflight; no contents were printed or committed. Host sign-in checks show
+ChatGPT, Claude subscription, and Grok OIDC; this does not prove container auth.
+
+Reviewed Claude's N1/N5 code. Conservative Grok stop is useful, but attempted
+Agent evidence does not establish execution. Asked Claude to distinguish
+suspected fan-out from confirmed native children in its wording/tests, retaining
+the stop. Claude JSON still cannot establish absence of undenied children.
+
+Validation: focused suite **127 passed in 6.28s**. Full local suite with
+QUADRATUS_TEST_DOCKER=1 and QUADRATUS_LIVE_CODEX_FEATURES=1: **880 passed in
+55.24s**, no skips. Ruff and git diff --check pass. These checks precede any
+live vendor probe; the installed-Codex check reads configuration only.
+Preparing a clean Linux image with pinned vendor CLI versions, Python/browser
+checks and Node 24. No scored run or model call started in this checkpoint.
+
+Container preflight now passed without model calls: image
+`sha256:f801ce6551eb6f00271d94773581c803e02dacd0dc3e94fada29e7ccbfb4e013`,
+Node 24.15.0, Codex 0.154.0, Claude 2.1.269, Grok 1.0.30. In the isolated HOME,
+Codex reports ChatGPT auth, Claude reports claude.ai/firstParty/Max, both Codex
+multi-agent switches report false, no API-key environment variables are
+present, and Chromium launches successfully. Grok OIDC was staged but its
+server authentication still requires a live call. Sanitized evidence and exact
+runtime source hashes are in evidence/container-preflight.json. Recipe and
+operating boundaries are in tools/acceptance/. A first unscored Sol native
+availability probe is now running under one attempt, a 50,000-reported-token
+stop threshold and an 80-second outer watchdog (70-second controller). No
+retry or scored-task input; raw outputs stay private.
+
+### Live Sol probe: native-off FAILED; scored run paused
+
+One bounded invocation of gpt-5.6-sol at low effort returned in 13.13s. Despite
+`--disable multi_agent --disable multi_agent_v2` and the clean-image feature
+check showing both false, the runtime found a linked child running
+**gpt-5.6-sol** (parent 01a0a5bd-af5e-76a3-bb35-aee0482758b4, child
+01a0a5bd-c623-7410-9f41-894c71e0bfd0). RunBudget correctly latched
+`uncontrolled_native_delegation`; no retry or further probe started. Parent
+reported 43,817 input + 78 output = 43,895; child reported 15,836 input + 5
+output = 15,841 separately. Do not assume counters are additive. A separate
+unidentified `wait` activity row does not prove another child.
+
+The container was removed successfully. Its tmpfs HOME (including raw rollout
+files) was removed too; the summarized linked-child evidence survives in
+sol-native-probe.json, with the exact limitation recorded. Private stdout and
+the returned reply were preserved. Future probes need narrowly selected raw
+rollout evidence copied out before cleanup. This is real evidence against the
+flag guarantee, not an application/scored attempt. Asked Claude to investigate
+in its native-control lane; do not consume further model calls repeating flags
+that already failed, or launch the scored run on their strength.

@@ -104,6 +104,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     session, error = None, ''
     if run_limits:
         config.worker_budget = WorkerBudget(
+            # This permissive per-task ceiling cannot widen the shared run cap:
+            # every worker transport attempt also reserves from RunBudget.
             max_per_task=run_limits.max_calls,
             max_concurrent=run_limits.max_concurrent_workers,
         )

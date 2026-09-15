@@ -1,7 +1,7 @@
 """Docker isolation and an external wall watchdog for a prepared solver tree.
 
-This module never provisions credentials or downloads an image. It mounts only
-the explicit disposable work tree and runtime tree. Neither should contain the
+This module never discovers credentials or downloads an image. It mounts only
+the explicit disposable work tree, runtime tree and optional credential seed. Neither should contain the
 examiner bundle, prior session state or developer home. Vendor readiness and
 blindness of their instruction inputs require a separate preflight.
 """
@@ -40,7 +40,34 @@ def _tree(path):
     return path
 
 
-def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=False):
+_AUTH_FILES = {'.codex/auth.json', '.claude/.credentials.json', '.grok/auth.json'}
+
+
+def _credential_tree(path):
+    """Accept a private, explicitly prepared auth-only tree, never a host home.
+
+    Callers must stage subscription credentials only; filenames do not establish
+    the authentication method. Secrets are neither returned nor logged here.
+    """
+    path = _tree(path)
+    files = set()
+    for entry in [path, *path.rglob('*')]:
+        name = entry.relative_to(path).as_posix()
+        allowed = (name in _AUTH_FILES if entry.is_file()
+                   else name in {'.', '.codex', '.claude', '.grok'})
+        if not allowed:
+            raise ValueError('Credential seed may contain only supported authentication files')
+        if entry.stat().st_mode & 0o077:
+            raise ValueError('Credential seed must be private to its owner')
+        if entry.is_file():
+            files.add(name)
+    if not files:
+        raise ValueError('Credential seed must contain authentication files')
+    return path
+
+
+def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=False,
+                 credentials=None):
     """Run a command in a disposable container and always remove its processes.
 
     Timeout bounds the workload; Docker control-plane cleanup has a separate
@@ -59,18 +86,31 @@ def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=Fal
     work, runtime = _tree(work), _tree(runtime)
     if work == runtime or work.is_relative_to(runtime) or runtime.is_relative_to(work):
         raise ValueError('Work and runtime mounts must be separate trees')
+    auth_mount = []
+    if credentials is not None:
+        credentials = _credential_tree(credentials)
+        if any(credentials == tree or credentials.is_relative_to(tree)
+               or tree.is_relative_to(credentials) for tree in (work, runtime)):
+            raise ValueError('Credentials must be separate from work and runtime')
+        auth_mount = ['--mount', f'type=bind,source={credentials},target=/run/solver-auth,readonly']
+        # The credential source is immutable. Refreshes and sessions are written
+        # into this container's tmpfs HOME and disappear with the container.
+        command = ['/bin/sh', '-c',
+                   'umask 077; mkdir -p "$HOME" && cp -R /run/solver-auth/. "$HOME"/ '
+                   '&& exec "$@"', 'solver-auth-bootstrap', *command]
     name = 'quadratus-blind-' + uuid.uuid4().hex
     deadline = time.monotonic() + wall_seconds
     args = ['docker', 'create', '--name', name, '--pull', 'never', '--init',
             '--user', f'{os.getuid() or 65534}:{os.getgid() or 65534}',
             '--read-only', '--network', 'bridge' if network else 'none',
             '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-            '--memory', '2g', '--cpus', '2', '--pids-limit', '128',
+            '--memory', '2g', '--cpus', '2', '--pids-limit', '512',
             '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m',
             '--env', 'HOME=/tmp/solver-home', '--env', 'PYTHONDONTWRITEBYTECODE=1',
             '--env', 'PYTHONPATH=/opt/quadratus', '--workdir', '/work',
             '--mount', f'type=bind,source={work},target=/work',
             '--mount', f'type=bind,source={runtime},target=/opt/quadratus,readonly',
+            *auth_mount,
             '--entrypoint', command[0], image, *command[1:]]
 
     def docker(argv):
