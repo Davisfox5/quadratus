@@ -166,3 +166,34 @@ def test_the_decomposition_prompt_asks_for_final_text_and_a_split_estimate(tmp_p
     assert "Estimate code lines and test lines separately" in text
     assert "The description is final text" in text
     assert "exactly one signature" in text and "verbatim" in text
+
+
+# Attempt 3 quoted the CSV column headings in acceptance. `Start (s)` reads as
+# a call with one argument, so a lint that took any backticked name(args) as a
+# declaration was one wording away from rejecting a correct decomposition over
+# a column name. A name is declared only where the description writes `def`.
+ATTEMPT_3_ACCEPTANCE = [
+    "`def _import_preview_rows(project, text):` exists in app.py and returns `(result, None)`",
+    "Header names are matched case-insensitively after trim; a missing `Tag Type`, "
+    "`Start (s)` or `End (s)` header yields `(None, (message, \"bad_request\"))`",
+]
+ATTEMPT_3_BODY = (
+    "Add the core CSV-parsing helper as a pure function in `app.py`. Signature: "
+    "`def _import_preview_rows(project, text):`. Required: `tag type`, `start (s)`, "
+    "`end (s)`. Start/End: `float()` of the stripped cell, `math.isfinite`.\n"
+)
+
+
+def test_quoted_column_headings_are_not_declared_functions():
+    found = declared_signatures(ATTEMPT_3_BODY, ["A helper `_import_preview_rows(project, text)`"],
+                                ATTEMPT_3_ACCEPTANCE)
+    assert found == {"_import_preview_rows": ["project, text"]}
+    scope, _ = read_scope(_declaration(ATTEMPT_3_BODY, acceptance=ATTEMPT_3_ACCEPTANCE),
+                          max_lines=100)
+    assert scope.max_lines == 100
+
+
+def test_a_signature_quoted_only_in_acceptance_needs_a_def_to_be_checked():
+    # No `def` anywhere: nothing is declared, so nothing can contradict.
+    body = "Call `helper(a, b)` and then `helper(a, b, c)` as convenient."
+    assert declared_signatures(body, [], []) == {}

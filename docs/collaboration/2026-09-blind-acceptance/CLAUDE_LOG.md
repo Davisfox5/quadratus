@@ -1117,3 +1117,100 @@ there; a different ID re-issues the freeze.
 
 No solver coaching, no prior output, no model names in the solver input.
 Not a retry of attempt 2: a fresh run from the original input.
+
+## 2026-09-16 — attempt 3 launched, scored and reviewed by Claude
+
+Davis authorised attempt 3 and told me to run it from his Mac, Codex being out
+of context. I launched it, scored it and reviewed it. Evidence is in
+`evidence/scored-attempt-3/`; the independent scoring record sits beside it.
+
+### Launch
+
+Branch at the freeze 107d55d. Input re-exported from `a8772ab` with the frozen
+brief: 30 files, every hash equal to the freeze. Runtime assembled from the
+engine at 4795062 plus the launcher: 36 files, every hash equal to the freeze.
+Image ID `d1f99331…` inspected on the host and equal to the freeze. Credential
+seed staged auth-only from the host's own Codex and Grok files and the macOS
+keychain entry for Claude; `_credential_tree` accepted it; Codex reports
+`auth_mode chatgpt` with no API key, Claude reports subscription `max`.
+Host preflight before the launch: 197 passed, 1 skipped with the Docker checks
+enabled. One `run_isolated` call, 900-second outer watchdog, no retry, no
+continuation. Container and seed removed afterwards.
+
+### Result
+
+Run f19eee8c stopped at 394.22 s on the reported-token threshold: 523,473
+against 500,000, 23,473 of overshoot from the last in-flight call. Three calls
+of a permitted 24. Nothing was written: `changes.diff` is empty, the tree is
+byte-identical to the input, and no scope stop or integration check occurred.
+
+Scoring against the unchanged private set (all 14 file hashes re-verified
+against the published commitments): **0 of 9**, every case HTTP 405 because no
+endpoint exists. Public examiner **0 of 13**, same cause. The saved archive
+reconstructs offline with all 30 hashes verified and the existing GameTape
+suite passing, **100 tests**, hashes unchanged afterwards.
+
+### Where the budget went, and the finding that matters
+
+Fable orchestrated (105,531 tokens, 41 s, four turns) and labelled task 1
+backend/standard, which seats Sol as lead. Sol was invoked (105,424 tokens,
+86,912 of it cached, 559 output) and spent that output commissioning one
+`code` worker. Under `WORKER_TREE` the `code` errand is Claude Haiku.
+
+That worker consumed **312,518 tokens in 324 seconds: 60 percent of the run**.
+Its seat was restricted exactly as designed — `--effort low`,
+`--disallowed-tools "Bash Edit Write NotebookEdit Task"` — and the restriction
+held: `subagent_stats.spawned` 0, no native child, no write tool, the tree
+untouched. What the restriction does not bound is volume. The envelope reports
+**eleven turns**, 40,274 output tokens and 224,844 cache reads, and the
+preserved reply is 101,074 bytes over 2,576 lines carrying the helper and about
+thirty-four test functions as text, because the seat cannot write files. None
+of it could land; the budget refused the lead's next call.
+
+This is the original Grok worker finding again — a bounded errand running a
+full agent loop — on Haiku, and this time inside a scored run. Denying tools
+bounds permission. It does not bound turns, output or wall time.
+
+Second-order: the lead handed one worker the entire task rather than a bounded
+sub-question, so the cheapest seat in the fleet drew the most expensive job.
+
+### What this run confirms
+
+- **Three vendors and a controlled worker ran in one scored attempt for the
+  first time.** Opus was selected as collaborator and never invoked; Grok was
+  not invoked because the ladder seated Sol. Full-worker coverage, Opus review
+  and closeout remain unreached.
+- **Both attempt-2 repairs worked.** The declaration named
+  `_import_preview_rows(project, text)` once and quoted it verbatim in
+  `intended_result` and all five acceptance lines; the lint passed it and still
+  rejects attempt 2's declaration. The scope report carries `code_lines` and
+  `test_lines`.
+- **Codex's provenance fix is confirmed live**: Fable's successful row carries
+  `auxiliary_models` and `auxiliary_tokens`, where attempt 2's was `{}`.
+- **Auxiliary accounting held on a hard case**: the worker's single `modelUsage`
+  row did not equal the seat's own total, so the larger figure was reported once
+  and provenance recorded as `unattributed` rather than labelling a row the seat.
+
+### A defect this run found in my own lane, fixed here
+
+Acceptance quoted the CSV columns `` `Start (s)` `` and `` `End (s)` ``, which
+parse as `name(args)`. The lint therefore treated them as declared functions.
+Harmless this time — each appeared once — but one wording away from rejecting a
+correct decomposition over a column name. A name is now declared only where the
+description writes `def`; quoted forms still contribute variants for such names,
+so attempt 2's contradiction is still caught. Two regressions use this run's
+real wording. Suite 956 passed, 2 skipped with the Docker and installed-CLI
+checks enabled; ruff and diff-check clean.
+
+### Recommended next repair, not implemented
+
+Cap worker turns. For the Claude worker seat that is `--max-turns` on the
+restricted call, the same lever the closeout already uses. It is in my lane and
+it is small, but it changes the behaviour of every worker errand and choosing
+the cap is a policy call, and any attempt 4 spends subscription window. Davis
+decides both. Also unresolved: the decomposition prompt asks for a separate
+code/test estimate and `SCOPE` has nowhere to record it, so only the sum is
+verifiable; either add the field or drop the instruction.
+
+No app feature, private-case edit, budget, role or tolerance change, safeguard
+bypass or further model run was made by this work.

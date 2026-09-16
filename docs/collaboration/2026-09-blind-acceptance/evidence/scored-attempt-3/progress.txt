@@ -1,0 +1,19 @@
+Project: /work; edits enabled
+asking claude:fable for the next task
+task 1: Add the core CSV-parsing helper for the read-only clip-manifest preview as a pure function in `app.py`, placed after `export_json` under a new `# ── Import preview ──` section. Signature: `def _import_preview_rows(project, text):`. `text` is already-decoded CSV text (the caller will handle BOM/decoding later); use `csv.reader(io.StringIO(text))` which already handles RFC 4180 quoting and CRLF.
+
+Behaviour:
+- Read the first row as the header. Build a column map by `h.strip().lower()`. Required: `tag type`, `start (s)`, `end (s)`; optional: `label`, `notes`, `players`, `clip id`. If a required header is missing (or the file has no header row), return `(None, ("Missing required column: <name>", "bad_request"))`. Other columns are ignored.
+- Iterate remaining rows with `line = reader.line_num`-style physical counting (header is line 1; use `enumerate(reader, start=1)` after reading the header via `next(reader)`, so the first data row is line 2). Skip rows that are empty or whose fields are all empty after strip; these do not count toward `total`.
+- If more than 5000 non-blank data rows, return `(None, ("Too many rows (max 5000)", "too_many_rows"))`.
+- For each counted row: reasons = []. If `len(row) != len(header)`: reason "wrong column count" and skip further checks. Else: tag type (strip) must be in `{t["name"] for t in project["tag_types"]}` — reason "unknown tag type". Start/End: `float()` of stripped cell; non-numeric or non-finite (`math.isfinite`) → "start must be a number" / "end must be a number"; start < 0 → "start must be >= 0"; end <= start (when both numeric) → "end must be greater than start". Label/Notes default to "" when the column is absent.
+- Row dict: `{"line": n, "status": "valid"|"malformed", "reasons": [...], "clip": {...} or None}` with `clip = {"tag_type", "start", "end", "label", "notes", "players": []}` only for valid rows. Summary counts `total`, `valid`, `malformed`, and `duplicate` (always 0 in this slice — the duplicate/Clip ID/Players rules come in the next task).
+- Import `math` at the top of app.py.
+
+Tests in a new `tests/test_import_preview.py` (follow the `sys.path.insert` pattern of `tests/test_bulk_edit.py`; no client fixture needed — build `project = {"tag_types": [{"name": "Pass"}, {"name": "Shot"}], "players": [], "clips": []}` directly). Scenarios:
+1. Valid two-row CSV with header in mixed case and padding (`" tag TYPE ,Start (s),END (s),Label"`) → both rows valid, lines 2 and 3, clip fields correct, summary `{total:2, valid:2, malformed:0, duplicate:0}`.
+2. CRLF text with a blank line between data rows → blank line skipped, the following row has `line` 4, total is 2.
+3. Malformed cases in one file: end <= start, unknown tag type, non-numeric start, negative start, wrong column count → each row `malformed` with the expected reason string and `clip` None.
+4. Missing `End (s)` header → `(None, (msg, "bad_request"))`; 5001 data rows → `(None, (msg, "too_many_rows"))`.
+
+Run `/usr/local/bin/python -m pytest -q` and confirm everything passes. [backend/standard]

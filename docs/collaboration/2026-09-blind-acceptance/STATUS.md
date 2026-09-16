@@ -6,15 +6,24 @@ Earlier attempt **b7ccbd24** and its engine **a001c1b** remain unchanged.
 
 ## Current owner and handoff
 
-**Attempt 3 is authorised and frozen, awaiting launch on the authenticated
-host.** Davis ruled: test lines count in full (already the engine's
-behaviour, unchanged) and Grok stays in the lineup (roles, ladder and the
-500k threshold unchanged). Freeze:
-[scored-attempt-3-freeze.json](evidence/scored-attempt-3-freeze.json), engine
-`4795062`, identical `a8772ab` input and brief, private commitment unchanged.
-Cloud Claude cannot launch (no Codex/Grok CLIs or credentials, x86_64); the
-launch steps are in [CLAUDE_LOG.md](CLAUDE_LOG.md). Claude scores and reviews
-after the artifact handoff.
+**Attempt 3 ran, was scored and is reviewed. Claude launched it on Davis's Mac
+at his direction, Codex being out of context.** Run `f19eee8c`, engine
+`4795062`, identical `a8772ab` input and brief, private commitment re-verified
+unchanged. Stopped at 394.22s on the reported-token threshold, 523,473 against
+500,000, three calls of 24, **nothing written**. Private **0 of 9**, public
+examiner **0 of 13**, unchanged GameTape baseline 100 tests passing offline.
+
+**Three vendors and a controlled worker ran in one scored attempt for the first
+time**, and the worker is the finding: Haiku on the `code` errand took 312,518
+tokens in 324 seconds, 60 percent of the run, across eleven turns, producing
+101KB of code as text it had no tools to write. Its restricted seat held
+exactly what it claims (no write tool, no Task, no subagent) and bounds
+permission, not volume. Opus was selected and never invoked; closeout and Opus
+review remain unreached. Details: [result and review](evidence/scored-attempt-3/README.md),
+[Claude log](CLAUDE_LOG.md).
+
+**Open for Davis:** whether to cap worker turns, and whether to authorise an
+attempt 4. Nothing is queued and no further run has been launched.
 
 
 **The two-fix repair batch is complete and verified offline.** No new

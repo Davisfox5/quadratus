@@ -332,12 +332,14 @@ _QUOTED = re.compile(r"`\s*(?:def\s+)?([A-Za-z_][\w.]*)\s*\(([^()`]*)\)\s*:?\s*`
 def declared_signatures(description: str, *fields: Sequence[str]) -> Dict[str, List[str]]:
     """Every signature the declaration gives each function it defines.
 
-    A function is *declared* when the description writes ``def name(`` or
-    when ``intended_result``/``acceptance`` quote ``name(...)`` in backticks.
+    A function is *declared* only where the description writes ``def name(``.
     For those names, every ``def`` line and every backticked ``name(args)``
     across the whole declaration is collected, with whitespace normalised.
     Incidental calls (``float()``, ``len(row)``) are never declared, so they
-    cannot trip the check.
+    cannot trip the check, and neither can a backticked name that is not a
+    function: attempt 3 of the blind acceptance quoted the CSV columns
+    ``Start (s)`` and ``End (s)`` in acceptance, which read as ``name(args)``
+    but are column headings. Requiring a ``def`` keeps the check on functions.
 
     Returns ``{name: [distinct signatures, in order of appearance]}``. More
     than one entry for a name is the contradiction the decomposition prompt
@@ -349,8 +351,6 @@ def declared_signatures(description: str, *fields: Sequence[str]) -> Dict[str, L
     """
     quoted_fields = [x for group in fields for x in group]
     declared = set(_DEFINED.findall(description))
-    for text in quoted_fields:
-        declared.update(name for name, _ in _QUOTED.findall(text))
     if not declared:
         return {}
     found: Dict[str, List[str]] = {}
