@@ -22,8 +22,17 @@ permission, not volume. Opus was selected and never invoked; closeout and Opus
 review remain unreached. Details: [result and review](evidence/scored-attempt-3/README.md),
 [Claude log](CLAUDE_LOG.md).
 
-**Open for Davis:** whether to cap worker turns, and whether to authorise an
-attempt 4. Nothing is queued and no further run has been launched.
+**Repair landed (Davis's direction, not the turn cap):** worker tool fit is now
+checked on both sides. The lead declares what an errand needs and the harness
+refuses a mismatch before the budget is charged or any call is made; the worker
+is told in its own prompt what it has, that it has no shell, and that it should
+reply `NEED TOOL: <what>` in one line rather than working around a missing tool;
+and the escalation is capped at one ask plus one reissue. `needs_from_text` also
+now sees an interpreter named by path, which the attempt-3 brief used. Suite 972
+passed, 2 skipped; ruff and diff-check clean.
+
+**Open for Davis:** whether to authorise attempt 4. Nothing is queued and no
+further run has been launched.
 
 
 **The two-fix repair batch is complete and verified offline.** No new

@@ -1214,3 +1214,91 @@ verifiable; either add the field or drop the instruction.
 
 No app feature, private-case edit, budget, role or tolerance change, safeguard
 bypass or further model run was made by this work.
+
+## 2026-09-16 — worker tool fit, checked on both sides before the call
+
+Davis rejected the turn cap as the repair: the worker was not short of turns,
+it was short of tools, and the thing to fix is that neither side checked
+whether the errand fit the grant. His shape: the lead checks first, the worker
+checks that it has what it needs, and a worker that later finds it needs more
+asks once rather than the run paying four times. Implemented that.
+
+### What was actually wrong
+
+The worker was handed `request['instruction']` and nothing else. It was never
+told what tools it had, and never told that `NEED TOOL` existed — `worker_menu`
+described that channel to the *lead* only. A helper that does not know it may
+ask does the best it can with what it has, which in attempt 3 was 101KB of code
+and tests written as prose over eleven turns.
+
+Two boundaries make this sharper than it looks. Every seat in the worker tree
+is a restricted roster row, and `task_kinds` already says a restricted seat's
+whole capability set is `patch`. So **no worker, on any vendor, at any grant,
+can run a command or write a file itself**: with `write:true` it is a bounded
+editor returning a diff the harness applies. The lead had no way to see either
+boundary before spending a call.
+
+### The three changes
+
+`workers.py`
+- `worker_capabilities(allow_writes)` states the honest set: `{patch}` when
+  granted, empty otherwise.
+- `check_errand_fit(instruction, needs=…, write=…)` refuses a mis-scoped errand
+  **before the budget is charged and before any call**, returning one sentence
+  with the lead's move. It checks the lead's declared needs together with what
+  the instruction itself asks for, because the expensive mistake is the errand
+  whose text says "run pytest" while its declaration says nothing. Rules:
+  `execute` is impossible for any worker; `direct-write` is impossible and
+  named as patch instead; `patch` without a grant is the attempt-3 case; and a
+  grant the errand does not need is refused **only when needs were stated** —
+  `None` means the lead declared nothing and is read from the instruction,
+  because silence is not a contradiction and treating it as one would refuse
+  every caller written before the field existed.
+- `capability_preamble(allow_writes)` now opens every worker prompt: what it
+  can do, that it has no shell, and that if the errand cannot be done with
+  these it replies with one line, `NEED TOOL: <what>`, before doing any work.
+  It ends with the sentence that would have saved 312,518 tokens: do not work
+  around a missing tool by writing the change out as text.
+- The escalation is capped at two calls. A `NEED TOOL` is recorded per errand;
+  if the reissue asks again, the result comes back as an error telling the lead
+  to rewrite the errand or do it itself, rather than a third round.
+- `worker_menu` tells the lead both boundaries and the two-call rule.
+
+`session.py`: the WORKER request takes `needs`, validated and passed through;
+`ErrandToolMismatch` joins the refusals the lead is told about and can act on,
+which already stall the run if the lead keeps failing to converge.
+
+`task_kinds.py`: `needs_from_text` could not see an interpreter named by path.
+The attempt-3 brief said ``Run `/usr/local/bin/python -m pytest -q` `` and the
+detector, anchored on a bare runner name, returned nothing — so the check that
+should have caught it would not have fired. Both the run-verb and the
+backticked-command patterns now allow a path before the runner.
+
+### Verification
+
+`tests/test_worker_tool_fit.py`: sixteen tests built on the real attempt-3
+errand text. Both worker boundaries; the exact attempt-3 refusal and its
+wording; the run-commands refusal however it is worded; direct-write; the
+over-grant; silence not being a contradiction; unknown labels raising; a
+mismatch costing no call and no budget; the worker being told its tools and how
+to ask; the two-call cap and that a different errand may still ask; and an
+end-to-end run where the lead sends the attempt-3 errand, gets the refusal in
+its next prompt, and proceeds with no worker call made.
+
+Three existing tests were stale in the way the change intends and were updated,
+not weakened: the worker prompt now legitimately opens with its briefing, so a
+`startswith` on the bare errand became an ordering assertion that also pins the
+briefing and the `NEED TOOL` line.
+
+Full suite **972 passed, 2 skipped** with Docker and installed-CLI checks
+enabled; ruff and diff-check clean. Note for whoever runs this next: three
+container tests errored intermittently because Docker Desktop on this host lost
+the `python:3.12-slim` tag from its index while keeping the image; `docker pull`
+restored it. Not a code fault, but it looks like one.
+
+### Not done
+
+No turn cap. No budget, role, tolerance or private-case change. No run. Whether
+to spend a window on attempt 4 is Davis's call, and the honest prediction is
+that this changes the failure rather than guaranteeing a pass: it makes the
+mismatch cheap and visible instead of expensive and silent.

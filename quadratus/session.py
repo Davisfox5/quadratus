@@ -72,6 +72,7 @@ from .taskmeta import AmbiguousMetadata, TaskMetadata, parse_control, parse_meta
 from .usage import UsageMeter
 from .workers import (
     WORKER_TREE,
+    ErrandToolMismatch,
     FanOutExceeded,
     RepeatedFailure,
     WorkerBudget,
@@ -705,11 +706,14 @@ class Session:
                     raise RunStalled("Worker budget exhausted before a draft was produced.")
                 try:
                     request = json.loads(body[len("WORKER "):])
+                    needs = request.get('needs')
                     if (not isinstance(request, dict) or request.get('errand') not in WORKER_TREE
                             or not isinstance(request.get('instruction'), str)
                             or not request['instruction'].strip()
                             or type(request.get('write', False)) is not bool
-                            or type(request.get('demanding', False)) is not bool):
+                            or type(request.get('demanding', False)) is not bool
+                            or not isinstance(needs, (list, type(None)))
+                            or any(not isinstance(n, str) for n in needs or ())):
                         raise ValueError('invalid worker request')
                 except (ValueError, TypeError) as exc:
                     raise RunStalled("Expected WORKER JSON with errand and instruction.") from exc
@@ -734,11 +738,11 @@ class Session:
                         task=task, parent_key=lead, prompt=request['instruction'],
                         label=label,
                         errand=request['errand'], demanding=request.get('demanding', False),
-                        allow_writes=writes,
+                        allow_writes=writes, needs=needs,
                     )
                 except PartialWorkStopped:
                     raise
-                except (FanOutExceeded, RepeatedFailure) as exc:
+                except (FanOutExceeded, RepeatedFailure, ErrandToolMismatch) as exc:
                     # Budget and repeated-failure guards are the lead's own
                     # limits reported back to it, not a crash: it can still
                     # close the task incomplete with what it has.
@@ -1422,8 +1426,13 @@ class Session:
         parts.append(worker_menu())
         parts.append('To commission one worker, reply only WORKER followed by JSON: '
                      '{"errand":"code","instruction":"one bounded request",'
-                     '"demanding":false,"write":false}. '
-                     'Use write:true only for an authorized project edit. Workers cannot delegate.')
+                     '"demanding":false,"write":false,"needs":[]}. '
+                     'needs states what the errand must be able to do: "patch" to change '
+                     'files, "execute" to run commands, "direct-write" to write a file '
+                     'the harness cannot patch, [] for an answer in text. Set write:true '
+                     'exactly when needs contains patch. The harness checks the fit '
+                     'before the call is made and refuses a mismatch for free. '
+                     'Workers cannot delegate.')
         if self.project:
             parts.append("Inspect the project source in your working directory. "
                          + ("Implement this task using the edit method in your role instructions; prose alone is not implementation."
