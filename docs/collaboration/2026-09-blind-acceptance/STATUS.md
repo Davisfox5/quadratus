@@ -40,9 +40,14 @@ because the limit envelope carries an empty `modelUsage` map. Astra's own
 window state is therefore unknown. Per Davis's standing instruction nothing was
 changed and no retry was made. [Result and review](evidence/scored-attempt-4/README.md).
 
-**Open for Davis:** whether a call that failed on a vendor limit, and so spent
-nothing, should latch the unknown-usage stop that exists for a successful call
-whose spend cannot be read. And when to retry, once a window returns. The
+**Fixed on Davis's instruction: the run now proceeds to the fallback seat
+whether or not the primary has tokens left.** An all-zero token report is read
+as a report of zero rather than as missing usage, so a vendor limit envelope no
+longer latches the budget before the deputy can be reserved. A missing or
+unreadable `usage` still stops the run, which keeps the timeout-after-partial-
+work case intact. Suite 976 passed, 2 skipped.
+
+**Open for Davis:** when to retry, once a window returns. The
 worker tool-fit repair remains unexercised: no attempt has reached a lead since
 it landed.
 

@@ -551,17 +551,26 @@ def _claude_usage_parts(stdout: str):
         if any(c is None for c in counts):
             malformed = True
         else:
+            # An all-zero report is a report. An earlier version collapsed it
+            # to "no usage", on the reasoning that zero is indistinguishable
+            # from missing -- which is not true here: a missing ``usage`` key
+            # never reaches this branch at all. Attempt 4 of the blind
+            # acceptance paid for the difference. A vendor window-limit
+            # envelope reports zeros because the request was rejected, that
+            # read as unknown usage, the run budget latched, and the
+            # orchestrator's fallback seat -- already chosen, and logged as
+            # chosen -- was refused its reservation. The run ended in 3.5
+            # seconds without ever calling the deputy the fallback exists for.
             seat = {"input_tokens": counts[0] + counts[1] + counts[2], "output_tokens": counts[3]}
-            if seat["input_tokens"] == 0 and seat["output_tokens"] == 0:
-                seat = None
     elif usage is not None:
         malformed = True
     rows: Dict[str, Dict[str, int]] = {}
     model_usage = payload.get("modelUsage", _ABSENT)
     if isinstance(model_usage, dict):
-        if not model_usage and seat is not None:
-            # Present and empty is a claim of "no models", which a nonzero
-            # seat contradicts. Absent says nothing and keeps the seat.
+        if not model_usage and seat is not None and (seat["input_tokens"] or seat["output_tokens"]):
+            # Present and empty is a claim of "no models", which only a
+            # *nonzero* seat contradicts: a seat that reports zero agrees with
+            # it. Absent says nothing and keeps the seat.
             malformed = True
         for name, row in model_usage.items():
             totals = _claude_row_totals(row)

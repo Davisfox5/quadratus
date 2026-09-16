@@ -178,3 +178,54 @@ def test_a_present_null_model_usage_is_unknown_like_an_empty_map():
                                                                        "seat_tokens": 65565}
     # Not a mapping at all is the same claim: present, unusable.
     assert _extract_claude_usage(_envelope(modelUsage=[FABLE])) is None
+
+
+# -- an all-zero report is a report ---------------------------------------
+#
+# Attempt 4 of the blind acceptance, 2026-09-16. Fable's window was gone and
+# its limit envelope reports zero tokens, because the request was rejected
+# before any work. An earlier version of the parser collapsed an all-zero seat
+# to "no usage", reasoning that zero is indistinguishable from missing. It is
+# not: a missing `usage` key never reaches that branch. The collapse read the
+# envelope as unknown usage, the run budget latched, and the orchestrator's
+# fallback seat -- already chosen, and logged as chosen -- was refused its
+# reservation. The run ended in 3.5 seconds having never called the deputy.
+
+LIMIT_ENVELOPE = json.dumps({
+    "type": "result", "subtype": "success", "is_error": True,
+    "stop_reason": "stop_sequence", "num_turns": 1,
+    "result": "You've reached your Fable limit.",
+    "usage": {"input_tokens": 0, "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0, "output_tokens": 0},
+    "modelUsage": {},
+})
+
+
+def test_a_vendor_limit_envelope_reports_zero_rather_than_unknown():
+    assert _extract_claude_usage(LIMIT_ENVELOPE) == {"input_tokens": 0, "output_tokens": 0}
+    assert _extract_claude_diagnostics(LIMIT_ENVELOPE) is None
+
+
+def test_an_empty_model_usage_agrees_with_a_zero_seat_and_contradicts_a_spending_one():
+    spent = json.loads(LIMIT_ENVELOPE)
+    spent["usage"] = dict(spent["usage"], input_tokens=5)
+    assert _extract_claude_usage(json.dumps(spent)) is None
+
+
+def test_a_missing_usage_key_is_still_unknown():
+    """The distinction the collapse destroyed. A timed-out call parses no
+    envelope at all, and must still stop the run."""
+    assert _extract_claude_usage(json.dumps({"type": "result"})) is None
+    assert _extract_claude_usage("") is None
+
+
+def test_the_zero_report_lets_a_run_budget_seat_the_next_attempt():
+    from quadratus.run_budget import RunBudget, RunLimits
+    budget = RunBudget(RunLimits())
+    ticket, _ = budget.reserve()
+    budget.finish(ticket, _extract_claude_usage(LIMIT_ENVELOPE))
+    assert budget.snapshot()["stop_reason"] == "", "the fallback seat must still be reservable"
+    assert budget.snapshot()["reported_tokens"] == 0
+    second, _ = budget.reserve()
+    budget.finish(second, {"input_tokens": 40, "output_tokens": 4})
+    assert budget.snapshot()["reported_tokens"] == 44

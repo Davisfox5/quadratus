@@ -1357,3 +1357,57 @@ rejected request is a different case. That is Davis's call, not a repair to
 slip into a review lane. No retry. The worker tool-fit repair was never
 exercised, because the run never reached a lead. Container and credential seed
 removed.
+
+## 2026-09-16 — a zero token report is a report, not a missing one
+
+Davis: the run must proceed to Astra whether or not Fable has tokens left.
+Fixed, in the one place that actually caused it.
+
+### The cause, corrected
+
+My first explanation to Davis blamed the empty `modelUsage` map. That was
+wrong, and the envelope disproves it: `_claude_usage_parts` on the saved
+attempt-4 envelope returns `malformed=False`, and deleting `modelUsage`
+entirely changes nothing. The empty-map rule only fires on a nonzero seat.
+
+The real cause was one line of mine from 3ef035a: an all-zero top-level
+`usage` was collapsed to `None`, on the reasoning that zero is
+indistinguishable from missing. It is not. A missing `usage` key never reaches
+that branch — the code already separates them structurally. So a vendor
+window-limit envelope, which honestly reports zeros because the request was
+rejected before any work, read as unknown usage. The budget latched
+`unknown_usage` in the failed call's `finish`, and the fallback seat's
+`reserve` was refused. `_ask_seat` had already recomputed the seat and logged
+`the seat falls to openai:gpt-6-astra`; the reservation is where it died.
+
+### What I tried first, and why the repo stopped me
+
+I first made the budget lenient: `finish(..., failed=True)` would record
+unknown usage without latching. `test_partial_write_timeout_keeps_file_and_
+never_replays` failed immediately, and it was right to. A call that times out
+*after writing files* is also a failed call, and there the spend is both
+unknown and potentially large. "Failed" is the wrong axis. Reverted whole.
+
+### The fix
+
+`_claude_usage_parts` no longer collapses an all-zero seat, and the empty-map
+contradiction now applies only when the seat reports something nonzero — a
+seat reporting zero agrees with "no models" rather than contradicting it.
+`run_budget.py` and `providers.py` are untouched.
+
+Four boundaries, each pinned by a test on the real saved envelope:
+
+| envelope | usage | run |
+| --- | --- | --- |
+| vendor limit, all zeros | `{0, 0}` | continues, fallback is reserved |
+| no `usage` key (a timeout) | `None` | stops, unchanged |
+| counts present but unreadable | `None` | stops, unchanged |
+| empty `modelUsage`, nonzero seat | `None` | stops, unchanged |
+
+Five regressions in `tests/test_claude_auxiliary_usage.py`, including one that
+drives a `RunBudget` through the limit envelope and then reserves and finishes
+a second attempt, which is the behaviour Davis asked for stated as a test.
+
+Suite **976 passed, 2 skipped** with Docker and installed-CLI checks enabled;
+ruff and diff-check clean. Nothing else changed: no budget limit, role,
+tolerance or private-case change, and no run.
