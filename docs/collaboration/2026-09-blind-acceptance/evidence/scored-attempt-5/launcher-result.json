@@ -1,0 +1,5 @@
+{
+  "completed": false,
+  "error": "OperatorInputNeeded: Can you restore read-only shell access to this copy? Source inspection failed because the sandbox cannot create a namespace (`bwrap: No permissions to create a new namespace`), so I cannot ground the next task in actual files.",
+  "run_dir": "/work/.quadratus/runs/20260916T200248Z-984ad6ee"
+}

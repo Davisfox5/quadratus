@@ -1411,3 +1411,44 @@ a second attempt, which is the behaviour Davis asked for stated as a test.
 Suite **976 passed, 2 skipped** with Docker and installed-CLI checks enabled;
 ruff and diff-check clean. Nothing else changed: no budget limit, role,
 tolerance or private-case change, and no run.
+
+## 2026-09-16 — attempt 5: the fallback seat was reached, and could not read
+
+Davis: run attempt 5 now. Frozen at engine adc774e with the zero-token-report
+fix; input re-exported from `a8772ab` and verified file by file; image ID
+inspected and equal; one `run_isolated` call, no retry.
+
+**The attempt-4 fix is confirmed live.** Fable's window is still gone and its
+limit envelope still reports zeros, but the budget read that as zero, stayed
+open, and the fallback seat was reserved and called. `progress.log` shows the
+seat falling to Astra and the ledger's second row is Astra **invoked, ok**.
+
+**It then stopped for a different reason.** Astra could not read the project:
+`bwrap: No permissions to create a new namespace`. The Codex CLI sandboxes
+itself with bubblewrap, which needs a user namespace, and the acceptance
+container denies that with `--cap-drop ALL` and `--security-opt
+no-new-privileges`. Astra handled it exactly as the design wants — it used the
+`ASK` channel rather than inventing a task from an unread tree. A blind run
+configures no operator channel, so `OperatorInputNeeded` stopped the run. Two
+calls, 56,356 tokens, 158 seconds, nothing written. Private 0 of 9, public 0 of
+13, baseline 100 passing offline, all determined by the empty diff.
+
+**This is not new, and it re-reads attempt 3.** The same `bwrap` failure
+appears twice in attempt 3's preserved Sol lead output. That lead was blind
+too, and answered by handing the entire task to one worker after 559 output
+tokens. Attempt 3's finding stands — the worker's tools were never checked
+against its errand — but the lead's decision to delegate everything now has a
+second cause. No `bwrap` appears in any Claude call in any attempt. **Every
+OpenAI seat in every isolated run so far has been unable to read the source**,
+and no OpenAI seat has yet done grounded work in this harness.
+
+**Not changed, deliberately.** Restoring source access means either allowing
+user namespaces in the container, which weakens the outer isolation that makes
+these runs safe to launch, or relaxing the Codex CLI's own `--sandbox
+read-only`, a vendor control this project has repeatedly declined to weaken.
+Both are Davis's call. A third option touches neither and is additive: the
+container preflight checks versions, auth and a Chromium launch but never asks
+whether each installed CLI can read a file in the mounted tree, which would
+have caught this before any window was spent.
+
+Container and credential seed removed.

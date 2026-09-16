@@ -47,7 +47,20 @@ longer latches the budget before the deputy can be reserved. A missing or
 unreadable `usage` still stops the run, which keeps the timeout-after-partial-
 work case intact. Suite 976 passed, 2 skipped.
 
-**Open for Davis:** when to retry, once a window returns. The
+**Attempt 5 reached the fallback seat and could not read the source.** Run
+`984ad6ee`, engine `adc774e`: Fable's window still gone, but the budget stayed
+open and **Astra was reserved and called** — the attempt-4 fix confirmed live.
+Astra then found its own sandbox blocked (`bwrap: No permissions to create a
+new namespace`, denied by the container's `--cap-drop ALL`) and correctly asked
+the operator instead of guessing; a blind run has no operator channel, so the
+run stopped. The same failure appears in attempt 3's Sol lead output: **every
+OpenAI seat in every isolated run so far has been blind to the project.**
+[Result and review](evidence/scored-attempt-5/README.md).
+
+**Open for Davis:** whether to allow user namespaces in the container (weakens
+outer isolation), relax the Codex CLI's own read-only sandbox (a vendor
+control), or add a real read check to the container preflight (additive,
+touches neither). Nothing was changed. Also: the
 worker tool-fit repair remains unexercised: no attempt has reached a lead since
 it landed.
 
