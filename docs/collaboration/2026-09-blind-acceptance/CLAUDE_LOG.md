@@ -1302,3 +1302,58 @@ No turn cap. No budget, role, tolerance or private-case change. No run. Whether
 to spend a window on attempt 4 is Davis's call, and the honest prediction is
 that this changes the failure rather than guaranteeing a pass: it makes the
 mismatch cheap and visible instead of expensive and silent.
+
+## 2026-09-16 — attempt 4 stopped on the orchestrator's exhausted window
+
+Davis authorised attempt 4 and said in advance that the Fable window was
+exhausted and the Astra fallback was close to its limit, with the standing
+instruction that a stop there is recorded and nothing is changed. It stopped
+there. Nothing was changed, and no retry was made.
+
+### Launch and result
+
+Freeze `evidence/scored-attempt-4-freeze.json` at engine a0f16ec: input
+re-exported from `a8772ab` and verified file by file against the same
+commitment, runtime re-assembled with all 36 hashes recorded, image ID
+inspected and equal. The four runtime files that differ from attempt 3 are the
+worker tool-fit repair and the lint `def` fix, each named in the freeze. The
+operator notice is recorded in the freeze itself.
+
+Run bb61698d: **one call, 3.5 seconds, incomplete**. Claude Fable returned a
+vendor limit envelope, *"You've reached your Fable limit."* Nothing was
+written; the saved source is byte-identical to the frozen input. Private 0 of
+9, public 0 of 13, baseline 100 tests passing offline, all determined by the
+empty diff and run only to keep the four attempts comparable.
+
+### Where it actually stopped, which is not quite where it was predicted to
+
+The exhaustion path did its job. `progress.log` reads `claude:fable is out of
+window; the seat falls to openai:gpt-6-astra`, exactly the documented
+behaviour: a window limit is the liveness check arriving late, the seat is
+recomputed, the question is re-asked once.
+
+The accounting rule then refused that re-ask. The limit envelope carries
+`is_error: true`, an all-zero `usage` and an **empty `modelUsage` map**. Under
+the repair batch a present-but-empty `modelUsage` cannot establish complete
+per-model usage, so the attempt is unknown usage, and one unknown-usage attempt
+stops the run. `budget.json`: `unknown_usage_attempts: 1`,
+`reported_tokens: 0`. The ledger's second row is Astra with `invoked: false`.
+
+So the run did not end because both seats were gone. It ended because a call
+that failed on a vendor limit, and therefore spent nothing, latched a stop
+designed for a *successful* call whose spend cannot be read. **Astra's window
+state is still unknown, because Astra was never called.**
+
+That distinction matters for the retry: the prediction was that we would lose
+the orchestrator, and what we can actually say is that we lost the primary and
+never learned about the deputy.
+
+### Deliberately not done
+
+No code change, per the standing instruction, and I want to be explicit that I
+think this is a genuine interaction worth a decision rather than a thing to
+quietly patch: the rule is right for the case it was written for, and a
+rejected request is a different case. That is Davis's call, not a repair to
+slip into a review lane. No retry. The worker tool-fit repair was never
+exercised, because the run never reached a lead. Container and credential seed
+removed.

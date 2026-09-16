@@ -31,8 +31,20 @@ and the escalation is capped at one ask plus one reissue. `needs_from_text` also
 now sees an interpreter named by path, which the attempt-3 brief used. Suite 972
 passed, 2 skipped; ruff and diff-check clean.
 
-**Open for Davis:** whether to authorise attempt 4. Nothing is queued and no
-further run has been launched.
+**Attempt 4 ran and stopped on the orchestrator's exhausted window**, which
+Davis predicted before the launch. Run `bb61698d`, engine `a0f16ec`: one call,
+3.5 seconds, nothing written, source byte-identical to the input. Fable
+returned a vendor limit envelope; the seat was recomputed to Astra as designed,
+and the run then stopped at `unknown_usage` **before Astra was invoked**,
+because the limit envelope carries an empty `modelUsage` map. Astra's own
+window state is therefore unknown. Per Davis's standing instruction nothing was
+changed and no retry was made. [Result and review](evidence/scored-attempt-4/README.md).
+
+**Open for Davis:** whether a call that failed on a vendor limit, and so spent
+nothing, should latch the unknown-usage stop that exists for a successful call
+whose spend cannot be read. And when to retry, once a window returns. The
+worker tool-fit repair remains unexercised: no attempt has reached a lead since
+it landed.
 
 
 **The two-fix repair batch is complete and verified offline.** No new
