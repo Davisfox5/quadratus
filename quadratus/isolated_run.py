@@ -24,6 +24,16 @@ class IsolatedResult:
     exit_code: int | None
     image_id: str
     container_name: str
+    #: Seconds since the heartbeat last advanced when the run ended. None when
+    #: no heartbeat was watched. Present so a stall can be read from the record
+    #: rather than inferred.
+    idle_seconds: float | None = None
+
+
+#: How long one `docker wait` slice runs before the heartbeat is re-read.
+#: Short enough that a stall is noticed promptly, long enough that the
+#: supervisor is not spinning: the workload writes far less often than this.
+_POLL_SECONDS = 5
 
 
 def _tree(path):
@@ -67,16 +77,38 @@ def _credential_tree(path):
 
 
 def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=False,
-                 credentials=None):
+                 credentials=None, heartbeat=None, stall_seconds=None):
     """Run a command in a disposable container and always remove its processes.
 
     Timeout bounds the workload; Docker control-plane cleanup has a separate
     bounded grace. Cleanup failure raises instead of claiming work has stopped.
     The writable work directory survives timeout for inspection of partial work.
+
+    ``wall_seconds`` is a *ceiling*, not a schedule. Set it above whatever
+    bounds the workload itself, so a run that uses its full time still gets to
+    write its own records: attempt 10 of the blind acceptance had the two equal
+    at 900 seconds and lost ``result.json``, ``report.md``, ``ledger.md``,
+    ``delegation.md``, ``changes.diff`` and every vendor session file, because
+    the kill landed before the workload's own final steps.
+
+    ``heartbeat`` is a path the workload touches as it makes progress -- the
+    run budget's state file is the natural one, since it is rewritten at every
+    call boundary. With ``stall_seconds`` it separates the two failures that a
+    single timeout conflates: a run still working when the ceiling arrives
+    (``wall_deadline``) and a run that stopped making progress and would
+    otherwise be waited on to the ceiling for nothing (``stalled``). A stall is
+    caught in ``stall_seconds`` rather than in ``wall_seconds``, so a wedged
+    container dies sooner than a busy one, not later.
     """
     if (isinstance(wall_seconds, bool) or not isinstance(wall_seconds, (int, float))
             or not math.isfinite(wall_seconds) or wall_seconds <= 0):
         raise ValueError('wall_seconds must be positive and finite')
+    if stall_seconds is not None:
+        if (isinstance(stall_seconds, bool) or not isinstance(stall_seconds, (int, float))
+                or not math.isfinite(stall_seconds) or stall_seconds <= 0):
+            raise ValueError('stall_seconds must be positive and finite')
+        if heartbeat is None:
+            raise ValueError('stall_seconds needs a heartbeat path to watch')
     if (not isinstance(command, (list, tuple)) or not command
             or any(not isinstance(x, str) or '\0' in x for x in command)
             or not command[0].strip()):
@@ -117,13 +149,56 @@ def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=Fal
         return subprocess.run(argv, capture_output=True, text=True, check=True,
                               timeout=max(0.01, deadline - time.monotonic()))
 
-    outcome, code = 'failed', None
+    def beat():
+        """When the workload last showed progress, or None if it never has."""
+        if heartbeat is None:
+            return None
+        try:
+            return Path(heartbeat).stat().st_mtime
+        except OSError:
+            return None
+
+    outcome, code, idle = 'failed', None, None
     try:
         docker(args)
         docker(['docker', 'start', name])
-        result = docker(['docker', 'wait', name])
-        code = int(result.stdout.strip())
-        outcome = 'success' if code == 0 else 'failed'
+        if stall_seconds is None:
+            result = docker(['docker', 'wait', name])
+            code = int(result.stdout.strip())
+            outcome = 'success' if code == 0 else 'failed'
+        else:
+            # Waited in slices so the heartbeat can be read between them. The
+            # slice is short relative to any sane stall window; the cost is one
+            # stat per slice against a file the workload is writing anyway.
+            started = time.monotonic()
+            last_beat, last_seen = beat(), time.monotonic()
+            while True:
+                slice_end = min(deadline, time.monotonic() + _POLL_SECONDS)
+                try:
+                    result = subprocess.run(['docker', 'wait', name], capture_output=True,
+                                            text=True, check=True,
+                                            timeout=max(0.01, slice_end - time.monotonic()))
+                    code = int(result.stdout.strip())
+                    outcome = 'success' if code == 0 else 'failed'
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+                current = beat()
+                if current != last_beat:
+                    last_beat, last_seen = current, time.monotonic()
+                idle = time.monotonic() - last_seen
+                if idle >= stall_seconds:
+                    # Progress stopped. Waiting out the remaining ceiling would
+                    # buy nothing and is exactly the indefinite wait a
+                    # heartbeat exists to avoid.
+                    outcome = 'stalled'
+                    break
+                if time.monotonic() >= deadline:
+                    outcome = 'wall_deadline'
+                    break
+                if time.monotonic() - started > wall_seconds:  # pragma: no cover
+                    outcome = 'wall_deadline'
+                    break
     except subprocess.TimeoutExpired:
         outcome = 'wall_deadline'
     finally:
@@ -135,4 +210,4 @@ def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=Fal
             raise RuntimeError('Container cleanup failed; workload stop is unverified')
     # Stdout from workload must be explicitly written under /work if needed;
     # keep this supervisor's result free of possible vendor prompts/credentials.
-    return IsolatedResult(outcome, code, image, name)
+    return IsolatedResult(outcome, code, image, name, idle_seconds=idle)

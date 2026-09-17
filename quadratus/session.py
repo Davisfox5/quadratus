@@ -1548,11 +1548,13 @@ class Session:
                      'before the call is made and refuses a mismatch for free. '
                      'Workers cannot delegate.')
         if self.project:
-            parts.append("Inspect the project source in your working directory. "
+            # Deliberately no longer "inspect the project source": that told the
+            # lead to go exploring in the same breath as the guidance below
+            # asked it not to, and attempt 10 shows which of the two won.
+            parts.append("The project source is in your working directory. "
                          + ("Implement this task using the edit method in your role instructions; prose alone is not implementation."
                             if self.config.allow_writes else
                             "This run has no edit grant. Return analysis and proposed changes only."))
-            parts.append(_READ_BEFORE_YOU_EXPLORE)
         parts.append(
             "To read a filed artifact in full before working, reply with "
             "exactly 'FETCH: <artifact-id>' and nothing else -- you will get "
@@ -1589,6 +1591,12 @@ class Session:
         # tool loops. The middle of the prompt -- where the task would
         # otherwise sit once history piles up -- is the least reliable real
         # estate there is.
+        if self.project:
+            # Immediately before the recitation, which is the other thing this
+            # prompt most needs read. Attempt 10 put this in the middle, after
+            # an instruction to inspect the source, and got no delegation at
+            # all out of it -- so it is both moved and no longer contradicted.
+            parts.append(_READ_BEFORE_YOU_EXPLORE)
         parts.append(
             "Before finishing, re-read your task, restated verbatim, and "
             f"confirm every part of it is addressed:\n\n{spec.description}"
