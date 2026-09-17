@@ -41,15 +41,21 @@ _CANCELLED = json.dumps({
 })
 
 
-def test_diagnostics_hold_stop_reason_model_calls_and_tool_names_only():
+def test_diagnostics_hold_stop_reason_model_calls_tool_names_and_the_reread_split():
     got = _extract_grok_diagnostics(_CANCELLED)
     assert got == {"stop_reason": "cancelled", "model_calls": 2,
+                   "cached_input_tokens": 17920,
                    "attempted_tools": ["bash", "read_file", "grep"]}
 
 
 def test_nothing_but_names_leaks():
-    """Arguments, paths and URLs never reach the record."""
-    flat = json.dumps(_extract_grok_diagnostics(_CANCELLED))
+    """Arguments, paths and URLs never reach the record.
+
+    Probed over the *values* only. The keys are ours and come from a fixed
+    whitelist, and one of them is now ``cached_input_tokens``, which contains
+    the probe word "token" without carrying anything from the envelope.
+    """
+    flat = json.dumps(list(_extract_grok_diagnostics(_CANCELLED).values()))
     for secret in ("mutation_check", "/Users", "secret", "https://", "token", "BULK_EDIT"):
         assert secret not in flat
 
@@ -141,11 +147,17 @@ def test_the_provider_exposes_diagnostics_and_resets_them_per_attempt(monkeypatc
         provider.cleanup()
 
 
-def test_codex_carries_no_diagnostics_and_claude_only_usage_provenance():
-    """Grok's extractor reads tool names from an undocumented envelope shape;
-    claude's (added 2026-09-15) reads only usage provenance from ``modelUsage``;
-    codex has none. Adding one elsewhere is a deliberate whitelist decision."""
-    assert cli_providers.CODEX_SPEC.extract_diagnostics is None
+def test_every_vendor_now_reports_how_much_of_its_input_was_re_read():
+    """Codex gained an extractor on 2026-09-17, and the reason is worth keeping.
+
+    It had none, so its calls reached the ledger with no stop reason and no
+    re-read split -- and codex holds the orchestrator seat whenever Fable is
+    out, which by attempt 9 was every run. Grok's extractor still reads tool
+    names from an undocumented envelope shape and claude's still reads usage
+    provenance from ``modelUsage``; what all three now share is the split
+    between new input and input the model was handed again.
+    """
+    assert cli_providers.CODEX_SPEC.extract_diagnostics is cli_providers._extract_codex_diagnostics
     assert cli_providers.CLAUDE_SPEC.extract_diagnostics is cli_providers._extract_claude_diagnostics
     assert cli_providers.CLAUDE_SPEC.extract_diagnostics('{"result": "ok"}') is None
     assert cli_providers.GROK_SPEC.extract_diagnostics is _extract_grok_diagnostics

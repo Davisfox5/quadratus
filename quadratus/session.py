@@ -353,6 +353,21 @@ _ORIENT_REQUEST = (
     'if you read nothing new. Do not investigate beyond what the task needed.'
 )
 
+_READ_BEFORE_YOU_EXPLORE = (
+    'Exploring costs you far more than it looks. Every step of your own loop re-sends '
+    'everything before it, so the cost of your call grows with the square of how many '
+    'steps you take: a measured task took 9 steps and 241,700 tokens, and the same work '
+    'at 15 steps took 450,602. A whole file you read early is re-sent on every step '
+    'after it. A worker does not work that way -- it answers in one step and its cost is '
+    'flat, and a measured worker answer came back for 7,337 tokens.\n'
+    'So when what you need is *knowledge about the code* rather than a change to it -- '
+    'how a module is laid out, what is already imported, what convention the '
+    'surrounding code follows, whether something already exists -- commission a worker '
+    'for it first and work from the answer. Ask for what you would otherwise have gone '
+    'looking for, and ask narrowly; a worker reads the project and reports back. Do your '
+    'own reading for the part you are actually editing, where you need the exact text.'
+)
+
 _NEEDS_REQUEST = (
     'After KIND, optionally include NEEDS: ["execute", "patch", "direct-write"] '
     'with only the operations required for this task (or [] for none). '
@@ -1537,6 +1552,7 @@ class Session:
                          + ("Implement this task using the edit method in your role instructions; prose alone is not implementation."
                             if self.config.allow_writes else
                             "This run has no edit grant. Return analysis and proposed changes only."))
+            parts.append(_READ_BEFORE_YOU_EXPLORE)
         parts.append(
             "To read a filed artifact in full before working, reply with "
             "exactly 'FETCH: <artifact-id>' and nothing else -- you will get "

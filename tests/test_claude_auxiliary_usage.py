@@ -22,10 +22,25 @@ def _envelope(**extra):
     return json.dumps({"type": "result", "result": "ok", "usage": USAGE, **extra})
 
 
+def _provenance(out):
+    """The auxiliary-usage keys, with the re-read split set aside.
+
+    These tests are about which ``modelUsage`` rows were counted and how, and
+    they assert exact dictionaries so that nothing else can quietly appear.
+    ``cached_input_tokens`` (added 2026-09-17) is a deliberate separate fact
+    about how much of the input was text the model had already seen, pinned in
+    tests/test_reread_visibility.py; separating it here keeps both assertions
+    exact and keeps each about one thing.
+    """
+    got = _extract_claude_diagnostics(out)
+    if isinstance(got, dict):
+        got.pop("cached_input_tokens", None)
+    return got
+
 def test_attempt_one_envelope_counts_the_haiku_row_once():
     out = _envelope(modelUsage={"claude-fable-5-1": FABLE, "claude-haiku-4-5-20251001": HAIKU})
     assert _extract_claude_usage(out) == {"input_tokens": 62738 + 2801, "output_tokens": 2827 + 16}
-    got = _extract_claude_diagnostics(out)
+    got = _provenance(out)
     assert got == {"auxiliary_models": ["claude-haiku-4-5-20251001"], "auxiliary_tokens": 2817}
     assert safe_diagnostics(got) == got
 
@@ -46,7 +61,7 @@ def test_a_malformed_row_makes_the_whole_figure_unknown():
     the seat's own known figure survives in the diagnostics, not as the total."""
     out = _envelope(modelUsage={"claude-fable-5-1": FABLE, "claude-haiku-4-5-20251001": {"inputTokens": "lots"}})
     assert _extract_claude_usage(out) is None
-    got = _extract_claude_diagnostics(out)
+    got = _provenance(out)
     assert got == {"auxiliary_usage": "unknown", "seat_tokens": 62738 + 2827}
     assert safe_diagnostics(got) == got
 
@@ -67,7 +82,7 @@ def test_fields_are_validated_never_coerced(bad):
 def test_rows_summing_below_the_seat_are_partial_and_unknown():
     out = _envelope(modelUsage={"claude-haiku-4-5-20251001": HAIKU})  # the seat's own row is missing
     assert _extract_claude_usage(out) is None
-    assert _extract_claude_diagnostics(out) == {"auxiliary_usage": "unknown", "seat_tokens": 65565}
+    assert _provenance(out) == {"auxiliary_usage": "unknown", "seat_tokens": 65565}
 
 
 def test_a_tie_for_the_seat_total_is_not_an_identity():
@@ -106,7 +121,10 @@ def test_the_run_budget_counts_auxiliary_rows_and_stops_on_malformed_ones(monkey
     with pytest.raises(RunBudgetExceeded, match="unknown_usage"):
         provider.generate("second")
     assert budget.snapshot()["stop_reason"] == "unknown_usage"
-    assert provider.last_diagnostics == {"auxiliary_usage": "unknown", "seat_tokens": 65565}
+    provenance = dict(provider.last_diagnostics)
+    # The re-read split rides along on every call now; see _provenance above.
+    assert provenance.pop("cached_input_tokens", None) == 62672
+    assert provenance == {"auxiliary_usage": "unknown", "seat_tokens": 65565}
 
 
 def test_rows_that_do_not_match_the_seat_are_unattributed_excess():
@@ -160,12 +178,12 @@ def test_consistency_is_checked_per_component_not_by_grand_total():
                       "usage": {"input_tokens": 100, "output_tokens": 20},
                       "modelUsage": {"seat": {"inputTokens": 1, "outputTokens": 120}}})
     assert _extract_claude_usage(out) is None
-    assert _extract_claude_diagnostics(out) == {"auxiliary_usage": "unknown", "seat_tokens": 120}
+    assert _provenance(out) == {"auxiliary_usage": "unknown", "seat_tokens": 120}
 
 
 def test_an_empty_model_usage_map_is_unknown_but_absence_keeps_the_seat():
     assert _extract_claude_usage(_envelope(modelUsage={})) is None
-    assert _extract_claude_diagnostics(_envelope(modelUsage={})) == {"auxiliary_usage": "unknown",
+    assert _provenance(_envelope(modelUsage={})) == {"auxiliary_usage": "unknown",
                                                                      "seat_tokens": 65565}
     assert _extract_claude_usage(_envelope()) == {"input_tokens": 62738, "output_tokens": 2827}
     # An empty map with no seat figure at all is simply nothing reported.
@@ -174,7 +192,7 @@ def test_an_empty_model_usage_map_is_unknown_but_absence_keeps_the_seat():
 
 def test_a_present_null_model_usage_is_unknown_like_an_empty_map():
     assert _extract_claude_usage(_envelope(modelUsage=None)) is None
-    assert _extract_claude_diagnostics(_envelope(modelUsage=None)) == {"auxiliary_usage": "unknown",
+    assert _provenance(_envelope(modelUsage=None)) == {"auxiliary_usage": "unknown",
                                                                        "seat_tokens": 65565}
     # Not a mapping at all is the same claim: present, unusable.
     assert _extract_claude_usage(_envelope(modelUsage=[FABLE])) is None

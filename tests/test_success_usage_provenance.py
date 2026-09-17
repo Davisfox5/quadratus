@@ -27,8 +27,13 @@ def test_successful_claude_call_retains_auxiliary_provenance(monkeypatch, tmp_pa
     assert fleet.invoke('claude:fable', 'Record the supplied result') == 'recorded'
     event = ledger.events[-1]
     assert event.outcome == 'ok'
+    # The re-read split reaches the durable record too, which is the whole
+    # point of it: attempt 9 spent 76% of its budget on input the models had
+    # already seen, and no run record showed that. Asserted end to end here
+    # because the ledger file is where someone would look.
     assert event.diagnostics == {'auxiliary_models': ['claude-haiku-4-5-20251001'],
-                                 'auxiliary_tokens': 2815}
+                                 'auxiliary_tokens': 2815,
+                                 'cached_input_tokens': 84160}
     assert budget.snapshot()['reported_tokens'] == 89963
     assert event.input_tokens + event.output_tokens == 89963
     assert len(ledger.events) == 1  # auxiliary metadata is not another billable event

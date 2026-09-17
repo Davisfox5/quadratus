@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -267,6 +268,26 @@ def safe_diagnostics(value) -> dict:
     seat = value.get('seat_tokens')
     if type(seat) is int and 0 <= seat <= 1_000_000_000:
         result['seat_tokens'] = seat
+    # How much of this call's input the model was being handed again. An agent
+    # re-sends its whole conversation on every step, so a long loop's reported
+    # total is mostly text it has already seen -- 402,816 of attempt 9's
+    # 532,795. Nothing in the run record showed that, and it took opening the
+    # private vendor envelopes to find it, which is exactly the kind of fact a
+    # ledger exists to save someone from having to dig for. A subset of
+    # ``input_tokens`` after provider normalisation, never an addition to it.
+    reread = value.get('cached_input_tokens')
+    if type(reread) is int and 0 <= reread <= 1_000_000_000:
+        result['cached_input_tokens'] = reread
+    # What the vendor itself says this call cost, where it says. Kept beside
+    # our own API-price counterfactual rather than replacing it: the two
+    # answer different questions, and on attempt 8's lead they differed 7.4x
+    # because cache reads are billed at a fraction of fresh input. Which of
+    # them a subscription window actually meters by is not documented, so
+    # recording both is how that becomes answerable instead of assumed.
+    cost = value.get('vendor_cost_usd')
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+        if math.isfinite(cost) and 0 <= cost <= 1_000_000:
+            result['vendor_cost_usd'] = round(float(cost), 6)
     return result
 
 

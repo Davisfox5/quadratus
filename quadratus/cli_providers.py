@@ -259,6 +259,10 @@ def _extract_grok_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
     calls = payload.get("modelCalls")
     if isinstance(calls, int) and not isinstance(calls, bool) and calls >= 0:
         diagnostics["model_calls"] = calls
+    # This envelope reports both, and grok is where the re-read cost is
+    # largest: 383,104 of attempt 8's 437,173 input tokens.
+    diagnostics.update(_reread_and_cost(payload.get("usage"),
+                                        payload.get("total_cost_usd")))
     names: List[str] = []
 
     def tool_name(item, certain):
@@ -368,6 +372,58 @@ def _extract_grok_usage(stdout: str) -> Optional[Dict[str, int]]:
     if input_tokens == 0 and output_tokens == 0:
         return None
     return {"input_tokens": input_tokens, "output_tokens": output_tokens}
+
+
+def _reread_and_cost(usage, cost=None) -> Dict[str, object]:
+    """How much of this call's input was text the model had already seen.
+
+    Attempt 9 reported 532,795 tokens, of which 402,816 were re-read: an agent
+    re-sends its whole conversation on every step, so a long loop's total is
+    mostly repetition. Nothing in the run record showed that. Finding it meant
+    opening the private vendor envelopes, which is precisely the digging a
+    ledger exists to spare someone.
+
+    Reported as a *subset* of the normalised ``input_tokens``, never an
+    addition to it, so the two can be compared without double counting.
+    ``vendor_cost_usd`` is what the vendor says it charged, kept beside our own
+    API-price counterfactual rather than replacing it -- on attempt 8's lead
+    the two differed 7.4x, because cache reads bill at a fraction of fresh
+    input, and which of them a subscription window meters by is undocumented.
+    """
+    facts: Dict[str, object] = {}
+    if isinstance(usage, dict):
+        total = 0
+        for key in ("cache_read_input_tokens", "cache_creation_input_tokens",
+                    "cached_input_tokens"):
+            value = usage.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                total += value
+        if total:
+            facts["cached_input_tokens"] = total
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
+        facts["vendor_cost_usd"] = float(cost)
+    return facts
+
+
+def _extract_codex_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
+    """Bounded facts from codex's ``turn.completed`` event.
+
+    This vendor had no diagnostics extractor at all, so its calls reached the
+    ledger with no stop reason and no re-read split -- and codex holds the
+    orchestrator seat whenever Fable is out, which by attempt 9 was every run.
+    """
+    diagnostics: Dict[str, object] = {}
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "turn.completed":
+            continue
+        # The last completed turn wins, matching _extract_codex_usage.
+        diagnostics = {"stop_reason": "turn.completed"}
+        diagnostics.update(_reread_and_cost(event.get("usage")))
+    return diagnostics or None
 
 
 def _extract_plain(stdout: str) -> str:
@@ -675,6 +731,13 @@ def _extract_claude_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
     """
     seat, rows, malformed = _claude_usage_parts(stdout)
     diagnostics: Dict[str, object] = {}
+    try:
+        payload = json.loads(stdout)
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        diagnostics.update(_reread_and_cost(payload.get("usage"),
+                                            payload.get("total_cost_usd")))
     if malformed:
         diagnostics["auxiliary_usage"] = "unknown"
         if seat is not None:
@@ -1178,6 +1241,7 @@ CODEX_SPEC = CLISpec(
     # vendor can be checked positively rather than by known failure wording.
     auth_check_args=["login", "status"],
     auth_ok_pattern=r"(?i)logged in",
+    extract_diagnostics=_extract_codex_diagnostics,
     always_args=["--skip-git-repo-check"],
     # No seat on this transport may spawn its own agents. A Sol review on
     # 2026-09-13 used the CLI's spawn_agent to create a second Sol that passed
