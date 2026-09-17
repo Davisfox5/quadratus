@@ -155,10 +155,50 @@ may record up to four `topic: fact` notes.
 and a reissue would pay the quadratic twice; a seat that cannot reach a tool
 finds a workaround, which is attempt 3's worker writing 101KB of code as prose.
 
-**Still open for Davis, unchanged:** what `max_reported_tokens` should count.
-The threshold is still reached and still mostly cache, but the run now spends
-it on finished slices. The worker tool-fit repair (`a0f16ec`) is six attempts
-unexercised: leads have done their own work rather than commissioning errands.
+**The token threshold stays as it is** (Davis, 2026-09-17). Counting re-reads
+is the honest reading of what a run costs; loosening it would hide the problem,
+and the cost compounds quadratically as jobs grow. Claude recommended counting
+new work only and was overruled with that reasoning. The re-reads themselves
+are what get attacked instead.
+
+**Attempts 10 and 11: the cost is understood and coming down.** An agent
+re-sends its whole conversation on every step, so a lead's cost grows with the
+*square* of its step count. Attempt 10 made that visible for the first time —
+every call now reports how much of its input was a re-read and what the vendor
+itself charged, and Codex, which had no diagnostics extractor at all while
+holding the orchestrator seat, now reports too. Attempt 11 then cut it:
+
+| Task-1 lead | Tokens | Re-read share |
+| --- | ---: | ---: |
+| Attempt 9 | 241,700 | 66% |
+| Attempt 10 | 353,635 | 82% |
+| **Attempt 11** | **201,764** | **48%** |
+
+Across attempt 11 as a whole, re-reads fell to **61%** from 80% and new work
+rose from 98,447 to **206,020** in a comparable budget. **Two tasks completed**,
+both closed out, both integration-checked and passing.
+[Attempt 10](evidence/scored-attempt-10/README.md) ·
+[attempt 11](evidence/scored-attempt-11/README.md).
+
+**What worked was removing a contradiction, not adding an instruction.** The
+lead prompt told it to inspect the project source and then, blocks later,
+invited it to commission a worker for the inspecting. Removing the first is
+what moved the number. **No workers were commissioned in attempts 10 or 11** —
+nought for two — so that wording is not being tuned again.
+
+**The supervisor now asks whether a run is alive, not whether it wrote.**
+Attempt 10 lost every run record because the outer ceiling equalled the inner
+limit at 900s, and attempt 11's first launch was then killed as `stalled` 240
+seconds into a *healthy* lead call, because the heartbeat watched a file that
+only advances at call boundaries and the window was set below a duration three
+runs had already measured. `run_isolated` takes a callable heartbeat; the
+launcher reports an outstanding call as progress. Ceiling 1080s over an
+unchanged 900s inner limit.
+
+**Still open:** the worker tool-fit repair (`a0f16ec`) is seven attempts
+unexercised. It cannot fire until a lead commissions an errand, and leads keep
+choosing not to; exercising it needs a task that genuinely cannot be done solo,
+not another prompt nudge.
 
 
 **The two-fix repair batch is complete and verified offline.** No new
