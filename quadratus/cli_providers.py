@@ -687,6 +687,18 @@ class CLISpec:
     #: agent loop. Empty means the vendor offers no such mode and every seat
     #: gets the full agent.
     restricted_args: List[str] = field(default_factory=list)
+    #: Used instead of ``restricted_args`` when the operator asserts this
+    #: process is already inside an OS sandbox that is the security boundary
+    #: (``QUADRATUS_CONTAINED=1``). Empty means containment changes nothing,
+    #: which is the right answer for a vendor whose restriction is a tool
+    #: denial: denying a tool costs nothing inside a container and still
+    #: bounds what the model can reach for.
+    contained_restricted_args: List[str] = field(default_factory=list)
+    #: A command that exercises the vendor's own sandbox without invoking a
+    #: model, given as the arguments after the binary. Empty means the vendor
+    #: has no such sandbox to test, which is reported as "not applicable"
+    #: rather than passing silently.
+    sandbox_selftest_args: List[str] = field(default_factory=list)
     #: Flags an agentic seat needs and a restricted one must not get. Distinct
     #: from ``always_args``, which is genuinely unconditional: codex's
     #: ``--skip-git-repo-check`` has to survive into a restricted call, while
@@ -1046,6 +1058,18 @@ CODEX_SPEC = CLISpec(
     # than the other two vendors can do, and said plainly rather than
     # implied by an empty list.
     restricted_args=["--sandbox", "read-only"],
+    # Inside our own container the vendor sandbox cannot start, and it is
+    # redundant there -- see ``contained`` for the measurement and the trade.
+    # This is the only mode codex documents as running commands without
+    # sandboxing. The name is alarming and accurate; what it means here is
+    # "the container is the sandbox". Unverified against a live call: the
+    # ``codex sandbox`` subcommand sandboxes whatever mode it is handed,
+    # because that is what the subcommand is for, so no model-free check can
+    # settle the ``exec`` path. The next scored run settles it.
+    contained_restricted_args=["--sandbox", "danger-full-access"],
+    # Exercises the vendor sandbox with no model call, which is exactly the
+    # mechanism that fails in the acceptance container.
+    sandbox_selftest_args=["sandbox", "--", "true"],
     always_args=["--skip-git-repo-check"],
     # No seat on this transport may spawn its own agents. A Sol review on
     # 2026-09-13 used the CLI's spawn_agent to create a second Sol that passed
@@ -1326,6 +1350,38 @@ def _render_history(history: Sequence[Turn]) -> str:
     return "\n".join(lines)
 
 
+def contained(env: Optional[Mapping[str, str]] = None) -> bool:
+    """Whether the operator asserts an OS sandbox already bounds this process.
+
+    Set by the isolated runner's launcher, never inferred. It asserts one
+    thing: the container is the security boundary, so a vendor's own inner
+    sandbox is redundant here and may be stood down where it cannot start.
+
+    The case is Codex. Its CLI sandboxes model-run shell commands with
+    bubblewrap, which needs an unprivileged user namespace, and the acceptance
+    container denies that through Docker's seccomp profile. The sandbox cannot
+    start, so the seat can run no command at all. Attempts 3 and 5 of the blind
+    acceptance each spent a window on an OpenAI seat that could not read a
+    single file; attempt 5's orchestrator correctly gave up and asked the
+    operator for read access rather than inventing a task.
+
+    The alternative was to let the container create user namespaces. Measured
+    and rejected on 2026-09-17: ``--security-opt seccomp=unconfined`` makes the
+    inner sandbox work, ``--cap-add SYS_ADMIN`` does not, so the only working
+    route opens the surface behind most container escapes, for every process in
+    the container, to enable a second sandbox inside a boundary that already
+    holds writes to the work tree and a tmpfs on a read-only root with no
+    capabilities. Weakening the wall that holds to prop up one that does not is
+    the wrong trade.
+
+    Off by default, so an ordinary host run keeps every vendor sandbox. There
+    the vendor's sandbox *is* the boundary, and standing it down would be a
+    real loss rather than a redundant one.
+    """
+    environ = os.environ if env is None else env
+    return environ.get('QUADRATUS_CONTAINED', '').strip().lower() in {'1', 'true', 'yes'}
+
+
 class NativeControlOverride(ProviderError):
     """A configuration conflicts with the selected native-delegation policy."""
 
@@ -1549,7 +1605,10 @@ class CLIProvider(LLMProvider):
             # readonly_args and write_args both describe what an agent may do
             # with its tools, and this seat's dangerous tools are absent rather
             # than governed.
-            argv += list(spec.restricted_args)
+            if contained() and spec.contained_restricted_args:
+                argv += list(spec.contained_restricted_args)
+            else:
+                argv += list(spec.restricted_args)
         else:
             argv += list(spec.agentic_args)
             argv += list(

@@ -57,10 +57,17 @@ run stopped. The same failure appears in attempt 3's Sol lead output: **every
 OpenAI seat in every isolated run so far has been blind to the project.**
 [Result and review](evidence/scored-attempt-5/README.md).
 
-**Open for Davis:** whether to allow user namespaces in the container (weakens
-outer isolation), relax the Codex CLI's own read-only sandbox (a vendor
-control), or add a real read check to the container preflight (additive,
-touches neither). Nothing was changed. Also: the
+**Decided and implemented (Davis, 2026-09-17): the container is the boundary.**
+Codex's inner sandbox stands down inside `run_isolated` and only there, behind
+an explicit `QUADRATUS_CONTAINED` assertion the launcher makes; Claude and Grok
+are unchanged, since a tool denial needs no privilege. Measured first: allowing
+user namespaces is the only route that keeps both sandboxes, and it opens the
+surface behind most container escapes for every process in the container.
+`tools/acceptance/preflight.py` now checks, with no model call, that the work
+tree is readable and each vendor's own sandbox can start, treating a dead
+sandbox as a blocker when we rely on it and a recorded fact when it is stood
+down. Suite 996 passed, 2 skipped. `--sandbox danger-full-access` is unverified
+against a live call; the next scored run settles it. Also: the
 worker tool-fit repair remains unexercised: no attempt has reached a lead since
 it landed.
 

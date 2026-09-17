@@ -1452,3 +1452,67 @@ whether each installed CLI can read a file in the mounted tree, which would
 have caught this before any window was spent.
 
 Container and credential seed removed.
+
+## 2026-09-17 — the container is the boundary; Codex's inner sandbox stands down
+
+Davis asked which route is right for production, then chose: keep the
+container, drop the Codex sandbox inside it, and add a preflight that checks
+each CLI can actually work before a run.
+
+### The measurement behind the choice
+
+Against the acceptance image, with no model calls:
+
+| container flags | user namespace | Codex's bundled bwrap |
+| --- | --- | --- |
+| current | blocked | fails |
+| `--security-opt seccomp=unconfined` | works | works |
+| `--cap-add SYS_ADMIN` | works | still fails |
+
+Two things follow. The blocker is Docker's seccomp profile, not capabilities,
+and `SYS_ADMIN` is both the larger grant and useless here, so it is ruled out
+outright. The only working route to keep both sandboxes is to allow
+unprivileged user namespaces for every process in the container — the surface
+behind most container escapes — in order to start a second sandbox inside a
+boundary that already holds writes to `/work` and a tmpfs on a read-only root
+with no capabilities and no new privileges. That is weakening the wall that
+holds to prop up one that does not.
+
+### What changed
+
+`cli_providers.contained()` reads `QUADRATUS_CONTAINED`, which the operator's
+launcher asserts and nothing infers. `CLISpec.contained_restricted_args` is
+used in place of `restricted_args` when it is set. Only codex declares one:
+`--sandbox danger-full-access`, the single mode codex documents as running
+commands without sandboxing. Claude and Grok declare none on purpose — their
+restriction is a tool denial, which needs no privilege and still bounds what
+the model can reach for, so containment changes nothing for them. An
+unrestricted codex seat is untouched: this substitutes for the restricted form
+only. Off by default, so an ordinary host run keeps every vendor sandbox,
+where the vendor's sandbox really is the boundary.
+
+`blind_trial.py` sets the variable after it has already proved it is inside
+`run_isolated`, so the assertion is made by the thing that knows.
+
+### The preflight
+
+`tools/acceptance/preflight.py` asks two questions, neither invoking a model:
+can the work tree be read, and can each vendor's own sandbox start.
+`CLISpec.sandbox_selftest_args` carries the vendor's model-free self-test;
+only codex has one (`codex sandbox -- true`), and the others report "not
+applicable" rather than passing silently. A vendor sandbox that cannot start
+is a **blocker** when we intend to rely on it and a **recorded fact** when it
+is stood down deliberately. Verified against the real container both ways:
+without containment it exits non-zero naming openai as the blocker; with
+containment it exits zero and records the same fact as stood down. It refuses
+to run on a host, and the engine import now happens after that refusal so the
+message is the real one.
+
+### Honest residue
+
+`--sandbox danger-full-access` is unverified against a live call. The `codex
+sandbox` subcommand sandboxes whatever mode it is handed, because that is what
+the subcommand is for, so no model-free check can settle the `exec` path. The
+next scored run settles it, and the preflight now reports the condition either
+way. Suite **996 passed, 2 skipped** with Docker and installed-CLI checks;
+ruff and diff-check clean.

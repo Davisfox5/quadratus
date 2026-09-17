@@ -22,6 +22,12 @@ def main():
         raise SystemExit('Run only inside run_isolated with its external watchdog')
     os.umask(0o077)
     os.environ['QUADRATUS_NATIVE_DELEGATION'] = 'off'
+    # This process has already proved it is inside run_isolated's container,
+    # which is the security boundary: read-only root, no capabilities, no new
+    # privileges, writes confined to /work and a tmpfs. A vendor's own inner
+    # sandbox is redundant here, and Codex's cannot start at all -- see
+    # cli_providers.contained for the measurement and the trade.
+    os.environ['QUADRATUS_CONTAINED'] = '1'
     project = Path('/work')
     state = project / '.quadratus'
     evidence = state / 'native-private'
