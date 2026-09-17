@@ -1,0 +1,5 @@
+{"model": "claude:fable", "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "measured": true}
+{"model": "openai:gpt-6-astra", "input_tokens": 59372, "output_tokens": 619, "cost_usd": 0.16081, "measured": true}
+{"model": "grok:default", "input_tokens": 336009, "output_tokens": 17626, "cost_usd": 0.777774, "measured": true}
+{"model": "grok:default", "input_tokens": 7003, "output_tokens": 386, "cost_usd": 0.016322, "measured": true}
+{"model": "openai:gpt-6-astra", "input_tokens": 64549, "output_tokens": 467, "cost_usd": 0.170712, "measured": true}

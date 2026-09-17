@@ -355,15 +355,24 @@ _RUNNERS = (
     "bash", "sh", "zsh", "ffmpeg", "docker", "git", "curl",
 )
 _RUNNER_ALTERNATION = "|".join(re.escape(r) for r in _RUNNERS)
-#: "run `node ...`", "re-run pytest", "execute npm test" -- a verb of running
-#: followed by a known runner, optionally backticked.
+#: An interpreter named by path rather than by bare name. Attempt 3 of the
+#: blind acceptance wrote "Run `/usr/local/bin/python -m pytest -q`", which a
+#: pattern anchored on the bare runner does not see -- so an errand that
+#: plainly runs commands declared nothing, and the check that should have
+#: caught it never fired.
+_RUNNER_PATH = r"(?:[\w.-]*/)*"
+#: "run `node ...`", "re-run pytest", "execute npm test", "run ./venv/bin/pytest"
+#: -- a verb of running followed by a known runner, optionally backticked and
+#: optionally reached by path.
 _RUN_VERB_RE = re.compile(
-    r"\b(?:run|re-?run|execute|invoke|launch)\s+(?:the\s+)?`?(?:" + _RUNNER_ALTERNATION + r")\b",
+    r"\b(?:run|re-?run|execute|invoke|launch)\s+(?:the\s+)?`?" + _RUNNER_PATH
+    + r"(?:" + _RUNNER_ALTERNATION + r")\b",
     re.IGNORECASE,
 )
-#: A backticked command literal starting with a known runner: `node x.js`.
+#: A backticked command literal starting with a known runner, by name or path:
+#: `node x.js`, `/usr/local/bin/python -m pytest`.
 _BACKTICK_COMMAND_RE = re.compile(
-    r"`(?:" + _RUNNER_ALTERNATION + r")(?:\s[^`]*)?`", re.IGNORECASE,
+    r"`" + _RUNNER_PATH + r"(?:" + _RUNNER_ALTERNATION + r")(?:\s[^`]*)?`", re.IGNORECASE,
 )
 #: Outcomes only a run can produce.
 _RUN_OUTCOME_RE = re.compile(

@@ -1,0 +1,89 @@
+{
+  "run": "20260917T183537Z-3eb4b947",
+  "engine_commit": "c0755d0",
+  "application_commit": "a8772ab",
+  "scored_by": "Claude, independently, on Davis's Mac; Codex remains out of context",
+  "scored_at": "2026-09-17T18:55:00Z",
+  "private_set": {
+    "archive_sha256": "71cb8b06a34ed94d6936bd9dfc45ed3889a0f6c5a80be1424850f1140e66371a",
+    "matches_published_commitment": true,
+    "own_SHA256SUMS_manifest_verified": "14 of 14 files OK",
+    "passed": 0,
+    "total": 9,
+    "cause": "the endpoint is still not wired"
+  },
+  "public_examiner": {
+    "passed": 0,
+    "failed": 13,
+    "total": 13
+  },
+  "application_suite": {
+    "passed": 113,
+    "baseline": 100,
+    "written_by_this_run": 13,
+    "note": "reconstructed offline; hashes matched before and after"
+  },
+  "tasks_completed": 2,
+  "closeouts": 2,
+  "integration_checks_run": 2,
+  "integration_checks_passed": 2,
+  "diff_lines": 192,
+  "source_changed": true,
+  "stop": {
+    "reason": "RunBudgetExceeded: reported_token_threshold",
+    "reported_tokens": 533060,
+    "threshold": 500000,
+    "calls_reserved": 8,
+    "elapsed_seconds": 502,
+    "records_written": true,
+    "note": "unlike attempt 10 the run wrote result.json, report.md, ledger.md, delegation.md and changes.diff before stopping"
+  },
+  "token_split": {
+    "total": 533060,
+    "re_read": 327040,
+    "new_work": 206020,
+    "re_read_share": "61%",
+    "against_attempt_10": {
+      "re_read_share": "80%",
+      "new_work": 98447,
+      "reading": "roughly twice the work for a comparable spend"
+    }
+  },
+  "the_prompt_change": {
+    "what_worked": "removing the instruction to inspect the project source, which contradicted the guidance that followed it",
+    "task_1_lead_tokens": {
+      "attempt_9": 241700,
+      "attempt_10": 353635,
+      "attempt_11": 201764
+    },
+    "task_1_lead_re_read_share": {
+      "attempt_9": "66%",
+      "attempt_10": "82%",
+      "attempt_11": "48%"
+    },
+    "what_did_not_work": "the invitation to commission a worker for reading. No workers were commissioned in either task; that is nought for two, and per the commitment made before this run the wording will not be tuned a third time."
+  },
+  "the_watchdog": {
+    "first_launch": {
+      "outcome": "stalled",
+      "idle_seconds": 240.329,
+      "in_flight_at_kill": 1,
+      "tokens_spent": 59296,
+      "source_changed": false,
+      "diagnosis": "a false positive of mine: the heartbeat watched the budget file's mtime, which advances only at call boundaries, and the stall window was set to 240s when three earlier runs had measured lead calls at 228 to 263s"
+    },
+    "fix": "run_isolated takes a callable heartbeat; the launcher reports an outstanding call as progress, so only idleness between calls accrues (c0755d0)",
+    "second_launch": {
+      "stall_fired": false,
+      "idle_seconds_at_exit": 1.25e-07,
+      "outcome": "stopped on its own token threshold with all records written"
+    }
+  },
+  "still_unexercised": "the worker tool-fit check (a0f16ec), seven attempts on: it cannot fire until a lead commissions an errand, and leads keep choosing not to",
+  "not_done": [
+    "no private-case edit",
+    "no budget, role or tolerance change",
+    "no vendor safeguard bypassed",
+    "no lead tool access changed"
+  ]
+}

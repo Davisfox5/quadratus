@@ -1,0 +1,148 @@
+{
+  "calls": [
+    {
+      "type": "result",
+      "subtype": "success",
+      "stop_reason": "stop_sequence",
+      "session_id": "5b13744c-6023-4fd6-a50b-bc54903b37b7",
+      "num_turns": 1,
+      "usage": {
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {},
+      "subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "is_error": true,
+      "permission_denials": [],
+      "evidence_file": "call-001.stdout",
+      "sha256": "6ea5071e59a9f2dff5257aa99b8a11a81f32ecaf7d5edce52bd6883c697060ef"
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 72936,
+        "cached_input_tokens": 63360,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 706,
+        "reasoning_output_tokens": 106
+      },
+      "evidence_file": "call-002.stdout",
+      "sha256": "5cbdba32f189294aa33cfbf712744a781550f6759c9b7bf9d13a58a95235b8e3"
+    },
+    {
+      "stopReason": "end_turn",
+      "sessionId": "01a0b037-bbd3-7953-9b5b-9a3a173c4eb3",
+      "num_turns": 9,
+      "usage": {
+        "input_tokens": 70310,
+        "cache_read_input_tokens": 158336,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 13054,
+        "reasoning_tokens": 10081,
+        "total_tokens": 241700
+      },
+      "modelUsage": {
+        "grok-4.6-build": {
+          "inputTokens": 70310,
+          "outputTokens": 13054,
+          "cacheReadInputTokens": 158336,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 9,
+          "costUSD": 0.10135808
+        }
+      },
+      "evidence_file": "call-003.stdout",
+      "sha256": "ca6a445b5e4a081d77cfa9a4cad985e43bb8babcbbe2f468156419420c0e6770"
+    },
+    {
+      "stopReason": "end_turn",
+      "sessionId": "01a0b03b-4065-76f2-a137-fcefab1dbaf2",
+      "num_turns": 1,
+      "usage": {
+        "input_tokens": 6876,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 461,
+        "reasoning_tokens": 26,
+        "total_tokens": 7337
+      },
+      "modelUsage": {
+        "grok-4.6-build": {
+          "inputTokens": 6876,
+          "outputTokens": 461,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 1,
+          "costUSD": 0.00561612
+        }
+      },
+      "evidence_file": "call-004.stdout",
+      "sha256": "51eb81bec00f612d51cfaaa72bf1f1586649c52ededeb998f436e51dde0276be"
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 57296,
+        "cached_input_tokens": 46848,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 657,
+        "reasoning_output_tokens": 79
+      },
+      "evidence_file": "call-005.stdout",
+      "sha256": "fc4ed448baab6dddde21595522e5d6d720d1d41a3ef7f6df23c124a0f4aa9470"
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 149101,
+        "cached_input_tokens": 134272,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 3062,
+        "reasoning_output_tokens": 505
+      },
+      "evidence_file": "call-006.stdout",
+      "sha256": "08612ba57ea3b61b270b4fb50f1a093a61e7034306c892e4fa438d62b58f59cc"
+    }
+  ],
+  "raw_envelopes": "Raw stdout, vendor sessions and thought fields remain private outside every repository; each row above names its file and that file's SHA-256."
+}

@@ -1,0 +1,85 @@
+{
+  "run": "20260917T145021Z-be04e367",
+  "engine_commit": "ad8fc76",
+  "application_commit": "a8772ab",
+  "scored_by": "Claude, independently, on Davis's Mac; Codex remains out of context",
+  "scored_at": "2026-09-17T15:20:00Z",
+  "private_set": {
+    "archive_sha256": "71cb8b06a34ed94d6936bd9dfc45ed3889a0f6c5a80be1424850f1140e66371a",
+    "matches_published_commitment": true,
+    "own_SHA256SUMS_manifest_verified": "14 of 14 files OK",
+    "unchanged_since_attempt_1": true,
+    "passed": 0,
+    "total": 9,
+    "every_case": "HTTP 405: the endpoint does not exist; no source was written"
+  },
+  "public_examiner": {
+    "passed": 0,
+    "failed": 13,
+    "total": 13,
+    "note": "same cause; the examiner is a public validation suite, not a held-out set"
+  },
+  "application_suite": {
+    "passed": 100,
+    "note": "the unchanged GameTape baseline, reconstructed from the archive in a fresh network-disabled credential-free container; source hashes matched before and after"
+  },
+  "browser_checks": {
+    "executed": 0,
+    "note": "no frontend file changed, so no browser run was warranted"
+  },
+  "stop": {
+    "reason": "OperatorInputNeeded",
+    "question_asked_by_the_seat": "Can you restore read-only command access to the source copy? The sandbox fails before execution with 'No permissions to create a new namespace', preventing the required source inspection.",
+    "reported_tokens": 57183,
+    "threshold": 500000,
+    "elapsed_seconds": 18.187323508999995,
+    "calls_reserved": 2,
+    "max_calls": 24,
+    "wall_limit_seconds": 900,
+    "budget_stop_reason": "",
+    "source_changed": false,
+    "tasks": 0
+  },
+  "usage_verified": {
+    "claude:fable": {
+      "role": "orchestrator",
+      "input": 0,
+      "output": 0,
+      "outcome": "ProviderError: vendor window limit",
+      "seconds": 1.509
+    },
+    "openai:gpt-6-astra": {
+      "role": "orchestrator (fallback seat)",
+      "input": 57033,
+      "output": 150,
+      "outcome": "ok",
+      "seconds": 16.646
+    }
+  },
+  "what_this_run_establishes": {
+    "the_fallback_seat_is_reached_reliably": "second consecutive run in which Fable's exhausted window fell through to Astra and Astra was reserved and called",
+    "the_containment_fix_did_not_reach_the_blind_seats": "the substitution was consulted only on the restricted-seat branch; senior seats are never restricted, and every seat that had ever been blind was a senior seat",
+    "the_mode_question_is_settled_model_free": "codex sandbox honours -c sandbox_mode=; inside the container read-only and workspace-write both fail with bwrap's namespace error and danger-full-access reads the file. The earlier note saying no model-free check could settle this was wrong and has been corrected in the engine and the preflight."
+  },
+  "repairs_landed_after_this_run": [
+    "the contained substitution applies to every rank of Codex seat, agentic included; CLISpec.contained_restricted_args renamed contained_sandbox_args",
+    "the preflight exercises each vendor sandbox in the mode the run will really use, reading a real file from the mounted tree rather than running true",
+    "a failing vendor sandbox is now always a blocker, since the mode under test is the mode that matters"
+  ],
+  "verification": {
+    "engine_suite": "1011 passed, 1 skipped (gradio absent), Docker and installed-CLI checks enabled",
+    "ruff": "clean",
+    "diff_check": "clean",
+    "model_calls_in_repair": 0,
+    "preflight_against_the_real_container": "contained: exit 0, OpenAI seat read /work/TASK.md under danger-full-access; control: exit 1, names the bwrap error"
+  },
+  "still_unexercised": "the worker tool-fit check (a0f16ec) has now been present and unreached for three attempts; no run has got as far as a lead commissioning an errand",
+  "not_done": [
+    "no app feature",
+    "no private-case edit",
+    "no budget, role or tolerance change",
+    "no vendor safeguard bypassed",
+    "no paid API fallback enabled",
+    "no further live run without Davis's authorisation"
+  ]
+}

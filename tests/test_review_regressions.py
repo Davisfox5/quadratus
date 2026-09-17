@@ -15,7 +15,9 @@ def test_lead_worker_request_reaches_runner_and_returns_evidence(tmp_path, write
     calls = []
     def invoke(key, prompt, *, allow_writes=False):
         calls.append((key, prompt, allow_writes))
-        if prompt.startswith('inspect this function'):
+        # The errand no longer arrives bare: every worker prompt opens with the
+        # capability briefing that tells it what it has and how to ask.
+        if 'inspect this function' in prompt:
             return 'worker evidence: found the cause'
         if 'The task is finished' in prompt:
             return 'SUMMARY: fixed\nREASONING: evidence'
@@ -28,9 +30,15 @@ def test_lead_worker_request_reaches_runner_and_returns_evidence(tmp_path, write
                       config=SessionConfig(project=tmp_path, allow_writes=write))
     result = session.run_task(TaskSpec('t1', 'fix', complexity=Complexity.SIMPLE,
                                        scope=TaskScope(permitted_paths=['app.py'], max_lines=10)))
-    worker_call = next(c for c in calls if c[1].startswith('inspect this function'))
+    worker_call = next(c for c in calls if 'inspect this function' in c[1]
+                       and 'You are leading' not in c[1])
     assert worker_call[0] == 'claude:haiku'
     assert worker_call[2] is write
+    # Briefing first, then the errand, then the task scope the session appends.
+    assert worker_call[1].startswith('## What you can do')
+    assert 'NEED TOOL:' in worker_call[1]
+    assert worker_call[1].index('## What you can do') < worker_call[1].index(
+        'inspect this function')
     assert any(r.author == 'claude:haiku' for r in result.refs)
     assert any('worker evidence' in prompt and 'You are leading' in prompt for _, prompt, _ in calls)
 

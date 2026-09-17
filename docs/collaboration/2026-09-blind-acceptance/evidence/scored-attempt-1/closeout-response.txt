@@ -1,0 +1,17 @@
+I'll inspect the finished endpoint and tests so the record matches what actually shipped.I have the file layout; next I’ll read the endpoint, tests, and surrounding patterns so the record matches the code.I’ll skim nearby helpers and imports so the map notes capture conventions, not just the new function.**SUMMARY:** Added read-only `POST /api/projects/<project_id>/clips/import_preview` in `app.py` (no `@_locked`, no `_save_projects`) and `tests/test_import_preview.py`. This slice validates required columns only: 404 if the project is missing; 400/`bad_request` for a missing `file`, `utf-8-sig` decode failure, or a header missing `tag type` / `start (s)` / `end (s)` after strip+lower; 400/`too_many_rows` after 5000 non-blank data rows. `csv.reader` handles RFC 4180 quoting and CRLF; blank records are skipped and omitted from `summary.total`; physical line numbers are taken as `reader.line_num + 1` before each `next()`. Valid rows return `clip` with `tag_type`/`start`/`end`/`label`/`notes` and `players: []`; malformed rows collect all reasons and set `clip: null`; `summary.duplicate` is always 0. Players, Clip ID, duplicate detection, UI, and docs stay deferred.
+
+**REASONING:** Kept the handler compact with a header-index map plus `cell`/`parse_num` helpers instead of `csv.DictReader`, which would hide wrong column counts and make physical line numbers harder. Skipped `@_locked` even though `bulk_preview` uses it: that lock protects `_BULK_PREVIEWS` writes, not a file read. `utf-8-sig` was required so a BOM does not become part of the first header cell. Reasons are accumulated rather than fail-fast so one row can report several problems. Tests stayed at two functions (mixed BOM+CRLF+blank-line CSV plus the three `bad_request`s, 404, and byte-identical `projects.json`) to match the size bound; the fixture copies `test_bulk_edit.py` but omits `_BULK_PREVIEWS.clear()` because this path never touches that store.
+
+**DEAD ENDS:**
+- Happy-path test first parsed JSON without asserting 200; `get_json()` succeeding is not a status check — assert the code first.
+
+**MAP NOTES:**
+- store: `projects.json` is a dict keyed by project id; writers use `@_locked` + `_save_projects`; pure readers call `_load_projects()` only.
+- bulk_preview: `@_locked` because it mutates in-memory `_BULK_PREVIEWS`, not because previews generally write the store.
+- defaults: `POST /api/projects` seeds tag types including `Pass`, so tests need not create tag types.
+- 404: `{"error": "Project not found"}` has no `code`; 400s in this slice include `code`.
+- multipart tests: `client.post(url, data={"file": (io.BytesIO(csv_bytes), "clips.csv")}, content_type="multipart/form-data")`.
+- fixtures: monkeypatch `DATA_DIR`, `VIDEOS_DIR`, `RECORDINGS_DIR`, `PROJECTS_FILE` on the `app` module and mkdir `videos`/`recordings`.
+- csv line numbers: capture `reader.line_num + 1` *before* `next()` so the first data row is line 2 even after skipped blanks.
+- roster import: existing `POST .../players/import` already uses `utf-8-sig` + `csv.reader` but writes players under `@_locked`; do not reuse it for clip preview.
+- next slice: `players` is always `[]` and `duplicate` is always 0; Clip ID / player matching / duplicate detection are not implemented.

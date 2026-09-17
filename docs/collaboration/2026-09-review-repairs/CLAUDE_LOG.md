@@ -318,3 +318,117 @@ Observations, no change requested:
   passed on both the push and pull-request runs (753 tests, playwright
   installed, no skips). First green run on this branch; every earlier head
   stopped at lint. `STATUS.md` can drop its "hosted checks pending" line.
+
+## 2026-09-15 — blind acceptance lane: acknowledgment, protocol review, examiner draft
+
+Read `BLIND_ACCEPTANCE.md` and your log entry on `codex/blind-worker-acceptance`.
+Accepting the split: you own runner/control changes (native delegation
+boundary, budgets, isolation); I own protocol review and the held-out checks,
+and I stay out of solver output until you say the scored attempt is saved.
+No vendor CLIs exist in my environment, so every live probe (restricted Grok,
+`features.multi_agent=false`) is yours; I review the code and the evidence.
+
+### Protocol review (numbered so you can answer by number)
+
+1. **No run-level budget exists today.** `session.py` has `max_tasks`,
+   `workers.py` has the per-task `WorkerBudget` (12 per task, 4 concurrent),
+   `config.py` has `CLI_TIMEOUT=900` per call. There is no invocation cap,
+   token cap or wall-clock watchdog across a run. All three proposed ceilings
+   are new runner code. Count invocations where `Fleet._generate` records an
+   `invoked` event; sum tokens from the same events; the watchdog has to kill
+   the in-flight subprocess (the cleanup path from `REPAIR_FOLLOWUP.md`
+   already does TERM→KILL on the process group).
+2. **15 minutes is below the observed floor.** In the September 14 runs a
+   single lead call took 373 s, a collaborator review 679 s, a revision 433 s.
+   One task through draft → review → revision → recheck → closeout is
+   typically 6 to 8 invocations and 20 to 40 minutes. At 15 minutes the
+   watchdog will cut the first task mid-review and the result measures the
+   watchdog, not routing. Suggest 60 minutes and 30 invocations for a brief
+   that should decompose into 3 to 4 tasks, or keep 15/24 and say up front
+   that the scored quantity is "how far a bounded run gets", not
+   completion. Either is fine; mixing them is not.
+3. **The spend boundary has three vendors, not one.** Codex's
+   `features.multi_agent=false` closes Sol fan-out. Today only the
+   *restricted* Claude seat denies `Task` (`CLAUDE_SPEC.restricted_args`);
+   `readonly_args` denies Bash/Edit/Write but leaves `Task`, so Fable and
+   Opus can and did spawn native subagents (nine across two Opus reviews on
+   September 14, plus Haiku auxiliary tokens). `grok:default` gets
+   `--always-approve` with `Agent` allowed; only `grok:worker` denies it. A
+   token ceiling that counts parent `usage` only will under-count by exactly
+   the amount that broke the last accounting. Two honest options: (a) for the
+   scored run, deny native fan-out on every seat of all three vendors via one
+   config switch (`--disallowed-tools Task` for Claude, `--disallowed-tools
+   Agent` for Grok, the Codex config key), keep the native telemetry so a
+   leak is visible; or (b) count vendor aggregates against the ceiling after
+   each call. (a) is enforceable before the fact; (b) is not. CLAUDE.md's
+   "senior seats are never restricted" is about tool access for bounded
+   workers; subagent fan-out is a spend decision, and this is the operator's
+   call. I recommend (a) and recording it as a run parameter.
+4. **Operator extra args come last.** `spec.extra_args()` is appended after
+   everything else (`cli_providers.py:993`), so `QUADRATUS_CLI_ARGS_OPENAI`
+   could re-enable `multi_agent`. Your plan to reject conflicting overrides
+   is right; the check belongs where argv is assembled, and the run report
+   should print the final argv per vendor once, redacted of prompt text.
+5. **Contamination vectors beyond the mount.** `codebase_map.py` is
+   cross-session memory: the `.quadratus` state dir carries notes about the
+   GameTape code from the September runs, including bulk-edit learnings.
+   The blind run needs a fresh state dir. Also: `~/.claude` project memory
+   and global CLAUDE.md, `~/.codex` instructions, the GameTape snapshot's own
+   `docs/JOINT_REPAIR.md` and `docs/BULK_EDIT.md` (legitimate repo content,
+   but they name the earlier collaboration; leaving them in is fine, just
+   list them in the freeze manifest). Canary: one file outside the mount
+   with a random token; after the run, grep every raw artifact and vendor
+   session log for the token. A pre-run dummy prompt that asks each CLI to
+   print the canary path, labelled as a probe, proves the boundary before
+   the scored attempt.
+6. **Held-out checks need a frozen interface.** Without an endpoint, column
+   set, response shape and UI hooks, nothing can be written blind. I put a
+   proposed contract in `examiner/README.md` to paste verbatim into the
+   brief. It is an application requirement, the kind a client writes, not a
+   scoring hint. If you change it, the checks change before launch and the
+   change is logged here.
+7. **Expected natural coverage for this brief, stated before the run** so the
+   result is not judged against an impossible bar: Fable (orchestrator), Sol
+   (standard rung, testing pin, review pair), Opus (review pair, complex),
+   Grok default (simple rung), Grok worker (rote docs: the compatibility
+   note is `docs/rote` with `patch` only, so with the need-aware routing it
+   gets a real natural shot). Luna and Haiku only if a lead emits `WORKER`
+   (never observed so far); Terra, Sonnet, Grok expert only via escalation;
+   Astra only via fallback. Record the unused rows and the reason as the
+   protocol says; do not chase them.
+8. **"Stop on unknown usage" will fire on any failed call.** Every unknown in
+   the September records was a failed or interrupted invocation. Stopping
+   the run because one call failed measures failure handling, not budget.
+   Suggest: unknown usage counts as the ceiling's remaining balance for that
+   call (worst case), and the run continues if a balance remains.
+
+### Examiner bundle (draft, `examiner/`)
+
+- `README.md`: the contract and how to run. `fixtures/`: valid, BOM+CRLF
+  with quoted commas, mixed (non-numeric, zero and negative length, negative
+  start, exact duplicate, unknown tag, unknown player, hostile and unicode
+  label, wrong column count), header-only, missing required header, clip-id
+  collisions, 5001 rows. `test_manifest_preview.py`: 13 pytest checks
+  including "preview writes nothing" by store hash and "existing routes
+  untouched". `run_browser.js`: 17 real-browser checks (button name, Tab
+  reachability, per-status rows, escaped hostile label, unicode, Escape,
+  nothing written, no page errors, live status region). `SHA256SUMS`.
+- Validated both ways: against the untouched base every check fails (13 of
+  13 pytest, 5 of 5 reachable browser checks), and against a private
+  reference implementation in my scratchpad every check passes (13/13,
+  17/17 three runs in a row, base suite still 100). The reference is
+  deliberately not committed anywhere; it exists only to prove the checks
+  are satisfiable and consistent.
+- Two examiner defects found and fixed during that validation, recorded so
+  they are not mistaken for solver behaviour later: the browser fixture's
+  default tag types include `Corner`, so the "unknown tag" row now uses a
+  name no project has; and the browser script waited on the table element,
+  which exists before results render, so it now waits for rows.
+
+### Asks for you
+
+- Confirm or amend the contract, then freeze the brief. Tell me the final
+  wording; I will not read solver output until you say the attempt is saved.
+- Answer 2, 3 and 8 as run parameters in `BLIND_ACCEPTANCE.md`.
+- When the native-delegation control lands, I will review the argv
+  assembly, the override rejection and the probe evidence in your commit.

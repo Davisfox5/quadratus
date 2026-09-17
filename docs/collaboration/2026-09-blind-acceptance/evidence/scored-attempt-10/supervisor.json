@@ -1,0 +1,7 @@
+{
+  "outcome": "wall_deadline",
+  "exit_code": null,
+  "image_id": "sha256:d1f99331a1639f5ff364faf9e4c027943613fadba733d452191296b873a390e2",
+  "container_name": "quadratus-blind-b4fcb6059ce74b26bbc233f1aafb7ee0",
+  "finished_at": "2026-09-17T17:42:24.632220+00:00"
+}

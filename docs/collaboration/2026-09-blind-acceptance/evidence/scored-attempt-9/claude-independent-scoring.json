@@ -1,0 +1,134 @@
+{
+  "run": "20260917T163320Z-81ba8b88",
+  "engine_commit": "65a5b41",
+  "application_commit": "a8772ab",
+  "scored_by": "Claude, independently, on Davis's Mac; Codex remains out of context",
+  "scored_at": "2026-09-17T16:55:00Z",
+  "launch_gate": {
+    "preflight": "passed clean",
+    "blockers": 0
+  },
+  "private_set": {
+    "archive_sha256": "71cb8b06a34ed94d6936bd9dfc45ed3889a0f6c5a80be1424850f1140e66371a",
+    "matches_published_commitment": true,
+    "own_SHA256SUMS_manifest_verified": "14 of 14 files OK",
+    "unchanged_since_attempt_1": true,
+    "passed": 0,
+    "total": 9,
+    "every_case": "HTTP 405: the endpoint is still not wired; tasks 1 and 2 are the parsing layer beneath it"
+  },
+  "public_examiner": {
+    "passed": 0,
+    "failed": 13,
+    "total": 13,
+    "same_cause": true
+  },
+  "application_suite": {
+    "passed": 113,
+    "baseline": 100,
+    "written_by_this_run": 13,
+    "note": "reconstructed from the archive in a fresh network-disabled credential-free container; source hashes matched before and unchanged after"
+  },
+  "firsts_for_this_lane": [
+    "a task completed",
+    "a task close-out",
+    "an integration check run",
+    "a second task reached"
+  ],
+  "tasks_completed": 1,
+  "source_changed": true,
+  "diff_lines": 233,
+  "stop": {
+    "reason": "RunBudgetExceeded: reported_token_threshold",
+    "reported_tokens": 532795,
+    "threshold": 500000,
+    "elapsed_seconds": 403.742509726,
+    "calls_reserved": 6,
+    "max_calls": 24
+  },
+  "usage_verified": {
+    "claude:fable": {
+      "role": "orchestrator",
+      "total": 0,
+      "seconds": 1.5,
+      "outcome": "ProviderError: reached the Fable limit"
+    },
+    "openai:gpt-6-astra (task 1)": {
+      "role": "orchestrator",
+      "total": 73642,
+      "seconds": 35.8,
+      "outcome": "ok"
+    },
+    "grok:default (task 1 lead)": {
+      "total": 241700,
+      "model_calls": 9,
+      "fresh_input": 70310,
+      "cache_read": 158336,
+      "seconds": 228.5,
+      "outcome": "ok, task complete"
+    },
+    "grok:default (task 1 closeout)": {
+      "total": 7337,
+      "model_calls": 1,
+      "seconds": 8.1,
+      "outcome": "ok"
+    },
+    "openai:gpt-6-astra (task 2)": {
+      "role": "orchestrator",
+      "total": 57953,
+      "seconds": 27.6,
+      "outcome": "ok"
+    },
+    "openai:gpt-5.6-sol (task 2 lead)": {
+      "total": 152163,
+      "seconds": 99.9,
+      "outcome": "stopped at the threshold"
+    }
+  },
+  "measured_effect_of_the_orientation_change": {
+    "comparison": "the same first slice, same model, same seat, in attempts 8 and 9",
+    "model_calls": {
+      "attempt_8": 15,
+      "attempt_9": 9,
+      "change": "-40%"
+    },
+    "cache_read_tokens": {
+      "attempt_8": 383104,
+      "attempt_9": 158336,
+      "change": "-59%"
+    },
+    "total_tokens": {
+      "attempt_8": 450602,
+      "attempt_9": 241700,
+      "change": "-46%"
+    },
+    "caveat": "attempt 9's slice was the larger of the two (30 implementation + 60 test lines against 30 + 50) and it finished, where attempt 8's was cut off",
+    "facts_the_orchestrator_recorded": [
+      "app.py:8-9 already imports io and csv; pytest is already used by Python tests",
+      "app.py:1291 defines export_csv; its header includes all eight columns in the requested manifest contract",
+      "tests/test_basic.py:1-10 adds the project root to sys.path and imports app as application",
+      "app.py:28-29 creates video/recording directories at module import; keep the new helper itself pure"
+    ],
+    "scan_block_cost": "~144 tokens, re-sent per call"
+  },
+  "open_for_davis": {
+    "unchanged_from_attempt_8": "what max_reported_tokens should count. The threshold is still reached and still mostly by cache; the run now spends it on finished slices rather than one unfinished one. A budget decision, not a review-lane repair."
+  },
+  "repairs_landed_after_this_run": [
+    "a map note recorded its provenance as the whole Seat record, so the map read \"{'key': 'openai:gpt-6-astra', 'reason': 'fallback-unavailable', ...}\" where a reader expects a model name; it now records the seat's key"
+  ],
+  "verification": {
+    "engine_suite": "1045 passed, 1 skipped (gradio absent), Docker and installed-CLI checks enabled",
+    "ruff": "clean",
+    "diff_check": "clean",
+    "model_calls_in_repair": 0
+  },
+  "still_unexercised": "the worker tool-fit check (a0f16ec), six attempts on: both leads did their own work rather than commissioning an errand",
+  "not_done": [
+    "no private-case edit",
+    "no budget, role or tolerance change",
+    "no vendor safeguard bypassed",
+    "no lead tool access changed",
+    "no paid API fallback"
+  ]
+}
