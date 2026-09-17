@@ -304,6 +304,44 @@ def _extract_grok_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
     return diagnostics or None
 
 
+#: Fields whose presence means a turn *began*, so its spend is genuinely
+#: unknown when the envelope carries no usage. An error envelope with none of
+#: them is the CLI refusing before it contacted the service.
+_TURN_BEGAN_KEYS = ("usage", "sessionId", "session_id", "text", "stopReason",
+                    "stop_reason", "modelUsage", "messages")
+
+
+def _refused_before_the_turn(payload: object) -> bool:
+    """Did the vendor refuse to start, without reaching a model?
+
+    A call that never began spent nothing, and that is a different fact from
+    "this call's spend is unknown". The distinction matters because unknown
+    usage latches the run budget and stops the run -- which is right when a
+    call may have burned a window, and wrong when the CLI printed a one-line
+    refusal in under a second and exited.
+
+    Attempt 7 of the blind acceptance is the case. The grok CLI's session had
+    expired, so it answered ``{"type": "error", "message": "Not signed in..."}``
+    in 0.37 seconds. That reported no usage, the budget latched, and the
+    recovery on Sol that the engine had *already selected* was refused. One
+    expired login ended a run that had every other seat working.
+
+    Deliberately narrow, and it errs towards unknown. An envelope counts as a
+    refusal only if it is an error and carries nothing that implies a turn
+    began -- no usage, no session id, no text, no stop reason. A turn that
+    started and then failed carries at least a session id, so it stays
+    unknown, and so does anything unparseable. This is not the same as
+    ``window_exhausted``: that is a vendor limit reported by a live service,
+    this is the CLI never getting that far.
+    """
+    if not isinstance(payload, dict):
+        return False
+    looks_like_error = payload.get("type") == "error" or bool(payload.get("error"))
+    if not looks_like_error:
+        return False
+    return not any(payload.get(key) for key in _TURN_BEGAN_KEYS)
+
+
 def _extract_grok_usage(stdout: str) -> Optional[Dict[str, int]]:
     """Real token counts from the grok JSON envelope.
 
@@ -312,7 +350,13 @@ def _extract_grok_usage(stdout: str) -> Optional[Dict[str, int]]:
     cached input is still billed input there.
     """
     try:
-        usage = json.loads(stdout).get("usage") or {}
+        payload = json.loads(stdout)
+    except ValueError:
+        return None
+    if _refused_before_the_turn(payload):
+        return {"input_tokens": 0, "output_tokens": 0}
+    try:
+        usage = payload.get("usage") or {}
         input_tokens = (
             int(usage.get("input_tokens", 0))
             + int(usage.get("cache_read_input_tokens", 0))
@@ -710,6 +754,19 @@ class CLISpec:
     #: rather than passing silently. ``{mode}`` is filled in by
     #: ``sandbox_selftest`` with the mode a seat would really be given.
     sandbox_selftest_args: List[str] = field(default_factory=list)
+    #: A command that reports whether this CLI is signed in, without invoking a
+    #: model. Empty means the vendor offers no such readout, which is reported
+    #: as "not applicable" rather than passing silently.
+    auth_check_args: List[str] = field(default_factory=list)
+    #: A regex the auth readout must match to count as signed in. Empty means
+    #: the CLI prints nothing distinctive when it is, so only a failure can be
+    #: recognised -- see ``auth_failure_pattern``.
+    auth_ok_pattern: str = ""
+    #: A regex in the auth readout that means definitely not signed in. Needed
+    #: because a CLI can report a dead session and still exit 0: ``grok models``
+    #: prints "You are not authenticated." and returns success, which is how
+    #: attempt 7 got as far as spending 82,051 tokens before finding out.
+    auth_failure_pattern: str = ""
     #: Flags an agentic seat needs and a restricted one must not get. Distinct
     #: from ``always_args``, which is genuinely unconditional: codex's
     #: ``--skip-git-repo-check`` has to survive into a restricted call, while
@@ -1117,6 +1174,10 @@ CODEX_SPEC = CLISpec(
     # command that touches nothing could pass without answering it.
     sandbox_selftest_args=["sandbox", "-c", "sandbox_mode={mode}",
                            "--", "cat", "{probe_file}"],
+    # Prints "Logged in using ChatGPT" for a subscription session, so this
+    # vendor can be checked positively rather than by known failure wording.
+    auth_check_args=["login", "status"],
+    auth_ok_pattern=r"(?i)logged in",
     always_args=["--skip-git-repo-check"],
     # No seat on this transport may spawn its own agents. A Sol review on
     # 2026-09-13 used the CLI's spawn_agent to create a second Sol that passed
@@ -1231,6 +1292,12 @@ GROK_SPEC = CLISpec(
     # call comes back as a cancelled agent turn, which is how the restriction
     # was first thought impossible.
     restricted_prompt_flag="-p",
+    # `grok models` reports the session and exits 0 either way, so only the
+    # failure wording is recognisable; there is no distinctive line to match
+    # when the session is live. Verified on grok 1.0.30 with an expired
+    # session on 2026-09-17: "You are not authenticated.", exit 0.
+    auth_check_args=["models"],
+    auth_failure_pattern=r"(?i)not\s+authenticated|not\s+signed\s+in",
     readonly_args=[],
     # Run-wide off mode, from the installed grok 1.0.30 documentation as
     # quoted by Codex on PR #11 (2026-09-15), since docs.x.ai is unreachable

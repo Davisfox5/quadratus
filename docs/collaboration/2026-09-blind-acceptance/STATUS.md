@@ -87,10 +87,32 @@ bwrap's namespace error while `danger-full-access` returns the file. Verified
 against the real container both ways. Suite 1011 passed, 1 skipped (gradio
 absent); ruff and diff-check clean.
 
-**Open for Davis:** attempt 7, which needs his go-ahead and a returned model
-window. The worker tool-fit repair (`a0f16ec`) has now been present and
-unexercised for three attempts — no run has reached a lead commissioning an
-errand.
+**Attempt 7: an OpenAI seat read the project for the first time.** Run
+`7303ff7d`, engine `cd33f7d`. No `bwrap` anywhere; Astra ran three shell
+commands against its disposable source copy and wrote a task grounded in
+`app.py`'s export column format. Across seven attempts no OpenAI seat had done
+grounded work before, so the containment repair is confirmed live.
+
+It then stopped on two things. **Grok's subscription session had expired**
+(token dead since 2026-09-14T22:13Z; `grok models` says so on the host too) —
+a credential fact, not an engine defect. **Then that refusal ended the run**:
+it reported no usage, the budget latched `unknown_usage`, and the Sol recovery
+the engine had already selected was refused. Private 0 of 9, public 0 of 13,
+baseline 100 passing, empty diff.
+[Result and review](evidence/scored-attempt-7/README.md).
+
+**Repaired:** a vendor refusal that never reached a model reports zero spend
+rather than unknown — narrow, erring towards unknown, with the
+timeout-after-partial-work guard pinned by its own test. And the preflight now
+asks whether each CLI is signed in (positive proof for codex; known-failure
+wording for grok, which exits 0 on a dead session; not applicable for claude).
+Verified in the container: exit 1, naming grok. Suite 1030 passed, 1 skipped.
+
+**Blocked on Davis: `grok login`.** The preflight refuses to launch until the
+session is live, which is what it is for. Attempt 8 goes the moment it passes.
+The worker tool-fit repair (`a0f16ec`) has now been present and unexercised for
+four attempts — attempt 7 selected a lead and wrote a task but never
+commissioned an errand.
 
 
 **The two-fix repair batch is complete and verified offline.** No new

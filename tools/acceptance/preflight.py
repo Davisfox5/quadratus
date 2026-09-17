@@ -6,17 +6,22 @@ acceptance: the Codex CLI sandboxes model-run shell commands with bubblewrap,
 which cannot create a user namespace inside our container, so every OpenAI seat
 was blind to the project. Both runs spent a subscription window discovering it.
 
-Two questions are asked here, and neither invokes a model:
+Three questions are asked here, and none invokes a model:
 
+* is each vendor CLI signed in,
 * can the harness read the mounted work tree at all, and
 * can a seat on each vendor read one real file out of it.
 
-The second is asked with the vendor's sandbox configured exactly as this run
-will configure it -- including the contained substitution, when the launcher
-has asserted one -- so a pass is about the run's own configuration and not some
+The last is asked with the vendor's sandbox configured exactly as this run will
+configure it -- including the contained substitution, when the launcher has
+asserted one -- so a pass is about the run's own configuration and not some
 other one. A failure is therefore always a blocker: it says the seats will be
 blind to the project, which is what attempts 3, 5 and 6 each spent a
-subscription window discovering. Run it inside ``run_isolated``; it refuses a
+subscription window discovering.
+
+The session check is here from the same lesson. Attempt 7 got a lead assigned
+and 82,051 tokens spent before the Grok CLI answered "Not signed in" in under a
+second, because nothing had asked. Run it inside ``run_isolated``; it refuses a
 host.
 """
 
@@ -25,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -84,6 +90,46 @@ def _sandbox_check(vendor: str, spec, probe_file: str) -> dict:
             "detail": (speaking or lines or [""])[0][:300]}
 
 
+def _auth_check(spec) -> dict:
+    """Is this CLI signed in? No model is invoked.
+
+    Attempt 7 is why this is asked. Grok's subscription session had expired,
+    which nothing checked, so the run spent 82,051 tokens reaching a lead
+    before the CLI answered "Not signed in" in 0.37 seconds. An expired login
+    is exactly as fatal as an unreadable tree and exactly as cheap to detect.
+
+    A pass here is weaker than a pass on the sandbox check, and says so: where
+    a CLI prints nothing distinctive for a live session, only the known
+    failure wording can be recognised, so "ok" means "did not say it was
+    signed out". The reading that matters -- a vendor that *is* signed out --
+    is positive evidence either way.
+    """
+    binary = shutil.which(spec.binary)
+    if binary is None:
+        return {"applicable": True, "ok": False, "detail": f"{spec.binary} is not installed"}
+    if not spec.auth_check_args:
+        return {"applicable": False,
+                "detail": "this vendor offers no model-free readout of its session, so "
+                          "nothing here establishes that it is signed in"}
+    argv = [binary, *spec.auth_check_args]
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"applicable": True, "ok": False, "argv": argv,
+                "detail": f"{type(exc).__name__}: {exc}"}
+    readout = (done.stdout or "") + (done.stderr or "")
+    signed_out = bool(spec.auth_failure_pattern
+                      and re.search(spec.auth_failure_pattern, readout))
+    # A CLI can report a dead session and still exit 0, so the exit code alone
+    # decides nothing here.
+    ok = (done.returncode == 0 and not signed_out
+          and (not spec.auth_ok_pattern or bool(re.search(spec.auth_ok_pattern, readout))))
+    lines = [line for line in readout.strip().splitlines() if line]
+    return {"applicable": True, "ok": ok, "argv": argv, "exit_code": done.returncode,
+            "proof": "positive" if spec.auth_ok_pattern else "known-failure wording only",
+            "detail": (lines or [""])[0][:300]}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", default="/work", help="the mounted application tree")
@@ -104,6 +150,11 @@ def main() -> int:
     tree = _read_check(work)
     report = {"contained": contained(), "work_tree": tree, "vendors": {}}
     blockers = []
+    report["auth"] = {vendor: _auth_check(spec) for vendor, spec in CLI_SPECS.items()}
+    for vendor, result in report["auth"].items():
+        if result.get("applicable") and not result["ok"]:
+            blockers.append(f"{vendor} is not signed in, so every seat on it will fail "
+                            f"the moment it is called: {result['detail']}")
     if not tree["ok"]:
         # Without a file the harness can read, a vendor check has nothing
         # honest to ask for, so it is not asked and not reported as passing.

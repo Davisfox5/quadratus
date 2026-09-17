@@ -1571,3 +1571,54 @@ checks; ruff and diff-check clean. No model calls in the repair.
 **Still unexercised:** the worker tool-fit check (`a0f16ec`) has now been
 present and unreached for three attempts. Container and credential seed
 removed. Attempt 7 is not authorised.
+
+## 2026-09-17 — attempt 7: an OpenAI seat finally read the project
+
+Davis, standing authorisation: a repeat of essentially the same error no longer
+needs a fresh go-ahead — fix it and reattempt. Frozen at engine `cd33f7d`;
+input re-exported from `a8772ab` and verified file by file; the preflight was
+run as a gate first and passed. One `run_isolated` call, no retry.
+
+**The containment repair is confirmed live, and it is the first real result
+this lane has had from an OpenAI seat.** No `bwrap` string appears anywhere in
+the run. Astra ran three shell commands — `rg --files`, a grep across `app.py`
+and the tests, a `sed` of specific line ranges plus `cat TASK.md` — and wrote a
+task grounded in what it had read, citing the export column format in `app.py`
+with a 40-line implementation and 60-line test budget and explicit deferrals.
+Across seven attempts no OpenAI seat had done grounded work before. The
+transcript's working directory is `/tmp/quadratus-review-onsp9knu`, which also
+confirms the other half of the argument: a seat without a write grant is held
+by the disposable copy, not by the vendor's sandbox flag.
+
+**It stopped on an expired login, and then on our own budget.** Grok answered
+the task-1 lead call in 0.37 seconds with `{"type":"error","message":"Not
+signed in..."}`. The staged token expired on 2026-09-14T22:13Z, and it
+reproduces on the host: `grok models` prints "You are not authenticated." That
+is a credential fact, not an engine defect. What followed is ours: the refusal
+reported no usage, the budget latched `unknown_usage`, and the recovery on Sol
+that the engine had **already selected** was refused before it could run. One
+expired login ended a run in which every other seat was working.
+
+**Two repairs.** First, a vendor refusal that never reached a model reports
+zero spend rather than unknown — an error envelope with no usage, no session
+id, no text and no stop reason is the CLI refusing before it contacted the
+service, and such a call demonstrably spent nothing. This is the evidenced
+version of the change attempted and reverted after attempt 4; it is narrow, it
+errs towards unknown, and the guard it must not weaken is pinned by its own
+test, because a timeout after partial work has genuinely unknown spend and must
+still stop the run. Second, the preflight now asks whether each CLI is signed
+in: `codex login status` gives positive proof, `grok models` prints a dead
+session and **exits 0** so only its failure wording is recognisable, and Claude
+offers no model-free readout and is recorded as not applicable rather than
+passing silently. Verified in the container with the seed mounted: exit 1,
+naming grok's dead session.
+
+Attempt 7: private 0 of 9, public 0 of 13, baseline 100 passing, empty diff.
+Suite 1030 passed, 1 skipped (gradio absent) with Docker and installed-CLI
+checks; ruff and diff-check clean. No model calls in the repair.
+
+**Blocked on `grok login`** — the preflight now refuses to launch until the
+session is live, which is what it is for. The worker tool-fit check (`a0f16ec`)
+has now been present and unreached for four attempts; attempt 7 got a lead
+selected and a task written, but never commissioned an errand. Container and
+credential seed removed.
