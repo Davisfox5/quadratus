@@ -9,12 +9,15 @@ was blind to the project. Both runs spent a subscription window discovering it.
 Two questions are asked here, and neither invokes a model:
 
 * can the harness read the mounted work tree at all, and
-* can each vendor's own sandbox start, where the vendor has one.
+* can a seat on each vendor read one real file out of it.
 
-A vendor whose sandbox cannot start is only a blocker when we intend to rely on
-it. Under ``QUADRATUS_CONTAINED=1`` the container is the boundary and that
-vendor's sandbox is stood down deliberately, so the same fact is reported and
-not treated as fatal. Run it inside ``run_isolated``; it refuses a host.
+The second is asked with the vendor's sandbox configured exactly as this run
+will configure it -- including the contained substitution, when the launcher
+has asserted one -- so a pass is about the run's own configuration and not some
+other one. A failure is therefore always a blocker: it says the seats will be
+blind to the project, which is what attempts 3, 5 and 6 each spent a
+subscription window discovering. Run it inside ``run_isolated``; it refuses a
+host.
 """
 
 from __future__ import annotations
@@ -50,26 +53,35 @@ def _read_check(work: Path) -> dict:
     return {"ok": False, "entries": len(names), "detail": "no regular file to read"}
 
 
-def _sandbox_check(vendor: str, spec) -> dict:
-    """Does this vendor's own sandbox start? No model is invoked."""
+def _sandbox_check(vendor: str, spec, probe_file: str) -> dict:
+    """Can a seat on this vendor read ``probe_file``? No model is invoked.
+
+    The sandbox is exercised in the mode a seat here would really be given, so
+    a pass means the run's own configuration works rather than some other one.
+    """
     binary = shutil.which(spec.binary)
     if binary is None:
         return {"applicable": True, "ok": False, "detail": f"{spec.binary} is not installed"}
-    if not spec.sandbox_selftest_args:
+    selftest = spec.sandbox_selftest(probe_file)
+    if not selftest:
         return {"applicable": False,
                 "detail": "this vendor has no inner sandbox to test; its restriction is a "
                           "tool denial, which needs no privilege to take effect"}
-    argv = [binary, *spec.sandbox_selftest_args]
+    argv = [binary, *selftest]
     try:
         done = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT)
     except (OSError, subprocess.SubprocessError) as exc:
         return {"applicable": True, "ok": False, "argv": argv,
                 "detail": f"{type(exc).__name__}: {exc}"}
     # Vendor output can carry paths and session ids; keep one diagnostic line.
-    detail = (done.stderr or done.stdout or "").strip().splitlines()
+    # Prefer a line that is not a warning: codex opens with an unrelated
+    # PATH-alias warning, and reporting that instead of the sandbox error
+    # would describe the wrong failure.
+    lines = [line for line in (done.stderr or done.stdout or "").strip().splitlines() if line]
+    speaking = [line for line in lines if not line.lstrip().upper().startswith("WARNING")]
     return {"applicable": True, "ok": done.returncode == 0, "argv": argv,
             "exit_code": done.returncode,
-            "detail": detail[0][:300] if detail else ""}
+            "detail": (speaking or lines or [""])[0][:300]}
 
 
 def main() -> int:
@@ -88,22 +100,24 @@ def main() -> int:
     sys.path.insert(0, "/opt/quadratus")
     from quadratus.cli_providers import CLI_SPECS, contained
 
-    report = {
-        "contained": contained(),
-        "work_tree": _read_check(Path(args.work)),
-        "vendors": {vendor: _sandbox_check(vendor, spec) for vendor, spec in CLI_SPECS.items()},
-    }
+    work = Path(args.work)
+    tree = _read_check(work)
+    report = {"contained": contained(), "work_tree": tree, "vendors": {}}
     blockers = []
-    if not report["work_tree"]["ok"]:
+    if not tree["ok"]:
+        # Without a file the harness can read, a vendor check has nothing
+        # honest to ask for, so it is not asked and not reported as passing.
         blockers.append("the work tree cannot be read")
+    else:
+        probe = str(work / tree["read"])
+        report["vendors"] = {vendor: _sandbox_check(vendor, spec, probe)
+                             for vendor, spec in CLI_SPECS.items()}
+        report["probe_file"] = probe
     for vendor, result in report["vendors"].items():
         if result.get("applicable") and not result["ok"]:
-            if report["contained"]:
-                result["stood_down"] = ("its sandbox is stood down under QUADRATUS_CONTAINED, "
-                                        "so this is recorded, not fatal")
-            else:
-                blockers.append(f"{vendor}'s own sandbox cannot start, so its seats can run "
-                                f"no command and will be blind to the project")
+            blockers.append(f"a seat on {vendor} cannot read the project: its sandbox is "
+                            f"configured exactly as this run would configure it, and in "
+                            f"that mode it can run no command at all")
     report["blockers"] = blockers
     report["ok"] = not blockers
 

@@ -687,17 +687,28 @@ class CLISpec:
     #: agent loop. Empty means the vendor offers no such mode and every seat
     #: gets the full agent.
     restricted_args: List[str] = field(default_factory=list)
-    #: Used instead of ``restricted_args`` when the operator asserts this
-    #: process is already inside an OS sandbox that is the security boundary
+    #: Used instead of whichever sandbox args a seat would otherwise get --
+    #: ``restricted_args`` on a bounded seat, ``readonly_args``/``write_args``
+    #: on an agentic one -- when the operator asserts this process is already
+    #: inside an OS sandbox that is the security boundary
     #: (``QUADRATUS_CONTAINED=1``). Empty means containment changes nothing,
     #: which is the right answer for a vendor whose restriction is a tool
     #: denial: denying a tool costs nothing inside a container and still
     #: bounds what the model can reach for.
-    contained_restricted_args: List[str] = field(default_factory=list)
+    #:
+    #: It covers both branches because they are the same mechanism. Attempt 6
+    #: of the blind acceptance stopped exactly where attempt 5 did, with this
+    #: field set, because it was then consulted only on the restricted branch
+    #: -- and every seat that had ever been blind was an agentic one. An
+    #: orchestrator or lead is a senior seat and is never restricted, so a
+    #: substitution that skipped the agentic branch could not reach any of
+    #: them. See ``contained`` for what the permission axis rests on instead.
+    contained_sandbox_args: List[str] = field(default_factory=list)
     #: A command that exercises the vendor's own sandbox without invoking a
     #: model, given as the arguments after the binary. Empty means the vendor
     #: has no such sandbox to test, which is reported as "not applicable"
-    #: rather than passing silently.
+    #: rather than passing silently. ``{mode}`` is filled in by
+    #: ``sandbox_selftest`` with the mode a seat would really be given.
     sandbox_selftest_args: List[str] = field(default_factory=list)
     #: Flags an agentic seat needs and a restricted one must not get. Distinct
     #: from ``always_args``, which is genuinely unconditional: codex's
@@ -770,6 +781,38 @@ class CLISpec:
     env: Dict[str, str] = field(default_factory=dict)
     #: Vendor key, used to find this spec's environment overrides.
     vendor: str = ""
+
+    def sandbox_selftest(self, probe_file: str,
+                         env: Optional[Mapping[str, str]] = None) -> List[str]:
+        """The sandbox self-test, in the mode a seat here would really be given.
+
+        ``probe_file`` is a readable file in the tree the seats must reach, so
+        the test answers the question the run cares about -- can this seat read
+        the source -- rather than only whether a sandbox starts.
+
+        A self-test in some other mode answers a question nobody asked. That
+        was the first version's mistake, and the note it carried -- that no
+        model-free check could settle which mode ``exec`` would get -- was
+        simply wrong: ``codex sandbox`` honours ``-c sandbox_mode=`` like any
+        other entry point. Measured inside the acceptance container on
+        2026-09-17, reading one file from the mounted tree: ``read-only`` and
+        ``workspace-write`` both fail with bwrap's namespace error and
+        ``danger-full-access`` returns the file's contents.
+
+        The mode tested is the strictest a seat could draw -- the contained
+        substitute where one applies, otherwise the read-only form, since a
+        write grant only ever loosens it.
+        """
+        if not self.sandbox_selftest_args:
+            return []
+        effective = (self.contained_sandbox_args
+                     if contained(env) and self.contained_sandbox_args
+                     else self.readonly_args)
+        # These arg lists are a flag followed by its value; the mode is the
+        # value. Stated here because the self-test borrows it by position.
+        mode = effective[-1] if effective else ""
+        return [arg.format(mode=mode, probe_file=probe_file)
+                for arg in self.sandbox_selftest_args]
 
     def resolved_binary(self, env: Optional[Mapping[str, str]] = None) -> str:
         """The executable to run, after any operator override."""
@@ -1061,15 +1104,19 @@ CODEX_SPEC = CLISpec(
     # Inside our own container the vendor sandbox cannot start, and it is
     # redundant there -- see ``contained`` for the measurement and the trade.
     # This is the only mode codex documents as running commands without
-    # sandboxing. The name is alarming and accurate; what it means here is
-    # "the container is the sandbox". Unverified against a live call: the
-    # ``codex sandbox`` subcommand sandboxes whatever mode it is handed,
-    # because that is what the subcommand is for, so no model-free check can
-    # settle the ``exec`` path. The next scored run settles it.
-    contained_restricted_args=["--sandbox", "danger-full-access"],
+    # sandboxing, and the three modes are the whole of its sandbox surface
+    # (``-s`` takes read-only, workspace-write or danger-full-access and
+    # nothing else), so there is no fourth setting that keeps a write denial
+    # while letting the sandbox stand down. The name is alarming and accurate;
+    # what it means here is "the container is the sandbox".
+    contained_sandbox_args=["--sandbox", "danger-full-access"],
     # Exercises the vendor sandbox with no model call, which is exactly the
-    # mechanism that fails in the acceptance container.
-    sandbox_selftest_args=["sandbox", "--", "true"],
+    # mechanism that fails in the acceptance container. The mode is filled in
+    # from the seat's own effective mode, and the command reads a real file
+    # rather than running `true`: starting the sandbox is the question, and a
+    # command that touches nothing could pass without answering it.
+    sandbox_selftest_args=["sandbox", "-c", "sandbox_mode={mode}",
+                           "--", "cat", "{probe_file}"],
     always_args=["--skip-git-repo-check"],
     # No seat on this transport may spawn its own agents. A Sol review on
     # 2026-09-13 used the CLI's spawn_agent to create a second Sol that passed
@@ -1374,6 +1421,26 @@ def contained(env: Optional[Mapping[str, str]] = None) -> bool:
     capabilities. Weakening the wall that holds to prop up one that does not is
     the wrong trade.
 
+    It applies to every seat on that vendor, bounded or agentic, and attempt 6
+    is why that is stated rather than assumed. The first version substituted
+    only on the restricted branch, which reads as the cautious choice and is
+    the opposite: senior seats are *never* restricted, so the substitution
+    could not reach an orchestrator, a lead, a reviewer or a consultant --
+    which is every seat that had ever gone blind. Attempt 6 stopped at the
+    same `bwrap` failure as attempt 5, at the same point, with this assertion
+    set.
+
+    Standing the sandbox down does not hand the permission axis away, because
+    the sandbox flag was not what held it. A call without a write grant runs
+    in a fresh source copy that is deleted when the call returns
+    (``runtime.Fleet._invoke``), and a restricted editing seat returns a text
+    patch the harness applies -- neither depends on the vendor refusing a
+    write. What is given up is narrower and worth saying plainly: inside this
+    container a Codex seat can now write into its own disposable copy, and a
+    seat that already holds a write grant can write to the tmpfs HOME as well
+    as to /work. Both disappear with the container, and a seat that can read
+    that HOME could already read it under ``read-only``.
+
     Off by default, so an ordinary host run keeps every vendor sandbox. There
     the vendor's sandbox *is* the boundary, and standing it down would be a
     real loss rather than a redundant one.
@@ -1605,15 +1672,25 @@ class CLIProvider(LLMProvider):
             # readonly_args and write_args both describe what an agent may do
             # with its tools, and this seat's dangerous tools are absent rather
             # than governed.
-            if contained() and spec.contained_restricted_args:
-                argv += list(spec.contained_restricted_args)
+            if contained() and spec.contained_sandbox_args:
+                argv += list(spec.contained_sandbox_args)
             else:
                 argv += list(spec.restricted_args)
         else:
             argv += list(spec.agentic_args)
-            argv += list(
-                spec.readonly_args if not self._allow_writes else spec.write_args
-            )
+            if contained() and spec.contained_sandbox_args:
+                # Same substitution, same reason: this vendor's two permission
+                # modes are one sandbox mechanism, and it cannot start here.
+                # What the permission axis rested on survives the swap --
+                # a call without a write grant runs in a disposable source
+                # copy (``runtime.Fleet._invoke``), and a call with one runs
+                # in a container whose root is read-only, so /work and a
+                # tmpfs are the only writable paths either way.
+                argv += list(spec.contained_sandbox_args)
+            else:
+                argv += list(
+                    spec.readonly_args if not self._allow_writes else spec.write_args
+                )
         # Operator overrides go last, so they can also correct something the
         # spec got wrong above -- most CLIs let a later flag win. The one
         # thing they may not correct is the control: it is checked against

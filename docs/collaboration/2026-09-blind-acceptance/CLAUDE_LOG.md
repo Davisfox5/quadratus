@@ -1516,3 +1516,58 @@ the subcommand is for, so no model-free check can settle the `exec` path. The
 next scored run settles it, and the preflight now reports the condition either
 way. Suite **996 passed, 2 skipped** with Docker and installed-CLI checks;
 ruff and diff-check clean.
+
+## 2026-09-17 — attempt 6: the containment fix reached the wrong half of the fleet
+
+Davis: do another full test run to see if that fix worked. Frozen at engine
+`ad8fc76`; input re-exported from `a8772ab` and verified file by file; image ID
+inspected and equal; one `run_isolated` call, no retry.
+
+**It did not work, and the run says so in 18 seconds.** Fable's window is still
+gone, the seat fell to Astra as it should, Astra was reserved and called — and
+then hit `bwrap: No permissions to create a new namespace`, exactly as in
+attempt 5, with the fix for that failure present and asserted. Two calls,
+57,183 tokens, nothing written. Private 0 of 9 (every case HTTP 405), public 0
+of 13, baseline 100 passing offline, all determined by the empty diff.
+
+**The substitution was consulted on one branch of the argument builder, and it
+was the wrong one.** `QUADRATUS_CONTAINED=1` replaced Codex's sandbox only for
+a *restricted* seat. Senior seats are never restricted — that is a deliberate
+rule, and it means the substitution could not reach an orchestrator, a lead, a
+reviewer or a consultant. Every seat that has ever gone blind is a senior seat:
+Astra as orchestrator in attempts 5 and 6, Sol as lead in attempt 3. The fix
+covered the one class of seat that never had the problem. Scoping it narrowly
+read as the cautious choice and was the opposite: it produced a run that looked
+configured and was not.
+
+**A note I recorded before the run was also wrong.** I wrote that no model-free
+check could settle which sandbox mode `codex exec` gets, because the `codex
+sandbox` subcommand sandboxes whatever it is handed. The subcommand honours
+`-c sandbox_mode=` like any other entry point. Measured in the acceptance
+container, reading one real file from the mount: `read-only` and
+`workspace-write` both fail with bwrap's namespace error, `danger-full-access`
+returns the file. That is the check I said was impossible, and it costs
+nothing.
+
+**Repairs.** The substitution now applies to every rank of Codex seat, so
+`contained_restricted_args` is renamed `contained_sandbox_args`. The preflight
+now exercises each vendor's sandbox *in the mode the run will really use*, and
+against a real file rather than `true` — a command that touches nothing can
+pass without answering the question — so a failure is always a blocker and the
+two-readings branch is gone. Verified against the real container: contained,
+exit 0 with the OpenAI seat reading `/work/TASK.md`; unasserted, exit 1 naming
+the bwrap error.
+
+Standing the sandbox down does not hand the permission axis away, and the
+residue is stated rather than implied: a call without a write grant already
+runs in a disposable source copy and a restricted editor already returns a
+patch, so what is newly possible is a Codex seat writing into its own throwaway
+copy, and a seat that already holds a write grant writing to the tmpfs HOME as
+well as `/work`. Both vanish with the container.
+
+Suite 1011 passed, 1 skipped (gradio absent) with Docker and installed-CLI
+checks; ruff and diff-check clean. No model calls in the repair.
+
+**Still unexercised:** the worker tool-fit check (`a0f16ec`) has now been
+present and unreached for three attempts. Container and credential seed
+removed. Attempt 7 is not authorised.

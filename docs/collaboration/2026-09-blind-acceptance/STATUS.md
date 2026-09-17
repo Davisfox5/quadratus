@@ -64,12 +64,33 @@ are unchanged, since a tool denial needs no privilege. Measured first: allowing
 user namespaces is the only route that keeps both sandboxes, and it opens the
 surface behind most container escapes for every process in the container.
 `tools/acceptance/preflight.py` now checks, with no model call, that the work
-tree is readable and each vendor's own sandbox can start, treating a dead
-sandbox as a blocker when we rely on it and a recorded fact when it is stood
-down. Suite 996 passed, 2 skipped. `--sandbox danger-full-access` is unverified
-against a live call; the next scored run settles it. Also: the
-worker tool-fit repair remains unexercised: no attempt has reached a lead since
-it landed.
+tree is readable and that a seat on each vendor can read a real file out of it.
+
+**Attempt 6 stopped at the same failure, because that fix reached the wrong
+half of the fleet.** Run `be04e367`, engine `ad8fc76`: the seat fell to Astra
+again, Astra was called, and it hit the same `bwrap` error 18 seconds in with
+containment asserted. The substitution was consulted only on the
+*restricted-seat* branch — and senior seats are never restricted, so it could
+not reach an orchestrator, lead, reviewer or consultant, which is every seat
+that has ever been blind. Two calls, 57,183 tokens, nothing written; private 0
+of 9, public 0 of 13, baseline 100 passing.
+[Result and review](evidence/scored-attempt-6/README.md).
+
+**Repaired, and the mode question is now settled without a model.** The
+substitution applies to every rank of Codex seat
+(`contained_restricted_args` → `contained_sandbox_args`), and the preflight
+exercises each sandbox in the mode the run will really use, reading a real
+file, so a failure is always a blocker. The earlier note that no model-free
+check could settle this was wrong: `codex sandbox` honours `-c sandbox_mode=`,
+and inside the container `read-only` and `workspace-write` both fail with
+bwrap's namespace error while `danger-full-access` returns the file. Verified
+against the real container both ways. Suite 1011 passed, 1 skipped (gradio
+absent); ruff and diff-check clean.
+
+**Open for Davis:** attempt 7, which needs his go-ahead and a returned model
+window. The worker tool-fit repair (`a0f16ec`) has now been present and
+unexercised for three attempts — no run has reached a lead commissioning an
+errand.
 
 
 **The two-fix repair batch is complete and verified offline.** No new
