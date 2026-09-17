@@ -23,6 +23,7 @@ does not need judgement.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -329,6 +330,29 @@ _SCOPE_REQUEST = (
     'rejected and comes back for correction.'
 )
 
+#: How many facts one decomposition may add, and how long each may be. The map
+#: is re-sent on every orchestrator and lead call for the rest of the run, so
+#: an unbounded one would replace a one-off exploration cost with a permanent
+#: per-call one -- which is the trade this whole change exists to avoid.
+_MAX_ORIENT_NOTES = 4
+_MAX_ORIENT_NOTE_CHARS = 180
+
+_ORIENT_REQUEST = (
+    'You are reading this project to choose the task. Whatever you learn doing that '
+    'is lost unless you write it down, and the seat that does the work then reads the '
+    'same files again from scratch -- which costs far more there than it did here, '
+    'because an agent re-sends its whole conversation on every step. So after the '
+    'description, add up to '
+    f'{_MAX_ORIENT_NOTES} lines of "MAP NOTES: topic: fact" recording what someone '
+    'editing this code would otherwise have to go and find: where the relevant code '
+    'lives and at roughly what line, what is already imported or defined nearby, the '
+    'conventions the surrounding code follows. Only facts you actually established by '
+    'reading, stated concretely enough to act on -- "app.py defines the Flask routes; '
+    'csv and io are already imported at the top" beats "app.py is the main file". '
+    f'Keep each under {_MAX_ORIENT_NOTE_CHARS} characters. Omit the section entirely '
+    'if you read nothing new. Do not investigate beyond what the task needed.'
+)
+
 _NEEDS_REQUEST = (
     'After KIND, optionally include NEEDS: ["execute", "patch", "direct-write"] '
     'with only the operations required for this task (or [] for none). '
@@ -336,6 +360,49 @@ _NEEDS_REQUEST = (
     'apply; direct-write means the tool itself must write files. A docs/rote '
     'task that runs tests still needs execute. Requirements do not grant permission.'
 )
+
+
+def _read_task_orientation(description: str):
+    """Split ``MAP NOTES:`` lines out of a task description.
+
+    Returns ``(notes, remaining_description)``. The notes are removed from the
+    description because they are not part of the task: leaving them in would
+    put them through the scope lint and into the task text the lead is told to
+    satisfy verbatim.
+
+    Malformed notes are dropped rather than guessed at, exactly as in a
+    close-out: the map is long-lived and re-sent on every call, so a wrong note
+    there is worse than no note. Bounded in count and length for the same
+    reason -- this exists to remove a cost, not to relocate it.
+    """
+    lines, notes, collecting = [], [], False
+    for line in description.splitlines():
+        match = re.match(r"\s*MAP\s+NOTES\s*:(.*)$", line, re.IGNORECASE)
+        if match is not None:
+            collecting = True
+            rest = match.group(1).strip()
+            if rest:
+                notes.append(rest)
+            continue
+        stripped = line.strip()
+        if collecting:
+            # The section runs until a blank line or a line that is plainly
+            # not one of its entries, so a description continuing underneath
+            # is not swallowed.
+            if stripped.startswith(("-", "•", "*")) or (stripped and ":" in stripped
+                                                        and len(stripped) <= 300
+                                                        and not stripped.endswith(".")):
+                notes.append(stripped)
+                continue
+            collecting = False
+        lines.append(line)
+    parsed = []
+    for raw in notes:
+        raw = raw.lstrip("-•* ").strip()
+        topic, _, note = raw.partition(":")
+        if topic.strip() and note.strip():
+            parsed.append((topic.strip()[:40], note.strip()[:_MAX_ORIENT_NOTE_CHARS]))
+    return parsed[:_MAX_ORIENT_NOTES], "\n".join(lines).strip()
 
 
 def _read_task_needs(description: str):
@@ -1197,6 +1264,8 @@ class Session:
                     "operator can answer, reply 'ASK: <one question>' instead."
                     f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}\n\n{_NEEDS_REQUEST}"
                     + ("\n\n" + _SCOPE_REQUEST if self.project and self.config.allow_writes else "")
+                    + ("\n\n" + _ORIENT_REQUEST
+                       if self.project and self.config.codebase_map is not None else "")
                 ),
                 recent=self.config.recent_entries,
                 extra=self._map_block(),
@@ -1279,6 +1348,8 @@ class Session:
                     f"silently drop whatever pin it meant to name."
                 ) from second
 
+        meta = self._absorb_orientation(meta, seat)
+
         scope = self.config.default_scope
         if self.project and self.config.allow_writes:
             from .scope import read_scope
@@ -1293,7 +1364,7 @@ class Session:
                     seat, reply = self._ask_seat(seat, build_with_correction)
                     if (control := parse_control(reply)) is not None:
                         raise RunStalled("Scope correction must supply a valid task, not a control reply.") from exc
-                    meta = _read_metadata(reply)
+                    meta = self._absorb_orientation(_read_metadata(reply), seat)
         else:
             description = meta.description.strip()
         if not description:
@@ -1397,6 +1468,28 @@ class Session:
             log.debug("progress callback raised", exc_info=True)
 
     # -- prompts -------------------------------------------------------------
+    def _absorb_orientation(self, meta, seat: str):
+        """Take the orchestrator's ``MAP NOTES`` into the map, off the task.
+
+        Applied to every parse of a decomposition reply, corrections included.
+        The orchestrator has already paid to read the project by the time it
+        names a task, and that reading is worth keeping even when the
+        description itself comes back for correction -- the facts are about
+        the code, not about the wording that failed a lint.
+
+        ``TaskMetadata`` is frozen, so this returns a replacement rather than
+        editing in place.
+        """
+        orientation, description = _read_task_orientation(meta.description)
+        if not orientation:
+            return meta
+        if self.config.codebase_map is not None:
+            for topic, note in orientation:
+                self.config.codebase_map.amend(
+                    topic=topic, note=note, author=seat, session="decomposition"
+                )
+        return dataclasses.replace(meta, description=description)
+
     def _map_block(self) -> str:
         if self.config.codebase_map is None:
             return ""
