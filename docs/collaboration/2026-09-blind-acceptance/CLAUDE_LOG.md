@@ -1769,3 +1769,49 @@ Task 1 completed and closed out, task 2 in flight at the kill. The surviving
 tree passes **135 tests** (100 baseline plus 35 written), baseline intact.
 Private 0 of 9, public 0 of 13 — the endpoint is still not wired. Container and
 credential seed removed.
+
+## 2026-09-17 — attempt 11: two tasks, the cheapest lead yet, and a watchdog I got wrong
+
+Davis's correction first, because it was right: #2 did not need his permission,
+and asking for it was poor judgement. His steer on #1 was better than mine —
+the question is not how long to allow a run, but whether it is still working.
+
+**The prompt change worked, and the half I argued for did not.** Removing
+`Inspect the project source in your working directory`, which contradicted the
+guidance that followed it, gave the cheapest first-slice lead call this lane
+has measured: **201,764 tokens against attempt 9's 241,700 and attempt 10's
+353,635**, with the re-read share down to **48%** from 82%. Across the whole
+run, re-reads fell from 80% to **61%** and new work rose from 98,447 to
+**206,020** in a comparable budget — roughly twice the work for the same spend.
+
+**No workers were commissioned, in either task.** That is nought for two. What
+moved the number was telling the lead not to go exploring, not inviting it to
+delegate. Per the commitment made before the run, the delegation wording is not
+being tuned a third time.
+
+**Two tasks completed, each closed out, each integration-checked and passing.**
+Eight calls, 192 diff lines, 113 tests on offline reconstruction with hashes
+matching. Private 0 of 9, public 0 of 13 — the endpoint is still not wired.
+The run stopped on its own token threshold **and wrote its records**, which
+attempt 10 could not.
+
+**The watchdog: my false positive, then a clean pass.** The first launch was
+killed as `stalled` after 240 idle seconds with `in_flight: 1` — in the middle
+of a healthy lead call. The heartbeat watched the budget file's mtime, which
+advances only at call boundaries, and I set the stall window to 240 seconds
+when three earlier runs had already measured lead calls at 228 to 263. A
+threshold below a known-good duration is a bug however it is spelled. It cost
+two calls and 59,296 tokens.
+
+The remedy was not a bigger number. `run_isolated` now takes a **callable**
+heartbeat, and the launcher answers the question that matters: it reads the
+budget's `in_flight` count and reports an outstanding call as progress, so only
+genuine idleness between calls accrues. A wedged call stays bounded by the
+provider's own timeout and the ceiling remains the backstop; a probe that
+raises reads as progress, because my bug is not evidence about the workload.
+On the second launch the stall never fired and idle at exit was effectively
+zero.
+
+**Still unexercised:** the worker tool-fit check (`a0f16ec`), seven attempts
+on. It cannot fire until a lead commissions an errand. Container and credential
+seed removed.

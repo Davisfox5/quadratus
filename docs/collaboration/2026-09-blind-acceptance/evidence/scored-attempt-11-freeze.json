@@ -1,11 +1,11 @@
 {
-  "frozen_at": "2026-09-17T18:15:15.946250+00:00",
-  "state": "scored attempt 11 frozen before launch; identical original input, engine whose supervisor can tell a working run from a stuck one, and whose lead prompt no longer contradicts itself",
+  "frozen_at": "2026-09-17T18:28:53.759203+00:00",
+  "state": "scored attempt 11, relaunched after the first launch was aborted by a stall window set below a known-good call duration; identical original input",
   "prepared_by": "Claude on Davis's Mac, with his authorisation; Codex remains out of context",
-  "runtime_commit": "00fbe5f2fccd3e7422e2ef382c6418cbea43a9ff",
+  "runtime_commit": "c0755d059582e8d22767ea2a43b6475e9b7ba779",
   "runtime_files": {
     "blind_trial.py": "44e46e18a2c73aa44a7cb80f04060213f0d9db01738e482b69b12d3a8204887f",
-    "quadratus/isolated_run.py": "d6956137de7c9272617a679e4a9fa20c9dfb3fff97af4be44459a532bef98e50",
+    "quadratus/isolated_run.py": "db7e1a5b206305365d52dd0e4b259ff12e0f8b00cc4e61820e6ef1491e7ebc54",
     "quadratus/config.py": "bbe147d68533b9d16a7daa2fe6ddf08ccfa7542bc5090874c63c2ae8cd546a2e",
     "quadratus/memory.py": "2daea08d1588dea52bcba1bbb085eb7f78f764394dfb3f26fb60252f85419bc9",
     "quadratus/project_run.py": "3879ded146ca5f87812ad78e4c5c58dadc72ee1b5c8ec6cea917c9c3d36b80dd",
@@ -182,11 +182,11 @@
     "worker_routing": "left to the errand tree rather than pinned to a vendor. A \"read\" errand routes to GPT-5.6 Luna for the widest corroborated cheap window. Accepted knowing it concentrates OpenAI while Fable is out, because learning whether Luna's window holds is worth more than avoiding the concentration.",
     "lead_tool_access": "unchanged, as at attempt 9."
   },
-  "stall_seconds": 240,
-  "heartbeat": ".quadratus/runs/<id>/budget.json, rewritten at every call boundary",
+  "stall_seconds": 300,
+  "heartbeat": "a liveness probe, not a file: the supervisor reads the budget's in_flight count and treats an outstanding call as progress",
   "runtime_changes_since_attempt_10": {
-    "quadratus/isolated_run.py": "the ceiling and the liveness check are separate. run_isolated takes a heartbeat path and a stall window, reads the heartbeat between short docker wait slices, and ends a run that stopped progressing as \"stalled\" rather than waiting it out to the ceiling. idle_seconds is carried on the result (00fbe5f).",
-    "quadratus/session.py": "the lead prompt no longer tells the lead to inspect the project source and then invites it to delegate the inspecting; the guidance moved to immediately before the task recitation, the position this project holds to be the one attention favours (00fbe5f)."
+    "quadratus/isolated_run.py": "the ceiling and the liveness check are separate, and the heartbeat may be a callable so the caller can answer \"is it alive\" rather than \"did it write\" (00fbe5f, c0755d0).",
+    "quadratus/session.py": "the lead prompt no longer tells the lead to inspect the project source and then invites it to delegate the inspecting; the guidance moved to immediately before the task recitation (00fbe5f)."
   },
   "supervision_change": {
     "why": "attempt 10 had the outer ceiling equal to the inner run limit, both 900s, so the container was killed before run_project wrote result.json, report.md, ledger.md, delegation.md, changes.diff or any vendor session file.",
@@ -194,5 +194,13 @@
     "stall_window": "240s without the budget file advancing, which ends a wedged run in four minutes rather than eighteen",
     "not_a_budget_change": "RunLimits.wall_seconds stays 900 and is what bounds the run",
     "operator_concern": "Davis, 2026-09-17: a run taking its full time may be hanging, so the supervisor must detect that rather than wait indefinitely."
+  },
+  "aborted_first_launch": {
+    "outcome": "stalled",
+    "idle_seconds": 240.329022042,
+    "elapsed_seconds": 306,
+    "what_happened": "the supervisor watched the budget file's mtime, which advances at each call boundary, so a healthy lead call looked silent for its whole duration. in_flight was 1 when the container was killed. Two calls and 59,296 tokens were spent; no source was changed.",
+    "my_error": "the stall window was set to 240s when lead calls had already been measured at 228 to 263 seconds across three runs",
+    "fix": "run_isolated accepts a callable heartbeat; the launcher reports an outstanding call as progress, so only idleness between calls accrues (c0755d0). Window raised to 300s as well, but the mechanism is the fix."
   }
 }

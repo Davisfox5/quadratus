@@ -1,0 +1,198 @@
+{
+  "calls": [
+    {
+      "type": "result",
+      "subtype": "success",
+      "stop_reason": "stop_sequence",
+      "session_id": "f2b26a94-dfe9-49a6-a085-67dd22ba32d6",
+      "num_turns": 1,
+      "usage": {
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {},
+      "subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "is_error": true,
+      "permission_denials": [],
+      "evidence_file": "call-001.stdout",
+      "sha256": "ead36c5b86700afc3c0cb8412cce9ba509f2cc254a4548c4b837a6fdaa6e354e"
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 62558,
+        "cached_input_tokens": 45184,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 667,
+        "reasoning_output_tokens": 107
+      },
+      "evidence_file": "call-002.stdout",
+      "sha256": "bbe543b65d820005f0f212301b64171da31864fca2b269b238ce0fc0abe15ef8"
+    },
+    {
+      "stopReason": "end_turn",
+      "sessionId": "01a0b0a7-a58f-7070-ae8f-1221a4492c70",
+      "num_turns": 8,
+      "usage": {
+        "input_tokens": 91511,
+        "cache_read_input_tokens": 96128,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 14125,
+        "reasoning_tokens": 11661,
+        "total_tokens": 201764
+      },
+      "modelUsage": {
+        "grok-4.6-build": {
+          "inputTokens": 91511,
+          "outputTokens": 14125,
+          "cacheReadInputTokens": 96128,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 8,
+          "costUSD": 0.10738424
+        }
+      },
+      "evidence_file": "call-003.stdout",
+      "sha256": "96f6ed7bbe3edee7a61f7568bdca8f1e7309487c1e4ae6efca3377fa4d5fb1e3"
+    },
+    {
+      "stopReason": "end_turn",
+      "sessionId": "01a0b0ab-975e-7df2-9e9d-1b474e5de236",
+      "num_turns": 1,
+      "usage": {
+        "input_tokens": 6501,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 399,
+        "reasoning_tokens": 23,
+        "total_tokens": 6900
+      },
+      "modelUsage": {
+        "grok-4.6-build": {
+          "inputTokens": 6501,
+          "outputTokens": 399,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 1,
+          "costUSD": 0.00523464
+        }
+      },
+      "evidence_file": "call-004.stdout",
+      "sha256": "49a7ada31b3a9883b4aec4e1277467f618f8aa15d3fa3a4da93caceec6e5ca67"
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 56161,
+        "cached_input_tokens": 35328,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 657,
+        "reasoning_output_tokens": 86
+      },
+      "evidence_file": "call-005.stdout",
+      "sha256": "f23fc1bd7328df55eb52822c5f487b880d91343c4cbee5e082ff457a811d4eea"
+    },
+    {
+      "stopReason": "end_turn",
+      "sessionId": "01a0b0ac-39b7-7320-ada6-c7b32286b6f8",
+      "num_turns": 7,
+      "usage": {
+        "input_tokens": 27598,
+        "cache_read_input_tokens": 121216,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 8358,
+        "reasoning_tokens": 6305,
+        "total_tokens": 157172
+      },
+      "modelUsage": {
+        "grok-4.6-build": {
+          "inputTokens": 27598,
+          "outputTokens": 8358,
+          "cacheReadInputTokens": 121216,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 7,
+          "costUSD": 0.05642368
+        }
+      },
+      "evidence_file": "call-006.stdout",
+      "sha256": "b2f806a8945775ed28b75f73dc26fea6fec0933d38c6e0e0f1591efcbb0f6439"
+    },
+    {
+      "stopReason": "end_turn",
+      "sessionId": "01a0b0ae-5056-7c00-a3da-8a294425022a",
+      "num_turns": 1,
+      "usage": {
+        "input_tokens": 6567,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 401,
+        "reasoning_tokens": 29,
+        "total_tokens": 6968
+      },
+      "modelUsage": {
+        "grok-4.6-build": {
+          "inputTokens": 6567,
+          "outputTokens": 401,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 1,
+          "costUSD": 0.0052836
+        }
+      },
+      "evidence_file": "call-007.stdout",
+      "sha256": "e6ad6403df4661eedd6981c90eda20c72fac9ad6d26e81437967598236df2e3c"
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 39731,
+        "cached_input_tokens": 29184,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 482,
+        "reasoning_output_tokens": 0
+      },
+      "evidence_file": "call-008.stdout",
+      "sha256": "e8b221e401d73f43ff05ebc0ace08546e5b34cdd72a2006f6c82bf7beb3e38a6"
+    }
+  ],
+  "raw_envelopes": "Raw stdout, vendor sessions and thought fields remain private outside every repository; each row above names its file and that file's SHA-256."
+}

@@ -1,0 +1,9 @@
+Project: /work; edits enabled
+asking claude:fable for the next task
+claude:fable is out of window; the seat falls to openai:gpt-6-astra
+task 1: Implement only the decoding/header foundation: decode strictly with UTF-8 BOM support, use newline-preserving StringIO and strict csv.reader, and require `tag type`, `start (s)`, and `end (s)`. Preserve column order and unknown columns so later row validation can check field counts. Leave row classification, endpoint wiring, and UI for subsequent slices. Budget approximately 30 implementation lines and 55 test lines. [backend/simple]
+task 1 closed by grok:default
+asking openai:gpt-6-astra for the next task
+task 2: Implement player resolution beside the CSV header helper, budgeting approximately 30 implementation lines and 55 test lines. Compare names and numbers exactly after trimming each token; preserve token order. If any token fails, return an empty ID list with explanatory reasons so later row classification can mark it malformed. Keep this helper independent of store and video operations. Leave row classification, duplicate detection, endpoint wiring, and UI for subsequent slices. Run `python -m pytest -q`. [backend/simple]
+task 2 closed by grok:default
+asking openai:gpt-6-astra for the next task

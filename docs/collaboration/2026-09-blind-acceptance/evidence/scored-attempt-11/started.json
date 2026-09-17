@@ -1,0 +1,8 @@
+{
+  "started_at": "2026-09-17T18:35:37.604737+00:00",
+  "freeze_sha256": "1d5076bff140386eb2f4928474606800c5633af63428f0259c886ef00e6e4c27",
+  "runtime_commit": "c0755d059582e8d22767ea2a43b6475e9b7ba779",
+  "image_id": "sha256:d1f99331a1639f5ff364faf9e4c027943613fadba733d452191296b873a390e2",
+  "outer_wall_seconds": 1080,
+  "stall_seconds": 300
+}
