@@ -1724,3 +1724,48 @@ Suite 1045 passed, 1 skipped (gradio absent); ruff and diff-check clean. The
 attempt-8 question stands: **what `max_reported_tokens` should count** is still
 open and still Davis's. The worker tool-fit check (`a0f16ec`) is six attempts
 unexercised. Container and credential seed removed.
+
+## 2026-09-17 — attempt 10: the split is visible, the delegation nudge is not working
+
+Davis approved four items: leave the run threshold alone, make the re-read
+split visible, tell leads to delegate their reading, and measure quota drain.
+Two of the four are in and one of them failed.
+
+**The split is in the record.** 486,031 tokens, of which **387,584 (80%) were
+re-reads** and 98,447 new work — and for the first time this is readable from
+the run's own ledger instead of from private vendor envelopes. The vendor's own
+price rides along: xAI charged $0.116 for the lead call our counterfactual
+prices at $0.30. Codex, which had no diagnostics extractor at all while holding
+the orchestrator seat in every recent run, now reports too.
+
+**The lead did not delegate.** No workers were commissioned. The task-1 lead
+took 12 model calls against attempt 9's 9, and 353,635 tokens against 241,700.
+Attempt 10's task 1 was a different slice, so it is not like-for-like, but it
+is the wrong direction and the instruction plainly did not take. The likely
+cause is the prompt contradicting itself: the lead is told `Inspect the project
+source in your working directory` directly, and invited to delegate the
+inspecting several blocks later. A direct instruction beats a hedged one placed
+after it, and this project's own finding is that the end of the prompt is where
+attention lands — which is where the task recitation sits and this guidance
+does not.
+
+**Scoreboard on the two efficiency changes, stated plainly.** Carrying the
+orchestrator's reading forward is measured and worked: −46% like-for-like at
+attempt 9. Telling the lead to delegate its reading has one data point and it
+is negative. If moving it to the recitation position does not shift it, the
+right answer is to stop tuning the wording rather than keep going.
+
+**A defect this exposed, and it cost us the run records.** `RunLimits.
+wall_seconds` and `run_isolated`'s `wall_seconds` are **both 900**, so a run
+that uses its full time is killed by the supervisor before `run_project` writes
+anything: `result.json`, `report.md`, `ledger.md`, `delegation.md` and
+`changes.diff` are all absent here, and so is the vendor session evidence,
+whose copy sits in a `finally` block the kill pre-empted. The work survived
+only because `/work` is a bind mount. The outer wall must exceed the inner
+limit; that enlarges no budget, since the inner 900 seconds is what bounds the
+run and is untouched. Not yet applied.
+
+Task 1 completed and closed out, task 2 in flight at the kill. The surviving
+tree passes **135 tests** (100 baseline plus 35 written), baseline intact.
+Private 0 of 9, public 0 of 13 — the endpoint is still not wired. Container and
+credential seed removed.
