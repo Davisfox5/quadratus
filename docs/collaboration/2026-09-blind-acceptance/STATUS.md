@@ -108,11 +108,27 @@ asks whether each CLI is signed in (positive proof for codex; known-failure
 wording for grok, which exits 0 on a dead session; not applicable for claude).
 Verified in the container: exit 1, naming grok. Suite 1030 passed, 1 skipped.
 
-**Blocked on Davis: `grok login`.** The preflight refuses to launch until the
-session is live, which is what it is for. Attempt 8 goes the moment it passes.
+**Attempt 8 produced the first working code this lane has had.** Run
+`18d728fd`, engine `0d2c629`. Grok re-authenticated by device code on
+`davisfox5@gmail.com`; **the preflight passed clean as a launch gate for the
+first time**. Astra sliced the feature (header reading first, wiring and row
+validation deferred) and Grok implemented that slice — 105 lines across
+`app.py` and a new test file, **108 tests passing** on offline reconstruction
+with hashes matching. Private 0 of 9 and public 0 of 13, because the endpoint
+is not wired yet. [Result and review](evidence/scored-attempt-8/README.md).
+
+**Open for Davis — what should `max_reported_tokens` count?** The run stopped
+at the 500k threshold, and most of the threshold was cache. The lead's 15-turn
+call metered 450,602 tokens of which **383,104 were `cache_read_input_tokens`**
+— the agent re-sending its conversation, not new work; fresh input was 54,069
+and the vendor billed $0.129. Attempt 3's stop was the same shape at **99%**
+cache. The meter folding cache into input is right for the API-price
+counterfactual and is not in question; whether the *run control* should use the
+same number is the decision. **Nothing was changed** — enlarging budgets is not
+a review-lane repair.
+
 The worker tool-fit repair (`a0f16ec`) has now been present and unexercised for
-four attempts — attempt 7 selected a lead and wrote a task but never
-commissioned an errand.
+five attempts: a lead was invoked and wrote code, but commissioned no errand.
 
 
 **The two-fix repair batch is complete and verified offline.** No new

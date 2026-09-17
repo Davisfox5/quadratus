@@ -1622,3 +1622,50 @@ session is live, which is what it is for. The worker tool-fit check (`a0f16ec`)
 has now been present and unreached for four attempts; attempt 7 got a lead
 selected and a task written, but never commissioned an errand. Container and
 credential seed removed.
+
+## 2026-09-17 — attempt 8: the first working code, and a threshold spent on cache
+
+Davis re-authenticated Grok by device code after attempt 7 found the staged
+token had expired. The first device login bound to a different account because
+the browser already held that session; he chose `davisfox5@gmail.com`, the
+account attempts 1 to 7 used, and it was redone in a private window. One
+bounded unscored call (5,573 tokens) confirmed the session before staging.
+
+Frozen at engine `0d2c629`. **The preflight passed clean as a launch gate for
+the first time** — work tree readable, Codex and Grok sessions live, an OpenAI
+seat able to read the mounted source.
+
+**The lane produced working code.** Astra sliced the feature deliberately —
+header reading first, endpoint wiring and row validation explicitly deferred —
+and Grok implemented that slice: `_read_clip_manifest_header` with a strict
+`utf-8-sig` decode, trimmed headers, case-insensitive matching of the three
+required names, a reader positioned so `line_num` counts physical lines, and
+`ValueError` for bad encoding, empty input or a missing header, plus eight
+focused tests. 105 lines across `app.py` and a new test file. Reconstructed
+offline: **108 tests pass**, hashes match before and unchanged after. Private 0
+of 9 and public 0 of 13, because the endpoint is not wired yet — that was the
+next slice.
+
+**It stopped at the token threshold, and most of the threshold was cache.** The
+lead ran 15 turns for 450,602 metered tokens, of which **383,104 are
+`cache_read_input_tokens`** — the agent re-sending its conversation each turn,
+not new work. Fresh input was 54,069 and output 13,429. The vendor's own figure
+for the whole call is **$0.129**; our counterfactual says $0.955, because the
+meter folds cache reads into input. That folding is right for an API-price
+counterfactual and is not in question. The question is that the *same number*
+is the run's stop threshold.
+
+This is the second such stop. Attempt 3's Haiku worker was 99% cache
+(224,844 read + 45,893 created against 1,507 fresh input); attempt 8's lead is
+88%. So `max_reported_tokens` is not bounding what it reads as though it
+bounds. **Nothing was changed**: what the threshold counts is a budget
+decision, and enlarging budgets is not a review-lane repair. Raised for Davis.
+
+**One repair, in the evidence tooling.** The collector archived the integration
+gate's own `.pytest_cache` as though it were model output, which made an
+otherwise clean offline reconstruction report a hash mismatch. Generated caches
+are now excluded and the re-run reports `source_hashes_match_before: true`.
+
+**Still unexercised:** the worker tool-fit check (`a0f16ec`), five attempts on.
+A lead was invoked and wrote code, but commissioned no errand. Container and
+credential seed removed.
