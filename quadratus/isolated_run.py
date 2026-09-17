@@ -8,6 +8,7 @@ blindness of their instruction inputs require a separate preflight.
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import re
@@ -16,6 +17,8 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -91,14 +94,21 @@ def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=Fal
     ``delegation.md``, ``changes.diff`` and every vendor session file, because
     the kill landed before the workload's own final steps.
 
-    ``heartbeat`` is a path the workload touches as it makes progress -- the
-    run budget's state file is the natural one, since it is rewritten at every
-    call boundary. With ``stall_seconds`` it separates the two failures that a
-    single timeout conflates: a run still working when the ceiling arrives
-    (``wall_deadline``) and a run that stopped making progress and would
-    otherwise be waited on to the ceiling for nothing (``stalled``). A stall is
-    caught in ``stall_seconds`` rather than in ``wall_seconds``, so a wedged
-    container dies sooner than a busy one, not later.
+    ``heartbeat`` is a path the workload touches as it progresses, or a
+    callable returning any token whose *change* means progress. With
+    ``stall_seconds`` it separates the two failures a single timeout conflates:
+    a run still working when the ceiling arrives (``wall_deadline``) and a run
+    that stopped progressing and would otherwise be waited out for nothing
+    (``stalled``). A stall is caught in ``stall_seconds`` rather than in
+    ``wall_seconds``, so a wedged container dies sooner than a busy one.
+
+    Prefer the callable where "has it written recently" is not the same
+    question as "is it alive". Attempt 11 of the blind acceptance watched the
+    run budget's mtime, which advances at each *call boundary*, and was killed
+    as stalled 240 seconds into a healthy lead call -- a duration three earlier
+    runs had already measured at 228 to 263 seconds. The caller knows whether a
+    call is outstanding; this module cannot, and a threshold chosen below a
+    known-good duration is a bug however the number is spelled.
     """
     if (isinstance(wall_seconds, bool) or not isinstance(wall_seconds, (int, float))
             or not math.isfinite(wall_seconds) or wall_seconds <= 0):
@@ -150,9 +160,27 @@ def run_isolated(*, image, work, runtime, command, wall_seconds=900, network=Fal
                               timeout=max(0.01, deadline - time.monotonic()))
 
     def beat():
-        """When the workload last showed progress, or None if it never has."""
+        """A token for the workload's progress; any change counts as progress.
+
+        A path is read as its mtime, which suits a workload that writes as it
+        goes. A callable lets the caller decide, and it has to be available,
+        because file writes are not the same thing as liveness: attempt 11 was
+        killed as stalled while a perfectly healthy model call was in flight,
+        because the run writes its budget at each *call boundary* and a single
+        lead call legitimately runs for minutes. The caller knows a call is
+        outstanding; this module does not, and should not have to.
+        """
         if heartbeat is None:
             return None
+        if callable(heartbeat):
+            try:
+                return heartbeat()
+            except Exception:  # noqa: BLE001
+                # A fresh object every time, so a probe that is itself broken
+                # reads as progress and cannot kill a live run. Our bug is not
+                # evidence about the workload; the ceiling remains the backstop.
+                log.debug('heartbeat probe failed', exc_info=True)
+                return object()
         try:
             return Path(heartbeat).stat().st_mtime
         except OSError:
