@@ -1484,9 +1484,15 @@ class Session:
         if not orientation:
             return meta
         if self.config.codebase_map is not None:
+            # The seat's *key*, not the seat. A Seat carries why it holds the
+            # chair, and rendering the whole record put
+            # "{'key': 'openai:gpt-6-astra', 'reason': 'fallback-unavailable', ...}"
+            # where a reader expects a model name. Provenance here answers
+            # "who established this fact", and that is the model.
+            author = getattr(seat, "key", seat)
             for topic, note in orientation:
                 self.config.codebase_map.amend(
-                    topic=topic, note=note, author=seat, session="decomposition"
+                    topic=topic, note=note, author=str(author), session="decomposition"
                 )
         return dataclasses.replace(meta, description=description)
 

@@ -137,3 +137,63 @@ def test_the_number_of_notes_is_bounded(count):
 def test_a_long_note_is_truncated_rather_than_rejected():
     notes, _ = _read_task_orientation('MAP NOTES: layout: ' + 'x' * 500 + '\n')
     assert len(notes[0][1]) == _MAX_ORIENT_NOTE_CHARS
+
+
+def test_a_note_records_the_model_that_established_it_not_the_seat_record():
+    """Attempt 9 wrote provenance as a whole Seat.
+
+    The map showed "{'key': 'openai:gpt-6-astra', 'reason':
+    'fallback-unavailable', ...}" where a reader expects a model name. A note's
+    author answers "who established this fact", and that is the model; why it
+    held the chair belongs to the ledger.
+    """
+    from dataclasses import dataclass
+
+    from quadratus.codebase_map import CodebaseMap
+
+    @dataclass
+    class _Seat:
+        key: str
+        reason: str = 'fallback-unavailable'
+
+    @dataclass
+    class _Meta:
+        description: str
+
+    class _Session:
+        config = type('C', (), {'codebase_map': None})()
+
+    import tempfile
+
+    from quadratus.session import Session
+    with tempfile.TemporaryDirectory() as tmp:
+        session = _Session()
+        session.config.codebase_map = CodebaseMap(f'{tmp}/map.jsonl')
+        meta = Session._absorb_orientation(
+            session, _Meta('Do it.\nMAP NOTES: imports: csv is imported at app.py:8\n'),
+            _Seat('openai:gpt-6-astra'))
+        note = session.config.codebase_map.notes[-1]
+        assert note.author == 'openai:gpt-6-astra'
+        assert 'fallback-unavailable' not in note.author
+        assert meta.description == 'Do it.'
+
+
+def test_a_plain_string_seat_still_works():
+    import tempfile
+    from dataclasses import dataclass
+
+    from quadratus.codebase_map import CodebaseMap
+    from quadratus.session import Session
+
+    @dataclass
+    class _Meta:
+        description: str
+
+    class _Session:
+        config = type('C', (), {'codebase_map': None})()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        session = _Session()
+        session.config.codebase_map = CodebaseMap(f'{tmp}/map.jsonl')
+        Session._absorb_orientation(session, _Meta('MAP NOTES: t: f\n'), 'grok:default')
+        assert session.config.codebase_map.notes[-1].author == 'grok:default'

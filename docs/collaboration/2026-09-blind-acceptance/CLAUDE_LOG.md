@@ -1669,3 +1669,58 @@ are now excluded and the re-run reports `source_hashes_match_before: true`.
 **Still unexercised:** the worker tool-fit check (`a0f16ec`), five attempts on.
 A lead was invoked and wrote code, but commissioned no errand. Container and
 credential seed removed.
+
+## 2026-09-17 — attempt 9: the first completed task, at 46% less per slice
+
+Davis asked for the root cause of attempt 8's token spend rather than a budget
+change, and rejected trimming the lead's toolset. He was right on both counts,
+and the investigation corrected my first diagnosis.
+
+**What I had wrong.** I said the lead did not know where to work. It did: it
+was handed the file to change *and* the exact signature to write, and it still
+spent 18 of 26 tool calls exploring. It knew *where* and nothing about *what
+was in there* — conventions, existing imports, neighbouring code. The map it
+received was the scan's language census. Meanwhile the orchestrator had read
+the same files minutes earlier to name the task, and that reading was
+discarded: the map is only written by the scan and by close-outs, and no
+attempt had ever reached a close-out.
+
+**Why it costs so much.** An agent re-sends its whole conversation on each
+step, so cost grows with the square of the step count. One early whole-file
+read of `app.py` at 8,800 tokens is then re-sent on every later step.
+
+**Two changes.** The scan now names the largest non-test source files with line
+counts and where tests live (~144 tokens; test files excluded, because a suite
+is often the biggest thing in a repository and naming it points a lead exactly
+wrong). And a decomposition may record up to four `MAP NOTES: topic: fact`
+lines, taken off the description before the scope lint and kept even when the
+description comes back for correction.
+
+**Measured, same slice and same seat:** model calls 15 → **9**, cache re-reads
+383,104 → **158,336**, total 450,602 → **241,700**, a **46% cut** — on the
+larger of the two slices, and this one finished. Astra's recorded facts were
+exactly the kind that save a read: `app.py:8–9 already imports io and csv`,
+`app.py:1291 defines export_csv` with the eight columns, the `sys.path` pattern
+in `tests/test_basic.py`, and a warning that `app.py:28–29` creates directories
+at import so the new helper should stay pure.
+
+**The run reached firsts.** Task 1 completed and closed out, an integration
+check ran, task 2 was named and begun. Six calls, 233 diff lines, 113 tests
+passing on offline reconstruction. Private 0 of 9 and public 0 of 13, because
+the endpoint is still not wired — tasks 1 and 2 are the parsing layer beneath
+it.
+
+**Not changed, on Davis's instruction and for a reason worth recording.**
+Lead tool access. `NEED TOOL` runs worker → lead only, so a lead cannot ask for
+a tool it lacks, and a reissue would restart its conversation and pay the
+quadratic twice. A seat that cannot reach a tool finds a workaround instead —
+which is attempt 3's worker writing 101KB of code as prose.
+
+**One repair after the run.** A map note recorded provenance as the whole
+`Seat` record, so the map read `{'key': 'openai:gpt-6-astra', 'reason': ...}`
+where a reader expects a model name. Now the seat's key.
+
+Suite 1045 passed, 1 skipped (gradio absent); ruff and diff-check clean. The
+attempt-8 question stands: **what `max_reported_tokens` should count** is still
+open and still Davis's. The worker tool-fit check (`a0f16ec`) is six attempts
+unexercised. Container and credential seed removed.

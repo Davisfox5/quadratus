@@ -127,8 +127,38 @@ counterfactual and is not in question; whether the *run control* should use the
 same number is the decision. **Nothing was changed** — enlarging budgets is not
 a review-lane repair.
 
-The worker tool-fit repair (`a0f16ec`) has now been present and unexercised for
-five attempts: a lead was invoked and wrote code, but commissioned no errand.
+**Attempt 9 completed a task — the first this lane has had.** Run `81ba8b88`,
+engine `65a5b41`. Task 1 implemented, closed out and integration-checked; task
+2 named and begun; 233 diff lines, **113 tests passing** on offline
+reconstruction. Private 0 of 9 and public 0 of 13, because the endpoint is
+still not wired — tasks 1 and 2 are the parsing layer beneath it.
+[Result and review](evidence/scored-attempt-9/README.md).
+
+**Carrying orientation forward is measured, not asserted.** The same first
+slice, same model, same seat:
+
+| The task-1 lead | Attempt 8 | Attempt 9 | |
+| --- | ---: | ---: | --- |
+| Model calls | 15 | 9 | −40% |
+| Cache re-reads | 383,104 | 158,336 | −59% |
+| Total tokens | 450,602 | **241,700** | **−46%** |
+
+on the larger of the two slices, and this one finished. The cause was not that
+the lead lacked the file — it had the file *and* the signature — but that
+nothing told it what was inside the project, while the orchestrator had read
+the same files minutes before and thrown it away. The scan now names the
+principal source files and where tests live (~144 tokens), and a decomposition
+may record up to four `topic: fact` notes.
+
+**Lead tool access was deliberately not trimmed** (Davis, 2026-09-17).
+`NEED TOOL` runs worker → lead only, so a lead cannot ask for a tool it lacks,
+and a reissue would pay the quadratic twice; a seat that cannot reach a tool
+finds a workaround, which is attempt 3's worker writing 101KB of code as prose.
+
+**Still open for Davis, unchanged:** what `max_reported_tokens` should count.
+The threshold is still reached and still mostly cache, but the run now spends
+it on finished slices. The worker tool-fit repair (`a0f16ec`) is six attempts
+unexercised: leads have done their own work rather than commissioning errands.
 
 
 **The two-fix repair batch is complete and verified offline.** No new
