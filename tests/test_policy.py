@@ -310,6 +310,7 @@ def test_leading_wildcard_denies_match_the_path_not_every_file(tmp_path, denied)
     write_policy(tmp_path, doc)
     policy = load_policy(tmp_path)
     assert not policy.resolve(['backend/app/x.py'], writing=True)['blocked']
+    assert not policy.resolve(['Dockerfile'], writing=True)['blocked']
     assert policy.resolve([denied], writing=True)['blocked']
     assert not policy.scope(TaskScope(['backend/'])).permits('backend/.env')
     assert not policy.scope(TaskScope(['*'])).permits('.env')

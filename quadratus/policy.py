@@ -188,7 +188,7 @@ def _applies(declared, pattern, root):
     """Concrete filenames use glob matching; broad declarations may overlap."""
     path = root / declared
     broad = (any(c in declared for c in '*?[') or declared.endswith('/')
-             or path.is_dir() or (not path.exists() and not PurePosixPath(declared).suffix))
+             or path.is_dir())
     return _overlap(declared, pattern) if broad else _matches(declared, pattern)
 
 
