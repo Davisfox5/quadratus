@@ -14,7 +14,7 @@ from pathlib import Path
 from .artifacts import ArtifactStore
 from .codebase_map import CodebaseMap
 from .delegation import DelegationLedger, reconcile
-from .integration import IntegrationGate
+from .integration import GateSuite, IntegrationGate
 from .project import Project
 from .providers import ProviderError
 from .repo_scan import scan_repo, seed_map
@@ -51,7 +51,7 @@ def _project_lock(project):
 def run_project(goal, project, settings, *, allow_writes=False, check='',
                 state_dir=None, max_tasks=20, mode='adversarial',
                 progress=None, ask_operator=None, plan_gate=None,
-                default_scope=None, run_limits=None):
+                default_scope=None, run_limits=None, gates=None):
     """Keep both successful and interrupted runs next to their source tree."""
     from .runtime import Fleet, new_session
 
@@ -74,13 +74,13 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     check=check, max_tasks=max_tasks, mode=mode, progress=progress,
                     ask_operator=ask_operator, plan_gate=plan_gate,
                     default_scope=default_scope,
-                    run_limits=run_limits,
+                    run_limits=run_limits, gates=gates,
                     fleet_type=Fleet, session_factory=new_session)
 
 
 def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
-         default_scope=None, run_limits=None):
+         default_scope=None, run_limits=None, gates=None):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
@@ -89,7 +89,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     code_map = CodebaseMap(state / 'codebase-map.jsonl')
     seed_map(scan, code_map)
     command = shlex.split(check) if check else scan.check_command
-    gate = IntegrationGate(command, cwd=project.root) if command else None
+    gate = (GateSuite(gates, cwd=project.root, exclude=project.exclude) if gates is not None
+            else IntegrationGate(command, cwd=project.root) if command else None)
     store = ArtifactStore(run_dir / 'artifacts')
     meter = UsageMeter(run_dir / 'usage.jsonl')
     delegation = DelegationLedger(path=run_dir / 'invocations.jsonl')
