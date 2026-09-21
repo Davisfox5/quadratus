@@ -282,3 +282,21 @@ def test_gui_registers_preview_controls_without_launch(monkeypatch):
     labels = [c.get('props', {}).get('label') for c in components]
     assert 'Paths that must stay unchanged (one per line)' in labels
     assert 'Paths this task may change (one per line)' in labels
+
+
+def test_policy_gate_executes_and_preserves_operator_check(tmp_path):
+    from quadratus.integration import IntegrationGate
+    doc = document()
+    doc['gates'].append({'id': 'unit-tests', 'runner': 'command',
+                         'argv': [sys.executable, '-B', '-c', 'print("1 passed")'],
+                         'required': True, 'minimum_tests': 1})
+    doc['gate_bindings'] = {}
+    write_policy(tmp_path, doc)
+    policy = load_policy(tmp_path)
+    operator = IntegrationGate([sys.executable, '-B', '-c', 'raise SystemExit(1)'], cwd=tmp_path)
+    gate = task_gate(policy, policy.resolve(['a.py']), operator)
+    result = gate.run()
+    assert not result.passed
+    assert [r.id for r in result.receipts] == ['unit-tests', 'operator-check']
+    assert result.receipts[0].tests == 1
+    assert result.receipts[1].status == 'failed'

@@ -329,13 +329,8 @@ def render_preview(plan):
     return '\n\n'.join(lines)
 
 
-def task_gate(policy, plan, existing):
-    """Bind command descriptors to Q3's runner; never downgrade required checks.
-
-    Q5 is independently based on the pinned acceptance branch. Until Q3 lands,
-    explicit policies that need command gates stop before the task dispatch.
-    Repositories without a policy retain the pre-existing integration command.
-    """
+def task_gate(policy, plan, existing, *, exclude=()):
+    """Bind policy checks to Q3 and retain operator checks without weakening them."""
     if not policy.explicit:
         return existing
     from . import integration
@@ -351,10 +346,33 @@ def task_gate(policy, plan, existing):
             continue
         if gate.get('side_effects') == 'external':
             raise PolicyError(f"Gate {gate['id']} needs a separate external-effect ruling")
-        if not hasattr(integration, 'GateSuite'):
-            raise PolicyError('Policy command gates require Q3 GateSuite before dispatch')
         commands.append(integration.GateCommand(
             id=gate['id'], argv=tuple(gate['argv']), cwd=gate.get('cwd', '.'),
             timeout=gate.get('timeout_seconds', 600), required=required,
             minimum_tests=gate.get('minimum_tests') or None))
-    return integration.GateSuite(commands, cwd=policy.root) if commands else None
+    if isinstance(existing, integration.GateSuite):
+        extra = list(existing.commands)
+    elif isinstance(existing, integration.IntegrationGate):
+        # Matching argv is concrete command identity, not guessed gate-name equivalence.
+        matches = [g for g in commands if tuple(existing.command) == g.argv
+                   and (policy.root / g.cwd).resolve() == Path(existing.cwd).resolve()]
+        if matches:
+            from dataclasses import replace
+            commands = [replace(g, timeout=min(g.timeout, existing.timeout), required=True)
+                        if g in matches else g for g in commands]
+            extra = []
+        else:
+            extra = [integration.GateCommand('operator-check', tuple(existing.command),
+                     cwd=Path(existing.cwd).resolve().relative_to(policy.root).as_posix(),
+                     timeout=existing.timeout)]
+    elif existing is None:
+        extra = []
+    else:
+        raise PolicyError('Cannot combine a custom operator gate with policy gates')
+    for command in extra:
+        same_id = [g for g in commands if g.id == command.id]
+        if same_id and same_id[0] != command:
+            raise PolicyError(f"Operator and policy gates disagree on {command.id}")
+        if not same_id:
+            commands.append(command)
+    return integration.GateSuite(commands, cwd=policy.root, exclude=exclude) if commands else None

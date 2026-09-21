@@ -330,8 +330,7 @@ unexpected edits. These controls do not constitute an OS filesystem sandbox.
 
 Run records include `policy-plan.json` and each resolved task plan plus its hash
 in `result.json`. Role-specific checklist packets are the separate Q6 item.
-The Q5 branch is based on the pinned acceptance branch: explicit policies with
-command gates stop before task dispatch until Q3's `GateSuite` is present.
-Unsupported required runners and external-effect gates also stop explicitly.
-Repository policies do not silently replace required checks with the legacy
-single command. Projects without a policy retain their existing check behavior.
+The Q5 branch includes the merged Q3 base. Explicit policy commands run through
+`GateSuite`; operator checks are retained. Conflicting gate definitions,
+unsupported required runners and external-effect gates stop explicitly.
+Projects without a policy retain their existing check behavior.

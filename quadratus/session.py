@@ -979,7 +979,9 @@ class Session:
                     and any(not self.config.default_scope.permits(p) for p in paths)):
                 raise PolicyError('Task declaration exceeds the operator path limits')
             spec.scope = policy.scope(spec.scope)
-            self.config.integration_gate = task_gate(policy, plan, self._original_gate)
+            self.config.integration_gate = task_gate(policy, plan, self._original_gate,
+                                                     exclude=self.config.project_excludes)
+        self._gate_fixes_used = 0
         self._active_spec = spec
         self._task_before = self._capture_source()
         if self.project and self.config.allow_writes and self._task_before is None:
@@ -1084,6 +1086,18 @@ class Session:
         task.keep(draft, kind="draft")
 
         self._assess_scope(spec, task, before)
+        from .integration import GateSuite
+        if isinstance(self.config.integration_gate, GateSuite):
+            cheap = self.config.integration_gate.cheap()
+            if cheap.commands:
+                draft = self._run_integration_gate(lead, spec, task, gate=cheap) or draft
+                if not self.checks[-1]['passed']:
+                    self.open_findings.append('Cheap gates failed before review')
+                    summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
+                    summary = task.close(summary=summary_text, reasoning=reasoning, dead_ends=dead_ends)
+                    self.memory.absorb(summary)
+                    self.history.append(summary)
+                    return summary
 
         # Collaborators contribute into the lead's working memory. They see the
         # task and the draft, not the whole session: their value is an
@@ -1719,7 +1733,7 @@ class Session:
             "the complete revised work."
         )
 
-    def _run_integration_gate(self, lead: str, spec: TaskSpec, task: TaskMemory) -> None:
+    def _run_integration_gate(self, lead: str, spec: TaskSpec, task: TaskMemory, *, gate=None) -> str:
         """Execute the project's own check and feed a failure back once.
 
         Reviewers judge the work by reading; this is the half that runs it.
@@ -1728,13 +1742,13 @@ class Session:
         into the task memory so the close-out and the ledger carry it as an
         open problem instead of a silent one.
         """
-        gate = self.config.integration_gate
+        gate = gate if gate is not None else self.config.integration_gate
         if gate is None:
-            return
+            return ""
+        latest_fix = ""
         result = self._check(gate)
         task.record("user", result.render())
-        fixes = 0
-        while not result.passed and fixes < self.config.max_gate_fixes:
+        while not result.passed and getattr(self, "_gate_fixes_used", 0) < self.config.max_gate_fixes:
             fix = self._edit(
                 lead,
                 f"Task: {spec.description}\n\n"
@@ -1745,17 +1759,21 @@ class Session:
             )
             task.record("assistant", fix)
             task.keep(fix, kind="gate-fix")
-            fixes += 1
+            latest_fix = fix
+            self._gate_fixes_used = getattr(self, "_gate_fixes_used", 0) + 1
             result = self._check(gate)
             task.record("user", result.render())
         self.checks.append({"passed": result.passed, "command": result.command,
-                            "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', ''))})
+                            "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
+                            "receipts": [dataclasses.asdict(r) for r in result.receipts]})
         if not result.passed:
             task.record(
                 "user",
                 "The integration gate is still failing at close -- carry it "
                 "into the summary as an open failure.",
             )
+
+        return latest_fix
 
     def _check(self, gate):
         """Run the gate, and say *what* changed when the tree moved under it.
@@ -1774,7 +1792,6 @@ class Session:
         excluded -- narrowing the fingerprint to tracked files would have made
         this failure invisible instead of merely unhelpful.
         """
-        from .integration import GateResult
         from .project import Project
         project = Project(self.project, exclude=self.config.project_excludes) if self.project else None
         before = project.contents() if project else None
@@ -1782,10 +1799,7 @@ class Session:
         if project is not None:
             after = project.contents()
             if before != after:
-                return GateResult(
-                    False, result.command, result.returncode,
-                    _describe_tree_change(before, after),
-                )
+                return replace(result, passed=False, output=_describe_tree_change(before, after))
         return result
 
     def _verifier_prompt(self, spec: TaskSpec, draft: str, verifier: str) -> str:
