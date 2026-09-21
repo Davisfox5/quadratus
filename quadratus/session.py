@@ -78,6 +78,7 @@ from .workers import (
     RepeatedFailure,
     WorkerBudget,
     WorkerPool,
+    check_errand_fit,
     worker_menu,
 )
 
@@ -784,11 +785,9 @@ class Session:
             draft = self._invoke_with_fetches(lead, build, task=task, editing=True)
             body = _parse_kind(draft)[2].strip()
             if body.startswith("WORKER "):
-                if self.workers.remaining(spec.task_id) <= 0:
-                    raise RunStalled("Worker budget exhausted before a draft was produced.")
                 try:
                     request = json.loads(body[len("WORKER "):])
-                    needs = request.get('needs')
+                    needs = request.get('needs') if isinstance(request, dict) else None
                     if (not isinstance(request, dict) or request.get('errand') not in WORKER_TREE
                             or not isinstance(request.get('instruction'), str)
                             or not request['instruction'].strip()
@@ -816,6 +815,14 @@ class Session:
                 # charged, and no tool is widened to make a bad answer apply.
                 # The lead gets the failure and decides.
                 try:
+                    # Reject impossible errands before entering dispatch or
+                    # reserving any worker attempt. Keep the pool's guard for
+                    # direct callers and sibling commissions too.
+                    mismatch = check_errand_fit(request['instruction'], needs=needs, write=writes)
+                    if mismatch is not None:
+                        raise ErrandToolMismatch(f"errand {label!r}: {mismatch}")
+                    if self.workers.remaining(spec.task_id) <= 0:
+                        raise FanOutExceeded("Worker budget exhausted before a draft was produced.")
                     result = self.workers.commission(
                         task=task, parent_key=lead, prompt=request['instruction'],
                         label=label,
