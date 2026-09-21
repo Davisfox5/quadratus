@@ -147,3 +147,35 @@ def test_cli_flag_reaches_project_config(tmp_path, monkeypatch):
     assert main(['--session', 'Review', '--project', str(tmp_path),
                  '--security-verdict-json']) == 0
     assert seen == [True]
+
+
+def test_gate_and_security_repairs_use_one_counter_after_base_merge(tmp_path):
+    class Gate:
+        calls = 0
+
+        def run(self):
+            self.calls += 1
+            return GateResult(self.calls > 1, 'fixture', int(self.calls == 1), 'check')
+
+    gate = Gate()
+    session, calls = exercise(tmp_path, ['reject', 'accept'], budget=2, gate=gate)
+    assert session._gate_fixes_used == 2
+    assert gate.calls == 3
+    assert not session.open_findings
+    assert len([p for _, p in calls if 'verifying security work' in p]) == 2
+
+
+def test_failed_post_verdict_gate_cannot_buy_an_extra_repair(tmp_path):
+    class Gate:
+        calls = 0
+
+        def run(self):
+            self.calls += 1
+            return GateResult(self.calls == 1, 'fixture', int(self.calls != 1), 'check')
+
+    gate = Gate()
+    session, calls = exercise(tmp_path, ['reject', 'accept'], budget=5, gate=gate)
+    assert session._gate_fixes_used == 1
+    assert gate.calls == 2
+    assert not session.checks[-1]['passed']
+    assert not any("The project's own integration check failed" in p for _, p in calls)
