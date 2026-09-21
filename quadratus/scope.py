@@ -75,6 +75,7 @@ class ScopeReport:
     #: happened, not so that either half is excused.
     code_lines: int = 0
     test_lines: int = 0
+    overrun_ratio: float = _OVERRUN_TOLERANCE
 
     @property
     def blocking(self) -> bool:
@@ -84,7 +85,7 @@ class ScopeReport:
     def oversized(self) -> bool:
         return (
             self.max_lines is not None
-            and self.changed_lines > self.max_lines * _OVERRUN_TOLERANCE
+            and self.changed_lines > self.max_lines * self.overrun_ratio
         )
 
     def render(self) -> str:
@@ -105,7 +106,7 @@ class ScopeReport:
             # ten named test scenarios sized at 100 lines landed at 223, all
             # inside the slice) or a task growing into the whole feature; the
             # harness cannot tell which, so it reports the split and asks.
-            allowed = int(self.max_lines * _OVERRUN_TOLERANCE)
+            allowed = int(self.max_lines * self.overrun_ratio)
             lines.append(
                 f"  {self.changed_lines} changed lines ({self.code_lines} in "
                 f"code, {self.test_lines} in tests) against a stated bound of "
@@ -140,6 +141,7 @@ class TaskScope:
     acceptance: Sequence[str] = ()
     max_lines: Optional[int] = None
     forbidden_paths: Sequence[str] = ()
+    overrun_ratio: float = _OVERRUN_TOLERANCE
 
     def permits(self, path: str) -> bool:
         """Whether ``path`` may be edited under this scope."""
@@ -172,6 +174,7 @@ class TaskScope:
             notes=notes,
             code_lines=lines - test_lines,
             test_lines=test_lines,
+            overrun_ratio=self.overrun_ratio,
         )
         return report
 
