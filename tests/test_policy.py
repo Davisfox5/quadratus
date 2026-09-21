@@ -300,3 +300,35 @@ def test_policy_gate_executes_and_preserves_operator_check(tmp_path):
     assert [r.id for r in result.receipts] == ['unit-tests', 'operator-check']
     assert result.receipts[0].tests == 1
     assert result.receipts[1].status == 'failed'
+
+
+@pytest.mark.parametrize('denied', ['backend/.env', '.env', 'backend/config.env',
+                                    'backend/node_modules/new.js', 'node_modules/new.js'])
+def test_leading_wildcard_denies_match_the_path_not_every_file(tmp_path, denied):
+    doc = document()
+    doc['capability_policy']['deny_write'] = ['*.env', '**/node_modules/**']
+    write_policy(tmp_path, doc)
+    policy = load_policy(tmp_path)
+    assert not policy.resolve(['backend/app/x.py'], writing=True)['blocked']
+    assert policy.resolve([denied], writing=True)['blocked']
+    assert not policy.scope(TaskScope(['backend/'])).permits('backend/.env')
+    assert not policy.scope(TaskScope(['*'])).permits('.env')
+
+
+def test_leading_wildcard_path_rules_do_not_route_unrelated_files(tmp_path):
+    doc = document()
+    doc['path_rules'] = [{'paths': ['*.env'], 'families': ['pure-logic'], 'overlays': ['privacy']}]
+    write_policy(tmp_path, doc)
+    assert not preview_policy(tmp_path, ['backend/app/x.py'])['blocked']
+    assert preview_policy(tmp_path, ['backend/'])['blocked']  # broad declaration can include .env
+
+
+def test_optional_unsupported_gate_is_visible_as_skipped(tmp_path):
+    doc = document()
+    doc['gates'].append({'id': 'optional-grep', 'runner': 'builtin:grep', 'pattern': 'TODO',
+                         'required': False})
+    doc['gate_bindings']['unit-tests'] = {'gate': 'optional-grep'}
+    write_policy(tmp_path, doc)
+    plan = preview_policy(tmp_path, ['a.py'])
+    assert plan['skipped_gates'] == [dict(id='optional-grep', status='skipped',
+                                         because='Runner builtin:grep is not configured')]

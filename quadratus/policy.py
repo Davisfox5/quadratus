@@ -184,6 +184,14 @@ def _overlap(left, right):
     return not a or not b or a == b or a.startswith(b + '/') or b.startswith(a + '/')
 
 
+def _applies(declared, pattern, root):
+    """Concrete filenames use glob matching; broad declarations may overlap."""
+    path = root / declared
+    broad = (any(c in declared for c in '*?[') or declared.endswith('/')
+             or path.is_dir() or (not path.exists() and not PurePosixPath(declared).suffix))
+    return _overlap(declared, pattern) if broad else _matches(declared, pattern)
+
+
 @dataclass
 class RepositoryPolicy:
     root: Path
@@ -198,7 +206,7 @@ class RepositoryPolicy:
         paths = sorted({_path(p, self.root) for p in paths})
         doc = self.document
         rules = [r for r in doc['path_rules']
-                 if any(_overlap(p, pattern) for p in paths for pattern in r['paths'])]
+                 if any(_applies(p, pattern, self.root) for p in paths for pattern in r['paths'])]
         families = list(dict.fromkeys(f for r in rules for f in r['families']))
         if not families:
             families = [doc['defaults']['family']]
@@ -219,10 +227,10 @@ class RepositoryPolicy:
                 prefix = re.split(r'[*?\[]', path, maxsplit=1)[0]
                 canonical = (self.root / prefix).resolve().relative_to(self.root).as_posix()
                 for pattern in deny:
-                    if _overlap(path, pattern) or _overlap(canonical, pattern):
+                    if _applies(path, pattern, self.root) or _applies(canonical, pattern, self.root):
                         blocked.append(f"Write denied: {path} ({pattern})")
                 for item in sensitive:
-                    if any(_overlap(path, p) or _overlap(canonical, p) for p in item['paths']):
+                    if any(_applies(path, p, self.root) or _applies(canonical, p, self.root) for p in item['paths']):
                         blocked.append(f"Sensitive path {path} needs an operator ruling: "
                                        + ', '.join(item['requires']))
         gate_map = {g['id']: g for g in doc['gates']}
@@ -239,6 +247,10 @@ class RepositoryPolicy:
                     blocked.append(f"Gate {name} is not configured")
                 elif not any(g['id'] == gate['id'] for g in selected):
                     selected.append(dict(gate))
+        skipped = [dict(id=g['id'], status='skipped', because=f"Runner {g['runner']} is not configured")
+                   for g in selected if not g['required']
+                   and g['id'] not in doc['defaults']['required_gates']
+                   and g['runner'] not in ('command', 'builtin:scope', 'builtin:diff-size')]
         adapters = {}
         for family in families:
             adapters[family] = {
@@ -252,7 +264,7 @@ class RepositoryPolicy:
                       policy_hash=_hash(doc), library_version=self.library['version'],
                       library_digest=self.library['digest'], declared_paths=paths,
                       primary_family=families[0], families=families, overlays=overlays,
-                      gates=selected, absent_gates=absent, adapters=adapters,
+                      gates=selected, absent_gates=absent, skipped_gates=skipped, adapters=adapters,
                       deny_write=deny, sensitive=sensitive, defaults=doc['defaults'],
                       capability_policy=capability, blocked=list(dict.fromkeys(blocked)))
         result['hash'] = _hash(result)
@@ -321,6 +333,7 @@ def render_preview(plan):
              f"Plan hash: {plan['hash']}"]
     lines += ['Blocked: ' + reason for reason in plan['blocked']]
     lines += [f"Not configured: {g['id']} ({g['because']})" for g in plan['absent_gates']]
+    lines += [f"Skipped: {g['id']} ({g['because']})" for g in plan['skipped_gates']]
     for family, fields in plan['adapters'].items():
         missing = [name for name, value in fields.items() if value['status'] == 'not_configured']
         if missing:

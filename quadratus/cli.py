@@ -322,7 +322,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     engine.add_argument("--policy-preview", action="store_true",
                         help="Show the resolved policy without running models or checks.")
     engine.add_argument("--path", dest="declared_paths", action="append", default=[],
-                        help="Declare a project-relative task path. Repeat for multiple paths.")
+                        help="Declare a narrow project-relative path; whole-project dot is refused. Repeat as needed.")
     engine.add_argument("--forbid", action="append", default=[],
                         help="Forbid writes to a project-relative path or glob. Repeat as needed.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging.")

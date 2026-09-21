@@ -145,7 +145,7 @@ class TaskScope:
 
     def permits(self, path: str) -> bool:
         """Whether ``path`` may be edited under this scope."""
-        path = str(path).lstrip("./")
+        path = str(path).removeprefix("./")
         if any(_matches(path, pattern) for pattern in self.forbidden_paths):
             return False
         if not self.permitted_paths:
@@ -228,7 +228,7 @@ def _matches(path: str, pattern: str) -> bool:
     ``docs/**`` for every directory would be noise, and getting it wrong would
     silently widen or narrow the grant.
     """
-    pattern = str(pattern).lstrip("./")
+    pattern = str(pattern).removeprefix("./")
     if fnmatch.fnmatch(path, pattern):
         return True
     prefix = pattern.rstrip("/")
