@@ -96,6 +96,7 @@ class LLMProvider:
     """
 
     #: short machine name, e.g. "claude"
+    transport = "api"
     name = "provider"
     #: human label, e.g. "Claude"
     label = "Provider"
@@ -282,7 +283,11 @@ class LLMProvider:
 
     def _observed_call(self, prompt, system, turns, attempt):
         control = getattr(self, 'run_budget', None)
-        ticket, remaining = control.reserve() if control is not None else (None, None)
+        if control is not None and control.limits.max_cost_usd is not None:
+            ticket, remaining = control.reserve(transport=self.transport,
+                                                price_key=f'{self.name}:{self.model}')
+        else:
+            ticket, remaining = control.reserve() if control is not None else (None, None)
         previous_timeout = self.timeout if control is not None else None
         if control is not None:
             self.timeout = remaining if previous_timeout is None else min(previous_timeout, remaining)
@@ -306,7 +311,7 @@ class LLMProvider:
             if control is not None:
                 try:
                     control.finish(ticket, self.last_usage, native_children=self.native_children,
-                                   reply=text)
+                                   reply=text, price_key=f'{self.name}:{self.resolved_model or self.model}')
                 except Exception as exc:
                     # Preserve an original interruption/partial-work failure.
                     # The shared controller is latched, so no retry can start.
@@ -377,13 +382,13 @@ class LLMProvider:
         raise ProviderError(f"{self.label} call failed: {last_exc}") from last_exc
 
 
-def _field(obj, name: str):
+def _field(obj, name: str, default=None):
     """Read ``name`` off an SDK model or a plain dict; None when absent."""
     if obj is None:
-        return None
+        return default
     if isinstance(obj, dict):
-        return obj.get(name)
-    return getattr(obj, name, None)
+        return obj.get(name, default)
+    return getattr(obj, name, default)
 
 
 class ClaudeProvider(LLMProvider):
@@ -404,7 +409,7 @@ class ClaudeProvider(LLMProvider):
         import anthropic
 
         self._sdk = anthropic
-        return anthropic.Anthropic(api_key=self.api_key, timeout=self.timeout)
+        return anthropic.Anthropic(api_key=self.api_key, timeout=self.timeout, max_retries=0)
 
     def _call(self, prompt, system, history):
         messages = [{"role": t.role, "content": t.content} for t in history]
@@ -415,6 +420,12 @@ class ClaudeProvider(LLMProvider):
             system=system,
             messages=messages,
         )
+        usage = _field(resp, 'usage')
+        values = [_field(usage, key) for key in ('input_tokens', 'output_tokens')]
+        cached = [_field(usage, key, 0) for key in ('cache_read_input_tokens', 'cache_creation_input_tokens')]
+        self.last_usage = ({'input_tokens': values[0] + sum(cached), 'output_tokens': values[1]}
+                           if all(type(n) is int and n >= 0 for n in values + cached) else None)
+        self.resolved_model = _field(resp, 'model') or self.model
         # Branch on stop_reason before touching content: a classifier decline
         # is an HTTP 200 whose content is empty (pre-output) or partial
         # (mid-stream), and a partial must not be mistaken for an answer.
@@ -465,7 +476,7 @@ class _OpenAISDKProvider(LLMProvider):
         import openai
 
         self._sdk = openai
-        kwargs = {"api_key": self.api_key, "timeout": self.timeout}
+        kwargs = {"api_key": self.api_key, "timeout": self.timeout, "max_retries": 0}
         if self.base_url:
             kwargs["base_url"] = self.base_url
         return openai.OpenAI(**kwargs)
@@ -509,6 +520,10 @@ class OpenAIProvider(_OpenAISDKProvider):
             input=turns,
             max_output_tokens=self.max_tokens,
         )
+        usage = _field(resp, 'usage')
+        self.last_usage = {'input_tokens': _field(usage, 'input_tokens'),
+                           'output_tokens': _field(usage, 'output_tokens')}
+        self.resolved_model = _field(resp, 'model') or self.model
         return resp.output_text or ""
 
 
@@ -541,6 +556,10 @@ class GrokProvider(_OpenAISDKProvider):
             messages=messages,
             max_completion_tokens=self.max_tokens,
         )
+        usage = _field(resp, 'usage')
+        self.last_usage = {'input_tokens': _field(usage, 'prompt_tokens'),
+                           'output_tokens': _field(usage, 'completion_tokens')}
+        self.resolved_model = _field(resp, 'model') or self.model
         return resp.choices[0].message.content or ""
 
 
