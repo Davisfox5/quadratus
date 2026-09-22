@@ -21,6 +21,7 @@ FAKE_CLI = r'''
 import json, os, sys
 from pathlib import Path
 args = sys.argv[1:]
+source_before = {p.name: p.read_bytes() for p in Path('.').glob('*.py')}
 def flag(key, default=''):
     return args[args.index(key) + 1] if key in args else default
 if '--prompt-file' in args:
@@ -61,6 +62,11 @@ elif mode == 'patch':
     reply = 'PATCH:\n```diff\n--- a/add.py\n+++ b/add.py\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return 0\n+    return a + b\n```'
 else:
     reply = 'NO FINDINGS'
+if 'You are leading' in prompt or 'Fix the failure' in prompt:
+    source_after = {p.name: p.read_bytes() for p in Path('.').glob('*.py')}
+    changed = sorted(p for p in source_before.keys() | source_after.keys()
+                     if source_before.get(p) != source_after.get(p))
+    reply += '\nCHANGED: ' + json.dumps(changed)
 if 'exec' in args:
     print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':reply}}))
 elif '--output-format' in args and '--system-prompt-override' in args:

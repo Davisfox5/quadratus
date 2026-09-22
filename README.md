@@ -349,3 +349,13 @@ worker allowance, as well as any shared run limits. Unknown token usage stops
 the loop. Tokens are a post-return threshold, so a running call can overshoot;
 the worker budget artifact retains the measured total and overshoot. The loop
 does not grant shell, direct-write or delegation tools.
+
+Role packets carry the resolved family checklist, scope, check configuration and
+repository conventions to leads, independent reviewers, rechecks, consultants
+and security verifiers. Required contract text must fit the packet byte limit;
+reference notes may be excerpted with a visible truncation marker. Unrestricted
+project editors must end each editing reply with `CHANGED: ["relative/path"]`
+(or `CHANGED: []`). The runtime compares that list with files added, changed or
+deleted during that call. A mismatch stops the run and preserves the work and
+raw reply for inspection. Restricted editors still use the existing PATCH
+contract. No reviewer receives another reviewer's findings.
