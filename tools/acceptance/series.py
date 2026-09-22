@@ -9,6 +9,10 @@ wrote them and says "missing" wherever a record is missing.
 
 ``aggregate`` never changes a run directory. ``run`` calls run_fixture.py once
 per fresh fixture copy, sequentially, and never retries: a failed run is data.
+It admits a run only against a Davis allowance record (``allowance.py``): the
+runtime commit and wall must match the record, and each run claims a durable
+slot beside it, so neither ``--count`` nor a re-run can exceed the record's
+runs per version or its batch token ceiling.
 
 Layout. Each run directory is a ``.quadratus/runs/<id>`` tree. Its label lives
 in a sidecar ``series.json`` ({"version", "runtime_commit", "attempt"}) and the
@@ -20,6 +24,7 @@ The report is an index: every row names the run directory it came from.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -35,6 +40,13 @@ MAX_COUNT = 5
 RELIABLE_N = 5
 STDERR_PREVIEW = 200
 GRADER_COUNT = re.compile(r"(\d+) (passed|failed|errors?)\b")
+
+# Loaded by path so the tool works both as a script and when a test imports
+# this file directly, without either putting tools/acceptance on sys.path.
+_allowance_spec = importlib.util.spec_from_file_location(
+    "canary_allowance", Path(__file__).resolve().with_name("allowance.py"))
+allowance = importlib.util.module_from_spec(_allowance_spec)
+_allowance_spec.loader.exec_module(allowance)
 
 
 def _read_json(path: Path, missing: list):
@@ -308,19 +320,6 @@ def cmd_aggregate(args) -> int:
     return 0
 
 
-def check_allowance(path) -> dict:
-    """The same test run_fixture.py applies, before any copy is made."""
-    if not path:
-        raise SystemExit("A direct Davis allowance record is required")
-    try:
-        allowance = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise SystemExit(f"A direct Davis allowance record is required ({exc})") from exc
-    if allowance.get("authorized_by") != "Davis" or not allowance.get("source"):
-        raise SystemExit("A direct Davis allowance record is required")
-    return allowance
-
-
 def _commit(runtime: Path) -> str:
     try:
         done = subprocess.run(["git", "-C", str(runtime), "rev-parse", "HEAD"],
@@ -330,57 +329,91 @@ def _commit(runtime: Path) -> str:
     return done.stdout.strip() if done.returncode == 0 else "unknown"
 
 
+def _launch(args, runtime: Path, launcher: Path, project: Path, record_path: Path, env):
+    """One launcher call under the external wall. Returns (exit code, output)."""
+    argv = [args.python, str(launcher), "--project", str(project),
+            "--allowance-record", str(record_path)]
+    print(f"{args.version}: {' '.join(argv)}", flush=True)
+    # The launcher is the head of a process tree (the vendor CLIs are its
+    # children), so the wall kills the whole session group, not only the
+    # head; a killed head with live CLI children would keep spending the
+    # window after the run was declared over.
+    proc = subprocess.Popen(argv, cwd=runtime, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, start_new_session=True)
+    try:
+        text, _ = proc.communicate(timeout=args.wall_seconds)
+        return proc.returncode, text
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, 9)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        partial, _ = proc.communicate()
+        return None, f"launcher killed after {args.wall_seconds}s\n{partial or ''}"
+
+
 def cmd_run(args) -> int:
-    check_allowance(args.allowance_record)
+    record = allowance.load_record(args.allowance_record)
+    record_path = Path(args.allowance_record).resolve()
     if not 1 <= args.count <= MAX_COUNT:
         raise SystemExit(f"--count must be 1 to {MAX_COUNT} per invocation")
     runtime, fixture, out = Path(args.runtime).resolve(), Path(args.fixture), Path(args.out)
     launcher = Path(args.launcher or runtime / "docs" / "harness-canary" / "run_fixture.py")
     grader = shlex.split(args.grader_command) if args.grader_command else None
     commit = _commit(runtime)
+    allowance.check_runtime(record, args.version, commit)
+    allowance.check_wall(record, args.wall_seconds)
+    # The slots, not --count, are the real cap: refuse a count the ledger
+    # cannot cover before anything is copied or launched.
+    left = allowance.slots_left(record_path, record, args.version)
+    total = record["runs_per_version"]
+    if left == 0:
+        raise SystemExit(f"no run slot left for {args.version}: {total} of {total} consumed")
+    if args.count > left:
+        raise SystemExit(f"--count {args.count} exceeds the {left} {args.version} run slot(s) "
+                         f"left of {total} on this allowance record")
+    record_digest = allowance.record_sha256(record_path)
     out.mkdir(parents=True, exist_ok=True)
     start = 1 + len(list(out.glob(f"{args.version}-*")))
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(
         p for p in (str(runtime), os.environ.get("PYTHONPATH", "")) if p))
     collected = []
-    for attempt in range(start, start + args.count):
-        slot = out / f"{args.version}-{attempt}"
-        project = slot / "project"
-        shutil.copytree(fixture, project, ignore=shutil.ignore_patterns("runs"))
-        argv = [args.python, str(launcher), "--project", str(project),
-                "--allowance-record", str(Path(args.allowance_record).resolve())]
-        print(f"{args.version} attempt {attempt}: {' '.join(argv)}", flush=True)
-        # The launcher is the head of a process tree (the vendor CLIs are its
-        # children), so the wall kills the whole session group, not only the
-        # head; a killed head with live CLI children would keep spending the
-        # window after the run was declared over.
-        proc = subprocess.Popen(argv, cwd=runtime, env=env, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True, start_new_session=True)
-        try:
-            text, _ = proc.communicate(timeout=args.wall_seconds)
-            code = proc.returncode
-        except subprocess.TimeoutExpired:
+    try:
+        for attempt in range(start, start + args.count):
+            # Claimed and written to the ledger before anything is copied or
+            # launched; closed below whatever happens to the launch.
+            claim = allowance.claim_slot(record_path, record, args.version)
+            slot = out / f"{args.version}-{attempt}"
+            project = slot / "project"
+            run_dir = slot
             try:
-                os.killpg(proc.pid, 9)
-            except (ProcessLookupError, PermissionError):
-                proc.kill()
-            partial, _ = proc.communicate()
-            code, text = None, f"launcher killed after {args.wall_seconds}s\n{partial or ''}"
-        (slot / "launcher.txt").write_text(text, encoding="utf-8")
-        found = sorted((project / ".quadratus" / "runs").glob("*"))
-        # No run tree means the launcher failed before run_project; the sidecar
-        # still goes in the slot so aggregate lists this attempt as all-missing.
-        run_dir = found[-1] if found else slot
-        sidecar = {"version": args.version, "runtime_commit": commit, "attempt": attempt,
-                   "launcher_exit_code": code, "run_trees_found": len(found)}
-        (run_dir / "series.json").write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
-        if grader:
-            genv = dict(os.environ, CANARY_PROJECT=str(project))
-            graded = subprocess.run(grader, cwd=project, env=genv, capture_output=True, text=True)
-            (run_dir / "grader.txt").write_text(graded.stdout + graded.stderr, encoding="utf-8")
-        collected.append(str(run_dir))
-    with (out / f"{args.version}-runs.txt").open("a", encoding="utf-8") as index:
-        index.write("".join(f"{d}\n" for d in collected))
+                shutil.copytree(fixture, project, ignore=shutil.ignore_patterns("runs"))
+                code, text = _launch(args, runtime, launcher, project, record_path, env)
+                (slot / "launcher.txt").write_text(text, encoding="utf-8")
+                found = sorted((project / ".quadratus" / "runs").glob("*"))
+                # No run tree means the launcher failed before run_project; the
+                # sidecar still goes in the slot so aggregate lists this attempt
+                # as all-missing, and the slot closes with unknown usage.
+                run_dir = found[-1] if found else slot
+                sidecar = {"version": args.version, "runtime_commit": commit,
+                           "attempt": attempt, "slot": claim["attempt"],
+                           "allowance_sha256": record_digest,
+                           "launcher_exit_code": code, "run_trees_found": len(found)}
+                (run_dir / "series.json").write_text(json.dumps(sidecar, indent=2),
+                                                     encoding="utf-8")
+            finally:
+                allowance.close_slot(record_path, claim, run_dir)
+            if grader:
+                genv = dict(os.environ, CANARY_PROJECT=str(project))
+                graded = subprocess.run(grader, cwd=project, env=genv,
+                                        capture_output=True, text=True)
+                (run_dir / "grader.txt").write_text(graded.stdout + graded.stderr,
+                                                    encoding="utf-8")
+            collected.append(str(run_dir))
+    finally:
+        if collected:
+            with (out / f"{args.version}-runs.txt").open("a", encoding="utf-8") as index:
+                index.write("".join(f"{d}\n" for d in collected))
     print("\n".join(collected))
     return 0
 

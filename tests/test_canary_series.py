@@ -172,13 +172,17 @@ def test_aggregate_writes_both_reports(tmp_path):
 # The run subcommand, against a fake launcher.
 
 FAKE_LAUNCHER = """
-import argparse, json, pathlib, sys
+import argparse, json, os, pathlib, sys
 p = argparse.ArgumentParser()
 p.add_argument("--project"); p.add_argument("--allowance-record")
 a = p.parse_args()
 run = pathlib.Path(a.project) / ".quadratus" / "runs" / "20260922T000000Z-fake"
 run.mkdir(parents=True)
-(run / "budget.json").write_text(json.dumps({"reserved_attempts": 2, "reported_tokens": 10}))
+if not os.environ.get("FAKE_NO_BUDGET"):
+    (run / "budget.json").write_text(json.dumps({
+        "reserved_attempts": 2,
+        "reported_tokens": int(os.environ.get("FAKE_TOKENS", "10")),
+        "unknown_usage_attempts": 0}))
 (run / "result.json").write_text(json.dumps({"completed": True}))
 (run / "invocations.jsonl").write_text("")
 (run / "changes.diff").write_text("")
@@ -186,23 +190,45 @@ log = pathlib.Path(a.project).parent.parent / "calls.txt"
 log.open("a").write(a.project + "\\n")
 """
 
+TEMPLATE = ROOT / "docs" / "harness-canary" / "allowance.template.json"
+BASELINE_SHA = "a" * 40
+CANDIDATE_SHA = "b" * 40
+
+
+def write_record(path: Path, **overrides) -> Path:
+    """A record that passes load_record, built from the shipped template."""
+    record = json.loads(TEMPLATE.read_text())
+    record.update(approved=True, authorized_by="Davis", source="test fixture",
+                  instruction="run the canary pair", recorded_at="2026-09-22T00:00:00+00:00",
+                  environment="container-contained", baseline_sha=BASELINE_SHA,
+                  candidate_sha=CANDIDATE_SHA, runs_per_version=2)
+    record.update(overrides)
+    path.write_text(json.dumps(record, indent=2))
+    return path
+
 
 @pytest.fixture
-def setup(tmp_path):
+def setup(tmp_path, monkeypatch):
     fixture = tmp_path / "fixture"
     fixture.mkdir()
     (fixture / "app.py").write_text("x = 1\n")
     launcher = tmp_path / "fake_launcher.py"
     launcher.write_text(FAKE_LAUNCHER)
-    allowance = tmp_path / "allowance.json"
-    allowance.write_text(json.dumps({"authorized_by": "Davis", "source": "test"}))
+    allowance = write_record(tmp_path / "allowance.json")
+    monkeypatch.setattr(series, "_commit", lambda runtime: CANDIDATE_SHA)
+    monkeypatch.delenv("FAKE_NO_BUDGET", raising=False)
+    monkeypatch.delenv("FAKE_TOKENS", raising=False)
     return tmp_path, fixture, launcher, allowance
 
 
-def _run_args(tmp_path, fixture, launcher, *extra):
-    return ["run", "--version", "candidate", "--runtime", str(tmp_path), "--fixture",
-            str(fixture), "--out", str(tmp_path / "out"), "--launcher", str(launcher),
+def _run_args(tmp_path, fixture, launcher, *extra, out="out", version="candidate"):
+    return ["run", "--version", version, "--runtime", str(tmp_path), "--fixture",
+            str(fixture), "--out", str(tmp_path / out), "--launcher", str(launcher),
             "--python", sys.executable, *extra]
+
+
+def _ledger(allowance: Path) -> dict:
+    return json.loads(series.allowance.ledger_path(allowance).read_text())
 
 
 def test_run_refuses_without_allowance_record(setup):
@@ -216,12 +242,143 @@ def test_run_refuses_without_allowance_record(setup):
     assert not (tmp_path / "out").exists()
 
 
+def test_shipped_template_is_refused(setup):
+    tmp_path, fixture, launcher, _ = setup
+    with pytest.raises(SystemExit, match="refused at approved"):
+        series.allowance.load_record(TEMPLATE)
+    with pytest.raises(SystemExit, match="refused at approved"):
+        series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
+                              "--allowance-record", str(TEMPLATE)))
+    assert not (tmp_path / "out").exists()
+    assert not series.allowance.ledger_path(TEMPLATE).exists()
+
+
+@pytest.mark.parametrize("field, value, where", [
+    ("schema", "quadratus-canary-allowance/1", "schema"),
+    ("authorized_by", "someone", "authorized_by"),
+    ("instruction", " ", "instruction"),
+    ("environment", "laptop", "environment"),
+    ("candidate_sha", "B" * 40, "candidate_sha"),
+    ("candidate_sha", BASELINE_SHA, "candidate_sha"),
+    ("runs", ["baseline", "other"], "runs"),
+    ("runs_per_version", 6, "runs_per_version"),
+    ("max_reported_tokens_batch", 0, "max_reported_tokens_batch"),
+    ("max_calls_each", True, "max_calls_each"),
+])
+def test_record_fields_are_checked(tmp_path, field, value, where):
+    path = write_record(tmp_path / "a.json", **{field: value})
+    with pytest.raises(SystemExit, match=f"refused at {where}"):
+        series.allowance.load_record(path)
+
+
+def test_record_missing_key_fails_closed(tmp_path):
+    path = write_record(tmp_path / "a.json")
+    data = json.loads(path.read_text())
+    del data["max_reported_tokens_batch"]
+    path.write_text(json.dumps(data))
+    with pytest.raises(SystemExit, match="max_reported_tokens_batch: missing"):
+        series.allowance.load_record(path)
+
+
 def test_run_refuses_count_above_five(setup):
     tmp_path, fixture, launcher, allowance = setup
     with pytest.raises(SystemExit, match="1 to 5"):
         series.main(_run_args(tmp_path, fixture, launcher, "--count", "6",
                               "--allowance-record", str(allowance)))
     assert not (tmp_path / "out").exists()
+
+
+def test_pair_record_refuses_count_five_before_any_launch(setup):
+    tmp_path, fixture, launcher, allowance = setup
+    write_record(allowance, runs_per_version=1)
+    with pytest.raises(SystemExit, match="--count 5 exceeds the 1 candidate run slot"):
+        series.main(_run_args(tmp_path, fixture, launcher, "--count", "5",
+                              "--allowance-record", str(allowance)))
+    assert not (tmp_path / "out").exists()
+    assert not series.allowance.ledger_path(allowance).exists()
+
+
+def test_rerun_after_pair_is_consumed_refuses(setup, monkeypatch):
+    tmp_path, fixture, launcher, allowance = setup
+    write_record(allowance, runs_per_version=1)
+    args = ("--count", "1", "--allowance-record", str(allowance))
+    assert series.main(_run_args(tmp_path, fixture, launcher, *args)) == 0
+    monkeypatch.setattr(series, "_commit", lambda runtime: BASELINE_SHA)
+    base = _run_args(tmp_path, fixture, launcher, *args, version="baseline")
+    assert series.main(base) == 0
+    slots = _ledger(allowance)["slots"]
+    assert [(s["version"], s["attempt"], s["reported_tokens"]) for s in slots] == [
+        ("candidate", 1, 10), ("baseline", 1, 10)]
+    with pytest.raises(SystemExit, match="no run slot left for baseline: 1 of 1 consumed"):
+        series.main(base)
+    monkeypatch.setattr(series, "_commit", lambda runtime: CANDIDATE_SHA)
+    with pytest.raises(SystemExit, match="no run slot left for candidate: 1 of 1 consumed"):
+        series.main(_run_args(tmp_path, fixture, launcher, *args, out="elsewhere"))
+    assert len((tmp_path / "out" / "calls.txt").read_text().split()) == 2
+    assert not (tmp_path / "elsewhere").exists()
+
+
+def test_wrong_runtime_commit_refuses_then_matching_runs(setup, monkeypatch):
+    tmp_path, fixture, launcher, allowance = setup
+    args = ("--count", "1", "--allowance-record", str(allowance))
+    for commit in ("f" * 40, BASELINE_SHA, "unknown"):
+        monkeypatch.setattr(series, "_commit", lambda runtime, c=commit: c)
+        with pytest.raises(SystemExit, match="is not the candidate commit"):
+            series.main(_run_args(tmp_path, fixture, launcher, *args))
+    assert not (tmp_path / "out").exists()
+    monkeypatch.setattr(series, "_commit", lambda runtime: CANDIDATE_SHA)
+    assert series.main(_run_args(tmp_path, fixture, launcher, *args)) == 0
+
+
+def test_wall_must_match_the_record(setup):
+    tmp_path, fixture, launcher, allowance = setup
+    with pytest.raises(SystemExit, match="external_wall_seconds_each 900"):
+        series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
+                              "--allowance-record", str(allowance), "--wall-seconds", "1200"))
+    assert not (tmp_path / "out").exists()
+
+
+def test_run_without_budget_blocks_next_admission(setup, monkeypatch):
+    tmp_path, fixture, launcher, allowance = setup
+    args = ("--count", "1", "--allowance-record", str(allowance))
+    monkeypatch.setenv("FAKE_NO_BUDGET", "1")
+    assert series.main(_run_args(tmp_path, fixture, launcher, *args)) == 0
+    slot = _ledger(allowance)["slots"][0]
+    assert slot["finished_at"] and slot["reported_tokens"] is None
+    assert slot["unknown_usage_attempts"] is None
+    monkeypatch.delenv("FAKE_NO_BUDGET")
+    with pytest.raises(SystemExit, match="usage of slot candidate-1 is unknown"):
+        series.main(_run_args(tmp_path, fixture, launcher, *args))
+    assert len((tmp_path / "out" / "calls.txt").read_text().split()) == 1
+
+
+def test_unclosed_slot_blocks_next_admission(setup):
+    _, _, _, allowance = setup
+    record = series.allowance.load_record(allowance)
+    series.allowance.claim_slot(allowance, record, "candidate")
+    with pytest.raises(SystemExit, match="usage of slot candidate-1 is unknown"):
+        series.allowance.claim_slot(allowance, record, "candidate")
+
+
+def test_record_edited_after_ledger_exists_refuses(setup):
+    tmp_path, fixture, launcher, allowance = setup
+    args = ("--count", "1", "--allowance-record", str(allowance))
+    assert series.main(_run_args(tmp_path, fixture, launcher, *args)) == 0
+    write_record(allowance, runs_per_version=5)
+    with pytest.raises(SystemExit, match="ledger belongs to a different allowance record"):
+        series.main(_run_args(tmp_path, fixture, launcher, *args))
+    assert len((tmp_path / "out" / "calls.txt").read_text().split()) == 1
+
+
+def test_batch_ceiling_refuses(setup):
+    tmp_path, fixture, launcher, allowance = setup
+    write_record(allowance, max_reported_tokens_each=100, max_reported_tokens_batch=105)
+    args = ("--count", "2", "--allowance-record", str(allowance))
+    with pytest.raises(SystemExit, match=r"10 reported tokens spent \+ 100 .* 105"):
+        series.main(_run_args(tmp_path, fixture, launcher, *args))
+    assert len((tmp_path / "out" / "calls.txt").read_text().split()) == 1
+    assert [s["attempt"] for s in _ledger(allowance)["slots"]] == [1]
+    assert len((tmp_path / "out" / "candidate-runs.txt").read_text().split()) == 1
 
 
 def test_run_writes_sidecars_and_grader_in_fresh_copies(setup):
@@ -234,12 +391,17 @@ def test_run_writes_sidecars_and_grader_in_fresh_copies(setup):
     assert len(calls) == 2 and calls[0] != calls[1]
     runs = [Path(p) for p in (tmp_path / "out" / "candidate-runs.txt").read_text().split()]
     assert len(runs) == 2
+    digest = series.allowance.record_sha256(allowance)
     for attempt, run in enumerate(runs, start=1):
         side = json.loads((run / "series.json").read_text())
         assert side["version"] == "candidate" and side["attempt"] == attempt
-        assert side["launcher_exit_code"] == 0 and side["runtime_commit"]
+        assert side["slot"] == attempt and side["allowance_sha256"] == digest
+        assert side["launcher_exit_code"] == 0 and side["runtime_commit"] == CANDIDATE_SHA
         assert "2 passed" in (run / "grader.txt").read_text()
         assert str(run.parents[2]) in (run / "grader.txt").read_text()
+    ledger = _ledger(allowance)
+    assert ledger["record_sha256"] == digest
+    assert [s["run_dir"] for s in ledger["slots"]] == [str(r) for r in runs]
     report = series.aggregate(runs)
     assert report["versions"]["candidate"]["pass_rate"] == "2 of 2"
     assert report["versions"]["candidate"]["completed"] == 2
