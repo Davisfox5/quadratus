@@ -1,0 +1,150 @@
+[
+  {
+    "control": "broken",
+    "selection": "preservation",
+    "changed_paths": [],
+    "exit_code": 0,
+    "tail": "5 passed, 8 deselected, 1 warning in 0.15s"
+  },
+  {
+    "control": "broken",
+    "selection": "lookup",
+    "changed_paths": [],
+    "exit_code": 1,
+    "tail": "3 failed, 10 deselected, 1 warning in 0.12s"
+  },
+  {
+    "control": "broken",
+    "selection": "security",
+    "changed_paths": [],
+    "exit_code": 1,
+    "tail": "5 failed, 8 deselected, 1 warning in 0.13s"
+  },
+  {
+    "control": "broken",
+    "selection": "all",
+    "changed_paths": [],
+    "exit_code": 1,
+    "tail": "8 failed, 5 passed, 1 warning in 0.15s"
+  },
+  {
+    "control": "lookup-only",
+    "selection": "preservation",
+    "changed_paths": [
+      "presentation.py"
+    ],
+    "exit_code": 0,
+    "tail": "5 passed, 8 deselected, 1 warning in 0.12s"
+  },
+  {
+    "control": "lookup-only",
+    "selection": "lookup",
+    "changed_paths": [
+      "presentation.py"
+    ],
+    "exit_code": 0,
+    "tail": "3 passed, 10 deselected, 1 warning in 0.11s"
+  },
+  {
+    "control": "lookup-only",
+    "selection": "security",
+    "changed_paths": [
+      "presentation.py"
+    ],
+    "exit_code": 1,
+    "tail": "5 failed, 8 deselected, 1 warning in 0.13s"
+  },
+  {
+    "control": "lookup-only",
+    "selection": "all",
+    "changed_paths": [
+      "presentation.py"
+    ],
+    "exit_code": 1,
+    "tail": "5 failed, 8 passed, 1 warning in 0.15s"
+  },
+  {
+    "control": "security-only",
+    "selection": "preservation",
+    "changed_paths": [
+      "access.py",
+      "app.py"
+    ],
+    "exit_code": 0,
+    "tail": "5 passed, 8 deselected, 1 warning in 0.11s"
+  },
+  {
+    "control": "security-only",
+    "selection": "lookup",
+    "changed_paths": [
+      "access.py",
+      "app.py"
+    ],
+    "exit_code": 1,
+    "tail": "3 failed, 10 deselected, 1 warning in 0.17s"
+  },
+  {
+    "control": "security-only",
+    "selection": "security",
+    "changed_paths": [
+      "access.py",
+      "app.py"
+    ],
+    "exit_code": 0,
+    "tail": "5 passed, 8 deselected, 1 warning in 0.13s"
+  },
+  {
+    "control": "security-only",
+    "selection": "all",
+    "changed_paths": [
+      "access.py",
+      "app.py"
+    ],
+    "exit_code": 1,
+    "tail": "3 failed, 10 passed, 1 warning in 0.14s"
+  },
+  {
+    "control": "reference",
+    "selection": "preservation",
+    "changed_paths": [
+      "access.py",
+      "app.py",
+      "presentation.py"
+    ],
+    "exit_code": 0,
+    "tail": "5 passed, 8 deselected, 1 warning in 0.11s"
+  },
+  {
+    "control": "reference",
+    "selection": "lookup",
+    "changed_paths": [
+      "access.py",
+      "app.py",
+      "presentation.py"
+    ],
+    "exit_code": 0,
+    "tail": "3 passed, 10 deselected, 1 warning in 0.12s"
+  },
+  {
+    "control": "reference",
+    "selection": "security",
+    "changed_paths": [
+      "access.py",
+      "app.py",
+      "presentation.py"
+    ],
+    "exit_code": 0,
+    "tail": "5 passed, 8 deselected, 1 warning in 0.12s"
+  },
+  {
+    "control": "reference",
+    "selection": "all",
+    "changed_paths": [
+      "access.py",
+      "app.py",
+      "presentation.py"
+    ],
+    "exit_code": 0,
+    "tail": "13 passed, 1 warning in 0.12s"
+  }
+]
