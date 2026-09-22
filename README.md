@@ -334,3 +334,13 @@ The Q5 branch includes the merged Q3 base. Explicit policy commands run through
 `GateSuite`; operator checks are retained. Conflicting gate definitions,
 unsupported required runners and external-effect gates stop explicitly.
 Projects without a policy retain their existing check behavior.
+
+Role packets carry the resolved family checklist, scope, check configuration and
+repository conventions to leads, independent reviewers, rechecks, consultants
+and security verifiers. Required contract text must fit the packet byte limit;
+reference notes may be excerpted with a visible truncation marker. Unrestricted
+project editors must end each editing reply with `CHANGED: ["relative/path"]`
+(or `CHANGED: []`). The runtime compares that list with files added, changed or
+deleted during that call. A mismatch stops the run and preserves the work and
+raw reply for inspection. Restricted editors still use the existing PATCH
+contract. No reviewer receives another reviewer's findings.
