@@ -249,3 +249,41 @@ def test_the_rule_is_absent_without_a_project(tmp_path):
 @pytest.mark.parametrize("stream", ["", "garbage"])
 def test_tool_failure_extraction_tolerates_empty_output(stream):
     assert _extract_codex_tool_failures(stream) == []
+
+
+# -- a live run names a preflight report that passed --------------------------
+
+
+def _canary_launcher():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "docs" / "harness-canary" / "run_fixture.py"
+    spec = importlib.util.spec_from_file_location("canary_run_fixture", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_allowance_missing_preflight_report_is_refused():
+    launcher = _canary_launcher()
+    with pytest.raises(SystemExit, match="preflight_report"):
+        launcher.require_allowance_preflight({"authorized_by": "Davis", "source": "x"})
+
+
+def test_allowance_preflight_not_ok_names_the_first_blocker(tmp_path):
+    report = tmp_path / "preflight.json"
+    report.write_text(json.dumps({
+        "ok": False,
+        "blockers": ["grok is not signed in", "codex is not signed in"],
+    }))
+    launcher = _canary_launcher()
+    with pytest.raises(SystemExit, match="grok is not signed in") as raised:
+        launcher.require_allowance_preflight({"preflight_report": str(report)})
+    assert "codex is not signed in" not in str(raised.value)
+
+
+def test_allowance_preflight_ok_is_accepted(tmp_path):
+    report = tmp_path / "preflight.json"
+    report.write_text(json.dumps({"ok": True, "blockers": []}))
+    _canary_launcher().require_allowance_preflight({"preflight_report": str(report)})

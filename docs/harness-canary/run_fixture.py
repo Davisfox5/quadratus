@@ -47,6 +47,31 @@ def _preflight(project: Path, output: Path) -> int:
         sys.argv = saved
 
 
+def require_allowance_preflight(allowance: dict) -> None:
+    """Refuse a live run that does not name a preflight report with ``ok`` true.
+
+    A report that is not ok is refused with a message that names its first
+    blocker, so the operator sees the thing that has to be cleared.
+    """
+    if "preflight_report" not in allowance:
+        raise SystemExit("allowance record is missing preflight_report")
+    raw = allowance.get("preflight_report")
+    if not isinstance(raw, str) or not raw.strip():
+        raise SystemExit("allowance record is missing preflight_report")
+    path = Path(raw)
+    if not path.is_file():
+        raise SystemExit(f"preflight report not found: {path}")
+    try:
+        report = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"preflight report is not valid JSON: {exc}") from None
+    if isinstance(report, dict) and report.get("ok") is True:
+        return
+    blockers = report.get("blockers") if isinstance(report, dict) else None
+    first = blockers[0] if isinstance(blockers, list) and blockers else "preflight report ok is false"
+    raise SystemExit(f"preflight refused: {first}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--allowance-record")
@@ -61,6 +86,7 @@ def main():
         allowance = json.loads(Path(args.allowance_record).read_text())
         if allowance.get("authorized_by") != "Davis" or not allowance.get("source"):
             raise SystemExit("A direct Davis allowance record is required")
+        require_allowance_preflight(allowance)
     # Container environment contains no API keys or application .env files.
     from quadratus.config import Settings
     from quadratus.project_run import run_project
