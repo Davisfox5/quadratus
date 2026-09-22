@@ -334,3 +334,18 @@ The Q5 branch includes the merged Q3 base. Explicit policy commands run through
 `GateSuite`; operator checks are retained. Conflicting gate definitions,
 unsupported required runners and external-effect gates stop explicitly.
 Projects without a policy retain their existing check behavior.
+
+A lead can retry a failed worker errand with one read-only sibling helper:
+`WORKER {"errand":"read","instruction":"revised request","retry_of":"read-1","helper":{"errand":"check","instruction":"independent check"}}`.
+Both siblings run through the existing worker pool at depth one and report to
+the lead. Workers cannot commission through either the single or batch entry
+point. A helper cannot receive a write grant.
+
+Worker requests may opt into `steps` (default 1, configured ceiling 3) and
+`token_limit` (configured ceiling 50,000 reported tokens). `CONTINUE:` requests
+another step on the same errand, with the prior result as context. Each provider
+attempt, including a retry, consumes the worker step allowance and the task's
+worker allowance, as well as any shared run limits. Unknown token usage stops
+the loop. Tokens are a post-return threshold, so a running call can overshoot;
+the worker budget artifact retains the measured total and overshoot. The loop
+does not grant shell, direct-write or delegation tools.
