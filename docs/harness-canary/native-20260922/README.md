@@ -59,8 +59,9 @@ heading and on the same line. Structured verdict handling is unchanged.
 
 The supervisor exited, recorded zero remaining owned processes, and required no
 forced termination. No watcher was created or restarted. The project and
-sanitized evidence are retained for inspection. Captured one-off scripts contain
-this run's absolute paths and are evidence, not a portable rerun command.
+sanitized evidence are retained for inspection. Captured one-off scripts are saved as .py.txt transcripts with their original
+bytes. They contain this run's absolute paths and are evidence, not a portable
+rerun command.
 
 ## Offline checks for the status fix
 
@@ -87,3 +88,8 @@ exit 0, no output
 An initial focused invocation named a nonexistent tests/test_harness_pack.py;
 that invocation did not run tests. The corrected harness_pack/test_pack.py
 command above and the full suite both passed. The post-fix live run was not run.
+
+The first PR CI stopped at lint because these one-off transcripts were named
+as Python modules. The .py.txt exports preserve their bytes and identify their
+purpose as recorded evidence. Repository-wide `ruff check .` then passed; no
+lint rule, gate or runtime source was excluded. CI is rerunning on that head.
