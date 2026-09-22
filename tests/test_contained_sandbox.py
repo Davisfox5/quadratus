@@ -25,7 +25,15 @@ from quadratus.cli_providers import (
 )
 
 
+def _binary_on_path(monkeypatch):
+    # These tests read the argv a seat would run, never the binary itself; a
+    # runner with no vendor CLI on PATH must build the same argv as a laptop
+    # with all three, or argv[0] comes back None and the comparison is moot.
+    monkeypatch.setattr('shutil.which', lambda name: f'/usr/bin/{name}')
+
+
 def _restricted(cls, model, monkeypatch, *, inside):
+    _binary_on_path(monkeypatch)
     if inside:
         monkeypatch.setenv('QUADRATUS_CONTAINED', '1')
     else:
@@ -36,6 +44,7 @@ def _restricted(cls, model, monkeypatch, *, inside):
 
 def _agentic(cls, model, monkeypatch, *, inside, writes):
     """A senior seat: an orchestrator, lead, reviewer or consultant."""
+    _binary_on_path(monkeypatch)
     if inside:
         monkeypatch.setenv('QUADRATUS_CONTAINED', '1')
     else:
