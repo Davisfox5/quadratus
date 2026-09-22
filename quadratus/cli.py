@@ -105,6 +105,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
             result = run_project(
                 goal, project, settings, allow_writes=args.allow_writes,
                 check=args.check or '', state_dir=args.state_dir,
+                forbid=args.forbid, declared_paths=args.declared_paths,
                 max_tasks=args.max_tasks, mode=args.mode,
                 security_verdict_json=getattr(args, "security_verdict_json", False),
                 progress=lambda message: print(f">> {message}", flush=True),
@@ -322,6 +323,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             "tree is write-thrash, and a reviewer asked to critique will edit."
         ),
     )
+    engine.add_argument("--policy-preview", action="store_true",
+                        help="Show the resolved policy without running models or checks.")
+    engine.add_argument("--path", dest="declared_paths", action="append", default=[],
+                        help="Declare a narrow project-relative path; whole-project dot is refused. Repeat as needed.")
+    engine.add_argument("--forbid", action="append", default=[],
+                        help="Forbid writes to a project-relative path or glob. Repeat as needed.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging.")
     args = parser.parse_args(argv)
 
@@ -329,6 +336,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
     )
+
+    if (args.policy_preview or args.forbid or args.declared_paths) and not args.project:
+        parser.error("--policy-preview, --path and --forbid require --project")
+    if args.policy_preview:
+        if args.clone or args.branch or args.probe or args.probe_all or args.status:
+            parser.error("Policy preview cannot be combined with clone, branch, probe or status")
+        import json
+
+        from .policy import preview_policy
+        try:
+            plan = preview_policy(args.project, args.declared_paths, forbid=args.forbid,
+                                  writing=args.allow_writes)
+        except (ValueError, OSError) as exc:
+            print(f"Error: {exc}")
+            return 1
+        print(json.dumps(plan, indent=2))
+        return 1 if plan['blocked'] else 0
 
     settings = _build_settings(args)
     if args.probe or args.probe_all:

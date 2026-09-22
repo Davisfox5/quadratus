@@ -294,3 +294,64 @@ def seed_map(report: ScanReport, codebase_map, *, session: str = "scan") -> int:
             codebase_map.amend(topic=topic, note=note, author="scan", session=session)
             added += 1
     return added
+
+
+def detect_adapters(root, report=None):
+    """Manifest-backed adapter hints. No imports, commands, or capability grants."""
+    import tomllib
+
+    root = Path(root).resolve()
+    report = report or scan_repo(root)
+    found = {}
+
+    def put(name, value, source):
+        found[name] = {'status': 'detected', 'value': value, 'source': source}
+
+    def read(relative):
+        path = root / relative
+        if (not path.resolve().is_relative_to(root) or not path.is_file()
+                or path.stat().st_size > 256_000):
+            return ''
+        return path.read_text(encoding='utf-8')
+
+    if report.check_command:
+        for name in ('test_runner', 'runner'):
+            put(name, list(report.check_command), 'repo_scan.check_command')
+    try:
+        project = tomllib.loads(read('pyproject.toml'))
+    except (ValueError, OSError):
+        project = {}
+    if project.get('project', {}).get('name') == 'quadratus' and read('quadratus/registry.py'):
+        put('runtime_model_policy', 'multi-vendor', 'pyproject.toml#project.name')
+        put('catalog_module', 'quadratus/registry.py', 'quadratus/registry.py')
+        put('permitted_calls', ['quadratus/cli_providers.py', 'quadratus/providers.py'],
+            'quadratus/registry.py')
+        put('routing_audit_exemption', 'CLAUDE.md#model-routing-this-repo-is-build-time-tooling',
+            'CLAUDE.md')
+    for manifest in ('package.json', 'site/package.json', 'apps/app/package.json'):
+        try:
+            pkg = json.loads(read(manifest) or '{}')
+        except (ValueError, OSError):
+            continue
+        deps = {**pkg.get('devDependencies', {}), **pkg.get('dependencies', {})}
+        for name in ('@mui/material', 'react'):
+            if name in deps and 'ui_lib' not in found:
+                put('ui_lib', name, manifest)
+        if 'zod' in deps:
+            put('validation_lib', 'zod', manifest)
+    for relative in ('prisma/schema.prisma', 'site/prisma/schema.prisma'):
+        if read(relative):
+            put('tool', 'prisma', relative)
+            break
+    else:
+        for relative in ('alembic.ini', 'backend/alembic.ini'):
+            if read(relative):
+                put('tool', 'alembic', relative)
+                break
+    for relative in ('.claude/agents', '.agents'):
+        path = root / relative
+        if path.is_dir() and path.resolve().is_relative_to(root):
+            put('agent_dir', relative, relative)
+            break
+    # All unrecognised fields are marked not configured by the family resolver.
+    return found

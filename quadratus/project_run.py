@@ -15,6 +15,7 @@ from .artifacts import ArtifactStore
 from .codebase_map import CodebaseMap
 from .delegation import DelegationLedger, reconcile
 from .integration import GateSuite, IntegrationGate
+from .policy import load_policy
 from .project import Project
 from .providers import ProviderError
 from .repo_scan import scan_repo, seed_map
@@ -51,7 +52,8 @@ def _project_lock(project):
 def run_project(goal, project, settings, *, allow_writes=False, check='',
                 state_dir=None, max_tasks=20, mode='adversarial',
                 progress=None, ask_operator=None, plan_gate=None,
-                default_scope=None, run_limits=None, security_verdict_json=False, gates=None):
+                default_scope=None, run_limits=None, forbid=(), declared_paths=(),
+                security_verdict_json=False, gates=None):
     """Keep both successful and interrupted runs next to their source tree."""
     from .runtime import Fleet, new_session
 
@@ -69,18 +71,26 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
         raise ValueError('Run state must not contain the project source folder.')
     project.exclude.add(state)
 
+    policy = load_policy(project.root, forbid=forbid)
+    if declared_paths:
+        from .scope import TaskScope
+        if default_scope is not None:
+            raise ValueError('Use either default_scope or declared_paths, not both')
+        default_scope = TaskScope(permitted_paths=tuple(declared_paths))
+    default_scope = policy.scope(default_scope)
     with _project_lock(project):
         return _run(goal, project, settings, state=state, allow_writes=allow_writes,
                     check=check, max_tasks=max_tasks, mode=mode, progress=progress,
                     ask_operator=ask_operator, plan_gate=plan_gate,
                     default_scope=default_scope,
-                    run_limits=run_limits, security_verdict_json=security_verdict_json, gates=gates,
+                    run_limits=run_limits, policy=policy, gates=gates,
+                    security_verdict_json=security_verdict_json,
                     fleet_type=Fleet, session_factory=new_session)
 
 
 def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
-         default_scope=None, run_limits=None, security_verdict_json=False, gates=None):
+         default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
@@ -100,8 +110,12 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         allow_writes=allow_writes, mode=mode, integration_gate=gate,
         codebase_map=code_map, ask_operator=ask_operator, plan_gate=plan_gate,
         progress=progress, delegation_ledger=delegation,
-        default_scope=default_scope, security_verdict_json=security_verdict_json,
+        default_scope=default_scope, repository_policy=policy,
+        security_verdict_json=security_verdict_json,
     )
+    preview = policy.resolve(default_scope.permitted_paths if default_scope else (),
+                             writing=allow_writes) if policy else None
+    (run_dir / 'policy-plan.json').write_text(json.dumps(preview, indent=2), encoding='utf-8')
     session, error = None, ''
     if run_limits:
         config.worker_budget = WorkerBudget(
@@ -115,6 +129,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                        **({'run_budget': budget} if budget else {}))
     in_flight = {}
     try:
+        if preview and preview['blocked']:
+            raise ValueError('; '.join(preview['blocked']))
         if progress:
             progress(f'Project: {project.root}; edits {"enabled" if allow_writes else "disabled"}')
         session = session_factory(
@@ -142,6 +158,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     lines = [f'# {status}', '', f'Project: {project.root}', '',
              f'Edits: {"enabled" if allow_writes else "disabled"}', '',
              f'Run files: {run_dir}', '']
+    if preview:
+        lines += [f"Default family: {preview['primary_family']}", '',
+                  f"Policy plan: {preview['hash']}", '']
     if error:
         lines += [f'Error: {error}', '']
     if in_flight:
@@ -177,6 +196,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'source_changed': bool(diff), 'source_fingerprint': project.fingerprint(),
         'tasks': len(session.history) if session else 0,
         'in_flight': in_flight,
+        'policy_preview': preview,
+        'policy_plans': getattr(session, 'policy_plans', []),
         'budget': budget.snapshot() if budget else None,
         'delegation': reconcile(delegation.events, delegation.native_children.values()),
         'scope_reports': [

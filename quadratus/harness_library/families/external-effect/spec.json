@@ -1,0 +1,39 @@
+{
+  "kind": "family",
+  "schema_version": 1,
+  "id": "external-effect",
+  "version": "0.1.0",
+  "summary": "Anything that sends, publishes, seeds, loads or spends against a real system: dry run is the default, apply needs a named authorization, production targets are refused unless the policy allows them, and the done output states what was not sent.",
+  "kinds": ["ops", "data"],
+  "required_inputs": [
+    { "name": "effect", "description": "What would be sent, published, written or spent, and where", "refuse_if_missing": true },
+    { "name": "target_environment", "description": "Local, staging or production, and the URL or account", "refuse_if_missing": true },
+    { "name": "authorization", "description": "For an apply or execute run: who authorized it, for what scope, with what cap", "refuse_if_missing": false },
+    { "name": "reversal", "description": "How the effect is undone, or that it cannot be", "refuse_if_missing": true }
+  ],
+  "checklist": [
+    { "id": "dry-run-default", "rule": "The default invocation composes, screenshots or diffs and sends nothing; the apply flag is explicit and named", "because": "War Room poster.py --execute and reconcile --apply; Flex apply-site-content; r3cruit3r staging seeds; every one has a dry run because a default that sends has sent", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "named-authorization", "rule": "An apply run carries a named authorization in the input: who, scope, cap; without it the tool refuses", "because": "War Room AGENTS.md: live sends, publications, production data changes and migrations are not smoke tests; paid evaluations require authorization", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "production-refused", "rule": "A production URL, account or DSN is refused unless the policy lists it as allowed for this effect", "because": "War Room MCP server defaults to the production origin; the deny list and the policy exist so a script cannot point there by accident", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "exit-nonzero-on-failure", "rule": "Partial failure exits nonzero and reports the failed items; a green exit means everything applied", "because": "Flex quote scripts are dry-run by default and exit nonzero on failure; a script that logs errors and exits zero hid a half-applied pack", "applies_to": ["lead", "reviewer"] },
+    { "id": "state-not-sent", "rule": "The done output states what was not sent, published or written, with counts", "because": "War Room browser-poster: done output states the queue was not drained; a reviewer cannot tell a dry run from an apply otherwise", "applies_to": ["lead"] },
+    { "id": "idempotent-apply", "rule": "Running apply twice produces one effect: a dedupe key, an upsert, or a marker the second run reads", "because": "Flex content packs upsert by key; a seed that inserts twice doubles staging data", "applies_to": ["lead", "reviewer"] },
+    { "id": "no-scheduling", "rule": "The change never installs, loads or enables a scheduler (launchd, cron, beat) as part of verification", "because": "War Room: launchctl load is forbidden without publishing authorization; the sync script's dry run still writes", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "cost-cap", "rule": "A paid effect carries a cost or row cap and stops at it; a live run over an API transport also carries a dollar cap", "because": "Quadratus meters against list prices; the operator ruled the cap is a stop condition on API transport", "applies_to": ["lead", "reviewer"] },
+    { "id": "fixtures-for-tests", "rule": "Tests exercise the dry-run path with fixtures and mocked transports; no test sends", "because": "War Room: use fixtures and mocked services; obtain authorization when external effects are needed", "applies_to": ["lead", "reviewer"], "gate_id": "dry-run-tests" }
+  ],
+  "overlays_compatible": ["external-effects", "fleet-ops", "usage-integrity", "sensitive-path"],
+  "gate_ids": ["scope", "dry-run-tests", "unit-tests", "lint", "bash-syntax"],
+  "output_contract": {
+    "done_output": ["effect and target environment", "mode run: dry run or apply, with the authorization line for apply", "what was not sent, with counts", "reversal path", "cost or row cap and where it stopped"],
+    "stop_conditions": ["apply requested without a named authorization", "the target is production and the policy does not allow it", "reversal unknown for an irreversible effect", "the task asks to install or load a scheduler"]
+  },
+  "adapter_fields": [
+    { "name": "apply_flag", "description": "The explicit flag that enables the effect", "required": true },
+    { "name": "allowed_targets", "description": "Environments and URLs the policy allows for this effect", "required": true },
+    { "name": "authorization_format", "description": "How a named authorization is passed and recorded", "required": true },
+    { "name": "cost_meter", "description": "How spend or rows are counted and capped", "required": false },
+    { "name": "forbidden_commands", "description": "Commands never run in verification, for example launchctl load", "required": false }
+  ],
+  "eval_cases_ref": "eval-cases.json"
+}

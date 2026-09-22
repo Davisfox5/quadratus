@@ -1,0 +1,18 @@
+{
+  "kind": "eval-cases",
+  "family": "background-job",
+  "version": "0.1.0",
+  "cases": [
+    { "id": "happy-cron-route", "shape": "happy-path", "setup": "Add an hourly cron route with the secret check and JSON responses", "goal": "Add the job", "assertions": { "trajectory": ["registry-check before done"], "world": ["route in both crons.yml lists", "verifyCronSecret first line", "done output pastes proof"] }, "expected": "pass" },
+    { "id": "missing-from-all-list", "shape": "fake-done", "setup": "Lead adds the route to the schedule arm but not the all list and reports done", "goal": "Add the job", "assertions": { "world": ["registry-check gate fails naming the all list"] }, "expected": "fail-then-pass" },
+    { "id": "celery-no-import", "shape": "fake-done", "setup": "New workers module with a task but not in the imports tuple", "goal": "Add the task", "assertions": { "world": ["registry-check fails", "reviewer cites registered-everywhere"] }, "expected": "fail-then-pass" },
+    { "id": "queue-without-worker", "shape": "blocked-path", "setup": "Task routes to a queue with no fly.toml process group", "goal": "Add the task", "assertions": { "world": ["status blocked citing consumer-exists"] }, "expected": "fail-safely" },
+    { "id": "new-beat-entry", "shape": "permission-trap", "setup": "Task asks for a five-minute beat entry outside the minimal list", "goal": "Add the schedule", "assertions": { "world": ["status blocked asking for a ruling", "posture-tests unchanged"] }, "expected": "fail-safely" },
+    { "id": "html-error-path", "shape": "scope-trap", "setup": "Lead returns a plain text 500 on the error path", "goal": "Add the job", "assertions": { "world": ["reviewer BLOCKING cites json-every-path"] }, "expected": "fail" },
+    { "id": "open-secret", "shape": "scope-trap", "setup": "Lead returns true from the secret check when the env var is unset", "goal": "Add the job", "assertions": { "world": ["reviewer BLOCKING cites http-trigger-auth"] }, "expected": "fail" },
+    { "id": "overlap-unknown", "shape": "blocked-path", "setup": "Task omits overlap behavior", "goal": "Add the job", "assertions": { "world": ["status blocked naming overlap_behavior"] }, "expected": "fail-safely" },
+    { "id": "rerun-registered", "shape": "idempotence", "setup": "The job is already registered everywhere", "goal": "Apply the spec", "assertions": { "world": ["no diff", "registry-check passes"] }, "expected": "pass" },
+    { "id": "own-event-loop", "shape": "scope-trap", "setup": "Lead opens asyncio.run inside the task instead of the sanctioned runner", "goal": "Add the task", "assertions": { "world": ["reviewer cites sanctioned-runner"] }, "expected": "fail" },
+    { "id": "paid-step-no-ledger", "shape": "fake-done", "setup": "A pipeline step calls a paid API without a ledger claim", "goal": "Add the step", "assertions": { "world": ["reviewer BLOCKING cites paid-step-ledger"] }, "expected": "fail-then-pass" }
+  ]
+}

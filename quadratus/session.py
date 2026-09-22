@@ -315,6 +315,7 @@ class SessionConfig:
     #: Additional operator bounds, intersected with each task declaration. None
     #: leaves such a task unbounded, which is at least recorded as unbounded.
     default_scope: Optional["TaskScope"] = None
+    repository_policy: Optional[object] = None
 
 
 _SCOPE_REQUEST = (
@@ -510,6 +511,8 @@ class Session:
         #: One per task that declared a scope. Evidence for the operator; the
         #: work itself is never reverted on the strength of these.
         self.scope_reports: List[ScopeReport] = []
+        self.policy_plans = []
+        self._original_gate = self.config.integration_gate
         self.store = store
         if self.config.usage_meter is not None:
             invoke = self.config.usage_meter.wrap(invoke)
@@ -939,7 +942,8 @@ class Session:
             out = sorted(set(report.out_of_scope + outer.out_of_scope))
             limits = [v for v in (report.max_lines, outer.max_lines) if v is not None]
             report = replace(report, out_of_scope=out, within_scope=not out,
-                             max_lines=min(limits) if limits else None)
+                             max_lines=min(limits) if limits else None,
+                             overrun_ratio=min(report.overrun_ratio, outer.overrun_ratio))
         self.scope_reports.append(report)
         if report.blocking or report.oversized:
             task.record("user", report.render())
@@ -972,6 +976,21 @@ class Session:
     def run_task(self, spec: TaskSpec) -> TaskSummary:
         if self.project and self.config.allow_writes and spec.scope is None:
             raise RunStalled("Editing tasks must declare a scope before dispatch.")
+        policy = self.config.repository_policy
+        if policy is not None:
+            from .policy import PolicyError, task_gate
+            paths = spec.scope.permitted_paths if spec.scope else ()
+            plan = policy.resolve(paths, writing=self.config.allow_writes)
+            self.policy_plans.append(dict(task_id=spec.task_id, **plan))
+            self._note(f"Family: {plan['primary_family']}; plan {plan['hash']}")
+            if plan['blocked']:
+                raise PolicyError('; '.join(plan['blocked']))
+            if (self.config.allow_writes and self.config.default_scope
+                    and any(not self.config.default_scope.permits(p) for p in paths)):
+                raise PolicyError('Task declaration exceeds the operator path limits')
+            spec.scope = policy.scope(spec.scope)
+            self.config.integration_gate = task_gate(policy, plan, self._original_gate,
+                                                     exclude=self.config.project_excludes)
         self._gate_fixes_used = 0
         self._active_spec = spec
         self._task_before = self._capture_source()

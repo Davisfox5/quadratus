@@ -1,0 +1,42 @@
+{
+  "kind": "family",
+  "schema_version": 1,
+  "id": "scoped-endpoint",
+  "version": "0.1.0",
+  "summary": "An API endpoint or data-access change that can never return or write another tenant's or user's data.",
+  "kinds": ["backend", "glue"],
+  "required_inputs": [
+    { "name": "route", "description": "Path, method and the handler location", "refuse_if_missing": true },
+    { "name": "scope_owner", "description": "Whether the resource is per-user, per-tenant, program-shared or global", "refuse_if_missing": true },
+    { "name": "schemas", "description": "Request and response schema names, or the fields if new", "refuse_if_missing": true },
+    { "name": "feature_key", "description": "Entitlement or feature flag that gates the route, or none with a reason", "refuse_if_missing": false }
+  ],
+  "checklist": [
+    { "id": "order-of-guards", "rule": "Auth dependency first, then scope resolution, then feature gate, then body validation, in that order", "because": "Flex admin services route is the accepted pattern; a 307 from the page-oriented guard on an API route was a live defect", "applies_to": ["lead", "reviewer"] },
+    { "id": "predicate-on-every-query", "rule": "Every query on a scoped model carries the scope predicate on the same statement, including secondary lookups by id", "because": "r3cruit3r has 61 raw id lookups in routers and recruit_merges.py fetches by id without a user predicate; Flex tenant content leaked through hardcoded fallbacks six times in two days", "applies_to": ["lead", "reviewer", "verifier"], "gate_id": "scope-predicate-grep" },
+    { "id": "cross-tenant-test", "rule": "A test proves a second tenant or user gets 404 or 403, using the repo's override mechanism", "because": "A static grep is a review cue, not proof; r3cruit3r IDOR holes were closed in PR #12 only after cross-tenant tests existed", "applies_to": ["lead", "reviewer"], "gate_id": "cross-tenant-test" },
+    { "id": "override-mechanism", "rule": "Tests override dependencies through the framework's mechanism, never by patching the module", "because": "r3cruit3r mocker.patch of a FastAPI dependency never took effect, so tests passed while calling the real API (commit 063bbcb)", "applies_to": ["lead", "reviewer"] },
+    { "id": "typed-envelope", "rule": "Declare the response model and use the repo's error envelope; no bare 500", "because": "r3cruit3r has 137 response_model uses and the reviewer prompt requires it; Flex uses { error: { code, message } }", "applies_to": ["lead", "reviewer"] },
+    { "id": "no-shared-write-for-one-tenant", "rule": "Never write shared or global data on behalf of one tenant or user", "because": "r3cruit3r CONTEXT.md: never write to a TransferPortalPlayer on behalf of one coach", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "registered-and-imported", "rule": "The router is registered where the app includes routers, and the import is proven to succeed", "because": "r3cruit3r wraps every include_router in try/except ImportError, so a missing package made AI endpoints 404 silently", "applies_to": ["lead"], "gate_id": "import-smoke" },
+    { "id": "feature-gate-both-sides", "rule": "A gated route asserts the feature server-side and the client wraps in the gate component", "because": "Flex widgets fired entitlement-gated calls for every tier and logged a 402 per load; CLAUDE.md says never render a blank page", "applies_to": ["lead", "reviewer"] },
+    { "id": "tenant-from-trusted-source", "rule": "Tenant identity comes from the proxy or the auth token, never from a client-supplied header", "because": "Flex proxy strips inbound x-tenant-slug; LINDA binds the tenant GUC before writes", "applies_to": ["lead", "reviewer", "verifier"] }
+  ],
+  "overlays_compatible": ["sensitive-path", "tenant-isolation", "privacy", "test-quality", "performance"],
+  "gate_ids": ["scope", "scope-predicate-grep", "cross-tenant-test", "import-smoke", "unit-tests", "lint"],
+  "output_contract": {
+    "done_output": ["route list from the app, showing the new path", "a line per query with its scope predicate quoted", "the cross-tenant test name and its output", "feature key or none with the reason"],
+    "stop_conditions": ["scope owner unknown", "the resource is global and the task asks for a per-tenant write", "no override mechanism exists to write the cross-tenant test", "the route touches a sensitive path without a grant"]
+  },
+  "adapter_fields": [
+    { "name": "auth_dependency", "description": "Name of the auth guard used on non-public routes", "required": true },
+    { "name": "scope_predicate", "description": "How scope is applied: user_id equality, tenantId column, or GUC binding", "required": true },
+    { "name": "validation_lib", "description": "Pydantic, Zod v4, or other", "required": true },
+    { "name": "feature_gate_fn", "description": "Server-side feature assertion function, if any", "required": false },
+    { "name": "error_envelope", "description": "Shape of the error response", "required": true },
+    { "name": "test_override_mechanism", "description": "How tests replace dependencies, for example app.dependency_overrides", "required": true },
+    { "name": "route_registry", "description": "Where routers are included and how to list registered routes", "required": true },
+    { "name": "raw_query_grep", "description": "Grep that lists raw or unscoped queries in the diff", "required": false }
+  ],
+  "eval_cases_ref": "eval-cases.json"
+}
