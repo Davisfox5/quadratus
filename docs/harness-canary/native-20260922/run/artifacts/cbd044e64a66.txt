@@ -1,0 +1,21 @@
+**Verdict: accept the code change. The test-output evidence is unverifiable from this copy — flag it, don't block on it.**
+
+**What I confirmed in the source**
+
+- `app.py:29` reads `if record is None or record["tenant_id"] != tenant:` and raises the *same* `HTTPException(status_code=404, detail="Not found")` at line 30. Missing and other-tenant records are genuinely indistinguishable — same status, same detail, same branch, no separate code path or differing message. That is the correct shape for this fix; a distinct 403 or a different detail string would have been an enumeration oracle.
+- `tenant` reaches the handler only via `Depends(current_tenant)` (line 27). `Header` is still imported but its sole use is `authorization` inside `current_tenant` (line 19) — no header/query tenant override was smuggled in. This satisfies the family rule that tenant identity comes from the auth token, not a client-supplied header.
+- `current_tenant` (lines 19–23) and its 401 behavior are byte-for-byte what the README describes; `Record(id, title)` (14–16) is unchanged. `TOKENS` and `RECORDS` (7–11) hold the canonical alpha/beta fixtures.
+- The predicate is on the same lookup as the id fetch — there's no window where the record is used before the scope check, and `response_model=Record` means `tenant_id` never appears in the success payload either.
+- This is the only route in the file, so there's no sibling endpoint left unscoped.
+
+**The one thing I could not verify**
+
+The pytest block is an assertion I cannot independently check. This working copy contains exactly two files — `README.md` and `app.py`. The acceptance test `examiner/test_contract.py` is not in it, it sits outside this copy, and I have no shell in this role. So "9 passed" is reported, not reproduced. It's consistent with the gate's `minimum_tests: 9` and the warning text matches a real starlette 0.5x testclient deprecation, so I have no reason to doubt it — but a verifier should say plainly that it was taken on trust rather than confirmed. If the harness re-runs the gate itself, that closes the gap; if not, someone with a shell should re-run the README command verbatim before this is treated as evidence.
+
+Similarly, "only app.py is modified" is unverifiable here in the strict sense: this copy is not a git repo (`is a git repository: false`) and has no `.quadratus/` to inspect, so there's no baseline to diff. What I can say is that everything *in* this copy other than line 29 matches the README's description of the untouched fixture, and `README.md` itself is unmodified.
+
+**Not blocking, worth noting**
+
+`record["tenant_id"]` will `KeyError` → 500 if a record ever lacks that key. With the fixtures frozen at lines 9–10 this cannot happen, and hardening it would be scope creep against an explicitly bounded task, so leave it. I mention it only so it isn't mistaken for a pattern to copy into code where records come from a database.
+
+The change is ~1 line against a ~10-line estimate. Undersize is not a concern — the bound exists to catch a small task quietly becoming a feature, and nothing here grew. Nothing in the answer recommends anything unsafe.

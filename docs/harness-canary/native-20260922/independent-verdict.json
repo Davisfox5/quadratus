@@ -1,0 +1,25 @@
+{
+  "run_id": "20260922T122228Z-f4569fa5",
+  "functional_acceptance": true,
+  "frozen_tests_passed": 9,
+  "original_controller_completed": false,
+  "reason_controller_incomplete": "legacy security prose parser matched Not blocking heading",
+  "provider_attempts": 4,
+  "reported_tokens": 300287,
+  "unknown_usage_attempts": 0,
+  "threshold_overshoot": 0,
+  "auxiliary_diagnostic_tokens_overlap_unknown": 5081,
+  "only_source_change": "app.py tenant guard",
+  "unchanged_inputs": {
+    "project/README.md": true,
+    "project/.quadratus/policy.json": true,
+    "examiner/test_contract.py": true
+  },
+  "offline_replay": {
+    "live_model_calls": 0,
+    "legacy_classifier_blocks": true,
+    "patched_security_task_open_findings": [],
+    "scope": "captured verifier reply through security task, not a fresh model run or orchestrator DONE"
+  },
+  "native_functional_test_only": true
+}
