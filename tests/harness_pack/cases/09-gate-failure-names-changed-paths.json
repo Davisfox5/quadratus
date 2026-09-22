@@ -1,0 +1,59 @@
+{
+ "id": "gate-failure-names-changed-paths",
+ "shape": "noisy-tool",
+ "family": "test-author",
+ "grader": false,
+ "source": "Report, Quadratus, GameTape finding 6: gate failures omitted changed paths; the test suite wrote into data/recordings and the message said only that something changed.",
+ "session": {
+  "project": true,
+  "allow_writes": false,
+  "config": {
+   "max_gate_fixes": 0
+  }
+ },
+ "files": {
+  "app.py": "x = 1\n"
+ },
+ "gate": [
+  {
+   "id": "tests",
+   "code": "from pathlib import Path; Path('data').mkdir(exist_ok=True); Path('data/clip1.webm').write_bytes(b'x'); print('3 passed')"
+  }
+ ],
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Add the parser",
+   "complexity": "simple"
+  }
+ },
+ "script": [
+  {
+   "role": "lead",
+   "reply": "Draft: the change as text."
+  },
+  {
+   "role": "closeout",
+   "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+  }
+ ],
+ "expect": {
+  "outcome": "completed",
+  "checks": {
+   "count": 1,
+   "last_passed": false,
+   "output_contains": [
+    "Changed paths: 1 added (data/clip1.webm)"
+   ],
+   "last_receipt": {
+    "status": "error",
+    "reason": "source changed during gate"
+   }
+  },
+  "store_contains": [
+   "still failing at close",
+   "clip1.webm"
+  ]
+ }
+}

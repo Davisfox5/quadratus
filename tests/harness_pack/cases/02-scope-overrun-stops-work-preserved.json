@@ -1,0 +1,67 @@
+{
+ "id": "scope-overrun-stops-work-preserved",
+ "shape": "scope-trap",
+ "family": "pure-logic",
+ "grader": false,
+ "source": "Report, Quadratus, GameTape finding 2: a two-line fixture task implemented the rest of the feature; a 50 percent overrun stops the task and preserves the work.",
+ "session": {
+  "project": true,
+  "allow_writes": true
+ },
+ "files": {
+  "app.py": "x = 1\n"
+ },
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Tiny fix",
+   "complexity": "simple",
+   "scope": {
+    "permitted_paths": [
+     "app.py"
+    ],
+    "max_lines": 5,
+    "intended_result": "one tiny fix",
+    "acceptance": [
+     "file compiles"
+    ]
+   }
+  }
+ },
+ "script": [
+  {
+   "role": "lead",
+   "reply": "Implemented.",
+   "writes": {
+    "app.py": "print(0)\nprint(1)\nprint(2)\nprint(3)\nprint(4)\nprint(5)\nprint(6)\nprint(7)\nprint(8)\nprint(9)\nprint(10)\nprint(11)\nprint(12)\nprint(13)\nprint(14)\nprint(15)\nprint(16)\nprint(17)\nprint(18)\nprint(19)\nprint(20)\nprint(21)\nprint(22)\nprint(23)\nprint(24)\nprint(25)\nprint(26)\nprint(27)\nprint(28)\nprint(29)\nprint(30)\nprint(31)\nprint(32)\nprint(33)\nprint(34)\nprint(35)\nprint(36)\nprint(37)\nprint(38)\nprint(39)\n"
+   }
+  }
+ ],
+ "expect": {
+  "outcome": "PartialWorkStopped",
+  "error_contains": [
+   "exceeded its declared scope"
+  ],
+  "files": {
+   "app.py": {
+    "exists": true,
+    "contains": "print(39)"
+   }
+  },
+  "in_flight": {
+   "changed_contains": [
+    "app.py"
+   ],
+   "inspected": true
+  },
+  "scope_reports": {
+   "count": 1,
+   "oversized": true
+  },
+  "calls": {
+   "role:collaborator": 0,
+   "role:closeout": 0
+  }
+ }
+}
