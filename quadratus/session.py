@@ -531,6 +531,11 @@ class Session:
         context = invocation_context.get() or dict(task="run", role="direct", origin="seat")
         self._active_call = dict(context, model=key, allow_writes=allow_writes)
         spec = self._active_spec
+        if (context.get("role") != "closeout" and context.get('origin') != 'worker'
+                and spec is not None and '## Role packet' not in prompt):
+            role = ('lead' if context.get('role') in ('lead', 'revision', 'gate-fix', 'security-fix') else 'verifier'
+                    if context.get('role') == 'verifier' else 'reviewer')
+            prompt += '\n\n' + self._role_packet(spec, role)
         if context.get("role") != "closeout" and spec is not None and spec.scope is not None:
             if spec.scope.render() not in prompt:
                 prompt += "\n\n" + spec.scope.render()
@@ -582,6 +587,10 @@ class Session:
         try:
             with invocation(getattr(self._active_spec, "task_id", "run"), role):
                 return self._invoke_model(key, prompt, allow_writes=allow_writes)
+        except PartialWorkStopped as exc:
+            if exc.partial.get('reply'):
+                self.store.put(exc.partial['reply'], kind='changed-report-mismatch', author=key)
+            raise
         except PartialWorkSuspected as exc:
             state = self._inspect_partial_edits(before)
             raise PartialWorkStopped(str(exc), partial=state) from exc
@@ -780,6 +789,7 @@ class Session:
         answers = []
         consults_used = 0
         worker_failures = 0
+        failed_errands = set()
 
         def build(fetched):
             extras = ["## Consult answers and worker evidence\n\n" + "\n\n".join(answers)] if answers else []
@@ -804,6 +814,15 @@ class Session:
                         raise ValueError('invalid worker request')
                 except (ValueError, TypeError) as exc:
                     raise RunStalled("Expected WORKER JSON with errand and instruction.") from exc
+                helper = request.get('helper')
+                if helper is not None:
+                    if (request.get('retry_of') not in failed_errands or not isinstance(helper, dict)
+                            or helper.get('errand') not in WORKER_TREE
+                            or not isinstance(helper.get('instruction'), str)
+                            or not helper['instruction'].strip() or helper.get('write', False) is not False
+                            or type(helper.get('demanding', False)) is not bool
+                            or helper.get('helper') is not None):
+                        raise RunStalled('A sibling helper requires a failed retry_of label and a read-only errand')
                 writes = request.get('write', False)
                 if writes and not (self.project and self.config.allow_writes):
                     raise RunStalled("Worker requested edits without an operator write grant.")
@@ -829,18 +848,31 @@ class Session:
                         raise ErrandToolMismatch(f"errand {label!r}: {mismatch}")
                     if self.workers.remaining(spec.task_id) <= 0:
                         raise FanOutExceeded("Worker budget exhausted before a draft was produced.")
-                    result = self.workers.commission(
-                        task=task, parent_key=lead, prompt=request['instruction'],
-                        label=label,
-                        errand=request['errand'], demanding=request.get('demanding', False),
-                        allow_writes=writes, needs=needs,
-                    )
+                    job = dict(prompt=request['instruction'], label=label,
+                               errand=request['errand'], demanding=request.get('demanding', False),
+                               allow_writes=writes, needs=needs,
+                               steps=request.get('steps', 1), token_limit=request.get('token_limit'))
+                    if helper is None:
+                        results = [self.workers.commission(task=task, parent_key=lead, **job)]
+                    else:
+                        mismatch = check_errand_fit(helper['instruction'], needs=helper.get('needs'), write=False)
+                        if mismatch is not None:
+                            raise ErrandToolMismatch('Helper: ' + mismatch)
+                        if self.workers.remaining(spec.task_id) < 2:
+                            raise FanOutExceeded('A sibling pair needs two remaining worker attempts')
+                        helper_job = dict(prompt=helper['instruction'], label=label + '-helper',
+                                          errand=helper['errand'], demanding=helper.get('demanding', False),
+                                          allow_writes=False, needs=helper.get('needs'),
+                                          steps=helper.get('steps', 1), token_limit=helper.get('token_limit'))
+                        results = self.workers.commission_many(task=task, parent_key=lead,
+                                                               jobs=[job, helper_job])
                 except PartialWorkStopped:
                     raise
                 except (FanOutExceeded, RepeatedFailure, ErrandToolMismatch) as exc:
                     # Budget and repeated-failure guards are the lead's own
                     # limits reported back to it, not a crash: it can still
                     # close the task incomplete with what it has.
+                    failed_errands.add(label)
                     worker_failures += 1
                     answers.append(
                         f"Worker errand {label!r} was refused: {exc}\n"
@@ -855,6 +887,7 @@ class Session:
                         ) from exc
                     continue
                 except Exception as exc:  # noqa: BLE001 -- returned, not raised
+                    failed_errands.add(label)
                     worker_failures += 1
                     detail = str(exc)[:400]
                     task.record("user", f"[worker {label}] FAILED: {detail}")
@@ -869,7 +902,16 @@ class Session:
                             f"lead is not converging. Last: {detail[:200]}"
                         ) from exc
                     continue
-                answers.append(f"Worker {result.model}: {result.summary}\n{result.ref.render()}")
+                for result in results:
+                    if result.error or result.needs_tool:
+                        failed_errands.add(result.label)
+                    if result.error:
+                        worker_failures += 1
+                    evidence = result.ref.render() if result.ref else ''
+                    answers.append(f"Worker {result.label} ({result.model}): "
+                                   f"{result.error or result.summary}\n{evidence}")
+                if worker_failures >= self.config.max_worker_failures:
+                    raise RunStalled('Worker failures exhausted the task recovery allowance')
                 continue
             requests = _parse_consults(body)
             if not requests:
@@ -961,9 +1003,20 @@ class Session:
             )
         return report
 
+    def _role_packet(self, spec, role):
+        notes = (self.config.codebase_map.render(topics=['conventions'])
+                 if self.config.codebase_map is not None else '')
+        policy = self.config.repository_policy
+        if policy is not None:
+            return policy.role_packet(spec.scope, role, notes)
+        contract = '## Role packet\n' + (spec.scope.render() if spec.scope else 'Scope: not declared.')
+        if len(contract.encode()) > 20_000:
+            raise RunStalled('Task scope exceeds the role packet limit; narrow the task')
+        return contract + '\nConventions notes:\n' + notes.encode()[:3000].decode('utf-8', errors='ignore')
+
     def _consult_prompt(self, spec: TaskSpec, question: str, peer: str) -> str:
         label = resolve(peer)
-        return (
+        return self._role_packet(spec, "reviewer") + "\n\n" + (
             f"Task context: {spec.description}\n\n"
             f"A colleague leading this task asks you one question in your "
             f"area of strength:\n{question}\n\n"
@@ -1632,8 +1685,7 @@ class Session:
         # Stated before the work, checked after it. Telling a model its bound
         # helps some; measuring the diff is what makes the bound real, and
         # both happen -- see _assess_scope.
-        if spec.scope is not None:
-            parts.append(spec.scope.render())
+        parts.append(self._role_packet(spec, 'lead'))
         parts.append(worker_menu())
         parts.append('To commission one worker, reply only WORKER followed by JSON: '
                      '{"errand":"code","instruction":"one bounded request",'
@@ -1643,7 +1695,12 @@ class Session:
                      'the harness cannot patch, [] for an answer in text. Set write:true '
                      'exactly when needs contains patch. The harness checks the fit '
                      'before the call is made and refuses a mismatch for free. '
-                     'Workers cannot delegate.')
+                     'Workers cannot delegate. After a failed errand, a retry may add '
+                     '"retry_of":"failed-label" and one "helper" object with its own '
+                     'errand, instruction, needs and demanding fields. The helper is always '
+                     'read-only; both are siblings reporting to you. Optional steps (up to 3) '
+                     'and token_limit (up to 50000 reported tokens) bound a worker continuation; '
+                     'the configured budget may be stricter. Defaults remain one shot.')
         if self.project:
             # Deliberately no longer "inspect the project source": that told the
             # lead to go exploring in the same breath as the guidance below
@@ -1702,7 +1759,7 @@ class Session:
 
     def _collaborator_prompt(self, spec: TaskSpec, draft: str, peer: str) -> str:
         label = resolve(peer)
-        return (
+        return self._role_packet(spec, "reviewer") + "\n\n" + (
             f"Task: {spec.description}\n\n"
             f"Current work:\n{draft}\n\n"
             f"You are {label.label if label else peer}, contributing an independent "
@@ -1774,6 +1831,7 @@ class Session:
         for peer, note in blocking:
             verdict = self._invoke_model(
                 peer,
+                self._role_packet(spec, 'reviewer') + '\n\n' +
                 f"Task: {spec.description}\n\n"
                 f"You reviewed this work and raised these findings:\n{note}\n\n"
                 f"The revised work:\n{revision}\n\n"
@@ -1873,7 +1931,7 @@ class Session:
 
     def _verifier_prompt(self, spec: TaskSpec, draft: str, verifier: str) -> str:
         label = resolve(verifier)
-        return (
+        return self._role_packet(spec, "verifier") + "\n\n" + (
             f"Task: {spec.description}\n\n"
             f"Proposed answer:\n{draft}\n\n"
             f"You are {label.label if label else verifier}, verifying security "

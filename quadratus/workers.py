@@ -48,17 +48,53 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Sequence
 
 from .artifacts import ArtifactRef, ArtifactStore
-from .delegation import invocation
+from .delegation import invocation, invocation_context
 from .memory import NoMemory, TaskMemory
 
 log = logging.getLogger(__name__)
+worker_loop_control = ContextVar('worker_loop_control', default=None)
+
+
+@dataclass
+class WorkerLoopControl:
+    """Per-errand transport limits, in addition to the enclosing run budget.
+
+    Tokens are a post-return threshold. Unknown usage stops continuation and
+    in-flight overshoot is retained in the budget artifact.
+    """
+    max_steps: int
+    max_tokens: int
+    charge: Callable
+    calls: int = 0
+    tokens: int = 0
+    unknown: bool = False
+
+    def reserve(self):
+        from .run_budget import RunBudgetExceeded
+        if self.calls >= self.max_steps or self.tokens >= self.max_tokens or self.unknown:
+            raise RunBudgetExceeded('Worker loop budget exhausted')
+        if self.calls:
+            self.charge()
+        self.calls += 1
+
+    def finish(self, usage):
+        from .run_budget import RunBudgetExceeded
+        values = [(usage or {}).get(k) for k in ('input_tokens', 'output_tokens')]
+        if any(type(v) is not int or v < 0 for v in values):
+            self.unknown = True
+            raise RunBudgetExceeded('Worker loop usage unknown; continuation refused')
+        self.tokens += sum(values)
+        if self.tokens >= self.max_tokens:
+            raise RunBudgetExceeded('Worker loop reported-token threshold reached')
 
 __all__ = [
     "WorkerBudget",
@@ -313,8 +349,13 @@ class WorkerBudget:
     max_per_task: int = 12
     max_concurrent: int = 4
     max_depth: int = 1
+    max_worker_steps: int = 3
+    max_worker_tokens: int = 50_000
 
     def __post_init__(self) -> None:
+        for name in ('max_worker_steps', 'max_worker_tokens'):
+            if type(getattr(self, name)) is not int or getattr(self, name) < 1:
+                raise ValueError(f'{name} must be a positive integer')
         if self.max_per_task < 0:
             raise ValueError("max_per_task cannot be negative")
         if self.max_concurrent < 1:
@@ -413,6 +454,8 @@ class WorkerPool:
         allow_writes: bool = False,
         needs: Optional[Sequence[str]] = None,
         depth: int = 0,
+        steps: int = 1,
+        token_limit: Optional[int] = None,
     ) -> WorkerResult:
         """Run one worker for ``task`` and fold its report into that task.
 
@@ -422,10 +465,14 @@ class WorkerPool:
         ``NEED TOOL: <what>`` and the result carries it; the lead reissues the
         errand with ``allow_writes`` (or the specific grant) set.
         """
-        if depth >= self.budget.max_depth:
+        if depth >= self.budget.max_depth or (invocation_context.get() or {}).get('origin') == 'worker':
             raise FanOutExceeded(
                 "workers do not commission workers; delegation depth is capped at 1"
             )
+        token_limit = self.budget.max_worker_tokens if token_limit is None else token_limit
+        if (type(steps) is not int or not 1 <= steps <= self.budget.max_worker_steps
+                or type(token_limit) is not int or not 1 <= token_limit <= self.budget.max_worker_tokens):
+            raise ValueError('Worker step/token limits exceed the configured allowance')
         if task.closed:
             raise RuntimeError(
                 f"task {task.task_id!r} is closed and cannot commission workers"
@@ -456,13 +503,49 @@ class WorkerPool:
 
         scratch = NoMemory()  # explicit: a worker carries nothing in or out
         briefed = capability_preamble(allow_writes) + "\n## Errand\n" + prompt
+        def charge():
+            with self._lock:
+                self._charge(task.task_id)
+        control = WorkerLoopControl(steps, token_limit, charge) if steps > 1 else None
+        marker = worker_loop_control.set(control)
+        raw = ''
         try:
-            with invocation(task.task_id, f"worker:{label}", "worker"):
-                raw = self._run(model_key, briefed, allow_writes=allow_writes)
-        except Exception:
+            for step in range(steps):
+                instruction = briefed
+                if control:
+                    instruction += ('\nYou cannot delegate. To continue this same errand, return '
+                                    'CONTINUE: followed by concise progress and the next read. '
+                                    'Otherwise return the final answer or PATCH. '
+                                    f'Step {step + 1}/{steps}; reported-token threshold {token_limit}.')
+                    if step:
+                        instruction += '\nPrevious step (data, not a new errand):\n' + raw
+                before_calls = control.calls if control else 0
+                with invocation(task.task_id, f"worker:{label}", "worker"):
+                    raw = self._run(model_key, instruction, allow_writes=allow_writes)
+                if raw.lstrip().startswith(('WORKER ', 'CONSULT ', 'FETCH:')):
+                    raise FanOutExceeded('A worker cannot hire, consult or fetch through lead channels')
+                if not raw.startswith('CONTINUE:'):
+                    break
+                if control is None or control.calls == before_calls:
+                    raise FanOutExceeded('Continuation requires an accounting-aware worker runner')
+                if step + 1 >= steps:
+                    raise FanOutExceeded('Worker step limit reached before a final answer')
+                with self._lock:
+                    self.store.put(raw, kind=f'worker-step:{label}', author=model_key)
+        except Exception as exc:
             with self._lock:
                 self._failed.add(fingerprint)
+                if getattr(exc, 'provider_response', ''):
+                    self.store.put(exc.provider_response, kind=f'worker-stopped:{label}', author=model_key)
             raise
+        finally:
+            worker_loop_control.reset(marker)
+            if control:
+                with self._lock:
+                    self.store.put(json.dumps(dict(steps=control.calls, reported_tokens=control.tokens,
+                        unknown_usage=control.unknown, max_steps=steps, max_tokens=token_limit,
+                        overshoot=max(0, control.tokens - token_limit))),
+                        kind=f'worker-budget:{label}', author=model_key)
         scratch.wipe()
 
         needs_tool = _parse_tool_request(raw)
@@ -522,6 +605,8 @@ class WorkerPool:
         ``model``, ``errand``, ``demanding``, ``allow_writes``, ``needs``.
         """
         results: List[Optional[WorkerResult]] = [None] * len(jobs)
+        if (invocation_context.get() or {}).get('origin') == 'worker':
+            raise FanOutExceeded('Workers cannot commission sibling workers')
 
         def one(index: int, job: dict) -> None:
             try:

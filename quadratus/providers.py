@@ -282,6 +282,10 @@ class LLMProvider:
                 ) from second
 
     def _observed_call(self, prompt, system, turns, attempt):
+        from .workers import worker_loop_control
+        worker_control = worker_loop_control.get()
+        if worker_control is not None:
+            worker_control.reserve()
         control = getattr(self, 'run_budget', None)
         if control is not None and control.limits.max_cost_usd is not None:
             ticket, remaining = control.reserve(transport=self.transport,
@@ -324,6 +328,15 @@ class LLMProvider:
                         exc.provider_response = text
             if control is not None:
                 self.timeout = previous_timeout
+            if worker_control is not None:
+                try:
+                    worker_control.finish(self.last_usage)
+                except Exception as exc:
+                    if failure is None:
+                        failure = budget_failure = exc
+                        exc.provider_outcome = 'ok'
+                        exc.post_return_failure = True
+                        exc.provider_response = text
             observer = getattr(self, "attempt_observer", None)
             if observer is not None:
                 try:
