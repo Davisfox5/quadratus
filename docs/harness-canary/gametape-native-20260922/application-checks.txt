@@ -1,0 +1,41 @@
+CHECK: /private/tmp/quadratus-harness-env/bin/python -m pytest -q -p no:cacheprovider
+........................................................................ [ 61%]
+..............................................                           [100%]
+118 passed in 1.95s
+CHECK: node --check static/js/app.js
+CHECK: node --test tests/ui/bulk_coverage.test.js tests/ui/bulk_keyboard.test.js tests/ui/bulk_serialization.test.js tests/ui/import_preview.test.js tests/ui/load_app.test.js
+✔ a preview that returns after the filter changed is discarded (16.418292ms)
+✔ a preview that returns after switching project is discarded (2.630834ms)
+✔ another project's preview reaches the server while an apply is pending, and its dialog is released after (3.311458ms)
+✔ Confirm refuses a stored preview that belongs to another project (3.168458ms)
+✔ focus parked by the app moves to Confirm when the preview succeeds (3.766792ms)
+✔ focus the user moved during the request is left alone (2.197542ms)
+✔ Tab that lands back on the parked control is still the user's choice (2.090042ms)
+✔ closing and reopening the dialog forgets any parked focus (1.559667ms)
+✔ a failed preview returns focus to Preview; a conflict moves it to Refresh (2.544875ms)
+✔ the preview table joins the Tab cycle only while it has rows (1.680916ms)
+✔ Tab wraps eligible controls and modal suppresses shortcuts (22.324417ms)
+✔ Escape closes the modal and restores focus (1.781917ms)
+✔ Preview recovers focus before its response (2.17925ms)
+✔ Confirm and Refresh recover focus while controls disappear (2.954292ms)
+✔ committed apply survives change events with captured values (17.368375ms)
+✔ dismiss and reopen keeps same-project apply busy (2.262916ms)
+✔ another project may preview but cannot confirm during pending apply (5.349584ms)
+✔ renders row statuses, summary, player, and escaped cell text (18.547041ms)
+✔ shows the empty state (4.007542ms)
+✔ shows server and network errors (6.382083ms)
+✔ clears stale results and announces loading before fetch resolves (1.966042ms)
+✔ resets the file input so the same file can be selected twice (1.863875ms)
+✔ M opens preview unless a modal is active; I/O/P/B remain intact (1.970167ms)
+✔ newer upload invalidates older (1.415208ms)
+✔ close while pending leaves no rows or status and restores focus (1.631708ms)
+✔ project switch while pending ignores old success and failure (1.65125ms)
+✔ loads the template and real app, including an APP_JS_PATH override (22.975417ms)
+ℹ tests 27
+ℹ suites 0
+ℹ pass 27
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 87.345042
