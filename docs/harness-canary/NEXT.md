@@ -126,11 +126,19 @@ called by the tool itself; `run` calls the launcher, which does.
 - `python tools/acceptance/series.py run --version baseline|candidate
   --runtime <checkout> --fixture <dir> --count N --allowance-record <path>
   --out <dir> [--grader-command "<argv>"]` calls `run_fixture.py` once per
-  fresh fixture copy, in sequence. It refuses without a valid allowance
-  record, refuses `--count` above 5, and never retries. Each run tree gets a
-  `series.json` sidecar (version, runtime commit, attempt, launcher exit
-  code) and, when a grader command is given, the grader's output as
-  `grader.txt`, run in the copy with `CANARY_PROJECT` set.
+  fresh fixture copy, in sequence, and never retries. Admission is against
+  the record (`tools/acceptance/allowance.py`, schema
+  `quadratus-canary-allowance/2`, template in `allowance.template.json`):
+  `approved` true and Davis-authorized, the runtime's `git rev-parse HEAD`
+  equal to the record's SHA for that version, `--wall-seconds` equal to
+  `external_wall_seconds_each`. A slot is claimed in `<record>.slots.json`
+  before each launch, `runs_per_version` per version across every invocation
+  of the command, and closed with the run's `budget.json` afterwards; a slot
+  with unknown usage, or a batch total that would cross
+  `max_reported_tokens_batch`, refuses the next run. Each run tree gets a
+  `series.json` sidecar (version, runtime commit, slot, allowance hash,
+  launcher exit code) and, when a grader command is given, the grader's
+  output as `grader.txt`, run in the copy with `CANARY_PROJECT` set.
 - `python tools/acceptance/series.py aggregate --runs <run dir>... --out <dir>`
   writes `series-report.md` and `series-report.json`. A missing file is
   reported as missing, never as zero. Fresh input is unknown when any invoked
