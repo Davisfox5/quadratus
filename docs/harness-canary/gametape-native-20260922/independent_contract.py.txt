@@ -1,0 +1,88 @@
+"""Independent public-contract checks, outside the model-editable project."""
+import io
+import sys
+from pathlib import Path
+import pytest
+sys.path.insert(0,'/private/tmp/gametape-quadratus-full-20260922')
+import app as application
+
+@pytest.fixture
+def preview(tmp_path,monkeypatch):
+ for key,val in [('DATA_DIR',tmp_path),('PROJECTS_FILE',tmp_path/'projects.json'),('VIDEOS_DIR',tmp_path/'videos'),('RECORDINGS_DIR',tmp_path/'recordings')]:
+  monkeypatch.setattr(application,key,str(val))
+ application.app.config['TESTING']=True
+ client=application.app.test_client()
+ project=client.post('/api/projects',json={'name':'Independent trial'}).get_json()
+ pid=project['id']
+ player=client.post(f'/api/projects/{pid}/players',json={'name':'Alex','number':'7'}).get_json()
+ existing=client.post(f'/api/projects/{pid}/clips',json={'tag_type':'Pass','start':100,'end':102,'label':'existing'}).get_json()
+ before=Path(application.PROJECTS_FILE).read_bytes()
+ def post(data,pid_override=None):
+  if isinstance(data,str):data=data.encode()
+  rv=client.post(f'/api/projects/{pid_override or pid}/clips/import_preview',data={'file':(io.BytesIO(data),'clips.csv')},content_type='multipart/form-data')
+  assert Path(application.PROJECTS_FILE).read_bytes()==before,'preview mutated stored project'
+  return rv
+ yield post,client,pid,player,existing
+ assert Path(application.PROJECTS_FILE).read_bytes()==before
+
+H='Tag Type,Start (s),End (s),Label,Notes,Players,Clip ID\n'
+def test_valid_bom_crlf_and_quoted_cells(preview):
+ post,_,_,player,_=preview
+ rv=post('\ufeff tag TYPE ,START (s),END (s),Label,Notes,Players,Duration (s),Ignored\r\nPass,1.5,4,"<img src=x onerror=alert(1)>","a,b",#7,99,z\r\n')
+ assert rv.status_code==200
+ result=rv.get_json();assert result['preview_only'] is True
+ assert result['summary']==dict(total=1,valid=1,malformed=0,duplicate=0)
+ clip=result['rows'][0]['clip'];assert clip['players']==[player['id']]
+ assert clip['notes']=='a,b' and clip['start']==1.5 and clip['end']==4
+
+@pytest.mark.parametrize('row',['Pass,nan,3,,,,','Pass,1,inf,,,,','Pass,-1,3,,,,','Pass,4,3,,,,','Unknown,1,3,,,,','Pass,1,3,,,Nobody,','Pass,1,3,too,few','Pass,1,3,a,b,,id,extra'])
+def test_malformed(preview,row):
+ result=preview[0](H+row+'\n').get_json()
+ assert result['summary']==dict(total=1,valid=0,malformed=1,duplicate=0)
+ assert result['rows'][0]['clip'] is None and result['rows'][0]['reasons']
+
+def test_duplicates_and_malformed_precedence(preview):
+ post,_,_,_,existing=preview
+ result=post(H+f'Pass,1,3,x,,,a\nPass,1,3,x,,,b\nPass,3,4,y,,,{existing["id"]}\nUnknown,1,3,x,,,a\n').get_json()
+ assert [r['status'] for r in result['rows']]==['valid','duplicate','duplicate','malformed']
+
+def test_blank_lines_and_physical_numbers(preview):
+ result=preview[0](H+'\n,,,,,,\nPass,1,3,"two\nlines",,,\nPass,4,5,next,,,\n').get_json()
+ assert result['summary']['total']==2
+ assert [r['line'] for r in result['rows']]==[4,6]
+
+@pytest.mark.parametrize('data',[b'\xff\xfe',b'Label\nabc\n',b''])
+def test_bad_files(preview,data):
+ rv=preview[0](data);assert rv.status_code==400 and rv.get_json()['code']=='bad_request'
+
+def test_missing_file_and_project(preview):
+ post,client,pid,_,_=preview
+ rv=client.post(f'/api/projects/{pid}/clips/import_preview')
+ assert rv.status_code==400 and rv.get_json()['code']=='bad_request'
+ rv=post(H+'Pass,1,3,,,,\n','missing')
+ assert rv.status_code==404 and rv.get_json()=={'error':'Project not found'}
+
+def test_row_limit(preview):
+ rv=preview[0](H+''.join(f'Pass,{i},{i+1},,,,\n' for i in range(5001)))
+ assert rv.status_code==400 and rv.get_json()['code']=='too_many_rows'
+
+def test_clip_id_used_by_earlier_malformed_row(preview):
+ result=preview[0](H+'Unknown,1,3,bad,,,used\nPass,4,5,ok,,,used\n').get_json()
+ assert [r['status'] for r in result['rows']]==['malformed','duplicate']
+
+def test_key_and_id_used_by_earlier_duplicate_row(preview):
+ post,_,_,_,existing=preview
+ result=post(H+f'Pass,1,3,x,,,{existing["id"]}\nPass,1,3,x,,,new-id\nPass,4,5,y,,,new-id\n').get_json()
+ assert [r['status'] for r in result['rows']]==['duplicate','duplicate','duplicate']
+
+def test_key_used_by_earlier_row_with_invalid_player(preview):
+ result=preview[0](H+'Pass,1,3,x,,Nobody,\nPass,1,3,x,,,\n').get_json()
+ assert [r['status'] for r in result['rows']]==['malformed','duplicate']
+
+def test_repeated_ignored_headers_use_physical_width(preview):
+ result=preview[0]('Tag Type,Start (s),End (s),Ignored,Ignored\nPass,1,3,a,b\n').get_json()
+ assert result['summary']==dict(total=1,valid=1,malformed=0,duplicate=0)
+
+def test_whitespace_fields_are_not_empty(preview):
+ result=preview[0]('Tag Type,Start (s),End (s)\n , , \n').get_json()
+ assert result['summary']==dict(total=1,valid=0,malformed=1,duplicate=0)

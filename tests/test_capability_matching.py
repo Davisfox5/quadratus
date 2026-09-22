@@ -146,6 +146,32 @@ def test_acceptance_criteria_count_as_much_as_the_description():
     assert needs_from_text("Tidy the doc.", ["Run `node --test tests/ui/*.test.js` and capture the output"]) >= {Need.EXECUTE}
 
 
+@pytest.mark.parametrize("text", [
+    "Review app.py. Do not edit files or run commands.",
+    "Inspect the bulk-edit behavior in app.py.",
+    "Review app.py; never modify files.",
+    "Inspect app.py. Don't write files.",
+])
+def test_readonly_review_is_not_an_edit_request(text):
+    assert needs_from_text(text) == frozenset()
+
+
+@pytest.mark.parametrize("text", [
+    "Do not edit app.py. Update tests/test_app.py instead.",
+    "Do not edit app.py, but change tests/test_app.py.",
+    "Edit app.py after reviewing its bulk-edit behavior.",
+    "Bulk-edit app.py.",
+    "Re-write app.py.",
+])
+def test_a_prohibition_does_not_hide_a_separate_edit_request(text):
+    assert needs_from_text(text) == {Need.PATCH}
+
+
+def test_a_prohibition_does_not_hide_execution_or_declared_acceptance():
+    assert needs_from_text("Do not edit app.py; run pytest.") == {Need.EXECUTE}
+    assert needs_from_text("Do not edit app.py.", ["Update README.md."]) == {Need.PATCH}
+
+
 # -- routing honours needs ----------------------------------------------------
 
 
