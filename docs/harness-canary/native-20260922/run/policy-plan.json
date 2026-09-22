@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "repository_id": "fixture/q9-tenant-api",
+  "policy_source": ".quadratus/policy.json",
+  "policy_hash": "e8502207ad9d8ce124eee4b96537ab2934855b3e9a881bc6136988e0237a5c2b",
+  "library_version": "pilot-1",
+  "library_digest": "3ebbe7937c14fe7dbb94438a8df6d9996b7a59cf5d7fae490dbfbb4a54492a42",
+  "declared_paths": [
+    "app.py"
+  ],
+  "primary_family": "scoped-endpoint",
+  "families": [
+    "scoped-endpoint"
+  ],
+  "overlays": [
+    "tenant-isolation"
+  ],
+  "gates": [
+    {
+      "id": "scope",
+      "runner": "builtin:scope",
+      "required": true
+    },
+    {
+      "id": "api-tests",
+      "runner": "command",
+      "argv": [
+        "/tmp/quadratus-harness-env/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "/Users/davisfox/Documents/Codex/2026-09-21/referenced-chatgpt-conversation-this-is-an/work/q9-native-20260922/examiner/test_contract.py"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 30,
+      "minimum_tests": 9,
+      "required": true,
+      "side_effects": "none"
+    }
+  ],
+  "absent_gates": [
+    {
+      "id": "scope-predicate-grep",
+      "status": "not_configured",
+      "because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration."
+    },
+    {
+      "id": "lint",
+      "status": "not_configured",
+      "because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration."
+    }
+  ],
+  "skipped_gates": [],
+  "adapters": {
+    "scoped-endpoint": {
+      "auth_dependency": {
+        "status": "not_configured",
+        "value": null,
+        "source": null,
+        "required": true
+      },
+      "scope_predicate": {
+        "status": "not_configured",
+        "value": null,
+        "source": null,
+        "required": true
+      },
+      "validation_lib": {
+        "status": "not_configured",
+        "value": null,
+        "source": null,
+        "required": true
+      },
+      "feature_gate_fn": {
+        "status": "not_configured",
+        "value": null,
+        "source": null,
+        "required": false
+      },
+      "error_envelope": {
+        "status": "not_configured",
+        "value": null,
+        "source": null,
+        "required": true
+      },
+      "test_override_mechanism": {
+        "status": "not_configured",
+        "value": null,
+        "source": null,
+        "required": true
+      },
+      "route_registry": {
+        "status": "not_configured",
+        "value": null,
+        "source": null,
+        "required": true
+      },
+      "raw_query_grep": {
+        "status": "not_configured",
+        "value": null,
+        "source": null,
+        "required": false
+      }
+    }
+  },
+  "deny_write": [
+    ".git/**",
+    ".quadratus/policy.json",
+    "README.md"
+  ],
+  "sensitive": [],
+  "defaults": {
+    "family": "scoped-endpoint",
+    "required_gates": [
+      "scope",
+      "api-tests"
+    ],
+    "scope_max_lines": 40,
+    "overrun_ratio": 1.5,
+    "worker_depth": 1
+  },
+  "capability_policy": {
+    "deny_write": [
+      ".git/**",
+      ".quadratus/policy.json",
+      "README.md"
+    ],
+    "sensitive": [],
+    "external_effects": "deny",
+    "native_delegation": "deny"
+  },
+  "blocked": [],
+  "hash": "7482cfea919f845e8bc65913bd246413f437facf13394e0fc840e19a83637831"
+}

@@ -1,0 +1,82 @@
+[
+  {
+    "kind": "native-read",
+    "mode": "read-only",
+    "argv": [
+      "codex",
+      "sandbox",
+      "-c",
+      "sandbox_mode=read-only",
+      "--",
+      "/bin/cat",
+      "/Users/davisfox/Documents/Codex/2026-09-21/referenced-chatgpt-conversation-this-is-an/work/q9-native-20260922/project/app.py"
+    ],
+    "exit_code": 0,
+    "matches_fixture": true,
+    "stderr": ""
+  },
+  {
+    "kind": "native-read",
+    "mode": "workspace-write",
+    "argv": [
+      "codex",
+      "sandbox",
+      "-c",
+      "sandbox_mode=workspace-write",
+      "--",
+      "/bin/cat",
+      "/Users/davisfox/Documents/Codex/2026-09-21/referenced-chatgpt-conversation-this-is-an/work/q9-native-20260922/project/app.py"
+    ],
+    "exit_code": 0,
+    "matches_fixture": true,
+    "stderr": ""
+  },
+  {
+    "kind": "native-write",
+    "argv": [
+      "codex",
+      "sandbox",
+      "-c",
+      "sandbox_mode=workspace-write",
+      "--",
+      "/bin/sh",
+      "-c",
+      "printf native-write-ok > .quadratus/native-write-probe"
+    ],
+    "exit_code": 0,
+    "verified": true,
+    "stderr": ""
+  },
+  {
+    "kind": "auth-status",
+    "vendor": "claude",
+    "argv": [
+      "claude",
+      "auth",
+      "status"
+    ],
+    "exit_code": 0,
+    "signed_in": true
+  },
+  {
+    "kind": "auth-status",
+    "vendor": "openai",
+    "argv": [
+      "codex",
+      "login",
+      "status"
+    ],
+    "exit_code": 0,
+    "signed_in": true
+  },
+  {
+    "kind": "auth-status",
+    "vendor": "grok",
+    "argv": [
+      "grok",
+      "models"
+    ],
+    "exit_code": 0,
+    "signed_in": true
+  }
+]

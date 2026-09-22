@@ -179,3 +179,26 @@ def test_failed_post_verdict_gate_cannot_buy_an_extra_repair(tmp_path):
     assert gate.calls == 2
     assert not session.checks[-1]['passed']
     assert not any("The project's own integration check failed" in p for _, p in calls)
+
+
+@pytest.mark.parametrize('reply,blocked', [
+    ('**Verdict: accept the code change.**\n\n**Not blocking, worth noting**\nA frozen fixture assumption.', False),
+    ('### Non-blocking: follow-up notes\nThe fixture is intentionally small.', False),
+    ('**Not blocking**\nNo required changes.', False),
+    ('BLOCKING: a tenant can read another tenant record.', True),
+    ('This authorization defect is BLOCKING.', True),
+    ('UNRESOLVED: the test evidence is missing.', True),
+    ('**Not blocking, worth noting**\nBLOCKING: a separate tenant leak.', True),
+    ('Not blocking, but UNRESOLVED: missing evidence.', True),
+    ('BLOCKING: do not label the tenant leak not blocking.', True),
+])
+def test_security_prose_heading_does_not_invent_a_finding(tmp_path, reply, blocked):
+    """Exercise the real security path; preserve actual findings after a note."""
+    def invoke(model, prompt, **kwargs):
+        if 'verifying security work' in prompt:
+            return reply
+        return 'SUMMARY: reviewed\nREASONING: fixture\nDEAD ENDS: none'
+
+    session = Session('check isolation', ArtifactStore(tmp_path / 'artifacts'), invoke)
+    session.run_task(TaskSpec('security-1', 'Review tenant isolation', kind='security'))
+    assert bool(session.open_findings) is blocked

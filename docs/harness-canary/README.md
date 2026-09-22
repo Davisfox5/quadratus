@@ -1,8 +1,10 @@
 # Q9: live canary
 
 State: the authorized pair ran on 2026-09-22 and was not accepted. See RESULT.md
-for the failure, complete retained records, limits and cleanup. The preparation
-record below describes what was frozen before execution.
+for the failure, complete retained records, limits and cleanup. A later
+[native Mac run](native-20260922/README.md) repaired the fixture and passed all nine
+tests; its separate controller-status defect and offline fix are recorded there.
+The preparation record below describes what was frozen before execution.
 
 Compare baseline Quadratus 5d70d31 with candidate e1e1f90288d83990ca801d761ea6e86eeb78ab5e
 (Q1 through Q8 merged). Each receives an identical copy of fixture/app.py,
