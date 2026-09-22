@@ -268,7 +268,7 @@ def _canary_launcher():
 def test_allowance_missing_preflight_report_is_refused():
     launcher = _canary_launcher()
     with pytest.raises(SystemExit, match="preflight_report"):
-        launcher.require_allowance_preflight({"authorized_by": "Davis", "source": "x"})
+        launcher.require_allowance_preflight({"authorized_by": "Davis", "source": "x"}, ".")
 
 
 def test_allowance_preflight_not_ok_names_the_first_blocker(tmp_path):
@@ -279,11 +279,112 @@ def test_allowance_preflight_not_ok_names_the_first_blocker(tmp_path):
     }))
     launcher = _canary_launcher()
     with pytest.raises(SystemExit, match="grok is not signed in") as raised:
-        launcher.require_allowance_preflight({"preflight_report": str(report)})
+        launcher.require_allowance_preflight({"preflight_report": str(report)}, tmp_path)
     assert "codex is not signed in" not in str(raised.value)
 
 
-def test_allowance_preflight_ok_is_accepted(tmp_path):
+def _bound_preflight(tmp_path, *, host=True, contained=False, blockers=None, ok=True, probe=None):
+    project = tmp_path / "proj"
+    project.mkdir()
+    app = project / "app.py"
+    app.write_text("x")
     report = tmp_path / "preflight.json"
-    report.write_text(json.dumps({"ok": True, "blockers": []}))
-    _canary_launcher().require_allowance_preflight({"preflight_report": str(report)})
+    report.write_text(json.dumps({
+        "ok": ok,
+        "blockers": [] if blockers is None else blockers,
+        "probe_file": str(app if probe is None else probe),
+        "host": host,
+        "contained": contained,
+    }))
+    return project, report
+
+
+def _approved(tmp_path, **over):
+    project, report = _bound_preflight(tmp_path)
+    record = {
+        "schema": "quadratus-canary-allowance/2",
+        "approved": True,
+        "authorized_by": "Davis",
+        "source": "https://example.test/allowance",
+        "instruction": "one pair",
+        "recorded_at": "2026-09-22T00:00:00+00:00",
+        "environment": "native-mac",
+        "fixture": "fixture-v2",
+        "baseline_sha": "a" * 40,
+        "candidate_sha": "b" * 40,
+        "runs": ["baseline", "candidate"],
+        "runs_per_version": 1,
+        "max_calls_each": 24,
+        "max_reported_tokens_each": 500000,
+        "max_reported_tokens_batch": 1000000,
+        "internal_wall_seconds_each": 840,
+        "external_wall_seconds_each": 900,
+        "automatic_reruns": False,
+        "transport": "subscription CLI only",
+        "preflight_report": str(report),
+    }
+    record.update(over)
+    return record, project
+
+
+def test_allowance_preflight_ok_is_accepted(tmp_path):
+    record, project = _approved(tmp_path)
+    _canary_launcher().require_allowance_preflight(record, project)
+
+
+def test_shipped_allowance_template_cannot_pass():
+    from pathlib import Path as P
+    template = P(__file__).resolve().parents[1] / "docs" / "harness-canary" / "allowance.template.json"
+    with pytest.raises(SystemExit, match="approved"):
+        _canary_launcher().require_allowance_record(json.loads(template.read_text()))
+
+
+def test_allowance_preflight_wrong_project_is_refused(tmp_path):
+    record, _project = _approved(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    with pytest.raises(SystemExit, match="probe_file"):
+        _canary_launcher().require_allowance_preflight(record, other)
+
+
+def test_allowance_preflight_wrong_environment_is_refused(tmp_path):
+    record, project = _approved(tmp_path)
+    report_path = project.parent / "preflight.json"
+    report = json.loads(report_path.read_text())
+    report["host"] = False
+    report_path.write_text(json.dumps(report))
+    with pytest.raises(SystemExit, match="host"):
+        _canary_launcher().require_allowance_preflight(record, project)
+
+
+def test_allowance_preflight_contradictory_report_names_the_blocker(tmp_path):
+    record, project = _approved(tmp_path)
+    report_path = project.parent / "preflight.json"
+    report = json.loads(report_path.read_text())
+    report["ok"] = True
+    report["blockers"] = ["grok is not signed in"]
+    report_path.write_text(json.dumps(report))
+    with pytest.raises(SystemExit, match="grok is not signed in"):
+        _canary_launcher().require_allowance_preflight(record, project)
+
+
+def test_allowance_unknown_runtime_commit_is_refused(tmp_path):
+    record, _project = _approved(tmp_path)
+    launcher = _canary_launcher()
+    launcher.require_allowance_record(record)
+    with pytest.raises(SystemExit, match="unknown"):
+        launcher.bind_runtime(record, "unknown")
+
+
+def test_allowance_unlisted_runtime_commit_is_refused(tmp_path):
+    record, _project = _approved(tmp_path)
+    with pytest.raises(SystemExit, match="not a commit the allowance names"):
+        _canary_launcher().bind_runtime(record, "c" * 40)
+
+
+def test_launcher_limits_must_match_the_record(tmp_path):
+    from quadratus.run_budget import RunLimits
+    record, _project = _approved(tmp_path)
+    limits = RunLimits(max_calls=25, max_reported_tokens=500000, wall_seconds=840)
+    with pytest.raises(SystemExit, match="max_calls_each"):
+        _canary_launcher().check_launcher_limits(record, limits)
