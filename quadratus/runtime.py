@@ -61,6 +61,8 @@ from .delegation import (
     DelegationLedger,
     InvocationEvent,
     Origin,
+    bounded_stderr,
+    bounded_tool_failures,
     capture_invocations,
     invocation_context,
     record_invocation,
@@ -438,6 +440,8 @@ class Fleet:
         # A custom provider may implement generate directly; cover it too.
         provider.last_usage = None
         provider.last_diagnostics = None
+        provider.last_stderr = ""
+        provider.last_tool_failures = []
         provider.native_children = []
         try:
             reply = provider.generate(prompt, system=system)
@@ -488,6 +492,8 @@ class Fleet:
                 session_id=getattr(provider, "last_session_id", None),
                 post_return_failure=post_return_failure,
                 detail=detail,
+                stderr_tail=bounded_stderr(getattr(provider, "last_stderr", "")),
+                tool_failures=bounded_tool_failures(getattr(provider, "last_tool_failures", None)),
             )
             record_invocation(self.delegation_ledger, event)
         except Exception:  # noqa: BLE001 -- accounting never fails a run

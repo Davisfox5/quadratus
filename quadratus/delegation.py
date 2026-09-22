@@ -188,6 +188,14 @@ class InvocationEvent:
     #: that several sources report.
     session_id: Optional[str] = None
     detail: str = ""
+    #: The tail of the CLI's stderr for this attempt, and the failed tool
+    #: calls the CLI reported (command, exit code, output tail), both bounded.
+    #: Added after the Q9 canary (2026-09-22): both runs closed on a lead
+    #: saying its sandbox could not start, with the bwrap error living only in
+    #: the model's prose. The verifier could not check it and neither could
+    #: anyone reading the record. Older records lack these and read as empty.
+    stderr_tail: str = ""
+    tool_failures: list = field(default_factory=list)
 
     @property
     def tokens_known(self) -> bool:
@@ -289,6 +297,45 @@ def safe_diagnostics(value) -> dict:
         if math.isfinite(cost) and 0 <= cost <= 1_000_000:
             result['vendor_cost_usd'] = round(float(cost), 6)
     return result
+
+
+#: Bounds re-applied at the durable event boundary, whatever a provider sent.
+STDERR_TAIL_LIMIT = 2_000
+TOOL_FAILURE_LIMIT = 8
+TOOL_FAILURE_TEXT = 500
+
+
+def bounded_stderr(value) -> str:
+    """The tail of a CLI's stderr, as text, never more than the limit."""
+    if isinstance(value, bytes):
+        value = value.decode(errors="replace")
+    if not isinstance(value, str):
+        return ""
+    return value[-STDERR_TAIL_LIMIT:]
+
+
+def bounded_tool_failures(value) -> list:
+    """Failed tool calls as plain bounded dicts: command, exit code, output
+    tail, or an error message. Anything else in the entry is dropped."""
+    if not isinstance(value, list):
+        return []
+    kept = []
+    for entry in value:
+        if len(kept) >= TOOL_FAILURE_LIMIT:
+            break
+        if not isinstance(entry, dict):
+            continue
+        clean = {}
+        for key in ("kind", "command", "status", "message", "output_tail"):
+            text = entry.get(key)
+            if isinstance(text, str) and text:
+                clean[key] = text[-TOOL_FAILURE_TEXT:] if key == "output_tail" else text[:TOOL_FAILURE_TEXT]
+        code = entry.get("exit_code")
+        if type(code) is int:
+            clean["exit_code"] = code
+        if clean:
+            kept.append(clean)
+    return kept
 
 
 @dataclass

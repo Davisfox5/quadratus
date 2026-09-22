@@ -426,6 +426,67 @@ def _extract_codex_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
     return diagnostics or None
 
 
+#: Upper bound on retained tool failures per call, and on each field's text.
+TOOL_FAILURE_LIMIT = 8
+TOOL_FAILURE_TEXT = 500
+
+
+def _extract_codex_tool_failures(stdout: str) -> List[Dict[str, object]]:
+    """Commands the codex agent ran that failed, from ``codex exec --json``.
+
+    Bounded evidence, not a transcript: only ``command_execution`` items with
+    a nonzero exit or a failed status, plus ``error`` items, each cut to a
+    command line, an exit code and an output tail. Both Q9 canary runs
+    (2026-09-22) ended with the lead reporting that its sandbox could not
+    start, and nothing retained showed the command that said so. The verifier
+    called the claim unevidenced and was right; this is the evidence.
+
+    Item shape observed on codex-cli 0.154.0::
+
+        {"type":"item.completed","item":{"id":"item_2","type":"command_execution",
+         "command":"cat app.py","aggregated_output":"...","exit_code":1,
+         "status":"failed"}}
+
+    Field names beyond ``command``, ``aggregated_output``, ``exit_code`` and
+    ``status`` are not relied on; a shape change degrades to fewer entries,
+    never to an exception.
+    """
+    failures: List[Dict[str, object]] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        item = event.get("item") if isinstance(event, dict) else None
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("type")
+        if kind == "command_execution":
+            exit_code = item.get("exit_code")
+            status = item.get("status")
+            failed = (type(exit_code) is int and exit_code != 0) or status in ("failed", "declined")
+            if not failed:
+                continue
+            output = item.get("aggregated_output")
+            failures.append({
+                "kind": "command",
+                "command": str(item.get("command", ""))[:TOOL_FAILURE_TEXT],
+                "exit_code": exit_code if type(exit_code) is int else None,
+                "status": str(status) if status is not None else "",
+                "output_tail": (output if isinstance(output, str) else "")[-TOOL_FAILURE_TEXT:],
+            })
+        elif kind == "error":
+            message = item.get("message")
+            if isinstance(message, str) and message.strip():
+                failures.append({"kind": "error", "message": message.strip()[:TOOL_FAILURE_TEXT]})
+        if len(failures) >= TOOL_FAILURE_LIMIT:
+            break
+    return failures
+
+
 def _extract_plain(stdout: str) -> str:
     return stdout.strip()
 
@@ -895,6 +956,10 @@ class CLISpec:
     #: count, attempted tool names), for the ledger. None where the CLI's
     #: output carries nothing of the kind.
     extract_diagnostics: Optional[Callable[[str], Optional[Dict[str, object]]]] = None
+    #: Failed tool calls the agent made during this call (command, exit code,
+    #: output tail), bounded, for the ledger. None where the CLI's output does
+    #: not report its tool calls in a parseable form.
+    extract_tool_failures: Optional[Callable[[str], List[Dict[str, object]]]] = None
     #: Whether these flags have been checked against a real binary.
     verified: bool = False
     #: Environment variables to set for the subprocess.
@@ -1242,6 +1307,7 @@ CODEX_SPEC = CLISpec(
     auth_check_args=["login", "status"],
     auth_ok_pattern=r"(?i)logged in",
     extract_diagnostics=_extract_codex_diagnostics,
+    extract_tool_failures=_extract_codex_tool_failures,
     always_args=["--skip-git-repo-check"],
     # No seat on this transport may spawn its own agents. A Sol review on
     # 2026-09-13 used the CLI's spawn_agent to create a second Sol that passed
@@ -1327,6 +1393,10 @@ CODEX_SPEC = CLISpec(
 #: racing the real limit -- the failure at the limit is an opaque OSError from
 #: exec, and a clear refusal well short of it is worth the lost headroom.
 MAX_ARGV_PROMPT = 200_000
+
+#: How much of a CLI's stderr survives into the ledger per attempt. Enough to
+#: hold a sandbox refusal or an auth failure verbatim; not a transcript.
+STDERR_TAIL = 2_000
 
 GROK_SPEC = CLISpec(
     vendor="grok",
@@ -1720,6 +1790,12 @@ class CLIProvider(LLMProvider):
         #: the start of every attempt so a stale record never describes a
         #: later call. Attached to a raised ProviderError as ``diagnostics``.
         self.last_diagnostics: Optional[Dict[str, object]] = None
+        #: The tail of the CLI's stderr and the failed tool calls it reported,
+        #: kept per attempt for the ledger. Q9 (2026-09-22): a blocked lead's
+        #: bwrap error existed only in the model's prose, so nobody could
+        #: check it. Bounded; never the whole transcript.
+        self.last_stderr: str = ""
+        self.last_tool_failures: List[Dict[str, object]] = []
         super().__init__(model, api_key="cli-oauth", **kwargs)
 
     # -- lifecycle -----------------------------------------------------------
@@ -1937,6 +2013,8 @@ class CLIProvider(LLMProvider):
 
     def _call(self, prompt: str, system: str, history: Sequence[Turn]) -> str:
         self.last_diagnostics = None  # per attempt: a stale record must not describe this call
+        self.last_stderr = ""
+        self.last_tool_failures = []
         composed = self._compose_prompt(prompt, system, history)
         argv = self._build_argv(composed, system)
         env = {**os.environ, **self.spec.env}
@@ -1959,6 +2037,8 @@ class CLIProvider(LLMProvider):
             )
         except subprocess.TimeoutExpired as exc:
             output = exc.output.decode(errors="replace") if isinstance(exc.output, bytes) else exc.output
+            errors = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr
+            self.last_stderr = (errors or "")[-STDERR_TAIL:]
             self._observe_output(output or "")
             raise TimeoutError(
                 f"{self.label} CLI timed out after {self.timeout}s"
@@ -1975,6 +2055,7 @@ class CLIProvider(LLMProvider):
                 self._prompt_files.discard(path)
 
         self._observe_output(proc.stdout)
+        self.last_stderr = (proc.stderr or "")[-STDERR_TAIL:]
 
         if proc.returncode != 0:
             # A failing exit code does not mean there is nothing to read. The
@@ -2020,6 +2101,9 @@ class CLIProvider(LLMProvider):
             self.last_usage = self.spec.extract_usage(stdout) if self.spec.extract_usage else None
             self.last_diagnostics = (
                 self.spec.extract_diagnostics(stdout) if self.spec.extract_diagnostics else None
+            )
+            self.last_tool_failures = (
+                self.spec.extract_tool_failures(stdout or "") if self.spec.extract_tool_failures else []
             )
             self.native_children = _extract_native_children(stdout)
             denied = list(getattr(self, "_native_fanout_denied", []) or [])

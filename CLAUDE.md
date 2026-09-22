@@ -396,6 +396,15 @@ Key design decisions already settled:
   (`max_consults`, default 2 — a consult is a question, not a conversation).
   Consults never happen inside security excursions, and peers still never
   chat.
+- **A channel the prompt offers is a channel the harness serves** (Q9
+  canary, 2026-09-22). The security excursion advertised WORKER and then
+  bypassed the channel loop; the baseline lead answered as instructed and its
+  request was filed as the draft. `_run_security_task` now drafts through
+  `_draft_with_channels(consults=False)`: FETCH and WORKER served, CONSULT
+  refused in words. And **a blocked report is evidence or it is nothing**:
+  the lead must quote the command, exit status and verbatim error
+  (`_BLOCKED_REPORT_RULE`), and the ledger keeps the CLI's own `stderr_tail`
+  and failed `tool_failures` per attempt so the claim can be checked later.
 - **Questions only the operator can answer go through ASK** — the
   orchestrator emits `ASK: <question>`; the answer becomes a standing ruling
   re-emitted on every render (never re-asked). No channel configured means

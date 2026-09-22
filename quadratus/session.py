@@ -785,7 +785,19 @@ class Session:
         return None
 
     @_invocation_role("lead")
-    def _draft_with_channels(self, lead: str, spec: TaskSpec, task: TaskMemory) -> str:
+    def _draft_with_channels(self, lead: str, spec: TaskSpec, task: TaskMemory,
+                             *, consults: bool = True) -> str:
+        """Serve the lead's channel requests until a real draft arrives.
+
+        ``consults=False`` is the security excursion: the excursion stays a
+        straight line, so a CONSULT is refused in words and the lead is
+        re-asked, while FETCH and WORKER keep working. Before the Q9 canary
+        (2026-09-22) the security path bypassed this loop entirely while its
+        prompt still advertised WORKER; the baseline lead answered with a
+        worker request as instructed, the harness filed it as the draft, and
+        the verifier rejected "a dispatch, not a result". A channel the
+        prompt offers is a channel the harness serves.
+        """
         answers = []
         consults_used = 0
         worker_failures = 0
@@ -795,7 +807,7 @@ class Session:
             extras = ["## Consult answers and worker evidence\n\n" + "\n\n".join(answers)] if answers else []
             if fetched:
                 extras.append(_render_fetches(fetched))
-            return self._lead_prompt(spec, lead=lead, extras=extras)
+            return self._lead_prompt(spec, lead=lead if consults else None, extras=extras)
 
         while True:
             draft = self._invoke_with_fetches(lead, build, task=task, editing=True)
@@ -918,6 +930,13 @@ class Session:
                 if body.startswith(('ASK:', 'CONSULT', 'WORKER', 'FETCH:')):
                     raise RunStalled("An unresolved request cannot be accepted as a draft.")
                 return draft
+            if not consults:
+                task.record("user", "[consult refused] not available inside a security excursion")
+                answers.append(
+                    "Consults are not available inside a security excursion. Decide "
+                    "with your own judgment, commission a worker, or report exactly "
+                    "what blocks you.")
+                continue
             if consults_used + len(requests) > self.config.max_consults:
                 raise RunStalled("Consult budget exhausted before a draft was produced.")
             for name, question in requests:
@@ -1281,15 +1300,10 @@ class Session:
             self._record_selection(spec, excursion.worker, "lead")
             task.record("user", spec.description)
 
-            # Fetch channel only: the excursion stays a straight line, so
-            # there is no consult here by design.
-            draft = self._invoke_with_fetches(
-                excursion.worker,
-                lambda fetched: self._lead_prompt(
-                    spec, extras=[_render_fetches(fetched)] if fetched else None
-                ),
-                task=task, editing=True,
-            )
+            # Fetch and worker channels, no consult: the excursion stays a
+            # straight line, but the lead's prompt offers WORKER and the
+            # harness has to serve what it offers (Q9 baseline, 2026-09-22).
+            draft = self._draft_with_channels(excursion.worker, spec, task, consults=False)
             task.record("assistant", draft)
             task.keep(draft, kind="draft")
 
@@ -1709,6 +1723,7 @@ class Session:
                          + ("Implement this task using the edit method in your role instructions; prose alone is not implementation."
                             if self.config.allow_writes else
                             "This run has no edit grant. Return analysis and proposed changes only."))
+            parts.append(_BLOCKED_REPORT_RULE)
         parts.append(
             "To read a filed artifact in full before working, reply with "
             "exactly 'FETCH: <artifact-id>' and nothing else -- you will get "
@@ -1937,8 +1952,11 @@ class Session:
             f"You are {label.label if label else verifier}, verifying security "
             "work you did not author. Check it for correctness, for anything "
             "unsafe it recommends, and for anything it asserts without "
-            "evidence. State plainly whether it should be accepted, and what "
-            "must change if not. Do not redo the work; verify it."
+            "evidence. A claim that the environment blocked the work counts "
+            "only when it quotes the failing command, its exit status and the "
+            "verbatim error; without those, treat it as unverified. State "
+            "plainly whether it should be accepted, and what must change if "
+            "not. Do not redo the work; verify it."
         )
 
     @_invocation_role("closeout")
@@ -2127,6 +2145,18 @@ def _parse_consults(reply: str):
 #: discovering the refusal by trying. Closing incomplete is listed last and
 #: explicitly, because a lead with no legal move left must have an honest exit
 #: that is not "keep trying".
+#: What a blocked-work report must carry. Both Q9 canary runs (2026-09-22)
+#: ended with the lead saying its sandbox could not start and nothing else:
+#: no command, no exit status, no verbatim error. The verifier rightly
+#: refused the claim, and nobody could check it afterwards either. A block
+#: is an outcome the harness can act on only when it arrives with evidence.
+_BLOCKED_REPORT_RULE = (
+    "If you cannot read, edit or run something, say so with evidence: quote "
+    "the exact command or tool call you attempted, its exit status, and the "
+    "verbatim error text. A blocked report without those three is rejected. "
+    "Never describe test output you did not see."
+)
+
 _WORKER_RECOVERY = (
     "You may: rewrite the instruction and re-send it; send the same "
     "instruction to a different worker; mark the errand demanding to bump it "

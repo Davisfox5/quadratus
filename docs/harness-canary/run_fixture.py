@@ -1,15 +1,60 @@
-"""One approved canary run. The external supervisor enforces the hard wall."""
+"""One approved canary run. The external supervisor enforces the hard wall.
+
+Two lessons from the 2026-09-22 pair are wired in here rather than left in a
+report. ``--preflight`` now runs the acceptance preflight (auth, work tree and
+each vendor's inner sandbox in the mode a seat would really get), because the
+pair's own preflight checked binaries and imports and never asked the one
+question that killed both runs. And the console log goes under the state
+directory, because a launcher that wrote it into the project root made the
+controller report a source change no model had made.
+"""
 
 import argparse
+import importlib.util
 import json
+import os
+import sys
 from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+CONSOLE = Path(".quadratus") / "live-console.txt"
+
+
+def _preflight(project: Path, output: Path) -> int:
+    """Run tools/acceptance/preflight.py against ``project``; exit 1 on a blocker.
+
+    Imported by path so the same file serves the container image and a native
+    host. ``--host`` is passed only when this process is not in a container,
+    which the preflight records in its report.
+    """
+    candidates = [HERE.parents[1] / "tools" / "acceptance" / "preflight.py",
+                  Path("/opt/quadratus/tools/acceptance/preflight.py")]
+    source = next((c for c in candidates if c.exists()), None)
+    if source is None:
+        print("preflight tool not found beside this launcher", file=sys.stderr)
+        return 1
+    spec = importlib.util.spec_from_file_location("acceptance_preflight", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    argv = ["--work", str(project), "--output", str(output)]
+    if not Path("/.dockerenv").exists():
+        argv.append("--host")
+    saved = sys.argv
+    sys.argv = ["preflight.py", *argv]
+    try:
+        return int(module.main() or 0)
+    finally:
+        sys.argv = saved
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--allowance-record")
     parser.add_argument("--preflight", action="store_true")
+    parser.add_argument("--project", default="/work",
+                        help="the disposable fixture copy the run may write to")
     args = parser.parse_args()
+    project = Path(args.project)
     if not args.preflight:
         if not args.allowance_record:
             raise SystemExit("A direct Davis allowance record is required")
@@ -52,19 +97,35 @@ def main():
             "CLI-only; 24 attempts; 500000 reported-token stop; "
             "840s internal deadline; external hard wall 900s; scope app.py"
         )
-        return 0
-    result = run_project(
-        goal,
-        Path("/work"),
-        settings,
-        allow_writes=True,
-        check="python -m pytest -q -p no:cacheprovider /opt/quadratus/test_contract.py",
-        max_tasks=2,
-        state_dir=".quadratus",
-        default_scope=scope,
-        run_limits=limits,
-        progress=lambda message: print(message, flush=True),
-    )
+        report = project / ".quadratus" / "preflight.json"
+        code = _preflight(project, report)
+        print(f"preflight {'passed' if code == 0 else 'BLOCKED'}: {report}")
+        return code
+
+    console = project / CONSOLE
+    console.parent.mkdir(parents=True, exist_ok=True)
+    log = console.open("a", encoding="utf-8")
+
+    def progress(message):
+        print(message, flush=True)
+        log.write(message + "\n")
+        log.flush()
+
+    try:
+        result = run_project(
+            goal,
+            project,
+            settings,
+            allow_writes=True,
+            check="python -m pytest -q -p no:cacheprovider /opt/quadratus/test_contract.py",
+            max_tasks=2,
+            state_dir=".quadratus",
+            default_scope=scope,
+            run_limits=limits,
+            progress=progress,
+        )
+    finally:
+        log.close()
     print(
         json.dumps(
             {"completed": result.completed, "run_dir": str(result.run_dir), "error": result.error}
@@ -75,4 +136,5 @@ def main():
 
 
 if __name__ == "__main__":
+    os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
     raise SystemExit(main())
