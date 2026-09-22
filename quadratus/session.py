@@ -463,6 +463,19 @@ def _has_blocking_finding(text: str) -> bool:
                for line in text.splitlines())
 
 
+def _has_security_finding(text: str) -> bool:
+    """Keep legacy prose conservative without treating note titles as findings."""
+    for line in text.splitlines():
+        line = line.strip().strip('#* ').upper()
+        # The live verifier used "Not blocking, worth noting" as a heading.
+        # Remove only that heading prefix, not its remainder or later lines:
+        # an actual BLOCKING/UNRESOLVED finding must still stop the run.
+        line = re.sub(r'^(?:NOT BLOCKING|NON[- ]BLOCKING)(?=$|[,:])', '', line)
+        if 'BLOCKING' in line or 'UNRESOLVED' in line:
+            return True
+    return False
+
+
 def _resolved_verdict(text: str) -> bool:
     """Accept one standalone boundary verdict, rejecting conflicting markers.
 
@@ -1345,7 +1358,7 @@ class Session:
                     )
                 task.record("assistant", f"[{verifier}] {verdict}")
                 task.keep(verdict, kind=f"verify:{verifier}", author=verifier)
-                if 'BLOCKING' in verdict.upper() or 'UNRESOLVED' in verdict.upper():
+                if _has_security_finding(verdict):
                     self.open_findings.append(verdict)
 
             summary_text, reasoning, dead_ends = self._close_out(

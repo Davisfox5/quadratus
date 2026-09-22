@@ -1,8 +1,10 @@
 # Q9: live canary
 
 State: the authorized pair ran on 2026-09-22 and was not accepted. See RESULT.md
-for the failure, complete retained records, limits and cleanup. The preparation
-record below describes what was frozen before execution.
+for the failure, complete retained records, limits and cleanup. A later
+[native Mac run](native-20260922/README.md) repaired the fixture and passed all nine
+tests; its separate controller-status defect and offline fix are recorded there.
+The preparation record below describes what was frozen before execution.
 
 What that pair taught, what was fixed in the engine because of it, and how the
 next pair runs: NEXT.md.
