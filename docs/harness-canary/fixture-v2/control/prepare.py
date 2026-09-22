@@ -19,8 +19,12 @@ def hashes(root):
 
 def prepare(target):
     target = Path(target).resolve()
-    if target.exists():
+    instrument = target.with_name(target.name + "-instrument")
+    if target.exists() or instrument.exists():
         raise ValueError("Use a new directory; existing trials are never overwritten")
+    instrument.mkdir(parents=True)
+    grader = instrument / "test_contract.py"
+    shutil.copyfile(HERE / "test_contract.py", grader)
     shutil.copytree(FIXTURE / "project", target,
                     ignore=shutil.ignore_patterns("__pycache__", ".quadratus"))
     policy = json.loads((FIXTURE.parent / "policy.json").read_text())
@@ -37,7 +41,7 @@ def prepare(target):
     # measured by the external grader, including after controller completion.
     gate = policy["gates"][1]
     gate["argv"] = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                    str(HERE / "test_contract.py"), "-k", "preservation"]
+                    str(grader), "-k", "preservation"]
     gate["minimum_tests"] = 5
     for name in ("cross-tenant-test", "unit-tests"):
         policy["gate_bindings"][name] = {
@@ -49,7 +53,9 @@ def prepare(target):
     state.mkdir()
     (state / "policy.json").write_text(json.dumps(policy, indent=2) + "\n")
     manifest = {"project": str(target), "source_sha256": hashes(target),
-                "instrument_sha256": hashes(HERE),
+                "instrument_directory": str(instrument),
+                "grader": str(grader),
+                "instrument_sha256": hashes(instrument),
                 "policy_sha256": hashlib.sha256((state / "policy.json").read_bytes()).hexdigest(),
                 "allowed_paths": ["presentation.py", "app.py", "access.py"],
                 "max_tasks": 2, "live_authorized": False}

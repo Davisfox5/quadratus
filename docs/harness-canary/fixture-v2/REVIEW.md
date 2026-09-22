@@ -3,9 +3,15 @@
 Status: proposed measurement instrument. No live allowance is attached.
 
 The solver receives only `project/` and a generated `.quadratus/policy.json`.
-`control/` stays outside the solver tree. Its grader is readable; its reference
-repair is for offline controls only and must not be exposed to model seats.
-The prepare command creates hashes without granting live-run permission.
+`control/` stays outside the solver tree. Preparation copies only the grader
+to `<target>-instrument/test_contract.py`; the policy and manifest point only
+there and hash that copy. The post-run launcher must use the manifest's grader
+path and verify its hash. No live policy or manifest points into `control/`.
+The reference repair is for offline controls only and must not be exposed to
+model seats, including through a runtime checkout containing these control
+files. Path separation prevents accidental disclosure; it is not an OS access
+boundary. Freeze a runtime export without controls or reference repairs before
+live execution. The prepare command does not grant live-run permission.
 
 Two ordered tasks:
 

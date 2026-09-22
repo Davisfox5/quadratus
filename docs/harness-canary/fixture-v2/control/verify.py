@@ -19,7 +19,14 @@ def main():
             ("security-only", False, True), ("reference", True, True),
         ]:
             project = Path(directory) / name
-            prepare(project)
+            manifest = prepare(project)
+            instrument = Path(manifest["instrument_directory"])
+            assert sorted(p.name for p in instrument.iterdir()) == ["test_contract.py"]
+            assert manifest["instrument_sha256"] == hashes(instrument)
+            assert Path(manifest["grader"]).read_bytes() == (HERE / "test_contract.py").read_bytes()
+            policy = json.loads((project / ".quadratus/policy.json").read_text())
+            assert manifest["grader"] in policy["gates"][1]["argv"]
+            assert str(HERE) not in json.dumps(manifest) + json.dumps(policy)
             before = hashes(project)
             repair(project, lookup=lookup, security=security)
             after = hashes(project)

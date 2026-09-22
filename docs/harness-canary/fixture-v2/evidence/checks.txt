@@ -39,3 +39,13 @@ Independent model-free Claude authentication check:
 claude auth status
 loggedIn true; authMethod claude.ai; subscriptionType max
 Account identifiers omitted. The current preflight spec does not call this probe.
+
+Claude fixture-review correction: isolated grader sibling, no control path in live manifest/policy.
+/tmp/quadratus-harness-env/bin/python docs/harness-canary/fixture-v2/control/verify.py
+exit 0; all 16 controls match, isolated grader hashes and path assertions pass
+/tmp/quadratus-harness-env/bin/python -m pytest -q tests/test_canary_evidence.py tests/test_zero_spend_and_session_checks.py
+33 passed in 0.38s
+/tmp/quadratus-harness-env/bin/ruff check .
+All checks passed!
+Pinned candidate 5e43e39 native preflight on isolated fixture:
+exit 0; blockers []; all three auth checks pass; Codex sandbox read passes
