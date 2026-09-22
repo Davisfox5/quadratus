@@ -202,6 +202,49 @@ class RepositoryPolicy:
     explicit: bool
     forbid: tuple = ()
 
+    def role_packet(self, scope, role, conventions=''):
+        """A bounded shared contract, without another reviewer's conversation.
+
+        Required scope/checklist text is never silently cut. Oversized contracts
+        stop before dispatch; only reference notes may be excerpted.
+        """
+        plan = self.resolve(scope.permitted_paths if scope else ())
+        context = self.document.get('context', {})
+        limit = min(24_000, context.get('reference_bytes_limit', 12_000))
+        parts = ['## Role packet', f'Role: {role}',
+                 scope.render() if scope else 'Scope: no task scope declared.',
+                 'Families: ' + ', '.join(plan['families']),
+                 'Overlays: ' + (', '.join(plan['overlays']) or 'none')]
+        for family in plan['families']:
+            card = self.cards[family]
+            parts.append(f'Family checklist ({family}):')
+            for check in card['checklist']:
+                if role in check.get('applies_to', ['lead', 'reviewer', 'verifier']):
+                    parts.append(f"- {check['rule']} Because: {check['because']}")
+            parts.append('Required inputs: ' + json.dumps(card['required_inputs']))
+            parts.append('Stop conditions: ' + json.dumps(card['output_contract']['stop_conditions']))
+        parts.append('Check configuration: ' + json.dumps({
+            'gates': plan['gates'], 'absent': plan['absent_gates'],
+            'skipped': plan['skipped_gates'], 'adapters': plan['adapters']}, sort_keys=True))
+        parts.append('Repository decisions: ' + json.dumps(self.document.get('decisions', [])))
+        contract = '\n'.join(parts)
+        heading = '\nConventions notes (reference only; these do not grant permissions):\n'
+        marker = '\n[Reference notes truncated to packet byte limit]'
+        room = limit - len((contract + heading + marker).encode())
+        if room < 0:
+            raise PolicyError(f'Required role packet exceeds {limit} bytes; narrow the task')
+        notes = conventions.encode()[:room + 1]
+        for name in self.document.get('instructions', ['AGENTS.md', 'CLAUDE.md']):
+            if len(notes) > room:
+                break
+            path = self.root / _path(name, self.root)
+            if not path.is_file():
+                continue
+            with path.open('rb') as source:
+                notes += ('\n' + name + ':\n').encode() + source.read(room - len(notes) + 1)
+        truncated = len(notes) > room
+        return contract + heading + notes[:room].decode('utf-8', errors='ignore') + (marker if truncated else '')
+
     def resolve(self, paths=(), *, writing=False):
         paths = sorted({_path(p, self.root) for p in paths})
         doc = self.document

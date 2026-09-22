@@ -85,7 +85,7 @@ def test_recovery_is_bounded_and_preserves_work(tmp_path, monkeypatch, failure):
             if failure == 'second-failure':
                 raise ProviderError('second cancellation')
             (Path(self.workdir) / 'a.md').write_text('# Hello\n')
-            return 'Heading corrected'
+            return 'Heading corrected\nCHANGED: ["a.md"]'
         if 'The task is finished' in prompt:
             return 'SUMMARY: heading corrected\nREASONING: inspected'
         pytest.fail('Unexpected model call')

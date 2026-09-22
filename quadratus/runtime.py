@@ -44,6 +44,7 @@ counterfactual rather than a bill.
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import os
 import re
@@ -317,10 +318,34 @@ class Fleet:
             raise ProviderError("Project sessions require CLI transport with filesystem access.")
         if allow_writes and not provider.restricted:
             view = provider.in_directory(self.project.root, allow_writes=True)
-            return self._generate(model_key, view, prompt, role +
+            before = self.project.contents()
+            reply = self._generate(model_key, view, prompt, role +
                                   "\nYour working directory is the persistent project. "
                                   "Implement the requested changes in files. Do not commit, push, "
-                                  "or change branches. Return a concise account of the changes.")
+                                  "or change branches. Return a concise account and exactly one "
+                                  'closing line CHANGED: ["relative/path"] listing every file this '
+                                  'call added, changed or deleted. Use CHANGED: [] for no changes. '
+                                  'A standalone FETCH, CONSULT or WORKER request may omit the line '
+                                  'only if this call changed no files.')
+            after = self.project.contents()
+            changed = sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
+            control = re.fullmatch(r'\s*(?:FETCH:|CONSULT |WORKER )[^\n]+\s*', reply)
+            if control and not changed:
+                return reply
+            rows = re.findall(r'^CHANGED: (.*)$', reply, re.MULTILINE)
+            try:
+                declared = json.loads(rows[0]) if len(rows) == 1 else None
+                valid = (isinstance(declared, list) and all(isinstance(p, str) for p in declared)
+                         and len(declared) == len(set(declared)) and sorted(declared) == changed
+                         and reply.rstrip().splitlines()[-1].startswith('CHANGED: '))
+            except (ValueError, TypeError, IndexError):
+                valid = False
+            if not valid:
+                from .session import PartialWorkStopped
+                raise PartialWorkStopped('CHANGED report does not match the captured source changes; '
+                                         'work preserved for inspection.',
+                                         partial=dict(changed=changed, inspected=True, reply=reply))
+            return reply
         with self.project.snapshot() as directory:
             view = provider.in_directory(directory, allow_writes=False)
             role += ("\nYour working directory is a fresh source copy. Read it to ground your "

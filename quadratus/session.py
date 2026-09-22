@@ -531,6 +531,10 @@ class Session:
         context = invocation_context.get() or dict(task="run", role="direct", origin="seat")
         self._active_call = dict(context, model=key, allow_writes=allow_writes)
         spec = self._active_spec
+        if context.get("role") != "closeout" and spec is not None and '## Role packet' not in prompt:
+            role = ('lead' if allow_writes else 'verifier'
+                    if context.get('role') == 'verifier' else 'reviewer')
+            prompt += '\n\n' + self._role_packet(spec, role)
         if context.get("role") != "closeout" and spec is not None and spec.scope is not None:
             if spec.scope.render() not in prompt:
                 prompt += "\n\n" + spec.scope.render()
@@ -582,6 +586,10 @@ class Session:
         try:
             with invocation(getattr(self._active_spec, "task_id", "run"), role):
                 return self._invoke_model(key, prompt, allow_writes=allow_writes)
+        except PartialWorkStopped as exc:
+            if exc.partial.get('reply'):
+                self.store.put(exc.partial['reply'], kind='changed-report-mismatch', author=key)
+            raise
         except PartialWorkSuspected as exc:
             state = self._inspect_partial_edits(before)
             raise PartialWorkStopped(str(exc), partial=state) from exc
@@ -961,9 +969,20 @@ class Session:
             )
         return report
 
+    def _role_packet(self, spec, role):
+        notes = (self.config.codebase_map.render(topics=['conventions'])
+                 if self.config.codebase_map is not None else '')
+        policy = self.config.repository_policy
+        if policy is not None:
+            return policy.role_packet(spec.scope, role, notes)
+        contract = '## Role packet\n' + (spec.scope.render() if spec.scope else 'Scope: not declared.')
+        if len(contract.encode()) > 20_000:
+            raise RunStalled('Task scope exceeds the role packet limit; narrow the task')
+        return contract + '\nConventions notes:\n' + notes.encode()[:3000].decode('utf-8', errors='ignore')
+
     def _consult_prompt(self, spec: TaskSpec, question: str, peer: str) -> str:
         label = resolve(peer)
-        return (
+        return self._role_packet(spec, "reviewer") + "\n\n" + (
             f"Task context: {spec.description}\n\n"
             f"A colleague leading this task asks you one question in your "
             f"area of strength:\n{question}\n\n"
@@ -1632,8 +1651,7 @@ class Session:
         # Stated before the work, checked after it. Telling a model its bound
         # helps some; measuring the diff is what makes the bound real, and
         # both happen -- see _assess_scope.
-        if spec.scope is not None:
-            parts.append(spec.scope.render())
+        parts.append(self._role_packet(spec, 'lead'))
         parts.append(worker_menu())
         parts.append('To commission one worker, reply only WORKER followed by JSON: '
                      '{"errand":"code","instruction":"one bounded request",'
@@ -1702,7 +1720,7 @@ class Session:
 
     def _collaborator_prompt(self, spec: TaskSpec, draft: str, peer: str) -> str:
         label = resolve(peer)
-        return (
+        return self._role_packet(spec, "reviewer") + "\n\n" + (
             f"Task: {spec.description}\n\n"
             f"Current work:\n{draft}\n\n"
             f"You are {label.label if label else peer}, contributing an independent "
@@ -1774,6 +1792,7 @@ class Session:
         for peer, note in blocking:
             verdict = self._invoke_model(
                 peer,
+                self._role_packet(spec, 'reviewer') + '\n\n' +
                 f"Task: {spec.description}\n\n"
                 f"You reviewed this work and raised these findings:\n{note}\n\n"
                 f"The revised work:\n{revision}\n\n"
@@ -1873,7 +1892,7 @@ class Session:
 
     def _verifier_prompt(self, spec: TaskSpec, draft: str, verifier: str) -> str:
         label = resolve(verifier)
-        return (
+        return self._role_packet(spec, "verifier") + "\n\n" + (
             f"Task: {spec.description}\n\n"
             f"Proposed answer:\n{draft}\n\n"
             f"You are {label.label if label else verifier}, verifying security "
