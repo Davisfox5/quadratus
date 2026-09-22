@@ -1,0 +1,51 @@
+{
+ "id": "worker-tool-misfit-costs-nothing",
+ "shape": "permission-trap",
+ "family": "agent-tool",
+ "grader": false,
+ "source": "Report, Codex corrections and Q1: acceptance attempt 3 sent a Haiku code worker the whole implementation with write:false and it spent 312,518 tokens on prose; tool fit is checked before any worker call is reserved.",
+ "session": {
+  "project": false
+ },
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Add the parser",
+   "complexity": "simple"
+  }
+ },
+ "script": [
+  {
+   "role": "lead",
+   "times": 1,
+   "reply": "WORKER {\"errand\": \"code\", \"instruction\": \"Add the core CSV-parsing helper `def _import_preview_rows(project, text):` to app.py and create tests/test_import_preview.py covering the four scenarios.\", \"needs\": [\"patch\"], \"write\": false}"
+  },
+  {
+   "role": "lead",
+   "reply": "Draft: the change as text."
+  },
+  {
+   "role": "closeout",
+   "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+  }
+ ],
+ "expect": {
+  "outcome": "completed",
+  "history": 1,
+  "calls": {
+   "role:worker": 0,
+   "role:lead": 2
+  },
+  "prompts": [
+   {
+    "role": "lead",
+    "contains": "was refused"
+   },
+   {
+    "role": "lead",
+    "contains": "write:true"
+   }
+  ]
+ }
+}

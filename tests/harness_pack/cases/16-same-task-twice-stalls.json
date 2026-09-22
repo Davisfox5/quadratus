@@ -1,0 +1,38 @@
+{
+ "id": "same-task-twice-stalls",
+ "shape": "idempotence",
+ "family": "harness-maintainer",
+ "grader": false,
+ "source": "Report, spine feature 8: a run stalls loudly when the orchestrator names the same task twice in a row; repeating a known-bad action is the canonical agent death spiral.",
+ "session": {
+  "project": false
+ },
+ "drive": {
+  "kind": "run",
+  "max_tasks": 5
+ },
+ "script": [
+  {
+   "role": "orchestrator",
+   "reply": "KIND: general simple\nAdd the parser"
+  },
+  {
+   "role": "lead",
+   "reply": "Draft: the change as text."
+  },
+  {
+   "role": "closeout",
+   "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+  }
+ ],
+ "expect": {
+  "outcome": "RunStalled",
+  "error_contains": [
+   "same task twice"
+  ],
+  "history": 1,
+  "calls": {
+   "role:orchestrator": 2
+  }
+ }
+}

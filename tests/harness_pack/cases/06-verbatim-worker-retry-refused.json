@@ -1,0 +1,57 @@
+{
+ "id": "verbatim-worker-retry-refused",
+ "shape": "idempotence",
+ "family": "agent-tool",
+ "grader": false,
+ "source": "Report, spine feature 8: a verbatim retry of a failed action is refused; the same prompt on a different worker is a changed strategy.",
+ "session": {
+  "project": false
+ },
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Add the parser",
+   "complexity": "simple"
+  }
+ },
+ "script": [
+  {
+   "role": "lead",
+   "times": 2,
+   "reply": "WORKER {\"errand\": \"read\", \"instruction\": \"Summarise how app.py lays out its routes\"}"
+  },
+  {
+   "role": "worker",
+   "raise": {
+    "type": "ProviderError",
+    "message": "transport failed"
+   }
+  },
+  {
+   "role": "lead",
+   "reply": "Draft: the change as text."
+  },
+  {
+   "role": "closeout",
+   "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+  }
+ ],
+ "expect": {
+  "outcome": "completed",
+  "history": 1,
+  "calls": {
+   "role:worker": 1,
+   "role:lead": 3
+  },
+  "prompts": [
+   {
+    "role": "lead",
+    "contains": "this exact prompt already failed"
+   }
+  ],
+  "store_contains": [
+   "REFUSED"
+  ]
+ }
+}

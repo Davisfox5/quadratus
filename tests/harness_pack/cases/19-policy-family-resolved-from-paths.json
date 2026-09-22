@@ -1,0 +1,123 @@
+{
+ "id": "policy-family-resolved-from-paths",
+ "shape": "happy-path",
+ "family": "schema-migration",
+ "grader": false,
+ "source": "Report, agent set design rule 2 and Q5: the specialist family is read from the declared scope paths against the policy path map, never from the model's description of itself, and the resolved plan hash is recorded.",
+ "session": {
+  "project": true,
+  "allow_writes": false
+ },
+ "files": {
+  "alembic/versions/0001_init.py": "def upgrade(): ...\n"
+ },
+ "policy": {
+  "kind": "policy",
+  "schema_version": 1,
+  "repository_id": "fixture/project",
+  "library": {},
+  "defaults": {
+   "family": "pure-logic",
+   "required_gates": [
+    "scope"
+   ],
+   "scope_max_lines": 50,
+   "overrun_ratio": 1.5,
+   "worker_depth": 1
+  },
+  "capability_policy": {
+   "deny_write": [
+    ".env",
+    ".git/**"
+   ],
+   "sensitive": [],
+   "external_effects": "deny",
+   "native_delegation": "deny"
+  },
+  "path_rules": [
+   {
+    "paths": [
+     "alembic/versions/"
+    ],
+    "families": [
+     "schema-migration"
+    ]
+   }
+  ],
+  "gate_bindings": {
+   "unit-tests": {
+    "absent": true,
+    "because": "Fixture only"
+   },
+   "migration-heads": {
+    "absent": true,
+    "because": "Fixture only"
+   },
+   "migration-revision-id": {
+    "absent": true,
+    "because": "Fixture only"
+   },
+   "migration-tenant-policy": {
+    "absent": true,
+    "because": "Fixture only"
+   },
+   "migration-rehearsal": {
+    "absent": true,
+    "because": "Fixture only"
+   },
+   "migration-tracked": {
+    "absent": true,
+    "because": "Fixture only"
+   },
+   "migration-registries": {
+    "absent": true,
+    "because": "Fixture only"
+   }
+  },
+  "gates": [
+   {
+    "id": "scope",
+    "runner": "builtin:scope",
+    "required": true
+   }
+  ],
+  "decisions": []
+ },
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Add a nullable column",
+   "complexity": "simple",
+   "scope": {
+    "permitted_paths": [
+     "alembic/versions/"
+    ],
+    "max_lines": 20
+   }
+  }
+ },
+ "script": [
+  {
+   "role": "lead",
+   "reply": "Draft: the change as text."
+  },
+  {
+   "role": "closeout",
+   "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+  }
+ ],
+ "expect": {
+  "outcome": "completed",
+  "history": 1,
+  "policy_plans": {
+   "count": 1,
+   "primary_family": "schema-migration",
+   "has_hash": true,
+   "blocked": false
+  },
+  "notes_contain": [
+   "Family: schema-migration"
+  ]
+ }
+}
