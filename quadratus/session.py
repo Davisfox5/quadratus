@@ -55,6 +55,7 @@ from .routing import (
     orchestrator_seat,
 )
 from .scope import ScopeReport, TaskScope, changed_paths, count_change_lines
+from .structured import StructuredError, parse_security_verdict
 from .task_kinds import (
     KNOWN_NEEDS,
     MAX_TASK_LINES,
@@ -283,6 +284,8 @@ class SessionConfig:
     #: How many fix rounds a failing integration gate buys the lead before
     #: the failure is carried into the record as an open problem.
     max_gate_fixes: int = 1
+    # Opt-in v1 contract; False retains the legacy prose path for one release.
+    security_verdict_json: bool = False
     #: Called with a one-line note as the run moves: the plan, each task as it
     #: is named, each as it closes. A session spends minutes per task against
     #: a subscription window, so a caller with no way to see what it is doing
@@ -1255,17 +1258,19 @@ class Session:
                 )
                 if crossed is not None:
                     verifier = crossed
-            self._run_integration_gate(excursion.worker, spec, task)
+            draft = self._run_integration_gate(excursion.worker, spec, task) or draft
             self._record_selection(spec, verifier, "verifier")
-            with invocation(spec.task_id, "verifier"):
-                verdict = self._invoke_model(
-                    verifier, self._verifier_prompt(spec, draft, verifier)
-                )
-            task.record("assistant", f"[{verifier}] {verdict}")
-            task.keep(verdict, kind=f"verify:{verifier}", author=verifier)
-
-            if 'BLOCKING' in verdict.upper() or 'UNRESOLVED' in verdict.upper():
-                self.open_findings.append(verdict)
+            if self.config.security_verdict_json:
+                self._verify_security_json(spec, task, draft, excursion.worker, verifier)
+            else:
+                with invocation(spec.task_id, "verifier"):
+                    verdict = self._invoke_model(
+                        verifier, self._verifier_prompt(spec, draft, verifier)
+                    )
+                task.record("assistant", f"[{verifier}] {verdict}")
+                task.keep(verdict, kind=f"verify:{verifier}", author=verifier)
+                if 'BLOCKING' in verdict.upper() or 'UNRESOLVED' in verdict.upper():
+                    self.open_findings.append(verdict)
 
             summary_text, reasoning, dead_ends = self._close_out(
                 excursion.worker, spec, task
@@ -1281,6 +1286,59 @@ class Session:
             # excursion and hands the seat back rather than leaving the run
             # degraded.
             close_excursion(excursion)
+
+    def _security_snapshot(self, spec, draft):
+        from .project import Project
+        source = (Project(self.project, exclude=self.config.project_excludes).fingerprint()
+                  if self.project else None)
+        return hashlib.sha256(json.dumps({
+            'source': source, 'task': spec.description, 'draft': draft,
+            'acceptance': list(spec.scope.acceptance) if spec.scope else [spec.description],
+        }, sort_keys=True).encode()).hexdigest()
+
+    def _verify_security_json(self, spec, task, draft, worker, verifier):
+        acceptance = list(spec.scope.acceptance) if spec.scope else [spec.description]
+        acceptance = acceptance or [spec.description]
+        for round_index in range(2):
+            snapshot = self._security_snapshot(spec, draft)
+            prompt = self._verifier_prompt(spec, draft, verifier) + (
+                '\nReturn one JSON object only, with exactly these fields: '
+                'schema_version (integer 1), verdict (accept, reject, insufficient_evidence), '
+                'snapshot_hash, acceptance_results, blocking_findings, limitations. '
+                'blocking_findings and limitations are arrays of nonempty strings. '
+                'acceptance_results is an ordered array of {criterion, status, evidence}; '
+                'status is passed, failed or insufficient_evidence; evidence must be nonempty. '
+                'Accept requires all criteria passed and no findings or limitations. '
+                'Missing evidence means insufficient_evidence. No fences or prose. '
+                f'\nSnapshot hash: {snapshot}\nAcceptance criteria: {json.dumps(acceptance)}'
+            )
+            with invocation(spec.task_id, "verifier"):
+                raw = self._invoke_model(verifier, prompt)
+            task.record("assistant", f"[{verifier}] {raw}")
+            task.keep(raw, kind=f"verify:{verifier}", author=verifier)
+            try:
+                verdict = parse_security_verdict(raw, snapshot_hash=snapshot,
+                                                 acceptance=acceptance)
+                if self._security_snapshot(spec, draft) != snapshot:
+                    raise StructuredError('Source changed during security verification')
+            except StructuredError as exc:
+                self.open_findings.append(f'Security verification incomplete: {exc}')
+                return
+            if verdict['verdict'] == 'accept':
+                return
+            if (verdict['verdict'] == 'reject' and round_index == 0
+                    and self._gate_fixes_used < self.config.max_gate_fixes):
+                # Share the existing gate repair allowance. A reject can buy
+                # one round, never a separate allowance or parsing retry.
+                draft = self._edit(worker, self._fix_prompt(
+                    spec, draft, [('Security verifier', raw)]), role='security-fix')
+                task.record("assistant", draft)
+                task.keep(draft, kind='security-fix', author=worker)
+                self._gate_fixes_used += 1
+                self._run_integration_gate(worker, spec, task, max_fixes=0)
+                continue
+            self.open_findings.append(f"Security verification {verdict['verdict']}: {raw}")
+            return
 
     # -- orchestration -------------------------------------------------------
     def next_task(self) -> Optional[TaskSpec]:
@@ -1740,7 +1798,8 @@ class Session:
             "the complete revised work."
         )
 
-    def _run_integration_gate(self, lead: str, spec: TaskSpec, task: TaskMemory, *, gate=None) -> str:
+    def _run_integration_gate(self, lead: str, spec: TaskSpec, task: TaskMemory, *,
+                              gate=None, max_fixes=None) -> str:
         """Execute the project's own check and feed a failure back once.
 
         Reviewers judge the work by reading; this is the half that runs it.
@@ -1752,10 +1811,13 @@ class Session:
         gate = gate if gate is not None else self.config.integration_gate
         if gate is None:
             return ""
+        ceiling = self.config.max_gate_fixes
+        if max_fixes is not None:
+            ceiling = min(ceiling, getattr(self, "_gate_fixes_used", 0) + max_fixes)
         latest_fix = ""
         result = self._check(gate)
         task.record("user", result.render())
-        while not result.passed and getattr(self, "_gate_fixes_used", 0) < self.config.max_gate_fixes:
+        while not result.passed and getattr(self, "_gate_fixes_used", 0) < ceiling:
             fix = self._edit(
                 lead,
                 f"Task: {spec.description}\n\n"

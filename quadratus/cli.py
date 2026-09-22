@@ -107,6 +107,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
                 check=args.check or '', state_dir=args.state_dir,
                 forbid=args.forbid, declared_paths=args.declared_paths,
                 max_tasks=args.max_tasks, mode=args.mode,
+                security_verdict_json=getattr(args, "security_verdict_json", False),
                 progress=lambda message: print(f">> {message}", flush=True),
                 ask_operator=lambda question: input(f"\n{question}\n> ").strip(),
                 plan_gate=(lambda plan: print(plan) is None and
@@ -163,6 +164,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
         plan_gate=plan_gate if args.plan_gate else None,
         ask_operator=ask_operator,
         integration_gate=gate,
+        security_verdict_json=getattr(args, "security_verdict_json", False),
         progress=progress,
     )
 
@@ -302,6 +304,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             "a fraction of the cost."
         ),
     )
+    engine.add_argument("--security-verdict-json", action="store_true",
+                        help="Require the strict v1 JSON security verdict (opt-in).")
     engine.add_argument(
         "--check",
         metavar="CMD",

@@ -242,7 +242,9 @@ def test_dispatch_forbid_makes_zero_calls(tmp_path):
     assert session.policy_plans[0]['declared_paths'] == ['keep.py']
 
 
-def test_project_record_preserves_blocked_plan_without_provider_calls(tmp_path, monkeypatch):
+@pytest.mark.parametrize('security_verdict_json', [False, True])
+def test_project_record_preserves_blocked_plan_without_provider_calls(
+        tmp_path, monkeypatch, security_verdict_json):
     from quadratus.config import Settings
     from quadratus.project_run import run_project
 
@@ -256,6 +258,8 @@ def test_project_record_preserves_blocked_plan_without_provider_calls(tmp_path, 
             pass
 
     def factory(goal, store, *, config, **kwargs):
+        assert config.security_verdict_json is security_verdict_json
+        assert config.repository_policy is not None
         session = Session(goal, store, lambda *a, **kw: calls.append(a), config=config)
         session.run = lambda **kw: session.run_task(
             TaskSpec('t1', 'Change keep.py', scope=TaskScope(['keep.py'])))
@@ -263,7 +267,8 @@ def test_project_record_preserves_blocked_plan_without_provider_calls(tmp_path, 
 
     monkeypatch.setattr('quadratus.runtime.Fleet', FakeFleet)
     monkeypatch.setattr('quadratus.runtime.new_session', factory)
-    result = run_project('test', tmp_path, Settings(), allow_writes=True, forbid=['keep.py'])
+    result = run_project('test', tmp_path, Settings(), allow_writes=True, forbid=['keep.py'],
+                         security_verdict_json=security_verdict_json)
     assert not calls and not result.completed
     assert 'Write denied' in result.error
     data = json.loads((result.run_dir / 'result.json').read_text())
