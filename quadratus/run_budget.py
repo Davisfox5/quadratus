@@ -12,6 +12,7 @@ import math
 import threading
 import time
 from dataclasses import asdict, dataclass
+from decimal import Decimal
 from pathlib import Path
 
 
@@ -20,13 +21,48 @@ class RunBudgetExceeded(RuntimeError):
 
 
 @dataclass(frozen=True)
+class APICostRate:
+    """Operator-supplied upper rates for an exact vendor:model API identifier.
+
+    Input rate must cover cache reads/writes and any context or service tier
+    used by the run. These are enforcement inputs, not usage.py seed prices.
+    """
+
+    model: str
+    input_per_mtok: float
+    output_per_mtok: float
+    source: str
+
+    def __post_init__(self):
+        if not isinstance(self.model, str) or ':' not in self.model:
+            raise ValueError('API rate needs an exact vendor:model identifier')
+        if not isinstance(self.source, str) or not self.source.strip():
+            raise ValueError('API rate needs pricing provenance')
+        for value in (self.input_per_mtok, self.output_per_mtok):
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0):
+                raise ValueError('API rates must be nonnegative and finite')
+
+
+@dataclass(frozen=True)
 class RunLimits:
     max_calls: int = 24
     max_reported_tokens: int = 500_000
     wall_seconds: float = 900
     max_concurrent_workers: int = 2
+    max_cost_usd: float | None = None
+    api_cost_rates: tuple[APICostRate, ...] = ()
 
     def __post_init__(self):
+        if self.max_cost_usd is not None and (
+                isinstance(self.max_cost_usd, bool) or not isinstance(self.max_cost_usd, (int, float))
+                or not math.isfinite(self.max_cost_usd) or self.max_cost_usd <= 0):
+            raise ValueError('max_cost_usd must be positive and finite')
+        object.__setattr__(self, 'api_cost_rates', tuple(self.api_cost_rates))
+        if any(not isinstance(r, APICostRate) for r in self.api_cost_rates):
+            raise ValueError('api_cost_rates must contain APICostRate records')
+        if len({r.model for r in self.api_cost_rates}) != len(self.api_cost_rates):
+            raise ValueError('Duplicate API cost rate')
         for name in ('max_calls', 'max_reported_tokens', 'max_concurrent_workers'):
             value = getattr(self, name)
             if type(value) is not int or value < 1:
@@ -45,7 +81,10 @@ class RunBudget:
         self._started = clock()
         self._lock = threading.Lock()
         self._calls = 0
-        self._active = set()
+        self._active = {}
+        self._rates = {r.model: r for r in limits.api_cost_rates}
+        self._api_cost = Decimal(0)
+        self._unknown_cost = 0
         self._input = self._output = self._unknown = 0
         self._reason = ''
         self._responses = []
@@ -53,6 +92,10 @@ class RunBudget:
     def _snapshot(self):
         return {
             'limits': asdict(self.limits), 'reserved_attempts': self._calls,
+            'api_cost_usd': float(self._api_cost),
+            'api_cost_overshoot_usd': float(max(Decimal(0), self._api_cost - Decimal(str(self.limits.max_cost_usd or 0)))),
+            'unknown_api_cost_attempts': self._unknown_cost,
+            'cost_boundary': 'configured API upper-rate threshold; in-flight calls can overshoot; CLI excluded',
             'in_flight': len(self._active), 'input_tokens': self._input,
             'output_tokens': self._output,
             'reported_tokens': self._input + self._output,
@@ -89,30 +132,35 @@ class RunBudget:
             self._persist()
             raise RunBudgetExceeded(f'Run stopped: {self._reason}')
 
-    def reserve(self):
+    def reserve(self, *, transport="cli", price_key=""):
         """Atomically authorize one attempt and return its ID and time remaining."""
         with self._lock:
             self._check()
+            if transport not in ('api', 'cli'):
+                raise ValueError('Unknown budget transport')
+            if self.limits.max_cost_usd is not None and transport == 'api' and price_key not in self._rates:
+                self._reason = 'api_price_unavailable'
+                self._check()
             if self._calls >= self.limits.max_calls:
                 self._reason = 'call_limit'
                 self._check()
             self._calls += 1
             ticket = self._calls
-            self._active.add(ticket)
+            self._active[ticket] = (transport, price_key)
             try:
                 self._persist()
             except RunBudgetExceeded:
-                self._active.remove(ticket)
+                self._active.pop(ticket)
                 self._calls -= 1
                 raise
             return ticket, self._remaining()
 
-    def finish(self, ticket, usage, *, native_children=(), reply=''):
+    def finish(self, ticket, usage, *, native_children=(), reply='', price_key=None):
         """Account once, latch terminal conditions and reject further calls."""
         with self._lock:
             if ticket not in self._active:
                 raise RuntimeError('Unknown or already-finished budget reservation')
-            self._active.remove(ticket)
+            transport, reserved_key = self._active.pop(ticket)
             usage = usage if isinstance(usage, dict) else {}
             counts = [usage.get('input_tokens'), usage.get('output_tokens')]
             if any(type(n) is not int or n < 0 for n in counts):
@@ -124,6 +172,16 @@ class RunBudget:
                 self._output += counts[1]
                 if self._input + self._output >= self.limits.max_reported_tokens:
                     self._reason = self._reason or 'reported_token_threshold'
+            if self.limits.max_cost_usd is not None and transport == 'api':
+                rate = self._rates.get(price_key or reserved_key)
+                if rate is None or any(type(n) is not int or n < 0 for n in counts):
+                    self._unknown_cost += 1
+                    self._reason = self._reason or 'unknown_api_cost'
+                else:
+                    self._api_cost += (Decimal(counts[0]) * Decimal(str(rate.input_per_mtok))
+                                       + Decimal(counts[1]) * Decimal(str(rate.output_per_mtok))) / 1_000_000
+                    if self._api_cost >= Decimal(str(self.limits.max_cost_usd)):
+                        self._reason = self._reason or 'api_cost_threshold'
             if native_children:
                 # Their spend/control is outside these reservations. Do not
                 # silently count this run as bounded or guess counter overlap.

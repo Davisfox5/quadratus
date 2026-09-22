@@ -1690,6 +1690,8 @@ class CLIProvider(LLMProvider):
 
     spec: CLISpec = CLAUDE_SPEC
 
+    transport = "cli"
+
     def __init__(self, model, api_key=None, *, workdir=None, allow_writes=False, **kwargs):
         # CLI providers authenticate through the vendor's cached OAuth login, so
         # there is no key to supply. A truthy sentinel keeps the base class from
