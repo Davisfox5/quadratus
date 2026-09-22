@@ -59,3 +59,19 @@ def test_an_unscripted_reply_fails_the_case_rather_than_guessing(tmp_path):
     result = runner.run_case(case, "base", tmp_path)
     assert not result.passed
     assert "ReplayGap" in result.failures[0]
+
+
+def test_content_expectations_fail_when_the_preserved_file_is_gone(tmp_path):
+    """Deletion negative control (Codex review, #20): a case that asserts
+    preserved work must fail once that work disappears, whether or not the
+    fixture also spelled out exists: true."""
+    case = next(c for c in CASES if c["id"] == "write-timeout-preserves-partial")
+    resolved = runner.resolve_variant(case, "base")
+    out = runner.execute(resolved, tmp_path)
+    assert runner.check(resolved["expect"], out) == []
+    (out.root / "a.py").unlink()
+    failures = runner.check(resolved["expect"], out)
+    assert any("a.py is missing" in f for f in failures), failures
+    (out.root / "new.py").unlink()
+    failures = runner.check(resolved["expect"], out)
+    assert any("new.py" in f and "exists=False" in f for f in failures), failures

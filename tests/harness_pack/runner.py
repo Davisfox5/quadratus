@@ -357,9 +357,14 @@ def check(expect: dict, out: Outcome) -> List[str]:
     if "files" in expect:
         for rel, spec in expect["files"].items():
             path = out.root / rel
+            wants_content = "equals" in spec or "contains" in spec
             if spec.get("exists") is not None and path.exists() != spec["exists"]:
                 failures.append(f"file {rel}: exists={path.exists()}, expected {spec['exists']}")
-            if path.exists():
+            if wants_content and not path.is_file():
+                # A content expectation is an existence expectation: a case
+                # asserting preserved work must fail when the work is gone.
+                failures.append(f"file {rel} is missing; content expectations need the file")
+            elif wants_content:
                 text = path.read_text(encoding="utf-8")
                 for needle in _list(spec.get("contains", [])):
                     if needle not in text:
