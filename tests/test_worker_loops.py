@@ -133,3 +133,19 @@ def test_helper_without_failure_is_refused_before_dispatch(tmp_path):
     with pytest.raises(RunStalled, match='failed retry_of'):
         session._draft_with_channels('claude:opus', TaskSpec('t1', 'task'), TaskMemory('task', 'lead', session.store))
     assert session.workers.spawned('t1') == 0
+
+
+def test_tool_requests_do_not_consume_failure_allowance(tmp_path):
+    count = 0
+    def invoke(key, prompt, **kwargs):
+        nonlocal count
+        if (invocation_context.get() or {}).get('origin') == 'worker':
+            return 'NEED TOOL: clarification'
+        count += 1
+        if count <= 4:
+            return 'WORKER ' + json.dumps({'errand': 'read', 'instruction': f'Read section {count}'})
+        return 'draft with unresolved requirements recorded'
+    session = Session('goal', ArtifactStore(tmp_path), invoke)
+    task = TaskMemory('t1', 'lead', session.store)
+    assert session._draft_with_channels('claude:opus', TaskSpec('t1', 'task'), task).startswith('draft')
+    assert session.workers.spawned('t1') == 4

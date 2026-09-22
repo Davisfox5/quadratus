@@ -896,6 +896,7 @@ class Session:
                 for result in results:
                     if result.error or result.needs_tool:
                         failed_errands.add(result.label)
+                    if result.error:
                         worker_failures += 1
                     evidence = result.ref.render() if result.ref else ''
                     answers.append(f"Worker {result.label} ({result.model}): "
