@@ -127,3 +127,25 @@ def test_no_change_delivery_and_control_requests(tmp_path, monkeypatch, reply):
         assert fleet.invoke('claude:opus', 'edit', allow_writes=True) == reply
     finally:
         fleet.close()
+
+
+@pytest.mark.parametrize('role', ['lead', 'revision', 'gate-fix', 'security-fix'])
+def test_editing_roles_keep_lead_checklist_without_a_write_grant(packet_session, role):
+    from quadratus.delegation import invocation
+    session, spec, seen = packet_session
+    session._active_spec = spec
+    with invocation(spec.task_id, role):
+        session._invoke_model('claude:opus', 'Revise the proposal')
+    assert 'Role: lead' in seen[-1]
+    assert 'Stop with an ASK' in seen[-1]
+
+
+def test_worker_gets_scope_without_parent_family_packet(packet_session):
+    from quadratus.delegation import invocation
+    session, spec, seen = packet_session
+    session._active_spec = spec
+    with invocation(spec.task_id, 'worker:read-1', 'worker'):
+        session._invoke_model('claude:haiku', 'Read this one definition')
+    assert spec.scope.render() in seen[-1]
+    assert '## Role packet' not in seen[-1]
+    assert 'Family checklist' not in seen[-1]

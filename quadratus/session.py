@@ -531,8 +531,9 @@ class Session:
         context = invocation_context.get() or dict(task="run", role="direct", origin="seat")
         self._active_call = dict(context, model=key, allow_writes=allow_writes)
         spec = self._active_spec
-        if context.get("role") != "closeout" and spec is not None and '## Role packet' not in prompt:
-            role = ('lead' if allow_writes else 'verifier'
+        if (context.get("role") != "closeout" and context.get('origin') != 'worker'
+                and spec is not None and '## Role packet' not in prompt):
+            role = ('lead' if context.get('role') in ('lead', 'revision', 'gate-fix', 'security-fix') else 'verifier'
                     if context.get('role') == 'verifier' else 'reviewer')
             prompt += '\n\n' + self._role_packet(spec, role)
         if context.get("role") != "closeout" and spec is not None and spec.scope is not None:
