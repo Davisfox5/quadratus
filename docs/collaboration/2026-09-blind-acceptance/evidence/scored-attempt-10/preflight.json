@@ -1,0 +1,65 @@
+{
+  "contained": true,
+  "work_tree": {
+    "ok": true,
+    "entries": 8,
+    "read": "TASK.md"
+  },
+  "vendors": {
+    "claude": {
+      "applicable": false,
+      "detail": "this vendor has no inner sandbox to test; its restriction is a tool denial, which needs no privilege to take effect"
+    },
+    "openai": {
+      "applicable": true,
+      "ok": true,
+      "argv": [
+        "/usr/local/bin/codex",
+        "sandbox",
+        "-c",
+        "sandbox_mode=danger-full-access",
+        "--",
+        "cat",
+        "/work/TASK.md"
+      ],
+      "exit_code": 0,
+      "detail": "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"/tmp\" (codex_home: AbsolutePathBuf(\"/tmp/solver-home/.codex\"))"
+    },
+    "grok": {
+      "applicable": false,
+      "detail": "this vendor has no inner sandbox to test; its restriction is a tool denial, which needs no privilege to take effect"
+    }
+  },
+  "auth": {
+    "claude": {
+      "applicable": false,
+      "detail": "this vendor offers no model-free readout of its session, so nothing here establishes that it is signed in"
+    },
+    "openai": {
+      "applicable": true,
+      "ok": true,
+      "argv": [
+        "/usr/local/bin/codex",
+        "login",
+        "status"
+      ],
+      "exit_code": 0,
+      "proof": "positive",
+      "detail": "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"/tmp\" (codex_home: AbsolutePathBuf(\"/tmp/solver-home/.codex\"))"
+    },
+    "grok": {
+      "applicable": true,
+      "ok": true,
+      "argv": [
+        "/usr/local/bin/grok",
+        "models"
+      ],
+      "exit_code": 0,
+      "proof": "known-failure wording only",
+      "detail": "You are logged in with grok.com."
+    }
+  },
+  "probe_file": "/work/TASK.md",
+  "blockers": [],
+  "ok": true
+}

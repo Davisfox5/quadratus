@@ -1,0 +1,4 @@
+Project: /work; edits enabled
+asking claude:fable for the next task
+claude:fable is out of window; the seat falls to openai:gpt-6-astra
+task 1: Implement the header-reading foundation using the existing `csv` and `io` imports in `app.py`. Accept bytes, decode strictly with `utf-8-sig`, and require `Tag Type`, `Start (s)`, and `End (s)` after normalization. Return `(headers, reader)`; raise `ValueError` for invalid encoding, empty input, or invalid/missing headers. Preserve CSV newline handling and quoted fields. Budget approximately 30 implementation lines and 50 test lines. Leave endpoint wiring and data-row validation for subsequent slices. [backend/simple]

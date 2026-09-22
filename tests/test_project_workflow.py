@@ -21,6 +21,7 @@ FAKE_CLI = r'''
 import json, os, sys
 from pathlib import Path
 args = sys.argv[1:]
+source_before = {p.name: p.read_bytes() for p in Path('.').glob('*.py')}
 def flag(key, default=''):
     return args[args.index(key) + 1] if key in args else default
 if '--prompt-file' in args:
@@ -54,11 +55,18 @@ elif 'You are leading' in prompt or 'Fix the failure' in prompt:
         reply = 'Everything is fixed.'
     else:
         Path('add.py').write_text('def add(a, b):\n    return a + b\n')
+        if mode == 'scope-breach':
+            Path('unexpected.py').write_text('preserved partial work\n')
         reply = 'Saved add.py'
 elif mode == 'patch':
     reply = 'PATCH:\n```diff\n--- a/add.py\n+++ b/add.py\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return 0\n+    return a + b\n```'
 else:
     reply = 'NO FINDINGS'
+if 'You are leading' in prompt or 'Fix the failure' in prompt:
+    source_after = {p.name: p.read_bytes() for p in Path('.').glob('*.py')}
+    changed = sorted(p for p in source_before.keys() | source_after.keys()
+                     if source_before.get(p) != source_after.get(p))
+    reply += '\nCHANGED: ' + json.dumps(changed)
 if 'exec' in args:
     print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':reply}}))
 elif '--output-format' in args and '--system-prompt-override' in args:
@@ -328,21 +336,33 @@ def test_a_real_run_records_who_actually_ran_and_what_it_could_not_observe(proje
     assert 'Usage report (API-price counterfactual)' not in report
 
 
-def test_a_scope_breach_is_reported_without_reverting_the_work(project_env):
+def test_a_scope_breach_is_reported_without_reverting_the_work(project_env, monkeypatch):
     """Scope is evidence, never a rollback: the work and the operator's own
     files both survive a breach."""
     from quadratus.scope import TaskScope
 
     project, settings, trace, _caller = project_env
     (project.root / 'operator-note.txt').write_text('mine\n')
+    monkeypatch.setenv('FAKE_MODE', 'scope-breach')
     result = run_project('Fix addition', project, settings, allow_writes=True,
                          check=check_command(),
-                         default_scope=TaskScope(permitted_paths=['docs'], max_lines=2))
+                         default_scope=TaskScope(permitted_paths=['add.py'], max_lines=2))
 
     data = json.loads((result.run_dir / 'result.json').read_text())
     reports = data['scope_reports']
     assert reports and any(r['out_of_scope'] for r in reports)
-    assert any('add.py' in r['out_of_scope'] for r in reports)
+    assert any('unexpected.py' in r['out_of_scope'] for r in reports)
     # Nothing rolled back.
     assert 'return a + b' in (project.root / 'add.py').read_text()
     assert (project.root / 'operator-note.txt').read_text() == 'mine\n'
+
+
+def test_conflicting_operator_paths_stop_before_edit_dispatch(project_env):
+    from quadratus.scope import TaskScope
+    project, settings, trace, _ = project_env
+    before = project.contents()
+    result = run_project('Fix addition', project, settings, allow_writes=True,
+                         default_scope=TaskScope(permitted_paths=['docs']))
+    assert not result.completed and 'operator path limits' in result.error
+    assert project.contents() == before
+    assert not any('You are leading' in c['prompt'] for c in calls(trace))

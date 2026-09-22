@@ -1,0 +1,68 @@
+{
+ "id": "ask-becomes-standing-ruling",
+ "shape": "blocked-path",
+ "family": "harness-maintainer",
+ "grader": false,
+ "source": "Report, spine feature 7: undecided questions are answered with an ASK, the answer becomes a standing ruling re-emitted on every render, and no channel means OperatorInputNeeded, not a guess.",
+ "drive": {
+  "kind": "run",
+  "max_tasks": 2
+ },
+ "variants": {
+  "good": {
+   "session": {
+    "project": false,
+    "ask_operator": "JWT with a 15 minute expiry"
+   },
+   "script": [
+    {
+     "role": "orchestrator",
+     "times": 1,
+     "reply": "ASK: Which auth scheme does the operator want for the new endpoint?"
+    },
+    {
+     "role": "orchestrator",
+     "reply": "DONE"
+    }
+   ],
+   "expect": {
+    "outcome": "completed",
+    "history": 0,
+    "calls": {
+     "role:orchestrator": 2
+    },
+    "rulings_contain": [
+     "Q: Which auth scheme does the operator want for the new endpoint? -- A: JWT with a 15 minute expiry"
+    ],
+    "prompts": [
+     {
+      "role": "orchestrator",
+      "contains": "JWT with a 15 minute expiry",
+      "count": 1
+     }
+    ]
+   }
+  },
+  "bad": {
+   "session": {
+    "project": false
+   },
+   "script": [
+    {
+     "role": "orchestrator",
+     "reply": "ASK: Which auth scheme does the operator want for the new endpoint?"
+    }
+   ],
+   "expect": {
+    "outcome": "OperatorInputNeeded",
+    "error_contains": [
+     "Which auth scheme"
+    ],
+    "calls": {
+     "role:orchestrator": 1
+    }
+   }
+  }
+ },
+ "expect": {}
+}

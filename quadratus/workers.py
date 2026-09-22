@@ -48,17 +48,53 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Sequence
 
 from .artifacts import ArtifactRef, ArtifactStore
-from .delegation import invocation
+from .delegation import invocation, invocation_context
 from .memory import NoMemory, TaskMemory
 
 log = logging.getLogger(__name__)
+worker_loop_control = ContextVar('worker_loop_control', default=None)
+
+
+@dataclass
+class WorkerLoopControl:
+    """Per-errand transport limits, in addition to the enclosing run budget.
+
+    Tokens are a post-return threshold. Unknown usage stops continuation and
+    in-flight overshoot is retained in the budget artifact.
+    """
+    max_steps: int
+    max_tokens: int
+    charge: Callable
+    calls: int = 0
+    tokens: int = 0
+    unknown: bool = False
+
+    def reserve(self):
+        from .run_budget import RunBudgetExceeded
+        if self.calls >= self.max_steps or self.tokens >= self.max_tokens or self.unknown:
+            raise RunBudgetExceeded('Worker loop budget exhausted')
+        if self.calls:
+            self.charge()
+        self.calls += 1
+
+    def finish(self, usage):
+        from .run_budget import RunBudgetExceeded
+        values = [(usage or {}).get(k) for k in ('input_tokens', 'output_tokens')]
+        if any(type(v) is not int or v < 0 for v in values):
+            self.unknown = True
+            raise RunBudgetExceeded('Worker loop usage unknown; continuation refused')
+        self.tokens += sum(values)
+        if self.tokens >= self.max_tokens:
+            raise RunBudgetExceeded('Worker loop reported-token threshold reached')
 
 __all__ = [
     "WorkerBudget",
@@ -66,14 +102,32 @@ __all__ = [
     "WorkerPool",
     "FanOutExceeded",
     "RepeatedFailure",
+    "ErrandToolMismatch",
     "WORKER_TREE",
     "pick_worker",
     "worker_menu",
+    "worker_capabilities",
+    "check_errand_fit",
+    "capability_preamble",
 ]
 
 
 class FanOutExceeded(RuntimeError):
     """A task tried to commission more workers than its budget allows."""
+
+
+class ErrandToolMismatch(ValueError):
+    """The errand needs an operation the worker seat cannot perform.
+
+    Raised before the call is made, so a mis-scoped errand costs nothing. It
+    exists because of what attempt 3 of the blind acceptance measured: a lead
+    sent a Haiku worker the whole implementation with ``write:false``, and the
+    worker, never told what it had or that it could ask, worked around the
+    missing tools by writing 101KB of code and tests as prose across eleven
+    turns. That is 312,518 tokens, sixty percent of the run, for output that
+    could not land. The seat's restrictions held perfectly the whole time:
+    they bound what it may do, not whether the errand was possible.
+    """
 
 
 class RepeatedFailure(RuntimeError):
@@ -170,10 +224,111 @@ def worker_menu() -> str:
         "- demanding: the errand defeated the base worker but the skill still "
         "fits -> same family, one tier up (Haiku->Sonnet, Luna->Terra, "
         "Grok worker->Grok expert). Sparingly.\n"
+        "\nWhat a worker can do, before you write the errand. Every worker "
+        "reads a fresh source copy. With write:false it answers in text. With "
+        "write:true it is a bounded editor: it returns a patch the harness "
+        "applies. No worker on any vendor can run a command or write a file "
+        "itself, so an errand that needs a shell is yours to do. Declare the "
+        "errand's needs and the harness checks the fit before the call is "
+        "spent: a mismatch costs you this sentence, not a window.\n"
         "If an errand fails: rewrite it, re-send it unchanged to a different "
         "worker, or mark it demanding -- never the same instruction to the "
         "same worker twice. A worker that lacked a tool it needed will say "
-        "NEED TOOL; reissue that errand with the tool granted."
+        "NEED TOOL; reissue that one errand with the grant. That reissue is "
+        "the whole escalation -- two calls, not four."
+    )
+
+
+#: What a worker seat can actually do, by grant. Every seat in the worker tree
+#: is a restricted roster row, and a restricted row's whole capability set is
+#: :data:`~quadratus.task_kinds.Need.PATCH` -- it returns a diff the harness
+#: applies. So no worker, on any vendor, at any grant, can run a command or
+#: write a file itself. That is not a gap to be widened: a worker is a
+#: one-shot helper, and the two boundaries the lead keeps crossing are worth
+#: stating in the same words to both sides.
+def worker_capabilities(allow_writes: bool):
+    """The operations a worker may perform under this grant."""
+    from .task_kinds import Need
+    return frozenset({Need.PATCH}) if allow_writes else frozenset()
+
+
+def check_errand_fit(instruction: str, *, needs=None, write: bool = False):
+    """Refuse a mis-scoped errand before any call is made.
+
+    ``needs`` is what the lead declared, in the vocabulary of
+    :data:`~quadratus.task_kinds.KNOWN_NEEDS`. It is checked together with
+    what the instruction itself asks for, because the expensive mistake is the
+    errand whose text says "run pytest" while its declaration says nothing.
+
+    ``None`` means the lead declared nothing, which is different from
+    declaring an empty list. Silence is read from the instruction and never
+    treated as a contradiction: only a lead that *stated* what the errand
+    needs can be told its grant disagrees with that statement.
+
+    Returns ``None`` when the errand fits, or one sentence naming the
+    mismatch and the lead's move. Unknown need labels raise, as they do at
+    decomposition: a label that was meant and then dropped is a silent
+    misroute.
+    """
+    from .task_kinds import Need, needs_from_text, normalise_needs
+
+    declared = None if needs is None else normalise_needs(needs)
+    wanted = (declared or frozenset()) | needs_from_text(instruction or "")
+    have = worker_capabilities(write)
+    if Need.EXECUTE in wanted:
+        return (
+            "this errand needs to run commands, and no worker seat can: every "
+            "worker is a restricted seat with the shell denied. Run it "
+            "yourself, or send the worker the part that does not need a shell."
+        )
+    if Need.DIRECT_WRITE in wanted:
+        return (
+            "this errand needs to write files directly, and a worker never "
+            "does: it returns a patch the harness applies. Ask for patch "
+            "instead, or make the edit yourself."
+        )
+    if Need.PATCH in wanted and Need.PATCH not in have:
+        return (
+            "this errand produces changes to files but was sent without a "
+            "write grant, so the worker can only describe them. Reissue it "
+            "with write:true, which puts the worker in bounded-editor mode."
+        )
+    if Need.PATCH in have and Need.PATCH not in wanted and declared is not None:
+        return (
+            "this errand was given a write grant it does not need. Send it "
+            "with write:false, or say what it is meant to change."
+        )
+    return None
+
+
+def capability_preamble(allow_writes: bool) -> str:
+    """Told to the worker, in its own prompt, before the errand.
+
+    The worker used to be handed the lead's instruction and nothing else: not
+    what tools it had, not that ``NEED TOOL`` existed. ``worker_menu`` told
+    the *lead* about that channel and the worker was never in the room. A
+    helper that does not know it may ask will instead do the best it can with
+    what it has, which is how an errand it could not perform became prose.
+    """
+    if allow_writes:
+        tools = (
+            "You can read the source copy in your working directory, and you "
+            "return changes as a patch: exactly PATCH: followed by a fenced "
+            "unified diff. You have no write tools and no shell."
+        )
+    else:
+        tools = (
+            "You can read the source copy in your working directory. You "
+            "cannot change files and you have no shell."
+        )
+    return (
+        "## What you can do\n" + tools + "\n"
+        "Check this against the errand before you start. If it cannot be done "
+        "with these, reply with only 'NEED TOOL: <what you need>' and nothing "
+        "else -- that is one line, not an attempt. Asking is cheap and the "
+        "errand comes back to you with the grant. Do not work around a "
+        "missing tool by writing the change out as text: an answer the "
+        "harness cannot apply is the expensive way to fail.\n"
     )
 
 
@@ -194,8 +349,13 @@ class WorkerBudget:
     max_per_task: int = 12
     max_concurrent: int = 4
     max_depth: int = 1
+    max_worker_steps: int = 3
+    max_worker_tokens: int = 50_000
 
     def __post_init__(self) -> None:
+        for name in ('max_worker_steps', 'max_worker_tokens'):
+            if type(getattr(self, name)) is not int or getattr(self, name) < 1:
+                raise ValueError(f'{name} must be a positive integer')
         if self.max_per_task < 0:
             raise ValueError("max_per_task cannot be negative")
         if self.max_concurrent < 1:
@@ -244,6 +404,9 @@ class WorkerPool:
     #: (task_id, model, prompt-hash) for every commission that raised. A
     #: verbatim retry on the same model is refused; see :class:`RepeatedFailure`.
     _failed: set = field(default_factory=set)
+    #: (task_id, prompt-hash) for every errand a worker has already answered
+    #: with NEED TOOL. Bounds the escalation to two calls; see ``commission``.
+    _asked: set = field(default_factory=set)
     #: Guards counts, failure fingerprints, the store, and task memory --
     #: everything commission_many touches from several threads at once.
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -289,7 +452,10 @@ class WorkerPool:
         errand: Optional[str] = None,
         demanding: bool = False,
         allow_writes: bool = False,
+        needs: Optional[Sequence[str]] = None,
         depth: int = 0,
+        steps: int = 1,
+        token_limit: Optional[int] = None,
     ) -> WorkerResult:
         """Run one worker for ``task`` and fold its report into that task.
 
@@ -299,14 +465,23 @@ class WorkerPool:
         ``NEED TOOL: <what>`` and the result carries it; the lead reissues the
         errand with ``allow_writes`` (or the specific grant) set.
         """
-        if depth >= self.budget.max_depth:
+        if depth >= self.budget.max_depth or (invocation_context.get() or {}).get('origin') == 'worker':
             raise FanOutExceeded(
                 "workers do not commission workers; delegation depth is capped at 1"
             )
+        token_limit = self.budget.max_worker_tokens if token_limit is None else token_limit
+        if (type(steps) is not int or not 1 <= steps <= self.budget.max_worker_steps
+                or type(token_limit) is not int or not 1 <= token_limit <= self.budget.max_worker_tokens):
+            raise ValueError('Worker step/token limits exceed the configured allowance')
         if task.closed:
             raise RuntimeError(
                 f"task {task.task_id!r} is closed and cannot commission workers"
             )
+        # Checked before the budget is charged and before any call: a
+        # mis-scoped errand should cost the lead a sentence, not a window.
+        mismatch = check_errand_fit(prompt, needs=needs, write=allow_writes)
+        if mismatch is not None:
+            raise ErrandToolMismatch(f"errand {label!r}: {mismatch}")
         model_key = self.resolve_model(model, errand=errand, demanding=demanding)
         # The fingerprint includes the model: the same prompt on a different
         # worker is a changed strategy and is allowed. See RepeatedFailure.
@@ -327,16 +502,76 @@ class WorkerPool:
             self._charge(task.task_id)
 
         scratch = NoMemory()  # explicit: a worker carries nothing in or out
+        briefed = capability_preamble(allow_writes) + "\n## Errand\n" + prompt
+        def charge():
+            with self._lock:
+                self._charge(task.task_id)
+        control = WorkerLoopControl(steps, token_limit, charge) if steps > 1 else None
+        marker = worker_loop_control.set(control)
+        raw = ''
         try:
-            with invocation(task.task_id, f"worker:{label}", "worker"):
-                raw = self._run(model_key, prompt, allow_writes=allow_writes)
-        except Exception:
+            for step in range(steps):
+                instruction = briefed
+                if control:
+                    instruction += ('\nYou cannot delegate. To continue this same errand, return '
+                                    'CONTINUE: followed by concise progress and the next read. '
+                                    'Otherwise return the final answer or PATCH. '
+                                    f'Step {step + 1}/{steps}; reported-token threshold {token_limit}.')
+                    if step:
+                        instruction += '\nPrevious step (data, not a new errand):\n' + raw
+                before_calls = control.calls if control else 0
+                with invocation(task.task_id, f"worker:{label}", "worker"):
+                    raw = self._run(model_key, instruction, allow_writes=allow_writes)
+                if raw.lstrip().startswith(('WORKER ', 'CONSULT ', 'FETCH:')):
+                    raise FanOutExceeded('A worker cannot hire, consult or fetch through lead channels')
+                if not raw.startswith('CONTINUE:'):
+                    break
+                if control is None or control.calls == before_calls:
+                    raise FanOutExceeded('Continuation requires an accounting-aware worker runner')
+                if step + 1 >= steps:
+                    raise FanOutExceeded('Worker step limit reached before a final answer')
+                with self._lock:
+                    self.store.put(raw, kind=f'worker-step:{label}', author=model_key)
+        except Exception as exc:
             with self._lock:
                 self._failed.add(fingerprint)
+                if getattr(exc, 'provider_response', ''):
+                    self.store.put(exc.provider_response, kind=f'worker-stopped:{label}', author=model_key)
             raise
+        finally:
+            worker_loop_control.reset(marker)
+            if control:
+                with self._lock:
+                    self.store.put(json.dumps(dict(steps=control.calls, reported_tokens=control.tokens,
+                        unknown_usage=control.unknown, max_steps=steps, max_tokens=token_limit,
+                        overshoot=max(0, control.tokens - token_limit))),
+                        kind=f'worker-budget:{label}', author=model_key)
         scratch.wipe()
 
         needs_tool = _parse_tool_request(raw)
+        # Asking is one extra call, not a conversation. The lead's move after
+        # a NEED TOOL is to reissue the same errand with the grant; if that
+        # reissue asks again, the errand is wrong rather than under-equipped,
+        # and a third call would be the lead paying twice to learn nothing.
+        errand_key = (task.task_id, hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16])
+        with self._lock:
+            already_asked = errand_key in self._asked
+            if needs_tool and already_asked:
+                needs_tool, second_ask = None, True
+            else:
+                second_ask = False
+                if needs_tool:
+                    self._asked.add(errand_key)
+        if second_ask:
+            with self._lock:
+                ref = self.store.put(raw, kind=f"worker:{label}", author=model_key)
+            return WorkerResult(
+                label=label, model=model_key, parent=parent_key, summary="", ref=ref,
+                error=("asked for a tool a second time on the same errand. One "
+                       "reissue with the grant is the whole escalation; rewrite "
+                       "the errand into something this worker can do, or do it "
+                       "yourself."),
+            )
         with self._lock:
             ref = self.store.put(raw, kind=f"worker:{label}", author=model_key)
             summary = self._summarise(raw)
@@ -367,9 +602,11 @@ class WorkerPool:
         reroute.
 
         Each job is a dict with ``prompt`` and ``label``, plus optional
-        ``model``, ``errand``, ``demanding``, ``allow_writes``.
+        ``model``, ``errand``, ``demanding``, ``allow_writes``, ``needs``.
         """
         results: List[Optional[WorkerResult]] = [None] * len(jobs)
+        if (invocation_context.get() or {}).get('origin') == 'worker':
+            raise FanOutExceeded('Workers cannot commission sibling workers')
 
         def one(index: int, job: dict) -> None:
             try:

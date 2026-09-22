@@ -1,0 +1,93 @@
+{
+  "run": "attempt 10, engine 95fee5c; the controller's own run id was never written",
+  "application_commit": "a8772ab",
+  "scored_by": "Claude, independently, on Davis's Mac; Codex remains out of context",
+  "scored_at": "2026-09-17T18:05:00Z",
+  "stop": {
+    "reason": "outer watchdog wall_deadline at 900s",
+    "inner_budget_stop_reason": "",
+    "inner_elapsed_seconds": 821.973225083,
+    "reported_tokens": 486031,
+    "threshold": 500000,
+    "calls_reserved": 6,
+    "note": "the run reached none of its own limits; the supervisor killed it"
+  },
+  "private_set": {
+    "archive_sha256": "71cb8b06a34ed94d6936bd9dfc45ed3889a0f6c5a80be1424850f1140e66371a",
+    "matches_published_commitment": true,
+    "own_SHA256SUMS_manifest_verified": "14 of 14 files OK",
+    "passed": 0,
+    "total": 9,
+    "cause": "the endpoint is still not wired"
+  },
+  "public_examiner": {
+    "passed": 0,
+    "failed": 13,
+    "total": 13
+  },
+  "application_suite": {
+    "passed": 135,
+    "baseline": 100,
+    "written_by_this_run": 35,
+    "note": "run in a fresh network-disabled credential-free container against the surviving tree; baseline intact"
+  },
+  "tasks_completed": 1,
+  "changed_files": [
+    "app.py",
+    "tests/test_basic.py"
+  ],
+  "token_split_now_visible_in_the_ledger": {
+    "total": 486031,
+    "re_read": 387584,
+    "new_work": 98447,
+    "re_read_share": "80%",
+    "per_seat": {
+      "astra orchestrator, task 1": {
+        "counted": 59991,
+        "re_read": 43520
+      },
+      "grok lead, task 1": {
+        "counted": 353635,
+        "re_read": 290944,
+        "model_calls": 12,
+        "vendor_cost_usd": 0.116062
+      },
+      "grok closeout, task 1": {
+        "counted": 7389,
+        "re_read": 0,
+        "vendor_cost_usd": 0.005549
+      },
+      "astra orchestrator, task 2": {
+        "counted": 65016,
+        "re_read": 53120
+      }
+    },
+    "assessment": "this is the first run whose own record shows where the tokens went; before it, the same finding required opening private vendor envelopes"
+  },
+  "the_delegation_change_did_not_work": {
+    "workers_commissioned": 0,
+    "lead_model_calls": {
+      "attempt_9": 9,
+      "attempt_10": 12
+    },
+    "lead_tokens": {
+      "attempt_9": 241700,
+      "attempt_10": 353635
+    },
+    "caveat": "attempt 10's task 1 was a different slice (a pure validator rather than the CSV reader), so this is not like-for-like; it is still the wrong direction",
+    "likely_cause": "the lead is told 'Inspect the project source in your working directory' directly, and invited to delegate the inspecting several blocks later. A direct instruction beats a hedged one after it, and this project's own finding is that the end of the prompt is where attention lands -- which is where the task recitation sits and this guidance does not.",
+    "scoreboard": "carrying the orchestrator's reading forward is measured and worked (-46% like-for-like, attempt 9); telling the lead to delegate has one data point and it is negative"
+  },
+  "defect_found": {
+    "claim": "the outer watchdog cannot let a run finish writing its records",
+    "detail": "RunLimits.wall_seconds and run_isolated's wall_seconds are both 900, so a run that uses its full time is killed before run_project writes result.json, report.md, ledger.md, delegation.md and changes.diff. All five are absent here. Vendor session evidence is absent for the same reason: the launcher copies it in a finally block the kill pre-empted.",
+    "remedy": "the outer wall should exceed the inner limit. This enlarges no budget: the inner 900-second limit bounds the run and is untouched.",
+    "not_yet_applied": true
+  },
+  "not_done": [
+    "no private-case edit",
+    "no budget, role or tolerance change",
+    "no vendor safeguard bypassed",
+    "no lead tool access changed"
+  ]
+}

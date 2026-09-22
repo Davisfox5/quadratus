@@ -1,0 +1,61 @@
+{
+ "id": "fetch-budget-bounded",
+ "shape": "cost-cap",
+ "family": "harness-maintainer",
+ "grader": false,
+ "source": "Report, Quadratus role hierarchy: a summary is an index; FETCH opens the original behind it, unknown ids come back as corrections, and the channel is bounded by max_fetches.",
+ "session": {
+  "project": false
+ },
+ "drive": {
+  "kind": "next_task"
+ },
+ "variants": {
+  "good": {
+   "script": [
+    {
+     "role": "orchestrator",
+     "times": 1,
+     "reply": "FETCH: nonexistent"
+    },
+    {
+     "role": "orchestrator",
+     "reply": "KIND: general simple\nParse the numbers"
+    }
+   ],
+   "expect": {
+    "outcome": "completed",
+    "task": {
+     "description_startswith": "Parse the numbers"
+    },
+    "calls": {
+     "role:orchestrator": 2
+    },
+    "prompts": [
+     {
+      "role": "orchestrator",
+      "contains": "no artifact 'nonexistent' exists"
+     }
+    ]
+   }
+  },
+  "bad": {
+   "script": [
+    {
+     "role": "orchestrator",
+     "reply": "FETCH: nonexistent"
+    }
+   ],
+   "expect": {
+    "outcome": "RunStalled",
+    "error_contains": [
+     "fetch budget exhausted"
+    ],
+    "calls": {
+     "role:orchestrator": 4
+    }
+   }
+  }
+ },
+ "expect": {}
+}

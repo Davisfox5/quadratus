@@ -1,0 +1,1 @@
+{"author": "openai:gpt-5.6-sol", "chars": 160, "id": "6066fadfa9fd", "kind": "gate-fix", "lines": 3, "preview": "Unable to modify or test: the workspace sandbox fails before every file operation because `bwrap` cannot create a namespace. No files were changed.\n\nCHANGED: []"}

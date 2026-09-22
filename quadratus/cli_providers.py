@@ -30,7 +30,10 @@ Design notes
   rather than from a binary: the likeliest failure on a fresh machine is one
   wrong flag, and the difference between a config line and a patch is the
   difference between a working evening and a blocked one. ``quadratus probe``
-  is how you find out which it is.
+  is how you find out which it is. The one thing an override may not do is
+  undo a control the harness sends on every call -- today, codex's native
+  sub-agent switch -- and an override that would is refused, not out-ordered
+  (see :data:`CODEX_NATIVE_DELEGATION_FEATURES`).
 * **Project access is explicit.** Fleet gives editing calls the persistent
   project and other calls fresh source copies. Vendor tool restrictions still
   apply. Copies isolate relative writes; they are not an operating-system
@@ -47,6 +50,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import math
 import os
 import re
 import shlex
@@ -72,7 +76,13 @@ __all__ = [
     "CodexCLIProvider",
     "GrokCLIProvider",
     "CLI_SPECS",
+    "CODEX_NATIVE_DELEGATION_CONTROL",
+    "CODEX_NATIVE_DELEGATION_FEATURES",
+    "CODEX_NATIVE_DELEGATION_OVERRIDE",
     "cli_provider_classes",
+    "codex_override_conflicts",
+    "native_delegation_mode",
+    "NativeControlOverride",
 ]
 
 
@@ -249,6 +259,10 @@ def _extract_grok_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
     calls = payload.get("modelCalls")
     if isinstance(calls, int) and not isinstance(calls, bool) and calls >= 0:
         diagnostics["model_calls"] = calls
+    # This envelope reports both, and grok is where the re-read cost is
+    # largest: 383,104 of attempt 8's 437,173 input tokens.
+    diagnostics.update(_reread_and_cost(payload.get("usage"),
+                                        payload.get("total_cost_usd")))
     names: List[str] = []
 
     def tool_name(item, certain):
@@ -294,6 +308,44 @@ def _extract_grok_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
     return diagnostics or None
 
 
+#: Fields whose presence means a turn *began*, so its spend is genuinely
+#: unknown when the envelope carries no usage. An error envelope with none of
+#: them is the CLI refusing before it contacted the service.
+_TURN_BEGAN_KEYS = ("usage", "sessionId", "session_id", "text", "stopReason",
+                    "stop_reason", "modelUsage", "messages")
+
+
+def _refused_before_the_turn(payload: object) -> bool:
+    """Did the vendor refuse to start, without reaching a model?
+
+    A call that never began spent nothing, and that is a different fact from
+    "this call's spend is unknown". The distinction matters because unknown
+    usage latches the run budget and stops the run -- which is right when a
+    call may have burned a window, and wrong when the CLI printed a one-line
+    refusal in under a second and exited.
+
+    Attempt 7 of the blind acceptance is the case. The grok CLI's session had
+    expired, so it answered ``{"type": "error", "message": "Not signed in..."}``
+    in 0.37 seconds. That reported no usage, the budget latched, and the
+    recovery on Sol that the engine had *already selected* was refused. One
+    expired login ended a run that had every other seat working.
+
+    Deliberately narrow, and it errs towards unknown. An envelope counts as a
+    refusal only if it is an error and carries nothing that implies a turn
+    began -- no usage, no session id, no text, no stop reason. A turn that
+    started and then failed carries at least a session id, so it stays
+    unknown, and so does anything unparseable. This is not the same as
+    ``window_exhausted``: that is a vendor limit reported by a live service,
+    this is the CLI never getting that far.
+    """
+    if not isinstance(payload, dict):
+        return False
+    looks_like_error = payload.get("type") == "error" or bool(payload.get("error"))
+    if not looks_like_error:
+        return False
+    return not any(payload.get(key) for key in _TURN_BEGAN_KEYS)
+
+
 def _extract_grok_usage(stdout: str) -> Optional[Dict[str, int]]:
     """Real token counts from the grok JSON envelope.
 
@@ -302,7 +354,13 @@ def _extract_grok_usage(stdout: str) -> Optional[Dict[str, int]]:
     cached input is still billed input there.
     """
     try:
-        usage = json.loads(stdout).get("usage") or {}
+        payload = json.loads(stdout)
+    except ValueError:
+        return None
+    if _refused_before_the_turn(payload):
+        return {"input_tokens": 0, "output_tokens": 0}
+    try:
+        usage = payload.get("usage") or {}
         input_tokens = (
             int(usage.get("input_tokens", 0))
             + int(usage.get("cache_read_input_tokens", 0))
@@ -314,6 +372,58 @@ def _extract_grok_usage(stdout: str) -> Optional[Dict[str, int]]:
     if input_tokens == 0 and output_tokens == 0:
         return None
     return {"input_tokens": input_tokens, "output_tokens": output_tokens}
+
+
+def _reread_and_cost(usage, cost=None) -> Dict[str, object]:
+    """How much of this call's input was text the model had already seen.
+
+    Attempt 9 reported 532,795 tokens, of which 402,816 were re-read: an agent
+    re-sends its whole conversation on every step, so a long loop's total is
+    mostly repetition. Nothing in the run record showed that. Finding it meant
+    opening the private vendor envelopes, which is precisely the digging a
+    ledger exists to spare someone.
+
+    Reported as a *subset* of the normalised ``input_tokens``, never an
+    addition to it, so the two can be compared without double counting.
+    ``vendor_cost_usd`` is what the vendor says it charged, kept beside our own
+    API-price counterfactual rather than replacing it -- on attempt 8's lead
+    the two differed 7.4x, because cache reads bill at a fraction of fresh
+    input, and which of them a subscription window meters by is undocumented.
+    """
+    facts: Dict[str, object] = {}
+    if isinstance(usage, dict):
+        total = 0
+        for key in ("cache_read_input_tokens", "cache_creation_input_tokens",
+                    "cached_input_tokens"):
+            value = usage.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                total += value
+        if total:
+            facts["cached_input_tokens"] = total
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
+        facts["vendor_cost_usd"] = float(cost)
+    return facts
+
+
+def _extract_codex_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
+    """Bounded facts from codex's ``turn.completed`` event.
+
+    This vendor had no diagnostics extractor at all, so its calls reached the
+    ledger with no stop reason and no re-read split -- and codex holds the
+    orchestrator seat whenever Fable is out, which by attempt 9 was every run.
+    """
+    diagnostics: Dict[str, object] = {}
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "turn.completed":
+            continue
+        # The last completed turn wins, matching _extract_codex_usage.
+        diagnostics = {"stop_reason": "turn.completed"}
+        diagnostics.update(_reread_and_cost(event.get("usage")))
+    return diagnostics or None
 
 
 def _extract_plain(stdout: str) -> str:
@@ -369,9 +479,12 @@ def _extract_native_children(stdout: str) -> List[NativeChild]:
     usage covered the parent alone, so 135,105 child tokens were spent inside
     an authorised run and appeared in no total it produced.
 
-    The harness cannot stop this -- it happens inside a vendor process -- so it
-    records it. Children are keyed by session id and their usage is taken as
-    the **maximum** seen, never the sum: these event streams restate the
+    On codex the harness now switches this off at the CLI
+    (``CODEX_SPEC.control_args``), so a child observed here is a *control
+    failure* and is marked as one. The observation stays regardless: it is
+    the check that the control held, and on the other two vendors it is still
+    all there is. Children are keyed by session id and their usage is taken
+    as the **maximum** seen, never the sum: these event streams restate the
     session's cumulative total on every update, so summing the updates
     multiplies the real figure.
 
@@ -440,6 +553,21 @@ def _extract_native_children(stdout: str) -> List[NativeChild]:
     return list(found.values())
 
 
+def _annotate_child(child: NativeChild, note: str) -> NativeChild:
+    """The same observation with the control verdict prepended to its detail."""
+    if note in child.detail:
+        return child
+    return NativeChild(
+        session_id=child.session_id,
+        model=child.model,
+        parent_session_id=child.parent_session_id,
+        input_tokens=child.input_tokens,
+        output_tokens=child.output_tokens,
+        tool_name=child.tool_name,
+        detail=f"{note}; {child.detail}" if child.detail else note,
+    )
+
+
 def _as_int(value) -> Optional[int]:
     try:
         return int(value)
@@ -455,6 +583,112 @@ def _pick_max(left: Optional[int], right: Optional[int]) -> Optional[int]:
     return max(left, right)
 
 
+_ABSENT = object()
+
+
+def _strict_count(mapping, key: str, *, missing_ok: bool) -> Optional[int]:
+    """A token count as the envelope must state it: a non-negative int.
+
+    Strings, floats, booleans, negatives and an explicit ``null`` are
+    malformed, not coerced. An absent optional field is zero; an absent
+    required one is malformed. Absence and ``null`` are different claims:
+    the first says nothing, the second says "no value", which for a count
+    is not a number.
+    """
+    value = mapping.get(key, _ABSENT)
+    if value is _ABSENT:
+        return 0 if missing_ok else None
+    if type(value) is not int or value < 0:
+        return None
+    return value
+
+
+def _claude_row_totals(row) -> Optional[Dict[str, int]]:
+    """One ``modelUsage`` row as (input incl. cache, output), or None if malformed."""
+    if not isinstance(row, dict):
+        return None
+    fields = [
+        _strict_count(row, "inputTokens", missing_ok=False),
+        _strict_count(row, "cacheReadInputTokens", missing_ok=True),
+        _strict_count(row, "cacheCreationInputTokens", missing_ok=True),
+        _strict_count(row, "outputTokens", missing_ok=False),
+    ]
+    if any(f is None for f in fields):
+        return None
+    return {"input_tokens": fields[0] + fields[1] + fields[2], "output_tokens": fields[3]}
+
+
+def _claude_usage_parts(stdout: str):
+    """(seat usage from top-level ``usage``, per-model rows, malformed flag).
+
+    Scored attempt 1 (2026-09-15) showed why both are read: the envelope's
+    top-level ``usage`` is the seat model's alone, while ``modelUsage`` also
+    carried a Haiku row (2,817 tokens) for the CLI's own auxiliary call. That
+    row was real subscription usage the run budget never saw.
+
+    ``malformed`` is true when any part of the metadata could not be read as
+    stated: a row that is not a mapping, a count that is not a non-negative
+    integer, a ``modelUsage`` that is not a mapping, or rows whose sum is
+    smaller than the seat's own figure (the seat is one of the rows, so a
+    smaller sum means rows are missing).
+    """
+    try:
+        payload = json.loads(stdout)
+    except (ValueError, TypeError):
+        return None, {}, False
+    if not isinstance(payload, dict):
+        return None, {}, False
+    seat = None
+    malformed = False
+    usage = payload.get("usage")
+    if isinstance(usage, dict):
+        counts = [
+            _strict_count(usage, "input_tokens", missing_ok=True),
+            _strict_count(usage, "cache_read_input_tokens", missing_ok=True),
+            _strict_count(usage, "cache_creation_input_tokens", missing_ok=True),
+            _strict_count(usage, "output_tokens", missing_ok=True),
+        ]
+        if any(c is None for c in counts):
+            malformed = True
+        else:
+            # An all-zero report is a report. An earlier version collapsed it
+            # to "no usage", on the reasoning that zero is indistinguishable
+            # from missing -- which is not true here: a missing ``usage`` key
+            # never reaches this branch at all. Attempt 4 of the blind
+            # acceptance paid for the difference. A vendor window-limit
+            # envelope reports zeros because the request was rejected, that
+            # read as unknown usage, the run budget latched, and the
+            # orchestrator's fallback seat -- already chosen, and logged as
+            # chosen -- was refused its reservation. The run ended in 3.5
+            # seconds without ever calling the deputy the fallback exists for.
+            seat = {"input_tokens": counts[0] + counts[1] + counts[2], "output_tokens": counts[3]}
+    elif usage is not None:
+        malformed = True
+    rows: Dict[str, Dict[str, int]] = {}
+    model_usage = payload.get("modelUsage", _ABSENT)
+    if isinstance(model_usage, dict):
+        if not model_usage and seat is not None and (seat["input_tokens"] or seat["output_tokens"]):
+            # Present and empty is a claim of "no models", which only a
+            # *nonzero* seat contradicts: a seat that reports zero agrees with
+            # it. Absent says nothing and keeps the seat.
+            malformed = True
+        for name, row in model_usage.items():
+            totals = _claude_row_totals(row)
+            if totals is None or not isinstance(name, str) or not name:
+                malformed = True
+                continue
+            rows[name] = totals
+    elif model_usage is not _ABSENT:
+        malformed = True
+    if rows and seat is not None:
+        # Per component, not grand total: the seat is one of the rows, so the
+        # rows' input must cover the seat's input and likewise for output.
+        if (sum(r["input_tokens"] for r in rows.values()) < seat["input_tokens"]
+                or sum(r["output_tokens"] for r in rows.values()) < seat["output_tokens"]):
+            malformed = True
+    return seat, rows, malformed
+
+
 def _extract_claude_usage(stdout: str) -> Optional[Dict[str, int]]:
     """Real token counts from the claude JSON envelope, when present.
 
@@ -462,20 +696,73 @@ def _extract_claude_usage(stdout: str) -> Optional[Dict[str, int]]:
     question is what the call would have cost on API keys, and cached input is
     still billed input there (at a different rate the seed sheet does not try
     to model -- the counterfactual is deliberately the conservative one).
+
+    The reported figure is the sum of every ``modelUsage`` row (seat plus the
+    CLI's own auxiliary models) when rows are present, else the top-level
+    ``usage`` (the seat alone). The two are never added to each other: the
+    seat's row is inside the sum, so each token is counted once.
+
+    Malformed or partial metadata makes the whole figure **unknown** (None),
+    so the run budget stops rather than continue on a count that is known to
+    be incomplete. The known seat part is preserved in the diagnostics for
+    the record; it is not presented as the total.
     """
+    seat, rows, malformed = _claude_usage_parts(stdout)
+    if malformed:
+        return None
+    if rows:
+        return {"input_tokens": sum(r["input_tokens"] for r in rows.values()),
+                "output_tokens": sum(r["output_tokens"] for r in rows.values())}
+    return seat
+
+
+def _extract_claude_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
+    """Provenance for the usage figure: which rows beyond the seat were counted.
+
+    ``auxiliary_models`` names the ``modelUsage`` rows that are not the seat,
+    the seat being the one row whose totals equal the top-level ``usage``;
+    ``auxiliary_tokens`` is their input plus output. When no row matches the
+    seat, or more than one does (a tie is not an identity), the rows are
+    ``unattributed`` and the figure is the excess of the rows' sum over the
+    seat. Malformed metadata sets ``auxiliary_usage`` to ``unknown`` and
+    reports the seat's own known figure as ``seat_tokens``: what could not be
+    parsed is missing, not zero, and the run budget sees None. Names and
+    integers only; nothing from the envelope's text reaches here.
+    """
+    seat, rows, malformed = _claude_usage_parts(stdout)
+    diagnostics: Dict[str, object] = {}
     try:
-        usage = json.loads(stdout).get("usage") or {}
-        input_tokens = (
-            int(usage.get("input_tokens", 0))
-            + int(usage.get("cache_read_input_tokens", 0))
-            + int(usage.get("cache_creation_input_tokens", 0))
-        )
-        output_tokens = int(usage.get("output_tokens", 0))
-    except (ValueError, TypeError, AttributeError):
+        payload = json.loads(stdout)
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        diagnostics.update(_reread_and_cost(payload.get("usage"),
+                                            payload.get("total_cost_usd")))
+    if malformed:
+        diagnostics["auxiliary_usage"] = "unknown"
+        if seat is not None:
+            diagnostics["seat_tokens"] = seat["input_tokens"] + seat["output_tokens"]
+        return diagnostics
+    if not rows:
         return None
-    if input_tokens == 0 and output_tokens == 0:
-        return None
-    return {"input_tokens": input_tokens, "output_tokens": output_tokens}
+    total = sum(r["input_tokens"] + r["output_tokens"] for r in rows.values())
+    if seat is None:
+        diagnostics["auxiliary_models"] = sorted(rows)
+        diagnostics["auxiliary_tokens"] = total
+        diagnostics["auxiliary_usage"] = "unattributed"
+        return diagnostics
+    seat_rows = [name for name, r in rows.items() if r == seat]
+    if len(seat_rows) == 1:
+        aux = {name: r for name, r in rows.items() if name != seat_rows[0]}
+        if not aux:
+            return None
+        diagnostics["auxiliary_models"] = sorted(aux)
+        diagnostics["auxiliary_tokens"] = sum(r["input_tokens"] + r["output_tokens"] for r in aux.values())
+        return diagnostics
+    diagnostics["auxiliary_models"] = sorted(rows)
+    diagnostics["auxiliary_tokens"] = total - seat["input_tokens"] - seat["output_tokens"]
+    diagnostics["auxiliary_usage"] = "unattributed"
+    return diagnostics
 
 
 @dataclass
@@ -507,11 +794,78 @@ class CLISpec:
     #: agent loop. Empty means the vendor offers no such mode and every seat
     #: gets the full agent.
     restricted_args: List[str] = field(default_factory=list)
+    #: Used instead of whichever sandbox args a seat would otherwise get --
+    #: ``restricted_args`` on a bounded seat, ``readonly_args``/``write_args``
+    #: on an agentic one -- when the operator asserts this process is already
+    #: inside an OS sandbox that is the security boundary
+    #: (``QUADRATUS_CONTAINED=1``). Empty means containment changes nothing,
+    #: which is the right answer for a vendor whose restriction is a tool
+    #: denial: denying a tool costs nothing inside a container and still
+    #: bounds what the model can reach for.
+    #:
+    #: It covers both branches because they are the same mechanism. Attempt 6
+    #: of the blind acceptance stopped exactly where attempt 5 did, with this
+    #: field set, because it was then consulted only on the restricted branch
+    #: -- and every seat that had ever been blind was an agentic one. An
+    #: orchestrator or lead is a senior seat and is never restricted, so a
+    #: substitution that skipped the agentic branch could not reach any of
+    #: them. See ``contained`` for what the permission axis rests on instead.
+    contained_sandbox_args: List[str] = field(default_factory=list)
+    #: A command that exercises the vendor's own sandbox without invoking a
+    #: model, given as the arguments after the binary. Empty means the vendor
+    #: has no such sandbox to test, which is reported as "not applicable"
+    #: rather than passing silently. ``{mode}`` is filled in by
+    #: ``sandbox_selftest`` with the mode a seat would really be given.
+    sandbox_selftest_args: List[str] = field(default_factory=list)
+    #: A command that reports whether this CLI is signed in, without invoking a
+    #: model. Empty means the vendor offers no such readout, which is reported
+    #: as "not applicable" rather than passing silently.
+    auth_check_args: List[str] = field(default_factory=list)
+    #: A regex the auth readout must match to count as signed in. Empty means
+    #: the CLI prints nothing distinctive when it is, so only a failure can be
+    #: recognised -- see ``auth_failure_pattern``.
+    auth_ok_pattern: str = ""
+    #: A regex in the auth readout that means definitely not signed in. Needed
+    #: because a CLI can report a dead session and still exit 0: ``grok models``
+    #: prints "You are not authenticated." and returns success, which is how
+    #: attempt 7 got as far as spending 82,051 tokens before finding out.
+    auth_failure_pattern: str = ""
     #: Flags an agentic seat needs and a restricted one must not get. Distinct
     #: from ``always_args``, which is genuinely unconditional: codex's
     #: ``--skip-git-repo-check`` has to survive into a restricted call, while
     #: grok's ``--always-approve`` is the very thing being withheld.
     agentic_args: List[str] = field(default_factory=list)
+    #: Flags that hold a harness invariant on *every* call, whatever the seat,
+    #: the permission mode or the operator's overrides say. Today this is one
+    #: thing: codex is told not to spawn its own agents, so that every helper
+    #: passes through WorkerPool and its budgets. Sent after the permission
+    #: axis and before ``extra_args``; ``override_conflicts`` is what stops an
+    #: operator override from undoing them. Empty for a vendor whose CLI
+    #: offers no such switch -- which is a gap, and is documented as one.
+    control_args: List[str] = field(default_factory=list)
+    #: Given the operator's extra arguments, the tokens that would undo or
+    #: hide ``control_args``. A non-empty answer refuses the call: an override
+    #: that re-enables native delegation is a configuration error, not a
+    #: preference, and a refusal cannot be mistaken for a bounded run.
+    override_conflicts: Optional[Callable[[Sequence[str]], List[str]]] = None
+    #: Optional run-wide denial request for other vendors' native helpers.
+    #: This is not proof their CLI honors it; see the Grok specification.
+    native_fanout_off_args: List[str] = field(default_factory=list)
+    #: Environment set on the subprocess only when the off-mode denial was
+    #: folded into this call's argv. Documented kill switches that remove a
+    #: fan-out path at startup, so a denial the model never sees cannot be
+    #: argued with either.
+    native_fanout_off_env: Dict[str, str] = field(default_factory=dict)
+    disallowed_tools_flag: str = ""
+    #: Arguments that turn the restricted seat into a one-turn, tool-less (or
+    #: as close as the CLI documents) summary call. Sent only when a provider
+    #: view carries ``summary_only=True``; see ``CLIProvider._build_argv``.
+    summary_only_args: List[str] = field(default_factory=list)
+    #: How the CLI separates several names in one ``disallowed_tools_flag``
+    #: value. Claude takes whitespace; grok's ``--help`` says comma-separated,
+    #: and a space-joined list would reach it as one nonsense tool name that
+    #: denies nothing (caught 2026-09-15 before the live check).
+    disallowed_tools_separator: str = " "
     #: Some CLIs only honour their tool-filtering flags when the prompt is an
     #: argument rather than a file (grok ignores them under --prompt-file, in
     #: silence). Where that is so, restricted mode must deliver the prompt in
@@ -547,6 +901,38 @@ class CLISpec:
     env: Dict[str, str] = field(default_factory=dict)
     #: Vendor key, used to find this spec's environment overrides.
     vendor: str = ""
+
+    def sandbox_selftest(self, probe_file: str,
+                         env: Optional[Mapping[str, str]] = None) -> List[str]:
+        """The sandbox self-test, in the mode a seat here would really be given.
+
+        ``probe_file`` is a readable file in the tree the seats must reach, so
+        the test answers the question the run cares about -- can this seat read
+        the source -- rather than only whether a sandbox starts.
+
+        A self-test in some other mode answers a question nobody asked. That
+        was the first version's mistake, and the note it carried -- that no
+        model-free check could settle which mode ``exec`` would get -- was
+        simply wrong: ``codex sandbox`` honours ``-c sandbox_mode=`` like any
+        other entry point. Measured inside the acceptance container on
+        2026-09-17, reading one file from the mounted tree: ``read-only`` and
+        ``workspace-write`` both fail with bwrap's namespace error and
+        ``danger-full-access`` returns the file's contents.
+
+        The mode tested is the strictest a seat could draw -- the contained
+        substitute where one applies, otherwise the read-only form, since a
+        write grant only ever loosens it.
+        """
+        if not self.sandbox_selftest_args:
+            return []
+        effective = (self.contained_sandbox_args
+                     if contained(env) and self.contained_sandbox_args
+                     else self.readonly_args)
+        # These arg lists are a flag followed by its value; the mode is the
+        # value. Stated here because the self-test borrows it by position.
+        mode = effective[-1] if effective else ""
+        return [arg.format(mode=mode, probe_file=probe_file)
+                for arg in self.sandbox_selftest_args]
 
     def resolved_binary(self, env: Optional[Mapping[str, str]] = None) -> str:
         """The executable to run, after any operator override."""
@@ -593,6 +979,35 @@ CLAUDE_SPEC = CLISpec(
     # claude degrades gracefully when a tool is missing: measured at one turn
     # with the answer inline, rather than a cancelled turn.
     restricted_args=["--disallowed-tools", "Bash Edit Write NotebookEdit Task"],
+    # Run-wide off mode. Every name here is a documented way for one claude
+    # call to start work outside itself or reach another session, and a bare
+    # name in --disallowed-tools removes the tool from the model's context
+    # (code.claude.com/docs/en/cli-reference, read 2026-09-15):
+    #   Task, Agent      subagents (Task is the older name, kept for older CLIs)
+    #   Workflow         "orchestrates many subagents in the background"
+    #   SendMessage,     cross-session messaging: other sessions in the same
+    #   ListAgents       filesystem, and cloud / Remote Control sessions
+    #   RemoteTrigger    claude.ai Routines, which can start fresh sessions
+    #   CronCreate       a scheduled prompt that re-enters this session later
+    #   mcp__*           every MCP tool; a project .mcp.json is not vetted
+    # Ordinary source read/write/exec/web tools are untouched. TaskOutput,
+    # TaskStop, ToolSearch and ScheduleWakeup stay: the docs scope them to
+    # this session, and a denied tool stays denied however its schema was
+    # loaded. Agent teams are off unless CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+    # is set and never form under -p; pinned to 0 below anyway.
+    native_fanout_off_args=["--disallowed-tools",
+                            "Task Agent Workflow SendMessage ListAgents RemoteTrigger CronCreate mcp__*"],
+    native_fanout_off_env={
+        # Read at startup: workflows unavailable, not merely denied.
+        "CLAUDE_CODE_DISABLE_WORKFLOWS": "1",
+        "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "0",
+    },
+    disallowed_tools_flag="--disallowed-tools",
+    # Summary-only form (cli-reference, read 2026-09-15): ``--tools ""``
+    # "disables all tools"; ``--max-turns 1`` limits agentic turns in print
+    # mode and "exits with an error when the limit is reached". Together they
+    # make the closeout a single model call over the prompt it was given.
+    summary_only_args=["--tools", "", "--max-turns", "1"],
     extract=_extract_claude_result,
     # Mandatory, not merely safer: --disallowed-tools is variadic, so a
     # positional prompt after it is swallowed as another tool name and the CLI
@@ -601,7 +1016,175 @@ CLAUDE_SPEC = CLISpec(
     prompt_on_stdin=True,
     verified=True,
     extract_usage=_extract_claude_usage,
+    extract_diagnostics=_extract_claude_diagnostics,
 )
+
+#: Codex feature switches that admit vendor-native sub-agents (``spawn_agent``
+#: and friends). Both are governed by ``--disable <name>`` on codex-cli
+#: 0.154.0, and the precedence was probed on 2026-09-15 with ``features
+#: list`` (a configuration read, not a model call):
+#:
+#: * ``--disable multi_agent`` wins over ``--enable multi_agent``, over
+#:   ``-c features.multi_agent=true`` in every spelling tried (``-c``,
+#:   ``-cKEY=``, ``--config``, an inline ``features={...}`` table, spaces
+#:   around ``=``), and over ``[features] multi_agent = true`` in a
+#:   ``CODEX_HOME`` config file -- *regardless of argument order*.
+#: * ``-c features.multi_agent=false`` alone does not: a later ``-c ...=true``
+#:   wins, and ``--enable`` beats it wherever it sits. So the control is the
+#:   ``--disable`` form, and the ``-c`` form is not relied on.
+#: * ``multi_agent_v2`` is a separate switch (present, off by default) that
+#:   disabling the first leaves alone, so both are disabled.
+#: * ``--disable <unknown>`` errors ("Unknown feature flag"), whereas ``-c
+#:   features.<unknown>=false`` is ignored in silence. The loud form is the
+#:   one wanted here: a codex release that renames the switch fails every
+#:   call and says why, rather than quietly running with spawning back on.
+#:
+#: **The two feature switches are not the control** (live finding,
+#: 2026-09-15). In a clean image with both reported ``false``, Sol spawned
+#: Sol. The reason is in codex-rs at tag ``rust-v0.154.0``,
+#: ``core/src/config/mod.rs``::
+#:
+#:     fn multi_agent_version_override(&self) -> Option<MultiAgentVersion> {
+#:         if self.features.enabled(Feature::MultiAgentV2) { Some(V2) }
+#:         else if !self.agents_enabled { Some(Disabled) }
+#:         else { None }
+#:     }
+#:     fn multi_agent_version_for_model(&self, model: Option<MultiAgentVersion>) {
+#:         self.multi_agent_version_override()
+#:             .or(model)
+#:             .unwrap_or_else(|| self.multi_agent_version_from_features())
+#:     }
+#:
+#: Precedence, highest first: ``features.multi_agent_v2`` on forces V2;
+#: ``agents.enabled = false`` forces Disabled; otherwise the *model's own
+#: declared version* (server-supplied model metadata, ``None`` in the
+#: built-in table) applies; and only when the model declares nothing do the
+#: feature flags decide. ``--disable`` edits the last resort. A model that
+#: ships with a multi-agent version, as GPT-5.6 evidently does, never reaches
+#: it. ``spec_plan.rs`` then adds ``spawn_agent`` and the rest whenever the
+#: resolved version is not ``Disabled``.
+#:
+#: So the control is ``agents.enabled = false`` (schema: "Whether multi-agent
+#: tools are enabled. Defaults to true. An enabled features.multi_agent_v2
+#: setting takes precedence"), sent as a ``-c`` override, *with* the two
+#: ``--disable`` switches kept so that nothing can force V2 over it. The
+#: conflict scanner refuses any operator override of ``features.multi_agent*``
+#: or of the ``agents`` table for the same reason. Still configuration
+#: until the bounded tool-list probe below has run: on this vendor a switch
+#: that reads ``false`` has already been shown not to be the switch.
+CODEX_NATIVE_DELEGATION_FEATURES = ("multi_agent", "multi_agent_v2")
+#: Config tables whose only purpose is to shape native sub-agents
+#: (``agents.enabled``, ``agents.max_threads``, ...). The 0.154.0 binary
+#: accepts ``agents.enabled`` and rejects ``agents.bogus``, so the table is
+#: real; with spawning disabled any override of it is at best inert and at
+#: worst an attempt to re-admit it, and both are refused.
+CODEX_NATIVE_DELEGATION_TABLES = ("agents",)
+#: The one override that sits ahead of the model's declared version.
+CODEX_NATIVE_DELEGATION_OVERRIDE = "agents.enabled=false"
+#: The control itself: both feature switches off (so nothing forces V2) and
+#: the agents table disabled (so the model's own default cannot re-admit
+#: the tools). Order is irrelevant to codex for these; kept stable for the
+#: record.
+CODEX_NATIVE_DELEGATION_CONTROL = [
+    flag for name in CODEX_NATIVE_DELEGATION_FEATURES for flag in ("--disable", name)
+] + ["-c", CODEX_NATIVE_DELEGATION_OVERRIDE]
+
+
+def _config_override_value(tokens: Sequence[str], index: int):
+    """The ``key=value`` payload of a ``-c``/``--config`` at ``index``, and
+    how many tokens it spans. None when the token is not a config override."""
+    token = tokens[index]
+    if token in ("-c", "--config"):
+        if index + 1 < len(tokens):
+            return tokens[index + 1], 2
+        return None, 1
+    if token.startswith("--config="):
+        return token[len("--config="):], 1
+    if token.startswith("-c") and len(token) > 2 and not token.startswith("--"):
+        # clap accepts both ``-cKEY=VAL`` and ``-c=KEY=VAL``.
+        return token[2:].lstrip("="), 1
+    return None, 0
+
+
+def _feature_switch_value(tokens: Sequence[str], index: int):
+    """The feature named by an ``--enable`` at ``index``, and its span."""
+    token = tokens[index]
+    if token == "--enable":
+        if index + 1 < len(tokens):
+            return tokens[index + 1], 2
+        return None, 1
+    if token.startswith("--enable="):
+        return token[len("--enable="):], 1
+    return None, 0
+
+
+def codex_override_conflicts(args: Sequence[str]) -> List[str]:
+    """Operator arguments that would undo or hide the native-delegation control.
+
+    Three shapes, each rendered back as the tokens that caused it:
+
+    * ``--enable <feature>`` for a feature in
+      :data:`CODEX_NATIVE_DELEGATION_FEATURES`. On 0.154.0 it would *lose* to
+      the ``--disable`` the harness sends, but an override whose only effect is
+      to lose is a misunderstanding worth stopping on rather than a no-op.
+    * A ``-c``/``--config`` override of ``features.<feature>`` to anything but
+      ``false``, of the whole ``features`` table naming one, or of anything
+      under an ``agents`` table. Keys are normalised by stripping quotes and
+      whitespace, since TOML allows both.
+    * A bare ``--``. Everything after an argument terminator is positional to
+      the CLI and invisible to this check, so the terminator itself is refused.
+
+    An agreeing override (``--disable multi_agent``, ``-c
+    features.multi_agent=false``) is not a conflict; neither is anything
+    unrelated, which is most of what ``QUADRATUS_CLI_ARGS_OPENAI`` is for.
+    """
+    tokens = list(args)
+    conflicts: List[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in ("--", "resume", "fork"):
+            conflicts.append(token)
+            index += 1
+            continue
+        feature, span = _feature_switch_value(tokens, index)
+        if span:
+            if feature in CODEX_NATIVE_DELEGATION_FEATURES:
+                conflicts.append(" ".join(tokens[index:index + span]))
+            index += span
+            continue
+        payload, span = _config_override_value(tokens, index)
+        if span:
+            if payload is not None and _config_override_conflicts(payload):
+                # The key only. An override's value can carry private
+                # configuration, and this string ends up in an error message
+                # and a log.
+                conflicts.append(f"{token.split('=', 1)[0][:8]} {_override_key(payload)}=…")
+            index += span
+            continue
+        index += 1
+    return conflicts
+
+
+def _override_key(payload: str) -> str:
+    return re.sub(r"""[\s"']""", "", payload.partition("=")[0])
+
+
+def _config_override_conflicts(payload: str) -> bool:
+    key, _, value = payload.partition("=")
+    key = _override_key(payload)
+    value = value.strip().strip("\"'").lower()
+    if key in CODEX_NATIVE_DELEGATION_TABLES or any(
+        key.startswith(f"{table}.") for table in CODEX_NATIVE_DELEGATION_TABLES
+    ):
+        return True
+    for name in CODEX_NATIVE_DELEGATION_FEATURES:
+        if key == f"features.{name}" and value != "false":
+            return True
+        if key == "features" and name in value:
+            return True
+    return False
+
 
 #: Verified end to end against codex-cli 0.154.0 on 2026-09-12: a signed-in
 #: ``codex exec`` round trip through these exact flags, with the JSONL event
@@ -638,7 +1221,43 @@ CODEX_SPEC = CLISpec(
     # than the other two vendors can do, and said plainly rather than
     # implied by an empty list.
     restricted_args=["--sandbox", "read-only"],
+    # Inside our own container the vendor sandbox cannot start, and it is
+    # redundant there -- see ``contained`` for the measurement and the trade.
+    # This is the only mode codex documents as running commands without
+    # sandboxing, and the three modes are the whole of its sandbox surface
+    # (``-s`` takes read-only, workspace-write or danger-full-access and
+    # nothing else), so there is no fourth setting that keeps a write denial
+    # while letting the sandbox stand down. The name is alarming and accurate;
+    # what it means here is "the container is the sandbox".
+    contained_sandbox_args=["--sandbox", "danger-full-access"],
+    # Exercises the vendor sandbox with no model call, which is exactly the
+    # mechanism that fails in the acceptance container. The mode is filled in
+    # from the seat's own effective mode, and the command reads a real file
+    # rather than running `true`: starting the sandbox is the question, and a
+    # command that touches nothing could pass without answering it.
+    sandbox_selftest_args=["sandbox", "-c", "sandbox_mode={mode}",
+                           "--", "cat", "{probe_file}"],
+    # Prints "Logged in using ChatGPT" for a subscription session, so this
+    # vendor can be checked positively rather than by known failure wording.
+    auth_check_args=["login", "status"],
+    auth_ok_pattern=r"(?i)logged in",
+    extract_diagnostics=_extract_codex_diagnostics,
     always_args=["--skip-git-repo-check"],
+    # No seat on this transport may spawn its own agents. A Sol review on
+    # 2026-09-13 used the CLI's spawn_agent to create a second Sol that passed
+    # through no worker selection and no budget; see delegation.py. The
+    # switch is sent on every call -- read-only, writable and restricted
+    # alike -- and an operator override that would undo it is refused rather
+    # than out-ordered. Helpers on this vendor are Luna and Terra, dispatched
+    # by WorkerPool. Configuration is checked locally; runtime enforcement
+    # still needs a live probe, so observed children remain in the telemetry.
+    control_args=list(CODEX_NATIVE_DELEGATION_CONTROL),
+    override_conflicts=codex_override_conflicts,
+    # Summary-only form: codex exec has no tool allowlist and no turn cap in
+    # this spec, so the bound is ``--sandbox read-only`` plus the native
+    # controls plus the caller's 60 s / one-attempt limits. Stated, not
+    # papered over with a flag this file has never seen accepted.
+    summary_only_args=[],
     extract=_extract_codex_result,
     extract_usage=_extract_codex_usage,
     prompt_on_stdin=True,
@@ -737,7 +1356,46 @@ GROK_SPEC = CLISpec(
     # call comes back as a cancelled agent turn, which is how the restriction
     # was first thought impossible.
     restricted_prompt_flag="-p",
+    # `grok models` reports the session and exits 0 either way, so only the
+    # failure wording is recognisable; there is no distinctive line to match
+    # when the session is live. Verified on grok 1.0.30 with an expired
+    # session on 2026-09-17: "You are not authenticated.", exit 0.
+    auth_check_args=["models"],
+    auth_failure_pattern=r"(?i)not\s+authenticated|not\s+signed\s+in",
     readonly_args=[],
+    # Run-wide off mode, from the installed grok 1.0.30 documentation as
+    # quoted by Codex on PR #11 (2026-09-15), since docs.x.ai is unreachable
+    # from the review environment:
+    #   spawn_subagent   the native spawner (user guide); Agent is its alias,
+    #                    so both names are denied
+    #   workflow         every workflow agent() call and parallel() item
+    #                    spends a child-agent slot (04-slash-commands.md:296);
+    #                    on by default, GROK_WORKFLOWS=0 disables it
+    #                    (05-configuration.md:364-372)
+    #   scheduler_create schedules a later re-entry, the analogue of Claude's
+    #                    CronCreate; a way past the one turn asked for
+    #   search_tool,     MCP discovery and calling an integration by qualified
+    #   use_tool         name (07-mcp-servers.md:213-218): integration
+    #                    dispatchers, not shown to be an Agent bypass, denied
+    #                    because a fresh HOME has no vetted integrations
+    # --disallowed-tools removes built-in tools and is comma-separated
+    # (--help; 14-headless-mode.md:35,51-82). Direct read_file,
+    # run_terminal_command, search_replace, write, grep, list_dir and the web
+    # tools are separate names and are untouched. The 2026-09-15 live check
+    # of the space-joined form listed spawn_subagent, scheduler_create,
+    # workflow, use_tool and search_tool still present, which is what a
+    # single nonsense name denies: nothing. Hence the separator field.
+    native_fanout_off_args=["--disallowed-tools",
+                            "Agent,spawn_subagent,workflow,scheduler_create,use_tool,search_tool"],
+    disallowed_tools_separator=",",
+    # Workflows removed at startup as well as denied by name.
+    native_fanout_off_env={"GROK_WORKFLOWS": "0"},
+    # Summary-only form: the guide documents ``--max-turns`` on the ``-p``
+    # form, and no tool-less form, so the bound is one turn on top of the
+    # restricted read-only allowlist and the full denial. A read tool that
+    # is present but has no turn to run in is the honest description.
+    summary_only_args=["--max-turns", "1"],
+    disallowed_tools_flag="--disallowed-tools",
     # Every *agentic* call, read-only included: without it the turn is
     # cancelled silently the first time a tool is called. A restricted seat
     # must not get it -- there, the write tools are absent rather than denied,
@@ -870,10 +1528,169 @@ def _render_history(history: Sequence[Turn]) -> str:
     return "\n".join(lines)
 
 
+def contained(env: Optional[Mapping[str, str]] = None) -> bool:
+    """Whether the operator asserts an OS sandbox already bounds this process.
+
+    Set by the isolated runner's launcher, never inferred. It asserts one
+    thing: the container is the security boundary, so a vendor's own inner
+    sandbox is redundant here and may be stood down where it cannot start.
+
+    The case is Codex. Its CLI sandboxes model-run shell commands with
+    bubblewrap, which needs an unprivileged user namespace, and the acceptance
+    container denies that through Docker's seccomp profile. The sandbox cannot
+    start, so the seat can run no command at all. Attempts 3 and 5 of the blind
+    acceptance each spent a window on an OpenAI seat that could not read a
+    single file; attempt 5's orchestrator correctly gave up and asked the
+    operator for read access rather than inventing a task.
+
+    The alternative was to let the container create user namespaces. Measured
+    and rejected on 2026-09-17: ``--security-opt seccomp=unconfined`` makes the
+    inner sandbox work, ``--cap-add SYS_ADMIN`` does not, so the only working
+    route opens the surface behind most container escapes, for every process in
+    the container, to enable a second sandbox inside a boundary that already
+    holds writes to the work tree and a tmpfs on a read-only root with no
+    capabilities. Weakening the wall that holds to prop up one that does not is
+    the wrong trade.
+
+    It applies to every seat on that vendor, bounded or agentic, and attempt 6
+    is why that is stated rather than assumed. The first version substituted
+    only on the restricted branch, which reads as the cautious choice and is
+    the opposite: senior seats are *never* restricted, so the substitution
+    could not reach an orchestrator, a lead, a reviewer or a consultant --
+    which is every seat that had ever gone blind. Attempt 6 stopped at the
+    same `bwrap` failure as attempt 5, at the same point, with this assertion
+    set.
+
+    Standing the sandbox down does not hand the permission axis away, because
+    the sandbox flag was not what held it. A call without a write grant runs
+    in a fresh source copy that is deleted when the call returns
+    (``runtime.Fleet._invoke``), and a restricted editing seat returns a text
+    patch the harness applies -- neither depends on the vendor refusing a
+    write. What is given up is narrower and worth saying plainly: inside this
+    container a Codex seat can now write into its own disposable copy, and a
+    seat that already holds a write grant can write to the tmpfs HOME as well
+    as to /work. Both disappear with the container, and a seat that can read
+    that HOME could already read it under ``read-only``.
+
+    Off by default, so an ordinary host run keeps every vendor sandbox. There
+    the vendor's sandbox *is* the boundary, and standing it down would be a
+    real loss rather than a redundant one.
+    """
+    environ = os.environ if env is None else env
+    return environ.get('QUADRATUS_CONTAINED', '').strip().lower() in {'1', 'true', 'yes'}
+
+
+class NativeControlOverride(ProviderError):
+    """A configuration conflicts with the selected native-delegation policy."""
+
+
+def native_delegation_mode(env: Optional[Mapping[str, str]] = None) -> str:
+    environ = os.environ if env is None else env
+    raw = environ.get('QUADRATUS_NATIVE_DELEGATION', '').strip().lower()
+    if raw not in ('', 'vendor-default', 'off'):
+        raise NativeControlOverride(
+            'QUADRATUS_NATIVE_DELEGATION must be vendor-default or off')
+    return raw or 'vendor-default'
+
+
+def _split_tool_names(value: str, separator: str = " ") -> List[str]:
+    """The names in one tool-list value, whichever separator the CLI uses."""
+    return [name for name in re.split(r"[\s,]+" if separator.strip() == "" else re.escape(separator) + r"|\s+", value) if name]
+
+
+def _fold_disallowed(argv: List[str], flag: str, extra: List[str], separator: str = " ") -> List[str]:
+    """Add ``extra`` to an existing ``flag`` value rather than repeating the flag.
+
+    Neither CLI documents that a repeated ``--disallowed-tools`` merges, so the
+    names are folded into the one value, joined with the CLI's own separator.
+    A flag with no value after it (last token) is left alone and the denial
+    appended as its own pair.
+    """
+    if flag in argv:
+        index = argv.index(flag) + 1
+        if index < len(argv):
+            present = _split_tool_names(argv[index], separator)
+            argv[index] = separator.join(present + [name for name in extra if name not in present])
+            return argv
+    return argv + [flag, separator.join(extra)]
+
+
+#: Prefix on a synthesised child's detail that marks it as *attempted*
+#: delegation: a denied fan-out tool was named in the envelope, and whether it
+#: executed or what it spent is unknown. Distinct from a codex child, which
+#: the vendor's own stream reports as having run.
+ATTEMPTED_DELEGATION = "ATTEMPTED native delegation"
+
+
+def _denied_fanout_children(vendor: str, denied: List[str], stdout: str,
+                            diagnostics) -> List[NativeChild]:
+    """Suspected native children on the vendors whose control is a tool denial.
+
+    Codex reports its own agents in its event stream; claude and grok do not.
+    Under ``QUADRATUS_NATIVE_DELEGATION=off`` the only evidence about a denied
+    fan-out tool is the envelope's own record of tool calls:
+
+    * grok's ``toolCalls`` (read through the diagnostics whitelist, names
+      only). A denied name that still appears there is an *attempt*: the
+      turn asked for the tool. A cancelled or refused request leaves the
+      same record as one that ran, so this does not establish that a child
+      executed, and the child carries unknown usage and the
+      ``ATTEMPTED_DELEGATION`` marker. The run still stops on it, because
+      the 2026-09-12 experiment showed ``--always-approve`` overrides
+      ``--disallowed-tools`` and an attempt under that flag may well have
+      run; stopping on suspicion is the conservative reading and the
+      record says "attempted", not "ran".
+    * claude's ``--output-format json`` envelope carries no tool calls at all,
+      only ``permission_denials``. A denial naming Task/Agent is the control
+      *holding*, not a child, so it is recorded in the diagnostics
+      (``denied_tools``) and not as a child. A claude child that was not
+      denied is invisible in this output format; that gap is documented in
+      the property below and is closed only by a live probe or stream-json.
+
+    Nothing here is trusted as complete: an empty list means "no evidence",
+    never "no child ran".
+    """
+    children: List[NativeChild] = []
+    wanted = {name.lower() for name in denied}
+    if vendor == "grok":
+        names = (diagnostics or {}).get("attempted_tools") or []
+        for name in names:
+            if isinstance(name, str) and name.lower() in wanted:
+                children.append(NativeChild(
+                    session_id=f"unidentified:grok:{name}",
+                    tool_name=name,
+                    detail=f"{ATTEMPTED_DELEGATION}: denied fan-out tool named in the "
+                           "envelope's tool calls; whether it executed and what it "
+                           "spent are unknown",
+                ))
+    return children
+
+
+def _claude_denied_fanout(stdout: str, denied: List[str]) -> List[str]:
+    """Names in the claude result envelope's ``permission_denials`` that match a denied fan-out tool."""
+    try:
+        payload = json.loads(stdout)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    wanted = {name.lower() for name in denied}
+    found: List[str] = []
+    for entry in payload.get("permission_denials") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("tool_name") or entry.get("toolName") or entry.get("name")
+        if isinstance(name, str) and name.lower() in wanted and name not in found:
+            found.append(name)
+    return found
+
+
 class CLIProvider(LLMProvider):
     """Base class for providers that drive a vendor CLI as a subprocess."""
 
     spec: CLISpec = CLAUDE_SPEC
+
+    transport = "cli"
 
     def __init__(self, model, api_key=None, *, workdir=None, allow_writes=False, **kwargs):
         # CLI providers authenticate through the vendor's cached OAuth login, so
@@ -883,6 +1700,9 @@ class CLIProvider(LLMProvider):
         self._workdir = workdir
         self._owned_workdir: Optional[str] = None
         self._allow_writes = allow_writes
+        #: One-turn, tool-less summary call on the restricted seat (closeout).
+        #: Off by default; a per-call view sets it. See ``_build_argv``.
+        self.summary_only: bool = bool(kwargs.pop("summary_only", False))
         self._prompt_files = set()
         #: Real token counts from the most recent call, when the CLI reported
         #: them; None otherwise. Read by metering glue, never load-bearing.
@@ -892,6 +1712,9 @@ class CLIProvider(LLMProvider):
         #: outside every per-task budget. Kept distinct so they are never
         #: folded into Quadratus-dispatched totals.
         self.native_children: List[NativeChild] = []
+        #: Fan-out tool names this call denied under the run-wide off mode;
+        #: set by ``_build_argv`` per call, empty when the mode is not on.
+        self._native_fanout_denied: List[str] = []
         #: How the most recent call ended, in the bounded form the ledger may
         #: keep: stop reason, model-call count, attempted tool names. Reset at
         #: the start of every attempt so a stale record never describes a
@@ -982,15 +1805,92 @@ class CLIProvider(LLMProvider):
             # readonly_args and write_args both describe what an agent may do
             # with its tools, and this seat's dangerous tools are absent rather
             # than governed.
-            argv += list(spec.restricted_args)
+            if contained() and spec.contained_sandbox_args:
+                argv += list(spec.contained_sandbox_args)
+            else:
+                argv += list(spec.restricted_args)
         else:
             argv += list(spec.agentic_args)
-            argv += list(
-                spec.readonly_args if not self._allow_writes else spec.write_args
-            )
+            if contained() and spec.contained_sandbox_args:
+                # Same substitution, same reason: this vendor's two permission
+                # modes are one sandbox mechanism, and it cannot start here.
+                # What the permission axis rested on survives the swap --
+                # a call without a write grant runs in a disposable source
+                # copy (``runtime.Fleet._invoke``), and a call with one runs
+                # in a container whose root is read-only, so /work and a
+                # tmpfs are the only writable paths either way.
+                argv += list(spec.contained_sandbox_args)
+            else:
+                argv += list(
+                    spec.readonly_args if not self._allow_writes else spec.write_args
+                )
         # Operator overrides go last, so they can also correct something the
-        # spec got wrong above -- most CLIs let a later flag win.
-        argv += spec.extra_args()
+        # spec got wrong above -- most CLIs let a later flag win. The one
+        # thing they may not correct is the control: it is checked against
+        # them first, and a conflict is a refusal, not a warning, because a
+        # call that ran with native spawning back on would look exactly like
+        # a bounded one from the outside.
+        extra = spec.extra_args()
+        mode = native_delegation_mode()
+        if self.summary_only:
+            # The closeout form (2026-09-15): the record that survives a task
+            # is written from the transcript and diff the caller supplies,
+            # never by re-reading the project. Scored attempt 1 spent 258k
+            # tokens on exactly that re-reading. So this view refuses to be
+            # anything but bounded: restricted seat, empty directory, one
+            # attempt, a minute, no operator override, and native fan-out
+            # off whatever the run-wide mode says.
+            if not self.restricted:
+                raise ProviderError(f"{self.label}: summary_only requires the restricted seat form")
+            if extra:
+                raise NativeControlOverride(
+                    f"QUADRATUS_CLI_ARGS_{spec.vendor.upper()} must be empty for a summary-only call")
+            if self.max_retries != 1:
+                raise ProviderError(f"{self.label}: summary_only allows exactly one attempt, not {self.max_retries}")
+            timeout = self.timeout
+            if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                    or not math.isfinite(timeout) or timeout <= 0 or timeout > 60):
+                # nan compares false against everything, so "not > 60" is not
+                # "<= 60"; the bound is stated positively.
+                raise ProviderError(f"{self.label}: summary_only needs a finite timeout in (0, 60], not {timeout!r}")
+            if os.listdir(self.workdir):
+                raise ProviderError(f"{self.label}: summary_only requires an empty working directory")
+            mode = 'off'
+        if mode == 'off' and spec.native_fanout_off_args:
+            # Vendor-specific flag precedence is not a reliable generic
+            # parser. In this strict opt-in mode, reject overrides rather
+            # than let a later tools/settings flag silently undo the denial.
+            if extra:
+                raise NativeControlOverride(
+                    f'QUADRATUS_CLI_ARGS_{spec.vendor.upper()} must be empty '
+                    'when QUADRATUS_NATIVE_DELEGATION=off')
+            flag, *names = spec.native_fanout_off_args
+            denied = _split_tool_names(" ".join(names), spec.disallowed_tools_separator)
+            argv = _fold_disallowed(argv, spec.disallowed_tools_flag or flag, denied,
+                                    spec.disallowed_tools_separator)
+            self._native_fanout_denied = denied
+        else:
+            self._native_fanout_denied = []
+        if spec.override_conflicts is not None:
+            conflicts = spec.override_conflicts(extra)
+            if conflicts:
+                raise NativeControlOverride(
+                    f"{self.label}: QUADRATUS_CLI_ARGS_{spec.vendor.upper()} would "
+                    f"re-enable or hide vendor-native sub-agents "
+                    f"({'; '.join(conflicts)}). Quadratus disables native "
+                    f"spawning on every {spec.binary} call so that helpers pass "
+                    f"through WorkerPool; remove the override, not the control."
+                )
+        # Before the overrides rather than after them, and deliberately so:
+        # the precedence probe (see CODEX_NATIVE_DELEGATION_FEATURES) showed
+        # --disable wins from any position, the conflict check above covers
+        # the spellings that could out-order a weaker form, and the operator
+        # contract that overrides land last is one this module already
+        # promises.
+        argv += list(spec.control_args)
+        argv += extra
+        if self.summary_only:
+            argv += list(spec.summary_only_args)
         if self.restricted and spec.restricted_prompt_flag:
             if len(prompt) > MAX_ARGV_PROMPT:
                 # Falling back to a prompt file here would silently drop the
@@ -1040,6 +1940,8 @@ class CLIProvider(LLMProvider):
         composed = self._compose_prompt(prompt, system, history)
         argv = self._build_argv(composed, system)
         env = {**os.environ, **self.spec.env}
+        if getattr(self, "_native_fanout_denied", None):
+            env.update(self.spec.native_fanout_off_env)
         # An inherited ANTHROPIC_API_KEY would silently divert a subscription
         # run onto billed API credits, so clear key vars for the child.
         for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
@@ -1120,6 +2022,17 @@ class CLIProvider(LLMProvider):
                 self.spec.extract_diagnostics(stdout) if self.spec.extract_diagnostics else None
             )
             self.native_children = _extract_native_children(stdout)
+            denied = list(getattr(self, "_native_fanout_denied", []) or [])
+            if denied:
+                self.native_children.extend(_denied_fanout_children(
+                    self.spec.vendor, denied, stdout, self.last_diagnostics
+                ))
+                if self.spec.vendor == "claude":
+                    held = _claude_denied_fanout(stdout, denied)
+                    if held:
+                        diagnostics = dict(self.last_diagnostics or {})
+                        diagnostics["denied_tools"] = held
+                        self.last_diagnostics = diagnostics
             for line in (stdout or "").splitlines():
                 try:
                     event = json.loads(line)
@@ -1144,8 +2057,55 @@ class CLIProvider(LLMProvider):
                     root, self.last_session_id, self.workdir,
                     ended=datetime.now(timezone.utc),
                 ))
+            if self.native_children and self.native_delegation_disabled:
+                # The switch was sent and the record shows native activity
+                # anyway. Say so on the record itself, where the ledger and
+                # the evidence bundle will carry it; a child silently filed
+                # under "observed" would read as the expected state of a
+                # vendor without a switch, which this vendor no longer is.
+                # Two wordings, because two kinds of evidence: a child the
+                # vendor's own stream reports (codex) *ran*; a denied tool
+                # name in an envelope (grok) was *attempted*, and the
+                # public record must not claim execution from a name.
+                sent = " ".join(token for token in (
+                    list(self.spec.control_args) or (
+                        [self.spec.disallowed_tools_flag or (self.spec.native_fanout_off_args or [""])[0]]
+                        + list(getattr(self, "_native_fanout_denied", []) or [])
+                    )
+                ) if token)
+                ran = f"CONTROL FAILURE: native child ran although the call sent {sent}"
+                attempted = (
+                    "CONTROL FAILURE (suspected): a denied fan-out tool was attempted "
+                    f"although the call sent {sent}; execution and usage unknown"
+                )
+                annotated = []
+                for child in self.native_children:
+                    note = attempted if child.detail.startswith(ATTEMPTED_DELEGATION) else ran
+                    log.warning("%s: %s", self.label, note)
+                    annotated.append(_annotate_child(child, note))
+                self.native_children = annotated
         except Exception:
             log.debug("native accounting unavailable", exc_info=True)
+
+    @property
+    def native_delegation_disabled(self) -> bool:
+        """Whether this transport tells the CLI not to spawn its own agents.
+
+        True where the spec carries a control (codex's ``--disable`` pair), or
+        where this call folded the run-wide off-mode denial into its argv
+        (claude's and grok's ``--disallowed-tools``). A vendor without either
+        is reported as such rather than assumed bounded.
+
+        What each is evidence of differs. Codex reports its children in its
+        own stream, so a child seen there is a confirmed control failure.
+        Grok's denial is unverified and its envelope lists tool calls, so a
+        denied tool named there is a *suspected* failure: an attempt with
+        unknown execution and usage, stopped on conservatively and recorded
+        as attempted. Claude's json envelope shows only denials, so on
+        claude a child that was *not* denied is not observable here at all;
+        that is a live-probe question, not one this property answers.
+        """
+        return bool(self.spec.control_args) or bool(getattr(self, "_native_fanout_denied", []))
 
     def _retryable(self, exc: Exception) -> bool:
         if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)):

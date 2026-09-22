@@ -1,0 +1,5 @@
+{
+  "completed": false,
+  "error": "PartialWorkStopped: Task exceeded its declared scope; work preserved. Scope check:\n  223 changed lines against a stated bound of ~100. This is the shape of a task expanding into the whole feature; say what grew and why.\n  Changed: app.py, tests/test_import_preview.py",
+  "run_dir": "/work/.quadratus/runs/20260915T193400Z-d9df9b6c"
+}

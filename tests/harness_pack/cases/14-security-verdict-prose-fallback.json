@@ -1,0 +1,78 @@
+{
+ "id": "security-verdict-prose-fallback",
+ "shape": "fake-done",
+ "family": "webhook-contract",
+ "grader": true,
+ "source": "Report, Quadratus role hierarchy, and Q2: the BLOCKING prose verifier path stays as the fallback for one release; a blocking verdict lands in open findings.",
+ "session": {
+  "project": false,
+  "config": {
+   "security_verdict_json": false
+  }
+ },
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Verify the webhook signature with a replay window",
+   "complexity": "simple",
+   "kind": "security"
+  }
+ },
+ "variants": {
+  "good": {
+   "script": [
+    {
+     "role": "lead",
+     "reply": "Signature verified with hmac.compare_digest."
+    },
+    {
+     "role": "verifier",
+     "reply": "Verified. The comparison is constant time and the window is enforced."
+    },
+    {
+     "role": "closeout",
+     "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+    }
+   ],
+   "expect": {
+    "outcome": "completed",
+    "calls": {
+     "role:verifier": 1
+    },
+    "open_findings": {
+     "empty": true
+    }
+   }
+  },
+  "bad": {
+   "script": [
+    {
+     "role": "lead",
+     "reply": "Signature compared with ==."
+    },
+    {
+     "role": "verifier",
+     "reply": "BLOCKING: the comparison leaks timing and there is no replay window."
+    },
+    {
+     "role": "closeout",
+     "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+    }
+   ],
+   "expect": {
+    "outcome": "completed",
+    "calls": {
+     "role:verifier": 1
+    },
+    "open_findings": {
+     "count": 1,
+     "contains": [
+      "BLOCKING: the comparison leaks timing"
+     ]
+    }
+   }
+  }
+ },
+ "expect": {}
+}

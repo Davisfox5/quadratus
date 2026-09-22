@@ -1,0 +1,60 @@
+{
+ "id": "cheap-gate-failure-skips-paid-review",
+ "shape": "blocked-path",
+ "family": "test-author",
+ "grader": false,
+ "source": "Report, agent set design rule 4 and Q3: deterministic gates run before the expensive round, so a review round is never spent on a finding a command could have produced.",
+ "session": {
+  "project": true,
+  "allow_writes": false
+ },
+ "files": {
+  "app.py": "x = 1\n"
+ },
+ "gate": [
+  {
+   "id": "lint",
+   "code": "raise SystemExit(1)",
+   "cheap": true
+  }
+ ],
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Add the parser",
+   "complexity": "standard"
+  }
+ },
+ "script": [
+  {
+   "role": "lead",
+   "reply": "Draft: the change as text."
+  },
+  {
+   "role": "gate-fix",
+   "reply": "Fixed the lint failure."
+  },
+  {
+   "role": "closeout",
+   "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+  }
+ ],
+ "expect": {
+  "outcome": "completed",
+  "history": 1,
+  "calls": {
+   "role:collaborator": 0,
+   "role:gate-fix": 1
+  },
+  "open_findings": {
+   "contains": [
+    "Cheap gates failed before review"
+   ]
+  },
+  "checks": {
+   "count": 1,
+   "last_passed": false
+  }
+ }
+}

@@ -1,0 +1,40 @@
+{
+  "kind": "family",
+  "schema_version": 1,
+  "id": "collector",
+  "version": "0.1.0",
+  "summary": "Code that fetches from a third party: a saved fixture is the required input, one parser per source, every outbound call through the SSRF guard with a timeout, and a captcha, empty page or network failure fails loudly.",
+  "kinds": ["backend", "data"],
+  "required_inputs": [
+    { "name": "source", "description": "The site, API or mailbox being read, and its terms if known", "refuse_if_missing": true },
+    { "name": "fixture", "description": "A saved HTML, JSON or Nuxt payload from the source, checked into the fixtures directory", "refuse_if_missing": true },
+    { "name": "existing_parser", "description": "The parser for this source if one exists, by path, or none after a grep", "refuse_if_missing": true },
+    { "name": "live_probe_authorization", "description": "For any live fetch during development: who authorized it and the row cap", "refuse_if_missing": false }
+  ],
+  "checklist": [
+    { "id": "fixture-first", "rule": "The parser is written and tested against the saved fixture; no live fetch is needed to run the tests", "because": "r3cruit3r collectors and War Room ingest both run offline unittest with HTML fixtures; a live-only test is skipped in CI and rots", "applies_to": ["lead", "reviewer", "verifier"], "gate_id": "fixture-tests" },
+    { "id": "one-parser-per-source", "rule": "One parser per source; grep for an existing one before writing, and extend it", "because": "r3cruit3r had two GotSport parsers that disagreed on the same page; War Room discovery scripts duplicated selectors", "applies_to": ["lead", "reviewer"], "gate_id": "duplicate-parser-grep" },
+    { "id": "ssrf-and-timeout", "rule": "Every outbound fetch goes through the SSRF guard and carries a timeout; browser navigations too", "because": "r3cruit3r ssrf_guard is a sensitive path because a collector fetches URLs found on pages; a hung navigation held a worker for hours", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "fail-loud", "rule": "A captcha, an empty page, a changed layout or a network error raises; it never returns an empty list as success or as absence", "because": "War Room ingest AGENTS.md: network failure is not evidence that a sport does not exist; r3cruit3r captcha pages once imported as zero recruits", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "never-invent", "rule": "Never guess or synthesize a value to make a record look complete; missing stays missing", "because": "War Room ingest: never guess an email address to make a record appear complete", "applies_to": ["lead", "reviewer"] },
+    { "id": "preserve-human-edits", "rule": "A reimport preserves human qualification and edits; the merge is field-level with provenance", "because": "War Room reimports must preserve human qualification; r3cruit3r merge surfaces keep the coach's decision", "applies_to": ["lead", "reviewer"] },
+    { "id": "live-probe-labeled", "rule": "A live probe is opt-in, labeled, capped by row count, and its counts are pasted; it never runs in the default test path", "because": "r3cruit3r test_travel_e2e_live is in the CI ignore list; War Room never runs ingest.run or --enrich in verification", "applies_to": ["lead", "reviewer"] },
+    { "id": "no-profile-or-secrets", "rule": "Never read or write the browser profile, cookies or credentials directory; keys only from the environment", "because": "War Room ingest/.browser-profile is deny-listed; the poster's session lives there", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "scope-of-source", "rule": "The collector stays inside the source's declared scope (sport, region, entity type) and rejects rows outside it", "because": "War Room ingest is women's soccer only; out-of-scope rows polluted the CRM once", "applies_to": ["lead", "reviewer"] }
+  ],
+  "overlays_compatible": ["external-effects", "privacy", "test-quality", "performance"],
+  "gate_ids": ["scope", "fixture-tests", "duplicate-parser-grep", "unit-tests", "lint"],
+  "output_contract": {
+    "done_output": ["source and fixture path", "parser extended or created, with the duplicate grep result", "SSRF guard and timeout lines quoted", "the failure cases tested: captcha, empty, layout change, network error", "live probe: none, or authorization, row cap and counts"],
+    "stop_conditions": ["no fixture and no authorization to capture one", "the task asks for a live fetch in the test path", "the source's terms forbid automated access", "the task asks to fill missing values"]
+  },
+  "adapter_fields": [
+    { "name": "fixtures_dir", "description": "Where saved pages and payloads live", "required": true },
+    { "name": "ssrf_guard", "description": "The guard every fetch goes through", "required": true },
+    { "name": "parser_registry", "description": "Where parsers are listed or how to grep for one", "required": true },
+    { "name": "live_probe_flag", "description": "How a live probe is opted into and capped", "required": false },
+    { "name": "forbidden_paths", "description": "Profiles, cookie jars, credential dirs", "required": false },
+    { "name": "source_scope", "description": "The declared scope rows must fall inside", "required": false }
+  ],
+  "eval_cases_ref": "eval-cases.json"
+}

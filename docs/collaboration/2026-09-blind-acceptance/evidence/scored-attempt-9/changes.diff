@@ -1,0 +1,233 @@
+--- a/app.py
++++ b/app.py
+@@ -7,6 +7,7 @@
+ import os
+ import io
+ import csv
++import math
+ import copy
+ import json
+ import uuid
+@@ -1288,6 +1289,98 @@
+     return clips
+ 
+ 
++_REQUIRED_MANIFEST_HEADERS = ("tag type", "start (s)", "end (s)")
++
++
++def _clip_manifest_reader(content):
++    """Decode clip-manifest CSV bytes and return (headers, reader).
++
++    Headers are trimmed and lowercased. The csv.reader is positioned after
++    the header row; optional and unknown columns are retained. Physical line
++    numbers are preserved via newline='' on StringIO. Raises ValueError on
++    invalid UTF-8, missing required headers, or invalid header CSV syntax.
++    """
++    try:
++        text = content.decode("utf-8")
++    except UnicodeDecodeError as exc:
++        raise ValueError(f"file is not valid UTF-8: {exc.reason}") from exc
++    if text.startswith("\ufeff"):
++        text = text[1:]
++
++    reader = csv.reader(io.StringIO(text, newline=""), strict=True)
++    try:
++        raw_header = next(reader)
++    except StopIteration:
++        raw_header = []
++    except csv.Error as exc:
++        raise ValueError(f"invalid header CSV syntax: {exc}") from exc
++
++    headers = [cell.strip().lower() for cell in raw_header]
++    missing = [name for name in _REQUIRED_MANIFEST_HEADERS if name not in headers]
++    if missing:
++        labels = {"tag type": "Tag Type", "start (s)": "Start (s)", "end (s)": "End (s)"}
++        raise ValueError(
++            "missing required header: " + ", ".join(labels[n] for n in missing)
++        )
++    return headers, reader
++
++
++def _validate_clip_manifest_row(headers, cells, project):
++    """Return (normalized clip, reasons) for one manifest data row."""
++    if len(cells) != len(headers):
++        return None, ["wrong column count"]
++
++    values = dict(zip(headers, cells))
++    reasons = []
++    tag_type = values["tag type"].strip()
++    if tag_type not in {tag.get("name") for tag in project.get("tag_types", [])}:
++        reasons.append("unknown tag type")
++
++    parsed_times = {}
++    for header, field in (("start (s)", "start"), ("end (s)", "end")):
++        try:
++            value = float(values[header].strip())
++            if not math.isfinite(value):
++                raise ValueError
++            parsed_times[field] = value
++        except (TypeError, ValueError):
++            reasons.append(f"{field} must be a finite number")
++    if "start" in parsed_times and parsed_times["start"] < 0:
++        reasons.append("start must be non-negative")
++    if ("start" in parsed_times and "end" in parsed_times
++            and parsed_times["end"] <= parsed_times["start"]):
++        reasons.append("end must be greater than start")
++
++    player_ids = []
++    raw_players = values.get("players", "")
++    tokens = [] if not raw_players.strip() else raw_players.split(";")
++    for token in (part.strip() for part in tokens):
++        if not token:
++            reasons.append("player token must not be empty")
++            continue
++        if token.startswith("#"):
++            matches = [p for p in project.get("players", [])
++                       if p.get("number") == token[1:]]
++        else:
++            matches = [p for p in project.get("players", [])
++                       if p.get("name") == token]
++        if len(matches) != 1:
++            reasons.append(f"player '{token}' must match exactly one player")
++        else:
++            player_ids.append(matches[0]["id"])
++
++    if reasons:
++        return None, reasons
++    return {
++        "tag_type": tag_type,
++        "start": parsed_times["start"],
++        "end": parsed_times["end"],
++        "label": values.get("label", ""),
++        "notes": values.get("notes", ""),
++        "players": player_ids,
++    }, []
++
++
+ @app.route("/api/projects/<project_id>/export/csv")
+ def export_csv(project_id):
+     projects = _load_projects()
+--- /dev/null
++++ b/tests/test_import_preview.py
+@@ -0,0 +1,121 @@
++import os
++import sys
++
++import pytest
++
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
++import app as application
++
++
++def _read(data):
++    if isinstance(data, str):
++        data = data.encode("utf-8")
++    return application._clip_manifest_reader(data)
++
++
++PROJECT = {
++    "tag_types": [{"name": "Pass"}, {"name": "Shot"}],
++    "players": [
++        {"id": "p1", "name": "Alex", "number": "7"},
++        {"id": "p2", "name": "Sam", "number": "9"},
++    ],
++}
++
++
++def _validate(headers, cells, project=PROJECT):
++    return application._validate_clip_manifest_row(headers, cells, project)
++
++
++def test_header_normalization_retains_optional_and_unknown():
++    headers, reader = _read(
++        "  TAG TYPE , Start (s),END (s), Label, Clip ID, Foo \nPass,1,2,x,id,y\n"
++    )
++    assert headers == [
++        "tag type", "start (s)", "end (s)", "label", "clip id", "foo"
++    ]
++    assert reader.line_num == 1
++    assert next(reader) == ["Pass", "1", "2", "x", "id", "y"]
++    assert reader.line_num == 2
++
++
++def test_utf8_bom_lf_and_crlf():
++    bom = b"\xef\xbb\xbfTag Type,Start (s),End (s)\nPass,1,2\n"
++    headers, reader = application._clip_manifest_reader(bom)
++    assert headers == ["tag type", "start (s)", "end (s)"]
++    assert next(reader) == ["Pass", "1", "2"]
++
++    _, reader = _read("Tag Type,Start (s),End (s)\r\nPass,1,2\r\n")
++    assert next(reader) == ["Pass", "1", "2"]
++    assert reader.line_num == 2
++
++
++def test_quoted_multiline_fields_preserve_physical_line_numbers():
++    lf = 'Tag Type,Start (s),End (s),Notes\nPass,1,2,"line A\nline B"\nShot,3,4,ok\n'
++    _, reader = _read(lf)
++    assert next(reader) == ["Pass", "1", "2", "line A\nline B"]
++    assert reader.line_num == 3
++    assert next(reader)[0] == "Shot" and reader.line_num == 4
++
++    crlf = 'Tag Type,Start (s),End (s),Notes\r\nPass,1,2,"a\r\nb"\r\n'
++    _, reader = _read(crlf)
++    assert next(reader)[3] == "a\r\nb"
++    assert reader.line_num == 3
++
++
++def test_missing_required_headers():
++    with pytest.raises(ValueError, match="missing required header"):
++        _read("Label,Notes\nx,y\n")
++    with pytest.raises(ValueError, match="Start \\(s\\)"):
++        _read("Tag Type,End (s)\nPass,2\n")
++    with pytest.raises(ValueError, match="missing required header"):
++        _read(b"")
++
++
++def test_invalid_utf8_and_header_syntax():
++    with pytest.raises(ValueError, match="UTF-8"):
++        application._clip_manifest_reader(b"Tag Type,Start (s),End (s)\n\xff")
++    with pytest.raises(ValueError, match="syntax"):
++        _read('"Tag Type,Start (s),End (s)\nPass,1,2\n')
++
++
++def test_valid_row_normalizes_fields_and_ignores_extra_columns():
++    headers = ["tag type", "start (s)", "end (s)", "label", "notes",
++               "players", "duration (s)", "unknown"]
++    clip, reasons = _validate(
++        headers, [" Pass ", "1.5", "4", " x ", "note", " Alex ; #9 ", "2.5", "x"]
++    )
++    assert reasons == []
++    assert clip == {"tag_type": "Pass", "start": 1.5, "end": 4.0,
++                    "label": " x ", "notes": "note", "players": ["p1", "p2"]}
++
++
++def test_optional_fields_default_and_wrong_column_count():
++    headers = ["tag type", "start (s)", "end (s)"]
++    clip, reasons = _validate(headers, ["Shot", "0", "1"])
++    assert clip["label"] == clip["notes"] == ""
++    assert clip["players"] == [] and reasons == []
++    assert _validate(headers, ["Shot", "0"])[0] is None
++    assert _validate(headers, ["Shot", "0"])[1] == ["wrong column count"]
++
++
++@pytest.mark.parametrize("cells, reason", [
++    (["pass", "0", "1"], "unknown tag type"),
++    (["Pass", "nan", "1"], "start must be a finite number"),
++    (["Pass", "0", "inf"], "end must be a finite number"),
++    (["Pass", "-1", "1"], "start must be non-negative"),
++    (["Pass", "2", "2"], "end must be greater than start"),
++])
++def test_tag_and_time_validation(cells, reason):
++    clip, reasons = _validate(["tag type", "start (s)", "end (s)"], cells)
++    assert clip is None and reason in reasons
++
++
++def test_players_require_one_exact_name_or_number_match():
++    headers = ["tag type", "start (s)", "end (s)", "players"]
++    ambiguous = {**PROJECT, "players": PROJECT["players"] + [
++        {"id": "p3", "name": "Other", "number": "7"}
++    ]}
++    assert "exactly one" in _validate(headers, ["Pass", "0", "1", "#7"], ambiguous)[1][0]
++    assert "exactly one" in _validate(headers, ["Pass", "0", "1", "alex"])[1][0]
++    assert "exactly one" in _validate(headers, ["Pass", "0", "1", "Nobody"])[1][0]
++    assert "empty" in _validate(headers, ["Pass", "0", "1", "Alex;"])[1][0]

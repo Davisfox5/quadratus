@@ -1,0 +1,55 @@
+Task: Add the first slice of the CSV clip-manifest preview: the backend endpoint with required-column validation only. Players, Clip ID, and duplicate detection are deferred to the next round; the UI and docs come after that.
+
+In `app.py`, next to `bulk_preview` (before the Annotations section, around line 780), add `POST /api/projects/<project_id>/clips/import_preview`. Do **not** decorate it with `@_locked` and never call `_save_projects` — it only reads via `_load_projects()`.
+
+Behavior for this slice:
+- `404 {"error": "Project not found"}` if the project is missing; `400 {"error": "...", "code": "bad_request"}` if `file` is not in `request.files`, if `file.read().decode("utf-8-sig")` raises `UnicodeDecodeError` (handles the BOM), or if the header lacks any of `tag type`, `start (s)`, `end (s)` after `.strip().lower()` on each header cell. Use `csv.reader(io.StringIO(text))` (RFC 4180 quoting; CRLF is handled by the csv module).
+- Map header names to column indexes case-insensitively after trimming; unknown columns ignored. Record the header's column count.
+- Iterate data records tracking the physical start line as `reader.line_num + 1` before reading each record (header is line 1, so the first data row is line 2). Skip records that are `[]` or whose cells are all empty after strip — these don't count toward `summary.total`. Stop with `400 {"error": "Too many rows", "code": "too_many_rows"}` once more than 5000 non-blank data rows are seen.
+- Per row: `malformed` with reasons collected in a list if the cell count differs from the header ("wrong column count"), `Tag Type` (trimmed) is not in `{t["name"] for t in project["tag_types"]}` ("unknown tag type"), `Start (s)`/`End (s)` aren't `float()`-parseable or not `math.isfinite` ("start must be a number" / "end must be a number"), start `< 0` ("start must be >= 0"), or end `<= start` ("end must be greater than start"). Otherwise `valid` with `clip = {"tag_type", "start", "end", "label", "notes", "players": []}` where label/notes come from the optional columns if present (trimmed) else `""`. Malformed rows have `clip: null`.
+- Return `200 {"preview_only": true, "summary": {"total", "valid", "malformed", "duplicate": 0}, "rows": [...]}` with `{"line", "status", "reasons", "clip"}` per row.
+
+Create `tests/test_import_preview.py` reusing the `client` fixture pattern from `tests/test_bulk_edit.py` (monkeypatch `DATA_DIR`, `VIDEOS_DIR`, `RECORDINGS_DIR`, `PROJECTS_FILE`). Post multipart via `client.post(url, data={"file": (io.BytesIO(csv_bytes), "clips.csv")}, content_type="multipart/form-data")`. Cover: a mixed CSV with a BOM, CRLF line endings, a blank line, one valid row and one `end <= start` row (assert lines, statuses, reasons, summary); the three `bad_request` cases and the 404; and that `projects.json` bytes are unchanged after a preview. Keep the endpoint to roughly 60–70 lines and the tests to roughly 30; run `/usr/local/bin/python -m pytest -q` and confirm existing tests still pass.
+
+[user] Add the first slice of the CSV clip-manifest preview: the backend endpoint with required-column validation only. Players, Clip ID, and duplicate detection are deferred to the next round; the UI and docs come after that.
+
+In `app.py`, next to `bulk_preview` (before the Annotations section, around line 780), add `POST /api/projects/<project_id>/clips/import_preview`. Do **not** decorate it with `@_locked` and never call `_save_projects` — it only reads via `_load_projects()`.
+
+Behavior for this slice:
+- `404 {"error": "Project not found"}` if the project is missing; `400 {"error": "...", "code": "bad_request"}` if `file` is not in `request.files`, if `file.read().decode("utf-8-sig")` raises `UnicodeDecodeError` (handles the BOM), or if the header lacks any of `tag type`, `start (s)`, `end (s)` after `.strip().lower()` on each header cell. Use `csv.reader(io.StringIO(text))` (RFC 4180 quoting; CRLF is handled by the csv module).
+- Map header names to column indexes case-insensitively after trimming; unknown columns ignored. Record the header's column count.
+- Iterate data records tracking the physical start line as `reader.line_num + 1` before reading each record (header is line 1, so the first data row is line 2). Skip records that are `[]` or whose cells are all empty after strip — these don't count toward `summary.total`. Stop with `400 {"error": "Too many rows", "code": "too_many_rows"}` once more than 5000 non-blank data rows are seen.
+- Per row: `malformed` with reasons collected in a list if the cell count differs from the header ("wrong column count"), `Tag Type` (trimmed) is not in `{t["name"] for t in project["tag_types"]}` ("unknown tag type"), `Start (s)`/`End (s)` aren't `float()`-parseable or not `math.isfinite` ("start must be a number" / "end must be a number"), start `< 0` ("start must be >= 0"), or end `<= start` ("end must be greater than start"). Otherwise `valid` with `clip = {"tag_type", "start", "end", "label", "notes", "players": []}` where label/notes come from the optional columns if present (trimmed) else `""`. Malformed rows have `clip: null`.
+- Return `200 {"preview_only": true, "summary": {"total", "valid", "malformed", "duplicate": 0}, "rows": [...]}` with `{"line", "status", "reasons", "clip"}` per row.
+
+Create `tests/test_import_preview.py` reusing the `client` fixture pattern from `tests/test_bulk_edit.py` (monkeypatch `DATA_DIR`, `VIDEOS_DIR`, `RECORDINGS_DIR`, `PROJECTS_FILE`). Post multipart via `client.post(url, data={"file": (io.BytesIO(csv_bytes), "clips.csv")}, content_type="multipart/form-data")`. Cover: a mixed CSV with a BOM, CRLF line endings, a blank line, one valid row and one `end <= start` row (assert lines, statuses, reasons, summary); the three `bad_request` cases and the 404; and that `projects.json` bytes are unchanged after a preview. Keep the endpoint to roughly 60–70 lines and the tests to roughly 30; run `/usr/local/bin/python -m pytest -q` and confirm existing tests still pass.
+
+[assistant] I'll inspect the existing Flask app and bulk-edit tests so the new import-preview endpoint matches current patterns.I have the bulk-preview insertion point and fixture pattern. Next I’ll add the read-only import-preview endpoint and focused tests.I'll run the test suite to confirm the new endpoint and existing behavior.I’ll add an explicit 200 assertion on the happy path so the preview response is checked, not just parsed.Added a read-only CSV clip-manifest preview endpoint and focused tests. Existing suite still passes (`102 passed`).
+
+**`POST /api/projects/<project_id>/clips/import_preview`** in `app.py` (no `@_locked`, no `_save_projects`):
+- `404` if the project is missing
+- `400` / `bad_request` for a missing `file`, undecodable bytes (`utf-8-sig`, BOM), or a header missing `Tag Type` / `Start (s)` / `End (s)`
+- `400` / `too_many_rows` after 5000 non-blank data rows
+- Parses with `csv.reader` (RFC 4180, CRLF); blank lines skipped and not counted; physical line numbers start at 2
+- Per-row `valid` / `malformed` on required columns only (`players` always `[]`; duplicates deferred)
+
+**`tests/test_import_preview.py`** covers a BOM+CRLF mixed CSV with a blank line, the three `bad_request` cases, `404`, and a byte-identical `projects.json` after preview.
+
+[user] Integration gate PASSED: `python -m pytest -q`
+
+The task is finished. Write the record that survives it, as three sections:
+SUMMARY: what was built and decided.
+REASONING: why, including alternatives weighed.
+DEAD ENDS: one line each for anything tried that failed, and why. Write the lesson, not the transcript.
+MAP NOTES: one line each, as 'topic: fact', for anything you learned about this codebase that the next session should not have to rediscover -- a convention, a dependency, a trap. Durable facts about the code only; omit the section if none.
+
+## Scope of this task
+Intended result: POST /api/projects/<id>/clips/import_preview parses a CSV and returns per-row valid/malformed statuses for the required columns, never writing the store
+You may change only these paths: app.py, tests/test_import_preview.py. A change anywhere else will be rejected as out of scope.
+This task is finished when:
+  - POST with a valid 3-column CSV returns 200 with preview_only true, summary counts and one row per data line with line numbers starting at 2
+  - Missing file, undecodable bytes (e.g. b'\xff\xfe'), and a header lacking 'Start (s)' each return 400 with code bad_request; unknown project returns 404 {"error": "Project not found"}
+  - Blank lines are skipped and not counted in summary.total; the row after a blank line reports the correct physical line number
+  - projects.json is byte-identical before and after the request
+  - /usr/local/bin/python -m pytest -q passes
+Expected size: about 100 changed lines. If the work genuinely needs substantially more, say so and stop rather than delivering the larger change -- an undersized task quietly growing into a whole feature is the specific failure this bound exists to catch.

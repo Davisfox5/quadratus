@@ -1,0 +1,56 @@
+{
+ "id": "zero-tests-is-not-a-pass",
+ "shape": "fake-done",
+ "family": "test-author",
+ "grader": false,
+ "source": "Report, spine feature 5 and Q3: a green exit with zero tests executed is not evidence; 'A green CI does NOT mean the whole suite passes'.",
+ "session": {
+  "project": true,
+  "allow_writes": false,
+  "config": {
+   "max_gate_fixes": 0
+  }
+ },
+ "files": {
+  "app.py": "x = 1\n"
+ },
+ "gate": [
+  {
+   "id": "tests",
+   "code": "print('0 passed')"
+  }
+ ],
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Add the parser",
+   "complexity": "simple"
+  }
+ },
+ "script": [
+  {
+   "role": "lead",
+   "reply": "Draft: the change as text."
+  },
+  {
+   "role": "closeout",
+   "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+  }
+ ],
+ "expect": {
+  "outcome": "completed",
+  "checks": {
+   "count": 1,
+   "last_passed": false,
+   "last_receipt": {
+    "status": "failed",
+    "tests": 0,
+    "reason": "zero tests executed"
+   }
+  },
+  "store_contains": [
+   "still failing at close"
+  ]
+ }
+}

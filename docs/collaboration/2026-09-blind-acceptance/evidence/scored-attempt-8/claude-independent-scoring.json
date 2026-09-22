@@ -1,0 +1,118 @@
+{
+  "run": "20260917T155833Z-18d728fd",
+  "engine_commit": "0d2c629",
+  "application_commit": "a8772ab",
+  "scored_by": "Claude, independently, on Davis's Mac; Codex remains out of context",
+  "scored_at": "2026-09-17T16:20:00Z",
+  "launch_gate": {
+    "preflight": "passed clean for the first time",
+    "blockers": 0,
+    "sessions": {
+      "claude": "no model-free readout (not applicable)",
+      "openai": "signed in (positive proof)",
+      "grok": "signed in (known-failure wording absent)"
+    },
+    "sandboxes": {
+      "openai": "read /work/TASK.md under danger-full-access",
+      "claude": "not applicable",
+      "grok": "not applicable"
+    }
+  },
+  "private_set": {
+    "archive_sha256": "71cb8b06a34ed94d6936bd9dfc45ed3889a0f6c5a80be1424850f1140e66371a",
+    "matches_published_commitment": true,
+    "own_SHA256SUMS_manifest_verified": "14 of 14 files OK",
+    "unchanged_since_attempt_1": true,
+    "passed": 0,
+    "total": 9,
+    "every_case": "HTTP 405: the endpoint is not wired yet; only the header-reading slice was implemented before the run stopped"
+  },
+  "public_examiner": {
+    "passed": 0,
+    "failed": 13,
+    "total": 13,
+    "same_cause": true
+  },
+  "application_suite": {
+    "passed": 108,
+    "baseline": 100,
+    "written_by_this_run": 8,
+    "note": "reconstructed from the archive in a fresh network-disabled credential-free container; source hashes matched before and after"
+  },
+  "source_changed": true,
+  "changed": {
+    "files": [
+      "app.py",
+      "tests/test_import_preview.py"
+    ],
+    "lines": 105,
+    "what": "_read_clip_manifest_header: strict utf-8-sig decode, trimmed headers, case-insensitive match of the three required names, reader positioned so line_num counts physical lines, ValueError for bad encoding / empty input / missing header. Plus eight focused tests.",
+    "assessment": "correct for the slice it was given, and one slice of the feature; endpoint wiring and row validation were deliberately deferred by the orchestrator"
+  },
+  "stop": {
+    "reason": "RunBudgetExceeded: reported_token_threshold",
+    "reported_tokens": 527794,
+    "threshold": 500000,
+    "overshoot": 27794,
+    "elapsed_seconds": 297.239361885,
+    "calls_reserved": 3,
+    "max_calls": 24,
+    "unknown_usage_attempts": 0,
+    "tasks_completed": 0,
+    "in_flight_preserved": true
+  },
+  "usage_verified": {
+    "claude:fable": {
+      "role": "orchestrator",
+      "input": 0,
+      "output": 0,
+      "seconds": 1.556,
+      "outcome": "ProviderError: reached the Fable limit"
+    },
+    "openai:gpt-6-astra": {
+      "role": "orchestrator (fallback seat)",
+      "input": 76583,
+      "output": 609,
+      "seconds": 32.203,
+      "outcome": "ok"
+    },
+    "grok:default": {
+      "role": "lead, task 1",
+      "total": 450602,
+      "fresh_input": 54069,
+      "cache_read_input_tokens": 383104,
+      "output": 13429,
+      "reasoning_tokens": 10389,
+      "turns": 15,
+      "model": "grok-4.6-build",
+      "seconds": 263.445,
+      "subagents_spawned": 0,
+      "vendor_reported_cost_usd": 0.12928976,
+      "our_api_price_counterfactual_usd": 0.95492,
+      "outcome": "provider ok; the run stopped after it returned"
+    }
+  },
+  "finding_for_davis": {
+    "claim": "max_reported_tokens is not bounding what it reads as though it bounds",
+    "evidence": {
+      "attempt_8": "cache_read is 383,104 of the lead's 437,173 input tokens (88%); the vendor billed $0.129 for the call our meter counts as 450,602 tokens",
+      "attempt_3": "cache_read plus cache_creation is 270,737 of the worker's 272,244 input tokens (99%); fresh input was 1,507"
+    },
+    "why_it_is_not_a_review_lane_repair": "what the threshold counts is a budget decision, and the standing constraint is not to enlarge budgets. No change was made.",
+    "note": "the meter folding cache into input is correct for the API-price counterfactual and is not in question; the question is whether the run control should use the same number"
+  },
+  "repairs_landed_after_this_run": [
+    "the evidence collector no longer archives the integration gate's own .pytest_cache as model output, which had made a clean offline reconstruction report a hash mismatch"
+  ],
+  "verification": {
+    "offline_reconstruction": "108 passed, source hashes match before and unchanged after",
+    "model_calls_in_repair": 0
+  },
+  "still_unexercised": "the worker tool-fit check (a0f16ec), five attempts on: a lead was invoked and wrote code, but commissioned no errand",
+  "not_done": [
+    "no private-case edit",
+    "no budget, role or tolerance change",
+    "no vendor safeguard bypassed",
+    "no paid API fallback enabled"
+  ]
+}

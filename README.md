@@ -295,3 +295,67 @@ Tests need no network and no keys.
 ## License
 
 MIT
+
+### Repository policy preview
+
+The installed package includes the 13 pilot family cards and their schemas from
+War Room coordination commit `5cd658e`. Preview reads the selected project and
+runs no models, check commands, clones, or branch changes:
+
+```sh
+quadratus --project /path/to/repo --policy-preview --path src/example.py
+quadratus --project /path/to/repo --policy-preview --allow-writes \
+  --path src/example.py --forbid src/protected.py
+```
+
+The Project screen has the same preview, task-path and forbidden-path controls.
+Without `.quadratus/policy.json`, preview uses the built-in `pure-logic` card,
+detects the test runner when possible, and marks unknown adapters as
+`not_configured`. A configured policy must use the packaged `pilot-1` schema and
+library. An optional digest must match the packaged library. Gate names resolve
+by exact id or `gate_bindings`; an explicit absence keeps its reason in the plan.
+
+Path rules are evaluated in document order. The first matched family is primary;
+other matched families keep their checks in the same task. A required overlay
+must be supported by the families on its rule. Directory and wildcard scopes
+are matched conservatively, including files that do not exist yet. Narrow a
+scope if it selects unrelated rules. A model tier or detected fact grants no
+write permission. Sensitive paths remain blocked for writes pending an operator
+ruling; read-only proposals can still be previewed.
+
+`--path` and `--forbid` are repeatable. Operator and policy bounds combine with
+per-task scopes; stricter line and overrun limits win. Conflicting declarations
+stop before the lead is invoked. Post-call scope checks preserve and report any
+unexpected edits. These controls do not constitute an OS filesystem sandbox.
+
+Run records include `policy-plan.json` and each resolved task plan plus its hash
+in `result.json`. Role-specific checklist packets are the separate Q6 item.
+The Q5 branch includes the merged Q3 base. Explicit policy commands run through
+`GateSuite`; operator checks are retained. Conflicting gate definitions,
+unsupported required runners and external-effect gates stop explicitly.
+Projects without a policy retain their existing check behavior.
+
+A lead can retry a failed worker errand with one read-only sibling helper:
+`WORKER {"errand":"read","instruction":"revised request","retry_of":"read-1","helper":{"errand":"check","instruction":"independent check"}}`.
+Both siblings run through the existing worker pool at depth one and report to
+the lead. Workers cannot commission through either the single or batch entry
+point. A helper cannot receive a write grant.
+
+Worker requests may opt into `steps` (default 1, configured ceiling 3) and
+`token_limit` (configured ceiling 50,000 reported tokens). `CONTINUE:` requests
+another step on the same errand, with the prior result as context. Each provider
+attempt, including a retry, consumes the worker step allowance and the task's
+worker allowance, as well as any shared run limits. Unknown token usage stops
+the loop. Tokens are a post-return threshold, so a running call can overshoot;
+the worker budget artifact retains the measured total and overshoot. The loop
+does not grant shell, direct-write or delegation tools.
+
+Role packets carry the resolved family checklist, scope, check configuration and
+repository conventions to leads, independent reviewers, rechecks, consultants
+and security verifiers. Required contract text must fit the packet byte limit;
+reference notes may be excerpted with a visible truncation marker. Unrestricted
+project editors must end each editing reply with `CHANGED: ["relative/path"]`
+(or `CHANGED: []`). The runtime compares that list with files added, changed or
+deleted during that call. A mismatch stops the run and preserves the work and
+raw reply for inspection. Restricted editors still use the existing PATCH
+contract. No reviewer receives another reviewer's findings.

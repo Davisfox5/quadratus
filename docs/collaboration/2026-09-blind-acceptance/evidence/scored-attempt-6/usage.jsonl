@@ -1,0 +1,2 @@
+{"model": "claude:fable", "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "measured": true}
+{"model": "openai:gpt-6-astra", "input_tokens": 57033, "output_tokens": 150, "cost_usd": 0.145583, "measured": true}

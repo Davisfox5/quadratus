@@ -16,12 +16,15 @@ dependencies = [
     "colorama>=0.4.6",
     "gradio>=6,<7",
     "playwright>=1.40",
+    "jsonschema>=4.18",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
+    "setuptools>=68",
+    "wheel",
 ]
 # Kept for compatibility: playwright is now a baseline dependency, so this
 # extra is empty. Browser evidence and piloting are core infrastructure.
@@ -34,6 +37,9 @@ quadratus-gui = "quadratus.gui:main"
 [tool.setuptools]
 packages = ["quadratus"]
 py-modules = ["multi_model_workflow", "chat_gui"]
+
+[tool.setuptools.package-data]
+quadratus = ["harness_library/origin.json", "harness_library/schema/*.json", "harness_library/families/*/*.json", "harness_library/families/*/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -96,7 +96,8 @@ def _format_response(result) -> str:
     return "".join(parts)
 
 
-def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings):
+def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
+                   *, forbid=(), declared_paths=()):
     """Stream progress while the shared project runner performs model calls."""
     from .project_run import run_project
     events = queue.Queue()
@@ -105,6 +106,7 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings)
         future = pool.submit(run_project, goal, folder, settings,
                              allow_writes=allow_writes, check=check,
                              mode=mode, max_tasks=int(max_tasks),
+                             forbid=forbid, declared_paths=declared_paths,
                              progress=events.put)
         while not future.done():
             try:
@@ -119,6 +121,18 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings)
             return
     yield result.report, result.diff, [str(result.run_dir / name)
                                       for name in ('report.md', 'changes.diff', 'ledger.md', 'result.json')]
+
+
+def policy_preview_ui(folder, paths='', forbid='', writing=False):
+    """Same resolver as CLI and dispatch; no project creation or provider construction."""
+    from .policy import preview_policy, render_preview
+    try:
+        plan = preview_policy(folder, [p.strip() for p in paths.splitlines() if p.strip()],
+                              forbid=[p.strip() for p in forbid.splitlines() if p.strip()],
+                              writing=writing)
+        return render_preview(plan)
+    except (ValueError, OSError) as exc:
+        return f'Policy preview failed: {exc}'
 
 
 def build_interface(settings: Optional[Settings] = None):
@@ -154,6 +168,13 @@ def build_interface(settings: Optional[Settings] = None):
                     max_tasks = gr.Number(value=20, minimum=1, precision=0, label='Task limit')
                 check = gr.Textbox(label='Test or build command (optional)',
                                    placeholder='Auto-detect from the project, or enter a command')
+                declared_paths = gr.Textbox(label='Paths this task may change (one per line)', lines=2)
+                forbid_paths = gr.Textbox(label='Paths that must stay unchanged (one per line)', lines=2)
+                preview_button = gr.Button('Preview policy')
+                policy_info = gr.Markdown()
+                preview_button.click(policy_preview_ui,
+                                     inputs=[selected, declared_paths, forbid_paths, edits],
+                                     outputs=[policy_info])
                 run_button = gr.Button('Run project task', variant='primary', interactive=False)
                 report = gr.Markdown()
                 diff = gr.Code(label='Source changes', language=None, interactive=False)
@@ -176,12 +197,14 @@ def build_interface(settings: Optional[Settings] = None):
                 open_button.click(open_project, inputs=[project_path, clone_url, branch],
                                   outputs=[selected, project_info, source_files, clone_url, branch, run_button])
 
-                def run_selected(goal, folder, writes, command, mode, limit):
+                def run_selected(goal, folder, writes, command, mode, limit, paths, forbid):
                     if not folder:
                         raise gr.Error('Open a project first.')
-                    yield from run_project_ui(goal, folder, writes, command, mode, limit, settings)
+                    yield from run_project_ui(goal, folder, writes, command, mode, limit, settings,
+                                              declared_paths=[p.strip() for p in paths.splitlines() if p.strip()],
+                                              forbid=[p.strip() for p in forbid.splitlines() if p.strip()])
 
-                run_button.click(run_selected, inputs=[goal, selected, edits, check, mode, max_tasks],
+                run_button.click(run_selected, inputs=[goal, selected, edits, check, mode, max_tasks, declared_paths, forbid_paths],
                                  outputs=[report, diff, downloads], concurrency_limit=1)
             with gr.Tab('Code discussion'):
                 gr.Markdown('Discuss snippets without opening a project. Answers here do not create source files.')

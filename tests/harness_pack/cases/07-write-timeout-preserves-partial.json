@@ -1,0 +1,74 @@
+{
+ "id": "write-timeout-preserves-partial",
+ "shape": "resume",
+ "family": "pure-logic",
+ "grader": false,
+ "source": "Report, Quadratus, GameTape finding 4: a 900-second timeout replayed the same writing prompt against a tree it had already changed; partial work is inspected and preserved, never replayed.",
+ "session": {
+  "project": true,
+  "allow_writes": true
+ },
+ "files": {
+  "a.py": "original\n"
+ },
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Tiny fix",
+   "complexity": "simple",
+   "scope": {
+    "permitted_paths": [
+     "a.py",
+     "new.py"
+    ],
+    "max_lines": 100,
+    "intended_result": "one tiny fix",
+    "acceptance": [
+     "file compiles"
+    ]
+   }
+  }
+ },
+ "script": [
+  {
+   "role": "lead",
+   "writes": {
+    "a.py": "half rewritten\n",
+    "new.py": "and a new file\n"
+   },
+   "raise": {
+    "type": "PartialWorkSuspected",
+    "message": "timed out after 900s"
+   }
+  }
+ ],
+ "expect": {
+  "outcome": "PartialWorkStopped",
+  "error_contains": [
+   "timed out after 900s"
+  ],
+  "files": {
+   "a.py": {
+    "equals": "half rewritten\n"
+   },
+   "new.py": {
+    "exists": true
+   }
+  },
+  "in_flight": {
+   "changed_contains": [
+    "a.py",
+    "new.py"
+   ],
+   "inspected": true
+  },
+  "store_kinds_contain": [
+   "interrupted-task",
+   "interrupted-prompt"
+  ],
+  "calls": {
+   "role:lead": 1
+  }
+ }
+}

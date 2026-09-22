@@ -8,10 +8,19 @@ input and 6,350 output tokens; the child separately recorded 127,405 and
 7,700. Quadratus metered the parent and nothing else, so 135,105 tokens were
 spent inside an authorised run and were absent from every total it reported.
 
-The fix is not to forbid native delegation -- the harness cannot, it happens
-inside a vendor process it does not control, and pretending otherwise would
-make the report *more* wrong. The fix is to say so. This module gives the
-record three things it lacked:
+Two fixes, in order. Where the vendor offers a switch, the harness now throws
+it: every Codex call carries ``--disable multi_agent`` (and its successor
+switch) from ``cli_providers.CODEX_SPEC.control_args``, and an operator
+override that would undo it is refused rather than out-ordered. OpenAI helpers
+are intended to pass through :class:`WorkerPool`; runtime enforcement still
+needs the live probe, and native observations must remain visible. An earlier version
+of this text said the harness could not forbid native delegation at all; that
+was too broad, and is the second design error this file has had to retract.
+It remains true for the other two vendors' senior seats -- Claude's ``Task``
+and Grok's ``Agent`` are denied only on restricted seats -- and for a control
+that fails on codex, where a child would still run inside a vendor process.
+For those the record is the check, and pretending otherwise would make the
+report *more* wrong. This module gives that record three things it lacked:
 
 **A provenance for every invocation.** :class:`Origin` distinguishes a
 Quadratus-assigned seat, a Quadratus-commissioned worker, a vendor-native
@@ -37,6 +46,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -231,6 +241,53 @@ def safe_diagnostics(value) -> dict:
         result['attempted_tools'] = list(dict.fromkeys(
             name for name in names[:128] if isinstance(name, str) and atom.fullmatch(name)
         ))[:32]
+    # Fan-out tools the CLI itself refused under the run-wide off mode: the
+    # control holding, recorded by name only, same filter as attempted_tools.
+    denied = value.get('denied_tools')
+    if isinstance(denied, list):
+        held = list(dict.fromkeys(
+            name for name in denied[:128] if isinstance(name, str) and atom.fullmatch(name)
+        ))[:32]
+        if held:
+            result['denied_tools'] = held
+    # Usage provenance from the claude envelope: model names and one integer,
+    # so a run's reported total can be traced to the rows it was built from.
+    models = value.get('auxiliary_models')
+    if isinstance(models, list):
+        named = list(dict.fromkeys(
+            name for name in models[:32] if isinstance(name, str) and atom.fullmatch(name)
+        ))[:16]
+        if named:
+            result['auxiliary_models'] = named
+    aux = value.get('auxiliary_tokens')
+    if type(aux) is int and 0 <= aux <= 1_000_000_000:
+        result['auxiliary_tokens'] = aux
+    state = value.get('auxiliary_usage')
+    if state in ('unknown', 'unattributed'):
+        result['auxiliary_usage'] = state
+    seat = value.get('seat_tokens')
+    if type(seat) is int and 0 <= seat <= 1_000_000_000:
+        result['seat_tokens'] = seat
+    # How much of this call's input the model was being handed again. An agent
+    # re-sends its whole conversation on every step, so a long loop's reported
+    # total is mostly text it has already seen -- 402,816 of attempt 9's
+    # 532,795. Nothing in the run record showed that, and it took opening the
+    # private vendor envelopes to find it, which is exactly the kind of fact a
+    # ledger exists to save someone from having to dig for. A subset of
+    # ``input_tokens`` after provider normalisation, never an addition to it.
+    reread = value.get('cached_input_tokens')
+    if type(reread) is int and 0 <= reread <= 1_000_000_000:
+        result['cached_input_tokens'] = reread
+    # What the vendor itself says this call cost, where it says. Kept beside
+    # our own API-price counterfactual rather than replacing it: the two
+    # answer different questions, and on attempt 8's lead they differed 7.4x
+    # because cache reads are billed at a fraction of fresh input. Which of
+    # them a subscription window actually meters by is not documented, so
+    # recording both is how that becomes answerable instead of assumed.
+    cost = value.get('vendor_cost_usd')
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+        if math.isfinite(cost) and 0 <= cost <= 1_000_000:
+            result['vendor_cost_usd'] = round(float(cost), 6)
     return result
 
 

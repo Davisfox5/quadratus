@@ -1,0 +1,5 @@
+{"model": "claude:fable", "input_tokens": 55526, "output_tokens": 1284, "cost_usd": 0.61946, "measured": true}
+{"model": "openai:gpt-5.6-sol", "input_tokens": 41671, "output_tokens": 460, "cost_usd": 0.056689, "measured": true}
+{"model": "openai:gpt-5.6-sol", "input_tokens": 85794, "output_tokens": 641, "cost_usd": 0.113653, "measured": true}
+{"model": "claude:opus", "input_tokens": 58262, "output_tokens": 2551, "cost_usd": 0.355085, "measured": true}
+{"model": "openai:gpt-5.6-sol", "input_tokens": 14673, "output_tokens": 397, "cost_usd": 0.022311, "measured": true}

@@ -51,6 +51,44 @@ _LANGUAGES = {
     ".html": "HTML", ".css": "CSS", ".vue": "Vue", ".svelte": "Svelte",
 }
 
+#: How many source files the map names. Small on purpose: this block is
+#: re-sent on every orchestrator and lead call, so it pays its way only while
+#: it stays orientation rather than an inventory.
+_MAX_PRINCIPAL_FILES = 6
+_MAX_TEST_DIRS = 3
+#: Lines read before giving up on one file, so a generated bundle or a minified
+#: asset cannot turn a bounded scan into a long one.
+_MAX_LINES_COUNTED = 200_000
+
+
+def _is_test_path(relative: str) -> bool:
+    """Test files are excluded from 'largest source files' and counted apart.
+
+    A suite is often the biggest thing in a repository and naming it as the
+    principal source would point a lead at exactly the wrong place.
+    """
+    lowered = relative.lower()
+    parts = lowered.split("/")
+    name = parts[-1]
+    return (any(p in ("test", "tests", "spec", "specs", "__tests__") for p in parts[:-1])
+            or name.startswith("test_") or name.startswith("spec_")
+            or ".test." in name or ".spec." in name
+            or name.endswith("_test.py") or name.endswith("_spec.rb"))
+
+
+def _count_lines(path: Path) -> int:
+    """Line count, or 0 when the file cannot be read as text."""
+    try:
+        with path.open("rb") as handle:
+            count = 0
+            for count, _ in enumerate(handle, start=1):
+                if count >= _MAX_LINES_COUNTED:
+                    break
+            return count
+    except OSError:
+        return 0
+
+
 #: Manifest files worth naming, in the order they are worth naming.
 _MANIFESTS = [
     "pyproject.toml", "setup.py", "requirements.txt", "package.json",
@@ -73,6 +111,13 @@ class ScanReport:
     manifests: List[str] = field(default_factory=list)
     top_dirs: List[str] = field(default_factory=list)
     readme_head: str = ""
+    #: ``(relative path, line count)`` for the biggest non-test source files,
+    #: largest first. A lead is told which file to change and still has to
+    #: discover what is in the project; naming the principal files costs a
+    #: line and saves it guessing which of nineteen JavaScript files matters.
+    principal_files: List[Tuple[str, int]] = field(default_factory=list)
+    #: Directories holding the test suite, most populated first.
+    test_dirs: List[str] = field(default_factory=list)
     #: The project's own check command, when one is recognisable. This is what
     #: the integration gate runs; None means the operator must supply one for
     #: the gate to exist.
@@ -116,6 +161,15 @@ class ScanReport:
             ))
         if self.top_dirs:
             notes.append(("layout", "Top-level directories: " + ", ".join(self.top_dirs)))
+        if self.principal_files:
+            notes.append((
+                "layout",
+                "Largest source files: " + ", ".join(
+                    f"{name} ({lines} lines)" for name, lines in self.principal_files
+                ),
+            ))
+        if self.test_dirs:
+            notes.append(("tests", "Test files live under: " + ", ".join(self.test_dirs)))
         if self.manifests:
             notes.append(("dependencies", "Manifests present: " + ", ".join(self.manifests)))
         if self.check_command:
@@ -171,6 +225,8 @@ def scan_repo(root) -> ScanReport:
     report.manifests = [m for m in _MANIFESTS if (root / m).is_file()
                         and not (root / m).is_symlink()]
 
+    sized: List[Tuple[str, int]] = []
+    test_files: List[str] = []
     stack: List[Path] = [root]
     while stack and report.file_count < _MAX_FILES:
         current = stack.pop()
@@ -189,6 +245,13 @@ def scan_repo(root) -> ScanReport:
             lang = _LANGUAGES.get(entry.suffix.lower())
             if lang:
                 report.languages[lang] = report.languages.get(lang, 0) + 1
+                relative = entry.relative_to(root).as_posix()
+                if _is_test_path(relative):
+                    test_files.append(relative)
+                else:
+                    lines = _count_lines(entry)
+                    if lines:
+                        sized.append((relative, lines))
             if report.file_count >= _MAX_FILES:
                 break
 
@@ -201,6 +264,17 @@ def scan_repo(root) -> ScanReport:
             except OSError:
                 pass
             break
+
+    # Largest first, and few: this is rendered into every orchestrator and
+    # lead prompt, so it is orientation, not an inventory.
+    sized.sort(key=lambda pair: (-pair[1], pair[0]))
+    report.principal_files = sized[:_MAX_PRINCIPAL_FILES]
+    directories = {}
+    for name in test_files:
+        parent = name.rsplit("/", 1)[0] + "/" if "/" in name else "(project root)"
+        directories[parent] = directories.get(parent, 0) + 1
+    report.test_dirs = [d for d, _ in sorted(directories.items(),
+                                             key=lambda kv: (-kv[1], kv[0]))][:_MAX_TEST_DIRS]
 
     report.check_command = _detect_check_command(root, report.manifests)
     return report
@@ -220,3 +294,64 @@ def seed_map(report: ScanReport, codebase_map, *, session: str = "scan") -> int:
             codebase_map.amend(topic=topic, note=note, author="scan", session=session)
             added += 1
     return added
+
+
+def detect_adapters(root, report=None):
+    """Manifest-backed adapter hints. No imports, commands, or capability grants."""
+    import tomllib
+
+    root = Path(root).resolve()
+    report = report or scan_repo(root)
+    found = {}
+
+    def put(name, value, source):
+        found[name] = {'status': 'detected', 'value': value, 'source': source}
+
+    def read(relative):
+        path = root / relative
+        if (not path.resolve().is_relative_to(root) or not path.is_file()
+                or path.stat().st_size > 256_000):
+            return ''
+        return path.read_text(encoding='utf-8')
+
+    if report.check_command:
+        for name in ('test_runner', 'runner'):
+            put(name, list(report.check_command), 'repo_scan.check_command')
+    try:
+        project = tomllib.loads(read('pyproject.toml'))
+    except (ValueError, OSError):
+        project = {}
+    if project.get('project', {}).get('name') == 'quadratus' and read('quadratus/registry.py'):
+        put('runtime_model_policy', 'multi-vendor', 'pyproject.toml#project.name')
+        put('catalog_module', 'quadratus/registry.py', 'quadratus/registry.py')
+        put('permitted_calls', ['quadratus/cli_providers.py', 'quadratus/providers.py'],
+            'quadratus/registry.py')
+        put('routing_audit_exemption', 'CLAUDE.md#model-routing-this-repo-is-build-time-tooling',
+            'CLAUDE.md')
+    for manifest in ('package.json', 'site/package.json', 'apps/app/package.json'):
+        try:
+            pkg = json.loads(read(manifest) or '{}')
+        except (ValueError, OSError):
+            continue
+        deps = {**pkg.get('devDependencies', {}), **pkg.get('dependencies', {})}
+        for name in ('@mui/material', 'react'):
+            if name in deps and 'ui_lib' not in found:
+                put('ui_lib', name, manifest)
+        if 'zod' in deps:
+            put('validation_lib', 'zod', manifest)
+    for relative in ('prisma/schema.prisma', 'site/prisma/schema.prisma'):
+        if read(relative):
+            put('tool', 'prisma', relative)
+            break
+    else:
+        for relative in ('alembic.ini', 'backend/alembic.ini'):
+            if read(relative):
+                put('tool', 'alembic', relative)
+                break
+    for relative in ('.claude/agents', '.agents'):
+        path = root / relative
+        if path.is_dir() and path.resolve().is_relative_to(root):
+            put('agent_dir', relative, relative)
+            break
+    # All unrecognised fields are marked not configured by the family resolver.
+    return found

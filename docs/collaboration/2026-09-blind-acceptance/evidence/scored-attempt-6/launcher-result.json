@@ -1,0 +1,5 @@
+{
+  "completed": false,
+  "error": "OperatorInputNeeded: Can you restore read-only command access to the source copy? The sandbox fails before execution with \u201cNo permissions to create a new namespace,\u201d preventing the required source inspection.",
+  "run_dir": "/work/.quadratus/runs/20260917T145021Z-be04e367"
+}
