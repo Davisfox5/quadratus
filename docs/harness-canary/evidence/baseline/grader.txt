@@ -1,0 +1,55 @@
+..FF...F.                                                                [100%]
+=================================== FAILURES ===================================
+_______ test_other_tenant_is_indistinguishable_from_missing[alpha-beta] ________
+
+tenant = 'alpha', other = 'beta'
+
+    @pytest.mark.parametrize("tenant,other", [("alpha", "beta"), ("beta", "alpha")])
+    def test_other_tenant_is_indistinguishable_from_missing(tenant, other):
+        headers = {"Authorization": f"Bearer {tenant}-token"}
+        cross = client.get(f"/records/{other}-1", headers=headers)
+        missing = client.get("/records/missing", headers=headers)
+>       assert cross.status_code == missing.status_code == 404
+E       assert 200 == 404
+E        +  where 200 = <Response [200 OK]>.status_code
+E        +  and   404 = <Response [404 Not Found]>.status_code
+
+/opt/quadratus/test_contract.py:32: AssertionError
+_______ test_other_tenant_is_indistinguishable_from_missing[beta-alpha] ________
+
+tenant = 'beta', other = 'alpha'
+
+    @pytest.mark.parametrize("tenant,other", [("alpha", "beta"), ("beta", "alpha")])
+    def test_other_tenant_is_indistinguishable_from_missing(tenant, other):
+        headers = {"Authorization": f"Bearer {tenant}-token"}
+        cross = client.get(f"/records/{other}-1", headers=headers)
+        missing = client.get("/records/missing", headers=headers)
+>       assert cross.status_code == missing.status_code == 404
+E       assert 200 == 404
+E        +  where 200 = <Response [200 OK]>.status_code
+E        +  and   404 = <Response [404 Not Found]>.status_code
+
+/opt/quadratus/test_contract.py:32: AssertionError
+______ test_tenant_header_and_query_cannot_override_authenticated_tenant _______
+
+    def test_tenant_header_and_query_cannot_override_authenticated_tenant():
+        response = client.get(
+            "/records/beta-1?tenant_id=beta",
+            headers={"Authorization": "Bearer alpha-token", "X-Tenant-ID": "beta"},
+        )
+>       assert response.status_code == 404
+E       assert 200 == 404
+E        +  where 200 = <Response [200 OK]>.status_code
+
+/opt/quadratus/test_contract.py:48: AssertionError
+=============================== warnings summary ===============================
+../usr/local/lib/python3.12/site-packages/starlette/testclient.py:53
+  /usr/local/lib/python3.12/site-packages/starlette/testclient.py:53: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED ../opt/quadratus/test_contract.py::test_other_tenant_is_indistinguishable_from_missing[alpha-beta]
+FAILED ../opt/quadratus/test_contract.py::test_other_tenant_is_indistinguishable_from_missing[beta-alpha]
+FAILED ../opt/quadratus/test_contract.py::test_tenant_header_and_query_cannot_override_authenticated_tenant
+3 failed, 6 passed, 1 warning in 0.11s
