@@ -151,3 +151,33 @@ def test_failed_cheap_gate_stops_before_collaborators(tmp_path):
     s.run_task(TaskSpec('t1', 'Review fixture', complexity='standard'))
     assert s.open_findings
     assert len(calls) == 2, 'Only draft and closeout, no paid review of a failed check'
+
+
+def test_real_failed_pytest_counts_executions_without_hiding_failure(tmp_path):
+    (tmp_path / 'test_fixture.py').write_text(
+        'import pytest\n'
+        'def test_pass(): assert True\n'
+        'def test_fail(): assert False\n'
+        '@pytest.mark.skip(reason="not executed")\n'
+        'def test_skip(): assert False\n')
+    result = GateSuite([GateCommand(
+        'pytest', (sys.executable, '-B', '-m', 'pytest', '-q', '-p', 'no:cacheprovider'),
+        minimum_tests=3)], cwd=tmp_path).run()
+    receipt = result.receipts[0]
+    assert not result.passed
+    assert receipt.tests == 2
+    assert receipt.returncode == 1
+    assert receipt.status == 'failed'
+    assert receipt.reason == 'nonzero exit'
+    assert '1 failed, 1 passed, 1 skipped' in receipt.output
+
+
+@pytest.mark.parametrize('output,count', [
+    ('3 failed, 6 passed, 1 warning in 0.11s', 9),
+    ('3 failed in 0.11s', 3),
+    ('2 passed, 3 skipped, 4 deselected, 1 xfailed, 1 xpassed in 0.11s', 4),
+    ('99 passed in 1.0s\n3 failed, 6 passed in 0.11s', 9),
+])
+def test_mixed_runner_summary_counts_executed_cases(output, count):
+    from quadratus.integration import _test_count
+    assert _test_count(output) == count

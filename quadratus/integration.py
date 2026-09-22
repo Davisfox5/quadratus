@@ -161,11 +161,14 @@ def _test_count(output):
     if unittest:
         skipped = re.findall(r'skipped=(\d+)', output)
         return max(0, int(unittest[-1]) - (int(skipped[-1]) if skipped else 0))
-    passed = re.findall(r'\b(\d+) passed\b', output)
-    if passed:
-        return int(passed[-1])
-    if re.search(r'\b\d+ skipped\b', output):
-        return 0
+    # Pytest (and compact JS summaries) can report failed executions alongside
+    # passes. Use one final summary line, excluding cases whose body did not run.
+    for line in reversed(output.splitlines()):
+        outcomes = re.findall(
+            r'\b(\d+) (passed|failed|xfailed|xpassed|skipped|deselected|errors?)\b', line)
+        if outcomes:
+            return sum(int(count) for count, outcome in outcomes
+                       if outcome in {'passed', 'failed', 'xfailed', 'xpassed'})
     return None
 
 
@@ -246,7 +249,7 @@ class GateSuite:
                 status, reason = ('passed', 'exit 0') if proc.returncode == 0 else ('failed', 'nonzero exit')
                 if count == 0:
                     status, reason = 'failed', 'zero tests executed'
-                elif command.minimum_tests is not None:
+                elif proc.returncode == 0 and command.minimum_tests is not None:
                     if count is None:
                         status, reason = 'blocked', 'test count unavailable'
                     elif count < command.minimum_tests:
