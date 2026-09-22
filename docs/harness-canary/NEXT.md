@@ -58,8 +58,15 @@ are built to run and their own sandboxes stay up. Fixture in a scratch
 directory, runtime checked out read-only elsewhere, `CANARY_PROJECT` pointing
 at the scratch copy for the grader. Run
 `python docs/harness-canary/run_fixture.py --preflight --project <scratch>`
-first; it must exit 0 and its report must show every vendor's sandbox check
-`ok: true`.
+first; it must exit 0. Read the report, not only the exit code: the sandbox
+check is `ok: true` only for a vendor with an inner sandbox to exercise
+(codex); claude and grok report `applicable: false`, which is correct, not a
+pass. The sign-in check is positive for codex (`login status`) and by known
+failure wording for grok (`models` says "You are not authenticated"); claude
+offers no model-free readout, so its sign-in is unverified by this script and
+the first live call is the check. Codex's native run of it on 2026-09-22
+showed exactly that shape: codex sandbox ok, grok not signed in, claude not
+applicable. A grok sign-in is required before any pair.
 
 **Option B, the prepared container with the documented substitution.** Set
 `QUADRATUS_CONTAINED=1` in the container environment. The engine then hands

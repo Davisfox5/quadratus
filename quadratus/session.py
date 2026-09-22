@@ -931,6 +931,15 @@ class Session:
                     raise RunStalled("An unresolved request cannot be accepted as a draft.")
                 return draft
             if not consults:
+                # A refusal is charged against the same allowance a served
+                # consult would be, so a lead that keeps asking stalls the run
+                # instead of being re-invoked until the budget is gone (Codex
+                # review of #25: seven identical replies before a sentinel).
+                consults_used += len(requests)
+                if consults_used > self.config.max_consults:
+                    raise RunStalled(
+                        "The lead kept requesting consults inside a security "
+                        "excursion, where none are served; it is not converging.")
                 task.record("user", "[consult refused] not available inside a security excursion")
                 answers.append(
                     "Consults are not available inside a security excursion. Decide "
