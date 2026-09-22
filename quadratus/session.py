@@ -789,6 +789,7 @@ class Session:
         answers = []
         consults_used = 0
         worker_failures = 0
+        failed_errands = set()
 
         def build(fetched):
             extras = ["## Consult answers and worker evidence\n\n" + "\n\n".join(answers)] if answers else []
@@ -813,6 +814,15 @@ class Session:
                         raise ValueError('invalid worker request')
                 except (ValueError, TypeError) as exc:
                     raise RunStalled("Expected WORKER JSON with errand and instruction.") from exc
+                helper = request.get('helper')
+                if helper is not None:
+                    if (request.get('retry_of') not in failed_errands or not isinstance(helper, dict)
+                            or helper.get('errand') not in WORKER_TREE
+                            or not isinstance(helper.get('instruction'), str)
+                            or not helper['instruction'].strip() or helper.get('write', False) is not False
+                            or type(helper.get('demanding', False)) is not bool
+                            or helper.get('helper') is not None):
+                        raise RunStalled('A sibling helper requires a failed retry_of label and a read-only errand')
                 writes = request.get('write', False)
                 if writes and not (self.project and self.config.allow_writes):
                     raise RunStalled("Worker requested edits without an operator write grant.")
@@ -838,18 +848,31 @@ class Session:
                         raise ErrandToolMismatch(f"errand {label!r}: {mismatch}")
                     if self.workers.remaining(spec.task_id) <= 0:
                         raise FanOutExceeded("Worker budget exhausted before a draft was produced.")
-                    result = self.workers.commission(
-                        task=task, parent_key=lead, prompt=request['instruction'],
-                        label=label,
-                        errand=request['errand'], demanding=request.get('demanding', False),
-                        allow_writes=writes, needs=needs,
-                    )
+                    job = dict(prompt=request['instruction'], label=label,
+                               errand=request['errand'], demanding=request.get('demanding', False),
+                               allow_writes=writes, needs=needs,
+                               steps=request.get('steps', 1), token_limit=request.get('token_limit'))
+                    if helper is None:
+                        results = [self.workers.commission(task=task, parent_key=lead, **job)]
+                    else:
+                        mismatch = check_errand_fit(helper['instruction'], needs=helper.get('needs'), write=False)
+                        if mismatch is not None:
+                            raise ErrandToolMismatch('Helper: ' + mismatch)
+                        if self.workers.remaining(spec.task_id) < 2:
+                            raise FanOutExceeded('A sibling pair needs two remaining worker attempts')
+                        helper_job = dict(prompt=helper['instruction'], label=label + '-helper',
+                                          errand=helper['errand'], demanding=helper.get('demanding', False),
+                                          allow_writes=False, needs=helper.get('needs'),
+                                          steps=helper.get('steps', 1), token_limit=helper.get('token_limit'))
+                        results = self.workers.commission_many(task=task, parent_key=lead,
+                                                               jobs=[job, helper_job])
                 except PartialWorkStopped:
                     raise
                 except (FanOutExceeded, RepeatedFailure, ErrandToolMismatch) as exc:
                     # Budget and repeated-failure guards are the lead's own
                     # limits reported back to it, not a crash: it can still
                     # close the task incomplete with what it has.
+                    failed_errands.add(label)
                     worker_failures += 1
                     answers.append(
                         f"Worker errand {label!r} was refused: {exc}\n"
@@ -864,6 +887,7 @@ class Session:
                         ) from exc
                     continue
                 except Exception as exc:  # noqa: BLE001 -- returned, not raised
+                    failed_errands.add(label)
                     worker_failures += 1
                     detail = str(exc)[:400]
                     task.record("user", f"[worker {label}] FAILED: {detail}")
@@ -878,7 +902,16 @@ class Session:
                             f"lead is not converging. Last: {detail[:200]}"
                         ) from exc
                     continue
-                answers.append(f"Worker {result.model}: {result.summary}\n{result.ref.render()}")
+                for result in results:
+                    if result.error or result.needs_tool:
+                        failed_errands.add(result.label)
+                    if result.error:
+                        worker_failures += 1
+                    evidence = result.ref.render() if result.ref else ''
+                    answers.append(f"Worker {result.label} ({result.model}): "
+                                   f"{result.error or result.summary}\n{evidence}")
+                if worker_failures >= self.config.max_worker_failures:
+                    raise RunStalled('Worker failures exhausted the task recovery allowance')
                 continue
             requests = _parse_consults(body)
             if not requests:
@@ -1662,7 +1695,12 @@ class Session:
                      'the harness cannot patch, [] for an answer in text. Set write:true '
                      'exactly when needs contains patch. The harness checks the fit '
                      'before the call is made and refuses a mismatch for free. '
-                     'Workers cannot delegate.')
+                     'Workers cannot delegate. After a failed errand, a retry may add '
+                     '"retry_of":"failed-label" and one "helper" object with its own '
+                     'errand, instruction, needs and demanding fields. The helper is always '
+                     'read-only; both are siblings reporting to you. Optional steps (up to 3) '
+                     'and token_limit (up to 50000 reported tokens) bound a worker continuation; '
+                     'the configured budget may be stricter. Defaults remain one shot.')
         if self.project:
             # Deliberately no longer "inspect the project source": that told the
             # lead to go exploring in the same breath as the guidance below

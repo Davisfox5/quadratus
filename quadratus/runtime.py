@@ -359,6 +359,9 @@ class Fleet:
                          "The harness applies it to the persistent project. For no required edits, "
                          "return NO CHANGES: with a reason. FETCH, CONSULT and WORKER requests "
                          "may be returned alone before the patch. You have no write tools.")
+                from .workers import worker_loop_control
+                if worker_loop_control.get() is not None:
+                    role += '\nDuring this bounded errand only, CONTINUE: may request another read step.'
             reply = self._generate(model_key, view, prompt, role)
             # Rewritten while the copy still exists, because its path is the
             # only thing that identifies which references need rewriting. A
@@ -371,7 +374,8 @@ class Fleet:
             if match:
                 self.project.apply_patch(match.group(1))
                 return reply + "\nPatch applied to the project."
-            if not re.match(r"\s*(?:NO CHANGES:|FETCH:|CONSULT |WORKER )", reply):
+            continuation = (worker_loop_control.get() is not None and reply.startswith('CONTINUE:'))
+            if not continuation and not re.match(r"\s*(?:NO CHANGES:|FETCH:|CONSULT |WORKER )", reply):
                 raise ProviderError("Bounded editor returned no PATCH or explicit NO CHANGES result.")
         return reply
 
