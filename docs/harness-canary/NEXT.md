@@ -61,7 +61,9 @@ at the scratch copy for the grader. Run
 first; it must exit 0. Read the report, not only the exit code: the sandbox
 check is `ok: true` only for a vendor with an inner sandbox to exercise
 (codex); claude and grok report `applicable: false`, which is correct, not a
-pass. The sign-in check is positive for codex (`login status`), positive for
+pass. A vendor whose binary is absent reports `applicable: true, ok: false`
+instead, because a missing CLI is a blocker before its sandbox is a question.
+The sign-in check is positive for codex (`login status`), positive for
 claude (`auth status` prints `loggedIn: true` and the subscription type;
 declared in `CLAUDE_SPEC` as of 7b9ffd8, so a preflight before that commit
 reported claude's sign-in as unchecked), and by known failure wording for
