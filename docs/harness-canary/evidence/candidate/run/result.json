@@ -1,0 +1,372 @@
+{
+  "project": "/work",
+  "goal": "Fix GET /records/{record_id} in app.py so authenticated tenants can read only their own records. The owner is the tenant returned by current_tenant. Keep the Record(id,title) response, existing 401 behavior, and identical 404 responses for missing and other-tenant records. Ignore tenant spoofing via headers or query parameters. No feature gate is needed in this synthetic fixture. Edit only app.py; do not edit tests, auth token mappings, record fixtures or policy. Do not commit, push, contact external services or install anything. Run the provided check, preserve evidence and stop.",
+  "completed": false,
+  "allow_writes": true,
+  "error": "",
+  "checks": [
+    {
+      "passed": false,
+      "command": "gate suite",
+      "output": "api-tests: failed: fewer tests than required\nta\"), (\"beta\", \"alpha\")])\n    def test_other_tenant_is_indistinguishable_from_missing(tenant, other):\n        headers = {\"Authorization\": f\"Bearer {tenant}-token\"}\n        cross = client.get(f\"/records/{other}-1\", headers=headers)\n        missing = client.get(\"/records/missing\", headers=headers)\n>       assert cross.status_code == missing.status_code == 404\nE       assert 200 == 404\nE        +  where 200 = <Response [200 OK]>.status_code\nE        +  and   404 = <Response [404 Not Found]>.status_code\n\n/opt/quadratus/test_contract.py:32: AssertionError\n______ test_tenant_header_and_query_cannot_override_authenticated_tenant _______\n\n    def test_tenant_header_and_query_cannot_override_authenticated_tenant():\n        response = client.get(\n            \"/records/beta-1?tenant_id=beta\",\n            headers={\"Authorization\": \"Bearer alpha-token\", \"X-Tenant-ID\": \"beta\"},\n        )\n>       assert response.status_code == 404\nE       assert 200 == 404\nE        +  where 200 = <Response [200 OK]>.status_code\n\n/opt/quadratus/test_contract.py:48: AssertionError\n=============================== warnings summary ===============================\n../usr/local/lib/python3.12/site-packages/starlette/testclient.py:53\n  /usr/local/lib/python3.12/site-packages/starlette/testclient.py:53: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.\n    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../opt/quadratus/test_contract.py::test_other_tenant_is_indistinguishable_from_missing[alpha-beta]\nFAILED ../opt/quadratus/test_contract.py::test_other_tenant_is_indistinguishable_from_missing[beta-alpha]\nFAILED ../opt/quadratus/test_contract.py::test_tenant_header_and_query_cannot_override_authenticated_tenant\n3 failed, 6 passed, 1 warning in 0.11s",
+      "cwd": "/work",
+      "receipts": [
+        {
+          "id": "api-tests",
+          "status": "failed",
+          "reason": "fewer tests than required",
+          "required": true,
+          "command": "python -m pytest -q -p no:cacheprovider /opt/quadratus/test_contract.py",
+          "returncode": 1,
+          "output": "ta\"), (\"beta\", \"alpha\")])\n    def test_other_tenant_is_indistinguishable_from_missing(tenant, other):\n        headers = {\"Authorization\": f\"Bearer {tenant}-token\"}\n        cross = client.get(f\"/records/{other}-1\", headers=headers)\n        missing = client.get(\"/records/missing\", headers=headers)\n>       assert cross.status_code == missing.status_code == 404\nE       assert 200 == 404\nE        +  where 200 = <Response [200 OK]>.status_code\nE        +  and   404 = <Response [404 Not Found]>.status_code\n\n/opt/quadratus/test_contract.py:32: AssertionError\n______ test_tenant_header_and_query_cannot_override_authenticated_tenant _______\n\n    def test_tenant_header_and_query_cannot_override_authenticated_tenant():\n        response = client.get(\n            \"/records/beta-1?tenant_id=beta\",\n            headers={\"Authorization\": \"Bearer alpha-token\", \"X-Tenant-ID\": \"beta\"},\n        )\n>       assert response.status_code == 404\nE       assert 200 == 404\nE        +  where 200 = <Response [200 OK]>.status_code\n\n/opt/quadratus/test_contract.py:48: AssertionError\n=============================== warnings summary ===============================\n../usr/local/lib/python3.12/site-packages/starlette/testclient.py:53\n  /usr/local/lib/python3.12/site-packages/starlette/testclient.py:53: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.\n    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../opt/quadratus/test_contract.py::test_other_tenant_is_indistinguishable_from_missing[alpha-beta]\nFAILED ../opt/quadratus/test_contract.py::test_other_tenant_is_indistinguishable_from_missing[beta-alpha]\nFAILED ../opt/quadratus/test_contract.py::test_tenant_header_and_query_cannot_override_authenticated_tenant\n3 failed, 6 passed, 1 warning in 0.11s",
+          "cached": false,
+          "tests": 6,
+          "source_hash": "359be2b8b1fb7ac34c5fe3098c293a4b94f862c3d755457215279ab0cfd6f6bb",
+          "config_hash": "124dd8bb1a9848dea7bd9bdaf3cdf0dc05f08da3f17c6101ee4da541b1e800e4",
+          "runner_hash": "f78adc0d2219fbfa2fcc5a8a5ef09c8f84cc2e58c23d1597e6f43b09611e2d8b"
+        }
+      ]
+    }
+  ],
+  "source_changed": true,
+  "source_fingerprint": "fb61f5d212b0503581f465a9657fff3329edf31d6a20a3be921cf6461d9985a4",
+  "tasks": 1,
+  "in_flight": {},
+  "policy_preview": {
+    "schema_version": 1,
+    "repository_id": "fixture/q9-tenant-api",
+    "policy_source": ".quadratus/policy.json",
+    "policy_hash": "f86d265d8e7d8d8cd8f15a97834b77166a6d96824b89ae7910151e1ea9ad66f5",
+    "library_version": "pilot-1",
+    "library_digest": "3ebbe7937c14fe7dbb94438a8df6d9996b7a59cf5d7fae490dbfbb4a54492a42",
+    "declared_paths": [
+      "app.py"
+    ],
+    "primary_family": "scoped-endpoint",
+    "families": [
+      "scoped-endpoint"
+    ],
+    "overlays": [
+      "tenant-isolation"
+    ],
+    "gates": [
+      {
+        "id": "scope",
+        "runner": "builtin:scope",
+        "required": true
+      },
+      {
+        "id": "api-tests",
+        "runner": "command",
+        "argv": [
+          "python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "/opt/quadratus/test_contract.py"
+        ],
+        "cwd": ".",
+        "timeout_seconds": 30,
+        "minimum_tests": 9,
+        "required": true,
+        "side_effects": "none"
+      }
+    ],
+    "absent_gates": [
+      {
+        "id": "scope-predicate-grep",
+        "status": "not_configured",
+        "because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration."
+      },
+      {
+        "id": "lint",
+        "status": "not_configured",
+        "because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration."
+      }
+    ],
+    "skipped_gates": [],
+    "adapters": {
+      "scoped-endpoint": {
+        "auth_dependency": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": true
+        },
+        "scope_predicate": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": true
+        },
+        "validation_lib": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": true
+        },
+        "feature_gate_fn": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": false
+        },
+        "error_envelope": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": true
+        },
+        "test_override_mechanism": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": true
+        },
+        "route_registry": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": true
+        },
+        "raw_query_grep": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": false
+        }
+      }
+    },
+    "deny_write": [
+      ".git/**",
+      ".quadratus/policy.json",
+      "README.md"
+    ],
+    "sensitive": [],
+    "defaults": {
+      "family": "scoped-endpoint",
+      "required_gates": [
+        "scope",
+        "api-tests"
+      ],
+      "scope_max_lines": 40,
+      "overrun_ratio": 1.5,
+      "worker_depth": 1
+    },
+    "capability_policy": {
+      "deny_write": [
+        ".git/**",
+        ".quadratus/policy.json",
+        "README.md"
+      ],
+      "sensitive": [],
+      "external_effects": "deny",
+      "native_delegation": "deny"
+    },
+    "blocked": [],
+    "hash": "263c2282a219a7c999d857bae749edfe189d56587322e8b0a6dfbe29cf4b4d04"
+  },
+  "policy_plans": [
+    {
+      "task_id": "t1",
+      "schema_version": 1,
+      "repository_id": "fixture/q9-tenant-api",
+      "policy_source": ".quadratus/policy.json",
+      "policy_hash": "f86d265d8e7d8d8cd8f15a97834b77166a6d96824b89ae7910151e1ea9ad66f5",
+      "library_version": "pilot-1",
+      "library_digest": "3ebbe7937c14fe7dbb94438a8df6d9996b7a59cf5d7fae490dbfbb4a54492a42",
+      "declared_paths": [
+        "app.py"
+      ],
+      "primary_family": "scoped-endpoint",
+      "families": [
+        "scoped-endpoint"
+      ],
+      "overlays": [
+        "tenant-isolation"
+      ],
+      "gates": [
+        {
+          "id": "scope",
+          "runner": "builtin:scope",
+          "required": true
+        },
+        {
+          "id": "api-tests",
+          "runner": "command",
+          "argv": [
+            "python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "/opt/quadratus/test_contract.py"
+          ],
+          "cwd": ".",
+          "timeout_seconds": 30,
+          "minimum_tests": 9,
+          "required": true,
+          "side_effects": "none"
+        }
+      ],
+      "absent_gates": [
+        {
+          "id": "scope-predicate-grep",
+          "status": "not_configured",
+          "because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration."
+        },
+        {
+          "id": "lint",
+          "status": "not_configured",
+          "because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration."
+        }
+      ],
+      "skipped_gates": [],
+      "adapters": {
+        "scoped-endpoint": {
+          "auth_dependency": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": true
+          },
+          "scope_predicate": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": true
+          },
+          "validation_lib": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": true
+          },
+          "feature_gate_fn": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": false
+          },
+          "error_envelope": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": true
+          },
+          "test_override_mechanism": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": true
+          },
+          "route_registry": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": true
+          },
+          "raw_query_grep": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": false
+          }
+        }
+      },
+      "deny_write": [
+        ".git/**",
+        ".quadratus/policy.json",
+        "README.md"
+      ],
+      "sensitive": [],
+      "defaults": {
+        "family": "scoped-endpoint",
+        "required_gates": [
+          "scope",
+          "api-tests"
+        ],
+        "scope_max_lines": 40,
+        "overrun_ratio": 1.5,
+        "worker_depth": 1
+      },
+      "capability_policy": {
+        "deny_write": [
+          ".git/**",
+          ".quadratus/policy.json",
+          "README.md"
+        ],
+        "sensitive": [],
+        "external_effects": "deny",
+        "native_delegation": "deny"
+      },
+      "blocked": [],
+      "hash": "263c2282a219a7c999d857bae749edfe189d56587322e8b0a6dfbe29cf4b4d04"
+    }
+  ],
+  "budget": {
+    "limits": {
+      "max_calls": 24,
+      "max_reported_tokens": 500000,
+      "wall_seconds": 840,
+      "max_concurrent_workers": 2,
+      "max_cost_usd": null,
+      "api_cost_rates": []
+    },
+    "reserved_attempts": 5,
+    "api_cost_usd": 0.0,
+    "api_cost_overshoot_usd": 0.0,
+    "unknown_api_cost_attempts": 0,
+    "cost_boundary": "configured API upper-rate threshold; in-flight calls can overshoot; CLI excluded",
+    "in_flight": 0,
+    "input_tokens": 222716,
+    "output_tokens": 4988,
+    "reported_tokens": 227704,
+    "unknown_usage_attempts": 0,
+    "stop_reason": "",
+    "preserved_responses": [],
+    "elapsed_seconds": 128.162759641,
+    "token_boundary": "post-return threshold; in-flight calls can overshoot",
+    "input_boundary": "normalized provider input includes cached input; do not add it again",
+    "wall_boundary": "attempt timeout plus required external process supervisor"
+  },
+  "delegation": {
+    "controlled_tokens": 227704,
+    "native_child_tokens": 0,
+    "auxiliary_tokens": 0,
+    "auxiliary_tokens_scope": "Explicit auxiliary InvocationEvent rows only; vendor aggregates are not included.",
+    "combined_reported_tokens": 227704,
+    "parent_child_overlap": "not_applicable",
+    "known_minimum_tokens": 227704,
+    "unknown_invocations": 0,
+    "unknown_detail": [],
+    "native_children": 0,
+    "unidentified_native_activity": 0,
+    "note": "Subscription usage including cached and repeated input. Native children counted once at their highest cumulative reading, never summed across updates. The combined sum assumes child counters are additional to parent counters; that overlap is unverified. known_minimum_tokens is a deprecated compatibility key for that conditional sum, not an established lower bound. Auxiliary usage covers explicit auxiliary event rows only, not vendor aggregates. Unknown usage is unknown, not zero."
+  },
+  "scope_reports": [
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [],
+      "changed_lines": 0,
+      "max_lines": 10,
+      "code_lines": 0,
+      "test_lines": 0,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [],
+      "changed_lines": 0,
+      "max_lines": 10,
+      "code_lines": 0,
+      "test_lines": 0,
+      "oversized": false
+    }
+  ]
+}
