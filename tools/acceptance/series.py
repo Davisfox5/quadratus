@@ -350,15 +350,22 @@ def cmd_run(args) -> int:
         argv = [args.python, str(launcher), "--project", str(project),
                 "--allowance-record", str(Path(args.allowance_record).resolve())]
         print(f"{args.version} attempt {attempt}: {' '.join(argv)}", flush=True)
+        # The launcher is the head of a process tree (the vendor CLIs are its
+        # children), so the wall kills the whole session group, not only the
+        # head; a killed head with live CLI children would keep spending the
+        # window after the run was declared over.
+        proc = subprocess.Popen(argv, cwd=runtime, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, start_new_session=True)
         try:
-            done = subprocess.run(argv, cwd=runtime, env=env, capture_output=True,
-                                  text=True, timeout=args.wall_seconds)
-            code, text = done.returncode, done.stdout + done.stderr
-        except subprocess.TimeoutExpired as exc:
-            partial = exc.stdout or ""
-            if isinstance(partial, bytes):
-                partial = partial.decode(errors="replace")
-            code, text = None, f"launcher killed after {args.wall_seconds}s\n{partial}"
+            text, _ = proc.communicate(timeout=args.wall_seconds)
+            code = proc.returncode
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, 9)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
+            partial, _ = proc.communicate()
+            code, text = None, f"launcher killed after {args.wall_seconds}s\n{partial or ''}"
         (slot / "launcher.txt").write_text(text, encoding="utf-8")
         found = sorted((project / ".quadratus" / "runs").glob("*"))
         # No run tree means the launcher failed before run_project; the sidecar
