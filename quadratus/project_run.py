@@ -51,7 +51,7 @@ def _project_lock(project):
 def run_project(goal, project, settings, *, allow_writes=False, check='',
                 state_dir=None, max_tasks=20, mode='adversarial',
                 progress=None, ask_operator=None, plan_gate=None,
-                default_scope=None, run_limits=None, gates=None):
+                default_scope=None, run_limits=None, security_verdict_json=False, gates=None):
     """Keep both successful and interrupted runs next to their source tree."""
     from .runtime import Fleet, new_session
 
@@ -74,13 +74,13 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     check=check, max_tasks=max_tasks, mode=mode, progress=progress,
                     ask_operator=ask_operator, plan_gate=plan_gate,
                     default_scope=default_scope,
-                    run_limits=run_limits, gates=gates,
+                    run_limits=run_limits, security_verdict_json=security_verdict_json, gates=gates,
                     fleet_type=Fleet, session_factory=new_session)
 
 
 def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
-         default_scope=None, run_limits=None, gates=None):
+         default_scope=None, run_limits=None, security_verdict_json=False, gates=None):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
@@ -100,7 +100,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         allow_writes=allow_writes, mode=mode, integration_gate=gate,
         codebase_map=code_map, ask_operator=ask_operator, plan_gate=plan_gate,
         progress=progress, delegation_ledger=delegation,
-        default_scope=default_scope,
+        default_scope=default_scope, security_verdict_json=security_verdict_json,
     )
     session, error = None, ''
     if run_limits:

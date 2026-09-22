@@ -259,3 +259,53 @@ def generate_structured(
         f"{getattr(provider, 'label', 'provider')} did not return valid JSON after "
         f"{max_attempts} attempts ({last_error}). Last output began: {last_raw[:200]}"
     )
+
+
+def parse_security_verdict(text: str, *, snapshot_hash: str, acceptance: Sequence[str]):
+    """Strict v1 verdict. Never repair or search inside an authority-bearing reply."""
+    def unique(pairs):
+        obj = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError(f'duplicate key: {key}')
+            obj[key] = value
+        return obj
+
+    def invalid_constant(value):
+        raise ValueError(f'invalid JSON constant: {value}')
+
+    try:
+        doc = json.loads(text, object_pairs_hook=unique, parse_constant=invalid_constant)
+    except (ValueError, TypeError) as exc:
+        raise StructuredError(f'Invalid security verdict JSON: {exc}') from exc
+    fields = {'schema_version', 'verdict', 'snapshot_hash', 'acceptance_results',
+              'blocking_findings', 'limitations'}
+    if not isinstance(doc, dict) or set(doc) != fields:
+        raise StructuredError('Security verdict must contain exactly the v1 fields')
+    if type(doc['schema_version']) is not int or doc['schema_version'] != 1:
+        raise StructuredError('Unsupported security verdict schema_version')
+    if doc['verdict'] not in ('accept', 'reject', 'insufficient_evidence'):
+        raise StructuredError('Unknown security verdict')
+    if doc['snapshot_hash'] != snapshot_hash:
+        raise StructuredError('Security verdict snapshot_hash does not match the reviewed source')
+    for key in ('blocking_findings', 'limitations'):
+        if not isinstance(doc[key], list) or any(
+                not isinstance(s, str) or not s.strip() for s in doc[key]):
+            raise StructuredError(f'{key} must be a list of nonempty strings')
+    results = doc['acceptance_results']
+    if not isinstance(results, list) or len(results) != len(acceptance):
+        raise StructuredError('Security verdict must cover every acceptance criterion')
+    for result, criterion in zip(results, acceptance, strict=True):
+        if (not isinstance(result, dict) or set(result) != {'criterion', 'status', 'evidence'}
+                or result['criterion'] != criterion
+                or result['status'] not in ('passed', 'failed', 'insufficient_evidence')
+                or not isinstance(result['evidence'], str) or not result['evidence'].strip()):
+            raise StructuredError('Invalid or missing acceptance evidence')
+    if doc['verdict'] == 'accept' and (
+            doc['blocking_findings'] or doc['limitations']
+            or any(r['status'] != 'passed' for r in results)):
+        raise StructuredError('Accept contradicts findings, limitations or acceptance results')
+    if doc['verdict'] == 'reject' and not (
+            doc['blocking_findings'] or any(r['status'] == 'failed' for r in results)):
+        raise StructuredError('Reject must name a blocking finding or failed criterion')
+    return doc
