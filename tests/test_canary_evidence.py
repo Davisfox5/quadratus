@@ -31,7 +31,7 @@ from quadratus.delegation import (
 )
 from quadratus.runtime import Fleet
 from quadratus.scope import TaskScope
-from quadratus.session import _BLOCKED_REPORT_RULE, Session, SessionConfig, TaskSpec
+from quadratus.session import _BLOCKED_REPORT_RULE, RunStalled, Session, SessionConfig, TaskSpec
 from quadratus.task_kinds import TaskKind
 
 SOL = "openai:gpt-5.6-sol"
@@ -193,6 +193,23 @@ def test_a_security_lead_asking_for_a_consult_is_refused_and_re_asked(tmp_path):
     assert len(leads) == 2
     assert "you may consult" not in leads[0].lower()
     assert all(k != "claude:opus" or "verifying security work" in p for k, p in calls)
+
+
+def test_repeated_consult_requests_in_a_security_excursion_stall_the_run(tmp_path):
+    """Codex's finding on #25: the refusal branch re-asked without counting, so
+    a lead that never stopped asking was re-invoked until the budget was gone.
+    Refusals now spend the consult allowance and the run stalls past it."""
+    calls = []
+
+    def invoke(key, prompt, *, allow_writes=False):
+        calls.append(key)
+        return "CONSULT Opus 5: still asking?"
+
+    session = _security_session(tmp_path, invoke)
+    with pytest.raises(RunStalled, match="not converging"):
+        session.run_task(SECURITY_TASK)
+    assert len(calls) == session.config.max_consults + 1
+    assert set(calls) == {SOL}
 
 
 def test_the_lead_prompt_demands_evidence_for_a_blocked_report(tmp_path):
