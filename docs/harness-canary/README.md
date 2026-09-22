@@ -1,6 +1,8 @@
-# Q9: prepared live canary
+# Q9: live canary
 
-State: prepared offline; no live runs authorized or executed in this record.
+State: the authorized pair ran on 2026-09-22 and was not accepted. See RESULT.md
+for the failure, complete retained records, limits and cleanup. The preparation
+record below describes what was frozen before execution.
 
 Compare baseline Quadratus 5d70d31 with candidate e1e1f90288d83990ca801d761ea6e86eeb78ab5e
 (Q1 through Q8 merged). Each receives an identical copy of fixture/app.py,
@@ -14,7 +16,7 @@ repository, real customer data, database server or outbound message in the
 fixture. Only app.py may change. The acceptance suite stays in the read-only
 runtime mount; run state stays in the disposable project.
 
-## Proposed allowance, awaiting direct Davis confirmation
+## Frozen allowance, subsequently authorized and executed
 
 - One baseline and one candidate run, sequentially. No automatic rerun.
 - Subscription CLIs only; no billed API fallback. Existing subscription auth

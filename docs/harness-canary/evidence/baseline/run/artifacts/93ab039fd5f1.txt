@@ -1,0 +1,1 @@
+WORKER {"errand":"code","instruction":"In app.py only, change get_record's check from `if record is None:` to `if record is None or record[\"tenant_id\"] != tenant:`. Make no other edits. Return the patch for the harness to apply.","demanding":false,"write":true,"needs":["patch"]}

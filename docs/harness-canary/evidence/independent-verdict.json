@@ -1,0 +1,62 @@
+{
+  "baseline": {
+    "accepted": false,
+    "run_id": "20260922T030524Z-4361b5a8",
+    "completed": false,
+    "provider_attempts": 5,
+    "reported_tokens": 261259,
+    "auxiliary_diagnostic_tokens_separate_overlap_unknown": 3653,
+    "unknown_usage_attempts": 0,
+    "token_threshold_overshoot": 0,
+    "source_files": {
+      "app.py": {
+        "unchanged": true,
+        "sha256": "1e5eb081d95953c36eb8e096ddb2a555826037109ee9b8e46b3ba1f1c8184d64"
+      },
+      "README.md": {
+        "unchanged": true,
+        "sha256": "c02ffd68bc7927cebcfeeec518960fd6505316658383861214d7154d87cb270b"
+      },
+      ".quadratus/policy.json": {
+        "unchanged": true,
+        "sha256": "df99f852c94103a6f876a3718b51d6da4f7eb8c35845985b6d78f38b18b82a8e"
+      }
+    },
+    "operator_added_file": "live-console.txt; explains source_changed=true; not a model edit",
+    "grader": {
+      "passed": 6,
+      "failed": 3
+    },
+    "retained_raw_artifacts_reviewed": 8
+  },
+  "candidate": {
+    "accepted": false,
+    "run_id": "20260922T030752Z-c22907f8",
+    "completed": false,
+    "provider_attempts": 5,
+    "reported_tokens": 227704,
+    "auxiliary_diagnostic_tokens_separate_overlap_unknown": 4684,
+    "unknown_usage_attempts": 0,
+    "token_threshold_overshoot": 0,
+    "source_files": {
+      "app.py": {
+        "unchanged": true,
+        "sha256": "1e5eb081d95953c36eb8e096ddb2a555826037109ee9b8e46b3ba1f1c8184d64"
+      },
+      "README.md": {
+        "unchanged": true,
+        "sha256": "c02ffd68bc7927cebcfeeec518960fd6505316658383861214d7154d87cb270b"
+      },
+      ".quadratus/policy.json": {
+        "unchanged": true,
+        "sha256": "df99f852c94103a6f876a3718b51d6da4f7eb8c35845985b6d78f38b18b82a8e"
+      }
+    },
+    "operator_added_file": "live-console.txt; explains source_changed=true; not a model edit",
+    "grader": {
+      "passed": 6,
+      "failed": 3
+    },
+    "retained_raw_artifacts_reviewed": 8
+  }
+}

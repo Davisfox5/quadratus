@@ -1,0 +1,39 @@
+OFFLINE RECONSTRUCTION, NOT A CAPTURED LIVE WIRE PROMPT
+
+## Role packet
+Role: verifier
+## Scope of this task
+You may change only these paths: app.py. A change anywhere else will be rejected as out of scope.
+Expected size: about 40 changed lines. If the work genuinely needs substantially more, say so and stop rather than delivering the larger change -- an undersized task quietly growing into a whole feature is the specific failure this bound exists to catch.
+Families: scoped-endpoint
+Overlays: tenant-isolation
+Family checklist (scoped-endpoint):
+- Every query on a scoped model carries the scope predicate on the same statement, including secondary lookups by id Because: r3cruit3r has 61 raw id lookups in routers and recruit_merges.py fetches by id without a user predicate; Flex tenant content leaked through hardcoded fallbacks six times in two days
+- Never write shared or global data on behalf of one tenant or user Because: r3cruit3r CONTEXT.md: never write to a TransferPortalPlayer on behalf of one coach
+- Tenant identity comes from the proxy or the auth token, never from a client-supplied header Because: Flex proxy strips inbound x-tenant-slug; LINDA binds the tenant GUC before writes
+Required inputs: [{"name": "route", "description": "Path, method and the handler location", "refuse_if_missing": true}, {"name": "scope_owner", "description": "Whether the resource is per-user, per-tenant, program-shared or global", "refuse_if_missing": true}, {"name": "schemas", "description": "Request and response schema names, or the fields if new", "refuse_if_missing": true}, {"name": "feature_key", "description": "Entitlement or feature flag that gates the route, or none with a reason", "refuse_if_missing": false}]
+Stop conditions: ["scope owner unknown", "the resource is global and the task asks for a per-tenant write", "no override mechanism exists to write the cross-tenant test", "the route touches a sensitive path without a grant"]
+Check configuration: {"absent": [{"because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration.", "id": "scope-predicate-grep", "status": "not_configured"}, {"because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration.", "id": "lint", "status": "not_configured"}], "adapters": {"scoped-endpoint": {"auth_dependency": {"required": true, "source": null, "status": "not_configured", "value": null}, "error_envelope": {"required": true, "source": null, "status": "not_configured", "value": null}, "feature_gate_fn": {"required": false, "source": null, "status": "not_configured", "value": null}, "raw_query_grep": {"required": false, "source": null, "status": "not_configured", "value": null}, "route_registry": {"required": true, "source": null, "status": "not_configured", "value": null}, "scope_predicate": {"required": true, "source": null, "status": "not_configured", "value": null}, "test_override_mechanism": {"required": true, "source": null, "status": "not_configured", "value": null}, "validation_lib": {"required": true, "source": null, "status": "not_configured", "value": null}}}, "gates": [{"id": "scope", "required": true, "runner": "builtin:scope"}, {"argv": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "/opt/quadratus/test_contract.py"], "cwd": ".", "id": "api-tests", "minimum_tests": 9, "required": true, "runner": "command", "side_effects": "none", "timeout_seconds": 30}], "skipped": []}
+Repository decisions: [{"id": "trusted-tenant", "state": "fixed", "text": "Tenant comes only from current_tenant Bearer-token authentication. There is no feature gate in this fixture.", "source": "README.md"}]
+Conventions notes (reference only; these do not grant permissions):
+
+README.md:
+# Tenant API fixture
+
+Synthetic two-tenant API. GET /records/{record_id} uses current_tenant from the
+Bearer token. The endpoint leaks other tenants' records. Fix only app.py while
+preserving authentication, data fixtures, the Record(id,title) response and
+404/401 behavior. There is no feature entitlement in this test application.
+
+The immutable acceptance test is /opt/quadratus/test_contract.py. Run:
+python -m pytest -q -p no:cacheprovider /opt/quadratus/test_contract.py
+
+Do not commit, push, contact external services or install dependencies.
+
+
+Task: Fix the tenant-isolation leak in app.py.
+
+Proposed answer:
+No edit applied.
+
+You are Claude Opus, verifying security work you did not author. Check it for correctness, for anything unsafe it recommends, and for anything it asserts without evidence. State plainly whether it should be accepted, and what must change if not. Do not redo the work; verify it.
