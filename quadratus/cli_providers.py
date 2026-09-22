@@ -1082,6 +1082,13 @@ CLAUDE_SPEC = CLISpec(
     verified=True,
     extract_usage=_extract_claude_usage,
     extract_diagnostics=_extract_claude_diagnostics,
+    # ``claude auth status`` is a model-free readout that reports
+    # ``loggedIn`` (observed true, with the subscription tier, on Davis's Mac
+    # on 2026-09-22 by Codex). Before this the preflight reported claude's
+    # sign-in as not applicable, which read as untested rather than untestable.
+    auth_check_args=["auth", "status"],
+    auth_ok_pattern=r"(?i)loggedIn\W+true|logged in",
+    auth_failure_pattern=r"(?i)loggedIn\W+false|not logged in|not authenticated",
 )
 
 #: Codex feature switches that admit vendor-native sub-agents (``spawn_agent``
