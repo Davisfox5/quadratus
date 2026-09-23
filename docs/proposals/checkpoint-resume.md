@@ -78,9 +78,13 @@ Two operations share the preconditions and the restore:
   hashes, continues an interrupted run. A latched budget stop refuses it.
 - **(b) Authorized budget extension**, `quadratus --extend <run-dir> --limit
   <name>=+<amount> --authorized-by <who> --source <where>`, then `--resume`.
-  Codex's review (PR #29) reports that eleven of the twelve GameTape
-  continuations stopped on reported tokens: recovery alone keeps that
-  evidence but never finishes the interrupted workflow.
+  The native GameTape sequence of 2026-09-22 (`docs/harness-canary/
+  gametape-native-20260922/README.md` and its `attempts.json` at b96994d,
+  PR #24) is the case: twelve supervised continuations, eleven stopped on
+  reported tokens and one on scope, 32 transport calls, 9,049,489 reported
+  primary tokens, the independent Opus review never invoked. Recovery alone
+  keeps that evidence but never finishes the interrupted workflow. That
+  sequence is supervised continuation, not twelve independent trials.
 
 **Preconditions.** Both refuse, naming each mismatch, unless all of these hold:
 
@@ -135,7 +139,14 @@ directory name), `checkpoint_hash` (sha256 of `checkpoint.json` at that moment),
   ceiling is above what was spent.
 - It never clears `unknown_usage`, `uncontrolled_native_delegation` or
   `api_cost_threshold` (`run_budget.py:166-188`), never releases a pending
-  call and never replays a scope stop.
+  call and never replays a scope stop. `max_cost_usd` is not extendable in
+  the first implementation; making it so is a separate ruling from Davis.
+- It stays inside any outer batch allowance. When the run was admitted
+  against a canary allowance record (`tools/acceptance/allowance.py`), the
+  extension refuses if the new ceiling, summed with the batch's other
+  consumed slots, would exceed `max_reported_tokens_batch`; raising the outer
+  ceiling needs its own recorded ruling on that record, never an extension
+  on one run.
 - The ledger gets an appended `Ledger.append` entry (task id `extension-<n>`,
   author `authorized_by`, summary naming the limit and both values, reasoning
   quoting `source`, which `ledger.py:130-136` requires). Nothing earlier changes.
@@ -274,6 +285,8 @@ The earlier ambiguous-call question is settled: fail-closed, and budget stops us
 2. **Runtime hash strictness.** An exact package digest (proposed) blocks resume
    across any Quadratus fix, even the one that motivated it. Accept that, or
    allow a recorded, named override?
-3. **Extension scope.** Should `max_cost_usd` be extendable too, and should
-   `--extend` check a cross-run allowance such as REVIEW.md's 1,000,000-token
-   pair threshold, which lives outside the run directory today?
+3. **Extension scope.** Settled conservatively per Codex's review: an
+   extension stays inside the outer batch allowance and `max_cost_usd` is not
+   extendable. The remaining question is how a run learns which allowance
+   record admitted it (proposed: the series runner writes the record path and
+   its sha256 into `series.json`, which `--extend` reads).
