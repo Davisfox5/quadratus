@@ -194,6 +194,7 @@ def summarise_run(run_dir: Path) -> dict:
         "version": (sidecar or {}).get("version"),
         "runtime_commit": (sidecar or {}).get("runtime_commit"),
         "attempt": (sidecar or {}).get("attempt"),
+        "provenance": provenance(sidecar),
         "completed": result.get("completed") if result else None,
         "provider_attempts": budget.get("reserved_attempts"),
         "reported_tokens": budget.get("reported_tokens"),
@@ -217,9 +218,18 @@ def _median(values: list):
 
 
 def label(n: int) -> str:
+    """Sample size only. Provenance (live launcher run or not) is per run."""
     if n >= RELIABLE_N:
         return f"live reliability: {n} runs per version"
-    return "controller determinism, not live reliability"
+    return f"live sample: {n} runs per version, below the {RELIABLE_N}-run reliability threshold"
+
+
+def provenance(sidecar) -> str:
+    """What made this run. Only a series.json written by ``run`` marks a live
+    launcher run; a replay or a hand-built tree has none and reads unknown."""
+    if isinstance(sidecar, dict) and "launcher_exit_code" in sidecar:
+        return "live launcher run (series.json)"
+    return "unknown (no series.json from the runner)"
 
 
 def summarise_version(runs: list) -> dict:
@@ -286,6 +296,7 @@ def render(report: dict) -> str:
         out += [f"### {r['version'] or 'unlabelled'} attempt {_show(r['attempt'], 'series.json')}",
                 "", f"- run directory: `{r['run_dir']}`",
                 f"- runtime commit: {_show(r['runtime_commit'], 'series.json')}",
+                f"- provenance: {r['provenance']}",
                 f"- completed: {_show(r['completed'], 'result.json')}",
                 f"- provider attempts: {_show(r['provider_attempts'], 'budget.json')}",
                 f"- reported tokens: {_show(r['reported_tokens'], 'budget.json')}",
@@ -358,6 +369,7 @@ def cmd_run(args) -> int:
     if not 1 <= args.count <= MAX_COUNT:
         raise SystemExit(f"--count must be 1 to {MAX_COUNT} per invocation")
     runtime, fixture, out = Path(args.runtime).resolve(), Path(args.fixture), Path(args.out)
+    allowance.check_grader(record, fixture)
     launcher = Path(args.launcher or runtime / "docs" / "harness-canary" / "run_fixture.py")
     grader = shlex.split(args.grader_command) if args.grader_command else None
     commit = _commit(runtime)

@@ -21,9 +21,10 @@ SCHEMA = "quadratus-canary-allowance/2"
 ENVIRONMENTS = {"native-mac", "container-contained"}
 VERSIONS = {"baseline", "candidate"}
 SHA = re.compile(r"[0-9a-f]{40}")
+SHA256 = re.compile(r"[0-9a-f]{64}")
 LIMITS = ("max_calls_each", "max_reported_tokens_each", "internal_wall_seconds_each",
           "external_wall_seconds_each", "max_reported_tokens_batch")
-REQUIRED = ("schema", "approved", "authorized_by", "source", "instruction", "recorded_at",
+REQUIRED = ("schema", "approved", "batch_id", "authorized_by", "fixture", "grader_sha256", "source", "instruction", "recorded_at",
             "environment", "baseline_sha", "candidate_sha", "runs", "runs_per_version",
             *LIMITS)
 
@@ -56,9 +57,11 @@ def load_record(path) -> dict:
         _refuse("approved", "must be true")
     if record["authorized_by"] != "Davis":
         _refuse("authorized_by", "must be 'Davis'")
-    for key in ("source", "recorded_at", "instruction"):
+    for key in ("batch_id", "source", "recorded_at", "instruction", "fixture"):
         if not isinstance(record[key], str) or not record[key].strip():
             _refuse(key, "empty")
+    if not isinstance(record["grader_sha256"], str) or not SHA256.fullmatch(record["grader_sha256"]):
+        _refuse("grader_sha256", "must be the 64 hex sha256 of the grader file")
     if record["environment"] not in ENVIRONMENTS:
         _refuse("environment", f"must be one of {sorted(ENVIRONMENTS)}")
     for key in ("baseline_sha", "candidate_sha"):
@@ -99,6 +102,24 @@ def check_wall(record: dict, wall_seconds) -> None:
                          f"external_wall_seconds_each {record['external_wall_seconds_each']}")
 
 
+def check_grader(record: dict, fixture) -> None:
+    """The fixture copy's manifest must name the grader the record authorizes.
+
+    ``prepare.py`` writes ``.quadratus/fixture-manifest.json`` with the sha256
+    of the instrument directory's ``test_contract.py``; a fixture without that
+    manifest, or with a different grader, refuses."""
+    path = Path(fixture) / ".quadratus" / "fixture-manifest.json"
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"fixture has no readable manifest at {path} ({exc})") from exc
+    hashes = manifest.get("instrument_sha256") if isinstance(manifest, dict) else None
+    actual = hashes.get("test_contract.py") if isinstance(hashes, dict) else None
+    if actual != record["grader_sha256"]:
+        raise SystemExit(f"fixture grader sha256 {actual} is not the allowance's "
+                         f"grader_sha256 {record['grader_sha256']}")
+
+
 def ledger_path(record_path) -> Path:
     return Path(f"{record_path}.slots.json")
 
@@ -130,7 +151,7 @@ def read_ledger(record_path) -> dict:
     path = ledger_path(record_path)
     digest = record_sha256(record_path)
     if not path.exists():
-        return {"record_sha256": digest, "slots": []}
+        return {"record_sha256": digest, "batch_id": None, "slots": []}
     try:
         ledger = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -138,6 +159,13 @@ def read_ledger(record_path) -> dict:
     if ledger.get("record_sha256") != digest:
         raise SystemExit("ledger belongs to a different allowance record")
     return ledger
+
+
+def check_batch(record: dict, ledger: dict) -> None:
+    if ledger.get("batch_id") not in (None, record["batch_id"]):
+        raise SystemExit(f"ledger belongs to batch {ledger.get('batch_id')}, "
+                         f"not {record['batch_id']}")
+    ledger["batch_id"] = record["batch_id"]
 
 
 def slots_left(record_path, record: dict, version: str) -> int:
@@ -168,6 +196,7 @@ def claim_slot(record_path, record: dict, version: str) -> dict:
     if on_disk != record:
         raise SystemExit("allowance record changed after it was loaded")
     ledger = read_ledger(record_path)
+    check_batch(record, ledger)
     mine = [s for s in ledger["slots"] if s["version"] == version]
     total = record["runs_per_version"]
     if len(mine) >= total:

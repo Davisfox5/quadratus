@@ -129,7 +129,9 @@ called by the tool itself; `run` calls the launcher, which does.
   fresh fixture copy, in sequence, and never retries. Admission is against
   the record (`tools/acceptance/allowance.py`, schema
   `quadratus-canary-allowance/2`, template in `allowance.template.json`):
-  `approved` true and Davis-authorized, the runtime's `git rev-parse HEAD`
+  `approved` true and Davis-authorized, a `batch_id`, the fixture copy's
+  manifest naming the grader whose sha256 the record carries
+  (`grader_sha256`), the runtime's `git rev-parse HEAD`
   equal to the record's SHA for that version, `--wall-seconds` equal to
   `external_wall_seconds_each`. A slot is claimed in `<record>.slots.json`
   before each launch, `runs_per_version` per version across every invocation
@@ -143,9 +145,12 @@ called by the tool itself; `run` calls the launcher, which does.
   writes `series-report.md` and `series-report.json`. A missing file is
   reported as missing, never as zero. Fresh input is unknown when any invoked
   row lacks a cached figure. Under five runs per version the report is
-  labelled "controller determinism, not live reliability"; at five or more,
-  "live reliability: n runs per version". Every row names its run directory,
-  which stays the evidence.
+  labelled "live sample: n runs per version, below the 5-run reliability
+  threshold"; at five or more, "live reliability: n runs per version". The
+  label is sample size only; each run carries its own provenance line, "live
+  launcher run" when the runner's `series.json` is present and "unknown"
+  otherwise, so a replayed or hand-built tree is never counted as live. Every
+  row names its run directory, which stays the evidence.
 
 ## Review split
 

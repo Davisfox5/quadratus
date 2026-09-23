@@ -132,8 +132,9 @@ def test_label_below_and_at_five_runs_per_version(tmp_path):
     few = [make_run(tmp_path, f"b{i}", "baseline", source="baseline", attempt=i) for i in range(4)]
     few += [make_run(tmp_path, f"c{i}", "candidate", attempt=i) for i in range(5)]
     report = series.aggregate(few)
-    assert report["label"] == "controller determinism, not live reliability"
+    assert report["label"] == "live sample: 4 runs per version, below the 5-run reliability threshold"
     assert report["versions"]["baseline"]["label"] == report["label"]
+    assert all(r["provenance"].startswith("unknown") for r in report["runs"])
     assert report["versions"]["candidate"]["label"] == "live reliability: 5 runs per version"
     few.append(make_run(tmp_path, "b9", "baseline", source="baseline", attempt=9,
                         grader="9 passed in 0.10s"))
@@ -193,6 +194,7 @@ log.open("a").write(a.project + "\\n")
 TEMPLATE = ROOT / "docs" / "harness-canary" / "allowance.template.json"
 BASELINE_SHA = "a" * 40
 CANDIDATE_SHA = "b" * 40
+GRADER_SHA = "c" * 64
 
 
 def write_record(path: Path, **overrides) -> Path:
@@ -201,7 +203,8 @@ def write_record(path: Path, **overrides) -> Path:
     record.update(approved=True, authorized_by="Davis", source="test fixture",
                   instruction="run the canary pair", recorded_at="2026-09-22T00:00:00+00:00",
                   environment="container-contained", baseline_sha=BASELINE_SHA,
-                  candidate_sha=CANDIDATE_SHA, runs_per_version=2)
+                  candidate_sha=CANDIDATE_SHA, runs_per_version=2, batch_id="batch-test-1",
+                  grader_sha256=GRADER_SHA)
     record.update(overrides)
     path.write_text(json.dumps(record, indent=2))
     return path
@@ -212,6 +215,9 @@ def setup(tmp_path, monkeypatch):
     fixture = tmp_path / "fixture"
     fixture.mkdir()
     (fixture / "app.py").write_text("x = 1\n")
+    (fixture / ".quadratus").mkdir()
+    (fixture / ".quadratus" / "fixture-manifest.json").write_text(json.dumps(
+        {"instrument_sha256": {"test_contract.py": GRADER_SHA}}))
     launcher = tmp_path / "fake_launcher.py"
     launcher.write_text(FAKE_LAUNCHER)
     allowance = write_record(tmp_path / "allowance.json")
@@ -405,3 +411,33 @@ def test_run_writes_sidecars_and_grader_in_fresh_copies(setup):
     report = series.aggregate(runs)
     assert report["versions"]["candidate"]["pass_rate"] == "2 of 2"
     assert report["versions"]["candidate"]["completed"] == 2
+
+
+def test_grader_identity_is_bound_to_the_fixture_manifest(setup):
+    tmp_path, fixture, launcher, allowance = setup
+    (fixture / ".quadratus" / "fixture-manifest.json").write_text(json.dumps(
+        {"instrument_sha256": {"test_contract.py": "d" * 64}}))
+    with pytest.raises(SystemExit, match="grader sha256"):
+        series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
+                              "--allowance-record", str(allowance)))
+    (fixture / ".quadratus" / "fixture-manifest.json").unlink()
+    with pytest.raises(SystemExit, match="no readable manifest"):
+        series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
+                              "--allowance-record", str(allowance)))
+    assert not (tmp_path / "out").exists()
+
+
+def test_ledger_is_bound_to_the_batch_id_and_runs_read_as_live(setup):
+    tmp_path, fixture, launcher, allowance = setup
+    assert series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
+                                 "--allowance-record", str(allowance))) == 0
+    ledger = _ledger(allowance)
+    assert ledger["batch_id"] == "batch-test-1"
+    runs = (tmp_path / "out" / "candidate-runs.txt").read_text().split()
+    report = series.aggregate(runs)
+    assert report["runs"][0]["provenance"].startswith("live launcher run")
+    ledger["batch_id"] = "batch-other"
+    series.allowance.ledger_path(allowance).write_text(json.dumps(ledger))
+    with pytest.raises(SystemExit, match="belongs to batch batch-other"):
+        series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
+                              "--allowance-record", str(allowance)))
