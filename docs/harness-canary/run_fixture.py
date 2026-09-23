@@ -10,6 +10,7 @@ controller report a source change no model had made.
 """
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -225,6 +226,73 @@ def check_launcher_limits(record: dict, limits) -> None:
             _refuse(field, f"launcher RunLimits uses {actual}")
 
 
+Q9_GOAL = (
+    "Fix GET /records/{record_id} in app.py so authenticated tenants can read "
+    "only their own records. The owner is the tenant returned by current_tenant. "
+    "Keep the Record(id,title) response, existing 401 behavior, and identical 404 "
+    "responses for missing and other-tenant records. Ignore tenant spoofing via "
+    "headers or query parameters. No feature gate is needed in this synthetic "
+    "fixture. Edit only app.py; do not edit tests, auth token mappings, record "
+    "fixtures or policy. Do not commit, push, contact external services or "
+    "install anything. Run the provided check, preserve evidence and stop."
+)
+
+# The fixture-v2 goal is the project README's task statement, verbatim in
+# substance, so both engines are asked the same thing and the README stays the
+# reference a model can read.
+V2_GOAL = (
+    "Complete exactly two tasks, in order, without changing their boundaries. "
+    "1. Non-security display task, scope presentation.py: make /caption use the "
+    "existing display helper in catalog.py. Look up that module's helper name and "
+    "behavior before editing. Reuse the helper rather than copying its algorithm. "
+    "Preserve the public adapter signature and endpoint response. "
+    "2. Security task, scope app.py and access.py: use the shared visible_to "
+    "predicate at the records endpoint and repair the predicate so only an "
+    "authenticated tenant's own records are visible. Missing records and other "
+    "tenants' records must both return exactly 404 {\"detail\":\"Not found\"}. "
+    "Preserve the Record(id,title) response, existing 401 behavior, and reject "
+    "tenant spoofing through headers or query parameters. "
+    "Authentication comes only from auth.current_tenant. Do not edit auth.py, "
+    "catalog.py, README.md, tests, or policy. There is no feature entitlement. "
+    "No installs, commits, pushes, external services, or production data. "
+    "The common per-task integration gate checks preservation invariants only; "
+    "the operator runs the full grader afterwards. Workers are available but not "
+    "mandatory. Report actual lookup evidence and actual worker invocations. "
+    "Run the provided check, preserve evidence and stop."
+)
+
+
+def resolve_fixture(project: Path) -> dict:
+    """What this project copy is: the Q9 single-file fixture, or a prepared
+    fixture-v2 copy whose ``.quadratus/fixture-manifest.json`` names the grader.
+
+    In v2 the grader file's bytes must hash to the manifest's figure, the scope
+    is the manifest's allowed paths, the check is the isolated grader's
+    preservation subset, and ``CANARY_PROJECT`` is set so every gate process the
+    engine spawns finds the project (the grader reads only that variable).
+    """
+    manifest_path = Path(project) / ".quadratus" / "fixture-manifest.json"
+    if not manifest_path.is_file():
+        return {"mode": "q9", "goal": Q9_GOAL, "scope_paths": ("app.py",), "max_lines": 40,
+                "check": "python -m pytest -q -p no:cacheprovider /opt/quadratus/test_contract.py",
+                "max_tasks": 2, "grader": None}
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    grader = Path(manifest["grader"])
+    want = manifest["instrument_sha256"]["test_contract.py"]
+    try:
+        have = hashlib.sha256(grader.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise SystemExit(f"fixture grader unreadable at {grader} ({exc})") from exc
+    if have != want:
+        raise SystemExit(f"fixture grader at {grader} hashes to {have}, manifest says {want}")
+    if Path(project).resolve() in grader.resolve().parents:
+        raise SystemExit(f"fixture grader {grader} sits inside the solver tree")
+    return {"mode": "v2", "goal": V2_GOAL,
+            "scope_paths": tuple(manifest["allowed_paths"]), "max_lines": 60,
+            "check": f"{sys.executable} -m pytest -q -p no:cacheprovider {grader} -k preservation",
+            "max_tasks": int(manifest["max_tasks"]), "grader": str(grader)}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--allowance-record")
@@ -262,17 +330,9 @@ def main():
         claude_refusal_fallback_model="",
         claude_cli_refusal_fallback_model="",
     )
-    goal = (
-        "Fix GET /records/{record_id} in app.py so authenticated tenants can read "
-        "only their own records. The owner is the tenant returned by current_tenant. "
-        "Keep the Record(id,title) response, existing 401 behavior, and identical 404 "
-        "responses for missing and other-tenant records. Ignore tenant spoofing via "
-        "headers or query parameters. No feature gate is needed in this synthetic "
-        "fixture. Edit only app.py; do not edit tests, auth token mappings, record "
-        "fixtures or policy. Do not commit, push, contact external services or "
-        "install anything. Run the provided check, preserve evidence and stop."
-    )
-    scope = TaskScope(permitted_paths=("app.py",), max_lines=40)
+    fixture = resolve_fixture(project)
+    goal = fixture["goal"]
+    scope = TaskScope(permitted_paths=fixture["scope_paths"], max_lines=fixture["max_lines"])
     limits = RunLimits(
         max_calls=LAUNCHER_CALLS, max_reported_tokens=LAUNCHER_TOKENS,
         wall_seconds=LAUNCHER_WALL, max_concurrent_workers=2,
@@ -282,7 +342,8 @@ def main():
     if args.preflight:
         print(
             "CLI-only; 24 attempts; 500000 reported-token stop; "
-            "840s internal deadline; external hard wall 900s; scope app.py"
+            f"840s internal deadline; external hard wall 900s; fixture {fixture['mode']}; "
+            f"scope {', '.join(fixture['scope_paths'])}"
         )
         report = project / ".quadratus" / "preflight.json"
         code = _preflight(project, report)
@@ -298,14 +359,15 @@ def main():
         log.write(message + "\n")
         log.flush()
 
+    os.environ["CANARY_PROJECT"] = str(project.resolve())
     try:
         result = run_project(
             goal,
             project,
             settings,
             allow_writes=True,
-            check="python -m pytest -q -p no:cacheprovider /opt/quadratus/test_contract.py",
-            max_tasks=2,
+            check=fixture["check"],
+            max_tasks=fixture["max_tasks"],
             state_dir=".quadratus",
             default_scope=scope,
             run_limits=limits,

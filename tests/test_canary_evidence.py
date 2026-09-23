@@ -471,3 +471,57 @@ def test_missing_grader_manifest_is_refused(tmp_path):
     with pytest.raises(SystemExit, match="manifest"):
         _canary_launcher().check_grader(record, project)
 
+
+# -- the launcher resolves the fixture it was handed ---------------------------
+
+
+def test_q9_fixture_resolves_without_a_manifest(tmp_path):
+    fx = _canary_launcher().resolve_fixture(tmp_path)
+    assert fx["mode"] == "q9" and fx["scope_paths"] == ("app.py",) and fx["max_tasks"] == 2
+
+
+def _v2_copy(tmp_path, grader_text="def test_preservation_x():\n    pass\n"):
+    import hashlib
+    project = tmp_path / "trial"
+    (project / ".quadratus").mkdir(parents=True)
+    instrument = tmp_path / "trial-instrument"
+    instrument.mkdir()
+    grader = instrument / "test_contract.py"
+    grader.write_text(grader_text)
+    digest = hashlib.sha256(grader.read_bytes()).hexdigest()
+    (project / ".quadratus" / "fixture-manifest.json").write_text(json.dumps({
+        "grader": str(grader), "instrument_sha256": {"test_contract.py": digest},
+        "allowed_paths": ["presentation.py", "app.py", "access.py"], "max_tasks": 2}))
+    return project, grader, digest
+
+
+def test_v2_fixture_resolves_from_the_manifest(tmp_path):
+    project, grader, digest = _v2_copy(tmp_path)
+    fx = _canary_launcher().resolve_fixture(project)
+    assert fx["mode"] == "v2"
+    assert fx["scope_paths"] == ("presentation.py", "app.py", "access.py")
+    assert fx["max_lines"] == 60 and fx["max_tasks"] == 2
+    assert fx["check"].endswith(f"{grader} -k preservation")
+    assert "Complete exactly two tasks" in fx["goal"]
+
+
+def test_v2_fixture_refuses_a_grader_that_does_not_match_the_manifest(tmp_path):
+    project, grader, digest = _v2_copy(tmp_path)
+    grader.write_text("def test_preservation_x():\n    assert False\n")
+    with pytest.raises(SystemExit, match="hashes to"):
+        _canary_launcher().resolve_fixture(project)
+    grader.unlink()
+    with pytest.raises(SystemExit, match="unreadable"):
+        _canary_launcher().resolve_fixture(project)
+
+
+def test_v2_fixture_refuses_a_grader_inside_the_solver_tree(tmp_path):
+    project, grader, digest = _v2_copy(tmp_path)
+    inside = project / "control" / "test_contract.py"
+    inside.parent.mkdir()
+    inside.write_text(grader.read_text())
+    manifest = json.loads((project / ".quadratus" / "fixture-manifest.json").read_text())
+    manifest["grader"] = str(inside)
+    (project / ".quadratus" / "fixture-manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(SystemExit, match="inside the solver tree"):
+        _canary_launcher().resolve_fixture(project)
