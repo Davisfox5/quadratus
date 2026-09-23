@@ -592,11 +592,14 @@ def test_launcher_scrubs_api_credentials_by_name_and_suffix():
     assert "k" not in " ".join(removed)
 
 
-def test_launcher_gives_the_orchestrator_a_confirming_turn_past_the_task_count():
+def test_launcher_caps_tasks_at_the_fixture_count():
+    # A cap above the task count would let the orchestrator start another
+    # implementation task; completion must come from the engine instead.
     from pathlib import Path
     text = (Path(__file__).resolve().parents[1] / "docs" / "harness-canary"
             / "run_fixture.py").read_text()
-    assert 'max_tasks=fixture["max_tasks"] + 1' in text
+    assert 'max_tasks=fixture["max_tasks"],' in text
+    assert 'max_tasks"] + 1' not in text
 
 
 def test_preflight_warms_up_a_refresh_on_read_cli_before_its_readout(monkeypatch):
