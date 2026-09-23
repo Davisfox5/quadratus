@@ -1,0 +1,1 @@
+Complete task 1 only: import `compact_caption` from `catalog` and return its result through the existing adapter. Estimate: 4 code lines, 0 test lines. Report the helper lookup evidence and actual worker invocations (none during this inspection). The check is supplied externally; no check command is present in this copy. Preserve check evidence and stop before the security task.

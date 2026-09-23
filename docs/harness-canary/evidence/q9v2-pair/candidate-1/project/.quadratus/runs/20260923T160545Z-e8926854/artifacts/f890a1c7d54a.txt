@@ -1,0 +1,31 @@
+[assistant] Completed task 2 within scope.
+
+- `visible_to` now denies missing records/tenants and requires matching `tenant_id`.
+- `/records/{record_id}` now uses `visible_to`; missing and cross-tenant records return `404 {"detail":"Not found"}`.
+- Record response, auth dependency, and existing 401 behavior remain unchanged.
+- Lookup confirmed the prior predicate checked only record existence and the endpoint guarded only missing records.
+- Workers invoked: none.
+- Preservation gate: `5 passed, 8 deselected in 0.10s` (exit 0). Full grader not run.
+
+CHANGED: ["app.py","access.py"]
+
+[user] Integration gate PASSED: `gate suite`
+
+[assistant] [claude:opus] **Verdict: accept.** The code is correct and in scope. One reported claim is unverifiable from here — flagged below, not held against it.
+
+**What I checked in the source**
+
+- `access.py:5` — `visible_to` preserves its signature and now fails closed on all three axes: `record is not None` (missing row), `bool(tenant)` (missing/empty tenant), `record.get("tenant_id") == tenant` (ownership). A record with no `tenant_id` yields `None`, which the `bool(tenant)` guard prevents from matching a falsy tenant. No `None == None` hole.
+- `app.py:3, 26` — imports the shared predicate and replaces the guard. The old missing-record-only branch is gone; there is no second, unscoped path to a record. `raise HTTPException(status_code=404, detail="Not found")` produces exactly `{"detail":"Not found"}`, identical for missing and cross-tenant, so the two are indistinguishable to a caller (no enumeration oracle).
+- Signatures preserved: `def get_record(record_id: str, tenant: str = Depends(current_tenant)) -> Record:` and `Record(id, title)` both unchanged; `response_model=Record` still set.
+- Tenant identity: `tenant` is bound solely by `Depends(current_tenant)`, which reads only the `Authorization` header (`auth.py:8-12`). Because the parameter is a `Depends` default, FastAPI will not populate it from a query string, and no `x-tenant`-style header is read anywhere. Header/query spoofing is closed. 401 behavior is untouched — the dependency raises before the handler body, so an unauthenticated request still gets 401, not 404.
+- Scope: only `access.py` and `app.py` differ in substance; `auth.py`, `catalog.py`, `README.md` are intact. `presentation.py:7` still delegates to `compact_caption` rather than copying it, so task 1's completed behavior is preserved as required.
+- Budget: roughly 3 changed code lines against a 15-line bound, zero test lines, no feature entitlement added. Nothing unsafe is recommended anywhere in the change or the writeup.
+
+**The one caveat**
+
+The claimed gate result, `5 passed, 8 deselected in 0.10s` (exit 0), is quoted with a command, exit status and verbatim output, which is the right form — but I could not reproduce it. The instrument lives at `/private/tmp/q9v2.nxS6sx/trial-instrument/test_contract.py`, outside this review copy, and this session has no shell and no read grant for that path. So I am confirming the code, not the gate transcript. That is a limit of my environment, not a defect in the answer; the reported numbers are consistent with a preservation-only gate and with what the source does. If the operator wants that line independently confirmed, it needs a re-run in an environment that has the instrument.
+
+Similarly, "the prior predicate checked only record existence" describes the pre-edit state, which is unrecoverable here — this copy is not a git repository. It is plausible given the file docstring ("Missing rows must fail closed") and the task framing, and nothing turns on it: the post-state is correct regardless.
+
+The answer correctly reports zero workers invoked and does not claim full-grader acceptance. Nothing must change before the full grader runs.

@@ -1,0 +1,7 @@
+Project: /private/tmp/q9v2.nxS6sx/evidence/baseline-1/project; edits enabled
+asking claude:fable for the next task
+claude:fable is out of window; the seat falls to openai:gpt-6-astra
+task 1: Complete task 1 only: import `compact_caption` from `catalog` and return its result through the existing adapter. Estimate: 4 code lines, 0 test lines. Report the helper lookup evidence and actual worker invocations (none during this inspection). The check is supplied externally; no check command is present in this copy. Preserve check evidence and stop before the security task. [refactor/simple]
+task 1 closed by grok:default
+asking openai:gpt-6-astra for the next task
+task 2: Complete task 2 only. Import `visible_to` into `app.py`, use it to guard the retrieved record, and repair its ownership decision in `access.py`. Estimate: 20 code lines, 0 test lines. Do not edit authentication, catalog, README, tests, or policy; do not install, commit, push, or access external services or production data. [security/simple]
