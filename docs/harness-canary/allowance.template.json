@@ -1,15 +1,20 @@
 {
   "schema": "quadratus-canary-allowance/2",
   "approved": false,
+  "batch_id": null,
   "authorized_by": null,
   "source": null,
   "instruction": null,
   "recorded_at": null,
   "environment": null,
   "fixture": "fixture-v2",
+  "grader_sha256": null,
   "baseline_sha": null,
   "candidate_sha": null,
-  "runs": ["baseline", "candidate"],
+  "runs": [
+    "baseline",
+    "candidate"
+  ],
   "runs_per_version": 1,
   "max_calls_each": 24,
   "max_reported_tokens_each": 500000,

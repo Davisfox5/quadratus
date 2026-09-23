@@ -53,11 +53,15 @@ SCHEMA = "quadratus-canary-allowance/2"
 ENVIRONMENTS = {"native-mac", "container-contained"}
 VERSIONS = {"baseline", "candidate"}
 _SHA = re.compile(r"[0-9a-f]{40}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+LAUNCHER_CALLS = 24
+LAUNCHER_TOKENS = 500_000
+LAUNCHER_WALL = 840
 _LIMITS = ("max_calls_each", "max_reported_tokens_each", "internal_wall_seconds_each",
            "external_wall_seconds_each", "max_reported_tokens_batch")
-_REQUIRED = ("schema", "approved", "authorized_by", "source", "instruction", "recorded_at",
-             "environment", "baseline_sha", "candidate_sha", "runs", "runs_per_version",
-             *_LIMITS)
+_REQUIRED = ("schema", "approved", "batch_id", "authorized_by", "fixture", "grader_sha256",
+             "source", "instruction", "recorded_at", "environment", "baseline_sha",
+             "candidate_sha", "runs", "runs_per_version", *_LIMITS)
 
 
 def _refuse(field: str, why: str):
@@ -81,9 +85,11 @@ def require_allowance_record(record: dict) -> None:
         _refuse("approved", "must be true")
     if record["authorized_by"] != "Davis":
         _refuse("authorized_by", "must be 'Davis'")
-    for key in ("source", "recorded_at", "instruction"):
+    for key in ("batch_id", "source", "recorded_at", "instruction", "fixture"):
         if not isinstance(record[key], str) or not record[key].strip():
             _refuse(key, "empty")
+    if not isinstance(record["grader_sha256"], str) or not _SHA256.fullmatch(record["grader_sha256"]):
+        _refuse("grader_sha256", "must be the 64 hex sha256 of the grader file")
     if record["environment"] not in ENVIRONMENTS:
         _refuse("environment", f"must be one of {sorted(ENVIRONMENTS)}")
     for key in ("baseline_sha", "candidate_sha"):
@@ -102,11 +108,26 @@ def require_allowance_record(record: dict) -> None:
             _refuse(key, "must be a positive integer")
 
 
-def runtime_commit(cwd: Path | None = None) -> str:
-    """``git rev-parse HEAD`` of the runtime, or ``unknown`` when it cannot be read."""
+def runtime_root() -> Path:
+    """The checkout that contains this launcher, never the caller's cwd.
+
+    ``HERE`` is ``docs/harness-canary``, so ``parents[1]`` is the repository.
+    The image copy lives at ``/opt/quadratus`` when this file is not in a checkout.
+    """
+    checkout = HERE.parents[1]
+    if (checkout / ".git").exists():
+        return checkout
+    image = Path("/opt/quadratus")
+    if (image / ".git").exists():
+        return image
+    return checkout
+
+
+def runtime_commit() -> str:
+    """``git rev-parse HEAD`` of the launcher checkout, or ``unknown``."""
     try:
         done = subprocess.run(
-            ["git", "-C", str(cwd or Path.cwd()), "rev-parse", "HEAD"],
+            ["git", "-C", str(runtime_root()), "rev-parse", "HEAD"],
             capture_output=True, text=True, timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -170,15 +191,37 @@ def require_allowance_preflight(allowance: dict, project: Path) -> None:
         _refuse("contained", "container-contained requires contained true")
 
 
+def check_grader(record: dict, project: Path) -> None:
+    """``grader_sha256`` must equal the fixture manifest's ``test_contract.py`` hash.
+
+    ``prepare.py`` writes ``.quadratus/fixture-manifest.json`` under ``--project``.
+    A missing manifest, or a different grader, refuses.
+    """
+    path = Path(project) / ".quadratus" / "fixture-manifest.json"
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"fixture has no readable manifest at {path} ({exc})") from exc
+    hashes = manifest.get("instrument_sha256") if isinstance(manifest, dict) else None
+    actual = hashes.get("test_contract.py") if isinstance(hashes, dict) else None
+    if actual != record["grader_sha256"]:
+        raise SystemExit(
+            f"fixture grader sha256 {actual} is not the allowance's "
+            f"grader_sha256 {record['grader_sha256']}"
+        )
+
+
 def check_launcher_limits(record: dict, limits) -> None:
-    """The RunLimits this process will enforce are the ones the record names."""
-    pairs = (
-        ("max_calls_each", limits.max_calls),
-        ("max_reported_tokens_each", limits.max_reported_tokens),
-        ("internal_wall_seconds_each", limits.wall_seconds),
+    """The Q9 ceiling is hardcoded. A record cannot raise it, and RunLimits cannot either."""
+    ceiling = (
+        ("max_calls_each", LAUNCHER_CALLS, limits.max_calls),
+        ("max_reported_tokens_each", LAUNCHER_TOKENS, limits.max_reported_tokens),
+        ("internal_wall_seconds_each", LAUNCHER_WALL, limits.wall_seconds),
     )
-    for field, actual in pairs:
-        if actual != record[field]:
+    for field, fixed, actual in ceiling:
+        if record[field] != fixed:
+            _refuse(field, f"launcher ceiling is {fixed}")
+        if actual != fixed:
             _refuse(field, f"launcher RunLimits uses {actual}")
 
 
@@ -201,15 +244,13 @@ def main():
         require_allowance_record(allowance)
         bind_runtime(allowance, runtime_commit())
         require_allowance_preflight(allowance, project)
+        check_grader(allowance, project)
     # Container environment contains no API keys or application .env files.
     from quadratus.config import Settings
     from quadratus.project_run import run_project
     from quadratus.run_budget import RunLimits
     from quadratus.scope import TaskScope
 
-    max_calls = allowance["max_calls_each"] if allowance else 24
-    max_tokens = allowance["max_reported_tokens_each"] if allowance else 500_000
-    internal_wall = allowance["internal_wall_seconds_each"] if allowance else 840
     settings = Settings(
         backend="cli",
         backend_overrides={},
@@ -217,7 +258,7 @@ def main():
         anthropic_api_key=None,
         xai_api_key=None,
         max_retries=1,
-        cli_timeout=internal_wall,
+        cli_timeout=LAUNCHER_WALL,
         claude_refusal_fallback_model="",
         claude_cli_refusal_fallback_model="",
     )
@@ -233,8 +274,8 @@ def main():
     )
     scope = TaskScope(permitted_paths=("app.py",), max_lines=40)
     limits = RunLimits(
-        max_calls=max_calls, max_reported_tokens=max_tokens,
-        wall_seconds=internal_wall, max_concurrent_workers=2,
+        max_calls=LAUNCHER_CALLS, max_reported_tokens=LAUNCHER_TOKENS,
+        wall_seconds=LAUNCHER_WALL, max_concurrent_workers=2,
     )
     if allowance is not None:
         check_launcher_limits(allowance, limits)

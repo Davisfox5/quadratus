@@ -12,6 +12,7 @@ that pair uninformative rather than merely failed, and each has a test here:
 from __future__ import annotations
 
 import json
+import subprocess
 from subprocess import CompletedProcess
 
 import pytest
@@ -304,12 +305,14 @@ def _approved(tmp_path, **over):
     record = {
         "schema": "quadratus-canary-allowance/2",
         "approved": True,
+        "batch_id": "batch-1",
         "authorized_by": "Davis",
         "source": "https://example.test/allowance",
         "instruction": "one pair",
         "recorded_at": "2026-09-22T00:00:00+00:00",
         "environment": "native-mac",
         "fixture": "fixture-v2",
+        "grader_sha256": "ab" * 32,
         "baseline_sha": "a" * 40,
         "candidate_sha": "b" * 40,
         "runs": ["baseline", "candidate"],
@@ -388,3 +391,83 @@ def test_launcher_limits_must_match_the_record(tmp_path):
     limits = RunLimits(max_calls=25, max_reported_tokens=500000, wall_seconds=840)
     with pytest.raises(SystemExit, match="max_calls_each"):
         _canary_launcher().check_launcher_limits(record, limits)
+
+
+def test_record_cannot_raise_the_call_ceiling(tmp_path):
+    from quadratus.run_budget import RunLimits
+    record, _project = _approved(tmp_path, max_calls_each=25)
+    limits = RunLimits(max_calls=24, max_reported_tokens=500000, wall_seconds=840)
+    with pytest.raises(SystemExit, match="launcher ceiling is 24"):
+        _canary_launcher().check_launcher_limits(record, limits)
+
+
+def test_ceiling_limits_are_accepted(tmp_path):
+    from quadratus.run_budget import RunLimits
+    record, _project = _approved(tmp_path)
+    limits = RunLimits(max_calls=24, max_reported_tokens=500000, wall_seconds=840)
+    _canary_launcher().check_launcher_limits(record, limits)
+
+
+def test_runtime_commit_binds_to_the_launcher_checkout(tmp_path, monkeypatch):
+    other = tmp_path / "other-repo"
+    other.mkdir()
+    git = ["git", "-C", str(other)]
+    subprocess.run([*git, "init"], check=True, capture_output=True)
+    subprocess.run([*git, "config", "user.email", "canary@example.test"], check=True)
+    subprocess.run([*git, "config", "user.name", "canary"], check=True)
+    (other / "note.txt").write_text("not the launcher\n")
+    subprocess.run([*git, "add", "note.txt"], check=True)
+    subprocess.run(
+        [*git, "-c", "commit.gpgsign=false", "commit", "-m", "other"],
+        check=True, capture_output=True,
+    )
+    monkeypatch.chdir(other)
+    launcher = _canary_launcher()
+    got = launcher.runtime_commit()
+    root = launcher.runtime_root()
+    expected = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+    other_head = subprocess.check_output(["git", "-C", str(other), "rev-parse", "HEAD"], text=True).strip()
+    assert got == expected
+    assert got != other_head
+
+
+def test_empty_batch_id_is_refused(tmp_path):
+    record, _project = _approved(tmp_path, batch_id="  ")
+    with pytest.raises(SystemExit, match="batch_id"):
+        _canary_launcher().require_allowance_record(record)
+
+
+def test_missing_batch_id_is_refused(tmp_path):
+    record, _project = _approved(tmp_path)
+    del record["batch_id"]
+    with pytest.raises(SystemExit, match="batch_id"):
+        _canary_launcher().require_allowance_record(record)
+
+
+def _write_manifest(project, digest):
+    folder = project / ".quadratus"
+    folder.mkdir(exist_ok=True)
+    (folder / "fixture-manifest.json").write_text(json.dumps({
+        "instrument_sha256": {"test_contract.py": digest},
+    }))
+
+
+def test_grader_sha256_mismatch_is_refused(tmp_path):
+    record, project = _approved(tmp_path, grader_sha256="ab" * 32)
+    _write_manifest(project, "cd" * 32)
+    with pytest.raises(SystemExit, match="grader_sha256"):
+        _canary_launcher().check_grader(record, project)
+
+
+def test_grader_sha256_match_is_accepted(tmp_path):
+    digest = "ab" * 32
+    record, project = _approved(tmp_path, grader_sha256=digest)
+    _write_manifest(project, digest)
+    _canary_launcher().check_grader(record, project)
+
+
+def test_missing_grader_manifest_is_refused(tmp_path):
+    record, project = _approved(tmp_path, grader_sha256="ab" * 32)
+    with pytest.raises(SystemExit, match="manifest"):
+        _canary_launcher().check_grader(record, project)
+
