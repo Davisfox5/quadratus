@@ -611,3 +611,39 @@ def test_a_wall_kill_ends_the_series_with_a_nonzero_exit(setup, monkeypatch):
     runs = (tmp_path / "out" / "candidate-runs.txt").read_text().split()
     assert len(runs) == 1
     assert json.loads((Path(runs[0]) / "series.json").read_text())["launcher_exit_code"] is None
+
+
+def test_a_failed_launcher_is_reported_and_never_counted_as_passed(tmp_path):
+    ok = make_run(tmp_path, "ok", "candidate", grader="13 passed in 0.1s")
+    bad = make_run(tmp_path, "bad", "candidate", grader="13 passed in 0.1s")
+    (bad / "series.json").write_text(json.dumps(
+        {"version": "candidate", "runtime_commit": "abc", "attempt": 2, "launcher_exit_code": 2}))
+    (ok / "series.json").write_text(json.dumps(
+        {"version": "candidate", "runtime_commit": "abc", "attempt": 1, "launcher_exit_code": 0}))
+    report = series.aggregate([str(ok), str(bad)])
+    v = report["versions"]["candidate"]
+    assert v["pass_rate"] == "1 of 2" and v["launcher_failed"] == 1
+    text = series.render(report)
+    assert "- launcher: exit 0" in text and "- launcher: exit 2" in text
+    assert "| candidate | 2 | 1 | " in text
+
+
+def test_a_refused_grader_reads_as_refused_not_as_broken(tmp_path):
+    run = make_run(tmp_path, "r", "candidate", grader=None)
+    (run / "grader.txt").write_text("REFUSED: grader file x hashes to y, not z\n")
+    report = series.aggregate([str(run)])
+    assert report["runs"][0]["grader"] == {"refused": "grader file x hashes to y, not z"}
+    assert report["versions"]["candidate"]["ungraded"] == 1
+    assert "refused, not run: grader file x hashes to y" in series.render(report)
+
+
+def test_slot_directories_are_numbered_by_directories_not_index_files(setup):
+    tmp_path, fixture, launcher, allowance = setup
+    for _ in range(2):
+        assert series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
+                                     "--allowance-record", str(allowance))) == 0
+    slots = sorted(p.name for p in (tmp_path / "out").iterdir() if p.is_dir())
+    assert slots == ["candidate-1", "candidate-2"]
+    runs = (tmp_path / "out" / "candidate-runs.txt").read_text().split()
+    sides = [json.loads((Path(r) / "series.json").read_text()) for r in runs]
+    assert [(s["attempt"], s["slot"]) for s in sides] == [(1, 1), (2, 2)]

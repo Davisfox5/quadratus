@@ -86,6 +86,8 @@ def _beside(run_dir: Path, name: str):
 def parse_grader(text: str):
     """The pytest summary line as counts. A line with neither count is not a
     result, and None says so rather than reporting 0 of 0."""
+    if text.startswith("REFUSED:"):
+        return {"refused": text.splitlines()[0][len("REFUSED:"):].strip()}
     for line in reversed(text.splitlines()):
         counts = {kind.rstrip("s"): int(n) for n, kind in GRADER_COUNT.findall(line)}
         if "passed" in counts or "failed" in counts:
@@ -194,6 +196,8 @@ def summarise_run(run_dir: Path) -> dict:
         "version": (sidecar or {}).get("version"),
         "runtime_commit": (sidecar or {}).get("runtime_commit"),
         "attempt": (sidecar or {}).get("attempt"),
+        "launcher_exit_code": (sidecar or {}).get("launcher_exit_code"),
+        "launched": "launcher_exit_code" in (sidecar or {}),
         "provenance": provenance(sidecar),
         "completed": result.get("completed") if result else None,
         "provider_attempts": budget.get("reserved_attempts"),
@@ -233,14 +237,19 @@ def provenance(sidecar) -> str:
 
 
 def summarise_version(runs: list) -> dict:
-    graded = [r for r in runs if isinstance(r["grader"], dict)]
-    passed = [r for r in graded if r["grader"]["failed"] == 0 and r["grader"]["passed"] > 0]
+    graded = [r for r in runs if isinstance(r["grader"], dict) and "passed" in r["grader"]]
+    # A run whose launcher did not exit 0 is never counted as passed, whatever
+    # its grader says: the grader can pass a tree the engine never finished.
+    passed = [r for r in graded
+              if r["grader"]["failed"] == 0 and r["grader"]["passed"] > 0
+              and (not r["launched"] or r["launcher_exit_code"] == 0)]
     return {
         "runs": len(runs),
         "completed": sum(1 for r in runs if r["completed"] is True),
         "completed_unknown": sum(1 for r in runs if r["completed"] is None),
         "pass_rate": f"{len(passed)} of {len(runs)}",
         "ungraded": len(runs) - len(graded),
+        "launcher_failed": sum(1 for r in runs if r["launched"] and r["launcher_exit_code"] != 0),
         "median_attempts": _median([r["provider_attempts"] for r in runs]),
         "median_reported_tokens": _median([r["reported_tokens"] for r in runs]),
         "label": label(len(runs)),
@@ -265,12 +274,12 @@ def render(report: dict) -> str:
     out = ["# Canary series", "", f"**{report['label']}**", "",
            "Each row indexes a run directory; the raw records there are the evidence.", "",
            "## Per version", "",
-           "| version | runs | completed | pass rate | median attempts | median tokens | label |",
-           "| --- | --- | --- | --- | --- | --- | --- |"]
+           "| version | runs | launcher failed | completed | pass rate | median attempts | median tokens | label |",
+           "| --- | --- | --- | --- | --- | --- | --- | --- |"]
     for name, v in report["versions"].items():
         med = [f"{_show(m['value'], 'no data')} ({m['known']} of {m['of']} known)"
                for m in (v["median_attempts"], v["median_reported_tokens"])]
-        out.append(f"| {name} | {v['runs']} | {v['completed']} of {v['runs']} | "
+        out.append(f"| {name} | {v['runs']} | {v['launcher_failed']} | {v['completed']} of {v['runs']} | "
                    f"{v['pass_rate']} ({v['ungraded']} ungraded) | {med[0]} | {med[1]} | "
                    f"{v['label']} |")
     out += ["", "## Per run", ""]
@@ -284,10 +293,17 @@ def render(report: dict) -> str:
                       f"{'unknown' if split['fresh'] is None else split['fresh']}"
                       f" ({split['rows_cached_unknown']} rows without a cached figure)")
         grader = r["grader"]
-        if isinstance(grader, dict):
+        if isinstance(grader, dict) and "refused" in grader:
+            grader = f"refused, not run: {grader['refused']}"
+        elif isinstance(grader, dict):
             grader = f"{grader['passed']} passed, {grader['failed']} failed"
         elif grader is None:
             grader = "grader.txt has no pytest summary line"
+        if r["launched"]:
+            code = r["launcher_exit_code"]
+            launch = "killed at the wall" if code is None else f"exit {code}"
+        else:
+            launch = "missing (series.json)"
         roles = ("missing (invocations.jsonl)" if r["roles"] is None
                  else " > ".join(map(str, r["roles"])) or "none")
         declared = r["only_declared_paths"]
@@ -296,6 +312,7 @@ def render(report: dict) -> str:
         out += [f"### {r['version'] or 'unlabelled'} attempt {_show(r['attempt'], 'series.json')}",
                 "", f"- run directory: `{r['run_dir']}`",
                 f"- runtime commit: {_show(r['runtime_commit'], 'series.json')}",
+                f"- launcher: {launch}",
                 f"- provenance: {r['provenance']}",
                 f"- completed: {_show(r['completed'], 'result.json')}",
                 f"- provider attempts: {_show(r['provider_attempts'], 'budget.json')}",
@@ -393,7 +410,7 @@ def cmd_run(args) -> int:
                          f"left of {total} on this allowance record")
     record_digest = allowance.record_sha256(record_path)
     out.mkdir(parents=True, exist_ok=True)
-    start = 1 + len(list(out.glob(f"{args.version}-*")))
+    start = 1 + sum(1 for p in out.glob(f"{args.version}-[0-9]*") if p.is_dir())
     env, removed = allowance.scrub_api_credentials(dict(os.environ, PYTHONPATH=os.pathsep.join(
         p for p in (str(runtime), os.environ.get("PYTHONPATH", "")) if p)))
     if removed:
