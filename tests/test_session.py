@@ -202,6 +202,89 @@ def test_run_respects_the_task_cap(store):
     assert len(s.run(max_tasks=3)) == 3
 
 
+class CapRecorder(Recorder):
+    """Also answers the one terminal question asked after the task cap."""
+
+    def __init__(self, terminal, **kw):
+        super().__init__(**kw)
+        self.terminal = terminal
+        self.terminal_asks = 0
+
+    def __call__(self, model, prompt, system=None):
+        if "The task cap for this run has been reached" in prompt:
+            self.calls.append({"model": model, "prompt": prompt})
+            self.terminal_asks += 1
+            return self.terminal
+        return super().__call__(model, prompt, system)
+
+
+def _counting_run_task(s):
+    ran = []
+    real = s.run_task
+
+    def run_task(spec):
+        ran.append(spec.description)
+        return real(spec)
+
+    s.run_task = run_task
+    return ran
+
+
+def test_a_run_that_fills_its_cap_can_still_report_the_goal_met(store):
+    """Q9-v2: two tasks, a cap of two, both closed, and completed stayed false
+    because the orchestrator never had the turn that says DONE."""
+    rec = CapRecorder("DONE", next_tasks=["task one", "task two"])
+    s = _session(store, rec)
+    ran = _counting_run_task(s)
+    assert len(s.run(max_tasks=2)) == 2
+    assert ran == ["task one", "task two"]
+    assert rec.terminal_asks == 1
+    assert s.completed is True
+
+
+def test_a_post_cap_reply_proposing_a_task_is_never_run(store):
+    """The terminal question can only confirm. A reply naming task three is
+    recorded as not met; run_task stays at two calls."""
+    rec = CapRecorder("KIND: refactor simple\ntask three: rewrite the parser",
+                      next_tasks=["task one", "task two"])
+    s = _session(store, rec)
+    ran = _counting_run_task(s)
+    s.run(max_tasks=2)
+    assert ran == ["task one", "task two"]
+    assert len(s.history) == 2
+    assert rec.terminal_asks == 1
+    assert s.completed is False
+
+
+def test_terminal_done_does_not_complete_a_run_with_a_failed_gate(store):
+    """DONE at the cap completes only when every gate passed, the same rule
+    as a DONE inside the loop."""
+    rec = CapRecorder("DONE", next_tasks=["task one", "task two"])
+    s = _session(store, rec)
+    real = s.run_task
+
+    def run_task(spec):
+        summary = real(spec)
+        if spec.description == "task one":
+            # A gate that failed, then passed on the fix round: the loop goes
+            # on, but the failure is on the record.
+            s.checks += [{"passed": False}, {"passed": True}]
+        return summary
+
+    s.run_task = run_task
+    s.run(max_tasks=2)
+    assert rec.terminal_asks == 1
+    assert s.completed is False
+
+
+def test_a_run_stopped_early_is_not_asked_the_terminal_question(store):
+    rec = CapRecorder("DONE", next_tasks=["task one", "DONE"])
+    s = _session(store, rec)
+    s.run(max_tasks=5)
+    assert rec.terminal_asks == 0
+    assert s.completed is True
+
+
 def test_tasks_accumulate_in_the_ledger_in_order(store):
     rec = Recorder(next_tasks=["a", "b", "DONE"])
     s = _session(store, rec)
