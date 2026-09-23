@@ -1,0 +1,20 @@
+--- /private/tmp/q9v2.nxS6sx/candidate/docs/harness-canary/run_fixture.py	2026-09-23 10:55:05
++++ run_fixture.py	2026-09-23 12:04:07
+@@ -56,7 +56,7 @@
+ _SHA = re.compile(r"[0-9a-f]{40}")
+ _SHA256 = re.compile(r"[0-9a-f]{64}")
+ LAUNCHER_CALLS = 24
+-LAUNCHER_TOKENS = 500_000
++LAUNCHER_TOKENS = 1_000_000
+ LAUNCHER_WALL = 840
+ _LIMITS = ("max_calls_each", "max_reported_tokens_each", "internal_wall_seconds_each",
+            "external_wall_seconds_each", "max_reported_tokens_batch")
+@@ -407,7 +407,7 @@
+         check_launcher_limits(allowance, limits)
+     if args.preflight:
+         print(
+-            "CLI-only; 24 attempts; 500000 reported-token stop; "
++            f"CLI-only; 24 attempts; {LAUNCHER_TOKENS} reported-token stop; "
+             f"840s internal deadline; external hard wall 900s; fixture {fixture['mode']}; "
+             f"scope {', '.join(fixture['scope_paths'])}"
+         )

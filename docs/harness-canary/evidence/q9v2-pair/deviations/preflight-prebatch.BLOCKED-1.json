@@ -1,0 +1,76 @@
+{
+  "contained": false,
+  "host": true,
+  "work_tree": {
+    "ok": true,
+    "entries": 7,
+    "read": "README.md"
+  },
+  "vendors": {
+    "claude": {
+      "applicable": false,
+      "detail": "this vendor has no inner sandbox to test; its restriction is a tool denial, which needs no privilege to take effect"
+    },
+    "openai": {
+      "applicable": true,
+      "ok": true,
+      "argv": [
+        "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/codex",
+        "sandbox",
+        "-c",
+        "sandbox_mode=read-only",
+        "--",
+        "cat",
+        "/tmp/q9v2.nxS6sx/trial/README.md"
+      ],
+      "exit_code": 0,
+      "detail": "# Two ordered repairs"
+    },
+    "grok": {
+      "applicable": false,
+      "detail": "this vendor has no inner sandbox to test; its restriction is a tool denial, which needs no privilege to take effect"
+    }
+  },
+  "auth": {
+    "claude": {
+      "applicable": true,
+      "ok": true,
+      "argv": [
+        "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/claude",
+        "auth",
+        "status"
+      ],
+      "exit_code": 0,
+      "proof": "positive",
+      "detail": "{"
+    },
+    "openai": {
+      "applicable": true,
+      "ok": true,
+      "argv": [
+        "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/codex",
+        "login",
+        "status"
+      ],
+      "exit_code": 0,
+      "proof": "positive",
+      "detail": "Logged in using ChatGPT"
+    },
+    "grok": {
+      "applicable": true,
+      "ok": false,
+      "argv": [
+        "/opt/homebrew/bin/grok",
+        "models"
+      ],
+      "exit_code": 0,
+      "proof": "known-failure wording only",
+      "detail": "You are not authenticated."
+    }
+  },
+  "probe_file": "/tmp/q9v2.nxS6sx/trial/README.md",
+  "blockers": [
+    "grok is not signed in, so every seat on it will fail the moment it is called: You are not authenticated."
+  ],
+  "ok": false
+}

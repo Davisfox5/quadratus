@@ -1,0 +1,6 @@
+step 6 start: 2026-09-23T15:38:12Z
+--grader-command must run the fixture's grader /private/tmp/q9v2.nxS6sx/trial-instrument/test_contract.py
+series exit for baseline: 1
+STOP: baseline run refused or failed (exit 1)
+step 6 end: 2026-09-23T15:38:12Z
+step6 script exit=0

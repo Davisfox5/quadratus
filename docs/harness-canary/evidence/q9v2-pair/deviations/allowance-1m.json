@@ -1,0 +1,26 @@
+{
+  "schema": "quadratus-canary-allowance/2",
+  "approved": true,
+  "batch_id": "q9v2-candidate-1m-2026-09-23",
+  "authorized_by": "Davis",
+  "source": "Davis, directly, in the local Claude Code session on the Mac (Claude Opus 5.5), 2026-09-23, after batch q9v2-pair-2026-09-23 stopped on the baseline",
+  "instruction": "Yes, I want the candidate run. Let's expand token limits to 1 million and see what happens. You may publish any time. Don't ask me",
+  "recorded_at": "2026-09-23T16:04:42Z",
+  "environment": "native-mac",
+  "fixture": "fixture-v2",
+  "grader_sha256": "80f1cd5af0112c3f8a786429e38bd4d8648acdb332a87eab8baf27a0138eb9a9",
+  "baseline_sha": "5d70d312868a3452c6aec9fd8461fd12fcdc31cb",
+  "candidate_sha": "986c934804dcfb16869562400f3655019c41c66c",
+  "runs": [
+    "candidate"
+  ],
+  "runs_per_version": 1,
+  "max_calls_each": 24,
+  "max_reported_tokens_each": 1000000,
+  "max_reported_tokens_batch": 1000000,
+  "internal_wall_seconds_each": 840,
+  "external_wall_seconds_each": 900,
+  "automatic_reruns": false,
+  "transport": "subscription CLI only",
+  "preflight_report": "/private/tmp/q9v2.nxS6sx/preflight-prebatch-1m.json"
+}
