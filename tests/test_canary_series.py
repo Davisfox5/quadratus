@@ -197,6 +197,14 @@ CANDIDATE_SHA = "b" * 40
 GRADER_SHA = "c" * 64
 
 
+FAKE_GRADER = "def test_preservation_ok():\n    assert True\n"
+
+
+def _sha(path: Path) -> str:
+    import hashlib
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def write_record(path: Path, **overrides) -> Path:
     """A record that passes load_record, built from the shipped template."""
     record = json.loads(TEMPLATE.read_text())
@@ -205,6 +213,9 @@ def write_record(path: Path, **overrides) -> Path:
                   environment="container-contained", baseline_sha=BASELINE_SHA,
                   candidate_sha=CANDIDATE_SHA, runs_per_version=2, batch_id="batch-test-1",
                   grader_sha256=GRADER_SHA)
+    grader = path.parent / "fixture-instrument" / "test_contract.py"
+    if grader.exists():
+        record["grader_sha256"] = _sha(grader)
     record.update(overrides)
     path.write_text(json.dumps(record, indent=2))
     return path
@@ -216,11 +227,15 @@ def setup(tmp_path, monkeypatch):
     fixture.mkdir()
     (fixture / "app.py").write_text("x = 1\n")
     (fixture / ".quadratus").mkdir()
+    instrument = tmp_path / "fixture-instrument"
+    instrument.mkdir()
+    grader = instrument / "test_contract.py"
+    grader.write_text(FAKE_GRADER)
     (fixture / ".quadratus" / "fixture-manifest.json").write_text(json.dumps(
-        {"instrument_sha256": {"test_contract.py": GRADER_SHA}}))
+        {"grader": str(grader), "instrument_sha256": {"test_contract.py": _sha(grader)}}))
     launcher = tmp_path / "fake_launcher.py"
     launcher.write_text(FAKE_LAUNCHER)
-    allowance = write_record(tmp_path / "allowance.json")
+    allowance = write_record(tmp_path / "allowance.json", grader_sha256=_sha(grader))
     monkeypatch.setattr(series, "_commit", lambda runtime: CANDIDATE_SHA)
     monkeypatch.delenv("FAKE_NO_BUDGET", raising=False)
     monkeypatch.delenv("FAKE_TOKENS", raising=False)
@@ -389,7 +404,9 @@ def test_batch_ceiling_refuses(setup):
 
 def test_run_writes_sidecars_and_grader_in_fresh_copies(setup):
     tmp_path, fixture, launcher, allowance = setup
-    grader = f'{sys.executable} -c "import os; print(os.environ[\'CANARY_PROJECT\']); print(\'2 passed in 0.01s\')"'
+    grader_file = tmp_path / "fixture-instrument" / "test_contract.py"
+    grader = (f'{sys.executable} -c "import os, sys; open(sys.argv[1]).read(); '
+              f'print(os.environ[\'CANARY_PROJECT\']); print(\'2 passed in 0.01s\')" {grader_file}')
     assert series.main(_run_args(tmp_path, fixture, launcher, "--count", "2",
                                  "--allowance-record", str(allowance),
                                  "--grader-command", grader)) == 0
@@ -415,8 +432,9 @@ def test_run_writes_sidecars_and_grader_in_fresh_copies(setup):
 
 def test_grader_identity_is_bound_to_the_fixture_manifest(setup):
     tmp_path, fixture, launcher, allowance = setup
+    grader = tmp_path / "fixture-instrument" / "test_contract.py"
     (fixture / ".quadratus" / "fixture-manifest.json").write_text(json.dumps(
-        {"instrument_sha256": {"test_contract.py": "d" * 64}}))
+        {"grader": str(grader), "instrument_sha256": {"test_contract.py": "d" * 64}}))
     with pytest.raises(SystemExit, match="grader sha256"):
         series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
                               "--allowance-record", str(allowance)))
@@ -441,3 +459,104 @@ def test_ledger_is_bound_to_the_batch_id_and_runs_read_as_live(setup):
     with pytest.raises(SystemExit, match="belongs to batch batch-other"):
         series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
                               "--allowance-record", str(allowance)))
+
+
+def test_grader_bytes_are_hashed_not_trusted_from_the_manifest(setup):
+    tmp_path, fixture, launcher, allowance = setup
+    grader = tmp_path / "fixture-instrument" / "test_contract.py"
+    grader.write_text("def test_preservation_ok():\n    assert False\n")  # manifest unchanged
+    with pytest.raises(SystemExit, match="hashes to"):
+        series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
+                              "--allowance-record", str(allowance)))
+    assert not (tmp_path / "out").exists()
+
+
+def test_grader_inside_the_solver_tree_is_refused(setup):
+    tmp_path, fixture, launcher, allowance = setup
+    inside = fixture / "control" / "test_contract.py"
+    inside.parent.mkdir()
+    inside.write_text(FAKE_GRADER)
+    (fixture / ".quadratus" / "fixture-manifest.json").write_text(json.dumps(
+        {"grader": str(inside), "instrument_sha256": {"test_contract.py": _sha(inside)}}))
+    with pytest.raises(SystemExit, match="inside the solver tree"):
+        series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
+                              "--allowance-record", str(allowance)))
+
+
+def test_grader_command_must_name_the_manifest_grader_and_default_runs_it(setup):
+    tmp_path, fixture, launcher, allowance = setup
+    with pytest.raises(SystemExit, match="must run the fixture's grader"):
+        series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
+                              "--allowance-record", str(allowance),
+                              "--grader-command", f"{sys.executable} -m pytest -q somewhere_else.py"))
+    assert series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
+                                 "--allowance-record", str(allowance))) == 0
+    runs = (tmp_path / "out" / "candidate-runs.txt").read_text().split()
+    text = (Path(runs[0]) / "grader.txt").read_text()
+    assert "1 passed" in text
+
+
+def test_a_grader_mutated_between_admission_and_grading_is_not_run(setup, monkeypatch):
+    tmp_path, fixture, launcher, allowance = setup
+    grader = tmp_path / "fixture-instrument" / "test_contract.py"
+    # The fake launcher mutates the grader during the run.
+    launcher.write_text(FAKE_LAUNCHER + "\nif os.environ.get('FAKE_MUTATE'):\n"
+                        "    pathlib.Path(os.environ['FAKE_MUTATE']).write_text('def test_x():\\n    pass\\n')\n")
+    monkeypatch.setenv("FAKE_MUTATE", str(grader))
+    assert series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
+                                 "--allowance-record", str(allowance))) == 0
+    runs = (tmp_path / "out" / "candidate-runs.txt").read_text().split()
+    text = (Path(runs[0]) / "grader.txt").read_text()
+    assert text.startswith("REFUSED:") and "hashes to" in text
+    report = series.aggregate(runs)
+    assert report["versions"]["candidate"]["ungraded"] == 1
+
+
+def test_concurrent_claims_admit_exactly_one(setup):
+    import threading
+    tmp_path, fixture, launcher, allowance = setup
+    write_record(allowance, runs_per_version=1, grader_sha256=_sha(
+        tmp_path / "fixture-instrument" / "test_contract.py"))
+    record = series.allowance.load_record(allowance)
+    barrier = threading.Barrier(2)
+    outcomes = []
+
+    def claim():
+        barrier.wait()
+        try:
+            outcomes.append(("ok", series.allowance.claim_slot(allowance, record, "candidate")))
+        except SystemExit as exc:
+            outcomes.append(("refused", str(exc)))
+
+    threads = [threading.Thread(target=claim) for _ in range(2)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    kinds = sorted(k for k, _ in outcomes)
+    assert kinds == ["ok", "refused"], outcomes
+    assert len(_ledger(allowance)["slots"]) == 1
+    assert series.allowance.lock_path(allowance).exists()
+
+
+def test_concurrent_claims_across_processes_admit_exactly_one(setup):
+    import subprocess as sp
+    tmp_path, fixture, launcher, allowance = setup
+    write_record(allowance, runs_per_version=1, grader_sha256=_sha(
+        tmp_path / "fixture-instrument" / "test_contract.py"))
+    script = (
+        "import sys, time; sys.path.insert(0, sys.argv[1]); import allowance as A\n"
+        "rec = A.load_record(sys.argv[2])\n"
+        "start = float(sys.argv[3])\n"
+        "time.sleep(max(0, start - time.time()))\n"
+        "try:\n    A.claim_slot(sys.argv[2], rec, 'candidate'); print('ok')\n"
+        "except SystemExit as e:\n    print('refused', e)\n"
+    )
+    import time
+    start = str(time.time() + 0.5)
+    tools = str(ROOT / "tools" / "acceptance")
+    procs = [sp.Popen([sys.executable, "-c", script, tools, str(allowance), start],
+                      stdout=sp.PIPE, text=True) for _ in range(2)]
+    outs = sorted(p.communicate()[0].split()[0] for p in procs)
+    assert outs == ["ok", "refused"], outs
+    assert len(_ledger(allowance)["slots"]) == 1

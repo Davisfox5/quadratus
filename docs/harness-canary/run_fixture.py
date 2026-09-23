@@ -222,10 +222,23 @@ def check_grader(record: dict, project: Path) -> None:
     except (OSError, json.JSONDecodeError) as exc:
         raise SystemExit(f"fixture has no readable manifest at {path} ({exc})") from exc
     hashes = manifest.get("instrument_sha256") if isinstance(manifest, dict) else None
-    actual = hashes.get("test_contract.py") if isinstance(hashes, dict) else None
+    claimed = hashes.get("test_contract.py") if isinstance(hashes, dict) else None
+    if claimed != record["grader_sha256"]:
+        raise SystemExit(
+            f"fixture grader sha256 {claimed} is not the allowance's "
+            f"grader_sha256 {record['grader_sha256']}"
+        )
+    # The manifest's figure is a claim; the file's bytes are the check.
+    grader = manifest.get("grader") if isinstance(manifest, dict) else None
+    if not isinstance(grader, str) or not grader.strip():
+        raise SystemExit("fixture manifest names no grader file")
+    try:
+        actual = hashlib.sha256(Path(grader).read_bytes()).hexdigest()
+    except OSError as exc:
+        raise SystemExit(f"fixture grader unreadable at {grader} ({exc})") from exc
     if actual != record["grader_sha256"]:
         raise SystemExit(
-            f"fixture grader sha256 {actual} is not the allowance's "
+            f"grader file {grader} hashes to {actual}, not the allowance's "
             f"grader_sha256 {record['grader_sha256']}"
         )
 

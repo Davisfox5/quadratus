@@ -9,11 +9,13 @@ never granted, and a run whose usage is unknown stops the batch.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import re
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -102,26 +104,73 @@ def check_wall(record: dict, wall_seconds) -> None:
                          f"external_wall_seconds_each {record['external_wall_seconds_each']}")
 
 
-def check_grader(record: dict, fixture) -> None:
-    """The fixture copy's manifest must name the grader the record authorizes.
+def grader_digest(path) -> str:
+    """sha256 of the grader file's bytes, or SystemExit when it cannot be read."""
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError as exc:
+        raise SystemExit(f"fixture grader unreadable at {path} ({exc})") from exc
 
-    ``prepare.py`` writes ``.quadratus/fixture-manifest.json`` with the sha256
-    of the instrument directory's ``test_contract.py``; a fixture without that
-    manifest, or with a different grader, refuses."""
-    path = Path(fixture) / ".quadratus" / "fixture-manifest.json"
+
+def check_grader(record: dict, fixture) -> Path:
+    """The fixture copy's manifest must name the grader the record authorizes,
+    and the grader file's bytes must hash to that figure right now.
+
+    ``prepare.py`` writes ``.quadratus/fixture-manifest.json`` with the grader's
+    path and the sha256 of the instrument directory's ``test_contract.py``. The
+    manifest's string is a claim; the bytes are the check. A fixture without
+    the manifest, a grader inside the solver tree, or a grader whose bytes hash
+    to anything other than the record's figure, refuses. Returns the grader
+    path so the caller runs exactly that file."""
+    fixture = Path(fixture)
+    path = fixture / ".quadratus" / "fixture-manifest.json"
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise SystemExit(f"fixture has no readable manifest at {path} ({exc})") from exc
     hashes = manifest.get("instrument_sha256") if isinstance(manifest, dict) else None
-    actual = hashes.get("test_contract.py") if isinstance(hashes, dict) else None
+    claimed = hashes.get("test_contract.py") if isinstance(hashes, dict) else None
+    if claimed != record["grader_sha256"]:
+        raise SystemExit(f"fixture grader sha256 {claimed} is not the allowance's "
+                         f"grader_sha256 {record['grader_sha256']}")
+    grader = manifest.get("grader") if isinstance(manifest, dict) else None
+    if not isinstance(grader, str) or not grader.strip():
+        raise SystemExit("fixture manifest names no grader file")
+    grader = Path(grader).resolve()
+    if fixture.resolve() in grader.parents:
+        raise SystemExit(f"fixture grader {grader} sits inside the solver tree")
+    verify_grader_bytes(record, grader)
+    return grader
+
+
+def verify_grader_bytes(record: dict, grader) -> None:
+    """The grader file on disk, hashed now, must be the record's grader."""
+    actual = grader_digest(grader)
     if actual != record["grader_sha256"]:
-        raise SystemExit(f"fixture grader sha256 {actual} is not the allowance's "
+        raise SystemExit(f"grader file {grader} hashes to {actual}, not the allowance's "
                          f"grader_sha256 {record['grader_sha256']}")
 
 
 def ledger_path(record_path) -> Path:
     return Path(f"{record_path}.slots.json")
+
+
+def lock_path(record_path) -> Path:
+    return Path(f"{record_path}.slots.lock")
+
+
+@contextmanager
+def _ledger_lock(record_path):
+    """An exclusive lock on a stable file beside the ledger for the whole
+    read, check and write of one claim or close. The ledger itself is
+    replaced on every write, so its inode cannot carry the lock."""
+    path = lock_path(record_path)
+    with path.open("a+") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def record_sha256(record_path) -> str:
@@ -187,46 +236,50 @@ def _check_usage(record: dict, slots: list) -> None:
 
 
 def claim_slot(record_path, record: dict, version: str) -> dict:
-    """Record a slot as consumed before the launch. The ledger is written
+    """Record a slot as consumed before the launch, under the ledger lock so
+    two concurrent claims cannot both be admitted. The ledger is written
     atomically, so a killed series still shows the slot it took."""
-    try:
-        on_disk = json.loads(Path(record_path).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise SystemExit(f"allowance record unreadable at claim ({exc})") from exc
-    if on_disk != record:
-        raise SystemExit("allowance record changed after it was loaded")
-    ledger = read_ledger(record_path)
-    check_batch(record, ledger)
-    mine = [s for s in ledger["slots"] if s["version"] == version]
-    total = record["runs_per_version"]
-    if len(mine) >= total:
-        raise SystemExit(f"no run slot left for {version}: {len(mine)} of {total} consumed")
-    _check_usage(record, ledger["slots"])
-    slot = {"version": version, "attempt": len(mine) + 1, "run_dir": None,
-            "started_at": _now(), "finished_at": None, "reported_tokens": None,
-            "unknown_usage_attempts": None}
-    ledger["slots"].append(slot)
-    _write(ledger_path(record_path), ledger)
-    return slot
+    with _ledger_lock(record_path):
+        try:
+            on_disk = json.loads(Path(record_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"allowance record unreadable at claim ({exc})") from exc
+        if on_disk != record:
+            raise SystemExit("allowance record changed after it was loaded")
+        ledger = read_ledger(record_path)
+        check_batch(record, ledger)
+        mine = [s for s in ledger["slots"] if s["version"] == version]
+        total = record["runs_per_version"]
+        if len(mine) >= total:
+            raise SystemExit(f"no run slot left for {version}: {len(mine)} of {total} consumed")
+        _check_usage(record, ledger["slots"])
+        slot = {"version": version, "attempt": len(mine) + 1, "run_dir": None,
+                "started_at": _now(), "finished_at": None, "reported_tokens": None,
+                "unknown_usage_attempts": None}
+        ledger["slots"].append(slot)
+        _write(ledger_path(record_path), ledger)
+        return slot
 
 
 def close_slot(record_path, slot: dict, run_dir) -> dict:
-    """Fill the slot from the run's own budget.json. A missing or unreadable
-    budget leaves the usage null, which blocks the next admission."""
-    ledger = read_ledger(record_path)
-    for entry in ledger["slots"]:
-        if entry["version"] == slot["version"] and entry["attempt"] == slot["attempt"]:
-            break
-    else:
-        raise SystemExit(f"slot {slot['version']}-{slot['attempt']} is not in the ledger")
-    try:
-        budget = json.loads((Path(run_dir) / "budget.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        budget = {}
-    if not isinstance(budget, dict):
-        budget = {}
-    entry.update(finished_at=_now(), run_dir=str(run_dir),
-                 reported_tokens=budget.get("reported_tokens"),
-                 unknown_usage_attempts=budget.get("unknown_usage_attempts"))
-    _write(ledger_path(record_path), ledger)
-    return entry
+    """Fill the slot from the run's own budget.json, under the ledger lock. A
+    missing or unreadable budget leaves the usage null, which blocks the next
+    admission."""
+    with _ledger_lock(record_path):
+        ledger = read_ledger(record_path)
+        for entry in ledger["slots"]:
+            if entry["version"] == slot["version"] and entry["attempt"] == slot["attempt"]:
+                break
+        else:
+            raise SystemExit(f"slot {slot['version']}-{slot['attempt']} is not in the ledger")
+        try:
+            budget = json.loads((Path(run_dir) / "budget.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            budget = {}
+        if not isinstance(budget, dict):
+            budget = {}
+        entry.update(finished_at=_now(), run_dir=str(run_dir),
+                     reported_tokens=budget.get("reported_tokens"),
+                     unknown_usage_attempts=budget.get("unknown_usage_attempts"))
+        _write(ledger_path(record_path), ledger)
+        return entry

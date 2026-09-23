@@ -444,12 +444,23 @@ def test_missing_batch_id_is_refused(tmp_path):
         _canary_launcher().require_allowance_record(record)
 
 
-def _write_manifest(project, digest):
+def _write_manifest(project, digest, grader_text=None):
+    """A manifest naming a real grader file beside the project. When
+    ``grader_text`` is given the file is written and ``digest`` is replaced by
+    its real hash, which the helper returns."""
+    import hashlib
     folder = project / ".quadratus"
     folder.mkdir(exist_ok=True)
+    instrument = project.parent / (project.name + "-instrument")
+    instrument.mkdir(exist_ok=True)
+    grader = instrument / "test_contract.py"
+    if grader_text is not None:
+        grader.write_text(grader_text)
+        digest = hashlib.sha256(grader.read_bytes()).hexdigest()
     (folder / "fixture-manifest.json").write_text(json.dumps({
-        "instrument_sha256": {"test_contract.py": digest},
+        "grader": str(grader), "instrument_sha256": {"test_contract.py": digest},
     }))
+    return digest
 
 
 def test_grader_sha256_mismatch_is_refused(tmp_path):
@@ -460,9 +471,9 @@ def test_grader_sha256_mismatch_is_refused(tmp_path):
 
 
 def test_grader_sha256_match_is_accepted(tmp_path):
-    digest = "ab" * 32
-    record, project = _approved(tmp_path, grader_sha256=digest)
-    _write_manifest(project, digest)
+    record, project = _approved(tmp_path)
+    digest = _write_manifest(project, None, grader_text="def test_preservation_a():\n    pass\n")
+    record["grader_sha256"] = digest
     _canary_launcher().check_grader(record, project)
 
 
@@ -556,3 +567,14 @@ def test_allowance_preflight_report_path_override_and_unbound_record(tmp_path):
                                  "contained": False}))
     with pytest.raises(SystemExit, match="grok is not signed in"):
         launcher.require_allowance_preflight(record, other, report_path=fresh)
+
+
+def test_launcher_check_grader_hashes_the_bytes(tmp_path):
+    project, grader, digest = _v2_copy(tmp_path)
+    launcher = _canary_launcher()
+    launcher.check_grader({"grader_sha256": digest}, project)
+    grader.write_text("def test_preservation_x():\n    assert False\n")  # manifest unchanged
+    with pytest.raises(SystemExit, match="hashes to"):
+        launcher.check_grader({"grader_sha256": digest}, project)
+    with pytest.raises(SystemExit, match="grader sha256"):
+        launcher.check_grader({"grader_sha256": "e" * 64}, project)
