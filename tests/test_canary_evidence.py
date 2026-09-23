@@ -535,3 +535,24 @@ def test_runtime_root_is_the_imported_package_checkout(tmp_path, monkeypatch):
     assert launcher.runtime_root() == Path(quadratus.__file__).resolve().parents[1]
     monkeypatch.setattr(launcher, "HERE", tmp_path / "elsewhere" / "docs" / "harness-canary")
     assert launcher.runtime_root() == Path(quadratus.__file__).resolve().parents[1]
+
+
+def test_allowance_preflight_report_path_override_and_unbound_record(tmp_path):
+    record, project = _approved(tmp_path)
+    launcher = _canary_launcher()
+    # The record's own report is accepted without a location check.
+    other = tmp_path / "other"
+    other.mkdir()
+    launcher.require_allowance_preflight(record, None)
+    with pytest.raises(SystemExit, match="probe_file"):
+        launcher.require_allowance_preflight(record, other)
+    # A fresh report for the launched copy binds in place of the record's.
+    fresh = tmp_path / "fresh.json"
+    fresh.write_text(json.dumps({"ok": True, "blockers": [], "probe_file": str(other / "a.py"),
+                                 "host": True, "contained": False}))
+    launcher.require_allowance_preflight(record, other, report_path=fresh)
+    fresh.write_text(json.dumps({"ok": False, "blockers": ["grok is not signed in"],
+                                 "probe_file": str(other / "a.py"), "host": True,
+                                 "contained": False}))
+    with pytest.raises(SystemExit, match="grok is not signed in"):
+        launcher.require_allowance_preflight(record, other, report_path=fresh)
