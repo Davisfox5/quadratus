@@ -110,11 +110,22 @@ def require_allowance_record(record: dict) -> None:
 
 
 def runtime_root() -> Path:
-    """The checkout that contains this launcher, never the caller's cwd.
+    """The checkout whose ``quadratus`` package this process imports, never the
+    caller's cwd and not necessarily this file's checkout.
 
-    ``HERE`` is ``docs/harness-canary``, so ``parents[1]`` is the repository.
-    The image copy lives at ``/opt/quadratus`` when this file is not in a checkout.
+    The series runner hands both versions the same launcher file and points
+    ``PYTHONPATH`` at the runtime under test, so the code that runs is the
+    imported package's checkout; binding to ``HERE`` would call a baseline run
+    a candidate run. ``HERE.parents[1]`` and ``/opt/quadratus`` are fallbacks
+    for a launcher run without the package importable.
     """
+    try:
+        import quadratus
+        package_root = Path(quadratus.__file__).resolve().parents[1]
+        if (package_root / ".git").exists():
+            return package_root
+    except ImportError:
+        pass
     checkout = HERE.parents[1]
     if (checkout / ".git").exists():
         return checkout

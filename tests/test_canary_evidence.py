@@ -525,3 +525,11 @@ def test_v2_fixture_refuses_a_grader_inside_the_solver_tree(tmp_path):
     (project / ".quadratus" / "fixture-manifest.json").write_text(json.dumps(manifest))
     with pytest.raises(SystemExit, match="inside the solver tree"):
         _canary_launcher().resolve_fixture(project)
+
+
+def test_runtime_root_is_the_imported_package_checkout(tmp_path, monkeypatch):
+    import quadratus
+    launcher = _canary_launcher()
+    assert launcher.runtime_root() == Path(quadratus.__file__).resolve().parents[1]
+    monkeypatch.setattr(launcher, "HERE", tmp_path / "elsewhere" / "docs" / "harness-canary")
+    assert launcher.runtime_root() == Path(quadratus.__file__).resolve().parents[1]
