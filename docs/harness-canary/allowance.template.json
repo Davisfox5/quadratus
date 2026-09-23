@@ -18,7 +18,7 @@
   "runs_per_version": 1,
   "max_calls_each": 24,
   "max_reported_tokens_each": 500000,
-  "max_reported_tokens_batch": 1000000,
+  "max_reported_tokens_batch": 1250000,
   "internal_wall_seconds_each": 840,
   "external_wall_seconds_each": 900,
   "automatic_reruns": false,

@@ -433,6 +433,10 @@ def main():
             settings,
             allow_writes=True,
             check=fixture["check"],
+            # Exactly the fixture's task count. A run that closes every task
+            # still reads incomplete until the engine asks one terminal,
+            # completion-only question after the cap (open, sensitive path).
+            # Raising this cap would permit a further task, not a confirmation.
             max_tasks=fixture["max_tasks"],
             state_dir=".quadratus",
             default_scope=scope,

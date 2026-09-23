@@ -90,6 +90,12 @@ def _sandbox_check(vendor: str, spec, probe_file: str) -> dict:
             "detail": (speaking or lines or [""])[0][:300]}
 
 
+# CLIs whose sign-in readout refreshes an expired token on the call that
+# reports it expired. Kept here, not on the CLI spec, because the spec lives
+# in a protected engine file and this is a preflight concern only.
+REFRESH_ON_READ = frozenset({"grok"})
+
+
 def _auth_check(spec) -> dict:
     """Is this CLI signed in? No model is invoked.
 
@@ -112,6 +118,16 @@ def _auth_check(spec) -> dict:
                 "detail": "this vendor offers no model-free readout of its session, so "
                           "nothing here establishes that it is signed in"}
     argv = [binary, *spec.auth_check_args]
+    # The grok CLI refreshes an expired token on the call that reports it
+    # expired: the first readout says "not authenticated" and rewrites its
+    # auth file in the same second (Q9-v2, 2026-09-23). The readout is
+    # model-free, so one discarded warm-up call costs nothing and keeps a
+    # refreshable session from refusing a claimed slot.
+    if spec.binary in REFRESH_ON_READ:
+        try:
+            subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT)
+        except (OSError, subprocess.SubprocessError):
+            pass
     try:
         done = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT)
     except (OSError, subprocess.SubprocessError) as exc:

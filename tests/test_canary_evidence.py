@@ -590,3 +590,39 @@ def test_launcher_scrubs_api_credentials_by_name_and_suffix():
                        "GROK_DEPLOYMENT_KEY", "OPENAI_API_KEY", "XAI_API_KEY"]
     assert set(clean) == {"PATH", "HOME", "KEYBOARD"}
     assert "k" not in " ".join(removed)
+
+
+def test_launcher_caps_tasks_at_the_fixture_count():
+    # A cap above the task count would let the orchestrator start another
+    # implementation task; completion must come from the engine instead.
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[1] / "docs" / "harness-canary"
+            / "run_fixture.py").read_text()
+    assert 'max_tasks=fixture["max_tasks"],' in text
+    assert 'max_tasks"] + 1' not in text
+
+
+def test_preflight_warms_up_a_refresh_on_read_cli_before_its_readout(monkeypatch):
+    import importlib.util
+    from pathlib import Path
+    from types import SimpleNamespace
+    path = Path(__file__).resolve().parents[1] / "tools" / "acceptance" / "preflight.py"
+    spec_ = importlib.util.spec_from_file_location("pf_under_test", path)
+    pf = importlib.util.module_from_spec(spec_)
+    spec_.loader.exec_module(pf)
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        out = "You are not authenticated." if len(calls) == 1 else "You are logged in with grok.com."
+        return SimpleNamespace(returncode=0, stdout=out, stderr="")
+
+    monkeypatch.setattr(pf.shutil, "which", lambda b: "/usr/local/bin/" + b)
+    monkeypatch.setattr(pf.subprocess, "run", fake_run)
+    grok = SimpleNamespace(binary="grok", auth_check_args=["models"], auth_ok_pattern=None,
+                           auth_failure_pattern=r"(?i)not authenticated")
+    assert pf._auth_check(grok)["ok"] is True and len(calls) == 2
+    calls.clear()
+    other = SimpleNamespace(binary="codex", auth_check_args=["login", "status"],
+                            auth_ok_pattern=None, auth_failure_pattern=r"(?i)not authenticated")
+    assert pf._auth_check(other)["ok"] is False and len(calls) == 1

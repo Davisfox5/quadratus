@@ -163,6 +163,16 @@ _SIZE_CEILING = (
     f"too large is one whose defects will not be found."
 )
 
+#: The one question asked after the task cap is spent. It can only confirm:
+#: the reply is never parsed as a task, so no answer to it can start work.
+_TERMINAL_REQUEST = (
+    "The task cap for this run has been reached. No further task will be run, "
+    "whatever you reply. Reply exactly DONE if the work in the ledger meets the "
+    "goal. Otherwise reply 'NOT DONE: <what remains>'. To read a full artifact "
+    "behind a summary first, reply with exactly 'FETCH: <artifact-id>' and "
+    "nothing else."
+)
+
 
 class Complexity:
     """How hard a task is. Drives two decisions at once.
@@ -1657,7 +1667,54 @@ class Session:
             self._note(f"task {len(self.history)} closed by {summary.author}")
             if self.open_findings or (self.checks and not self.checks[-1]['passed']):
                 break
+        else:
+            # Every slot went to a task and none of them stopped the loop, so
+            # the orchestrator never had the turn that says the goal is met:
+            # whenever the cap equalled the tasks the goal needed, completion
+            # was unreachable (Q9-v2, 2026-09-23: both tasks closed, grader 13
+            # of 13, completed false). Raising the cap is not the fix -- the
+            # extra iteration runs whatever task it is handed. One terminal
+            # question instead, whose reply is never executed.
+            self.completed = (
+                self._confirm_goal_met()
+                and not self.open_findings
+                and not any(not c["passed"] for c in self.checks)
+            )
         return list(self.history)
+
+    def _confirm_goal_met(self) -> bool:
+        """After the cap: ask once whether the goal is met, and never act on it.
+
+        Only an exact ``DONE`` confirms. Anything else -- a proposed next task,
+        an ASK, prose -- reads as not met and is recorded, not executed; the
+        cap is the boundary, and a reply that could start work would make this
+        a further task rather than a confirmation. FETCH is served as on any
+        orchestrator turn, and an exhausted seat re-seats as on any other, so
+        the answer rests on the same originals and the same fallback.
+        """
+        seat = self.seat()
+        self._note(f"task cap reached; asking {seat.key} whether the goal is met")
+        prompt = self.memory.render(
+            current=_TERMINAL_REQUEST,
+            recent=self.config.recent_entries,
+            extra=self._map_block(),
+        )
+
+        def build(fetched: List[tuple]) -> str:
+            if not fetched:
+                return prompt
+            return prompt + "\n\n" + _render_fetches(fetched) + "\n\nWith that read, answer now."
+
+        _, reply = self._ask_seat(seat, build)
+        control = parse_control(reply)
+        if control is not None and control.verb == "DONE":
+            self._note("the orchestrator confirms the goal met at the task cap")
+            return True
+        self._note(
+            "the task cap was reached without the goal confirmed: "
+            f"{(reply or '').strip()[:160]}"
+        )
+        return False
 
     def _note(self, message: str) -> None:
         """Tell the caller where the run is. Never fails the run."""

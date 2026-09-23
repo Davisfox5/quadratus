@@ -165,6 +165,12 @@ called by the tool itself; `run` calls the launcher, which does.
   per-version table keeps three outcomes apart: launch and instrument
   (launcher exit 0, grader not refused), controller completion, and what the
   grader measured over graded runs; none is an overall success alone. The
+  grader column is measurement only: a pass counts whatever the launcher did,
+  because the launch column reports that separately. The template's
+  `max_reported_tokens_batch` (1,250,000) leaves headroom above two runs'
+  `max_reported_tokens_each`: the token stop is checked after each call
+  returns, so a run can overshoot, and a ceiling of exactly twice the per-run
+  stop let the Q9-v2 baseline's 56,518 overshoot block the candidate. The
   label is sample size only; each run carries its own provenance line, "live
   launcher run" when the runner's `series.json` is present and "unknown"
   otherwise, so a replayed or hand-built tree is never counted as live. Every
