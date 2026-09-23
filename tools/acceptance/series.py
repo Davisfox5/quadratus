@@ -237,19 +237,28 @@ def provenance(sidecar) -> str:
 
 
 def summarise_version(runs: list) -> dict:
+    """Three facts kept apart, never folded into one rate: whether the launch
+    and the instrument were sound (launcher exit 0, grader not refused),
+    whether the controller completed (result.json), and what the grader
+    measured (its own passed/failed, over graded runs only). A run counts as
+    a grader pass only when its launch was sound."""
+    sound = [r for r in runs if r["launched"] and r["launcher_exit_code"] == 0
+             and not (isinstance(r["grader"], dict) and "refused" in r["grader"])]
     graded = [r for r in runs if isinstance(r["grader"], dict) and "passed" in r["grader"]]
-    # A run whose launcher did not exit 0 is never counted as passed, whatever
-    # its grader says: the grader can pass a tree the engine never finished.
-    passed = [r for r in graded
-              if r["grader"]["failed"] == 0 and r["grader"]["passed"] > 0
-              and (not r["launched"] or r["launcher_exit_code"] == 0)]
+    grader_passed = [r for r in graded if r["grader"]["failed"] == 0 and r["grader"]["passed"] > 0
+                     and r in sound]
     return {
         "runs": len(runs),
+        "launch_sound": len(sound),
+        "launcher_failed": sum(1 for r in runs if r["launched"] and r["launcher_exit_code"] != 0),
+        "launcher_unknown": sum(1 for r in runs if not r["launched"]),
+        "instrument_refused": sum(1 for r in runs
+                                  if isinstance(r["grader"], dict) and "refused" in r["grader"]),
         "completed": sum(1 for r in runs if r["completed"] is True),
         "completed_unknown": sum(1 for r in runs if r["completed"] is None),
-        "pass_rate": f"{len(passed)} of {len(runs)}",
+        "graded": len(graded),
+        "grader_passed": f"{len(grader_passed)} of {len(graded)} graded",
         "ungraded": len(runs) - len(graded),
-        "launcher_failed": sum(1 for r in runs if r["launched"] and r["launcher_exit_code"] != 0),
         "median_attempts": _median([r["provider_attempts"] for r in runs]),
         "median_reported_tokens": _median([r["reported_tokens"] for r in runs]),
         "label": label(len(runs)),
@@ -274,13 +283,20 @@ def render(report: dict) -> str:
     out = ["# Canary series", "", f"**{report['label']}**", "",
            "Each row indexes a run directory; the raw records there are the evidence.", "",
            "## Per version", "",
-           "| version | runs | launcher failed | completed | pass rate | median attempts | median tokens | label |",
-           "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+           "Three outcomes per version, kept apart: launch and instrument (launcher exit 0,",
+           "grader not refused), controller completion (result.json), and what the grader",
+           "measured. None of them is an overall success on its own.", "",
+           "| version | runs | launch sound | launcher failed | instrument refused | "
+           "controller completed | grader passed | median attempts | median tokens | label |",
+           "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for name, v in report["versions"].items():
         med = [f"{_show(m['value'], 'no data')} ({m['known']} of {m['of']} known)"
                for m in (v["median_attempts"], v["median_reported_tokens"])]
-        out.append(f"| {name} | {v['runs']} | {v['launcher_failed']} | {v['completed']} of {v['runs']} | "
-                   f"{v['pass_rate']} ({v['ungraded']} ungraded) | {med[0]} | {med[1]} | "
+        out.append(f"| {name} | {v['runs']} | {v['launch_sound']} of {v['runs']} | "
+                   f"{v['launcher_failed']} ({v['launcher_unknown']} unknown) | "
+                   f"{v['instrument_refused']} | "
+                   f"{v['completed']} of {v['runs']} ({v['completed_unknown']} unknown) | "
+                   f"{v['grader_passed']} ({v['ungraded']} ungraded) | {med[0]} | {med[1]} | "
                    f"{v['label']} |")
     out += ["", "## Per run", ""]
     for r in report["runs"]:
@@ -448,8 +464,12 @@ def cmd_run(args) -> int:
             try:
                 allowance.verify_grader_bytes(record, grader_file)
             except SystemExit as exc:
+                # An instrument that changed is an integrity failure, not a
+                # measurement: recorded, and it ends the series below.
                 (run_dir / "grader.txt").write_text(f"REFUSED: {exc}\n", encoding="utf-8")
+                refused = str(exc)
             else:
+                refused = None
                 genv = dict(env, CANARY_PROJECT=str(project))
                 graded = subprocess.run(grader, cwd=project, env=genv,
                                         capture_output=True, text=True)
@@ -460,7 +480,10 @@ def cmd_run(args) -> int:
             # wall kill) ends the series here: its records are kept, no next
             # launch happens, and the command's own exit says so.
             if code != 0:
-                failed = (attempt, code)
+                failed = (attempt, "killed at the wall" if code is None else f"launcher exit {code}")
+                break
+            if refused is not None:
+                failed = (attempt, f"grader integrity refused: {refused}")
                 break
     finally:
         if collected:
@@ -468,9 +491,8 @@ def cmd_run(args) -> int:
                 index.write("".join(f"{d}\n" for d in collected))
     print("\n".join(collected))
     if failed is not None:
-        attempt, code = failed
-        shown = "killed at the wall" if code is None else f"exit {code}"
-        print(f"{args.version} attempt {attempt}: launcher {shown}; series stopped", flush=True)
+        attempt, why = failed
+        print(f"{args.version} attempt {attempt}: {why}; series stopped", flush=True)
         return 1
     return 0
 

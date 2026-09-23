@@ -153,13 +153,18 @@ called by the tool itself; `run` calls the launcher, which does.
   launcher exit code) and, when a grader command is given, the grader's
   output as `grader.txt`, run in the copy with `CANARY_PROJECT` set. A
   launcher that does not exit 0, or is killed at the wall, ends the series:
-  its records stay, no further launch happens, and the command exits 1.
+  its records stay, no further launch happens, and the command exits 1. A
+  grader whose bytes changed since admission is an instrument integrity
+  failure and ends the series the same way, even when the launcher exited 0.
 - `python tools/acceptance/series.py aggregate --runs <run dir>... --out <dir>`
   writes `series-report.md` and `series-report.json`. A missing file is
   reported as missing, never as zero. Fresh input is unknown when any invoked
   row lacks a cached figure. Under five runs per version the report is
   labelled "live sample: n runs per version, below the 5-run reliability
   threshold"; at five or more, "live reliability: n runs per version". The
+  per-version table keeps three outcomes apart: launch and instrument
+  (launcher exit 0, grader not refused), controller completion, and what the
+  grader measured over graded runs; none is an overall success alone. The
   label is sample size only; each run carries its own provenance line, "live
   launcher run" when the runner's `series.json` is present and "unknown"
   otherwise, so a replayed or hand-built tree is never counted as live. Every
