@@ -13,6 +13,8 @@ import argparse
 import importlib.util
 import json
 import os
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -47,6 +49,182 @@ def _preflight(project: Path, output: Path) -> int:
         sys.argv = saved
 
 
+SCHEMA = "quadratus-canary-allowance/2"
+ENVIRONMENTS = {"native-mac", "container-contained"}
+VERSIONS = {"baseline", "candidate"}
+_SHA = re.compile(r"[0-9a-f]{40}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+LAUNCHER_CALLS = 24
+LAUNCHER_TOKENS = 500_000
+LAUNCHER_WALL = 840
+_LIMITS = ("max_calls_each", "max_reported_tokens_each", "internal_wall_seconds_each",
+           "external_wall_seconds_each", "max_reported_tokens_batch")
+_REQUIRED = ("schema", "approved", "batch_id", "authorized_by", "fixture", "grader_sha256",
+             "source", "instruction", "recorded_at", "environment", "baseline_sha",
+             "candidate_sha", "runs", "runs_per_version", *_LIMITS)
+
+
+def _refuse(field: str, why: str):
+    raise SystemExit(f"allowance record refused at {field}: {why}")
+
+
+def require_allowance_record(record: dict) -> None:
+    """The same field rules as ``tools/acceptance/allowance.py`` on #27.
+
+    Reimplemented here so the launcher checks the record itself. A missing
+    key fails closed and the message names that field.
+    """
+    if not isinstance(record, dict):
+        _refuse("record", "not a JSON object")
+    for key in _REQUIRED:
+        if key not in record:
+            _refuse(key, "missing")
+    if record["schema"] != SCHEMA:
+        _refuse("schema", f"expected {SCHEMA!r}")
+    if record["approved"] is not True:
+        _refuse("approved", "must be true")
+    if record["authorized_by"] != "Davis":
+        _refuse("authorized_by", "must be 'Davis'")
+    for key in ("batch_id", "source", "recorded_at", "instruction", "fixture"):
+        if not isinstance(record[key], str) or not record[key].strip():
+            _refuse(key, "empty")
+    if not isinstance(record["grader_sha256"], str) or not _SHA256.fullmatch(record["grader_sha256"]):
+        _refuse("grader_sha256", "must be the 64 hex sha256 of the grader file")
+    if record["environment"] not in ENVIRONMENTS:
+        _refuse("environment", f"must be one of {sorted(ENVIRONMENTS)}")
+    for key in ("baseline_sha", "candidate_sha"):
+        if not isinstance(record[key], str) or not _SHA.fullmatch(record[key]):
+            _refuse(key, "must be 40 lowercase hex characters")
+    if record["baseline_sha"] == record["candidate_sha"]:
+        _refuse("candidate_sha", "equals baseline_sha")
+    runs = record["runs"]
+    if not isinstance(runs, list) or not runs or not all(r in VERSIONS for r in runs):
+        _refuse("runs", f"must be a non-empty list drawn from {sorted(VERSIONS)}")
+    per = record["runs_per_version"]
+    if not isinstance(per, int) or isinstance(per, bool) or not 1 <= per <= 5:
+        _refuse("runs_per_version", "must be an integer from 1 to 5")
+    for key in _LIMITS:
+        if isinstance(record[key], bool) or not isinstance(record[key], int) or record[key] <= 0:
+            _refuse(key, "must be a positive integer")
+
+
+def runtime_root() -> Path:
+    """The checkout that contains this launcher, never the caller's cwd.
+
+    ``HERE`` is ``docs/harness-canary``, so ``parents[1]`` is the repository.
+    The image copy lives at ``/opt/quadratus`` when this file is not in a checkout.
+    """
+    checkout = HERE.parents[1]
+    if (checkout / ".git").exists():
+        return checkout
+    image = Path("/opt/quadratus")
+    if (image / ".git").exists():
+        return image
+    return checkout
+
+
+def runtime_commit() -> str:
+    """``git rev-parse HEAD`` of the launcher checkout, or ``unknown``."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(runtime_root()), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+    commit = done.stdout.strip() if done.returncode == 0 else ""
+    return commit or "unknown"
+
+
+def bind_runtime(record: dict, commit: str) -> str:
+    """The version whose named SHA is this runtime. An unknown commit refuses."""
+    if not isinstance(commit, str) or not commit.strip() or commit == "unknown":
+        raise SystemExit("runtime commit unknown is not a commit the allowance names")
+    matched = [v for v in ("baseline", "candidate") if record.get(f"{v}_sha") == commit]
+    if len(matched) != 1:
+        raise SystemExit(
+            f"runtime commit {commit} is not a commit the allowance names "
+            f"({record.get('baseline_sha')}, {record.get('candidate_sha')})"
+        )
+    version = matched[0]
+    if version not in record.get("runs", []):
+        raise SystemExit(f"the allowance record grants no {version} runs")
+    return version
+
+
+def require_allowance_preflight(allowance: dict, project: Path) -> None:
+    """The report must be this launch: ok, no blockers, probe under ``project``.
+
+    ``host`` must be true for ``native-mac`` and ``contained`` must be true for
+    ``container-contained``. A blocker list is refused by its first entry.
+    """
+    raw = allowance.get("preflight_report") if isinstance(allowance, dict) else None
+    if "preflight_report" not in allowance or not isinstance(raw, str) or not raw.strip():
+        _refuse("preflight_report", "missing")
+    path = Path(raw)
+    if not path.is_file():
+        _refuse("preflight_report", f"not found: {path}")
+    try:
+        report = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        _refuse("preflight_report", str(exc))
+    if not isinstance(report, dict):
+        _refuse("preflight_report", "not a JSON object")
+    blockers = report.get("blockers")
+    if not isinstance(blockers, list):
+        _refuse("blockers", "must be a list")
+    if blockers:
+        _refuse("blockers", str(blockers[0]))
+    if report.get("ok") is not True:
+        _refuse("ok", "preflight report ok is false")
+    probe = report.get("probe_file")
+    if not isinstance(probe, str) or not probe.strip():
+        _refuse("probe_file", "missing")
+    try:
+        Path(probe).resolve().relative_to(Path(project).resolve())
+    except ValueError:
+        _refuse("probe_file", f"{probe} is not under {project}")
+    env = allowance.get("environment")
+    if env == "native-mac" and report.get("host") is not True:
+        _refuse("host", "native-mac requires host true")
+    if env == "container-contained" and report.get("contained") is not True:
+        _refuse("contained", "container-contained requires contained true")
+
+
+def check_grader(record: dict, project: Path) -> None:
+    """``grader_sha256`` must equal the fixture manifest's ``test_contract.py`` hash.
+
+    ``prepare.py`` writes ``.quadratus/fixture-manifest.json`` under ``--project``.
+    A missing manifest, or a different grader, refuses.
+    """
+    path = Path(project) / ".quadratus" / "fixture-manifest.json"
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"fixture has no readable manifest at {path} ({exc})") from exc
+    hashes = manifest.get("instrument_sha256") if isinstance(manifest, dict) else None
+    actual = hashes.get("test_contract.py") if isinstance(hashes, dict) else None
+    if actual != record["grader_sha256"]:
+        raise SystemExit(
+            f"fixture grader sha256 {actual} is not the allowance's "
+            f"grader_sha256 {record['grader_sha256']}"
+        )
+
+
+def check_launcher_limits(record: dict, limits) -> None:
+    """The Q9 ceiling is hardcoded. A record cannot raise it, and RunLimits cannot either."""
+    ceiling = (
+        ("max_calls_each", LAUNCHER_CALLS, limits.max_calls),
+        ("max_reported_tokens_each", LAUNCHER_TOKENS, limits.max_reported_tokens),
+        ("internal_wall_seconds_each", LAUNCHER_WALL, limits.wall_seconds),
+    )
+    for field, fixed, actual in ceiling:
+        if record[field] != fixed:
+            _refuse(field, f"launcher ceiling is {fixed}")
+        if actual != fixed:
+            _refuse(field, f"launcher RunLimits uses {actual}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--allowance-record")
@@ -55,12 +233,18 @@ def main():
                         help="the disposable fixture copy the run may write to")
     args = parser.parse_args()
     project = Path(args.project)
+    allowance = None
     if not args.preflight:
         if not args.allowance_record:
             raise SystemExit("A direct Davis allowance record is required")
-        allowance = json.loads(Path(args.allowance_record).read_text())
-        if allowance.get("authorized_by") != "Davis" or not allowance.get("source"):
-            raise SystemExit("A direct Davis allowance record is required")
+        try:
+            allowance = json.loads(Path(args.allowance_record).read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"A direct Davis allowance record is required ({exc})") from None
+        require_allowance_record(allowance)
+        bind_runtime(allowance, runtime_commit())
+        require_allowance_preflight(allowance, project)
+        check_grader(allowance, project)
     # Container environment contains no API keys or application .env files.
     from quadratus.config import Settings
     from quadratus.project_run import run_project
@@ -74,7 +258,7 @@ def main():
         anthropic_api_key=None,
         xai_api_key=None,
         max_retries=1,
-        cli_timeout=840,
+        cli_timeout=LAUNCHER_WALL,
         claude_refusal_fallback_model="",
         claude_cli_refusal_fallback_model="",
     )
@@ -90,8 +274,11 @@ def main():
     )
     scope = TaskScope(permitted_paths=("app.py",), max_lines=40)
     limits = RunLimits(
-        max_calls=24, max_reported_tokens=500_000, wall_seconds=840, max_concurrent_workers=2
+        max_calls=LAUNCHER_CALLS, max_reported_tokens=LAUNCHER_TOKENS,
+        wall_seconds=LAUNCHER_WALL, max_concurrent_workers=2,
     )
+    if allowance is not None:
+        check_launcher_limits(allowance, limits)
     if args.preflight:
         print(
             "CLI-only; 24 attempts; 500000 reported-token stop; "
