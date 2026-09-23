@@ -1,0 +1,6 @@
+{"topic": "stack", "note": "Primary language: Python (5 files)", "author": "scan", "session": "scan"}
+{"topic": "layout", "note": "Largest source files: app.py (27 lines), auth.py (12 lines), catalog.py (12 lines), access.py (5 lines), presentation.py (5 lines)", "author": "scan", "session": "scan"}
+{"topic": "adapter", "note": "presentation.py:4\u20135 defines `def display_title(value):` and currently returns value unchanged; there are no imports.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "helper", "note": "catalog.py:9\u201312 defines compact_caption(value); split/join collapses whitespace, then values over 24 characters become text[:23] plus \u201c\u2026\u201d.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "endpoint", "note": "app.py:6 imports display_title; app.py:17\u201319 returns {\"caption\": display_title(title)} for /caption.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "checks", "note": "README.md:20\u201322 says the operator supplies external task checks; the common gate checks preservation invariants only.", "author": "openai:gpt-6-astra", "session": "decomposition"}

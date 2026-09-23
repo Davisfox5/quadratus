@@ -1,0 +1,81 @@
+{
+  "project": "/private/tmp/q9v2.nxS6sx/evidence2/baseline-1/project",
+  "goal": "Complete exactly two tasks, in order, without changing their boundaries. 1. Non-security display task, scope presentation.py: make /caption use the existing display helper in catalog.py. Look up that module's helper name and behavior before editing. Reuse the helper rather than copying its algorithm. Preserve the public adapter signature and endpoint response. 2. Security task, scope app.py and access.py: use the shared visible_to predicate at the records endpoint and repair the predicate so only an authenticated tenant's own records are visible. Missing records and other tenants' records must both return exactly 404 {\"detail\":\"Not found\"}. Preserve the Record(id,title) response, existing 401 behavior, and reject tenant spoofing through headers or query parameters. Authentication comes only from auth.current_tenant. Do not edit auth.py, catalog.py, README.md, tests, or policy. There is no feature entitlement. No installs, commits, pushes, external services, or production data. The common per-task integration gate checks preservation invariants only; the operator runs the full grader afterwards. Workers are available but not mandatory. Report actual lookup evidence and actual worker invocations. Run the provided check, preserve evidence and stop.",
+  "completed": false,
+  "allow_writes": true,
+  "error": "WindowExhausted: grok:default: subscription window exhausted (grok did not complete the turn (stopReason None).; Error: You\u2019ve reached your free Grok Build usage limit for now. Get SuperGrok for much higher limits, or try again later: https://grok.com/supergrok?referrer=grok-build)",
+  "checks": [],
+  "source_changed": true,
+  "source_fingerprint": "c1d453f92f3694f37d9f40903d981648be2740fd792a609fed548217319a2519",
+  "tasks": 0,
+  "in_flight": {
+    "changed": [
+      "presentation.py"
+    ],
+    "changed_lines": 4,
+    "inspected": true,
+    "note": "These changes were already on disk when the call stopped and have been preserved. Re-sending the same prompt would apply a second pass on top of them, not repeat the first.",
+    "task": "t1",
+    "description": "Complete task 1 only: import `compact_caption` from `catalog` and return its result from the existing adapter. Estimated diff: 3 code lines, 0 test lines. Report the actual helper lookup and check result. No workers were invoked during this inspection; report any actual worker invocations during implementation. The check is supplied externally; do not substitute an invented check or begin the security task.",
+    "needs": [
+      "execute",
+      "patch"
+    ],
+    "scope": {
+      "permitted_paths": [
+        "presentation.py"
+      ],
+      "forbidden_paths": [],
+      "intended_result": "Make def display_title(value): delegate to catalog.compact_caption.",
+      "acceptance": [
+        "Preserve def display_title(value): exactly and reuse catalog.compact_caption without duplicating its algorithm.",
+        "Preserve /caption's {\"caption\": ...} response structure.",
+        "Run the operator-provided integration check, preserve its evidence, and stop."
+      ],
+      "max_lines": 10
+    },
+    "invocation": {
+      "task": "t1",
+      "role": "lead",
+      "origin": "seat",
+      "model": "grok:default",
+      "allow_writes": true,
+      "prompt_artifact": "4b3335166c25"
+    }
+  },
+  "budget": {
+    "limits": {
+      "max_calls": 24,
+      "max_reported_tokens": 1000000,
+      "wall_seconds": 840,
+      "max_concurrent_workers": 2
+    },
+    "reserved_attempts": 3,
+    "in_flight": 0,
+    "input_tokens": 372027,
+    "output_tokens": 6043,
+    "reported_tokens": 378070,
+    "unknown_usage_attempts": 0,
+    "stop_reason": "",
+    "preserved_responses": [],
+    "elapsed_seconds": 87.7469982500188,
+    "token_boundary": "post-return threshold; in-flight calls can overshoot",
+    "input_boundary": "normalized provider input includes cached input; do not add it again",
+    "wall_boundary": "attempt timeout plus required external process supervisor"
+  },
+  "delegation": {
+    "controlled_tokens": 378070,
+    "native_child_tokens": 0,
+    "auxiliary_tokens": 0,
+    "auxiliary_tokens_scope": "Explicit auxiliary InvocationEvent rows only; vendor aggregates are not included.",
+    "combined_reported_tokens": 378070,
+    "parent_child_overlap": "not_applicable",
+    "known_minimum_tokens": 378070,
+    "unknown_invocations": 0,
+    "unknown_detail": [],
+    "native_children": 0,
+    "unidentified_native_activity": 0,
+    "note": "Subscription usage including cached and repeated input. Native children counted once at their highest cumulative reading, never summed across updates. The combined sum assumes child counters are additional to parent counters; that overlap is unverified. known_minimum_tokens is a deprecated compatibility key for that conditional sum, not an established lower bound. Auxiliary usage covers explicit auxiliary event rows only, not vendor aggregates. Unknown usage is unknown, not zero."
+  },
+  "scope_reports": []
+}

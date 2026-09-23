@@ -1,0 +1,10 @@
+rerun start: 2026-09-23T18:03:20Z
+baseline: /private/tmp/q9v2.nxS6sx/venv/bin/python /private/tmp/q9v2.nxS6sx/launcher-1m-v2/docs/harness-canary/run_fixture.py --project /private/tmp/q9v2.nxS6sx/evidence2/baseline-1/project --allowance-record /private/tmp/q9v2.nxS6sx/allowance-rerun.json
+/private/tmp/q9v2.nxS6sx/evidence2/baseline-1/project/.quadratus/runs/20260923T180322Z-ad60943c
+baseline attempt 1: launcher exit 1; series stopped
+series exit for baseline: 1
+candidate: /private/tmp/q9v2.nxS6sx/venv/bin/python /private/tmp/q9v2.nxS6sx/launcher-1m-v2/docs/harness-canary/run_fixture.py --project /private/tmp/q9v2.nxS6sx/evidence2/candidate-1/project --allowance-record /private/tmp/q9v2.nxS6sx/allowance-rerun.json
+/private/tmp/q9v2.nxS6sx/evidence2/candidate-1/project/.quadratus/runs/20260923T180452Z-645d4d3a
+candidate attempt 1: launcher exit 1; series stopped
+series exit for candidate: 1
+rerun end: 2026-09-23T18:05:26Z

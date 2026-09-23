@@ -1,0 +1,24 @@
+{
+  "project": "/private/tmp/q9v2.nxS6sx/trial2",
+  "source_sha256": {
+    "README.md": "19c8089168c701fbb3b6b8a4878d93d6abd44669d6b86b71102ad40f93e80a51",
+    "access.py": "d96f017fdc7feb9d0620dbd898318dfaeac3f48ebb3876c19d6e0a169f09d713",
+    "app.py": "14e6e659b2d95595dba4abaea93e4f6d29c08d237b2141151fbdc74c0502e123",
+    "auth.py": "778521b5a0d6f4dd98257eeca69bf56c84e180bce368d143612c97d2c37cf5a5",
+    "catalog.py": "6010ea1babd1dcdfe3433e5ef277a5c713bb6121a716967f2dbcfe94d74090a0",
+    "presentation.py": "cb8dd8fb4c17c0ae07590131d8f0ee37de78ad2848c6d668fbb76d4e6907a8a7"
+  },
+  "instrument_directory": "/private/tmp/q9v2.nxS6sx/trial2-instrument",
+  "grader": "/private/tmp/q9v2.nxS6sx/trial2-instrument/test_contract.py",
+  "instrument_sha256": {
+    "test_contract.py": "80f1cd5af0112c3f8a786429e38bd4d8648acdb332a87eab8baf27a0138eb9a9"
+  },
+  "policy_sha256": "f956bdbde1791135f32f90ffc88c88e5a7fa598e3b8b331ce383bb0eeb0d9b4d",
+  "allowed_paths": [
+    "presentation.py",
+    "app.py",
+    "access.py"
+  ],
+  "max_tasks": 2,
+  "live_authorized": false
+}

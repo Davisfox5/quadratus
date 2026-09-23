@@ -1,0 +1,137 @@
+.....FFFFFFFF                                                            [100%]
+=================================== FAILURES ===================================
+_____________________ test_lookup_caption[  a\n  b  -a b] ______________________
+
+value = '  a\n  b  ', expected = 'a b'
+
+    @pytest.mark.parametrize("value,expected", [
+        ("  a\n  b  ", "a b"), ("abcdefghijklmnopqrstuvwxyz", "abcdefghijklmnopqrstuvw…"),
+    ])
+    def test_lookup_caption(value, expected):
+        r = client.get("/caption", params={"title": value})
+        assert r.status_code == 200
+>       assert r.json() == {"caption": expected}
+E       AssertionError: assert {'caption': '  a\n  b  '} == {'caption': 'a b'}
+E         
+E         Differing items:
+E         {'caption': '  a\n  b  '} != {'caption': 'a b'}
+E         Use -v to get more diff
+
+../../../trial2-instrument/test_contract.py:39: AssertionError
+_ test_lookup_caption[abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvw\u2026] _
+
+value = 'abcdefghijklmnopqrstuvwxyz', expected = 'abcdefghijklmnopqrstuvw…'
+
+    @pytest.mark.parametrize("value,expected", [
+        ("  a\n  b  ", "a b"), ("abcdefghijklmnopqrstuvwxyz", "abcdefghijklmnopqrstuvw…"),
+    ])
+    def test_lookup_caption(value, expected):
+        r = client.get("/caption", params={"title": value})
+        assert r.status_code == 200
+>       assert r.json() == {"caption": expected}
+E       AssertionError: assert {'caption': '...opqrstuvwxyz'} == {'caption': '...mnopqrstuvw…'}
+E         
+E         Differing items:
+E         {'caption': 'abcdefghijklmnopqrstuvwxyz'} != {'caption': 'abcdefghijklmnopqrstuvw…'}
+E         Use -v to get more diff
+
+../../../trial2-instrument/test_contract.py:39: AssertionError
+_______________________ test_lookup_uses_existing_helper _______________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10831b770>
+
+    def test_lookup_uses_existing_helper(monkeypatch):
+        # Install before reload to cover both module and from-module imports.
+        monkeypatch.setattr(catalog, "compact_caption", lambda _: "helper-called")
+        importlib.reload(presentation)
+        try:
+>           assert presentation.display_title("x") == "helper-called"
+E           AssertionError: assert 'x' == 'helper-called'
+E             
+E             - helper-called
+E             + x
+
+../../../trial2-instrument/test_contract.py:47: AssertionError
+____________________ test_security_cross_tenant[alpha-beta] ____________________
+
+tenant = 'alpha', other = 'beta'
+
+    @pytest.mark.parametrize("tenant,other", [("alpha", "beta"), ("beta", "alpha")])
+    def test_security_cross_tenant(tenant, other):
+        headers = {"Authorization": f"Bearer {tenant}-token"}
+        cross = client.get(f"/records/{other}-1", headers=headers)
+        missing = client.get("/records/missing", headers=headers)
+>       assert cross.status_code == missing.status_code == 404
+E       assert 200 == 404
+E        +  where 200 = <Response [200 OK]>.status_code
+E        +  and   404 = <Response [404 Not Found]>.status_code
+
+../../../trial2-instrument/test_contract.py:58: AssertionError
+____________________ test_security_cross_tenant[beta-alpha] ____________________
+
+tenant = 'beta', other = 'alpha'
+
+    @pytest.mark.parametrize("tenant,other", [("alpha", "beta"), ("beta", "alpha")])
+    def test_security_cross_tenant(tenant, other):
+        headers = {"Authorization": f"Bearer {tenant}-token"}
+        cross = client.get(f"/records/{other}-1", headers=headers)
+        missing = client.get("/records/missing", headers=headers)
+>       assert cross.status_code == missing.status_code == 404
+E       assert 200 == 404
+E        +  where 200 = <Response [200 OK]>.status_code
+E        +  and   404 = <Response [404 Not Found]>.status_code
+
+../../../trial2-instrument/test_contract.py:58: AssertionError
+____________________________ test_security_spoofing ____________________________
+
+    def test_security_spoofing():
+        r = client.get("/records/beta-1?tenant_id=beta", headers={
+            "Authorization": "Bearer alpha-token", "X-Tenant-ID": "beta",
+        })
+>       assert r.status_code == 404
+E       assert 200 == 404
+E        +  where 200 = <Response [200 OK]>.status_code
+
+../../../trial2-instrument/test_contract.py:66: AssertionError
+________________________ test_security_shared_predicate ________________________
+
+    def test_security_shared_predicate():
+        assert access.visible_to(catalog.RECORDS["alpha-1"], "alpha")
+>       assert not access.visible_to(catalog.RECORDS["alpha-1"], "beta")
+E       AssertionError: assert not True
+E        +  where True = <function visible_to at 0x10819ee80>({'id': 'alpha-1', 'tenant_id': 'alpha', 'title': 'Alpha record'}, 'beta')
+E        +    where <function visible_to at 0x10819ee80> = access.visible_to
+
+../../../trial2-instrument/test_contract.py:71: AssertionError
+____________________ test_security_endpoint_calls_predicate ____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1083681a0>
+
+    def test_security_endpoint_calls_predicate(monkeypatch):
+        calls = []
+    
+        def deny(record, tenant):
+            calls.append((record, tenant))
+            return False
+    
+        monkeypatch.setattr(access, "visible_to", deny)
+        importlib.reload(application)
+        try:
+            r = TestClient(application.app).get("/records/alpha-1", headers={
+                "Authorization": "Bearer alpha-token",
+            })
+>           assert r.status_code == 404
+E           assert 200 == 404
+E            +  where 200 = <Response [200 OK]>.status_code
+
+../../../trial2-instrument/test_contract.py:89: AssertionError
+=========================== short test summary info ============================
+FAILED ../../../trial2-instrument/test_contract.py::test_lookup_caption[  a\n  b  -a b]
+FAILED ../../../trial2-instrument/test_contract.py::test_lookup_caption[abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvw\u2026]
+FAILED ../../../trial2-instrument/test_contract.py::test_lookup_uses_existing_helper
+FAILED ../../../trial2-instrument/test_contract.py::test_security_cross_tenant[alpha-beta]
+FAILED ../../../trial2-instrument/test_contract.py::test_security_cross_tenant[beta-alpha]
+FAILED ../../../trial2-instrument/test_contract.py::test_security_spoofing - ...
+FAILED ../../../trial2-instrument/test_contract.py::test_security_shared_predicate
+FAILED ../../../trial2-instrument/test_contract.py::test_security_endpoint_calls_predicate
+8 failed, 5 passed in 0.16s

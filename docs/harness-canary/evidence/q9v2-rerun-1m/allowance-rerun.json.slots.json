@@ -1,0 +1,24 @@
+{
+  "record_sha256": "ae71b492e206f874c46633744c61570d909272a07e54ea936c5b62d15cec3a1f",
+  "batch_id": "q9v2-rerun-1m-2026-09-23",
+  "slots": [
+    {
+      "version": "baseline",
+      "attempt": 1,
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence2/baseline-1/project/.quadratus/runs/20260923T180322Z-ad60943c",
+      "started_at": "2026-09-23T18:03:20.763411+00:00",
+      "finished_at": "2026-09-23T18:04:50.440768+00:00",
+      "reported_tokens": 378070,
+      "unknown_usage_attempts": 0
+    },
+    {
+      "version": "candidate",
+      "attempt": 1,
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence2/candidate-1/project/.quadratus/runs/20260923T180452Z-645d4d3a",
+      "started_at": "2026-09-23T18:04:50.872774+00:00",
+      "finished_at": "2026-09-23T18:05:26.297565+00:00",
+      "reported_tokens": 65639,
+      "unknown_usage_attempts": 0
+    }
+  ]
+}
