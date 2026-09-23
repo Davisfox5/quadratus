@@ -528,6 +528,8 @@ def test_v2_fixture_refuses_a_grader_inside_the_solver_tree(tmp_path):
 
 
 def test_runtime_root_is_the_imported_package_checkout(tmp_path, monkeypatch):
+    from pathlib import Path
+
     import quadratus
     launcher = _canary_launcher()
     assert launcher.runtime_root() == Path(quadratus.__file__).resolve().parents[1]
