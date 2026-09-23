@@ -1,0 +1,573 @@
+{
+  "project": "/private/tmp/q9v2.nxS6sx/evidence3/candidate-1/project",
+  "goal": "Complete exactly two tasks, in order, without changing their boundaries. 1. Non-security display task, scope presentation.py: make /caption use the existing display helper in catalog.py. Look up that module's helper name and behavior before editing. Reuse the helper rather than copying its algorithm. Preserve the public adapter signature and endpoint response. 2. Security task, scope app.py and access.py: use the shared visible_to predicate at the records endpoint and repair the predicate so only an authenticated tenant's own records are visible. Missing records and other tenants' records must both return exactly 404 {\"detail\":\"Not found\"}. Preserve the Record(id,title) response, existing 401 behavior, and reject tenant spoofing through headers or query parameters. Authentication comes only from auth.current_tenant. Do not edit auth.py, catalog.py, README.md, tests, or policy. There is no feature entitlement. No installs, commits, pushes, external services, or production data. The common per-task integration gate checks preservation invariants only; the operator runs the full grader afterwards. Workers are available but not mandatory. Report actual lookup evidence and actual worker invocations. Run the provided check, preserve evidence and stop.",
+  "completed": true,
+  "allow_writes": true,
+  "error": "",
+  "checks": [
+    {
+      "passed": true,
+      "command": "gate suite",
+      "output": "api-tests: passed: exit 0\n.....                                                                    [100%]\n5 passed, 8 deselected in 0.10s",
+      "cwd": "/private/tmp/q9v2.nxS6sx/evidence3/candidate-1/project",
+      "receipts": [
+        {
+          "id": "api-tests",
+          "status": "passed",
+          "reason": "exit 0",
+          "required": true,
+          "command": "/private/tmp/q9v2.nxS6sx/venv/bin/python -m pytest -q -p no:cacheprovider /private/tmp/q9v2.nxS6sx/trial3-instrument/test_contract.py -k preservation",
+          "returncode": 0,
+          "output": ".....                                                                    [100%]\n5 passed, 8 deselected in 0.10s",
+          "cached": false,
+          "tests": 5,
+          "source_hash": "a1ba8310efe448c9ca4b4691813b756619082fef448497315dd9545c8fe3d9aa",
+          "config_hash": "42f1199b68cea55ef4783e24f1f5dfafe04f2be85e4a0bd4d59b53dc0458f91c",
+          "runner_hash": "03013f0b24d8fe552626e303e5d381c65d08dd2f32b9e8411768ae3209dc9330"
+        }
+      ]
+    },
+    {
+      "passed": true,
+      "command": "gate suite",
+      "output": "api-tests: passed: exit 0\n.....                                                                    [100%]\n5 passed, 8 deselected in 0.12s",
+      "cwd": "/private/tmp/q9v2.nxS6sx/evidence3/candidate-1/project",
+      "receipts": [
+        {
+          "id": "api-tests",
+          "status": "passed",
+          "reason": "exit 0",
+          "required": true,
+          "command": "/private/tmp/q9v2.nxS6sx/venv/bin/python -m pytest -q -p no:cacheprovider /private/tmp/q9v2.nxS6sx/trial3-instrument/test_contract.py -k preservation",
+          "returncode": 0,
+          "output": ".....                                                                    [100%]\n5 passed, 8 deselected in 0.12s",
+          "cached": false,
+          "tests": 5,
+          "source_hash": "e49811daba0d59fb08f371ff20192a6cba7215d64bc65439ff191469f8ea2b15",
+          "config_hash": "42f1199b68cea55ef4783e24f1f5dfafe04f2be85e4a0bd4d59b53dc0458f91c",
+          "runner_hash": "03013f0b24d8fe552626e303e5d381c65d08dd2f32b9e8411768ae3209dc9330"
+        }
+      ]
+    }
+  ],
+  "source_changed": true,
+  "source_fingerprint": "e49811daba0d59fb08f371ff20192a6cba7215d64bc65439ff191469f8ea2b15",
+  "tasks": 2,
+  "in_flight": {},
+  "policy_preview": {
+    "schema_version": 1,
+    "repository_id": "fixture/q9-two-task-v2",
+    "policy_source": ".quadratus/policy.json",
+    "policy_hash": "d1b960aca048a32bb38cb844327d9447c2402ef79db60db1f8be9fe0e81c0f73",
+    "library_version": "pilot-1",
+    "library_digest": "3ebbe7937c14fe7dbb94438a8df6d9996b7a59cf5d7fae490dbfbb4a54492a42",
+    "declared_paths": [
+      "access.py",
+      "app.py",
+      "presentation.py"
+    ],
+    "primary_family": "pure-logic",
+    "families": [
+      "pure-logic",
+      "scoped-endpoint"
+    ],
+    "overlays": [
+      "tenant-isolation"
+    ],
+    "gates": [
+      {
+        "id": "scope",
+        "runner": "builtin:scope",
+        "required": true
+      },
+      {
+        "id": "api-tests",
+        "runner": "command",
+        "argv": [
+          "/private/tmp/q9v2.nxS6sx/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "/private/tmp/q9v2.nxS6sx/trial3-instrument/test_contract.py",
+          "-k",
+          "preservation"
+        ],
+        "cwd": ".",
+        "timeout_seconds": 30,
+        "minimum_tests": 5,
+        "required": true,
+        "side_effects": "none"
+      }
+    ],
+    "absent_gates": [
+      {
+        "id": "unit-tests",
+        "status": "not_configured",
+        "because": "Task correctness is graded externally after both ordered tasks; the common per-task gate checks preservation only."
+      },
+      {
+        "id": "scope-predicate-grep",
+        "status": "not_configured",
+        "because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration."
+      },
+      {
+        "id": "cross-tenant-test",
+        "status": "not_configured",
+        "because": "Task correctness is graded externally after both ordered tasks; the common per-task gate checks preservation only."
+      },
+      {
+        "id": "lint",
+        "status": "not_configured",
+        "because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration."
+      }
+    ],
+    "skipped_gates": [],
+    "adapters": {
+      "pure-logic": {
+        "test_runner": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": true
+        },
+        "typecheck_list": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": false
+        }
+      },
+      "scoped-endpoint": {
+        "auth_dependency": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": true
+        },
+        "scope_predicate": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": true
+        },
+        "validation_lib": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": true
+        },
+        "feature_gate_fn": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": false
+        },
+        "error_envelope": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": true
+        },
+        "test_override_mechanism": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": true
+        },
+        "route_registry": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": true
+        },
+        "raw_query_grep": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": false
+        }
+      }
+    },
+    "deny_write": [
+      ".git/**",
+      ".quadratus/policy.json",
+      "README.md",
+      "auth.py",
+      "catalog.py"
+    ],
+    "sensitive": [],
+    "defaults": {
+      "family": "pure-logic",
+      "required_gates": [
+        "scope",
+        "api-tests"
+      ],
+      "scope_max_lines": 60,
+      "overrun_ratio": 1.5,
+      "worker_depth": 1
+    },
+    "capability_policy": {
+      "deny_write": [
+        ".git/**",
+        ".quadratus/policy.json",
+        "README.md",
+        "auth.py",
+        "catalog.py"
+      ],
+      "sensitive": [],
+      "external_effects": "deny",
+      "native_delegation": "deny"
+    },
+    "blocked": [],
+    "hash": "e1233f1d1b3e79526d8b2d7700f571bbca0b7c2a4d94fdb407422078d139962a"
+  },
+  "policy_plans": [
+    {
+      "task_id": "t1",
+      "schema_version": 1,
+      "repository_id": "fixture/q9-two-task-v2",
+      "policy_source": ".quadratus/policy.json",
+      "policy_hash": "d1b960aca048a32bb38cb844327d9447c2402ef79db60db1f8be9fe0e81c0f73",
+      "library_version": "pilot-1",
+      "library_digest": "3ebbe7937c14fe7dbb94438a8df6d9996b7a59cf5d7fae490dbfbb4a54492a42",
+      "declared_paths": [
+        "presentation.py"
+      ],
+      "primary_family": "pure-logic",
+      "families": [
+        "pure-logic"
+      ],
+      "overlays": [],
+      "gates": [
+        {
+          "id": "scope",
+          "runner": "builtin:scope",
+          "required": true
+        },
+        {
+          "id": "api-tests",
+          "runner": "command",
+          "argv": [
+            "/private/tmp/q9v2.nxS6sx/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "/private/tmp/q9v2.nxS6sx/trial3-instrument/test_contract.py",
+            "-k",
+            "preservation"
+          ],
+          "cwd": ".",
+          "timeout_seconds": 30,
+          "minimum_tests": 5,
+          "required": true,
+          "side_effects": "none"
+        }
+      ],
+      "absent_gates": [
+        {
+          "id": "unit-tests",
+          "status": "not_configured",
+          "because": "Task correctness is graded externally after both ordered tasks; the common per-task gate checks preservation only."
+        }
+      ],
+      "skipped_gates": [],
+      "adapters": {
+        "pure-logic": {
+          "test_runner": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": true
+          },
+          "typecheck_list": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": false
+          }
+        }
+      },
+      "deny_write": [
+        ".git/**",
+        ".quadratus/policy.json",
+        "README.md",
+        "auth.py",
+        "catalog.py"
+      ],
+      "sensitive": [],
+      "defaults": {
+        "family": "pure-logic",
+        "required_gates": [
+          "scope",
+          "api-tests"
+        ],
+        "scope_max_lines": 60,
+        "overrun_ratio": 1.5,
+        "worker_depth": 1
+      },
+      "capability_policy": {
+        "deny_write": [
+          ".git/**",
+          ".quadratus/policy.json",
+          "README.md",
+          "auth.py",
+          "catalog.py"
+        ],
+        "sensitive": [],
+        "external_effects": "deny",
+        "native_delegation": "deny"
+      },
+      "blocked": [],
+      "hash": "27b702e9f458e849f4427eda13afbf4785cc7d27582e3e5037119fbcefb7674b"
+    },
+    {
+      "task_id": "t2",
+      "schema_version": 1,
+      "repository_id": "fixture/q9-two-task-v2",
+      "policy_source": ".quadratus/policy.json",
+      "policy_hash": "d1b960aca048a32bb38cb844327d9447c2402ef79db60db1f8be9fe0e81c0f73",
+      "library_version": "pilot-1",
+      "library_digest": "3ebbe7937c14fe7dbb94438a8df6d9996b7a59cf5d7fae490dbfbb4a54492a42",
+      "declared_paths": [
+        "access.py",
+        "app.py"
+      ],
+      "primary_family": "scoped-endpoint",
+      "families": [
+        "scoped-endpoint"
+      ],
+      "overlays": [
+        "tenant-isolation"
+      ],
+      "gates": [
+        {
+          "id": "scope",
+          "runner": "builtin:scope",
+          "required": true
+        },
+        {
+          "id": "api-tests",
+          "runner": "command",
+          "argv": [
+            "/private/tmp/q9v2.nxS6sx/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "/private/tmp/q9v2.nxS6sx/trial3-instrument/test_contract.py",
+            "-k",
+            "preservation"
+          ],
+          "cwd": ".",
+          "timeout_seconds": 30,
+          "minimum_tests": 5,
+          "required": true,
+          "side_effects": "none"
+        }
+      ],
+      "absent_gates": [
+        {
+          "id": "scope-predicate-grep",
+          "status": "not_configured",
+          "because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration."
+        },
+        {
+          "id": "cross-tenant-test",
+          "status": "not_configured",
+          "because": "Task correctness is graded externally after both ordered tasks; the common per-task gate checks preservation only."
+        },
+        {
+          "id": "unit-tests",
+          "status": "not_configured",
+          "because": "Task correctness is graded externally after both ordered tasks; the common per-task gate checks preservation only."
+        },
+        {
+          "id": "lint",
+          "status": "not_configured",
+          "because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration."
+        }
+      ],
+      "skipped_gates": [],
+      "adapters": {
+        "scoped-endpoint": {
+          "auth_dependency": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": true
+          },
+          "scope_predicate": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": true
+          },
+          "validation_lib": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": true
+          },
+          "feature_gate_fn": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": false
+          },
+          "error_envelope": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": true
+          },
+          "test_override_mechanism": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": true
+          },
+          "route_registry": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": true
+          },
+          "raw_query_grep": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": false
+          }
+        }
+      },
+      "deny_write": [
+        ".git/**",
+        ".quadratus/policy.json",
+        "README.md",
+        "auth.py",
+        "catalog.py"
+      ],
+      "sensitive": [],
+      "defaults": {
+        "family": "pure-logic",
+        "required_gates": [
+          "scope",
+          "api-tests"
+        ],
+        "scope_max_lines": 60,
+        "overrun_ratio": 1.5,
+        "worker_depth": 1
+      },
+      "capability_policy": {
+        "deny_write": [
+          ".git/**",
+          ".quadratus/policy.json",
+          "README.md",
+          "auth.py",
+          "catalog.py"
+        ],
+        "sensitive": [],
+        "external_effects": "deny",
+        "native_delegation": "deny"
+      },
+      "blocked": [],
+      "hash": "b009f9e4e3af776dc03e93f33559cf06643f0aa3356321ce7d6b5dab43653519"
+    }
+  ],
+  "budget": {
+    "limits": {
+      "max_calls": 24,
+      "max_reported_tokens": 1000000,
+      "wall_seconds": 840,
+      "max_concurrent_workers": 2,
+      "max_cost_usd": null,
+      "api_cost_rates": []
+    },
+    "reserved_attempts": 9,
+    "api_cost_usd": 0.0,
+    "api_cost_overshoot_usd": 0.0,
+    "unknown_api_cost_attempts": 0,
+    "cost_boundary": "configured API upper-rate threshold; in-flight calls can overshoot; CLI excluded",
+    "in_flight": 0,
+    "input_tokens": 602264,
+    "output_tokens": 12147,
+    "reported_tokens": 614411,
+    "unknown_usage_attempts": 0,
+    "stop_reason": "",
+    "preserved_responses": [],
+    "elapsed_seconds": 294.93654512497596,
+    "token_boundary": "post-return threshold; in-flight calls can overshoot",
+    "input_boundary": "normalized provider input includes cached input; do not add it again",
+    "wall_boundary": "attempt timeout plus required external process supervisor"
+  },
+  "delegation": {
+    "controlled_tokens": 614411,
+    "native_child_tokens": 0,
+    "auxiliary_tokens": 0,
+    "auxiliary_tokens_scope": "Explicit auxiliary InvocationEvent rows only; vendor aggregates are not included.",
+    "combined_reported_tokens": 614411,
+    "parent_child_overlap": "not_applicable",
+    "known_minimum_tokens": 614411,
+    "unknown_invocations": 0,
+    "unknown_detail": [],
+    "native_children": 0,
+    "unidentified_native_activity": 0,
+    "note": "Subscription usage including cached and repeated input. Native children counted once at their highest cumulative reading, never summed across updates. The combined sum assumes child counters are additional to parent counters; that overlap is unverified. known_minimum_tokens is a deprecated compatibility key for that conditional sum, not an established lower bound. Auxiliary usage covers explicit auxiliary event rows only, not vendor aggregates. Unknown usage is unknown, not zero."
+  },
+  "scope_reports": [
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "presentation.py"
+      ],
+      "changed_lines": 4,
+      "max_lines": 10,
+      "code_lines": 4,
+      "test_lines": 0,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "presentation.py"
+      ],
+      "changed_lines": 4,
+      "max_lines": 10,
+      "code_lines": 4,
+      "test_lines": 0,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "presentation.py"
+      ],
+      "changed_lines": 4,
+      "max_lines": 10,
+      "code_lines": 4,
+      "test_lines": 0,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "access.py",
+        "app.py"
+      ],
+      "changed_lines": 6,
+      "max_lines": 20,
+      "code_lines": 6,
+      "test_lines": 0,
+      "oversized": false
+    }
+  ]
+}

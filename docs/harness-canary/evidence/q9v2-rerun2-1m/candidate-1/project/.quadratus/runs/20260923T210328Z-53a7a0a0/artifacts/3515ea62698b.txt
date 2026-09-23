@@ -1,0 +1,32 @@
+I read the whole source copy (6 files) and checked each claim against it.
+
+## Verdict: accept
+
+### Code verified
+
+`access.py:5`
+```python
+return record is not None and bool(tenant) and record.get("tenant_id") == tenant
+```
+- Signature `def visible_to(record, tenant):` preserved verbatim.
+- Fails closed on all three required cases: `record is None` (missing), falsy `tenant` (absent), and `tenant_id` mismatch. A record missing the `tenant_id` key yields `None != tenant` → deny, so it also fails closed on malformed rows rather than on a hardcoded fallback.
+
+`app.py:24-29`
+- `def get_record(record_id: str, tenant: str = Depends(current_tenant)) -> Record:` preserved verbatim; `response_model=Record` and `Record(id=record["id"], title=record["title"])` unchanged.
+- The predicate is applied on the same lookup path as the id fetch (`RECORDS.get(record_id)` → `access.visible_to(...)`), satisfying the scoped-endpoint checklist item about secondary id lookups.
+- Missing and foreign records take the identical branch: `HTTPException(status_code=404, detail="Not found")` → exactly `{"detail":"Not found"}`. No existence oracle.
+- Tenant identity comes only from `Depends(current_tenant)`. Because `tenant` is a `Depends` parameter, FastAPI will not bind it from a query string, and `auth.current_tenant` (`auth.py:8`) reads only the `Authorization` header and raises 401 itself — so 401 behavior is untouched and header/query spoofing has no path in. The handler accepts no other client-controlled parameters.
+- Only two endpoints exist (`/caption`, `/records/{record_id}`); no other unscoped read of `RECORDS`.
+
+Size is ~4 changed lines, far inside the 20-line bound. No writes on behalf of a tenant. Nothing unsafe is recommended.
+
+### Claims I could not verify (do not block acceptance, but should be read as self-reported)
+
+1. **Gate output.** `test_contract.py` is not in this source copy (the gate's `argv` points at `/private/tmp/q9v2.nxS6sx/trial3-instrument/`, outside it), and I have no shell here. "exit 0 — `5 passed, 8 deselected in 0.10s`" is quoted in the required form (command implied by the packet, exit status, verbatim output) but I cannot independently reproduce it. It meets the gate's `minimum_tests: 5`.
+2. **`CHANGED: ["access.py","app.py"]`.** This copy is not a git repository, so I cannot diff. `presentation.py:7` correctly delegates to `catalog.compact_caption`, consistent with task 1 having been completed separately rather than touched here, but I am confirming the end state, not the edit set.
+
+### Correct disclaimers in the answer
+
+The lookup-evidence claim checks out: ownership is stored at `catalog.py:4-5` as `RECORDS[*]["tenant_id"]`. "Workers invoked: none" is consistent with the packet (workers optional). Declining to run the full grader and stating the preservation gate does not establish correctness is the right call — that grader is the operator's.
+
+Nothing must change.
