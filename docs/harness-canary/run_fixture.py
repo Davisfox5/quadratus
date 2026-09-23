@@ -68,8 +68,9 @@ _REQUIRED = ("schema", "approved", "batch_id", "authorized_by", "fixture", "grad
 API_CREDENTIAL_NAMES = frozenset({
     "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "GROK_API_KEY",
     "GROK_DEPLOYMENT_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN", "OPENAI_AUTH_TOKEN", "XAI_AUTH_TOKEN",
 })
-API_CREDENTIAL_SUFFIXES = ("_API_KEY", "_DEPLOYMENT_KEY", "_API_TOKEN")
+API_CREDENTIAL_SUFFIXES = ("_API_KEY", "_DEPLOYMENT_KEY", "_API_TOKEN", "_AUTH_TOKEN")
 
 
 def scrub_api_credentials(env: dict) -> tuple:

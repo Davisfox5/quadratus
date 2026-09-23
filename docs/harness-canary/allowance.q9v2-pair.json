@@ -10,7 +10,7 @@
   "fixture": "fixture-v2",
   "grader_sha256": "80f1cd5af0112c3f8a786429e38bd4d8648acdb332a87eab8baf27a0138eb9a9",
   "baseline_sha": "5d70d312868a3452c6aec9fd8461fd12fcdc31cb",
-  "candidate_sha": "a7e3b0e41975ac83baa207d9f8a0df7c66ca280e",
+  "candidate_sha": "b81ff14fb6b54800f369c4b01798ec3b536031bc",
   "runs": ["baseline", "candidate"],
   "runs_per_version": 1,
   "max_calls_each": 24,
