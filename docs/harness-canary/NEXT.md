@@ -81,7 +81,10 @@ rejected on 2026-09-17. The preflight runs the sandbox check in the
 substituted mode, so it proves the substitution took effect.
 
 Either way: no run starts on a preflight blocker, and the preflight report is
-archived with the evidence.
+archived with the evidence. The allowance record names that pre-batch report;
+the launcher then runs the same preflight again inside every fixture copy it
+is about to launch and binds to that fresh report (`.quadratus/preflight.json`
+in the run's project), so a series of copies is each checked in place.
 
 ## The fixture for the next pair
 

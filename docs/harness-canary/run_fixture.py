@@ -164,16 +164,22 @@ def bind_runtime(record: dict, commit: str) -> str:
     return version
 
 
-def require_allowance_preflight(allowance: dict, project: Path) -> None:
+def require_allowance_preflight(allowance: dict, project, report_path=None) -> None:
     """The report must be this launch: ok, no blockers, probe under ``project``.
 
     ``host`` must be true for ``native-mac`` and ``contained`` must be true for
     ``container-contained``. A blocker list is refused by its first entry.
+
+    ``report_path`` overrides the record's ``preflight_report``: the launcher
+    passes the report it just wrote for this exact project copy. ``project``
+    may be None for the record's own pre-batch report, which was made against
+    the prepared fixture rather than the copy being launched; every other
+    check still applies to it.
     """
     raw = allowance.get("preflight_report") if isinstance(allowance, dict) else None
     if "preflight_report" not in allowance or not isinstance(raw, str) or not raw.strip():
         _refuse("preflight_report", "missing")
-    path = Path(raw)
+    path = Path(report_path) if report_path is not None else Path(raw)
     if not path.is_file():
         _refuse("preflight_report", f"not found: {path}")
     try:
@@ -192,10 +198,11 @@ def require_allowance_preflight(allowance: dict, project: Path) -> None:
     probe = report.get("probe_file")
     if not isinstance(probe, str) or not probe.strip():
         _refuse("probe_file", "missing")
-    try:
-        Path(probe).resolve().relative_to(Path(project).resolve())
-    except ValueError:
-        _refuse("probe_file", f"{probe} is not under {project}")
+    if project is not None:
+        try:
+            Path(probe).resolve().relative_to(Path(project).resolve())
+        except ValueError:
+            _refuse("probe_file", f"{probe} is not under {project}")
     env = allowance.get("environment")
     if env == "native-mac" and report.get("host") is not True:
         _refuse("host", "native-mac requires host true")
@@ -322,7 +329,14 @@ def main():
             raise SystemExit(f"A direct Davis allowance record is required ({exc})") from None
         require_allowance_record(allowance)
         bind_runtime(allowance, runtime_commit())
-        require_allowance_preflight(allowance, project)
+        # The record's report is the operator's pre-batch evidence, made against
+        # the prepared fixture. This copy gets its own preflight now, in the
+        # exact tree the seats will read, and that report is what binds.
+        require_allowance_preflight(allowance, None)
+        fresh = project / ".quadratus" / "preflight.json"
+        if _preflight(project, fresh) != 0:
+            raise SystemExit(f"preflight refused this copy: {fresh}")
+        require_allowance_preflight(allowance, project, report_path=fresh)
         check_grader(allowance, project)
     # Container environment contains no API keys or application .env files.
     from quadratus.config import Settings
