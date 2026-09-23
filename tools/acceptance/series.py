@@ -369,9 +369,16 @@ def cmd_run(args) -> int:
     if not 1 <= args.count <= MAX_COUNT:
         raise SystemExit(f"--count must be 1 to {MAX_COUNT} per invocation")
     runtime, fixture, out = Path(args.runtime).resolve(), Path(args.fixture), Path(args.out)
-    allowance.check_grader(record, fixture)
+    grader_file = allowance.check_grader(record, fixture)
     launcher = Path(args.launcher or runtime / "docs" / "harness-canary" / "run_fixture.py")
-    grader = shlex.split(args.grader_command) if args.grader_command else None
+    # The final grader is the manifest's file and nothing else: a supplied
+    # command must name it, and the default is built from it.
+    if args.grader_command:
+        grader = shlex.split(args.grader_command)
+        if str(grader_file) not in grader:
+            raise SystemExit(f"--grader-command must run the fixture's grader {grader_file}")
+    else:
+        grader = [args.python, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(grader_file)]
     commit = _commit(runtime)
     allowance.check_runtime(record, args.version, commit)
     allowance.check_wall(record, args.wall_seconds)
@@ -415,7 +422,13 @@ def cmd_run(args) -> int:
                                                      encoding="utf-8")
             finally:
                 allowance.close_slot(record_path, claim, run_dir)
-            if grader:
+            # Hashed again right before it runs: a grader that changed since
+            # admission is not run, and the run reads as ungraded.
+            try:
+                allowance.verify_grader_bytes(record, grader_file)
+            except SystemExit as exc:
+                (run_dir / "grader.txt").write_text(f"REFUSED: {exc}\n", encoding="utf-8")
+            else:
                 genv = dict(os.environ, CANARY_PROJECT=str(project))
                 graded = subprocess.run(grader, cwd=project, env=genv,
                                         capture_output=True, text=True)
@@ -443,7 +456,8 @@ def main(argv=None) -> int:
     run.add_argument("--count", type=int, required=True)
     run.add_argument("--allowance-record")
     run.add_argument("--out", required=True)
-    run.add_argument("--grader-command", help="argv string, run in the fixture copy")
+    run.add_argument("--grader-command",
+                     help="argv string naming the manifest's grader; default runs it with --python")
     run.add_argument("--python", default=sys.executable)
     run.add_argument("--launcher", help="defaults to <runtime>/docs/harness-canary/run_fixture.py")
     run.add_argument("--wall-seconds", type=int, default=900,
