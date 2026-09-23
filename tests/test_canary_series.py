@@ -189,6 +189,8 @@ if not os.environ.get("FAKE_NO_BUDGET"):
 (run / "changes.diff").write_text("")
 log = pathlib.Path(a.project).parent.parent / "calls.txt"
 log.open("a").write(a.project + "\\n")
+seen = pathlib.Path(a.project).parent.parent / "env-seen.txt"
+seen.open("a").write(" ".join(sorted(k for k in os.environ if "KEY" in k or k == "PATH")) + "\\n")
 """
 
 TEMPLATE = ROOT / "docs" / "harness-canary" / "allowance.template.json"
@@ -560,3 +562,20 @@ def test_concurrent_claims_across_processes_admit_exactly_one(setup):
     outs = sorted(p.communicate()[0].split()[0] for p in procs)
     assert outs == ["ok", "refused"], outs
     assert len(_ledger(allowance)["slots"]) == 1
+
+
+def test_api_credentials_never_reach_the_launcher_or_grader(setup, monkeypatch, capsys):
+    tmp_path, fixture, launcher, allowance = setup
+    monkeypatch.setenv("XAI_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("GROK_DEPLOYMENT_KEY", "not-a-real-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("CUSTOM_VENDOR_API_TOKEN", "not-a-real-key")
+    monkeypatch.setenv("HARMLESS_KEYBOARD", "kept")
+    assert series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
+                                 "--allowance-record", str(allowance))) == 0
+    seen = (tmp_path / "out" / "env-seen.txt").read_text().split()
+    assert "PATH" in seen and "HARMLESS_KEYBOARD" in seen
+    for name in ("XAI_API_KEY", "GROK_DEPLOYMENT_KEY", "ANTHROPIC_API_KEY", "CUSTOM_VENDOR_API_TOKEN"):
+        assert name not in seen
+    out = capsys.readouterr().out
+    assert "scrubbed API credentials" in out and "not-a-real-key" not in out
