@@ -240,13 +240,14 @@ def summarise_version(runs: list) -> dict:
     """Three facts kept apart, never folded into one rate: whether the launch
     and the instrument were sound (launcher exit 0, grader not refused),
     whether the controller completed (result.json), and what the grader
-    measured (its own passed/failed, over graded runs only). A run counts as
-    a grader pass only when its launch was sound."""
+    measured (its own passed/failed, over graded runs only). The grader
+    column is measurement only: a pass means correct code on disk whatever the
+    launcher did, and the launch column says separately whether the run that
+    put it there was sound. A refused instrument is never graded."""
     sound = [r for r in runs if r["launched"] and r["launcher_exit_code"] == 0
              and not (isinstance(r["grader"], dict) and "refused" in r["grader"])]
     graded = [r for r in runs if isinstance(r["grader"], dict) and "passed" in r["grader"]]
-    grader_passed = [r for r in graded if r["grader"]["failed"] == 0 and r["grader"]["passed"] > 0
-                     and r in sound]
+    grader_passed = [r for r in graded if r["grader"]["failed"] == 0 and r["grader"]["passed"] > 0]
     return {
         "runs": len(runs),
         "launch_sound": len(sound),
@@ -408,7 +409,15 @@ def cmd_run(args) -> int:
     # command must name it, and the default is built from it.
     if args.grader_command:
         grader = shlex.split(args.grader_command)
-        if str(grader_file) not in grader:
+        # Compared by resolved path, token by token: on macOS /tmp is a symlink
+        # to /private/tmp, and a string match refused a correct command.
+        named = False
+        for token in grader:
+            try:
+                named = named or Path(token).resolve() == grader_file
+            except (OSError, ValueError):
+                continue
+        if not named:
             raise SystemExit(f"--grader-command must run the fixture's grader {grader_file}")
     else:
         grader = [args.python, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(grader_file)]

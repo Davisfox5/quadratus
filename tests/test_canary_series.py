@@ -141,7 +141,7 @@ def test_label_below_and_at_five_runs_per_version(tmp_path):
     report = series.aggregate(few)
     assert report["label"] == "live reliability: 5 runs per version"
     base = report["versions"]["baseline"]
-    assert base["grader_passed"] == "0 of 5 graded"  # hand-built trees have no launcher record
+    assert base["grader_passed"] == "1 of 5 graded"  # measurement only, launcher record or not
     assert base["median_attempts"] == {"value": 5, "known": 5, "of": 5}
     assert "**live reliability: 5 runs per version**" in series.render(report)
 
@@ -625,7 +625,7 @@ def test_a_failed_launcher_is_reported_and_never_counted_as_passed(tmp_path):
         {"version": "candidate", "runtime_commit": "abc", "attempt": 1, "launcher_exit_code": 0}))
     report = series.aggregate([str(ok), str(bad)])
     v = report["versions"]["candidate"]
-    assert v["grader_passed"] == "1 of 2 graded" and v["launcher_failed"] == 1
+    assert v["grader_passed"] == "2 of 2 graded" and v["launcher_failed"] == 1
     assert v["launch_sound"] == 1
     text = series.render(report)
     assert "- launcher: exit 0" in text and "- launcher: exit 2" in text
@@ -683,7 +683,19 @@ def test_wall_killed_run_without_a_tree_is_not_a_pass_anywhere(tmp_path):
     v = report["versions"]["candidate"]
     assert v["launch_sound"] == 0 and v["launcher_failed"] == 1
     assert v["completed"] == 0 and v["completed_unknown"] == 1
-    assert v["grader_passed"] == "0 of 1 graded"
+    assert v["grader_passed"] == "1 of 1 graded"
     text = series.render(report)
     assert "- launcher: killed at the wall" in text
-    assert "| candidate | 1 | 0 of 1 | 1 (0 unknown) | 0 | 0 of 1 (1 unknown) | 0 of 1 graded" in text
+    assert "| candidate | 1 | 0 of 1 | 1 (0 unknown) | 0 | 0 of 1 (1 unknown) | 1 of 1 graded" in text
+
+
+def test_grader_command_through_a_symlinked_scratch_root_is_admitted(setup):
+    tmp_path, fixture, launcher, allowance = setup
+    real = tmp_path / "fixture-instrument" / "test_contract.py"
+    link = tmp_path / "linkroot"
+    link.symlink_to(tmp_path, target_is_directory=True)
+    via_link = link / "fixture-instrument" / "test_contract.py"
+    assert str(via_link) != str(real.resolve())
+    assert series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
+                                 "--allowance-record", str(allowance), "--grader-command",
+                                 f"{sys.executable} -m pytest -q -p no:cacheprovider {via_link}")) == 0

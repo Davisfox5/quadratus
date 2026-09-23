@@ -433,7 +433,12 @@ def main():
             settings,
             allow_writes=True,
             check=fixture["check"],
-            max_tasks=fixture["max_tasks"],
+            # One turn past the task count: the engine sets `completed` only when
+            # the orchestrator is asked for another task and answers that the goal
+            # is met. With max_tasks equal to the task count that ask never
+            # happens, so a run that closes every task still reads incomplete
+            # (Q9-v2 candidate, 2026-09-23). The goal still says exactly N tasks.
+            max_tasks=fixture["max_tasks"] + 1,
             state_dir=".quadratus",
             default_scope=scope,
             run_limits=limits,
