@@ -141,7 +141,7 @@ def test_label_below_and_at_five_runs_per_version(tmp_path):
     report = series.aggregate(few)
     assert report["label"] == "live reliability: 5 runs per version"
     base = report["versions"]["baseline"]
-    assert base["pass_rate"] == "1 of 5"
+    assert base["grader_passed"] == "0 of 5 graded"  # hand-built trees have no launcher record
     assert base["median_attempts"] == {"value": 5, "known": 5, "of": 5}
     assert "**live reliability: 5 runs per version**" in series.render(report)
 
@@ -428,7 +428,8 @@ def test_run_writes_sidecars_and_grader_in_fresh_copies(setup):
     assert ledger["record_sha256"] == digest
     assert [s["run_dir"] for s in ledger["slots"]] == [str(r) for r in runs]
     report = series.aggregate(runs)
-    assert report["versions"]["candidate"]["pass_rate"] == "2 of 2"
+    assert report["versions"]["candidate"]["grader_passed"] == "2 of 2 graded"
+    assert report["versions"]["candidate"]["launch_sound"] == 2
     assert report["versions"]["candidate"]["completed"] == 2
 
 
@@ -506,12 +507,14 @@ def test_a_grader_mutated_between_admission_and_grading_is_not_run(setup, monkey
                         "    pathlib.Path(os.environ['FAKE_MUTATE']).write_text('def test_x():\\n    pass\\n')\n")
     monkeypatch.setenv("FAKE_MUTATE", str(grader))
     assert series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
-                                 "--allowance-record", str(allowance))) == 0
+                                 "--allowance-record", str(allowance))) == 1
     runs = (tmp_path / "out" / "candidate-runs.txt").read_text().split()
     text = (Path(runs[0]) / "grader.txt").read_text()
     assert text.startswith("REFUSED:") and "hashes to" in text
     report = series.aggregate(runs)
     assert report["versions"]["candidate"]["ungraded"] == 1
+    assert report["versions"]["candidate"]["instrument_refused"] == 1
+    assert report["versions"]["candidate"]["launch_sound"] == 0
 
 
 def test_concurrent_claims_admit_exactly_one(setup):
@@ -622,10 +625,11 @@ def test_a_failed_launcher_is_reported_and_never_counted_as_passed(tmp_path):
         {"version": "candidate", "runtime_commit": "abc", "attempt": 1, "launcher_exit_code": 0}))
     report = series.aggregate([str(ok), str(bad)])
     v = report["versions"]["candidate"]
-    assert v["pass_rate"] == "1 of 2" and v["launcher_failed"] == 1
+    assert v["grader_passed"] == "1 of 2 graded" and v["launcher_failed"] == 1
+    assert v["launch_sound"] == 1
     text = series.render(report)
     assert "- launcher: exit 0" in text and "- launcher: exit 2" in text
-    assert "| candidate | 2 | 1 | " in text
+    assert "| candidate | 2 | 1 of 2 | 1 (0 unknown) | 0 | " in text
 
 
 def test_a_refused_grader_reads_as_refused_not_as_broken(tmp_path):
@@ -647,3 +651,39 @@ def test_slot_directories_are_numbered_by_directories_not_index_files(setup):
     runs = (tmp_path / "out" / "candidate-runs.txt").read_text().split()
     sides = [json.loads((Path(r) / "series.json").read_text()) for r in runs]
     assert [(s["attempt"], s["slot"]) for s in sides] == [(1, 1), (2, 2)]
+
+
+def test_a_grader_integrity_refusal_stops_the_series_even_when_the_launcher_exits_0(setup, monkeypatch, capsys):
+    tmp_path, fixture, launcher, allowance = setup
+    grader = tmp_path / "fixture-instrument" / "test_contract.py"
+    launcher.write_text(FAKE_LAUNCHER + "\nif os.environ.get('FAKE_MUTATE'):\n"
+                        "    pathlib.Path(os.environ['FAKE_MUTATE']).write_text('def test_x():\\n    pass\\n')\n")
+    monkeypatch.setenv("FAKE_MUTATE", str(grader))
+    rc = series.main(_run_args(tmp_path, fixture, launcher, "--count", "2",
+                               "--allowance-record", str(allowance)))
+    assert rc == 1
+    calls = (tmp_path / "out" / "calls.txt").read_text().split()
+    assert len(calls) == 1, "no launch after an instrument integrity failure"
+    runs = (tmp_path / "out" / "candidate-runs.txt").read_text().split()
+    assert len(runs) == 1
+    side = json.loads((Path(runs[0]) / "series.json").read_text())
+    assert side["launcher_exit_code"] == 0
+    ledger = _ledger(allowance)
+    assert len(ledger["slots"]) == 1 and ledger["slots"][0]["finished_at"]
+    assert "grader integrity refused" in capsys.readouterr().out
+
+
+def test_wall_killed_run_without_a_tree_is_not_a_pass_anywhere(tmp_path):
+    slot = tmp_path / "candidate-1"
+    slot.mkdir()
+    (slot / "series.json").write_text(json.dumps(
+        {"version": "candidate", "runtime_commit": "abc", "attempt": 1, "launcher_exit_code": None}))
+    (slot / "grader.txt").write_text("13 passed in 0.1s\n")
+    report = series.aggregate([str(slot)])
+    v = report["versions"]["candidate"]
+    assert v["launch_sound"] == 0 and v["launcher_failed"] == 1
+    assert v["completed"] == 0 and v["completed_unknown"] == 1
+    assert v["grader_passed"] == "0 of 1 graded"
+    text = series.render(report)
+    assert "- launcher: killed at the wall" in text
+    assert "| candidate | 1 | 0 of 1 | 1 (0 unknown) | 0 | 0 of 1 (1 unknown) | 0 of 1 graded" in text
