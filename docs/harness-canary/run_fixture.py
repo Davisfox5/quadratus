@@ -65,6 +65,26 @@ _REQUIRED = ("schema", "approved", "batch_id", "authorized_by", "fixture", "grad
              "candidate_sha", "runs", "runs_per_version", *_LIMITS)
 
 
+API_CREDENTIAL_NAMES = frozenset({
+    "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "GROK_API_KEY",
+    "GROK_DEPLOYMENT_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+})
+API_CREDENTIAL_SUFFIXES = ("_API_KEY", "_DEPLOYMENT_KEY", "_API_TOKEN")
+
+
+def scrub_api_credentials(env: dict) -> tuple:
+    """A copy of ``env`` without API transport credentials, and the names removed.
+
+    A canary runs on subscription CLIs only. ``Settings(*_api_key=None)`` keeps
+    the engine off billed transport, but the vendor CLIs read their own
+    variables (grok answers on ``XAI_API_KEY`` when it is set), so the child
+    environment must not carry them. Sign-in stores on disk are untouched.
+    Values are never returned or printed, only names."""
+    removed = sorted(name for name in env
+                     if name in API_CREDENTIAL_NAMES or name.endswith(API_CREDENTIAL_SUFFIXES))
+    return {k: v for k, v in env.items() if k not in removed}, removed
+
+
 def _refuse(field: str, why: str):
     raise SystemExit(f"allowance record refused at {field}: {why}")
 
@@ -332,6 +352,12 @@ def main():
                         help="the disposable fixture copy the run may write to")
     args = parser.parse_args()
     project = Path(args.project)
+    # Before the preflight probes or any seat: the CLIs must see no API key.
+    scrubbed, removed = scrub_api_credentials(dict(os.environ))
+    if removed:
+        os.environ.clear()
+        os.environ.update(scrubbed)
+        print(f"scrubbed API credentials from this process: {', '.join(removed)}", flush=True)
     allowance = None
     if not args.preflight:
         if not args.allowance_record:
@@ -351,7 +377,8 @@ def main():
             raise SystemExit(f"preflight refused this copy: {fresh}")
         require_allowance_preflight(allowance, project, report_path=fresh)
         check_grader(allowance, project)
-    # Container environment contains no API keys or application .env files.
+    # API credentials were scrubbed above; sign-in stores on disk are the
+    # only transport left, which is what "subscription CLI only" means.
     from quadratus.config import Settings
     from quadratus.project_run import run_project
     from quadratus.run_budget import RunLimits

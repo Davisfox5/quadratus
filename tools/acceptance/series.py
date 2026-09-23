@@ -394,8 +394,11 @@ def cmd_run(args) -> int:
     record_digest = allowance.record_sha256(record_path)
     out.mkdir(parents=True, exist_ok=True)
     start = 1 + len(list(out.glob(f"{args.version}-*")))
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join(
-        p for p in (str(runtime), os.environ.get("PYTHONPATH", "")) if p))
+    env, removed = allowance.scrub_api_credentials(dict(os.environ, PYTHONPATH=os.pathsep.join(
+        p for p in (str(runtime), os.environ.get("PYTHONPATH", "")) if p)))
+    if removed:
+        print(f"scrubbed API credentials from the child environment: {', '.join(removed)}",
+              flush=True)
     collected = []
     try:
         for attempt in range(start, start + args.count):
@@ -429,7 +432,7 @@ def cmd_run(args) -> int:
             except SystemExit as exc:
                 (run_dir / "grader.txt").write_text(f"REFUSED: {exc}\n", encoding="utf-8")
             else:
-                genv = dict(os.environ, CANARY_PROJECT=str(project))
+                genv = dict(env, CANARY_PROJECT=str(project))
                 graded = subprocess.run(grader, cwd=project, env=genv,
                                         capture_output=True, text=True)
                 (run_dir / "grader.txt").write_text(graded.stdout + graded.stderr,
