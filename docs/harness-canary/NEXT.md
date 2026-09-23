@@ -82,7 +82,8 @@ substituted mode, so it proves the substitution took effect.
 
 Either way: no run starts on a preflight blocker, and the preflight report is
 archived with the evidence. The launcher and the series runner strip API
-credentials (`*_API_KEY`, `*_DEPLOYMENT_KEY`, `*_API_TOKEN`) from their own
+credentials (`*_API_KEY`, `*_DEPLOYMENT_KEY`, `*_API_TOKEN`, `*_AUTH_TOKEN`,
+including `ANTHROPIC_AUTH_TOKEN`) from their own
 and every child environment first, printing the names removed, so no vendor
 CLI can answer on a billed key; only the sign-in stores on disk remain. The allowance record names that pre-batch report;
 the launcher then runs the same preflight again inside every fixture copy it
@@ -150,7 +151,9 @@ called by the tool itself; `run` calls the launcher, which does.
   `max_reported_tokens_batch`, refuses the next run. Each run tree gets a
   `series.json` sidecar (version, runtime commit, slot, allowance hash,
   launcher exit code) and, when a grader command is given, the grader's
-  output as `grader.txt`, run in the copy with `CANARY_PROJECT` set.
+  output as `grader.txt`, run in the copy with `CANARY_PROJECT` set. A
+  launcher that does not exit 0, or is killed at the wall, ends the series:
+  its records stay, no further launch happens, and the command exits 1.
 - `python tools/acceptance/series.py aggregate --runs <run dir>... --out <dir>`
   writes `series-report.md` and `series-report.json`. A missing file is
   reported as missing, never as zero. Fresh input is unknown when any invoked

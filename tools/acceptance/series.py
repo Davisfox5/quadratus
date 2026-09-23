@@ -400,6 +400,7 @@ def cmd_run(args) -> int:
         print(f"scrubbed API credentials from the child environment: {', '.join(removed)}",
               flush=True)
     collected = []
+    failed = None  # (attempt, launcher exit code or None for a wall kill)
     try:
         for attempt in range(start, start + args.count):
             # Claimed and written to the ledger before anything is copied or
@@ -438,11 +439,22 @@ def cmd_run(args) -> int:
                 (run_dir / "grader.txt").write_text(graded.stdout + graded.stderr,
                                                     encoding="utf-8")
             collected.append(str(run_dir))
+            # A launcher that did not exit 0 (a refusal, an engine error, a
+            # wall kill) ends the series here: its records are kept, no next
+            # launch happens, and the command's own exit says so.
+            if code != 0:
+                failed = (attempt, code)
+                break
     finally:
         if collected:
             with (out / f"{args.version}-runs.txt").open("a", encoding="utf-8") as index:
                 index.write("".join(f"{d}\n" for d in collected))
     print("\n".join(collected))
+    if failed is not None:
+        attempt, code = failed
+        shown = "killed at the wall" if code is None else f"exit {code}"
+        print(f"{args.version} attempt {attempt}: launcher {shown}; series stopped", flush=True)
+        return 1
     return 0
 
 

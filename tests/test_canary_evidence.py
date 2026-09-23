@@ -583,9 +583,10 @@ def test_launcher_check_grader_hashes_the_bytes(tmp_path):
 def test_launcher_scrubs_api_credentials_by_name_and_suffix():
     launcher = _canary_launcher()
     env = {"PATH": "/bin", "XAI_API_KEY": "k", "GROK_DEPLOYMENT_KEY": "k", "OPENAI_API_KEY": "k",
-           "ACME_API_TOKEN": "k", "ACME_API_KEY": "k", "HOME": "/h", "KEYBOARD": "x"}
+           "ACME_API_TOKEN": "k", "ACME_API_KEY": "k", "ANTHROPIC_AUTH_TOKEN": "k",
+           "HOME": "/h", "KEYBOARD": "x"}
     clean, removed = launcher.scrub_api_credentials(env)
-    assert removed == ["ACME_API_KEY", "ACME_API_TOKEN", "GROK_DEPLOYMENT_KEY",
-                       "OPENAI_API_KEY", "XAI_API_KEY"]
+    assert removed == ["ACME_API_KEY", "ACME_API_TOKEN", "ANTHROPIC_AUTH_TOKEN",
+                       "GROK_DEPLOYMENT_KEY", "OPENAI_API_KEY", "XAI_API_KEY"]
     assert set(clean) == {"PATH", "HOME", "KEYBOARD"}
     assert "k" not in " ".join(removed)

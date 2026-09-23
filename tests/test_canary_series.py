@@ -569,13 +569,45 @@ def test_api_credentials_never_reach_the_launcher_or_grader(setup, monkeypatch, 
     monkeypatch.setenv("XAI_API_KEY", "not-a-real-key")
     monkeypatch.setenv("GROK_DEPLOYMENT_KEY", "not-a-real-key")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "not-a-real-key")
     monkeypatch.setenv("CUSTOM_VENDOR_API_TOKEN", "not-a-real-key")
     monkeypatch.setenv("HARMLESS_KEYBOARD", "kept")
     assert series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
                                  "--allowance-record", str(allowance))) == 0
     seen = (tmp_path / "out" / "env-seen.txt").read_text().split()
     assert "PATH" in seen and "HARMLESS_KEYBOARD" in seen
-    for name in ("XAI_API_KEY", "GROK_DEPLOYMENT_KEY", "ANTHROPIC_API_KEY", "CUSTOM_VENDOR_API_TOKEN"):
+    for name in ("XAI_API_KEY", "GROK_DEPLOYMENT_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+                 "CUSTOM_VENDOR_API_TOKEN"):
         assert name not in seen
     out = capsys.readouterr().out
     assert "scrubbed API credentials" in out and "not-a-real-key" not in out
+
+
+def test_a_failed_launcher_ends_the_series_with_a_nonzero_exit(setup, monkeypatch, capsys):
+    tmp_path, fixture, launcher, allowance = setup
+    launcher.write_text(FAKE_LAUNCHER + "\nif os.environ.get('FAKE_FAIL'):\n    sys.exit(2)\n")
+    monkeypatch.setenv("FAKE_FAIL", "1")
+    rc = series.main(_run_args(tmp_path, fixture, launcher, "--count", "2",
+                               "--allowance-record", str(allowance)))
+    assert rc == 1
+    calls = (tmp_path / "out" / "calls.txt").read_text().split()
+    assert len(calls) == 1, "no second launch after a failed one"
+    runs = (tmp_path / "out" / "candidate-runs.txt").read_text().split()
+    assert len(runs) == 1
+    side = json.loads((Path(runs[0]) / "series.json").read_text())
+    assert side["launcher_exit_code"] == 2
+    ledger = _ledger(allowance)
+    assert len(ledger["slots"]) == 1 and ledger["slots"][0]["finished_at"]
+    assert "launcher exit 2; series stopped" in capsys.readouterr().out
+
+
+def test_a_wall_kill_ends_the_series_with_a_nonzero_exit(setup, monkeypatch):
+    tmp_path, fixture, launcher, allowance = setup
+    monkeypatch.setattr(series, "_launch",
+                        lambda *a, **k: (None, "launcher killed after 1s\n"))
+    rc = series.main(_run_args(tmp_path, fixture, launcher, "--count", "2",
+                               "--allowance-record", str(allowance)))
+    assert rc == 1
+    runs = (tmp_path / "out" / "candidate-runs.txt").read_text().split()
+    assert len(runs) == 1
+    assert json.loads((Path(runs[0]) / "series.json").read_text())["launcher_exit_code"] is None
