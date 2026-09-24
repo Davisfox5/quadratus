@@ -6,12 +6,17 @@ writable project for the handback.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
 from quadratus.cli_providers import (
-    ClaudeCLIProvider, CLIProvider, CodexCLIProvider, GrokCLIProvider,
-    _extract_claude_result, _extract_grok_result,
+    ClaudeCLIProvider,
+    CLIProvider,
+    CodexCLIProvider,
+    GrokCLIProvider,
+    _extract_claude_result,
+    _extract_grok_result,
 )
 from quadratus.config import Settings
 from quadratus.delegation import invocation
@@ -81,7 +86,8 @@ def test_a_view_with_a_turn_limit_sends_it(make):
 
 def test_codex_has_no_turn_flag_and_is_unchanged():
     plain = CodexCLIProvider("gpt-5.6-sol")._build_argv("p", "")
-    capped = CodexCLIProvider("gpt-5.6-sol"); capped.max_turns = 16
+    capped = CodexCLIProvider("gpt-5.6-sol")
+    capped.max_turns = 16
     assert capped._build_argv("p", "") == plain
 
 
@@ -165,8 +171,7 @@ def _run(tmp_path, monkeypatch, leads, *, tasks, max_tasks=5):
 
 def _capped_after_writing(text, path="a.md"):
     def lead(self):
-        (self.workdir_path() if hasattr(self, "workdir_path") else __import__("pathlib").Path(self.workdir)
-         ).joinpath(path).write_text("partial\n")
+        Path(self.workdir, path).write_text("partial\n")
         raise TurnLimitReached("grok stopped at its turn limit before finishing", partial_text=text, turns=16)
     return lead
 
@@ -176,7 +181,7 @@ def _capped_with_nothing(self):
 
 
 def _finishes(self):
-    __import__("pathlib").Path(self.workdir).joinpath("a.md").write_text("# Hello\n")
+    Path(self.workdir, "a.md").write_text("# Hello\n")
     return 'Heading corrected\nCHANGED: ["a.md"]'
 
 
