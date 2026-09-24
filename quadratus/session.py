@@ -2040,7 +2040,9 @@ class Session:
             "only when it quotes the failing command, its exit status and the "
             "verbatim error; without those, treat it as unverified. State "
             "plainly whether it should be accepted, and what must change if "
-            "not. Do not redo the work; verify it."
+            "not. Start each finding that must be fixed on its own line with "
+            "'BLOCKING:'; anything else in your reply is read as a note, not a "
+            "finding. Do not redo the work; verify it."
         )
 
     @_invocation_role("closeout")

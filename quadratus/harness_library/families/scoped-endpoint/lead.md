@@ -21,15 +21,20 @@ Procedure
    with the import-smoke gate.
 5. Write the cross-tenant test with the repo's override mechanism, never a
    module patch. It must show a second tenant or user denied.
+   Add the missing-owner case: a record with no owner, or a null one, is
+   denied the same way, with no error.
 6. Run the gates in order: scope, scope-predicate-grep, import-smoke,
    cross-tenant-test, unit-tests, lint. Paste the tails.
 
 Do not
 
 - Read tenant identity from a client header.
+- Compare the owner with a direct subscript such as `record["tenant_id"]`;
+  a missing field must deny, not raise.
 - Write shared or global data for one tenant.
 - Use the page-oriented guard on an API route.
 - Add a route without its gate when the feature key is set.
 
 Return: the route list line, one line per query with its predicate quoted, the
-cross-tenant test name and tail, and the feature key or none with the reason.
+cross-tenant and missing-owner test names and tails, and the feature key or
+none with the reason.
