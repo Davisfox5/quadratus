@@ -1685,7 +1685,8 @@ class Session:
     def _confirm_goal_met(self) -> bool:
         """After the cap: ask once whether the goal is met, and never act on it.
 
-        Only an exact ``DONE`` confirms. Anything else -- a proposed next task,
+        Only a reply that is exactly ``DONE``, and nothing else, confirms.
+        Anything else -- a proposed next task,
         an ASK, prose -- reads as not met and is recorded, not executed; the
         cap is the boundary, and a reply that could start work would make this
         a further task rather than a confirmation. FETCH is served as on any
@@ -1706,8 +1707,12 @@ class Session:
             return prompt + "\n\n" + _render_fetches(fetched) + "\n\nWith that read, answer now."
 
         _, reply = self._ask_seat(seat, build)
-        control = parse_control(reply)
-        if control is not None and control.verb == "DONE":
+        # Judged whole, not scanned for a DONE line. The loop's own parser
+        # accepts DONE beside a preface and ignores what follows, so
+        # "task 2 is unverified" then DONE, or DONE then "except the security
+        # task", would both have confirmed. At the one point where a run's
+        # completion is decided, a hedge or a contradiction is not a DONE.
+        if (reply or "").strip() == "DONE":
             self._note("the orchestrator confirms the goal met at the task cap")
             return True
         self._note(

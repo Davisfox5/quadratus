@@ -1939,6 +1939,11 @@ class CLIProvider(LLMProvider):
             if os.listdir(self.workdir):
                 raise ProviderError(f"{self.label}: summary_only requires an empty working directory")
             mode = 'off'
+        if getattr(self, 'native_fanout_off', False):
+            # Set per call on a view by runtime.Fleet for a seat whose job
+            # excludes delegation (the verifier). The same denial, kill
+            # switches and refusal of overrides as the run-wide off mode.
+            mode = 'off'
         if mode == 'off' and spec.native_fanout_off_args:
             # Vendor-specific flag precedence is not a reliable generic
             # parser. In this strict opt-in mode, reject overrides rather

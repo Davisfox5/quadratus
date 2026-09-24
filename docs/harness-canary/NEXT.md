@@ -185,3 +185,22 @@ reviews the records after (Q10 posture). Sensitive paths in this repo for
 this work: `quadratus/session.py`, `quadratus/cli_providers.py`,
 `quadratus/delegation.py`, `quadratus/runtime.py`; changes there come to
 Claude before merge.
+
+## Token figures are stop thresholds, not ceilings
+
+`max_reported_tokens_each` in the allowance and `LAUNCHER_TOKENS` in the
+launcher are checked after each call returns (`budget.json` says so in
+`token_boundary`). A run stops at the first return that crosses the figure, but
+the call that crossed it is already spent: the Q9-v2 rerun baseline was at
+605,708 when one verifier call reported 1,096,136, and ended at 1,701,844
+against a 1,000,000 stop. So a batch figure sized as runs times the per-run
+stop does not bound spend, and the series report now prints each run's figure
+beside its stop and its overshoot. Raising the figure is not a remedy.
+
+Most of that call was delegation: 920,656 of its tokens went to an Opus
+subagent the verifier spawned. A verifier checks work it did not author, so the
+Fleet now runs verifier calls with native delegation off (the vendor's own
+`native_fanout_off_args`, the same denial as `QUADRATUS_NATIVE_DELEGATION=off`).
+It keeps every read tool. Leads and the orchestrator are unchanged; bounding
+those would change their job, not their cost. A per-call ceiling that holds
+before a call starts is still open.
