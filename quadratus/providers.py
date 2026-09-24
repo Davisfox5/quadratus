@@ -28,6 +28,22 @@ class ProviderError(RuntimeError):
     """A provider call failed permanently (after retries or non-retryable)."""
 
 
+class TurnLimitReached(ProviderError):
+    """A call stopped at its agentic turn limit before finishing.
+
+    Not a refusal, a timeout or a transport failure: the vendor ran the call,
+    its usage is real, and a writable call may already have changed files. It
+    is never retried here -- a ProviderError passes straight through -- and it
+    carries whatever answer text the vendor returned, which is narration of
+    unfinished work and must never be read as a result.
+    """
+
+    def __init__(self, message, *, partial_text=None, turns=None):
+        super().__init__(message)
+        self.partial_text = partial_text if isinstance(partial_text, str) and partial_text.strip() else None
+        self.turns = turns if isinstance(turns, int) and not isinstance(turns, bool) else None
+
+
 class PartialWorkSuspected(ProviderError):
     """An editing call stopped without saying what it had already written.
 
