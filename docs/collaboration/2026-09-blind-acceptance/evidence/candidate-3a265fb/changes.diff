@@ -1,0 +1,633 @@
+--- a/app.py
++++ b/app.py
+@@ -17,6 +17,8 @@
+ import time
+ from collections import Counter
+ from flask import Flask, jsonify, request, send_from_directory, send_file, render_template
++
++from clip_manifest import preview_clip_csv
+ 
+ app = Flask(__name__, static_folder="static", template_folder="templates")
+ 
+@@ -582,6 +584,24 @@
+     projects[project_id]["clips"] = [c for c in clips if c["id"] != clip_id]
+     _save_projects(projects)
+     return jsonify({"ok": True})
++
++
++@app.route("/api/projects/<project_id>/clips/import_preview", methods=["POST"])
++def import_preview(project_id):
++    """Return a read-only CSV clip preview. Never writes the project store."""
++    projects = _load_projects()
++    if project_id not in projects:
++        return jsonify({"error": "Project not found"}), 404
++    upload = request.files.get("file")
++    if upload is None:
++        return jsonify({"error": "No file provided", "code": "bad_request"}), 400
++    try:
++        preview = preview_clip_csv(upload.read(), projects[project_id])
++    except ValueError as exc:
++        message = str(exc)
++        code = "too_many_rows" if message == "too_many_rows" else "bad_request"
++        return jsonify({"error": message, "code": code}), 400
++    return jsonify(preview)
+ 
+ 
+ _BULK_PREVIEWS = {}
+--- /dev/null
++++ b/clip_manifest.py
+@@ -0,0 +1,153 @@
++"""In-memory clip-manifest CSV parsing and validation. No external access."""
++
++import csv
++import math
++
++_REQUIRED = ("tag type", "start (s)", "end (s)")
++_MAX_DATA_ROWS = 5000
++
++
++def parse_clip_csv(data):
++    """Return (headers, records) from UTF-8 bytes with an optional BOM.
++
++    Headers are trimmed and lowercased. Each record is (physical start line,
++    fields) with cell text unchanged. Blank records are skipped. Unknown
++    columns and wrong-width rows are kept. ValueError on invalid UTF-8,
++    missing required headers, or more than 5000 nonblank data rows.
++    """
++    try:
++        text = data.decode("utf-8-sig")
++    except UnicodeDecodeError as exc:
++        raise ValueError("CSV is not valid UTF-8") from exc
++
++    lines = text.splitlines(keepends=True)
++    consumed = 0
++
++    def _lines():
++        nonlocal consumed
++        while consumed < len(lines):
++            consumed += 1
++            yield lines[consumed - 1]
++
++    headers = None
++    records = []
++    previous_end = 0
++    for fields in csv.reader(_lines()):
++        start = previous_end + 1
++        previous_end = consumed
++        if not fields or all(cell == "" for cell in fields):
++            continue
++        if headers is None:
++            headers = [cell.strip().lower() for cell in fields]
++            missing = [name for name in _REQUIRED if name not in headers]
++            if missing:
++                raise ValueError("missing required header: " + ", ".join(missing))
++            continue
++        if len(records) >= _MAX_DATA_ROWS:
++            raise ValueError("too_many_rows")
++        records.append((start, fields))
++    if headers is None:
++        raise ValueError("missing required header: " + ", ".join(_REQUIRED))
++    return headers, records
++
++
++def validate_clip_row(headers, fields, project):
++    """Normalize one row from parse_clip_csv, returning (clip, reasons).
++
++    Required, normalized headers are therefore assumed to be present. Player
++    names and numbers are matched exactly after trimming each CSV token.
++    """
++    if len(fields) != len(headers):
++        return None, ["wrong column count"]
++    row = dict(zip(headers, fields))
++    reasons = []
++
++    tag_type = row["tag type"].strip()
++    if tag_type not in {tag["name"] for tag in project.get("tag_types", [])}:
++        reasons.append("unknown tag type")
++
++    values = {}
++    for key, label in (("start (s)", "start"), ("end (s)", "end")):
++        try:
++            value = float(row[key].strip())
++        except ValueError:
++            reasons.append(f"{label} must be a finite number")
++        else:
++            if math.isfinite(value):
++                values[label] = value
++            else:
++                reasons.append(f"{label} must be a finite number")
++    if "start" in values and values["start"] < 0:
++        reasons.append("start must be nonnegative")
++    if "start" in values and "end" in values and values["end"] <= values["start"]:
++        reasons.append("end must be greater than start")
++
++    player_ids = []
++    for token in filter(None, (part.strip() for part in row.get("players", "").split(";"))):
++        if token.startswith("#"):
++            number = token[1:]
++            matches = ([p for p in project.get("players", [])
++                        if number and str(p.get("number", "")) == number])
++        else:
++            matches = [p for p in project.get("players", []) if p.get("name") == token]
++        if len(matches) != 1:
++            reasons.append(f"player {token} is {'unknown' if not matches else 'ambiguous'}")
++        else:
++            player_ids.append(matches[0]["id"])
++
++    if reasons:
++        return None, reasons
++    return {
++        "tag_type": tag_type, "start": values["start"], "end": values["end"],
++        "label": row.get("label", ""), "notes": row.get("notes", ""),
++        "players": player_ids,
++    }, []
++
++
++def preview_clip_csv(data, project):
++    """Assemble a read-only manifest preview entirely in memory."""
++    headers, records = parse_clip_csv(data)
++    prior_tuples = {}
++    prior_ids = {}
++    existing_ids = {str(clip.get("id")) for clip in project.get("clips", [])
++                    if clip.get("id") is not None}
++    rows = []
++    counts = {"total": len(records), "valid": 0, "malformed": 0, "duplicate": 0}
++
++    for line, fields in records:
++        clip, malformed_reasons = validate_clip_row(headers, fields, project)
++        row = dict(zip(headers, fields))
++        identity = None
++        clip_id = row.get("clip id", "").strip()
++        if clip is not None:
++            identity = (clip["tag_type"], clip["start"], clip["end"],
++                        clip["label"].strip())
++        else:
++            try:
++                start = float(row.get("start (s)", "").strip())
++                end = float(row.get("end (s)", "").strip())
++                if math.isfinite(start) and math.isfinite(end):
++                    identity = (row.get("tag type", "").strip(), start, end,
++                                row.get("label", "").strip())
++            except ValueError:
++                pass
++
++        duplicate_reasons = []
++        if identity in prior_tuples:
++            duplicate_reasons.append(f"same as line {prior_tuples[identity]}")
++        if clip_id:
++            if clip_id in prior_ids:
++                duplicate_reasons.append(f"clip id same as line {prior_ids[clip_id]}")
++            elif clip_id in existing_ids:
++                duplicate_reasons.append("clip id already exists")
++        if identity is not None:
++            prior_tuples.setdefault(identity, line)
++        if clip_id:
++            prior_ids.setdefault(clip_id, line)
++
++        status = "malformed" if malformed_reasons else "duplicate" if duplicate_reasons else "valid"
++        reasons = malformed_reasons if malformed_reasons else duplicate_reasons
++        rows.append({"line": line, "status": status, "reasons": reasons,
++                     "clip": clip if status == "valid" else None})
++        counts[status] += 1
++    return {"preview_only": True, "summary": counts, "rows": rows}
+--- a/static/css/style.css
++++ b/static/css/style.css
+@@ -1178,3 +1178,20 @@
+   min-height: 20px;
+   margin-bottom: 8px;
+ }
++
++/* ── Import preview (read-only, clips panel) ──────────────────────── */
++.import-preview {
++  margin-top: 8px;
++  padding-top: 8px;
++  border-top: 1px solid #2a2d3a;
++  font-size: 0.8rem;
++  color: #e0e0e0;
++}
++.import-preview-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
++#import-preview-file { max-width: 100%; color: #ccc; }
++#import-preview-summary, .import-preview-status { margin: 4px 0; color: #888; }
++#import-preview-table { width: 100%; border-collapse: collapse; }
++#import-preview-table th, #import-preview-table td {
++  padding: 4px 6px; text-align: left; border-bottom: 1px solid #333; vertical-align: top;
++}
++#import-preview-table th { color: #888; font-weight: 600; }
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -1580,6 +1580,33 @@
+   }
+ });
+ 
++/* ── Import preview (read-only render; no fetch, no project writes) ─ */
++function renderImportPreview(payload) {
++  const summary = payload.summary;
++  const rows = payload.rows;
++  document.getElementById("import-preview-summary").textContent =
++    `${summary.total} total, ${summary.valid} valid, ${summary.malformed} malformed, ${summary.duplicate} duplicate`;
++  document.getElementById("import-preview-status").textContent =
++    rows.length ? "" : "No clip rows to preview.";
++  const body = document.getElementById("import-preview-body");
++  body.textContent = "";
++  for (const row of rows) {
++    const tr = document.createElement("tr");
++    tr.dataset.status = row.status;
++    const clip = row.clip;
++    const clipText = clip
++      ? [clip.tag_type, `${clip.start}-${clip.end}`, clip.label, clip.notes, (clip.players || []).join(", ")]
++          .filter(part => part !== "" && part != null).join(" ")
++      : "";
++    for (const value of [row.line, row.status, clipText, (row.reasons || []).join("; ")]) {
++      const td = document.createElement("td");
++      td.textContent = value == null ? "" : String(value);
++      tr.appendChild(td);
++    }
++    body.appendChild(tr);
++  }
++}
++
+ /* ── Escape HTML ──────────────────────────────────────────────────── */
+ function esc(str) {
+   const div = document.createElement("div");
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -147,6 +147,20 @@
+         <button id="btn-export-json" class="export-btn">JSON</button>
+         <button id="btn-export-video" class="export-btn">Video</button>
+       </div>
++      <div id="import-preview-results" class="import-preview">
++        <div class="import-preview-controls">
++          <button type="button" id="btn-import-preview" class="export-btn">Import preview</button>
++          <label for="import-preview-file">CSV file
++            <input type="file" id="import-preview-file" accept=".csv,text/csv">
++          </label>
++        </div>
++        <p id="import-preview-status" class="import-preview-status" role="status" aria-live="polite"></p>
++        <p id="import-preview-summary"></p>
++        <table id="import-preview-table">
++          <thead><tr><th>Line</th><th>Status</th><th>Clip</th><th>Reasons</th></tr></thead>
++          <tbody id="import-preview-body"></tbody>
++        </table>
++      </div>
+     </div>
+   </div>
+ </div>
+--- a/tests/test_basic.py
++++ b/tests/test_basic.py
+@@ -1332,3 +1332,74 @@
+         client.get(f"/api/projects/{pid}/export/json").data
+     )
+     assert unfiltered["clip_count"] == 3
++
++
++def _forbid_preview_side_effects(monkeypatch):
++    def _forbid(*_a, **_k):
++        raise AssertionError("preview must not save or process video")
++    for name in ("_save_projects", "_ffmpeg_cut", "_ffmpeg_concat"):
++        monkeypatch.setattr(application, name, _forbid)
++    monkeypatch.setattr(application.subprocess, "run", _forbid)
++
++
++def _post_import_preview(client, project_id, payload):
++    from io import BytesIO
++    data = {} if payload is None else {"file": (BytesIO(payload), "clips.csv")}
++    return client.post(
++        f"/api/projects/{project_id}/clips/import_preview",
++        data=data, content_type="multipart/form-data")
++
++
++def test_import_preview_mixed_statuses(client, monkeypatch):
++    pid = client.post("/api/projects", json={"name": "Preview"}).get_json()["id"]
++    player_id = client.post(
++        f"/api/projects/{pid}/players", json={"name": "Alex", "number": "7"},
++    ).get_json()["id"]
++    before = open(application.PROJECTS_FILE, "rb").read()
++    _forbid_preview_side_effects(monkeypatch)
++    body = (
++        "Tag Type,Start (s),End (s),Label,Players\n"
++        "Pass,1.5,4.0,x,Alex\nPass,4,1,bad,\nPass,1.5,4.0,x,\n"
++    ).encode()
++    rv = _post_import_preview(client, pid, body)
++    assert rv.status_code == 200 and rv.get_json() == {
++        "preview_only": True,
++        "summary": {"total": 3, "valid": 1, "malformed": 1, "duplicate": 1},
++        "rows": [
++            {"line": 2, "status": "valid", "reasons": [], "clip": {
++                "tag_type": "Pass", "start": 1.5, "end": 4.0, "label": "x",
++                "notes": "", "players": [player_id]}},
++            {"line": 3, "status": "malformed", "clip": None,
++             "reasons": ["end must be greater than start"]},
++            {"line": 4, "status": "duplicate", "clip": None,
++             "reasons": ["same as line 2"]},
++        ],
++    }
++    assert open(application.PROJECTS_FILE, "rb").read() == before
++    assert client.get(f"/api/projects/{pid}/clips").get_json() == []
++
++
++def test_import_preview_header_only_and_errors(client, monkeypatch):
++    pid = client.post("/api/projects", json={"name": "Errors"}).get_json()["id"]
++    before = open(application.PROJECTS_FILE, "rb").read()
++    _forbid_preview_side_effects(monkeypatch)
++    header = _post_import_preview(client, pid, b"Tag Type,Start (s),End (s)\n")
++    assert header.status_code == 200 and header.get_json() == {
++        "preview_only": True, "rows": [],
++        "summary": {"total": 0, "valid": 0, "malformed": 0, "duplicate": 0}}
++    missing = _post_import_preview(client, pid, None)
++    assert missing.status_code == 400
++    assert missing.get_json() == {"error": "No file provided", "code": "bad_request"}
++    bad = _post_import_preview(client, pid, b"\xff")
++    assert bad.status_code == 400 and bad.get_json()["code"] == "bad_request"
++    assert bad.get_json()["error"]
++    no_header = _post_import_preview(client, pid, b"Label\n")
++    assert no_header.status_code == 400 and no_header.get_json()["code"] == "bad_request"
++    assert "header" in no_header.get_json()["error"]
++    over = b"Tag Type,Start (s),End (s)\n" + b"".join(
++        f"Pass,{i},{i + 1}\n".encode() for i in range(5001))
++    too_many = _post_import_preview(client, pid, over)
++    assert too_many.status_code == 400 and too_many.get_json()["code"] == "too_many_rows"
++    gone = _post_import_preview(client, "missing", b"Tag Type,Start (s),End (s)\n")
++    assert gone.status_code == 404 and gone.get_json() == {"error": "Project not found"}
++    assert open(application.PROJECTS_FILE, "rb").read() == before
+--- /dev/null
++++ b/tests/test_clip_manifest.py
+@@ -0,0 +1,216 @@
++"""Parser and validator checks for clip-manifest CSV. No external access."""
++
++import copy
++import os
++import sys
++
++import pytest
++
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
++
++from clip_manifest import parse_clip_csv, preview_clip_csv, validate_clip_row
++
++
++def test_normalized_required_headers_keep_unknown_columns():
++    data = b"  Tag Type  ,START (S), end (s) ,Duration (s),Extra\nPass,1.5,4.0,2.5,  keep me  "
++    headers, records = parse_clip_csv(data)
++    assert headers == ["tag type", "start (s)", "end (s)", "duration (s)", "extra"]
++    assert records == [(2, ["Pass", "1.5", "4.0", "2.5", "  keep me  "])]
++
++
++def test_bom_and_crlf():
++    data = "\ufeffTag Type,Start (s),End (s)\r\nPass,0,1.25\r\n".encode()
++    headers, records = parse_clip_csv(data)
++    assert headers == ["tag type", "start (s)", "end (s)"]
++    assert records == [(2, ["Pass", "0", "1.25"])]
++
++
++def test_quoted_commas_and_multiline_cells():
++    data = (
++        'Tag Type,Start (s),End (s),Label,Notes\r\n'
++        '"Pass, deep",1,2,"say ""hi""","line1\r\nline2"\r\n'
++        "Shot,3,4,plain,ok\r\n"
++    ).encode()
++    _, records = parse_clip_csv(data)
++    assert records[0] == (2, ["Pass, deep", "1", "2", 'say "hi"', "line1\r\nline2"])
++    assert records[1] == (4, ["Shot", "3", "4", "plain", "ok"])
++
++
++def test_blank_records_skipped_and_lines_stay_physical():
++    data = b"Tag Type,Start (s),End (s),Label\n\n,,,\n ,,,\nPass,1,2,x\n"
++    _, records = parse_clip_csv(data)
++    assert records == [(4, [" ", "", "", ""]), (5, ["Pass", "1", "2", "x"])]
++
++
++def test_wrong_width_records_retained():
++    data = b"Tag Type,Start (s),End (s),Label\nonly-two,1\nPass,1,2,lab,extra\n"
++    _, records = parse_clip_csv(data)
++    assert records == [(2, ["only-two", "1"]), (3, ["Pass", "1", "2", "lab", "extra"])]
++
++
++def test_invalid_encoding():
++    with pytest.raises(ValueError, match="UTF-8"):
++        parse_clip_csv(b"Tag Type,Start (s),End (s)\n\xff\n")
++
++
++def test_missing_required_headers():
++    with pytest.raises(ValueError, match="missing required header: tag type"):
++        parse_clip_csv(b"Start (s),End (s)\n0,1\n")
++    with pytest.raises(ValueError, match=r"end \(s\)"):
++        parse_clip_csv(b"Tag Type,Start (s),Label\nPass,1,x\n")
++    with pytest.raises(ValueError, match="missing required header"):
++        parse_clip_csv(b"")
++
++
++def test_row_limit_boundary():
++    header = "Tag Type,Start (s),End (s)\n"
++    ok = (header + "\n" + "".join(f"T,{i},{i + 1}\n" for i in range(5000))).encode()
++    _, records = parse_clip_csv(ok)
++    assert (len(records), records[0], records[-1][0]) == (5000, (3, ["T", "0", "1"]), 5002)
++    over = (header + "".join(f"T,{i},{i + 1}\n" for i in range(5001))).encode()
++    with pytest.raises(ValueError, match="^too_many_rows$"):
++        parse_clip_csv(over)
++
++
++PROJECT = {
++    "tag_types": [{"name": "Pass"}, {"name": "Shot"}],
++    "players": [
++        {"id": "p1", "name": "Alex", "number": "7"},
++        {"id": "p2", "name": "Blair", "number": "10"},
++    ],
++}
++HEADERS = ["tag type", "start (s)", "end (s)", "label", "notes", "players"]
++
++
++def test_validate_normalizes_and_preserves_optional_text():
++    fields = [" Pass ", " 1.5 ", "4", "  label  ", "notes\nkept", " Alex ; #10 "]
++    fields_before, project_before = copy.deepcopy(fields), copy.deepcopy(PROJECT)
++    clip, reasons = validate_clip_row(HEADERS, fields, PROJECT)
++    assert reasons == []
++    assert clip == {"tag_type": "Pass", "start": 1.5, "end": 4.0,
++                    "label": "  label  ", "notes": "notes\nkept", "players": ["p1", "p2"]}
++    assert fields == fields_before and PROJECT == project_before
++
++
++def test_validate_optional_defaults_and_ignored_columns():
++    clip, reasons = validate_clip_row(
++        ["tag type", "start (s)", "end (s)", "duration (s)", "extra"],
++        ["Shot", "0", "2", "999", "ignored"], PROJECT)
++    assert reasons == []
++    assert clip == {"tag_type": "Shot", "start": 0.0, "end": 2.0,
++                    "label": "", "notes": "", "players": []}
++
++
++@pytest.mark.parametrize("players", ["", ";", " ; "])
++def test_validate_empty_players_cell(players):
++    clip, reasons = validate_clip_row(HEADERS, ["Pass", "1", "2", "", "", players], PROJECT)
++    assert reasons == [] and clip["players"] == []
++
++
++@pytest.mark.parametrize(("fields", "reason"), [
++    (["Pass", "1"], "wrong column count"),
++    (["Pass", "1", "2", "", "", "", "extra"], "wrong column count"),
++    (["Unknown", "1", "2", "", "", ""], "unknown tag type"),
++    (["Pass", "nope", "2", "", "", ""], "start must be a finite number"),
++    (["Pass", "nan", "2", "", "", ""], "start must be a finite number"),
++    (["Pass", "-1", "2", "", "", ""], "start must be nonnegative"),
++    (["Pass", "2", "2", "", "", ""], "end must be greater than start"),
++    (["Pass", "5", "1", "", "", ""], "end must be greater than start"),
++    (["Pass", "1", "inf", "", "", ""], "end must be a finite number"),
++    (["Pass", "1", "2", "", "", "Nobody"], "player Nobody is unknown"),
++    (["Pass", "1", "2", "", "", "#"], "player # is unknown"),
++])
++def test_validate_rejects_bad_rows(fields, reason):
++    project_before = copy.deepcopy(PROJECT)
++    clip, reasons = validate_clip_row(HEADERS, fields, PROJECT)
++    assert clip is None
++    assert reason in reasons
++    assert PROJECT == project_before
++
++
++@pytest.mark.parametrize("token", ["Alex", "#7"])
++def test_validate_player_name_or_number(token):
++    clip, reasons = validate_clip_row(HEADERS, ["Pass", "1", "2", "", "", token], PROJECT)
++    assert reasons == [] and clip["players"] == ["p1"]
++
++
++def test_validate_rejects_ambiguous_player():
++    project = {**PROJECT, "players": PROJECT["players"] + [{"id": "p3", "name": "Alex", "number": "7"}]}
++    for token in ("Alex", "#7"):
++        clip, reasons = validate_clip_row(HEADERS, ["Pass", "1", "2", "", "", token], project)
++        assert clip is None and f"player {token} is ambiguous" in reasons
++
++
++def test_preview_mixed_statuses_and_physical_lines():
++    data = ("Tag Type,Start (s),End (s),Label,Players,Clip ID\n\n"
++            "Pass,1,2,x,Alex,new\n"
++            "Pass,3,2,bad,,new\n"
++            "Pass,1,2,x,,other\n").encode()
++    result = preview_clip_csv(data, PROJECT)
++    assert result["preview_only"] is True
++    assert result["summary"] == {"total": 3, "valid": 1, "malformed": 1, "duplicate": 1}
++    assert [(row["line"], row["status"]) for row in result["rows"]] == [
++        (3, "valid"), (4, "malformed"), (5, "duplicate")]
++    assert result["rows"][0] == {
++        "line": 3, "status": "valid", "reasons": [],
++        "clip": {"tag_type": "Pass", "start": 1.0, "end": 2.0,
++                 "label": "x", "notes": "", "players": ["p1"]},
++    }
++    assert result["rows"][1]["reasons"] == ["end must be greater than start"]
++    assert result["rows"][2]["reasons"] == ["same as line 3"]
++    assert result["rows"][1]["clip"] is None and result["rows"][2]["clip"] is None
++
++
++def test_preview_tracks_id_and_normalizable_tuple_on_malformed_rows():
++    data = ("Tag Type,Start (s),End (s),Label,Players,Clip ID\n"
++            "Pass,1,2,x,Nobody,reserved\n"
++            "Pass,4,5,y,,reserved\n"
++            "Pass,1,2,x,,\n").encode()
++    result = preview_clip_csv(data, PROJECT)
++    assert [row["status"] for row in result["rows"]] == ["malformed", "duplicate", "duplicate"]
++    assert result["summary"] == {"total": 3, "valid": 0, "malformed": 1, "duplicate": 2}
++    assert result["rows"][1]["reasons"] == ["clip id same as line 2"]
++    assert result["rows"][2]["reasons"] == ["same as line 2"]
++
++
++def test_preview_normalizes_label_and_reports_both_collisions():
++    data = ("Tag Type,Start (s),End (s),Label,Clip ID\n"
++            " Pass ,1,2, x ,same\nPass,1.0,2.0,x,same\n").encode()
++    result = preview_clip_csv(data, PROJECT)
++    assert result["summary"] == {"total": 2, "valid": 1, "malformed": 0, "duplicate": 1}
++    assert result["rows"][1]["reasons"] == [
++        "same as line 2", "clip id same as line 2"]
++
++
++def test_preview_wrong_width_row_still_reserves_present_id():
++    data = ("Tag Type,Start (s),End (s),Label,Clip ID\n"
++            "Pass,1,2,x,reserved,extra\nPass,3,4,y,reserved\n").encode()
++    result = preview_clip_csv(data, PROJECT)
++    assert [row["status"] for row in result["rows"]] == ["malformed", "duplicate"]
++    assert result["rows"][0]["reasons"] == ["wrong column count"]
++    assert result["rows"][1]["reasons"] == ["clip id same as line 2"]
++
++
++def test_preview_existing_id_empty_ids_and_project_immutability():
++    project = {**PROJECT, "clips": [{"id": "taken"}]}
++    before = copy.deepcopy(project)
++    data = ("Tag Type,Start (s),End (s),Clip ID\n"
++            "Pass,0,1,taken\nPass,2,3,\nPass,4,5,   \n").encode()
++    result = preview_clip_csv(data, project)
++    assert [row["status"] for row in result["rows"]] == ["duplicate", "valid", "valid"]
++    assert result["summary"] == {"total": 3, "valid": 2, "malformed": 0, "duplicate": 1}
++    assert result["rows"][0]["reasons"] == ["clip id already exists"]
++    assert project == before
++
++
++def test_preview_header_only_and_parser_errors():
++    result = preview_clip_csv(b"Tag Type,Start (s),End (s)\n", PROJECT)
++    assert result == {"preview_only": True,
++                      "summary": {"total": 0, "valid": 0, "malformed": 0, "duplicate": 0},
++                      "rows": []}
++    with pytest.raises(ValueError, match="missing required header"):
++        preview_clip_csv(b"Tag Type,Start (s)\n", PROJECT)
++    over = ("Tag Type,Start (s),End (s)\n" +
++            "".join(f"Pass,{i},{i + 1}\n" for i in range(5001))).encode()
++    with pytest.raises(ValueError, match="^too_many_rows$"):
++        preview_clip_csv(over, PROJECT)
+--- /dev/null
++++ b/tests/ui/import_preview.test.js
+@@ -0,0 +1,60 @@
++const assert = require("node:assert/strict");
++const fs = require("node:fs");
++const path = require("node:path");
++const test = require("node:test");
++const { loadApp } = require("./load_app");
++
++// Contract payloads from the preview response, not from the renderer.
++const MIXED = { preview_only: true, summary: { total: 3, valid: 1, malformed: 1, duplicate: 1 }, rows: [
++  { line: 2, status: "valid", reasons: [], clip: { tag_type: "Pass", start: 1.5, end: 4.0, label: "x", notes: "", players: ["<player id>"] } },
++  { line: 3, status: "malformed", reasons: ["end must be greater than start"], clip: null },
++  { line: 4, status: "duplicate", reasons: ["same as line 2"], clip: null },
++] };
++const EMPTY = { preview_only: true, rows: [], summary: { total: 0, valid: 0, malformed: 0, duplicate: 0 } };
++const EVIL = { preview_only: true, summary: { total: 1, valid: 1, malformed: 0, duplicate: 0 }, rows: [
++  { line: 2, status: "valid", reasons: ["<script>alert(1)</script>"], clip: {
++    tag_type: "Pass", start: 1.5, end: 4, label: "<img src=x onerror=alert(1)>&", notes: "", players: [] } },
++] };
++
++test("renders escaped preview rows and replaces them", () => {
++  const html = fs.readFileSync(path.resolve(__dirname, "../../templates/index.html"), "utf8");
++  assert.match(html, /id="btn-import-preview"[^>]*>Import preview</);
++  const { document: doc, calls, evalInApp } = loadApp();
++  const region = doc.getElementById("import-preview-results");
++  assert.equal(region.closest(".modal-overlay"), null);
++  assert.ok(doc.getElementById("tagging-screen").contains(region));
++  assert.equal(doc.querySelector('label[for="import-preview-file"]')["for"], "import-preview-file");
++  assert.equal(doc.getElementById("import-preview-status").role, "status");
++  doc.getElementById("btn-import-preview").focus();
++  assert.equal(doc.activeElement.id, "btn-import-preview");
++  doc.getElementById("import-preview-file").focus();
++  assert.equal(doc.activeElement.id, "import-preview-file");
++  evalInApp("currentProject = {id:'keep', clips:[{id:'c1'}]}");
++  const before = evalInApp("JSON.stringify(currentProject)"), fetches = calls.fetch.length;
++  const show = payload => evalInApp(`renderImportPreview(${JSON.stringify(payload)})`);
++  show(MIXED);
++  let rows = doc.querySelectorAll("tr[data-status]");
++  assert.deepEqual(rows.map(row => row.dataset.status), ["valid", "malformed", "duplicate"]);
++  assert.equal(rows[0].children[0].textContent, "2");
++  assert.equal(rows[0].children[2].textContent, "Pass 1.5-4 x <player id>");
++  assert.match(rows[0].children[2].innerHTML, /&lt;player id&gt;/);
++  assert.equal(rows[1].children[2].textContent, "");
++  assert.equal(rows[1].children[3].textContent, "end must be greater than start");
++  assert.equal(rows[2].children[3].textContent, "same as line 2");
++  assert.equal(doc.getElementById("import-preview-summary").textContent, "3 total, 1 valid, 1 malformed, 1 duplicate");
++  assert.equal(doc.getElementById("import-preview-status").textContent, "");
++  show(EMPTY);
++  assert.equal(doc.querySelectorAll("tr[data-status]").length, 0);
++  assert.equal(doc.getElementById("import-preview-status").textContent, "No clip rows to preview.");
++  assert.equal(doc.getElementById("import-preview-summary").textContent, "0 total, 0 valid, 0 malformed, 0 duplicate");
++  show(EVIL);
++  const row = doc.querySelector("tr[data-status]");
++  assert.equal(doc.querySelectorAll("tr[data-status]").length, 1);
++  assert.equal(row.children[2].textContent, "Pass 1.5-4 <img src=x onerror=alert(1)>&");
++  assert.match(row.children[2].innerHTML, /&lt;img src=x onerror=alert\(1\)&gt;&amp;/);
++  assert.equal(row.querySelector("img"), null);
++  assert.match(row.children[3].innerHTML, /&lt;script&gt;/);
++  assert.equal(row.querySelector("script"), null);
++  assert.equal(calls.fetch.length, fetches);
++  assert.equal(evalInApp("JSON.stringify(currentProject)"), before);
++});

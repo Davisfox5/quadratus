@@ -1,0 +1,34 @@
+{
+  "scored_by": "Claude Opus 5.5 (local Mac session), after the run ended; private archive opened only then",
+  "private_archive_sha256": "71cb8b06a34ed94d6936bd9dfc45ed3889a0f6c5a80be1424850f1140e66371a",
+  "private_archive_hash_verified": true,
+  "private": {
+    "passed": 9,
+    "of": 9
+  },
+  "public_examiner": {
+    "passed": 11,
+    "of": 13,
+    "failed": {
+      "test_valid_manifest_previews_every_row_and_writes_nothing": "Players cell '#9 Alex QA' (number and name together) rejected as unknown; the examiner expects it to resolve",
+      "test_format_note_exists_and_cites_the_standard": "docs/CSV_IMPORT.md absent; the docs slice never started"
+    }
+  },
+  "browser": {
+    "passed_before_stop": 4,
+    "of": 17,
+    "passed": [
+      "import preview button exists",
+      "button has the accessible name",
+      "button reachable by Tab",
+      "file input exists"
+    ],
+    "stopped_on": "locator.waitFor timeout; the UI slice was stopped mid-call by the token threshold"
+  },
+  "application_suite": {
+    "passed": 135,
+    "baseline": 100
+  },
+  "js_syntax": "node --check clean on every static/js file",
+  "environment": "same image as the run, --network none, fresh extract of source-after.tar.gz"
+}

@@ -1,0 +1,853 @@
+{
+  "project": "/work",
+  "goal": "# Read-only CSV clip-manifest preview\n\nAdd a CSV clip-manifest preview to GameTape so a coach can validate exported\nclip descriptions before importing them elsewhere. This feature must never\nsave clips, change project data, or read/process video files. Use the following\napplication interface contract and preserve existing behavior. Include focused\nautomated checks. Do not add dependencies or implement a saving/import action.\n\nEndpoint: `POST /api/projects/<project_id>/clips/import_preview`, multipart\nform with one field `file` holding a CSV. It never writes the project store.\n\nCSV: header row required; column names matched case-insensitively after\ntrimming; UTF-8 with optional BOM; LF or CRLF; RFC 4180 quoting. Columns:\n\n| Column | Required | Rule |\n| --- | --- | --- |\n| `Tag Type` | yes | must name an existing project tag type (exact, after trim) |\n| `Start (s)` | yes | finite number, `>= 0` |\n| `End (s)` | yes | finite number, `> Start (s)` |\n| `Label` | no | free text, displayed escaped |\n| `Notes` | no | free text |\n| `Players` | no | `;`-separated names or `#number`; each must match one project player |\n| `Clip ID` | no | if present, must not equal an existing clip id or an earlier row's id |\n| `Duration (s)` | no | ignored (the app's own export writes it) |\n\nColumns not listed in the table are ignored.\nBlank lines (no fields, or all fields empty) are ignored and are not counted\nin `summary.total`; line numbers still count physical lines.\n\nRow statuses: `valid`, `malformed` (any rule above fails, wrong column count,\nundecodable cell), `duplicate` (same `Tag Type`, `Start (s)`, `End (s)` and\n`Label` as an earlier row, or a `Clip ID` already used). A row gets one status;\n`malformed` wins over `duplicate`. Row numbering counts the header as line 1.\n\nResponse `200`:\n\n```json\n{\"preview_only\": true,\n \"summary\": {\"total\": 3, \"valid\": 1, \"malformed\": 1, \"duplicate\": 1},\n \"rows\": [\n   {\"line\": 2, \"status\": \"valid\", \"reasons\": [],\n    \"clip\": {\"tag_type\": \"Pass\", \"start\": 1.5, \"end\": 4.0, \"label\": \"x\",\n             \"notes\": \"\", \"players\": [\"<player id>\"]}},\n   {\"line\": 3, \"status\": \"malformed\", \"reasons\": [\"end must be greater than start\"], \"clip\": null},\n   {\"line\": 4, \"status\": \"duplicate\", \"reasons\": [\"same as line 2\"], \"clip\": null}]}\n```\n\nErrors: `404 {\"error\": \"Project not found\"}`; `400 {\"error\": \"...\", \"code\":\n\"bad_request\"}` for a missing `file`, an undecodable file, or a missing\nrequired header; `400 {\"code\": \"too_many_rows\"}` above 5000 data rows.\n\nUI (tagging screen): a button `#btn-import-preview` with accessible name\n\"Import preview\", a file input `#import-preview-file`, a results region with a\ntable `#import-preview-table` (one `tr[data-status]` per row, escaped text), a\n`#import-preview-summary` element with the counts, and a `role=\"status\"`\nelement for loading/empty/error messages. Everything reachable and operable by\nkeyboard; Escape dismisses the results if they are shown in a dialog.\n\nDocs: `docs/CSV_IMPORT.md` stating the column table, BOM/CRLF handling and\nquoting, citing RFC 4180.\n\n## Application design constraints\n\nStack: Flask with one Jinja template, vanilla CSS and JS. No framework, no build\nstep. Screens are `div.screen` elements toggled by an `.active` class rather than\nrouted.\n\n### Tokens (from static/css/style.css)\n- Background `#0f1117`, foreground `#e0e0e0`, headings `#fff`, secondary `#888`\n- System font stack, 0.9rem on controls, 2.4rem on the project-list title with\n  2px letter-spacing\n- Dark only. There is no light theme.\n\n### Layout\n- `.screen` with `.screen.active` is the only navigation primitive\n- Project list is centered, `max-width: 700px`, 60px top padding\n- `.project-controls` is a 10px-gap flex row\n\n### Rules\n- Tagging is a keyboard task. Every action a user repeats during a match needs a\n  key binding, and the binding is visible on screen.\n- The video is the primary surface. Chrome shrinks, video does not.\n- Timeline and clip state survive a reload. Losing tags mid-match is the worst\n  possible failure.\n- Every screen ships loading, empty, and error states.\n- No new styling dependencies.\n",
+  "completed": false,
+  "allow_writes": true,
+  "error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+  "checks": [
+    {
+      "passed": true,
+      "command": "python -m pytest -q",
+      "output": "........................................................................ [ 66%]\n....................................                                     [100%]\n108 passed in 1.98s",
+      "cwd": "/work",
+      "receipts": []
+    },
+    {
+      "passed": true,
+      "command": "python -m pytest -q",
+      "output": "........................................................................ [ 56%]\n.......................................................                  [100%]\n127 passed in 2.05s",
+      "cwd": "/work",
+      "receipts": []
+    },
+    {
+      "passed": true,
+      "command": "python -m pytest -q",
+      "output": "........................................................................ [ 54%]\n.............................................................            [100%]\n133 passed in 2.00s",
+      "cwd": "/work",
+      "receipts": []
+    },
+    {
+      "passed": true,
+      "command": "python -m pytest -q",
+      "output": "........................................................................ [ 53%]\n...............................................................          [100%]\n135 passed in 2.02s",
+      "cwd": "/work",
+      "receipts": []
+    }
+  ],
+  "source_changed": true,
+  "source_fingerprint": "b066849afd4b4b5d0417cfa5e377d4fb37a8be95eedf64042a9a95fc7ef7f79a",
+  "tasks": 4,
+  "in_flight": {
+    "changed": [
+      "static/css/style.css",
+      "static/js/app.js",
+      "templates/index.html",
+      "tests/ui/import_preview.test.js"
+    ],
+    "changed_lines": 118,
+    "inspected": true,
+    "note": "These changes were already on disk when the call stopped and have been preserved. Re-sending the same prompt would apply a second pass on top of them, not repeat the first.",
+    "task": "t5",
+    "description": "Implement the preview presentation slice: approximately 60 lines of markup, styling, and rendering plus 40 test lines. Use an inline results region to avoid dialog focus management. Show a clear empty message for header-only previews. Defer upload wiring, loading/error transitions, keyboard shortcut integration, and documentation to subsequent tasks.",
+    "needs": [
+      "execute",
+      "patch"
+    ],
+    "scope": {
+      "permitted_paths": [
+        "templates/index.html",
+        "static/js/app.js",
+        "static/css/style.css",
+        "tests/ui/import_preview.test.js"
+      ],
+      "forbidden_paths": [
+        ".git/**",
+        ".env",
+        ".env.*",
+        ".quadratus/**"
+      ],
+      "intended_result": "Add tagging-screen preview markup and `function renderImportPreview(payload)` for safely rendering preview results.",
+      "acceptance": [
+        "`function renderImportPreview(payload)` renders summary counts and exactly one tr[data-status] per response row, including physical line, status, reasons, and available clip text.",
+        "Provide #btn-import-preview named Import preview, labeled #import-preview-file, #import-preview-table, #import-preview-summary, and a role=status element within an inline results region.",
+        "All supplied text is escaped; focused Node tests cover mixed statuses, malicious label text, empty results, and replacement of previous results.",
+        "Use existing dark styles and preserve video dimensions; rendering performs no network requests or project mutations."
+      ],
+      "max_lines": 100
+    },
+    "invocation": {
+      "task": "t5",
+      "role": "lead",
+      "origin": "seat",
+      "model": "grok:default",
+      "allow_writes": true,
+      "prompt_artifact": "d7ca45d5049d"
+    }
+  },
+  "policy_preview": {
+    "schema_version": 1,
+    "repository_id": "local/project",
+    "policy_source": "built-in",
+    "policy_hash": "d0e805962d2eee843a3aac413923caac6538e9d1740e79287e32474acca363f4",
+    "library_version": "pilot-1",
+    "library_digest": "59573800c79c8114b6f024d09c95f397a85605b78642764f79007a194bd975ab",
+    "declared_paths": [],
+    "primary_family": "pure-logic",
+    "families": [
+      "pure-logic"
+    ],
+    "overlays": [],
+    "gates": [
+      {
+        "id": "scope",
+        "runner": "builtin:scope",
+        "required": true
+      },
+      {
+        "id": "unit-tests",
+        "runner": "command",
+        "required": true,
+        "argv": [
+          "/usr/local/bin/python",
+          "-m",
+          "pytest",
+          "-q"
+        ],
+        "cwd": ".",
+        "minimum_tests": 1
+      }
+    ],
+    "absent_gates": [],
+    "skipped_gates": [],
+    "adapters": {
+      "pure-logic": {
+        "test_runner": {
+          "status": "detected",
+          "value": [
+            "/usr/local/bin/python",
+            "-m",
+            "pytest",
+            "-q"
+          ],
+          "source": "repo_scan.check_command",
+          "required": true
+        },
+        "typecheck_list": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": false
+        }
+      }
+    },
+    "deny_write": [
+      ".git/**",
+      ".env",
+      ".env.*",
+      ".quadratus/**"
+    ],
+    "sensitive": [],
+    "defaults": {
+      "family": "pure-logic",
+      "required_gates": [
+        "scope"
+      ],
+      "scope_max_lines": 100,
+      "overrun_ratio": 1.5,
+      "worker_depth": 1
+    },
+    "capability_policy": {
+      "deny_write": [
+        ".git/**",
+        ".env",
+        ".env.*",
+        ".quadratus/**"
+      ],
+      "external_effects": "deny",
+      "native_delegation": "deny",
+      "sensitive": []
+    },
+    "blocked": [],
+    "hash": "c4b100b5843a441d453e097c790c1a99194c61d5567aa2adcbb5cf6962edef6e"
+  },
+  "policy_plans": [
+    {
+      "task_id": "t1",
+      "schema_version": 1,
+      "repository_id": "local/project",
+      "policy_source": "built-in",
+      "policy_hash": "d0e805962d2eee843a3aac413923caac6538e9d1740e79287e32474acca363f4",
+      "library_version": "pilot-1",
+      "library_digest": "59573800c79c8114b6f024d09c95f397a85605b78642764f79007a194bd975ab",
+      "declared_paths": [
+        "clip_manifest.py",
+        "tests/test_clip_manifest.py"
+      ],
+      "primary_family": "pure-logic",
+      "families": [
+        "pure-logic"
+      ],
+      "overlays": [],
+      "gates": [
+        {
+          "id": "scope",
+          "runner": "builtin:scope",
+          "required": true
+        },
+        {
+          "id": "unit-tests",
+          "runner": "command",
+          "required": true,
+          "argv": [
+            "/usr/local/bin/python",
+            "-m",
+            "pytest",
+            "-q"
+          ],
+          "cwd": ".",
+          "minimum_tests": 1
+        }
+      ],
+      "absent_gates": [],
+      "skipped_gates": [],
+      "adapters": {
+        "pure-logic": {
+          "test_runner": {
+            "status": "detected",
+            "value": [
+              "/usr/local/bin/python",
+              "-m",
+              "pytest",
+              "-q"
+            ],
+            "source": "repo_scan.check_command",
+            "required": true
+          },
+          "typecheck_list": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": false
+          }
+        }
+      },
+      "deny_write": [
+        ".git/**",
+        ".env",
+        ".env.*",
+        ".quadratus/**"
+      ],
+      "sensitive": [],
+      "defaults": {
+        "family": "pure-logic",
+        "required_gates": [
+          "scope"
+        ],
+        "scope_max_lines": 100,
+        "overrun_ratio": 1.5,
+        "worker_depth": 1
+      },
+      "capability_policy": {
+        "deny_write": [
+          ".git/**",
+          ".env",
+          ".env.*",
+          ".quadratus/**"
+        ],
+        "external_effects": "deny",
+        "native_delegation": "deny",
+        "sensitive": []
+      },
+      "blocked": [],
+      "hash": "4aa8a65cef44ca2ebf6031b7c54fd71829d4d391e51d83f355c72972bb012db9"
+    },
+    {
+      "task_id": "t2",
+      "schema_version": 1,
+      "repository_id": "local/project",
+      "policy_source": "built-in",
+      "policy_hash": "d0e805962d2eee843a3aac413923caac6538e9d1740e79287e32474acca363f4",
+      "library_version": "pilot-1",
+      "library_digest": "59573800c79c8114b6f024d09c95f397a85605b78642764f79007a194bd975ab",
+      "declared_paths": [
+        "clip_manifest.py",
+        "tests/test_clip_manifest.py"
+      ],
+      "primary_family": "pure-logic",
+      "families": [
+        "pure-logic"
+      ],
+      "overlays": [],
+      "gates": [
+        {
+          "id": "scope",
+          "runner": "builtin:scope",
+          "required": true
+        },
+        {
+          "id": "unit-tests",
+          "runner": "command",
+          "required": true,
+          "argv": [
+            "/usr/local/bin/python",
+            "-m",
+            "pytest",
+            "-q"
+          ],
+          "cwd": ".",
+          "minimum_tests": 1
+        }
+      ],
+      "absent_gates": [],
+      "skipped_gates": [],
+      "adapters": {
+        "pure-logic": {
+          "test_runner": {
+            "status": "detected",
+            "value": [
+              "/usr/local/bin/python",
+              "-m",
+              "pytest",
+              "-q"
+            ],
+            "source": "repo_scan.check_command",
+            "required": true
+          },
+          "typecheck_list": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": false
+          }
+        }
+      },
+      "deny_write": [
+        ".git/**",
+        ".env",
+        ".env.*",
+        ".quadratus/**"
+      ],
+      "sensitive": [],
+      "defaults": {
+        "family": "pure-logic",
+        "required_gates": [
+          "scope"
+        ],
+        "scope_max_lines": 100,
+        "overrun_ratio": 1.5,
+        "worker_depth": 1
+      },
+      "capability_policy": {
+        "deny_write": [
+          ".git/**",
+          ".env",
+          ".env.*",
+          ".quadratus/**"
+        ],
+        "external_effects": "deny",
+        "native_delegation": "deny",
+        "sensitive": []
+      },
+      "blocked": [],
+      "hash": "4aa8a65cef44ca2ebf6031b7c54fd71829d4d391e51d83f355c72972bb012db9"
+    },
+    {
+      "task_id": "t3",
+      "schema_version": 1,
+      "repository_id": "local/project",
+      "policy_source": "built-in",
+      "policy_hash": "d0e805962d2eee843a3aac413923caac6538e9d1740e79287e32474acca363f4",
+      "library_version": "pilot-1",
+      "library_digest": "59573800c79c8114b6f024d09c95f397a85605b78642764f79007a194bd975ab",
+      "declared_paths": [
+        "clip_manifest.py",
+        "tests/test_clip_manifest.py"
+      ],
+      "primary_family": "pure-logic",
+      "families": [
+        "pure-logic"
+      ],
+      "overlays": [],
+      "gates": [
+        {
+          "id": "scope",
+          "runner": "builtin:scope",
+          "required": true
+        },
+        {
+          "id": "unit-tests",
+          "runner": "command",
+          "required": true,
+          "argv": [
+            "/usr/local/bin/python",
+            "-m",
+            "pytest",
+            "-q"
+          ],
+          "cwd": ".",
+          "minimum_tests": 1
+        }
+      ],
+      "absent_gates": [],
+      "skipped_gates": [],
+      "adapters": {
+        "pure-logic": {
+          "test_runner": {
+            "status": "detected",
+            "value": [
+              "/usr/local/bin/python",
+              "-m",
+              "pytest",
+              "-q"
+            ],
+            "source": "repo_scan.check_command",
+            "required": true
+          },
+          "typecheck_list": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": false
+          }
+        }
+      },
+      "deny_write": [
+        ".git/**",
+        ".env",
+        ".env.*",
+        ".quadratus/**"
+      ],
+      "sensitive": [],
+      "defaults": {
+        "family": "pure-logic",
+        "required_gates": [
+          "scope"
+        ],
+        "scope_max_lines": 100,
+        "overrun_ratio": 1.5,
+        "worker_depth": 1
+      },
+      "capability_policy": {
+        "deny_write": [
+          ".git/**",
+          ".env",
+          ".env.*",
+          ".quadratus/**"
+        ],
+        "external_effects": "deny",
+        "native_delegation": "deny",
+        "sensitive": []
+      },
+      "blocked": [],
+      "hash": "4aa8a65cef44ca2ebf6031b7c54fd71829d4d391e51d83f355c72972bb012db9"
+    },
+    {
+      "task_id": "t4",
+      "schema_version": 1,
+      "repository_id": "local/project",
+      "policy_source": "built-in",
+      "policy_hash": "d0e805962d2eee843a3aac413923caac6538e9d1740e79287e32474acca363f4",
+      "library_version": "pilot-1",
+      "library_digest": "59573800c79c8114b6f024d09c95f397a85605b78642764f79007a194bd975ab",
+      "declared_paths": [
+        "app.py",
+        "tests/test_basic.py"
+      ],
+      "primary_family": "pure-logic",
+      "families": [
+        "pure-logic"
+      ],
+      "overlays": [],
+      "gates": [
+        {
+          "id": "scope",
+          "runner": "builtin:scope",
+          "required": true
+        },
+        {
+          "id": "unit-tests",
+          "runner": "command",
+          "required": true,
+          "argv": [
+            "/usr/local/bin/python",
+            "-m",
+            "pytest",
+            "-q"
+          ],
+          "cwd": ".",
+          "minimum_tests": 1
+        }
+      ],
+      "absent_gates": [],
+      "skipped_gates": [],
+      "adapters": {
+        "pure-logic": {
+          "test_runner": {
+            "status": "detected",
+            "value": [
+              "/usr/local/bin/python",
+              "-m",
+              "pytest",
+              "-q"
+            ],
+            "source": "repo_scan.check_command",
+            "required": true
+          },
+          "typecheck_list": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": false
+          }
+        }
+      },
+      "deny_write": [
+        ".git/**",
+        ".env",
+        ".env.*",
+        ".quadratus/**"
+      ],
+      "sensitive": [],
+      "defaults": {
+        "family": "pure-logic",
+        "required_gates": [
+          "scope"
+        ],
+        "scope_max_lines": 100,
+        "overrun_ratio": 1.5,
+        "worker_depth": 1
+      },
+      "capability_policy": {
+        "deny_write": [
+          ".git/**",
+          ".env",
+          ".env.*",
+          ".quadratus/**"
+        ],
+        "external_effects": "deny",
+        "native_delegation": "deny",
+        "sensitive": []
+      },
+      "blocked": [],
+      "hash": "9c3b21cdfdf764cfa7454080ed194d6cb584a80752ae44a915d06bc725ad9eb3"
+    },
+    {
+      "task_id": "t5",
+      "schema_version": 1,
+      "repository_id": "local/project",
+      "policy_source": "built-in",
+      "policy_hash": "d0e805962d2eee843a3aac413923caac6538e9d1740e79287e32474acca363f4",
+      "library_version": "pilot-1",
+      "library_digest": "59573800c79c8114b6f024d09c95f397a85605b78642764f79007a194bd975ab",
+      "declared_paths": [
+        "static/css/style.css",
+        "static/js/app.js",
+        "templates/index.html",
+        "tests/ui/import_preview.test.js"
+      ],
+      "primary_family": "pure-logic",
+      "families": [
+        "pure-logic"
+      ],
+      "overlays": [],
+      "gates": [
+        {
+          "id": "scope",
+          "runner": "builtin:scope",
+          "required": true
+        },
+        {
+          "id": "unit-tests",
+          "runner": "command",
+          "required": true,
+          "argv": [
+            "/usr/local/bin/python",
+            "-m",
+            "pytest",
+            "-q"
+          ],
+          "cwd": ".",
+          "minimum_tests": 1
+        }
+      ],
+      "absent_gates": [],
+      "skipped_gates": [],
+      "adapters": {
+        "pure-logic": {
+          "test_runner": {
+            "status": "detected",
+            "value": [
+              "/usr/local/bin/python",
+              "-m",
+              "pytest",
+              "-q"
+            ],
+            "source": "repo_scan.check_command",
+            "required": true
+          },
+          "typecheck_list": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": false
+          }
+        }
+      },
+      "deny_write": [
+        ".git/**",
+        ".env",
+        ".env.*",
+        ".quadratus/**"
+      ],
+      "sensitive": [],
+      "defaults": {
+        "family": "pure-logic",
+        "required_gates": [
+          "scope"
+        ],
+        "scope_max_lines": 100,
+        "overrun_ratio": 1.5,
+        "worker_depth": 1
+      },
+      "capability_policy": {
+        "deny_write": [
+          ".git/**",
+          ".env",
+          ".env.*",
+          ".quadratus/**"
+        ],
+        "external_effects": "deny",
+        "native_delegation": "deny",
+        "sensitive": []
+      },
+      "blocked": [],
+      "hash": "98bbdb025d7bfc7af03619959402ccb697ce2147b0b453081b93ddb1f460dd80"
+    }
+  ],
+  "budget": {
+    "limits": {
+      "max_calls": 60,
+      "max_reported_tokens": 3000000,
+      "wall_seconds": 2700,
+      "max_concurrent_workers": 2,
+      "max_cost_usd": null,
+      "api_cost_rates": []
+    },
+    "reserved_attempts": 20,
+    "api_cost_usd": 0.0,
+    "api_cost_overshoot_usd": 0.0,
+    "unknown_api_cost_attempts": 0,
+    "cost_boundary": "configured API upper-rate threshold; in-flight calls can overshoot; CLI excluded",
+    "in_flight": 0,
+    "input_tokens": 3863957,
+    "output_tokens": 126621,
+    "reported_tokens": 3990578,
+    "unknown_usage_attempts": 0,
+    "stop_reason": "reported_token_threshold",
+    "preserved_responses": [
+      "budget-responses/attempt-20.txt"
+    ],
+    "elapsed_seconds": 2006.9247474159997,
+    "token_boundary": "post-return threshold; in-flight calls can overshoot",
+    "input_boundary": "normalized provider input includes cached input; do not add it again",
+    "wall_boundary": "attempt timeout plus required external process supervisor"
+  },
+  "delegation": {
+    "controlled_tokens": 3990578,
+    "native_child_tokens": 0,
+    "auxiliary_tokens": 0,
+    "auxiliary_tokens_scope": "Explicit auxiliary InvocationEvent rows only; vendor aggregates are not included.",
+    "combined_reported_tokens": 3990578,
+    "parent_child_overlap": "not_applicable",
+    "known_minimum_tokens": 3990578,
+    "unknown_invocations": 0,
+    "unknown_detail": [],
+    "native_children": 0,
+    "unidentified_native_activity": 0,
+    "note": "Subscription usage including cached and repeated input. Native children counted once at their highest cumulative reading, never summed across updates. The combined sum assumes child counters are additional to parent counters; that overlap is unverified. known_minimum_tokens is a deprecated compatibility key for that conditional sum, not an established lower bound. Auxiliary usage covers explicit auxiliary event rows only, not vendor aggregates. Unknown usage is unknown, not zero."
+  },
+  "scope_reports": [
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "clip_manifest.py",
+        "tests/test_clip_manifest.py"
+      ],
+      "changed_lines": 121,
+      "max_lines": 100,
+      "code_lines": 50,
+      "test_lines": 71,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "clip_manifest.py",
+        "tests/test_clip_manifest.py"
+      ],
+      "changed_lines": 121,
+      "max_lines": 100,
+      "code_lines": 50,
+      "test_lines": 71,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "clip_manifest.py",
+        "tests/test_clip_manifest.py"
+      ],
+      "changed_lines": 121,
+      "max_lines": 100,
+      "code_lines": 50,
+      "test_lines": 71,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "clip_manifest.py",
+        "tests/test_clip_manifest.py"
+      ],
+      "changed_lines": 106,
+      "max_lines": 100,
+      "code_lines": 46,
+      "test_lines": 60,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "clip_manifest.py",
+        "tests/test_clip_manifest.py"
+      ],
+      "changed_lines": 106,
+      "max_lines": 100,
+      "code_lines": 46,
+      "test_lines": 60,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "clip_manifest.py",
+        "tests/test_clip_manifest.py"
+      ],
+      "changed_lines": 130,
+      "max_lines": 100,
+      "code_lines": 56,
+      "test_lines": 74,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "clip_manifest.py",
+        "tests/test_clip_manifest.py"
+      ],
+      "changed_lines": 130,
+      "max_lines": 100,
+      "code_lines": 56,
+      "test_lines": 74,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "clip_manifest.py",
+        "tests/test_clip_manifest.py"
+      ],
+      "changed_lines": 95,
+      "max_lines": 100,
+      "code_lines": 46,
+      "test_lines": 49,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "clip_manifest.py",
+        "tests/test_clip_manifest.py"
+      ],
+      "changed_lines": 95,
+      "max_lines": 100,
+      "code_lines": 46,
+      "test_lines": 49,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "clip_manifest.py",
+        "tests/test_clip_manifest.py"
+      ],
+      "changed_lines": 126,
+      "max_lines": 100,
+      "code_lines": 49,
+      "test_lines": 77,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "clip_manifest.py",
+        "tests/test_clip_manifest.py"
+      ],
+      "changed_lines": 126,
+      "max_lines": 100,
+      "code_lines": 49,
+      "test_lines": 77,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "app.py",
+        "tests/test_basic.py"
+      ],
+      "changed_lines": 91,
+      "max_lines": 100,
+      "code_lines": 20,
+      "test_lines": 71,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "app.py",
+        "tests/test_basic.py"
+      ],
+      "changed_lines": 91,
+      "max_lines": 100,
+      "code_lines": 20,
+      "test_lines": 71,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "app.py",
+        "tests/test_basic.py"
+      ],
+      "changed_lines": 91,
+      "max_lines": 100,
+      "code_lines": 20,
+      "test_lines": 71,
+      "oversized": false
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+--- /private/tmp/gametape-cand.mUaFIc/blind_trial.original.py	2026-09-24 12:25:16
++++ /private/tmp/gametape-cand.mUaFIc/runtime/blind_trial.py	2026-09-24 12:25:16
+@@ -34,7 +34,7 @@
+     evidence.mkdir(parents=True, mode=0o700)
+     settings = Settings(backend='cli', backend_overrides={}, openai_api_key=None,
+                         anthropic_api_key=None, xai_api_key=None)
+-    limits = RunLimits(max_calls=24, max_reported_tokens=500_000, wall_seconds=900,
++    limits = RunLimits(max_calls=60, max_reported_tokens=3_000_000, wall_seconds=2700,
+                        max_concurrent_workers=2)
+     (state / 'effective-config.json').write_text(json.dumps({
+         'settings': asdict(settings), 'run_limits': asdict(limits),
