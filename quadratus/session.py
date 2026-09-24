@@ -44,7 +44,7 @@ from .delegation import (
     invocation_context,
 )
 from .memory import PersistentMemory, TaskMemory, TaskSummary
-from .providers import PartialWorkSuspected, ProviderError, ProviderRefusal
+from .providers import PartialWorkSuspected, ProviderError, ProviderRefusal, TurnLimitReached
 from .registry import peers_for, resolve
 from .routing import (
     Seat,
@@ -294,6 +294,10 @@ class SessionConfig:
     #: How many fix rounds a failing integration gate buys the lead before
     #: the failure is carried into the record as an open problem.
     max_gate_fixes: int = 1
+    #: A lead that stops at its turn limit hands its unfinished task back
+    #: for re-planning. This many in a row are tolerated; one more ends the
+    #: run cleanly, so a limit set too low cannot loop.
+    max_turn_limited_in_a_row: int = 1
     # Opt-in v1 contract; False retains the legacy prose path for one release.
     security_verdict_json: bool = False
     #: Called with a one-line note as the run moves: the plan, each task as it
@@ -536,6 +540,10 @@ class Session:
         )
         self._rotation = 0
         self.history: List[TaskSummary] = []
+        #: Tasks whose lead stopped at its turn limit, in order.
+        self.turn_limited: List[str] = []
+        self._turn_limited_in_a_row = 0
+        self._unresolved_partial = False
 
     def _invoke_model(self, key, prompt, *, allow_writes=False):
         context = invocation_context.get() or dict(task="run", role="direct", origin="seat")
@@ -1150,6 +1158,8 @@ class Session:
         # consult channels live: a reply that is a request gets served.
         try:
             draft = self._draft_with_channels(lead, spec, task)
+        except TurnLimitReached as exc:
+            return self._close_turn_limited(lead, spec, task, exc, before)
         except ProviderError as exc:
             # Only a failed lead, not a consultant/worker or policy refusal,
             # may be replaced. Never replay partial or uninspectable edits.
@@ -1294,6 +1304,62 @@ class Session:
         )
         self.memory.absorb(summary)
         self.history.append(summary)
+        return summary
+
+    def _close_turn_limited(self, lead, spec, task, exc, before) -> TaskSummary:
+        """A lead stopped at its turn limit: keep the work, record it, re-plan.
+
+        The call ran and its usage is already on the ledger. Its edits stay
+        where they are, inspected and held to the task's scope exactly as a
+        finished draft's would be; out-of-scope or unmeasurable edits still
+        stop the run with the work preserved. What does not happen is review,
+        the gate or a close-out call: the task is unfinished, so the harness
+        writes its record from the evidence and hands the rest back to the
+        orchestrator, which names the remaining work as a new task. The lead's
+        final text, if any, is narration of work in progress and is labelled
+        as such, never folded in as a result.
+        """
+        state = self._inspect_partial_edits(before)
+        if self.project and self.config.allow_writes:
+            if not state["inspected"]:
+                raise PartialWorkStopped("Lead stopped at its turn limit and the source could not "
+                                         "be inspected; work preserved.", partial=state) from exc
+            if state["changed"]:
+                report = self._assess_scope(spec, task, before)
+                if spec.scope is not None and report is None:
+                    raise PartialWorkStopped("Turn-limited edits could not be measured against the "
+                                             "task scope; work preserved.", partial=state) from exc
+                if report and (report.blocking or report.oversized):
+                    raise PartialWorkStopped("Turn-limited edits exceed the declared scope; work "
+                                             "preserved. " + report.render(), partial=state) from exc
+        said = (exc.partial_text or "").strip()
+        task.keep(json.dumps(dict(task=spec.task_id, lead=lead, turns=exc.turns,
+                                  changed=state["changed"], changed_lines=state["changed_lines"],
+                                  note=state["note"], partial_text=said[:4000] or None)),
+                  kind="turn-limited", author=lead)
+        changed = ", ".join(state["changed"]) or "no files"
+        summary_text = (
+            "STOPPED AT THE LEAD TURN LIMIT before finishing"
+            + (f" ({exc.turns} turns)" if exc.turns else "")
+            + f". Changed, unreviewed and ungated: {changed}"
+            + (f" ({state['changed_lines']} lines)" if state["changed"] else "")
+            + ". This task is not done: name the remaining work as a new, smaller task, "
+              "and do not assume any of it is finished."
+            + (f" The lead's last words, which are narration and not a result: {said[:300]}"
+               if said else " The lead returned no answer text.")
+        )
+        summary = task.close(
+            summary=summary_text,
+            reasoning=("Recorded by the harness from the stopped call's evidence. No close-out "
+                       "model call is made for an unfinished task."),
+            dead_ends=[],
+        )
+        # TaskSummary is frozen; the outcome is set on a copy, never mutated.
+        from dataclasses import replace
+        summary = replace(summary, outcome="turn_limited")
+        self.memory.absorb(summary)
+        self.history.append(summary)
+        self.turn_limited.append(spec.task_id)
         return summary
 
     def _run_security_task(self, spec: TaskSpec) -> TaskSummary:
@@ -1635,7 +1701,8 @@ class Session:
             self._note(f"asking {self.seat().key} for the next task")
             spec = self.next_task()
             if spec is None:
-                self.completed = not self.open_findings and not any(not c["passed"] for c in self.checks)
+                self.completed = (not self.open_findings and not self._unresolved_partial
+                                  and not any(not c["passed"] for c in self.checks))
                 self._note("the orchestrator reports the goal met")
                 break
             if spec.description == previous_description:
@@ -1651,6 +1718,18 @@ class Session:
                 f"[{spec.kind}/{spec.complexity}]"
             )
             summary = self.run_task(spec)
+            if getattr(summary, "outcome", "closed") == "turn_limited":
+                self._unresolved_partial = True
+                self._turn_limited_in_a_row += 1
+                self._note(f"task {len(self.history)} stopped at the lead's turn limit; its "
+                           f"work is kept and the orchestrator re-plans")
+                if self._turn_limited_in_a_row > self.config.max_turn_limited_in_a_row:
+                    self._note(f"the lead turn limit was reached {self._turn_limited_in_a_row} "
+                               f"times in a row; stopping instead of re-planning again")
+                    break
+                continue
+            self._turn_limited_in_a_row = 0
+            self._unresolved_partial = False
             self._note(f"task {len(self.history)} closed by {summary.author}")
             if self.open_findings or (self.checks and not self.checks[-1]['passed']):
                 break
@@ -1663,7 +1742,8 @@ class Session:
             # extra iteration runs whatever task it is handed. One terminal
             # question instead, whose reply is never executed.
             self.completed = (
-                self._confirm_goal_met()
+                not self._unresolved_partial
+                and self._confirm_goal_met()
                 and not self.open_findings
                 and not any(not c["passed"] for c in self.checks)
             )

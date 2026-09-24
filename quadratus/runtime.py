@@ -322,15 +322,26 @@ class Fleet:
         # established one. The verifier keeps every read tool and loses only
         # native delegation, on a copy so no other seat inherits it.
         verifying = (invocation_context.get() or {}).get("role") == "verifier"
+        # A lead's agentic turn limit, when the operator set one. Applied per
+        # call on a view, never on the shared provider. A capped lead raises
+        # TurnLimitReached with its edits still in place; the session keeps
+        # them and re-plans rather than treating the call as failed.
+        lead_turns = (self.settings.lead_max_turns
+                      if (invocation_context.get() or {}).get("role") == "lead" else None)
         if self.project is None:
-            if verifying:
+            if verifying or lead_turns:
                 provider = copy.copy(provider)
-                provider.native_fanout_off = True
+                if verifying:
+                    provider.native_fanout_off = True
+                if lead_turns:
+                    provider.max_turns = lead_turns
             return self._generate(model_key, provider, prompt, role)
         if self.settings.backend_for(model_key.partition(':')[0]) != 'cli':
             raise ProviderError("Project sessions require CLI transport with filesystem access.")
         if allow_writes and not provider.restricted:
             view = provider.in_directory(self.project.root, allow_writes=True)
+            if lead_turns:
+                view.max_turns = lead_turns
             before = self.project.contents()
             reply = self._generate(model_key, view, prompt, role +
                                   "\nYour working directory is the persistent project. "
@@ -363,6 +374,8 @@ class Fleet:
             view = provider.in_directory(directory, allow_writes=False)
             if verifying:
                 view.native_fanout_off = True
+            if lead_turns:
+                view.max_turns = lead_turns
             role += ("\nYour working directory is a fresh source copy. Read it to ground your "
                      "answer. Do not change files, commit, push, or use paths outside this copy. "
                      "Cite files by their path relative to the project root, not by the absolute "
@@ -482,6 +495,13 @@ class Fleet:
             return
         try:
             usage = usage or {}
+            raw = getattr(provider, "last_diagnostics", None) or {}
+            # One cache figure per row: the usage dict's when the extractor
+            # gives one (codex), else the envelope's re-read count (claude,
+            # grok), which is the same subset of input_tokens.
+            cached = usage.get("cached_input_tokens")
+            if cached is None and isinstance(raw.get("cached_input_tokens"), int):
+                cached = raw["cached_input_tokens"]
             event = InvocationEvent(
                 task=task or "-",
                 role=role or "-",
@@ -501,7 +521,13 @@ class Fleet:
                 # Absent stays absent: None is unknown, and unknown is not zero.
                 input_tokens=usage.get("input_tokens"),
                 output_tokens=usage.get("output_tokens"),
-                cached_input_tokens=usage.get("cached_input_tokens"),
+                cached_input_tokens=cached,
+                fresh_input_tokens=(usage["input_tokens"] - cached
+                                    if isinstance(usage.get("input_tokens"), int) and isinstance(cached, int)
+                                    and usage["input_tokens"] >= cached else None),
+                model_turns=raw.get("model_calls") if isinstance(raw.get("model_calls"), int) else None,
+                max_turns=getattr(provider, "max_turns", None),
+                turn_limited=outcome == "TurnLimitReached",
                 session_id=getattr(provider, "last_session_id", None),
                 post_return_failure=post_return_failure,
                 detail=detail,

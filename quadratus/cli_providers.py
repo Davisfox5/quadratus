@@ -65,7 +65,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
 from .delegation import NativeChild
-from .providers import LLMProvider, ProviderError, ProviderRefusal, Turn
+from .providers import LLMProvider, ProviderError, ProviderRefusal, Turn, TurnLimitReached
 
 log = logging.getLogger(__name__)
 
@@ -106,6 +106,12 @@ def _extract_claude_result(stdout: str) -> str:
             category=category,
             explanation=(details.get("explanation") if isinstance(details, dict) else None),
         )
+    if payload.get("subtype") == "error_max_turns":
+        # The result envelope's turn-cap subtype. Not yet seen from the
+        # installed binary: confirm the exact shape with a bounded probe.
+        raise TurnLimitReached("claude stopped at its turn limit before finishing",
+                               partial_text=payload.get("result"),
+                               turns=_envelope_turns(payload))
     if payload.get("is_error"):
         raise ProviderError(f"claude reported an error: {payload.get('result', '')[:300]}")
     return payload.get("result", "") or ""
@@ -201,6 +207,11 @@ def _extract_grok_result(stdout: str) -> str:
     # completed turn is therefore an error, including a stop reason this code
     # has never seen: guessing that an unknown one is benign is how the
     # narration got mistaken for an answer in the first place.
+    if stop == "max_turns":
+        # Capped, not failed: the call ran and may have written. The text is
+        # where the loop had got to, kept as evidence and never as an answer.
+        raise TurnLimitReached("grok stopped at its turn limit before finishing",
+                               partial_text=text, turns=_envelope_turns(payload))
     if stop != "end_turn":
         diagnostics = _extract_grok_diagnostics(stdout) or {}
         attempted = diagnostics.get("attempted_tools")
@@ -261,6 +272,9 @@ def _extract_grok_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
         diagnostics["model_calls"] = calls
     # This envelope reports both, and grok is where the re-read cost is
     # largest: 383,104 of attempt 8's 437,173 input tokens.
+    turns = _envelope_turns(payload)
+    if turns is not None:
+        diagnostics.setdefault("model_calls", turns)
     diagnostics.update(_reread_and_cost(payload.get("usage"),
                                         payload.get("total_cost_usd")))
     names: List[str] = []
@@ -372,6 +386,27 @@ def _extract_grok_usage(stdout: str) -> Optional[Dict[str, int]]:
     if input_tokens == 0 and output_tokens == 0:
         return None
     return {"input_tokens": input_tokens, "output_tokens": output_tokens}
+
+
+def _envelope_turns(payload) -> Optional[int]:
+    """How many model turns one CLI call ran, from its JSON envelope.
+
+    claude and grok report ``num_turns``; grok also counts ``modelCalls`` per
+    model inside ``modelUsage``, which the top-level lookup used to miss, so
+    the 32-turn GameTape UI lead recorded no turn count at all.
+    """
+    if not isinstance(payload, dict):
+        return None
+    turns = payload.get("num_turns")
+    if isinstance(turns, int) and not isinstance(turns, bool) and turns >= 0:
+        return turns
+    rows = payload.get("modelUsage")
+    if isinstance(rows, dict):
+        counts = [r.get("modelCalls") for r in rows.values() if isinstance(r, dict)]
+        counts = [n for n in counts if isinstance(n, int) and not isinstance(n, bool) and n >= 0]
+        if counts:
+            return sum(counts)
+    return None
 
 
 def _reread_and_cost(usage, cost=None) -> Dict[str, object]:
@@ -797,7 +832,10 @@ def _extract_claude_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
     except ValueError:
         payload = None
     if isinstance(payload, dict):
-        diagnostics.update(_reread_and_cost(payload.get("usage"),
+        turns = _envelope_turns(payload)
+    if turns is not None:
+        diagnostics.setdefault("model_calls", turns)
+    diagnostics.update(_reread_and_cost(payload.get("usage"),
                                             payload.get("total_cost_usd")))
     if malformed:
         diagnostics["auxiliary_usage"] = "unknown"
@@ -922,6 +960,10 @@ class CLISpec:
     #: as close as the CLI documents) summary call. Sent only when a provider
     #: view carries ``summary_only=True``; see ``CLIProvider._build_argv``.
     summary_only_args: List[str] = field(default_factory=list)
+    #: The flag that caps agentic turns in one call, for a lead's turn limit
+    #: (``Settings.lead_max_turns``). Empty where the CLI has none (codex):
+    #: there the call is bounded by time and attempts only.
+    max_turns_flag: str = ""
     #: How the CLI separates several names in one ``disallowed_tools_flag``
     #: value. Claude takes whitespace; grok's ``--help`` says comma-separated,
     #: and a space-joined list would reach it as one nonsense tool name that
@@ -1073,6 +1115,7 @@ CLAUDE_SPEC = CLISpec(
     # mode and "exits with an error when the limit is reached". Together they
     # make the closeout a single model call over the prompt it was given.
     summary_only_args=["--tools", "", "--max-turns", "1"],
+    max_turns_flag="--max-turns",
     extract=_extract_claude_result,
     # Mandatory, not merely safer: --disallowed-tools is variadic, so a
     # positional prompt after it is swallowed as another tool name and the CLI
@@ -1472,6 +1515,7 @@ GROK_SPEC = CLISpec(
     # restricted read-only allowlist and the full denial. A read tool that
     # is present but has no turn to run in is the honest description.
     summary_only_args=["--max-turns", "1"],
+    max_turns_flag="--max-turns",
     disallowed_tools_flag="--disallowed-tools",
     # Every *agentic* call, read-only included: without it the turn is
     # cancelled silently the first time a tool is called. A restricted seat
@@ -1780,6 +1824,10 @@ class CLIProvider(LLMProvider):
         #: One-turn, tool-less summary call on the restricted seat (closeout).
         #: Off by default; a per-call view sets it. See ``_build_argv``.
         self.summary_only: bool = bool(kwargs.pop("summary_only", False))
+        #: A lead's agentic turn limit for this view, set per call by
+        #: runtime.Fleet. None sends no flag. A proxy for spend, not a
+        #: token ceiling: an 11-turn grok lead still reported 365,138 tokens.
+        self.max_turns: Optional[int] = kwargs.pop("max_turns", None)
         self._prompt_files = set()
         #: Real token counts from the most recent call, when the CLI reported
         #: them; None otherwise. Read by metering glue, never load-bearing.
@@ -1979,6 +2027,8 @@ class CLIProvider(LLMProvider):
         argv += extra
         if self.summary_only:
             argv += list(spec.summary_only_args)
+        elif self.max_turns and spec.max_turns_flag:
+            argv += [spec.max_turns_flag, str(int(self.max_turns))]
         if self.restricted and spec.restricted_prompt_flag:
             if len(prompt) > MAX_ARGV_PROMPT:
                 # Falling back to a prompt file here would silently drop the
@@ -2083,6 +2133,8 @@ class CLIProvider(LLMProvider):
                 self.spec.extract(proc.stdout)
             except (ProviderError, ProviderRefusal) as parsed:
                 parsed.diagnostics = self.last_diagnostics
+                if isinstance(parsed, TurnLimitReached):
+                    raise
                 if isinstance(parsed, ProviderRefusal):
                     parsed.model = self.model
                     raise

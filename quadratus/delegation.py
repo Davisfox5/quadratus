@@ -172,6 +172,13 @@ class InvocationEvent:
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     cached_input_tokens: Optional[int] = None
+    #: input_tokens minus cached_input_tokens, when both are known.
+    fresh_input_tokens: Optional[int] = None
+    #: Model turns the call ran, from the vendor envelope.
+    model_turns: Optional[int] = None
+    #: The turn limit sent with the call, if any, and whether it was hit.
+    max_turns: Optional[int] = None
+    turn_limited: bool = False
     canonical_model: Optional[str] = None
     invocation_id: Optional[str] = None
     wire_model: Optional[str] = None
