@@ -256,6 +256,25 @@ def test_a_post_cap_reply_proposing_a_task_is_never_run(store):
     assert s.completed is False
 
 
+@pytest.mark.parametrize("reply, completed", [
+    ("DONE", True),
+    ("  DONE\n", True),
+    ("Task 2 is not verified yet.\nDONE", False),
+    ("DONE\nexcept the security task, which still needs review", False),
+    ("NOT DONE: the security task is unverified", False),
+    ("done", False),
+    ("DONE.", False),
+])
+def test_only_a_reply_that_is_exactly_done_confirms_at_the_cap(store, reply, completed):
+    """A DONE line beside reasoning is a contradiction or a hedge, not a
+    confirmation; the terminal reply is judged whole."""
+    rec = CapRecorder(reply, next_tasks=["task one", "task two"])
+    s = _session(store, rec)
+    s.run(max_tasks=2)
+    assert rec.terminal_asks == 1
+    assert s.completed is completed
+
+
 def test_terminal_done_does_not_complete_a_run_with_a_failed_gate(store):
     """DONE at the cap completes only when every gate passed, the same rule
     as a DONE inside the loop."""

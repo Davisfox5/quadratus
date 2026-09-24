@@ -314,7 +314,16 @@ class Fleet:
             if self.project and self.settings.backend_for(model_key.partition(':')[0]) != 'cli':
                 raise ProviderError("Project sessions require CLI transport with filesystem access.")
             return self._closeout(model_key, provider, prompt)
+        # A verifier checks work it did not author; it does not hand the check
+        # on. The Q9-v2 baseline's Opus verifier did: 920,656 of one call's
+        # 1,076,547 input tokens went to an Opus subagent it spawned (run
+        # 2026-09-23, evidence/q9v2-rerun2-1m). It keeps every read tool and
+        # loses only native delegation, on a copy so no other seat inherits it.
+        verifying = (invocation_context.get() or {}).get("role") == "verifier"
         if self.project is None:
+            if verifying:
+                provider = copy.copy(provider)
+                provider.native_fanout_off = True
             return self._generate(model_key, provider, prompt, role)
         if self.settings.backend_for(model_key.partition(':')[0]) != 'cli':
             raise ProviderError("Project sessions require CLI transport with filesystem access.")
@@ -350,6 +359,8 @@ class Fleet:
             return reply
         with self.project.snapshot() as directory:
             view = provider.in_directory(directory, allow_writes=False)
+            if verifying:
+                view.native_fanout_off = True
             role += ("\nYour working directory is a fresh source copy. Read it to ground your "
                      "answer. Do not change files, commit, push, or use paths outside this copy. "
                      "Cite files by their path relative to the project root, not by the absolute "

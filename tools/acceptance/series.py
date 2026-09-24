@@ -202,6 +202,7 @@ def summarise_run(run_dir: Path) -> dict:
         "completed": result.get("completed") if result else None,
         "provider_attempts": budget.get("reserved_attempts"),
         "reported_tokens": budget.get("reported_tokens"),
+        "token_stop": (budget.get("limits") or {}).get("max_reported_tokens"),
         "unknown_usage_attempts": budget.get("unknown_usage_attempts"),
         "wall_seconds": budget.get("elapsed_seconds"),
         "input_tokens": _input_split(rows) if rows is not None else None,
@@ -276,6 +277,18 @@ def aggregate(run_dirs: list) -> dict:
     return {"label": label(smallest), "versions": versions, "runs": runs}
 
 
+def _stop_note(run: dict) -> str:
+    """The run's token figure beside its stop threshold. The threshold is
+    checked after each call returns, so it is a stop, not a ceiling: one call
+    can carry a run well past it (Q9-v2 rerun, 2026-09-23: a 1,000,000 stop,
+    1,701,844 spent)."""
+    stop, spent = run.get("token_stop"), run.get("reported_tokens")
+    if stop is None or spent is None:
+        return ""
+    over = f"; {spent - stop} over it" if spent > stop else ""
+    return f" (stop threshold {stop}, checked after each call returns, not a ceiling{over})"
+
+
 def _show(value, source: str) -> str:
     return f"missing ({source})" if value is None else str(value)
 
@@ -333,7 +346,7 @@ def render(report: dict) -> str:
                 f"- provenance: {r['provenance']}",
                 f"- completed: {_show(r['completed'], 'result.json')}",
                 f"- provider attempts: {_show(r['provider_attempts'], 'budget.json')}",
-                f"- reported tokens: {_show(r['reported_tokens'], 'budget.json')}",
+                f"- reported tokens: {_show(r['reported_tokens'], 'budget.json')}{_stop_note(r)}",
                 f"- input tokens: {tokens}",
                 f"- unknown-usage attempts: {_show(r['unknown_usage_attempts'], 'budget.json')}",
                 f"- wall seconds: {_show(r['wall_seconds'], 'budget.json')}",

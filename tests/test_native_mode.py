@@ -7,7 +7,10 @@ from quadratus.cli_providers import (
     GrokCLIProvider,
     native_delegation_mode,
 )
+from quadratus.config import Settings
+from quadratus.delegation import invocation
 from quadratus.providers import ProviderError
+from quadratus.runtime import Fleet
 
 
 @pytest.fixture(autouse=True)
@@ -334,3 +337,48 @@ def test_grok_default_mode_argv_is_unchanged_by_the_widening():
     assert "--disallowed-tools" not in normal
     worker = GrokCLIProvider(model="").for_seat("", restricted=True)._build_argv("p", "")
     assert worker[worker.index("--disallowed-tools") + 1] == "Agent"
+
+
+# -- the verifier's own switch (Q9-v2, 2026-09-23) ------------------------------
+
+
+def test_a_view_marked_fanout_off_denies_delegation_in_default_mode():
+    view = ClaudeCLIProvider(model="opus", allow_writes=False)
+    view.native_fanout_off = True
+    argv = view._build_argv("p", "")
+    assert argv.count("--disallowed-tools") == 1
+    assert _pair(argv, "--disallowed-tools").split() == [
+        "Bash", "Edit", "Write", "NotebookEdit", *CLAUDE_OFF_DENIALS]
+
+
+def test_a_view_marked_fanout_off_still_refuses_operator_overrides(monkeypatch):
+    monkeypatch.setenv("QUADRATUS_CLI_ARGS_CLAUDE", "--allowed-tools Task")
+    view = ClaudeCLIProvider(model="opus", allow_writes=False)
+    view.native_fanout_off = True
+    with pytest.raises(ProviderError):
+        view._build_argv("p", "")
+
+
+def _captured_views(monkeypatch, tmp_path, *, project):
+    views = []
+    monkeypatch.setattr(Fleet, "_generate",
+                        lambda self, key, provider, prompt, system, **kw: views.append(provider) or "ok")
+    (tmp_path / "a.py").write_text("x = 1\n")
+    fleet = Fleet(Settings(backend="cli"), project=tmp_path if project else None)
+    return fleet, views
+
+
+@pytest.mark.parametrize("project", [True, False])
+def test_the_fleet_turns_delegation_off_for_the_verifier_only(monkeypatch, tmp_path, project):
+    fleet, views = _captured_views(monkeypatch, tmp_path, project=project)
+    with invocation("t2", "verifier"):
+        fleet.invoke("claude:opus", "verify this")
+    with invocation("t2", "lead"):
+        fleet.invoke("claude:opus", "lead this")
+    verifier, lead = views
+    assert getattr(verifier, "native_fanout_off", False) is True
+    assert _pair(verifier._build_argv("p", ""), "--disallowed-tools").split()[-len(CLAUDE_OFF_DENIALS):] \
+        == CLAUDE_OFF_DENIALS
+    assert getattr(lead, "native_fanout_off", False) is False, "senior seats keep delegation"
+    assert getattr(fleet.provider_for("claude:opus"), "native_fanout_off", False) is False, \
+        "the shared provider is never marked"

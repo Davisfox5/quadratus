@@ -699,3 +699,23 @@ def test_grader_command_through_a_symlinked_scratch_root_is_admitted(setup):
     assert series.main(_run_args(tmp_path, fixture, launcher, "--count", "1",
                                  "--allowance-record", str(allowance), "--grader-command",
                                  f"{sys.executable} -m pytest -q -p no:cacheprovider {via_link}")) == 0
+
+
+def test_the_token_line_names_the_stop_threshold_and_any_overshoot(tmp_path):
+    run = make_run(tmp_path, "over", "baseline", source="baseline")
+    budget = json.loads((run / "budget.json").read_text())
+    budget["limits"] = {"max_reported_tokens": 1_000_000}
+    budget["reported_tokens"] = 1_701_844
+    (run / "budget.json").write_text(json.dumps(budget))
+    text = series.render(series.aggregate([str(run)]))
+    assert ("- reported tokens: 1701844 (stop threshold 1000000, checked after each call "
+            "returns, not a ceiling; 701844 over it)") in text
+
+
+def test_the_token_line_without_limits_is_unchanged(tmp_path):
+    run = make_run(tmp_path, "plain", "baseline", source="baseline")
+    budget = json.loads((run / "budget.json").read_text())
+    budget.pop("limits", None)
+    (run / "budget.json").write_text(json.dumps(budget))
+    text = series.render(series.aggregate([str(run)]))
+    assert "stop threshold" not in text
