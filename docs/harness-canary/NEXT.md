@@ -197,10 +197,13 @@ against a 1,000,000 stop. So a batch figure sized as runs times the per-run
 stop does not bound spend, and the series report now prints each run's figure
 beside its stop and its overshoot. Raising the figure is not a remedy.
 
-Most of that call was delegation: 920,656 of its tokens went to an Opus
-subagent the verifier spawned. A verifier checks work it did not author, so the
-Fleet now runs verifier calls with native delegation off (the vendor's own
-`native_fanout_off_args`, the same denial as `QUADRATUS_NATIVE_DELEGATION=off`).
-It keeps every read tool. Leads and the orchestrator are unchanged; bounding
-those would change their job, not their cost. A per-call ceiling that holds
-before a call starts is still open.
+That call's envelope reported usage beyond the seat on its Haiku and Opus rows,
+920,656 tokens, marked `unattributed`: the extractor could not match a single
+row to the seat, so the figure is an excess over the seat's own usage, not a
+measured subagent. Delegation is a plausible cause, not an established one. As
+a preventive bound, the Fleet now runs verifier calls with native delegation off
+(the vendor's own `native_fanout_off_args` and kill switches, the same denial as
+`QUADRATUS_NATIVE_DELEGATION=off`; codex's always-on `control_args` already
+cover it). The verifier keeps every read tool. Leads and the orchestrator are
+unchanged; bounding those would change their job, not their cost. **Per-call token ceilings are not supported.** No seat has a limit that holds
+before a call starts; every token figure in this harness is a post-return stop.
