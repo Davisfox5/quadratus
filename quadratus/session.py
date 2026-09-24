@@ -473,17 +473,27 @@ def _has_blocking_finding(text: str) -> bool:
                for line in text.splitlines())
 
 
+#: The marker as a verifier writes it: the uppercase word, not the English one.
+#: A note heading ("non-blocking", "neither blocking") is not a finding.
+_FINDING_MARKER = re.compile(
+    r"(?<!NON-)(?<!NON )(?<!NOT )(?<!NEITHER )\b(?:BLOCKING|UNRESOLVED)\b")
+
+
 def _has_security_finding(text: str) -> bool:
-    """Keep legacy prose conservative without treating note titles as findings."""
-    for line in text.splitlines():
-        line = line.strip().strip('#* ').upper()
-        # The live verifier used "Not blocking, worth noting" as a heading.
-        # Remove only that heading prefix, not its remainder or later lines:
-        # an actual BLOCKING/UNRESOLVED finding must still stop the run.
-        line = re.sub(r'^(?:NOT BLOCKING|NON[- ]BLOCKING)(?=$|[,:])', '', line)
-        if 'BLOCKING' in line or 'UNRESOLVED' in line:
-            return True
-    return False
+    """A finding is a marker as written, not the word in prose.
+
+    The old test upper-cased every line before looking for BLOCKING or
+    UNRESOLVED, so English prose became markers: in the Q9-v2 series
+    (2026-09-24) "## Two minor notes, neither blocking" and "One non-blocking
+    note for the record" each stopped a run whose verifier had accepted,
+    before the terminal question, costing two completions of five. Now the
+    uppercase marker counts wherever it appears ("This defect is BLOCKING.",
+    "..., but UNRESOLVED: missing evidence."), a line opening with
+    "Blocking:" counts in any case, and a NON-/NOT/NEITHER note does not.
+    """
+    if _has_blocking_finding(text):
+        return True
+    return any(_FINDING_MARKER.search(line) for line in text.splitlines())
 
 
 def _resolved_verdict(text: str) -> bool:
