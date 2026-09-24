@@ -1,0 +1,21 @@
+Project: /work; edits enabled
+asking claude:fable for the next task
+claude:fable is out of window; the seat falls to openai:gpt-6-astra
+task 1: Build the standalone parsing foundation, allocating about 40 implementation lines and 60 test lines. Return `(headers, records)`, where each record is `(line, fields)`. Preserve cell text unchanged and retain unknown columns. Test normalized required headers, BOM/CRLF, quoted commas and multiline cells, blank records, wrong-width records, invalid encoding, missing headers, and the 5000/5001 boundary. Leave project validation, duplicate detection, endpoint wiring, and UI for subsequent slices. [backend/simple]
+Family: pure-logic; plan 4aa8a65cef44ca2ebf6031b7c54fd71829d4d391e51d83f355c72972bb012db9
+task 1 closed by grok:default
+asking openai:gpt-6-astra for the next task
+task 2: Implement single-row validation only, budgeting approximately 45 implementation lines and 55 test lines. Resolve each semicolon-separated player token to exactly one project player ID; reject unknown or ambiguous tokens. An empty Players cell produces an empty list. Cover successful normalization, optional defaults, wrong widths, unknown tags, invalid and nonfinite times, reversed intervals, player names/numbers, ambiguity, and input immutability using compact parameterized tests. Leave Clip ID checks, cross-row duplicate detection, response assembly, endpoint wiring, and UI for subsequent slices. Run the focused parser/validator tests. [backend/standard]
+Family: pure-logic; plan 4aa8a65cef44ca2ebf6031b7c54fd71829d4d391e51d83f355c72972bb012db9
+task 2 closed by openai:gpt-5.6-sol
+asking openai:gpt-6-astra for the next task
+task 3: Add the pure preview assembler using the existing parser and single-row validator. Track earlier-row identities, including IDs on malformed rows; compare tuple identities whenever their constituent values can be normalized. Missing or empty optional Clip IDs do not reserve an ID. Preserve physical line numbers and return zero counts for a header-only manifest. Keep all processing in memory; leave endpoint and UI wiring for later tasks. Budget approximately 45 implementation lines and 55 test lines covering mixed statuses, tuple and ID collisions, malformed precedence, empty results, and project immutability. Run the focused test module. [backend/standard]
+Family: pure-logic; plan 4aa8a65cef44ca2ebf6031b7c54fd71829d4d391e51d83f355c72972bb012db9
+task 3 closed by openai:gpt-5.6-sol
+asking openai:gpt-6-astra for the next task
+task 4: Implement the endpoint by loading the project, reading the uploaded `file` into memory, and calling the existing preview assembler. Map its ValueError results to the contract without changing parser behavior. Add focused tests using the existing client fixture, installing save/video-processing guards after project setup. Budget approximately 25 implementation lines and 75 test lines. Run the full pytest suite. Leave UI and documentation for later slices. [backend/simple]
+Family: pure-logic; plan 9c3b21cdfdf764cfa7454080ed194d6cb584a80752ae44a915d06bc725ad9eb3
+task 4 closed by grok:default
+asking openai:gpt-6-astra for the next task
+task 5: Implement the preview presentation slice: approximately 60 lines of markup, styling, and rendering plus 40 test lines. Use an inline results region to avoid dialog focus management. Show a clear empty message for header-only previews. Defer upload wiring, loading/error transitions, keyboard shortcut integration, and documentation to subsequent tasks. [frontend/simple]
+Family: pure-logic; plan 98bbdb025d7bfc7af03619959402ccb697ce2147b0b453081b93ddb1f460dd80

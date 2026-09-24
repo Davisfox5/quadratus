@@ -1,0 +1,47 @@
+{
+  "changed": [
+    "static/css/style.css",
+    "static/js/app.js",
+    "templates/index.html",
+    "tests/ui/import_preview.test.js"
+  ],
+  "changed_lines": 118,
+  "inspected": true,
+  "note": "These changes were already on disk when the call stopped and have been preserved. Re-sending the same prompt would apply a second pass on top of them, not repeat the first.",
+  "task": "t5",
+  "description": "Implement the preview presentation slice: approximately 60 lines of markup, styling, and rendering plus 40 test lines. Use an inline results region to avoid dialog focus management. Show a clear empty message for header-only previews. Defer upload wiring, loading/error transitions, keyboard shortcut integration, and documentation to subsequent tasks.",
+  "needs": [
+    "execute",
+    "patch"
+  ],
+  "scope": {
+    "permitted_paths": [
+      "templates/index.html",
+      "static/js/app.js",
+      "static/css/style.css",
+      "tests/ui/import_preview.test.js"
+    ],
+    "forbidden_paths": [
+      ".git/**",
+      ".env",
+      ".env.*",
+      ".quadratus/**"
+    ],
+    "intended_result": "Add tagging-screen preview markup and `function renderImportPreview(payload)` for safely rendering preview results.",
+    "acceptance": [
+      "`function renderImportPreview(payload)` renders summary counts and exactly one tr[data-status] per response row, including physical line, status, reasons, and available clip text.",
+      "Provide #btn-import-preview named Import preview, labeled #import-preview-file, #import-preview-table, #import-preview-summary, and a role=status element within an inline results region.",
+      "All supplied text is escaped; focused Node tests cover mixed statuses, malicious label text, empty results, and replacement of previous results.",
+      "Use existing dark styles and preserve video dimensions; rendering performs no network requests or project mutations."
+    ],
+    "max_lines": 100
+  },
+  "invocation": {
+    "task": "t5",
+    "role": "lead",
+    "origin": "seat",
+    "model": "grok:default",
+    "allow_writes": true,
+    "prompt_artifact": "d7ca45d5049d"
+  }
+}

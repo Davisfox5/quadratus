@@ -1,0 +1,14 @@
+{
+  "started_at": "2026-09-24T16:38:05.521271+00:00",
+  "image": "sha256:707363c1c70ea5918be65840c6a37ac5049716fb94f530264ecdc0ea8f7dc0d9",
+  "result": {
+    "outcome": "failed",
+    "exit_code": 2,
+    "image_id": "sha256:707363c1c70ea5918be65840c6a37ac5049716fb94f530264ecdc0ea8f7dc0d9",
+    "container_name": "quadratus-blind-f110b00371fd420ca82a59ed10989465",
+    "idle_seconds": null
+  },
+  "seed_removed": true,
+  "elapsed_seconds": 2007.3,
+  "finished_at": "2026-09-24T17:11:32.957001+00:00"
+}
