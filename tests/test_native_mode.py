@@ -2,6 +2,7 @@
 import pytest
 
 from quadratus.cli_providers import (
+    CODEX_NATIVE_DELEGATION_CONTROL,
     ClaudeCLIProvider,
     CodexCLIProvider,
     GrokCLIProvider,
@@ -382,3 +383,38 @@ def test_the_fleet_turns_delegation_off_for_the_verifier_only(monkeypatch, tmp_p
     assert getattr(lead, "native_fanout_off", False) is False, "senior seats keep delegation"
     assert getattr(fleet.provider_for("claude:opus"), "native_fanout_off", False) is False, \
         "the shared provider is never marked"
+
+
+# -- verifier controls, vendor by vendor (Codex review of d282bad) ---------------
+
+
+def _marked(view):
+    view.native_fanout_off = True
+    return view
+
+
+def test_verifier_controls_claude_denies_fanout_and_sets_kill_switches(monkeypatch, tmp_path):
+    seen = _captured_launch(monkeypatch, json.dumps({"type": "result", "result": "ok",
+                                                     "usage": {"input_tokens": 1, "output_tokens": 1}}))
+    _marked(ClaudeCLIProvider(model="opus", allow_writes=False, workdir=tmp_path)).generate("p")
+    denied = _pair(seen["argv"], "--disallowed-tools").split()
+    assert set(CLAUDE_OFF_DENIALS) <= set(denied)
+    assert {"Bash", "Edit", "Write", "NotebookEdit"} <= set(denied), "read-only denials kept"
+    assert "Read" not in denied and "Grep" not in denied, "the verifier keeps its read tools"
+    assert seen["env"]["CLAUDE_CODE_DISABLE_WORKFLOWS"] == "1"
+    assert seen["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] == "0"
+
+
+def test_verifier_controls_grok_denies_agent(monkeypatch):
+    view = _marked(GrokCLIProvider(model="", allow_writes=False))
+    argv = view._build_argv("p", "")
+    assert set(GROK_OFF_DENIALS) <= set(_pair(argv, "--disallowed-tools").split(","))
+    assert view._native_fanout_denied, "the env half keys off this, so GROK_WORKFLOWS=0 lands too"
+    assert view.spec.native_fanout_off_env == {"GROK_WORKFLOWS": "0"}
+
+
+def test_verifier_controls_codex_keeps_its_always_on_controls():
+    marked = _marked(_codex())._build_argv("p", "")
+    assert marked == _codex()._build_argv("p", ""), "codex has no off-mode flags to add"
+    for arg in CODEX_NATIVE_DELEGATION_CONTROL:
+        assert arg in marked

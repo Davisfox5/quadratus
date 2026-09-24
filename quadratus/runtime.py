@@ -314,11 +314,13 @@ class Fleet:
             if self.project and self.settings.backend_for(model_key.partition(':')[0]) != 'cli':
                 raise ProviderError("Project sessions require CLI transport with filesystem access.")
             return self._closeout(model_key, provider, prompt)
-        # A verifier checks work it did not author; it does not hand the check
-        # on. The Q9-v2 baseline's Opus verifier did: 920,656 of one call's
-        # 1,076,547 input tokens went to an Opus subagent it spawned (run
-        # 2026-09-23, evidence/q9v2-rerun2-1m). It keeps every read tool and
-        # loses only native delegation, on a copy so no other seat inherits it.
+        # A verifier checks work it did not author; it has no need to hand the
+        # check on. Preventive: the Q9-v2 rerun baseline's Opus verifier call
+        # reported 1,076,547 input tokens, with usage beyond the seat on its
+        # Haiku and Opus rows that the envelope left unattributed (920,656;
+        # evidence/q9v2-rerun2-1m). Delegation is a plausible cause, not an
+        # established one. The verifier keeps every read tool and loses only
+        # native delegation, on a copy so no other seat inherits it.
         verifying = (invocation_context.get() or {}).get("role") == "verifier"
         if self.project is None:
             if verifying:
