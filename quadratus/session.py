@@ -474,9 +474,11 @@ def _has_blocking_finding(text: str) -> bool:
 
 
 #: The marker as a verifier writes it: the uppercase word, not the English one.
-#: A note heading ("non-blocking", "neither blocking") is not a finding.
-_FINDING_MARKER = re.compile(
-    r"(?<!NON-)(?<!NON )(?<!NOT )(?<!NEITHER )\b(?:BLOCKING|UNRESOLVED)\b")
+_FINDING_MARKER = re.compile(r"\b(?:BLOCKING|UNRESOLVED)\b")
+#: A marker directly after one of these is a note about findings, not one.
+_NEGATION_BEFORE = re.compile(r"(?:\bnon-|\bnon |\bnot |\bneither |\bno |\bnothing )$", re.IGNORECASE)
+_BLOCKING_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?BLOCKING\s*:\s*(.*)$", re.IGNORECASE)
+_EMPTY_FINDING = re.compile(r"(?:none|n/?a|nothing)\b[\s.!]*$", re.IGNORECASE)
 
 
 def _has_security_finding(text: str) -> bool:
@@ -486,14 +488,27 @@ def _has_security_finding(text: str) -> bool:
     UNRESOLVED, so English prose became markers: in the Q9-v2 series
     (2026-09-24) "## Two minor notes, neither blocking" and "One non-blocking
     note for the record" each stopped a run whose verifier had accepted,
-    before the terminal question, costing two completions of five. Now the
-    uppercase marker counts wherever it appears ("This defect is BLOCKING.",
-    "..., but UNRESOLVED: missing evidence."), a line opening with
-    "Blocking:" counts in any case, and a NON-/NOT/NEITHER note does not.
+    before the terminal question, costing two completions of five.
+
+    Now a line opening with "Blocking:" counts in any case unless what follows
+    is none, n/a or nothing (the verifier is told to write BLOCKING: lines, so
+    "Blocking: none" is the likeliest note it writes). Elsewhere the uppercase
+    marker counts ("This defect is BLOCKING.", "..., but UNRESOLVED: missing
+    evidence.") unless a negation sits directly before it: non-, not, neither,
+    no or nothing, in any case. Negations fail open only for those forms; any
+    other doubt still stops the run, which is the safe side for security.
     """
-    if _has_blocking_finding(text):
-        return True
-    return any(_FINDING_MARKER.search(line) for line in text.splitlines())
+    for raw in text.splitlines():
+        line = raw.replace("**", "")
+        prefixed = _BLOCKING_LINE.match(line)
+        if prefixed:
+            if _EMPTY_FINDING.match(prefixed.group(1).strip()):
+                continue
+            return True
+        for marker in _FINDING_MARKER.finditer(line):
+            if not _NEGATION_BEFORE.search(line[:marker.start()]):
+                return True
+    return False
 
 
 def _resolved_verdict(text: str) -> bool:
