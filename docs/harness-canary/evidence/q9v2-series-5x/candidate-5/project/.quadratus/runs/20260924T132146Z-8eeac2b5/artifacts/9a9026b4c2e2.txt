@@ -1,0 +1,10 @@
+Implemented task 2.
+
+- `visible_to` now requires a record, nonempty authenticated tenant, and matching `tenant_id`.
+- `/records/{record_id}` uses `visible_to`; missing and foreign records share the existing 404 response.
+- Lookup confirmed identity comes only from `current_tenant`’s Bearer token and records store ownership in `tenant_id`.
+- Preserved task 1 and the existing response model/401 behavior.
+- Workers invoked: none.
+- Preservation gate: `5 passed, 8 deselected in 0.10s`. This does not prove security correctness; full grading remains with the operator.
+
+CHANGED: ["access.py","app.py"]

@@ -1,0 +1,11 @@
+Implemented task 2 only.
+
+- `visible_to` now denies missing records/tenants and requires matching `tenant_id`.
+- `/records/{record_id}` imports and applies `visible_to`, returning the same 404 for missing or foreign records.
+- Authentication remains solely through `Depends(current_tenant)`; response and 401 behavior are unchanged.
+- Lookup evidence: ownership is stored as `record["tenant_id"]`; the prior predicate checked existence only.
+- Preservation gate: `5 passed, 8 deselected in 0.10s`. The full grader was not run.
+- Workers invoked: none.
+- Git status was unavailable because this fixture is not a Git worktree.
+
+CHANGED: ["app.py","access.py"]

@@ -1,0 +1,25 @@
+12:33:51Z setup: candidate ce0ceefe93423cd7d96bad42f39aff4667874bfb, baseline 5d70d312868a3452c6aec9fd8461fd12fcdc31cb
+12:33:54Z grok: You are not authenticated.
+12:33:58Z setup ok; preflight passed: /private/tmp/q9v2.nxS6sx/trial4/.quadratus/preflight.json
+12:33:58Z START baseline 1
+12:39:55Z END baseline 1 exit=1 completed=False tokens=1022772 grader=[13 passed in 0.11s] verifier_aux=[1805] error='RunBudgetExceeded: Run stopped: reported_token_threshold' FLAGS=none
+12:39:55Z START candidate 1
+12:43:55Z END candidate 1 exit=1 completed=False tokens=497050 grader=[13 passed in 0.11s] verifier_aux=[3233] error='' FLAGS=none
+12:43:55Z START baseline 2
+12:49:42Z END baseline 2 exit=1 completed=False tokens=825482 grader=[1 failed, 12 passed in 0.12s] verifier_aux=[1893] error='' FLAGS=none
+12:49:42Z START candidate 2
+12:54:14Z END candidate 2 exit=1 completed=False tokens=558212 grader=[13 passed in 0.11s] verifier_aux=[3174] error='' FLAGS=none
+12:54:14Z START baseline 3
+12:59:28Z END baseline 3 exit=1 completed=False tokens=819308 grader=[1 failed, 12 passed in 0.12s] verifier_aux=[1819] error='' FLAGS=none
+12:59:28Z START candidate 3
+13:05:01Z END candidate 3 exit=0 completed=True tokens=733210 grader=[13 passed in 0.15s] verifier_aux=[3203] error='' FLAGS=none
+13:05:01Z START baseline 4
+13:11:25Z END baseline 4 exit=1 completed=False tokens=954911 grader=[13 passed in 0.11s] verifier_aux=[1963] error='' FLAGS=none
+13:11:25Z START candidate 4
+13:16:00Z END candidate 4 exit=0 completed=True tokens=594858 grader=[13 passed in 0.11s] verifier_aux=[3171] error='' FLAGS=none
+13:16:00Z START baseline 5
+13:21:44Z END baseline 5 exit=1 completed=False tokens=1121358 grader=[13 passed in 0.11s] verifier_aux=[1779] error='RunBudgetExceeded: Run stopped: reported_token_threshold' FLAGS=none
+13:21:44Z START candidate 5
+13:26:20Z END candidate 5 exit=0 completed=True tokens=628120 grader=[13 passed in 0.11s] verifier_aux=[3164] error='' FLAGS=none
+13:26:20Z SERIES COMPLETE
+script exit=0

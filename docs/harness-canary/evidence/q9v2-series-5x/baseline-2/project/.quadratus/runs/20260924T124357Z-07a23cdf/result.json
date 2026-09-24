@@ -1,0 +1,110 @@
+{
+  "project": "/private/tmp/q9v2.nxS6sx/evidence-series/baseline-2/project",
+  "goal": "Complete exactly two tasks, in order, without changing their boundaries. 1. Non-security display task, scope presentation.py: make /caption use the existing display helper in catalog.py. Look up that module's helper name and behavior before editing. Reuse the helper rather than copying its algorithm. Preserve the public adapter signature and endpoint response. 2. Security task, scope app.py and access.py: use the shared visible_to predicate at the records endpoint and repair the predicate so only an authenticated tenant's own records are visible. Missing records and other tenants' records must both return exactly 404 {\"detail\":\"Not found\"}. Preserve the Record(id,title) response, existing 401 behavior, and reject tenant spoofing through headers or query parameters. Authentication comes only from auth.current_tenant. Do not edit auth.py, catalog.py, README.md, tests, or policy. There is no feature entitlement. No installs, commits, pushes, external services, or production data. The common per-task integration gate checks preservation invariants only; the operator runs the full grader afterwards. Workers are available but not mandatory. Report actual lookup evidence and actual worker invocations. Run the provided check, preserve evidence and stop.",
+  "completed": false,
+  "allow_writes": true,
+  "error": "",
+  "checks": [
+    {
+      "passed": true,
+      "command": "/private/tmp/q9v2.nxS6sx/venv/bin/python -m pytest -q -p no:cacheprovider /private/tmp/q9v2.nxS6sx/trial4-instrument/test_contract.py -k preservation",
+      "output": ".....                                                                    [100%]\n5 passed, 8 deselected in 0.10s",
+      "cwd": "/private/tmp/q9v2.nxS6sx/evidence-series/baseline-2/project"
+    },
+    {
+      "passed": true,
+      "command": "/private/tmp/q9v2.nxS6sx/venv/bin/python -m pytest -q -p no:cacheprovider /private/tmp/q9v2.nxS6sx/trial4-instrument/test_contract.py -k preservation",
+      "output": ".....                                                                    [100%]\n5 passed, 8 deselected in 0.10s",
+      "cwd": "/private/tmp/q9v2.nxS6sx/evidence-series/baseline-2/project"
+    }
+  ],
+  "source_changed": true,
+  "source_fingerprint": "042c75a05d286ba1f6ffb30c1eccc21e8073e37c6b19be4f512c792f0bb03fdc",
+  "tasks": 2,
+  "in_flight": {},
+  "budget": {
+    "limits": {
+      "max_calls": 24,
+      "max_reported_tokens": 1000000,
+      "wall_seconds": 840,
+      "max_concurrent_workers": 2
+    },
+    "reserved_attempts": 8,
+    "in_flight": 0,
+    "input_tokens": 808165,
+    "output_tokens": 17317,
+    "reported_tokens": 825482,
+    "unknown_usage_attempts": 0,
+    "stop_reason": "",
+    "preserved_responses": [],
+    "elapsed_seconds": 344.8728609170066,
+    "token_boundary": "post-return threshold; in-flight calls can overshoot",
+    "input_boundary": "normalized provider input includes cached input; do not add it again",
+    "wall_boundary": "attempt timeout plus required external process supervisor"
+  },
+  "delegation": {
+    "controlled_tokens": 825482,
+    "native_child_tokens": 0,
+    "auxiliary_tokens": 0,
+    "auxiliary_tokens_scope": "Explicit auxiliary InvocationEvent rows only; vendor aggregates are not included.",
+    "combined_reported_tokens": 825482,
+    "parent_child_overlap": "not_applicable",
+    "known_minimum_tokens": 825482,
+    "unknown_invocations": 0,
+    "unknown_detail": [],
+    "native_children": 0,
+    "unidentified_native_activity": 0,
+    "note": "Subscription usage including cached and repeated input. Native children counted once at their highest cumulative reading, never summed across updates. The combined sum assumes child counters are additional to parent counters; that overlap is unverified. known_minimum_tokens is a deprecated compatibility key for that conditional sum, not an established lower bound. Auxiliary usage covers explicit auxiliary event rows only, not vendor aggregates. Unknown usage is unknown, not zero."
+  },
+  "scope_reports": [
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "presentation.py"
+      ],
+      "changed_lines": 4,
+      "max_lines": 10,
+      "code_lines": 4,
+      "test_lines": 0,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "presentation.py"
+      ],
+      "changed_lines": 4,
+      "max_lines": 10,
+      "code_lines": 4,
+      "test_lines": 0,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "presentation.py"
+      ],
+      "changed_lines": 4,
+      "max_lines": 10,
+      "code_lines": 4,
+      "test_lines": 0,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "access.py",
+        "app.py"
+      ],
+      "changed_lines": 9,
+      "max_lines": 10,
+      "code_lines": 9,
+      "test_lines": 0,
+      "oversized": false
+    }
+  ]
+}

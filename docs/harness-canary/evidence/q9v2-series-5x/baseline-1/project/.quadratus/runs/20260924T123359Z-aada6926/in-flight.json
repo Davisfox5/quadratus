@@ -1,0 +1,40 @@
+{
+  "changed": [
+    "access.py",
+    "app.py"
+  ],
+  "changed_lines": 9,
+  "inspected": true,
+  "note": "These changes were already on disk when the call stopped and have been preserved. Re-sending the same prompt would apply a second pass on top of them, not repeat the first.",
+  "task": "t2",
+  "description": "Complete task 2 only: repair the ownership predicate in `access.py`, import and use it for the existing denial branch in `app.py`. Budget: 20 code lines, zero test edits. Do not add feature entitlements, install dependencies, commit, push, access external services, or use production data.",
+  "needs": [
+    "execute",
+    "patch"
+  ],
+  "scope": {
+    "permitted_paths": [
+      "app.py",
+      "access.py"
+    ],
+    "forbidden_paths": [],
+    "intended_result": "Repair def visible_to(record, tenant): and integrate it into def get_record(record_id: str, tenant: str = Depends(current_tenant)) -> Record: so only authenticated tenants can read their own records.",
+    "acceptance": [
+      "Preserve def visible_to(record, tenant): and def get_record(record_id: str, tenant: str = Depends(current_tenant)) -> Record: verbatim.",
+      "The shared predicate denies missing records, absent tenants, and mismatched tenant_id values; the endpoint uses it.",
+      "Missing and other tenants' records both return exactly 404 {\"detail\":\"Not found\"}; own records retain the Record(id,title) response.",
+      "Preserve existing 401 behavior and derive identity exclusively from auth.current_tenant; headers and query parameters cannot override tenant identity.",
+      "Preserve completed caption behavior; edit no other files.",
+      "Run the operator-provided preservation check, preserve actual output, report lookup evidence and actual worker invocations, then stop; full grading remains with the operator."
+    ],
+    "max_lines": 20
+  },
+  "invocation": {
+    "task": "t2",
+    "role": "verifier",
+    "origin": "seat",
+    "model": "claude:opus",
+    "allow_writes": false,
+    "prompt_artifact": "89c70329a78f"
+  }
+}

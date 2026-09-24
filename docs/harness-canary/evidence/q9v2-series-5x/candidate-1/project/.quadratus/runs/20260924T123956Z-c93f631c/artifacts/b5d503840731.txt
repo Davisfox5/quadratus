@@ -1,0 +1,15 @@
+I'll confirm the catalog helper from source, then delegate `display_title` to it without touching the security task.`display_title` now delegates to `catalog.compact_caption`. The security task is untouched.
+
+**Lookup (source, before edit).** `catalog.py` lines 9–12 define `compact_caption(value)`: `" ".join(value.split())`, then the original string if `len(text) <= 24`, otherwise `text[:23] + "…"`. `presentation.py` previously returned `value` unchanged. `app.py` lines 17–19 still return `{"caption": display_title(title)}`. The adapter signature is unchanged: `def display_title(value):`.
+
+**Workers.** None.
+
+**Check (preservation only, not full correctness).**
+```
+/private/tmp/q9v2.nxS6sx/venv/bin/python -m pytest -q -p no:cacheprovider /private/tmp/q9v2.nxS6sx/trial4-instrument/test_contract.py -k preservation
+```
+Exit 0: `5 passed, 8 deselected in 0.14s`. Those tests do not cover caption formatting.
+
+**Review.** Small delegation only. Least sure that the external grader accepts a direct call with no extra wrapping. No tests were added (budget: 0 test lines).
+
+CHANGED: ["presentation.py"]

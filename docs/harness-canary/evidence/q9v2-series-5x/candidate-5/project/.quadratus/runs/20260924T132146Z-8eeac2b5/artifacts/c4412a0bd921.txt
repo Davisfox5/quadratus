@@ -1,0 +1,25 @@
+--- a/access.py
++++ b/access.py
+@@ -2,4 +2,4 @@
+ 
+ 
+ def visible_to(record, tenant):
+-    return record is not None
++    return record is not None and bool(tenant) and record.get("tenant_id") == tenant
+--- a/app.py
++++ b/app.py
+@@ -1,5 +1,6 @@
+ """Synthetic tenant API with separate display and record-access tasks."""
+ 
++from access import visible_to
+ from auth import current_tenant
+ from catalog import RECORDS
+ from fastapi import Depends, FastAPI, HTTPException
+@@ -22,6 +23,6 @@
+ @app.get("/records/{record_id}", response_model=Record)
+ def get_record(record_id: str, tenant: str = Depends(current_tenant)) -> Record:
+     record = RECORDS.get(record_id)
+-    if record is None:
++    if not visible_to(record, tenant):
+         raise HTTPException(status_code=404, detail="Not found")
+     return Record(id=record["id"], title=record["title"])

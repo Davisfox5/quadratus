@@ -1,0 +1,35 @@
+No Bash tool in this verifier environment, and the gate's test file lives outside this copy — so I verified the code by reading, and flag the gate claim separately below.
+
+## Verdict: **Accept.**
+
+The code is correct and within scope.
+
+### What I checked against the source
+
+`access.py:5` — `return bool(tenant) and record is not None and record.get("tenant_id") == tenant`
+
+- Signature `def visible_to(record, tenant):` preserved verbatim.
+- Fails closed on all three paths: falsy/None tenant, `record is None`, mismatched `tenant_id`. Short-circuit order means `record.get` is never reached on a `None` record — no AttributeError.
+- Subtle case handled correctly: a record missing `tenant_id` yields `None == "alpha"` → False. It does *not* collapse into a `None == None` true, because `bool(tenant)` gates first. That ordering is load-bearing; it's right.
+
+`app.py:23-28`
+
+- Signature `def get_record(record_id: str, tenant: str = Depends(current_tenant)) -> Record:` preserved verbatim.
+- Missing and foreign records take the **same** branch, so both return identical `404 {"detail":"Not found"}`. No existence oracle — this is the part most repairs get wrong by keeping a separate missing-record `raise`.
+- Tenant spoofing: the handler's only parameters are the path `record_id` and `Depends(current_tenant)`. No `Header`/`Query` tenant param anywhere in `app.py` or `access.py`; `auth.py:8` reads only `Authorization`. Matches the `trusted-tenant` decision and the family rule that identity comes from the token, not a client header.
+- 401 preserved by construction — the dependency raises before the body runs.
+- `response_model=Record` plus `Record(id=..., title=...)`: `tenant_id` is not a field, so the scoping column isn't leaked in the response.
+
+Scope and size: two files, ~4 changed lines total, well under the 12-line bound. `presentation.py:7` already delegates to `catalog.compact_caption`, so task 1's caption behavior is untouched — correct for a task-2-only change.
+
+The three lookup claims in the answer are true: `tenant_id` is in `catalog.py:4-5`, and identity is exclusively `auth.current_tenant`. Nothing unsafe is recommended — no installs, no external calls, no test edits.
+
+### Two things the answer asserts that I could not confirm
+
+1. **`5 passed, 8 deselected in 0.10s` (exit 0).** I have no Bash tool here, and the gate's `test_contract.py` sits outside this working copy, which I'm bound not to reach into. So this is the author's self-report, not something I reproduced. It is *consistent* — the gate requires `minimum_tests: 5` and the claim is exactly 5 — and the code satisfies every preservation invariant I can read, so I have no reason to doubt it. But the operator should treat the count as re-runnable rather than confirmed. This is a success claim, not an "environment blocked me" claim, so the quote-the-error rule doesn't bite here.
+
+2. **Which files actually changed.** This copy is not a git repository, so there's no diff to inspect. I verified the *end state* of all five files is in scope-compliant shape and that `auth.py`, `catalog.py`, and `README.md` contain nothing anomalous — but I'm inferring "only app.py and access.py were touched" from the CHANGED list, not proving it.
+
+"Workers invoked: none" is unfalsifiable from the repo and harmless — workers were optional for this task.
+
+Nothing must change. If you want the gate number to be more than a self-report, re-run it yourself before the full grader; the code will pass.

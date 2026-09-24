@@ -1,0 +1,27 @@
+{
+  "schema": "quadratus-canary-allowance/2",
+  "approved": true,
+  "batch_id": "q9v2-series-5x-2026-09-24",
+  "authorized_by": "Davis",
+  "source": "Davis, directly, in the local Claude Code session on the Mac (Claude Opus 5.5), 2026-09-24, approving Codex's step 3 after the review of c587a78 on PR #25",
+  "instruction": "Done. Have a look at Codex's review on PR 25, then once everything looks good on steps 1 & 2, proceed to step 3",
+  "recorded_at": "2026-09-24T12:33:58Z",
+  "environment": "native-mac",
+  "fixture": "fixture-v2",
+  "grader_sha256": "80f1cd5af0112c3f8a786429e38bd4d8648acdb332a87eab8baf27a0138eb9a9",
+  "baseline_sha": "5d70d312868a3452c6aec9fd8461fd12fcdc31cb",
+  "candidate_sha": "ce0ceefe93423cd7d96bad42f39aff4667874bfb",
+  "runs": [
+    "baseline",
+    "candidate"
+  ],
+  "runs_per_version": 5,
+  "max_calls_each": 24,
+  "max_reported_tokens_each": 1000000,
+  "max_reported_tokens_batch": 12000000,
+  "internal_wall_seconds_each": 840,
+  "external_wall_seconds_each": 900,
+  "automatic_reruns": false,
+  "transport": "subscription CLI only",
+  "preflight_report": "/private/tmp/q9v2.nxS6sx/preflight-prebatch-series.json"
+}

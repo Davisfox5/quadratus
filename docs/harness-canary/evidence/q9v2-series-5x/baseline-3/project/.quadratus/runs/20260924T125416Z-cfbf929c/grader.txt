@@ -1,0 +1,29 @@
+...........F.                                                            [100%]
+=================================== FAILURES ===================================
+________________________ test_security_shared_predicate ________________________
+
+    def test_security_shared_predicate():
+        assert access.visible_to(catalog.RECORDS["alpha-1"], "alpha")
+        assert not access.visible_to(catalog.RECORDS["alpha-1"], "beta")
+        assert not access.visible_to(None, "alpha")
+>       assert not access.visible_to({"id": "unowned"}, "alpha")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+../../../trial4-instrument/test_contract.py:73: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+record = {'id': 'unowned'}, tenant = 'alpha'
+
+    def visible_to(record, tenant):
+        return (
+            record is not None
+            and bool(tenant)
+>           and record["tenant_id"] == tenant
+                ^^^^^^^^^^^^^^^^^^^
+        )
+E       KeyError: 'tenant_id'
+
+access.py:8: KeyError
+=========================== short test summary info ============================
+FAILED ../../../trial4-instrument/test_contract.py::test_security_shared_predicate
+1 failed, 12 passed in 0.12s

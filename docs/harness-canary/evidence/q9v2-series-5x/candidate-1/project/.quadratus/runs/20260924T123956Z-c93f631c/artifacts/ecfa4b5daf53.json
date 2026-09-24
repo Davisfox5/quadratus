@@ -1,0 +1,1 @@
+{"author": "claude:opus", "chars": 5472, "id": "ecfa4b5daf53", "kind": "verify:claude:opus", "lines": 55, "preview": "I read all five files in the copy. Verification below.\n\n## What the code actually does\n\n`access.py` (the whole file):\n```python\ndef visible_to(record, tenant):\n    return bool(record is not None and tenant and record.get(\"tenant_id\") == tenant)\n```\n"}

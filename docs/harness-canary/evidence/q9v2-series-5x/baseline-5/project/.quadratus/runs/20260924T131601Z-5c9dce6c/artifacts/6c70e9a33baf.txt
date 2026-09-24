@@ -1,0 +1,18 @@
+Implemented task 2 only.
+
+- `access.py`: `visible_to(record, tenant)` now fails closed and permits only matching `tenant_id` ownership.
+- `app.py`: imports and uses `visible_to`; missing and foreign records retain the exact `404 {"detail":"Not found"}` behavior.
+- Preserved `Record(id, title)`, `Depends(current_tenant)`, existing authentication/401 behavior, and `/caption`.
+- Added no entitlement or alternate tenant inputs.
+- Workers invoked: none.
+
+Source lookup confirmed records store ownership in `tenant_id`, while `auth.current_tenant` derives identity solely from the Bearer token.
+
+Preservation gate:
+
+```text
+.....                                                                    [100%]
+5 passed, 8 deselected in 0.10s
+```
+
+The bare `pytest` command was unavailable; the supplied venv pytest was used without installing anything. This preservation gate does not establish full security correctness; the operator’s full grader remains required.

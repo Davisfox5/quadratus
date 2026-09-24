@@ -1,0 +1,7 @@
+Project: /private/tmp/q9v2.nxS6sx/evidence-series/baseline-1/project; edits enabled
+asking claude:fable for the next task
+claude:fable is out of window; the seat falls to openai:gpt-6-astra
+task 1: Complete task 1 only: import `compact_caption` from `catalog` and return its result from the existing adapter. The helper collapses whitespace, trims, and limits output to 24 characters, using 23 characters plus `…` when truncated. Estimate: 3 code lines, 0 test lines. Edit only `presentation.py`; leave the security repair for task 2. No worker was invoked during this lookup. The check command is externally supplied and is not present in this copy. [refactor/simple]
+task 1 closed by grok:default
+asking openai:gpt-6-astra for the next task
+task 2: Complete task 2 only: repair the ownership predicate in `access.py`, import and use it for the existing denial branch in `app.py`. Budget: 20 code lines, zero test edits. Do not add feature entitlements, install dependencies, commit, push, access external services, or use production data. [security/simple]

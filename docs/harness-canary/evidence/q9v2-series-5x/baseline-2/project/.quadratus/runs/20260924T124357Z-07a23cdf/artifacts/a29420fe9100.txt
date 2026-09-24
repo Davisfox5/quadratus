@@ -1,0 +1,46 @@
+[assistant] Implemented task 2 only.
+
+- [access.py](/private/tmp/q9v2.nxS6sx/evidence-series/baseline-2/project/access.py:4): `visible_to` now rejects missing records, absent tenants, and tenant mismatches.
+- [app.py](/private/tmp/q9v2.nxS6sx/evidence-series/baseline-2/project/app.py:3): imports and uses `visible_to`; inaccessible and missing records return exactly `404 {"detail":"Not found"}`.
+- Authentication remains exclusively through `Depends(current_tenant)`. Existing 401 behavior, `Record(id,title)`, and caption behavior are unchanged.
+- Lookup evidence: inspected `app.py`, `access.py`, `auth.py`, `catalog.py`, and `presentation.py`; protected files matched manifest hashes.
+- Worker invocations: none.
+
+Preservation gate:
+
+```text
+CANARY_PROJECT=/private/tmp/q9v2.nxS6sx/evidence-series/baseline-2/project /private/tmp/q9v2.nxS6sx/venv/bin/python -m pytest -q -p no:cacheprovider /private/tmp/q9v2.nxS6sx/trial4-instrument/test_contract.py -k preservation
+
+5 passed, 8 deselected in 0.10s
+EXIT=0
+```
+
+The full grader was not run.
+
+[user] Integration gate PASSED: `/private/tmp/q9v2.nxS6sx/venv/bin/python -m pytest -q -p no:cacheprovider /private/tmp/q9v2.nxS6sx/trial4-instrument/test_contract.py -k preservation`
+
+[assistant] [claude:opus] ## Verdict: Accept
+
+The code in the source copy does what the answer claims. I verified each acceptance criterion against the files rather than the narrative.
+
+**Correctness — confirmed**
+
+`access.py:4-9` — `visible_to(record, tenant)` signature preserved; returns `False` for missing record, `None` tenant, and mismatched `tenant_id`. The `and` chain short-circuits on `record is not None` first, so there's no `KeyError` on the `None` path.
+
+`app.py:24-28` — signature preserved, the guard is now the shared predicate (not a missing-record-only check), and `HTTPException(404, detail="Not found")` renders exactly `{"detail":"Not found"}` for both the missing and the wrong-tenant case, so there's no enumeration oracle between them.
+
+Tenant identity: the only source is `Depends(current_tenant)`. Because the parameter carries a `Depends` default, FastAPI will not bind it from query or header — no spoofing vector. `auth.py` is untouched, so 401 still fires in the dependency, before any record lookup, uniformly for existing and nonexistent ids. `Record(id, title)` and the `/caption` behavior via `presentation.display_title` → `catalog.compact_caption` are intact.
+
+Scope and size: only `app.py` and `access.py` carry task-2 changes, ~9 lines. No entitlement check was added, correctly matching the README's "There is no feature entitlement." Nothing unsafe is recommended.
+
+**Asserted without evidence — two items**
+
+1. *"protected files matched manifest hashes."* There is no manifest in the project tree (`README.md`, `access.py`, `app.py`, `auth.py`, `catalog.py`, `presentation.py` only). If a manifest exists in the operator's instrument directory, the answer should name it and show the comparison; as written, this is an unbacked claim. It does not change the verdict, since I independently read the protected files and they are consistent with an unmodified fixture.
+2. The preservation gate output (`5 passed, 8 deselected`, `EXIT=0`) points at a test file outside this copy, so I cannot re-derive it. It is reported in the required form — command, output, exit status — and correctly stops short of the full grader. Taken at face value, not verified.
+
+**Two nits, neither blocking**
+
+- `tenant is not None` admits an empty-string tenant matching an empty `tenant_id`. Unreachable through `auth.TOKENS`, but `not tenant` would fail closed on falsy identities at no cost in lines.
+- `record["tenant_id"]` raises `KeyError` → 500 on a malformed row rather than failing closed to 404. The fixture always has the key; `record.get("tenant_id")` would be strictly safer and still inside the ~10-line bound.
+
+**One reporting fix required before this goes anywhere else:** the citations are absolute paths into a temp working copy (`/private/tmp/q9v2.../project/app.py`). Those are dead references once the call ends. They should read `app.py:26` and `access.py:4`.

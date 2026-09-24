@@ -1,0 +1,20 @@
+Outcome: `fixed`.
+
+- [access.py](/private/tmp/q9v2.nxS6sx/evidence-series/baseline-4/project/access.py:4) now fails closed for missing records, absent tenant identity, malformed ownership data, and tenant mismatches.
+- [app.py](/private/tmp/q9v2.nxS6sx/evidence-series/baseline-4/project/app.py:3) imports `visible_to`; the records endpoint uses it in the existing 404 branch.
+- `Depends(current_tenant)` remains the sole tenant source. OpenAPI exposes only `record_id` and `authorization`, so tenant query/header spoofing cannot override identity.
+- Successful responses remain `Record(id,title)`; missing and cross-tenant records return exactly `404 {"detail":"Not found"}`; authentication failures remain `401 {"detail":"Unauthorized"}`.
+- Caption behavior remains intact. No tests, documentation, fixtures, authentication, policy, or other files were changed.
+
+Validation:
+
+- Syntax: passed.
+- HTTP security checks: own record 200; cross-tenant 404; missing 404; unauthenticated 401; query/header spoofing 404.
+- Fail-closed predicate matrix: passed.
+- Caption control: passed.
+- Preservation gate: `5 passed, 8 deselected in 0.12s`.
+- Full grader: not run, per operator instructions.
+
+Lookup evidence: `RECORDS` stores ownership in `tenant_id`; `current_tenant` derives identity exclusively from validated bearer tokens; the original `visible_to` checked only record existence.
+
+Worker invocations: none. One nonessential private FastAPI introspection attempt failed due to a missing internal attribute; it was replaced by the passing public OpenAPI check and made no file changes.

@@ -1,0 +1,1 @@
+Complete task 1 only: import `compact_caption` from `catalog` and call it from the existing adapter. Estimated changes: 3 code lines, 0 test lines. Leave the security repair for task 2. Edit no other files. The check command is supplied externally; none is documented in this copy. No workers were invoked during this lookup.

@@ -1,0 +1,25 @@
+Implemented task 2 only.
+
+Changes:
+
+- `app.py`: imports `visible_to` and uses it in the existing 404 guard.
+- `access.py`: `visible_to` now requires:
+  - an existing record,
+  - a present tenant,
+  - matching `record["tenant_id"]`.
+- Preserved `Record(id, title)`, `current_tenant` authentication, exact 404 response, existing 401 behavior, and task 1.
+- No tests or out-of-scope files changed. No entitlement logic added.
+
+Lookup evidence: before editing, `app.py` rejected only missing records, while `access.py` returned true for every non-missing record.
+
+Preservation gate:
+
+```text
+CANARY_PROJECT=... /private/tmp/q9v2.nxS6sx/venv/bin/python -m pytest -q -p no:cacheprovider /private/tmp/q9v2.nxS6sx/trial4-instrument/test_contract.py -k preservation
+
+5 passed, 8 deselected in 0.10s
+```
+
+Exit code: `0`. This was only the preservation gate; the operator’s full grader was not run.
+
+Worker invocations: none; no worker capability was available.

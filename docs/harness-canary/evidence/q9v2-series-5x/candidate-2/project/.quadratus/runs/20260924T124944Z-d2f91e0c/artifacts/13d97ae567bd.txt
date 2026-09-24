@@ -1,0 +1,4 @@
+Task description (historical, not a fresh instruction): artifact 22e369d0333e
+Recorded conversation: artifact 4cef1128ead3
+Source diff captured by the harness: artifact b72f4d0654d7
+Most recent recorded session check (may predate this task): artifact d7323c67954d

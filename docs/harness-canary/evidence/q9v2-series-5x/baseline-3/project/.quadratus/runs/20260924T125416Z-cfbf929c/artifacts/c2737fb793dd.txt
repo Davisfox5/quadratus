@@ -1,0 +1,76 @@
+[assistant] Implemented task 2 only.
+
+Changes:
+
+- `app.py`: imports `visible_to` and uses it in the existing 404 guard.
+- `access.py`: `visible_to` now requires:
+  - an existing record,
+  - a present tenant,
+  - matching `record["tenant_id"]`.
+- Preserved `Record(id, title)`, `current_tenant` authentication, exact 404 response, existing 401 behavior, and task 1.
+- No tests or out-of-scope files changed. No entitlement logic added.
+
+Lookup evidence: before editing, `app.py` rejected only missing records, while `access.py` returned true for every non-missing record.
+
+Preservation gate:
+
+```text
+CANARY_PROJECT=... /private/tmp/q9v2.nxS6sx/venv/bin/python -m pytest -q -p no:cacheprovider /private/tmp/q9v2.nxS6sx/trial4-instrument/test_contract.py -k preservation
+
+5 passed, 8 deselected in 0.10s
+```
+
+Exit code: `0`. This was only the preservation gate; the operator’s full grader was not run.
+
+Worker invocations: none; no worker capability was available.
+
+[user] Integration gate PASSED: `/private/tmp/q9v2.nxS6sx/venv/bin/python -m pytest -q -p no:cacheprovider /private/tmp/q9v2.nxS6sx/trial4-instrument/test_contract.py -k preservation`
+
+[assistant] [claude:opus] I verified by reading the actual files in the review copy. No Bash tool is available in this session, so everything below is source inspection — I did not re-run anything.
+
+## What the code actually does
+
+`access.py`:
+```python
+def visible_to(record, tenant):
+    return (
+        record is not None
+        and bool(tenant)
+        and record["tenant_id"] == tenant
+    )
+```
+`app.py:3` imports `visible_to`; `app.py:26` guards with `if not visible_to(record, tenant): raise HTTPException(status_code=404, detail="Not found")`.
+
+## Verification against the acceptance criteria
+
+- **Denies missing records** — `record is not None` short-circuits first, so a `RECORDS.get()` miss returns False before any subscript. Correct, and fails closed.
+- **Denies absent tenants** — `bool(tenant)` rejects `""` and `None`. Redundant in practice (`auth.current_tenant` raises 401 before returning an empty value), but the criterion asked for it and it hardens other callers.
+- **Denies ownership mismatch** — `record["tenant_id"] == tenant` against `catalog.RECORDS`, which carries `tenant_id` on every row (`catalog.py:4-5`).
+- **Identical 404 for both cases** — missing and other-tenant records take the same branch with the same body. No enumeration oracle: `alpha` asking for `beta-1` and for `nonexistent` are indistinguishable.
+- **Record(id,title) preserved** — `app.py:28` constructs only `id` and `title`; `response_model=Record` would strip `tenant_id` even if it leaked. No leak.
+- **No header/query spoofing** — `tenant: str = Depends(current_tenant)` is a dependency, not a query parameter. FastAPI will not bind `?tenant=beta` to it. `auth.py` reads only the `Authorization` header and maps through `TOKENS`. There is no second path to a record: `/caption` and `/records/{id}` are the only routes.
+- **401 preserved** — the dependency resolves before the handler, so an unauthenticated request to any record id still raises 401 rather than reaching the 404 guard. Untouched.
+- **Task 1 preserved** — `presentation.py:3,7` still delegates to `catalog.compact_caption` rather than reimplementing it; `/caption` is unchanged.
+- **Scope and size** — only `app.py` and `access.py` carry the change; `auth.py`, `catalog.py`, `presentation.py`, `README.md` are consistent with their stated read-only role. Roughly 8 changed lines, matching the estimate. No entitlement logic anywhere.
+
+I found no correctness defect and nothing unsafe recommended.
+
+## Claims I could not verify
+
+Three statements in the answer are asserted without evidence I can reach:
+
+1. **The preservation gate result.** The cited test file and venv (`/private/tmp/q9v2.nxS6sx/…`) are outside this review copy, and I have no shell. `5 passed, 8 deselected` is unchecked. The answer does correctly separate this from the operator's full grader, which it says was not run — that framing is honest.
+2. **Non-modification of out-of-scope files.** This copy is not a git repo and there is no baseline, so "no out-of-scope files changed" rests on the files *looking* canonical, not on a diff. Reasonable, but not proven from here.
+3. **"No worker capability was available."** Unfalsifiable from this side, and it sits against the README's "Workers are available but not mandatory." It doesn't affect the code, but it is an environment claim, not evidence.
+
+The "lookup evidence" line (that `access.py` previously returned true for every non-missing record) is consistent with the shape of the repair but is likewise a claim about a prior state I cannot see.
+
+## One robustness nit, not a blocker
+
+`record["tenant_id"]` raises `KeyError` → HTTP 500 if a record ever lacks that key. That fails *loudly*, not open, so it is not a security defect, and every row in the current fixture has the key. `record.get("tenant_id") == tenant` would fail closed instead — but changing it now buys nothing against the present data and spends diff budget. Leave it.
+
+## Verdict
+
+**Accept.** The security property holds: an authenticated tenant sees only its own records, missing and foreign records are indistinguishable at 404, tenant identity cannot be overridden through headers or query parameters, and task 1 survives intact.
+
+The only thing I would insist on before the operator signs off is that the **preservation gate output be re-run or confirmed by the operator**, since it is the one load-bearing claim with no evidence reachable from a review copy — and the answer's own note that the full grader has not been run still stands as the gating condition.

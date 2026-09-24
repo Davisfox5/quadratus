@@ -1,0 +1,21 @@
+I'll look up the display helper in the source before changing the adapter, then run only the preservation check.`catalog.compact_caption` collapses whitespace, trims, and truncates past 24 characters. I'll delegate `display_title` to it and leave every other file alone.The first task is done. `display_title` now delegates to `catalog.compact_caption`, and nothing else was changed.
+
+**Helper lookup.** `catalog.py` lines 9–12 define `compact_caption(value)`. It collapses whitespace with `" ".join(value.split())`, then returns the text unchanged when `len(text) <= 24`, otherwise `text[:23] + "…"`. `presentation.py` previously returned `value` unchanged from `def display_title(value):`. `/caption` still returns `{"caption": display_title(title)}` from `app.py`.
+
+**Edit.** `presentation.py` imports `compact_caption` and returns `compact_caption(value)`. The signature `def display_title(value):` is unchanged. The helper is called, not reimplemented.
+
+**Workers.** None.
+
+**Preservation check** (cwd `.`, exit 0):
+
+```
+/private/tmp/q9v2.nxS6sx/venv/bin/python -m pytest -q -p no:cacheprovider /private/tmp/q9v2.nxS6sx/trial4-instrument/test_contract.py -k preservation
+.....                                                                    [100%]
+5 passed, 8 deselected in 0.10s
+```
+
+Those five tests are the preservation gate only. They do not show that caption truncation matches `compact_caption`. No co-located tests were added. The task forbids test edits and leaves correctness to the external grader.
+
+**Human review.** Least sure that callers never depend on the old identity behavior (`display_title` returning the raw string). The security task was not started.
+
+CHANGED: ["presentation.py"]
