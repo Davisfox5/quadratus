@@ -223,8 +223,12 @@ class RepositoryPolicy:
                     parts.append(f"- {check['rule']} Because: {check['because']}")
             parts.append('Required inputs: ' + json.dumps(card['required_inputs']))
             parts.append('Stop conditions: ' + json.dumps(card['output_contract']['stop_conditions']))
+        # Gates by name and requirement only. A command can name a file seats
+        # must not open (the Q9-v2 grader path reached every lead here).
+        visible_gates = [{k: g[k] for k in ('id', 'runner', 'required', 'minimum_tests') if k in g}
+                         for g in plan['gates']]
         parts.append('Check configuration: ' + json.dumps({
-            'gates': plan['gates'], 'absent': plan['absent_gates'],
+            'gates': visible_gates, 'absent': plan['absent_gates'],
             'skipped': plan['skipped_gates'], 'adapters': plan['adapters']}, sort_keys=True))
         parts.append('Repository decisions: ' + json.dumps(self.document.get('decisions', [])))
         contract = '\n'.join(parts)

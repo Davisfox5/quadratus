@@ -470,6 +470,32 @@ def _invocation_role(role):
     return decorate
 
 
+def _check_for_models(check: dict) -> dict:
+    """A recorded check as a seat may see it: outcomes, never commands or their paths."""
+    import shlex
+
+    from .integration import redact_command_paths
+    paths = set()
+    for text in [check.get("command", "")] + [r.get("command", "") for r in check.get("receipts") or []]:
+        try:
+            tokens = shlex.split(text or "")
+        except ValueError:
+            tokens = (text or "").split()
+        for token in tokens:
+            if token.startswith("/") and len(token) > 1:
+                paths.add(token.rstrip("/"))
+                parent = token.rstrip("/").rsplit("/", 1)[0]
+                if parent.count("/") >= 2:
+                    paths.add(parent)
+    ordered = sorted(paths, key=len, reverse=True)
+    return {
+        "passed": check.get("passed"),
+        "gates": [{"id": r.get("id"), "status": r.get("status"), "reason": r.get("reason"),
+                   "tests": r.get("tests")} for r in check.get("receipts") or []],
+        "output": redact_command_paths(check.get("output") or "", ordered)[-1500:],
+    }
+
+
 def _has_blocking_finding(text: str) -> bool:
     """Only a finding's explicit prefix controls the recheck loop."""
     return any(re.match(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?BLOCKING\s*:",
@@ -2078,13 +2104,13 @@ class Session:
             ceiling = min(ceiling, getattr(self, "_gate_fixes_used", 0) + max_fixes)
         latest_fix = ""
         result = self._check(gate)
-        task.record("user", result.render())
+        task.record("user", result.for_models())
         while not result.passed and getattr(self, "_gate_fixes_used", 0) < ceiling:
             fix = self._edit(
                 lead,
                 f"Task: {spec.description}\n\n"
                 f"The project's own integration check failed after your "
-                f"work:\n{result.render()}\n\n"
+                f"work:\n{result.for_models()}\n\n"
                 "Fix the failure. Produce the complete revised work.",
                 role="gate-fix",
             )
@@ -2093,7 +2119,7 @@ class Session:
             latest_fix = fix
             self._gate_fixes_used = getattr(self, "_gate_fixes_used", 0) + 1
             result = self._check(gate)
-            task.record("user", result.render())
+            task.record("user", result.for_models())
         self.checks.append({"passed": result.passed, "command": result.command,
                             "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
@@ -2171,7 +2197,7 @@ class Session:
             "Recorded conversation": (transcript, 10_000),
             "Source diff captured by the harness": (diff, 12_000),
             "Most recent recorded session check (may predate this task)": (
-                json.dumps(self.checks[-1:], ensure_ascii=False), 2_000),
+                json.dumps([_check_for_models(c) for c in self.checks[-1:]], ensure_ascii=False), 2_000),
         }
         parts, pointers = [], []
         for title, (content, limit) in evidence.items():
