@@ -73,7 +73,7 @@ def test_the_review_adds_what_the_list_missed(tmp_path):
     ledger = session.memory.ledger
     assert ledger.requirements["R4"] == "docs/CSV_IMPORT.md documents the format"
     assert ledger.requirement_status["R4"].startswith("open")
-    assert "ambiguous" in ledger.requirement_status["R2"]
+    assert ledger.ambiguous["R2"] == "which screen"
     reviewer = next(m for m, p in script.prompts if "Compare the list with the goal" in p)
     assert reviewer.partition(":")[0] != session.seat().key.partition(":")[0]
 
@@ -121,3 +121,35 @@ def test_cited_evidence_must_exist_in_the_project(tmp_path):
     assert session._resolve_citations("app.py and imaginary.py") == ["app.py"]
     assert session._resolve_citations("test_preview_writes_nothing") == ["tests/test_app.py::test_preview_writes_nothing"]
     assert session._resolve_citations("test_nothing_like_it") == []
+
+
+def test_a_review_that_is_not_complete_or_well_formed_is_not_a_review(tmp_path):
+    plan = PLAN.replace("COVERS: R1", "COVERS: R1, R2, R3")
+    script = Script([plan, "DONE", "DONE"], review="Looks mostly fine to me, maybe add docs.",
+                    audits=["R1: MET - app.py\nR2: MET - app.py\nR3: MET - app.py"] * 3)
+    session = _run(tmp_path, script, max_requirement_reopens=1)
+    assert not session.completed
+    assert all(r["result"].startswith("failed") for r in session.requirement_reviews)
+    assert not any("independent auditor" in p for m, p in script.prompts)
+
+
+def test_every_added_requirement_is_kept(tmp_path):
+    many = "\n".join(f"ADD: requirement number {i}" for i in range(20))
+    script = Script([PLAN, "DONE"], review=many)
+    session = _run(tmp_path, script, max_requirement_reopens=0)
+    assert len(session.memory.ledger.requirements) == 23
+
+
+def test_an_ambiguous_requirement_needs_a_ruling_even_when_covered(tmp_path):
+    plan = PLAN.replace("COVERS: R1", "COVERS: R1, R2, R3")
+    script = Script([plan, "DONE", "DONE"], review="AMBIGUOUS: R2 - which screen gets the button",
+                    audits=["R1: MET - app.py\nR2: MET - app.py\nR3: MET - app.py"] * 3)
+    session = _run(tmp_path, script, max_requirement_reopens=1)
+    assert not session.completed
+    assert session.memory.ledger.requirement_status["R2"].startswith("covered")
+    assert "R2" in session.memory.ledger.ambiguous
+    assert any("need the operator's ruling: R2" in p for m, p in script.prompts if "Name the single next task" in p)
+    session.memory.ledger.rulings.append("Q: R2, which screen? -- A: the tagging screen")
+    session._done_refusal = ""
+    session._requirements_satisfied()
+    assert "operator's ruling" not in session._done_refusal, "a ruling naming R2 settles it"
