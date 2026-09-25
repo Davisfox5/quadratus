@@ -1070,6 +1070,15 @@ class Session:
         text = "\n\n".join(texts)
         return text, text.startswith("Worker errand ")
 
+    def _note_interim_edits(self, answers: List[str]) -> None:
+        """Tell a re-asked lead which files its task has already changed."""
+        if not (self.project and self.config.allow_writes and self._task_before is not None):
+            return
+        state = self._inspect_partial_edits(self._task_before)
+        if state.get("changed"):
+            answers.append("Files this task has already changed (kept; build on them, do not redo them): "
+                           + ", ".join(state["changed"]))
+
     def _serve_worker(self, body: str, lead: str, spec: TaskSpec, task: TaskMemory, state: dict,
                       *, answer_only: bool = False) -> List[str]:
         """Serve one ``WORKER {...}`` request; return what the lead is told.
@@ -1235,6 +1244,7 @@ class Session:
             body = _parse_kind(draft)[2].strip()
             if body.startswith("WORKER "):
                 answers.extend(self._serve_worker(body, lead, spec, task, state))
+                self._note_interim_edits(answers)
                 continue
             requests = _parse_consults(body)
             if not requests:

@@ -361,12 +361,18 @@ class Fleet:
                                   "or change branches. Return a concise account and exactly one "
                                   'closing line CHANGED: ["relative/path"] listing every file this '
                                   'call added, changed or deleted. Use CHANGED: [] for no changes. '
-                                  'A standalone FETCH, CONSULT or WORKER request may omit the line '
-                                  'only if this call changed no files.')
+                                  'A standalone FETCH, CONSULT or WORKER request may omit the line; '
+                                  'any files you changed before it are kept.')
             after = self.project.contents()
             changed = sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
             control = re.fullmatch(r'\s*(?:FETCH:|CONSULT |WORKER )[^\n]+\s*', reply)
-            if control and not changed:
+            if control:
+                # A request mid-work is legitimate even after edits: GameTape
+                # run 5 (2026-09-25) had a lead fix one test line, then ask a
+                # worker to check the endpoint, and this refusal ended the run.
+                # The edits stay in place, the task-level scope check still
+                # measures them, and the session tells the lead what it has
+                # changed so far when it asks again.
                 return reply
             rows = re.findall(r'^CHANGED: (.*)$', reply, re.MULTILINE)
             try:

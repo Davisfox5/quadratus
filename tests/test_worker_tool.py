@@ -312,3 +312,29 @@ def test_repeated_refused_tool_calls_close_the_channel(tmp_path):
     with invocation("t1", "lead"), pytest.raises(RunStalled, match="not converging"):
         session._draft_with_channels(OPUS, TaskSpec("t1", "do it"), _memory(store))
     assert "now closed" in answers[2][0] and "channel is closed" in answers[3][0]
+
+
+def test_a_worker_request_after_edits_is_served_and_the_lead_told_what_it_changed(tmp_path):
+    """GameTape run 5: a lead fixed a test line, then asked for a check."""
+    import dataclasses
+    store = ArtifactStore(tmp_path / "artifacts")
+    project = tmp_path / "p"
+    project.mkdir()
+    (project / "t.py").write_text("x = 1\n")
+    prompts = []
+
+    def invoke(model, prompt, system=None, allow_writes=False):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            (project / "t.py").write_text("x = 2\n")
+            return 'WORKER {"errand":"check","instruction":"review t.py","write":false,"needs":[]}'
+        return "Done."
+
+    session = Session("goal", store, invoke, config=SessionConfig())
+    session.project = project
+    session.config = dataclasses.replace(session.config, allow_writes=True)
+    session._task_before = session._capture_source()
+    session.workers = WorkerPool(store=store, run=lambda *a, **k: "t.py looks right")
+    with invocation("t1", "lead"):
+        session._draft_with_channels(OPUS, TaskSpec("t1", "do it"), _memory(store))
+    assert "already changed (kept" in prompts[1] and "t.py" in prompts[1]
