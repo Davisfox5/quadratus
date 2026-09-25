@@ -309,7 +309,7 @@ def check_errand_fit(instruction: str, *, needs=None, write: bool = False, answe
     return None
 
 
-def capability_preamble(allow_writes: bool) -> str:
+def capability_preamble(allow_writes: bool, model_key: Optional[str] = None) -> str:
     """Told to the worker, in its own prompt, before the errand.
 
     The worker used to be handed the lead's instruction and nothing else: not
@@ -317,8 +317,21 @@ def capability_preamble(allow_writes: bool) -> str:
     the *lead* about that channel and the worker was never in the room. A
     helper that does not know it may ask will instead do the best it can with
     what it has, which is how an errand it could not perform became prose.
+
+    Reading is described per vendor. codex has no read tool: it reads through
+    shell commands. Told "no shell", a Luna worker on GameTape (2026-09-25)
+    concluded it could not read at all and answered NEED TOOL without a single
+    call. Read-only commands are safe for that seat: on the host the codex
+    sandbox is read-only, and in the container the worker runs in a
+    disposable source copy.
     """
-    if allow_writes:
+    if (model_key or "").startswith("openai:"):
+        reading = ("You read the source copy in your working directory with read-only shell "
+                   "commands (ls, cat, sed -n, rg, grep, head). Those are the only commands you "
+                   "may run: do not run tests, install anything, or change a file.")
+        tools = (reading + " You return changes as a patch: exactly PATCH: followed by a fenced "
+                 "unified diff." if allow_writes else reading + " You cannot change files.")
+    elif allow_writes:
         tools = (
             "You can read the source copy in your working directory, and you "
             "return changes as a patch: exactly PATCH: followed by a fenced "
@@ -511,7 +524,7 @@ class WorkerPool:
             self._charge(task.task_id)
 
         scratch = NoMemory()  # explicit: a worker carries nothing in or out
-        briefed = capability_preamble(allow_writes) + "\n## Errand\n" + prompt
+        briefed = capability_preamble(allow_writes, model_key) + "\n## Errand\n" + prompt
         def charge():
             with self._lock:
                 self._charge(task.task_id)

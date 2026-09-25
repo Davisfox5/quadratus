@@ -227,3 +227,12 @@ def test_the_lead_gets_the_refusal_back_without_a_worker_call(tmp_path, monkeypa
     assert 'write:true' in refusals[0]
     # No worker ran: every call is a seat call, none carries the preamble.
     assert not any('## What you can do' in p for p in prompts)
+
+
+def test_a_codex_worker_is_told_it_reads_through_the_shell():
+    """GameTape 2026-09-25: told 'no shell', Luna answered NEED TOOL without reading."""
+    text = capability_preamble(False, "openai:gpt-5.6-luna")
+    assert "read-only shell commands" in text and "no shell" not in text
+    assert "do not run tests" in text
+    assert "PATCH:" in capability_preamble(True, "openai:gpt-5.6-luna")
+    assert "no shell" in capability_preamble(False, "claude:haiku")
