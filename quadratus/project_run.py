@@ -211,7 +211,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'source_changed': bool(diff), 'source_fingerprint': project.fingerprint(),
         'tasks': len(session.history) if session else 0,
         'turn_limited_tasks': list(getattr(session, 'turn_limited', []) or []) if session else [],
-        'personal_preferences': _preferences_record(),
+        'personal_preferences': _preferences_record(settings),
+        'requirements': _requirements_record(session),
+        'design_checks': list(getattr(session, 'design_checks', []) or []) if session else [],
         'trace': {'calls': len(traces),
                   'transcripts_found': sum(1 for t in traces if t.get('tool_calls') is not None),
                   'calls_outside_project': sum(1 for t in traces if t.get('outside_project')),
@@ -233,13 +235,29 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     return ProjectResult(completed, report, run_dir, diff, error)
 
 
-def _preferences_record():
-    """Whether the operator's personal CLI configuration shaped this run."""
+def _requirements_record(session):
+    if session is None:
+        return None
+    ledger = session.memory.ledger
+    return {"listed": dict(ledger.requirements), "status": dict(ledger.requirement_status),
+            "reviews": list(getattr(session, "requirement_reviews", []) or []),
+            "audits": list(getattr(session, "requirement_audits", []) or [])}
+
+
+def _preferences_record(settings=None):
+    """What this run asked for about the operator's personal CLI configuration.
+
+    An intent, not an observation: the flags below were passed, and what each
+    CLI then loaded is not independently verified here (Codex review of #25).
+    """
     from .cli_providers import CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC, neutral_preferences
-    if not neutral_preferences():
-        return {"mode": "active", "note": "personal CLI configuration and account rules were loaded"}
+    requested = (getattr(settings, "neutral_preferences", False) if settings is not None
+                 else neutral_preferences())
     specs = (CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC)
-    return {"mode": "neutralised",
-            "flags": {s.vendor: list(s.neutral_args) for s in specs},
+    if not requested:
+        return {"requested": "personal configuration not suppressed",
+                "note": "each CLI loaded whatever user configuration and account rules it has"}
+    return {"requested": "neutral", "observed": "not verified per CLI",
+            "flags_passed": {s.vendor: list(s.neutral_args) for s in specs},
             "not_removable": [s.neutral_gap for s in specs if s.neutral_gap]}
 

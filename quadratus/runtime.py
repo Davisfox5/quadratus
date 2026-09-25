@@ -212,6 +212,9 @@ class Fleet:
             effort=spec.effort if spec else "",
             restricted=spec.restricted if spec else False,
         )
+        if getattr(self.settings, "neutral_preferences", False) and hasattr(bound, "neutral"):
+            bound = copy.copy(bound)
+            bound.neutral = True
         if self.run_budget is not None:
             if any(getattr(type(bound), method) is not getattr(LLMProvider, method)
                    for method in ('generate', '_generate_once', '_observed_call')):

@@ -1,0 +1,79 @@
+"""The goal's requirements, numbered, reviewed, covered and audited before DONE."""
+
+from quadratus.artifacts import ArtifactStore
+from quadratus.session import Session, SessionConfig, TaskSpec, _read_covers, _read_requirements
+
+PLAN = ("REQUIREMENTS:\nR1: POST endpoint previews rows\nR2: UI button #btn-import-preview\n"
+        "R3: must not write the project store\nKIND: backend simple\nBuild the parser.\nCOVERS: R1")
+
+
+def test_the_block_is_read_and_stripped():
+    found, rest = _read_requirements(PLAN)
+    assert list(found) == ["R1", "R2", "R3"] and "REQUIREMENTS" not in rest and rest.startswith("KIND")
+    ids, spec = _read_covers(TaskSpec("t1", "Build the parser.\nCOVERS: R1, R3"))
+    assert ids == ["R1", "R3"] and spec.description == "Build the parser."
+
+
+class Script:
+    """A fake invoke: orchestrator replies in order, the reviewer and auditor as given."""
+
+    def __init__(self, orchestrator, review="COMPLETE", audits=()):
+        self.orchestrator, self.review, self.audits, self.prompts = list(orchestrator), review, list(audits), []
+
+    def __call__(self, model, prompt, system=None, allow_writes=False):
+        self.prompts.append((model, prompt))
+        if "Compare the list with the goal" in prompt:
+            return self.review
+        if "independent auditor" in prompt:
+            return self.audits.pop(0)
+        if "Name the single next task" in prompt:
+            return self.orchestrator.pop(0) if self.orchestrator else "DONE"
+        if "The task is finished" in prompt:
+            return "SUMMARY: done\nREASONING: done"
+        return "work"
+
+
+def _run(tmp_path, script, **config):
+    session = Session("Build the preview", ArtifactStore(tmp_path / "a"), script, config=SessionConfig(**config))
+    session.run(max_tasks=6)
+    return session
+
+
+def test_done_is_sent_back_while_a_requirement_is_uncovered(tmp_path):
+    script = Script([PLAN, "DONE", "KIND: frontend simple\nAdd the button.\nCOVERS: R2, R3", "DONE"],
+                    audits=["R1: MET - app.py::import_preview\nR2: MET - templates/index.html\n"
+                            "R3: MET - tests/test_preview.py::test_writes_nothing"])
+    session = _run(tmp_path, script)
+    orchestrator_prompts = [p for m, p in script.prompts if "Name the single next task" in p]
+    assert any("not covered by any finished task: R2, R3" in p for p in orchestrator_prompts)
+    assert session.completed
+    assert session.memory.ledger.requirement_status["R2"] == "met (audited)"
+
+
+def test_an_audit_without_evidence_or_with_a_miss_reopens_then_stops(tmp_path):
+    plan = PLAN.replace("COVERS: R1", "COVERS: R1, R2, R3")
+    script = Script([plan, "DONE", "DONE", "DONE", "DONE"],
+                    audits=["R1: MET - looks fine\nR2: NOT MET - no button\nR3: MET - app.py"] * 4)
+    session = _run(tmp_path, script, max_requirement_reopens=2)
+    assert not session.completed
+    status = session.memory.ledger.requirement_status
+    assert status["R1"].startswith("NOT MET") and "without a cited file" in status["R1"]
+    assert status["R2"].startswith("NOT MET")
+    assert len(session.requirement_audits) == 1, "no second audit until a task covers the misses again"
+    assert any("found not met by the audit" in p for m, p in script.prompts if "Name the single next task" in p)
+
+
+def test_the_review_adds_what_the_list_missed(tmp_path):
+    script = Script([PLAN], review="ADD: docs/CSV_IMPORT.md documents the format\nAMBIGUOUS: R2 - which screen")
+    session = _run(tmp_path, script, max_requirement_reopens=0)
+    ledger = session.memory.ledger
+    assert ledger.requirements["R4"] == "docs/CSV_IMPORT.md documents the format"
+    assert ledger.requirement_status["R4"].startswith("open")
+    assert "ambiguous" in ledger.requirement_status["R2"]
+    reviewer = next(m for m, p in script.prompts if "Compare the list with the goal" in p)
+    assert reviewer.partition(":")[0] != session.seat().key.partition(":")[0]
+
+
+def test_without_a_list_the_run_behaves_as_before(tmp_path):
+    script = Script(["KIND: backend simple\nBuild it.", "DONE"])
+    assert _run(tmp_path, script).completed

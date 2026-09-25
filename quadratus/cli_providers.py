@@ -1403,9 +1403,12 @@ CODEX_SPEC = CLISpec(
     extract_usage=_extract_codex_usage,
     prompt_on_stdin=True,
     verified=True,
-    # config.toml carries plugins and MCP servers; .rules files carry the
-    # execpolicy. auth.json is still read from CODEX_HOME.
-    neutral_args=["--ignore-user-config", "--ignore-rules"],
+    # config.toml carries plugins and MCP servers; auth.json is still read
+    # from CODEX_HOME. Not --ignore-rules: it drops the project's .rules too,
+    # and a switch for personal preferences must not remove repository
+    # safety policy (Codex review of #25).
+    neutral_args=["--ignore-user-config"],
+    neutral_gap="codex: user .rules execpolicy files still load, because the only switch also drops the project's",
     worker_tool_style="codex",
 )
 
@@ -1879,6 +1882,8 @@ class CLIProvider(LLMProvider):
         #: The in-session worker tool for this view (``WorkerBridge.spec()``),
         #: set per lead call by runtime.Fleet. None attaches nothing.
         self.worker_tool: Optional[dict] = kwargs.pop("worker_tool", None)
+        #: Per-run neutral mode from Settings; None falls back to the env var.
+        self.neutral: Optional[bool] = None
         self._worker_tool_files: List[str] = []
         self.worker_tool_attached = False
         self._prompt_files = set()
@@ -1984,7 +1989,8 @@ class CLIProvider(LLMProvider):
         if spec.effort_flag and self.effort:
             argv += [spec.effort_flag, spec.effort_template.format(level=self.effort)]
         argv += list(spec.always_args)
-        if neutral_preferences() and spec.neutral_args:
+        neutral = getattr(self, "neutral", None)
+        if (neutral_preferences() if neutral is None else neutral) and spec.neutral_args:
             argv += list(spec.neutral_args)
         if self.restricted and spec.restricted_args:
             # A bounded call, not an agent. The permission axis does not apply:

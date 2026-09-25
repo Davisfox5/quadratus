@@ -334,6 +334,12 @@ class SessionConfig:
     #: Design and UI work also gets a reviewer from another vendor, briefed
     #: on design and aesthetic choices, even when the task is SIMPLE.
     design_cross_check: bool = True
+    #: The orchestrator numbers the goal's requirements, every task names
+    #: what it covers, and DONE needs full coverage plus a cross-vendor audit.
+    requirements_ledger: bool = True
+    #: How many times DONE may be sent back for uncovered or unmet
+    #: requirements before the run stops incomplete instead.
+    max_requirement_reopens: int = 3
     #: Records who actually ran, distinguishing Quadratus-dispatched work from
     #: vendor-native children and vendor-internal auxiliary activity, and
     #: carrying what the harness cannot observe or bound. Observational only.
@@ -421,12 +427,14 @@ def is_design_task(spec) -> bool:
 
 
 _DESIGN_SELF_VERIFY = (
-    "This task changes what users see, so you verify it yourself before you finish: "
-    "look at the rendered result in a real browser at a desktop width and at a mobile "
-    "width (quadratus.browser.render_page returns a screenshot, console errors and "
-    "failed requests; your own browser tool is fine too). Check the states the task "
-    "names, for example empty, loading, error and populated. Report in a few lines "
-    "what you looked at and what you saw. A UI change you have not looked at is not finished."
+    "This task changes what users see, so you verify it yourself before you finish. "
+    "Start the app if it needs a server, then capture the page at a desktop and a mobile "
+    "width with exactly this command (it writes the screenshots the harness checks):\n"
+    "    {command}\n"
+    "Look at both screenshots, and at the console errors and failed requests it reports, "
+    "and fix what is wrong. Check the states the task names, for example empty, loading, "
+    "error and populated. Report in a few lines what you looked at and what you saw. "
+    "Without both screenshots from this task, the task is recorded as unverified design work."
 )
 
 _DESIGN_REVIEW_LENS = (
@@ -436,6 +444,46 @@ _DESIGN_REVIEW_LENS = (
     "up at a mobile width. Mark a design problem BLOCKING only when a user would be "
     "misled or unable to use the feature."
 )
+
+_REQUIREMENTS_REQUEST = (
+    "Before your first task, number the goal's requirements: a line 'REQUIREMENTS:' "
+    "and then one line per requirement, 'R1: <one testable requirement>'. Take them "
+    "from the goal and cover every deliverable it names -- behaviour, interfaces, "
+    "user interface, documentation, and any promise about working with what the "
+    "product already does -- and every constraint it sets on what must NOT happen "
+    "(for example read-only, no new dependencies, no saving). Then name your first "
+    "task as usual."
+)
+_COVERS_REQUEST = (
+    "Include one line 'COVERS: R2, R5' naming the requirements this task delivers. "
+    "The run is complete only when every requirement is covered by a finished task "
+    "and an independent audit finds it met; DONE before that is sent back to you."
+)
+_REQ_BLOCK = re.compile(r"^\s*REQUIREMENTS:\s*\n((?:\s*R\d+\s*[:.)-].*\n?)+)", re.MULTILINE)
+_REQ_LINE = re.compile(r"^\s*(R\d+)\s*[:.)-]\s*(.+?)\s*$", re.MULTILINE)
+_COVERS = re.compile(r"^\s*COVERS:\s*(.+?)\s*$", re.MULTILINE)
+_AUDIT_LINE = re.compile(r"^\s*(R\d+)\s*:\s*(MET|NOT MET)\b[\s:—-]*(.*)$", re.MULTILINE | re.IGNORECASE)
+
+
+def _read_requirements(reply: str):
+    """Split a REQUIREMENTS block off an orchestrator reply."""
+    match = _REQ_BLOCK.search(reply or "")
+    if not match:
+        return {}, reply
+    found = {rid: text for rid, text in _REQ_LINE.findall(match.group(1))}
+    rest = (reply[:match.start()] + reply[match.end():]).strip()
+    return found, rest
+
+
+def _read_covers(spec):
+    """Split a ``COVERS: R1, R3`` line off a task."""
+    match = _COVERS.search(spec.description or "")
+    if not match:
+        return [], spec
+    ids = re.findall(r"R\d+", match.group(1))
+    description = _COVERS.sub("", spec.description).strip()
+    return ids, replace(spec, description=description or spec.description)
+
 
 _CONTINUES = re.compile(r"^\s*CONTINUES:\s*(\S+)\s*$", re.MULTILINE)
 
@@ -665,6 +713,13 @@ class Session:
         #: Capped tasks not yet finished by a task that names them in a
         #: CONTINUES line. Any entry blocks completion.
         self._partial_tasks: set = set()
+        self._done_refusal = ""
+        self._requirement_reopens = 0
+        self._design_note = ""
+        self._task_started: Optional[float] = None
+        self.design_checks: List[dict] = []
+        self.requirement_audits: List[dict] = []
+        self.requirement_reviews: List[dict] = []
 
     def _invoke_model(self, key, prompt, *, allow_writes=False):
         context = invocation_context.get() or dict(task="run", role="direct", origin="seat")
@@ -1386,6 +1441,8 @@ class Session:
 
         task = TaskMemory(spec.task_id, lead, self.store)
         self._task_memory = task
+        import time as _time
+        self._task_started = _time.time()
         task.record("user", spec.description)
         task.keep(json.dumps({'needs': sorted(spec.needs)}), kind='task-needs')
         if spec.scope is not None:
@@ -1449,6 +1506,7 @@ class Session:
         task.keep(draft, kind="draft")
 
         self._assess_scope(spec, task, before)
+        self._check_design(spec, lead, collaborators, task)
         from .integration import GateSuite
         if isinstance(self.config.integration_gate, GateSuite):
             cheap = self.config.integration_gate.cheap()
@@ -1780,6 +1838,9 @@ class Session:
                     "nothing else. If the decision turns on something only the "
                     "operator can answer, reply 'ASK: <one question>' instead."
                     f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}\n\n{_NEEDS_REQUEST}"
+                    + ("\n\n" + (_COVERS_REQUEST if self.memory.ledger.requirements
+                                  else _REQUIREMENTS_REQUEST) if self.config.requirements_ledger else "")
+                    + (self._done_refusal or "")
                     + ("\n\n" + _SCOPE_REQUEST if self.project and self.config.allow_writes else "")
                     + ("\n\n" + _ORIENT_REQUEST
                        if self.project and self.config.codebase_map is not None else "")
@@ -1800,6 +1861,7 @@ class Session:
 
         for _ in range(_MAX_ASKS_PER_DECISION):
             seat, reply = self._ask_seat(seat, build_with_correction)
+            reply = self._absorb_requirements(reply)
             correction = ""
             # Control messages are recognised through a bounded preface scan.
             # An ASK buried under a paragraph of reasoning used to read as a
@@ -1853,6 +1915,7 @@ class Session:
                 f"first and the task on the following line."
             )
             seat, reply = self._ask_seat(seat, build_with_correction)
+            reply = self._absorb_requirements(reply)
             retry_control = parse_control(reply)
             if retry_control is not None and retry_control.verb == "DONE":
                 return None
@@ -1953,7 +2016,15 @@ class Session:
         for _ in range(max_tasks):
             self._note(f"asking {self.seat().key} for the next task")
             spec = self.next_task()
+            self._done_refusal = ""
             if spec is None:
+                if not self._requirements_satisfied():
+                    if self._requirement_reopens < self.config.max_requirement_reopens:
+                        self._requirement_reopens += 1
+                        continue
+                    self._note("requirements still open after the reopen allowance; stopping incomplete")
+                    self.completed = False
+                    break
                 self.completed = (not self.open_findings and not self._unresolved_partial
                                   and not any(not c["passed"] for c in self.checks))
                 self._note("the orchestrator reports the goal met")
@@ -1971,6 +2042,7 @@ class Session:
                 f"[{spec.kind}/{spec.complexity}]"
             )
             continues, spec = _read_continues(spec)
+            covers, spec = _read_covers(spec)
             summary = self.run_task(spec)
             if getattr(summary, "outcome", "closed") == "turn_limited":
                 # A capped continuation carries its predecessor's debt forward.
@@ -1989,6 +2061,10 @@ class Session:
             # an unrelated clean task must not make the run complete (Codex
             # review of #25, 2026-09-25).
             self._partial_tasks.discard(continues)
+            status = self.memory.ledger.requirement_status
+            for rid in covers:
+                if rid in self.memory.ledger.requirements:
+                    status[rid] = f"covered by {spec.task_id}"
             self._note(f"task {len(self.history)} closed by {summary.author}")
             if self.open_findings or (self.checks and not self.checks[-1]['passed']):
                 break
@@ -2003,10 +2079,184 @@ class Session:
             self.completed = (
                 not self._unresolved_partial
                 and self._confirm_goal_met()
+                and self._requirements_satisfied()
                 and not self.open_findings
                 and not any(not c["passed"] for c in self.checks)
             )
         return list(self.history)
+
+    def _check_design(self, spec, lead, collaborators, task) -> None:
+        """Design work must leave rendered evidence and draw an independent
+        reviewer; either missing is an open finding, not a quiet pass."""
+        self._design_note = ""
+        if not is_design_task(spec) or not (self.project and self.config.allow_writes):
+            return
+        from .design_evidence import check
+        if self.config.design_self_verify:
+            ok, problem, shots = check(self.project, spec.task_id, self._task_started or 0)
+            record = dict(task=spec.task_id, verified=ok, problem=problem, screenshots=shots)
+            self.design_checks.append(record)
+            task.keep(json.dumps(record), kind="design-evidence")
+            if ok:
+                self._design_note = (
+                    "\n\nThe lead's rendered evidence (read these files; they are outside your "
+                    "source copy on purpose): " + ", ".join(shots)
+                    + ". Judge the design from the screenshots as well as the code.")
+            else:
+                self.open_findings.append(
+                    f"Task {spec.task_id} is design work without rendered evidence: {problem}.")
+                self._note(f"task {spec.task_id}: design work unverified ({problem[:120]})")
+        else:
+            self.design_checks.append(dict(task=spec.task_id, verified=None,
+                                           problem="design self-verification disabled by the operator"))
+        if self.config.design_cross_check:
+            vendor = lead.partition(":")[0]
+            if not any(p.partition(":")[0] != vendor for p in collaborators):
+                self.open_findings.append(
+                    f"Task {spec.task_id} is design work with no reviewer from another vendor available.")
+
+    def _absorb_requirements(self, reply: str) -> str:
+        """Take a REQUIREMENTS block into the ledger, once, off the reply."""
+        found, rest = _read_requirements(reply)
+        if not found:
+            return reply
+        ledger = self.memory.ledger
+        if not ledger.requirements and self.config.requirements_ledger:
+            ledger.requirements.update(found)
+            self._note(f"the orchestrator numbered {len(found)} requirements")
+            self._review_requirements()
+        return rest
+
+    def _review_requirements(self) -> None:
+        """A second vendor compares the numbered list with the verbatim goal.
+
+        Codex's review: an auditor that checks an incomplete list faithfully
+        still passes an incomplete product. Missing requirements are added;
+        disputed ones stay open. An unavailable reviewer is recorded, not
+        treated as agreement.
+        """
+        ledger = self.memory.ledger
+        reviewer = self._auditor()
+        if reviewer is None:
+            self.requirement_reviews.append(dict(reviewer=None, result="no reviewer available"))
+            return
+        prompt = (
+            f"## Goal (verbatim)\n\n{self.memory.goal.strip()}\n\n## Numbered requirements\n\n"
+            + "\n".join(f"{rid}: {text}" for rid, text in ledger.requirements.items())
+            + "\n\nCompare the list with the goal. Reply COMPLETE if it covers everything the goal "
+            "asks for and forbids. Otherwise reply only with lines 'ADD: <one testable requirement "
+            "the list misses>' (deliverables, interfaces, user interface, documentation, "
+            "compatibility with existing behaviour, and must-not constraints) and "
+            "'AMBIGUOUS: R<n> - <why the goal allows more than one reading>'."
+        )
+        saved = self._active_spec
+        self._active_spec = None
+        try:
+            with invocation("plan", "requirements-review"):
+                reply = self._invoke_model(reviewer, prompt, allow_writes=False)
+        except ProviderError as exc:
+            self.requirement_reviews.append(dict(reviewer=reviewer, result=f"failed: {type(exc).__name__}"))
+            return
+        finally:
+            self._active_spec = saved
+        added = re.findall(r"^\s*ADD:\s*(.+?)\s*$", reply or "", re.MULTILINE)
+        disputed = re.findall(r"^\s*AMBIGUOUS:\s*(R\d+)\s*[-:—]\s*(.+?)\s*$", reply or "", re.MULTILINE)
+        next_id = len(ledger.requirements) + 1
+        for text in added[:12]:
+            rid = f"R{next_id}"
+            next_id += 1
+            ledger.requirements[rid] = text
+            ledger.requirement_status[rid] = "open (added by the requirements review)"
+        for rid, why in disputed:
+            if rid in ledger.requirements:
+                ledger.requirement_status[rid] = f"open: ambiguous -- {why[:160]}"
+        self.requirement_reviews.append(dict(reviewer=reviewer, added=added[:12], ambiguous=disputed))
+
+    def _requirements_satisfied(self) -> bool:
+        """Whether DONE may stand: every requirement covered, then audited met.
+
+        Not satisfied means DONE goes back to the orchestrator with the gap
+        named. No requirements listed means the ledger is inactive for this
+        run; that is recorded, not invented.
+        """
+        ledger = self.memory.ledger
+        if not self.config.requirements_ledger or not ledger.requirements:
+            return True
+        status = ledger.requirement_status
+        uncovered = [r for r in ledger.requirements if not status.get(r, "").startswith(("covered", "met"))]
+        if uncovered:
+            self._done_refusal = (
+                "\n\n--- DONE SENT BACK ---\nThese requirements are not covered by any finished "
+                f"task: {', '.join(uncovered)} (never covered, or found not met by the audit and not "
+                "covered again since). Name a task for them (with COVERS), or explain in the task "
+                "why one cannot be done.")
+            self._note(f"DONE sent back: uncovered {', '.join(uncovered)}")
+            return False
+        verdicts = self._audit_requirements()
+        unmet = {r: why for r, (ok, why) in verdicts.items() if not ok}
+        for rid, (ok, why) in verdicts.items():
+            status[rid] = "met (audited)" if ok else f"NOT MET: {why[:160]}"
+        if unmet:
+            self._done_refusal = (
+                "\n\n--- DONE SENT BACK ---\nAn independent audit found these requirements not met:\n"
+                + "\n".join(f"- {r}: {why[:300]}" for r, why in unmet.items())
+                + "\nName a task that fixes them (with COVERS).")
+            self._note(f"DONE sent back: audit found {', '.join(unmet)} not met")
+            return False
+        return True
+
+    def _auditor(self) -> Optional[str]:
+        """A brain-trust member from a vendor other than the orchestrator's."""
+        seat_vendor = self.seat().key.partition(":")[0]
+        pool = [p for p in self.brain_trust if self._available(p)]
+        return next((p for p in pool if p.partition(":")[0] != seat_vendor), pool[0] if pool else None)
+
+    def _audit_requirements(self) -> dict:
+        """One read-only call: each requirement met or not, with evidence."""
+        ledger = self.memory.ledger
+        auditor = self._auditor()
+        if auditor is None:
+            return {r: (False, "no auditor available") for r in ledger.requirements}
+        checks = "\n".join(f"- {c['command']}: {'passed' if c['passed'] else 'FAILED'}" for c in self.checks[-3:])
+        prompt = (
+            f"## Goal (verbatim)\n\n{self.memory.goal.strip()}\n\n## Requirements\n\n"
+            + "\n".join(f"{rid}: {text}" for rid, text in ledger.requirements.items())
+            + (f"\n\n## Latest project checks\n{checks}" if checks else "")
+            + (("\n\n## Rendered design evidence\n" + "\n".join(
+                f"- {d['task']}: " + (", ".join(d.get('screenshots') or []) or d.get('problem', ''))
+                for d in self.design_checks)) if self.design_checks else "")
+            + "\n\nYou are an independent auditor. The project in your working directory is the "
+            "delivered work. For each requirement, check the delivered files themselves: code, "
+            "interface, tests and documentation. Documentation must agree with the goal, not only "
+            "with the code. A requirement about existing product behaviour is met only if it works "
+            "with what the product actually does today. A user-interface requirement is met only "
+            "with rendered evidence above. Reply with exactly one line per requirement and nothing "
+            "else: 'R1: MET - <file path or test name that shows it>' or "
+            "'R1: NOT MET - <what is missing or contradicts the goal>'. A MET without a cited "
+            "file or test is counted as not met."
+        )
+        saved = self._active_spec
+        self._active_spec = None
+        try:
+            with invocation("audit", "auditor"):
+                reply = self._invoke_model(auditor, prompt)
+        except ProviderError as exc:
+            # An audit that could not run is not a pass. Budget stops and
+            # every other exception propagate as from any other call.
+            reply = ""
+            self._note(f"requirements audit failed: {type(exc).__name__}: {str(exc)[:160]}")
+        finally:
+            self._active_spec = saved
+        found = {}
+        for m in _AUDIT_LINE.finditer(reply or ""):
+            met, why = m.group(2).upper() == "MET", m.group(3).strip()
+            if met and not re.search(r"[\w./-]+\.\w+|test_\w+|::", why):
+                met, why = False, f"MET claimed without a cited file or test ({why[:80]})"
+            found[m.group(1).upper()] = (met, why)
+        verdicts = {r: found.get(r, (False, "the auditor gave no verdict")) for r in ledger.requirements}
+        self.requirement_audits.append(dict(auditor=auditor, verdicts={r: dict(met=ok, why=why)
+                                                                       for r, (ok, why) in verdicts.items()}))
+        return verdicts
 
     def _confirm_goal_met(self) -> bool:
         """After the cap: ask once whether the goal is met, and never act on it.
@@ -2107,7 +2357,11 @@ class Session:
             parts.append(map_block)
         parts.append("You are leading this task. Produce the complete work.")
         if self.config.design_self_verify and is_design_task(spec):
-            parts.append(_DESIGN_SELF_VERIFY)
+            import sys as _sys
+            package_root = Path(__file__).resolve().parent.parent
+            command = (f"PYTHONPATH={package_root} {_sys.executable} -m quadratus.design_evidence "
+                       f"<url of the page> {spec.task_id} .")
+            parts.append(_DESIGN_SELF_VERIFY.format(command=command))
         # Stated before the work, checked after it. Telling a model its bound
         # helps some; measuring the diff is what makes the bound real, and
         # both happen -- see _assess_scope.
@@ -2205,7 +2459,8 @@ class Session:
             "against the revision. If you genuinely find nothing worth changing, "
             "reply exactly 'NO FINDINGS' and nothing else; do not write 'BLOCKING: none'."
             + _review_subject_note(spec)
-            + (_DESIGN_REVIEW_LENS if self.config.design_cross_check and is_design_task(spec) else "")
+            + (_DESIGN_REVIEW_LENS + getattr(self, "_design_note", "")
+               if self.config.design_cross_check and is_design_task(spec) else "")
         )
 
     def _revision_prompt(self, spec: TaskSpec, draft: str, notes: List[str]) -> str:
