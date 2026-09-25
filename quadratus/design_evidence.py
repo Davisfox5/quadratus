@@ -34,7 +34,7 @@ def capture(target: str, task_id: str, root=".") -> dict:
         evidence = render_page(target, out_dir=evidence_dir(root, task_id) / name, viewport=viewport)
         out[name] = dict(screenshot=evidence.screenshot_path, clean=evidence.clean,
                          console_errors=evidence.console_errors[:10], failed_requests=evidence.failed_requests[:10])
-    (evidence_dir(root, task_id) / "summary.json").write_text(json.dumps(out, indent=2))
+    (evidence_dir(root, task_id) / "summary.json").write_text(json.dumps(dict(target=target, views=out), indent=2))
     return out
 
 
@@ -50,9 +50,29 @@ def _png_width(path: Path) -> Optional[int]:
 
 
 def check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
-    """Whether the task left fresh desktop and mobile renders. Never raises."""
+    """Whether the task left fresh, clean desktop and mobile renders of a
+    named page. Never raises.
+
+    Clean means no console errors and no failed requests: a render of a
+    broken page is evidence that it is broken, not that it works (Codex
+    review of #25 rendered a page with a console.error and a missing image,
+    and the first version of this check passed it).
+    """
     folder = evidence_dir(root, task_id)
     problems, shots = [], []
+    try:
+        summary = json.loads((folder / "summary.json").read_text())
+    except (OSError, ValueError):
+        summary = None
+    if not isinstance(summary, dict) or not summary.get("target") or not isinstance(summary.get("views"), dict):
+        return False, "no summary.json naming the rendered page (use python -m quadratus.design_evidence)", []
+    for name, view in summary["views"].items():
+        if not view.get("clean"):
+            errors = "; ".join(str(e)[:120] for e in (view.get("console_errors") or [])[:3])
+            failed = "; ".join(str(f)[:120] for f in (view.get("failed_requests") or [])[:3])
+            problems.append(f"the {name} render is not clean"
+                            + (f" (console: {errors})" if errors else "")
+                            + (f" (failed requests: {failed})" if failed else ""))
     for name, viewport in VIEWPORTS.items():
         shot = folder / name / "page.png"
         width = _png_width(shot)
@@ -66,6 +86,8 @@ def check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
             problems.append(f"the {name} screenshot is {width}px wide, not ~{viewport['width']}px")
             continue
         shots.append(str(shot))
+    if not problems and summary is not None:
+        shots.append(f"target: {summary['target']}")
     return not problems, "; ".join(problems), shots
 
 

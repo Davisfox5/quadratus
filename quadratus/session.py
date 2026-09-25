@@ -28,6 +28,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field, replace
 from functools import wraps
@@ -336,7 +337,10 @@ class SessionConfig:
     design_cross_check: bool = True
     #: The orchestrator numbers the goal's requirements, every task names
     #: what it covers, and DONE needs full coverage plus a cross-vendor audit.
-    requirements_ledger: bool = True
+    #: On by default. QUADRATUS_REQUIREMENTS_LEDGER=0 turns it off, which the
+    #: test suite does for scripted orchestrators that predate the ledger.
+    requirements_ledger: bool = field(default_factory=lambda: os.getenv(
+        "QUADRATUS_REQUIREMENTS_LEDGER", "1").strip() != "0")
     #: How many times DONE may be sent back for uncovered or unmet
     #: requirements before the run stops incomplete instead.
     max_requirement_reopens: int = 3
@@ -677,14 +681,21 @@ class Session:
         self._partial_tasks: set = set()
         self._done_refusal = ""
         self._requirement_reopens = 0
+        self._covers_corrections = 0
         self._design_note = ""
         self._task_started: Optional[float] = None
+        #: When the most recent editing call began: renders older than this
+        #: show a tree that has since changed.
+        self._last_edit_started: Optional[float] = None
         self.design_checks: List[dict] = []
         self.requirement_audits: List[dict] = []
         self.requirement_reviews: List[dict] = []
 
     def _invoke_model(self, key, prompt, *, allow_writes=False):
         context = invocation_context.get() or dict(task="run", role="direct", origin="seat")
+        if allow_writes and context.get("origin") != "worker":
+            import time as _time
+            self._last_edit_started = _time.time()
         self._active_call = dict(context, model=key, allow_writes=allow_writes)
         spec = self._active_spec
         if (context.get("role") != "closeout" and context.get('origin') != 'worker'
@@ -1468,7 +1479,7 @@ class Session:
         task.keep(draft, kind="draft")
 
         self._assess_scope(spec, task, before)
-        self._check_design(spec, lead, collaborators, task)
+        self._brief_design_reviewers(spec)
         from .integration import GateSuite
         if isinstance(self.config.integration_gate, GateSuite):
             cheap = self.config.integration_gate.cheap()
@@ -1568,6 +1579,7 @@ class Session:
                 )
 
         self._run_integration_gate(lead, spec, task)
+        self._check_design(spec, lead, collaborators, task)
 
         self._assess_scope(spec, task, before)
         summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
@@ -2005,6 +2017,16 @@ class Session:
             )
             continues, spec = _read_continues(spec)
             covers, spec = _read_covers(spec)
+            problem = self._covers_problem(covers)
+            if problem:
+                # Corrected before any lead call is spent (Codex review of #25).
+                self._covers_corrections += 1
+                if self._covers_corrections > self.config.max_requirement_reopens:
+                    raise RunStalled(f"the orchestrator kept naming tasks without valid COVERS: {problem}")
+                self._done_refusal = (f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again "
+                                      "with a COVERS line using the listed requirement ids.")
+                previous_description = None
+                continue
             summary = self.run_task(spec)
             if getattr(summary, "outcome", "closed") == "turn_limited":
                 # A capped continuation carries its predecessor's debt forward.
@@ -2047,35 +2069,99 @@ class Session:
             )
         return list(self.history)
 
-    def _check_design(self, spec, lead, collaborators, task) -> None:
-        """Design work must leave rendered evidence and draw an independent
-        reviewer; either missing is an open finding, not a quiet pass."""
+    def _brief_design_reviewers(self, spec) -> None:
+        """Point the design reviewers at the draft's renders, if it left any.
+        Nothing is judged here: the enforced check runs after the last edit."""
         self._design_note = ""
+        if not (self.config.design_cross_check and is_design_task(spec) and self.project):
+            return
+        from .design_evidence import check
+        ok, _, shots = check(self.project, spec.task_id, self._last_edit_started or 0)
+        if ok:
+            self._design_note = (
+                "\n\nThe lead's rendered evidence for this draft (read these files; they are "
+                "outside your source copy on purpose): " + ", ".join(shots)
+                + ". Judge the design from the screenshots as well as the code.")
+
+    def _check_design(self, spec, lead, collaborators, task) -> None:
+        """The enforced design check, after the last edit and the gate.
+
+        The renders must postdate the start of the last editing call, be
+        clean, and name their page. One bounded design-fix call is allowed,
+        then the gate is re-run; still missing is an open finding. A reviewer
+        from another vendor then approves the final renders or records
+        blocking design problems. Codex review of #25: a screenshot of the
+        draft must not pass a revised tree, and a render with console errors
+        is not evidence that the UI works.
+        """
         if not is_design_task(spec) or not (self.project and self.config.allow_writes):
             return
         from .design_evidence import check
-        if self.config.design_self_verify:
-            ok, problem, shots = check(self.project, spec.task_id, self._task_started or 0)
-            record = dict(task=spec.task_id, verified=ok, problem=problem, screenshots=shots)
+        record = dict(task=spec.task_id)
+        if not self.config.design_self_verify:
+            record.update(verified=None, problem="design self-verification disabled by the operator")
             self.design_checks.append(record)
-            task.keep(json.dumps(record), kind="design-evidence")
-            if ok:
-                self._design_note = (
-                    "\n\nThe lead's rendered evidence (read these files; they are outside your "
-                    "source copy on purpose): " + ", ".join(shots)
-                    + ". Judge the design from the screenshots as well as the code.")
-            else:
-                self.open_findings.append(
-                    f"Task {spec.task_id} is design work without rendered evidence: {problem}.")
-                self._note(f"task {spec.task_id}: design work unverified ({problem[:120]})")
-        else:
-            self.design_checks.append(dict(task=spec.task_id, verified=None,
-                                           problem="design self-verification disabled by the operator"))
+            return
+        ok, problem, shots = check(self.project, spec.task_id, self._last_edit_started or 0)
+        if not ok:
+            record["first_problem"] = problem
+            self._note(f"task {spec.task_id}: design evidence missing or broken; one fix call ({problem[:100]})")
+            import sys as _sys
+            package_root = Path(__file__).resolve().parent.parent
+            command = (f"PYTHONPATH={package_root} {_sys.executable} -m quadratus.design_evidence "
+                       f"<url of the page> {spec.task_id} .")
+            self._edit(lead, (
+                f"Task: {spec.description}\n\nThe rendered evidence for this design task is missing "
+                f"or shows a broken page: {problem}.\nFix what the render shows is wrong, then capture "
+                f"it again with exactly:\n    {command}\nReport what you changed and what the new "
+                "screenshots show. " + self._revision_delivery()), role="design-fix")
+            self._run_integration_gate(lead, spec, task)
+            ok, problem, shots = check(self.project, spec.task_id, self._last_edit_started or 0)
+        record.update(verified=ok, problem=problem, screenshots=shots)
+        if not ok:
+            self.open_findings.append(f"Task {spec.task_id} is design work without clean rendered evidence: {problem}.")
+            self._note(f"task {spec.task_id}: design work unverified ({problem[:120]})")
+        vendor = lead.partition(":")[0]
+        reviewer = next((p for p in collaborators if p.partition(":")[0] != vendor), None)
         if self.config.design_cross_check:
-            vendor = lead.partition(":")[0]
-            if not any(p.partition(":")[0] != vendor for p in collaborators):
+            if reviewer is None:
                 self.open_findings.append(
                     f"Task {spec.task_id} is design work with no reviewer from another vendor available.")
+            elif ok:
+                verdict = self._final_design_review(spec, reviewer, shots)
+                record["final_review"] = dict(reviewer=reviewer, verdict=verdict[:600])
+                blocking = [line for line in (verdict or "").splitlines() if line.strip().startswith("BLOCKING:")]
+                if (verdict or "").strip() != "APPROVED" and not blocking:
+                    blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
+                self.open_findings.extend(f"Task {spec.task_id} design: {b.strip()}" for b in blocking)
+        self.design_checks.append(record)
+        task.keep(json.dumps(record), kind="design-evidence")
+
+    def _final_design_review(self, spec, reviewer, shots) -> str:
+        """The cross-vendor reviewer judges the final renders, not the draft's."""
+        prompt = (
+            f"Task: {spec.description}\n\nThese are the final renders of this design work, taken "
+            "after its last edit (read these files; they are outside your source copy on purpose): "
+            + ", ".join(shots) + _DESIGN_REVIEW_LENS
+            + "\n\nReply exactly APPROVED if the delivered interface is acceptable, or one line "
+            "per blocking problem starting 'BLOCKING:'. Nothing else."
+        )
+        with invocation(spec.task_id, "design-review"):
+            return self._invoke_model(reviewer, prompt)
+
+    def _covers_problem(self, covers) -> str:
+        ledger = self.memory.ledger
+        if not self.config.requirements_ledger:
+            return ""
+        if not ledger.requirements:
+            return ("No requirements are listed yet. Start the reply with a 'REQUIREMENTS:' block "
+                    "numbering the goal's requirements (R1: ...), then the task.")
+        if not covers:
+            return "The task has no COVERS line."
+        unknown = [r for r in covers if r not in ledger.requirements]
+        if unknown:
+            return f"COVERS names requirements that do not exist: {', '.join(unknown)}."
+        return ""
 
     def _absorb_requirements(self, reply: str) -> str:
         """Take a REQUIREMENTS block into the ledger, once, off the reply."""
@@ -2142,8 +2228,28 @@ class Session:
         run; that is recorded, not invented.
         """
         ledger = self.memory.ledger
-        if not self.config.requirements_ledger or not ledger.requirements:
+        if not self.config.requirements_ledger:
             return True
+        if not ledger.requirements:
+            self._done_refusal = (
+                "\n\n--- DONE SENT BACK ---\nNo requirements were listed. Before DONE can stand, "
+                "reply with a 'REQUIREMENTS:' block numbering the goal's requirements (R1: ...), "
+                "then name the next task or reply DONE.")
+            self._note("DONE sent back: no requirements listed")
+            return False
+        if not any(r.get("reviewer") and not str(r.get("result", "")).startswith(("failed", "no reviewer"))
+                   for r in self.requirement_reviews):
+            self._review_requirements()
+            if not any(r.get("reviewer") and not str(r.get("result", "")).startswith(("failed", "no reviewer"))
+                       for r in self.requirement_reviews):
+                self._done_refusal = (
+                    "\n\n--- DONE SENT BACK ---\nThe requirement list has not been reviewed against "
+                    "the goal by another vendor (no reviewer available, or the review failed).")
+                self._note("DONE sent back: requirements not independently reviewed")
+                return False
+            if any(not s.startswith(("covered", "met")) for s in
+                   (ledger.requirement_status.get(r, "open") for r in ledger.requirements)):
+                return self._requirements_satisfied()
         status = ledger.requirement_status
         uncovered = [r for r in ledger.requirements if not status.get(r, "").startswith(("covered", "met"))]
         if uncovered:
@@ -2168,17 +2274,43 @@ class Session:
         return True
 
     def _auditor(self) -> Optional[str]:
-        """A brain-trust member from a vendor other than the orchestrator's."""
+        """A brain-trust member from a vendor other than the orchestrator's,
+        or None. Never the seat's own vendor: an audit that shares the
+        planner's lineage is not independent (Codex review of #25)."""
         seat_vendor = self.seat().key.partition(":")[0]
-        pool = [p for p in self.brain_trust if self._available(p)]
-        return next((p for p in pool if p.partition(":")[0] != seat_vendor), pool[0] if pool else None)
+        return next((p for p in self.brain_trust
+                     if self._available(p) and p.partition(":")[0] != seat_vendor), None)
+
+    def _resolve_citations(self, text: str) -> List[str]:
+        """The cited paths and test names that actually exist in the project."""
+        if not self.project:
+            return re.findall(r"[\w./-]+\.\w+|test_\w+", text)
+        root = Path(self.project)
+        found = []
+        for token in re.findall(r"[\w./-]+\.[A-Za-z]\w*", text):
+            path = token.split("::")[0].lstrip("./")
+            if path and (root / path).is_file():
+                found.append(path)
+        for name in re.findall(r"\btest_\w+", text):
+            for test_file in root.rglob("test*.py"):
+                if ".quadratus" in test_file.parts:
+                    continue
+                try:
+                    if f"def {name}" in test_file.read_text(errors="ignore"):
+                        found.append(f"{test_file.relative_to(root)}::{name}")
+                        break
+                except OSError:
+                    continue
+        return found
 
     def _audit_requirements(self) -> dict:
         """One read-only call: each requirement met or not, with evidence."""
         ledger = self.memory.ledger
         auditor = self._auditor()
         if auditor is None:
-            return {r: (False, "no auditor available") for r in ledger.requirements}
+            self.requirement_audits.append(dict(auditor=None, result="no auditor from another vendor available"))
+            return {r: (False, "no auditor from another vendor available") for r in ledger.requirements}
+        before = self._capture_source() if self.project else None
         checks = "\n".join(f"- {c['command']}: {'passed' if c['passed'] else 'FAILED'}" for c in self.checks[-3:])
         prompt = (
             f"## Goal (verbatim)\n\n{self.memory.goal.strip()}\n\n## Requirements\n\n"
@@ -2209,11 +2341,17 @@ class Session:
             self._note(f"requirements audit failed: {type(exc).__name__}: {str(exc)[:160]}")
         finally:
             self._active_spec = saved
+        if self.project and before is not None and self._capture_source() != before:
+            self._note("the source changed during the requirements audit; its verdicts are void")
+            self.requirement_audits.append(dict(auditor=auditor, result="void: the tree changed during the audit"))
+            return {r: (False, "the tree changed during the audit") for r in ledger.requirements}
         found = {}
         for m in _AUDIT_LINE.finditer(reply or ""):
             met, why = m.group(2).upper() == "MET", m.group(3).strip()
-            if met and not re.search(r"[\w./-]+\.\w+|test_\w+|::", why):
-                met, why = False, f"MET claimed without a cited file or test ({why[:80]})"
+            if met:
+                resolved = self._resolve_citations(why)
+                if not resolved:
+                    met, why = False, f"MET claimed without a file or test that exists in the project ({why[:100]})"
             found[m.group(1).upper()] = (met, why)
         verdicts = {r: found.get(r, (False, "the auditor gave no verdict")) for r in ledger.requirements}
         self.requirement_audits.append(dict(auditor=auditor, verdicts={r: dict(met=ok, why=why)
@@ -2421,7 +2559,7 @@ class Session:
             "against the revision. If you genuinely find nothing worth changing, "
             "reply exactly 'NO FINDINGS' and nothing else; do not write 'BLOCKING: none'."
             + _review_subject_note(spec)
-            + (_DESIGN_REVIEW_LENS + getattr(self, "_design_note", "")
+            + (_DESIGN_REVIEW_LENS + (self._design_note or "")
                if self.config.design_cross_check and is_design_task(spec) else "")
         )
 
