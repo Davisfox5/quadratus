@@ -119,6 +119,24 @@ class Ledger:
         #: apart from the status, so COVERS cannot overwrite them; only an
         #: operator ruling naming the id settles one.
         self.ambiguous: Dict[str, str] = {}
+        #: How many rulings existed when each ambiguity was flagged, so a
+        #: later answer can be attributed to it.
+        self.ambiguous_since: Dict[str, int] = {}
+        #: Ambiguities the orchestrator settled itself (DECIDE: Rn - ...),
+        #: labelled as its decisions, not the operator's.
+        self.decisions: Dict[str, str] = {}
+
+    def settled(self, rid: str) -> bool:
+        """An ambiguity is settled by the orchestrator's DECIDE, or by an
+        operator ruling given after it was flagged that names it -- or, when
+        it is the only open ambiguity, any such ruling."""
+        if rid in self.decisions:
+            return True
+        later = self.rulings[self.ambiguous_since.get(rid, 0):]
+        if any(rid in r for r in later):
+            return True
+        open_ids = [r for r in self.ambiguous if r not in self.decisions]
+        return bool(later) and open_ids == [rid]
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -208,8 +226,9 @@ class Ledger:
             blocks.append(
                 "## Requirements (numbered from the goal; the run is done only when every one is met)\n\n"
                 + "\n".join(f"- {rid}: {text} [{self.requirement_status.get(rid, 'open')}]"
-                             + (f" [AMBIGUOUS, needs an operator ruling: {self.ambiguous[rid]}]"
-                                if rid in self.ambiguous and not any(rid in r for r in self.rulings) else "")
+                             + (f" [DECIDED by the orchestrator: {self.decisions[rid]}]" if rid in self.decisions else
+                                f" [AMBIGUOUS -- settle it: {self.ambiguous[rid]}]"
+                                if rid in self.ambiguous and not self.settled(rid) else "")
                              for rid, text in self.requirements.items())
             )
 

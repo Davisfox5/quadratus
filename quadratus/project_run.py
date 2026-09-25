@@ -241,6 +241,8 @@ def _requirements_record(session):
     ledger = session.memory.ledger
     return {"listed": dict(ledger.requirements), "status": dict(ledger.requirement_status),
             "ambiguous": dict(ledger.ambiguous),
+            "decided_by_orchestrator": dict(ledger.decisions),
+            "operator_rulings": list(ledger.rulings),
             "reviews": list(getattr(session, "requirement_reviews", []) or []),
             "audits": list(getattr(session, "requirement_audits", []) or [])}
 
@@ -261,4 +263,32 @@ def _preferences_record(settings=None):
     return {"requested": "neutral", "observed": "not verified per CLI",
             "flags_passed": {s.vendor: list(s.neutral_args) for s in specs},
             "not_removable": [s.neutral_gap for s in specs if s.neutral_gap]}
+
+
+def standing_rulings(path, fallback=None):
+    """An ask_operator that answers from rulings the operator gave in advance.
+
+    The file is JSON: a list of {"about": "<regex>", "answer": "<text>"}. A
+    question matching an entry gets its answer, recorded as a standing ruling
+    like any other; anything else goes to ``fallback`` (an interactive
+    prompt), or stops the run with OperatorInputNeeded. A blind run can then
+    carry answers the operator already gave without anyone at the keyboard.
+    """
+    import json as _json
+    import re as _re
+    entries = _json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(entries, list) or not all(
+            isinstance(e, dict) and isinstance(e.get("about"), str) and isinstance(e.get("answer"), str)
+            for e in entries):
+        raise ValueError(f"{path}: expected a list of {{'about': regex, 'answer': text}}")
+
+    def ask(question: str) -> str:
+        for entry in entries:
+            if _re.search(entry["about"], question, _re.IGNORECASE):
+                return entry["answer"]
+        if fallback is not None:
+            return fallback(question)
+        from .session import OperatorInputNeeded
+        raise OperatorInputNeeded(question)
+    return ask
 

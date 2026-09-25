@@ -148,8 +148,50 @@ def test_an_ambiguous_requirement_needs_a_ruling_even_when_covered(tmp_path):
     assert not session.completed
     assert session.memory.ledger.requirement_status["R2"].startswith("covered")
     assert "R2" in session.memory.ledger.ambiguous
-    assert any("need the operator's ruling: R2" in p for m, p in script.prompts if "Name the single next task" in p)
+    assert any("not yet settled: R2" in p for m, p in script.prompts if "Name the single next task" in p)
     session.memory.ledger.rulings.append("Q: R2, which screen? -- A: the tagging screen")
     session._done_refusal = ""
     session._requirements_satisfied()
-    assert "operator's ruling" not in session._done_refusal, "a ruling naming R2 settles it"
+    assert "not yet settled" not in session._done_refusal, "a ruling naming R2 settles it"
+
+
+def test_the_orchestrator_settles_a_small_ambiguity_itself_with_decide(tmp_path):
+    """Davis, 2026-09-25: ask sparingly, for large-scale production decisions only."""
+    plan = PLAN.replace("COVERS: R1", "COVERS: R1, R2, R3")
+    script = Script([plan, "DECIDE: R2 - the tagging screen, where clips are made\nDONE"],
+                    review="AMBIGUOUS: R2 - which screen gets the button",
+                    audits=["R1: MET - app.py\nR2: MET - app.py\nR3: MET - app.py"])
+    session = _run(tmp_path, script)
+    assert session.completed
+    assert session.memory.ledger.decisions["R2"].startswith("the tagging screen")
+    audit = next(p for m, p in script.prompts if "independent auditor" in p)
+    assert "decided by the orchestrator: the tagging screen" in audit
+    first = next(p for m, p in script.prompts if "Name the single next task" in p)
+    assert "large-scale production decision" in first
+
+
+def test_an_answer_to_a_question_that_does_not_name_the_id_settles_the_only_open_ambiguity():
+    from quadratus.ledger import Ledger
+    ledger = Ledger()
+    ledger.requirements = {"R9": "players"}
+    ledger.ambiguous = {"R9": "combined form"}
+    ledger.ambiguous_since = {"R9": 0}
+    assert not ledger.settled("R9")
+    ledger.rulings.append("Q: Should Players accept '#7 Alice'? -- A: yes")
+    assert ledger.settled("R9")
+
+
+def test_standing_rulings_answer_in_advance(tmp_path):
+    import json
+
+    import pytest
+
+    from quadratus.project_run import standing_rulings
+    from quadratus.session import OperatorInputNeeded
+    path = tmp_path / "rulings.json"
+    path.write_text(json.dumps([{"about": "players|#\\d+ \\w+", "answer": "Accept the combined form."}]))
+    ask = standing_rulings(path)
+    assert ask("Should Players also accept the combined `#7 Alice` format?") == "Accept the combined form."
+    with pytest.raises(OperatorInputNeeded):
+        ask("Which database should we use?")
+    assert standing_rulings(path, fallback=lambda q: "typed")("Which database?") == "typed"

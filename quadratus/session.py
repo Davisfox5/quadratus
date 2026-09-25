@@ -463,6 +463,16 @@ _COVERS_REQUEST = (
     "The run is complete only when every requirement is covered by a finished task "
     "and an independent audit finds it met; DONE before that is sent back to you."
 )
+_ASK_SPARINGLY = (
+    "Ask the operator sparingly. Reply 'ASK: <one question>' only for a large-scale "
+    "production decision that only they can make: scope, data safety, security, cost, "
+    "or an interface other systems rely on. For an ambiguous requirement that is not "
+    "one of those, decide it yourself with a line 'DECIDE: R<n> - <the reading you "
+    "chose and why>', preferring the reading that keeps existing behaviour working and "
+    "satisfies every promise in the goal. Decisions are recorded as yours and the "
+    "audit checks the work against them."
+)
+_DECIDE = re.compile(r"^\s*DECIDE:\s*(R\d+)\s*[-:—]\s*(.+?)\s*$", re.MULTILINE)
 _REQ_BLOCK = re.compile(r"^\s*REQUIREMENTS:\s*\n((?:\s*R\d+\s*[:.)-].*\n?)+)", re.MULTILINE)
 _REQ_LINE = re.compile(r"^\s*(R\d+)\s*[:.)-]\s*(.+?)\s*$", re.MULTILINE)
 _COVERS = re.compile(r"^\s*COVERS:\s*(.+?)\s*$", re.MULTILINE)
@@ -1847,9 +1857,8 @@ class Session:
                     "Name the single next task, or reply exactly DONE if the "
                     "goal is met. To read a full artifact behind a summary "
                     "first, reply with exactly 'FETCH: <artifact-id>' and "
-                    "nothing else. If the decision turns on something only the "
-                    "operator can answer, reply 'ASK: <one question>' instead."
-                    f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}\n\n{_NEEDS_REQUEST}"
+                    "nothing else. " + _ASK_SPARINGLY
+                    + f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}\n\n{_NEEDS_REQUEST}"
                     + ("\n\n" + (_COVERS_REQUEST if self.memory.ledger.requirements
                                   else _REQUIREMENTS_REQUEST) if self.config.requirements_ledger else "")
                     + (self._done_refusal or "")
@@ -2202,7 +2211,14 @@ class Session:
         return ""
 
     def _absorb_requirements(self, reply: str) -> str:
-        """Take a REQUIREMENTS block into the ledger, once, off the reply."""
+        """Take a REQUIREMENTS block into the ledger, once, and any DECIDE
+        lines on ambiguous requirements, off the reply."""
+        ledger = self.memory.ledger
+        for rid, text in _DECIDE.findall(reply or ""):
+            if rid in ledger.ambiguous:
+                ledger.decisions[rid] = text[:400]
+                self._note(f"the orchestrator decided ambiguous {rid}: {text[:120]}")
+        reply = _DECIDE.sub("", reply or "").strip() or reply
         found, rest = _read_requirements(reply)
         if not found:
             return reply
@@ -2269,6 +2285,7 @@ class Session:
             ledger.requirement_status[rid] = "open (added by the requirements review)"
         for rid, why in disputed:
             ledger.ambiguous[rid] = why[:300]
+            ledger.ambiguous_since[rid] = len(ledger.rulings)
         self.requirement_reviews.append(dict(reviewer=reviewer, result="reviewed", added=added,
                                              ambiguous=disputed))
 
@@ -2302,14 +2319,13 @@ class Session:
             if any(not s.startswith(("covered", "met")) for s in
                    (ledger.requirement_status.get(r, "open") for r in ledger.requirements)):
                 return self._requirements_satisfied()
-        unsettled = [r for r in ledger.ambiguous
-                     if not any(re.search(rf"\b{r}\b", ruling) for ruling in ledger.rulings)]
+        unsettled = [r for r in ledger.ambiguous if not ledger.settled(r)]
         if unsettled:
             self._done_refusal = (
-                "\n\n--- DONE SENT BACK ---\nThese requirements are ambiguous and need the "
-                f"operator's ruling: {', '.join(unsettled)}. Ask with 'ASK: <question naming the "
-                "requirement id>'; the answer is recorded as a standing ruling.")
-            self._note(f"DONE sent back: ambiguous requirements without a ruling: {', '.join(unsettled)}")
+                "\n\n--- DONE SENT BACK ---\nThese requirements are ambiguous and not yet settled: "
+                f"{', '.join(unsettled)}. Settle each with 'DECIDE: R<n> - <reading and why>', or "
+                "ASK the operator only if it is a large-scale production decision.")
+            self._note(f"DONE sent back: unsettled ambiguous requirements: {', '.join(unsettled)}")
             return False
         status = ledger.requirement_status
         uncovered = [r for r in ledger.requirements if not status.get(r, "").startswith(("covered", "met"))]
@@ -2377,6 +2393,10 @@ class Session:
             f"## Goal (verbatim)\n\n{self.memory.goal.strip()}\n\n## Requirements\n\n"
             + "\n".join(f"{rid}: {text}" for rid, text in ledger.requirements.items())
             + (f"\n\n## Latest project checks\n{checks}" if checks else "")
+            + (("\n\n## How ambiguous requirements were settled (judge against these)\n"
+                + "\n".join([f"- {r}: decided by the orchestrator: {t}" for r, t in ledger.decisions.items()]
+                             + [f"- operator ruling: {r}" for r in ledger.rulings]))
+               if ledger.decisions or ledger.rulings else "")
             + (("\n\n## Rendered design evidence\n" + "\n".join(
                 f"- {d['task']}: " + (", ".join(d.get('screenshots') or []) or d.get('problem', ''))
                 for d in self.design_checks)) if self.design_checks else "")

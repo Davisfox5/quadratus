@@ -111,7 +111,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
                 max_tasks=args.max_tasks, mode=args.mode,
                 security_verdict_json=getattr(args, "security_verdict_json", False),
                 progress=lambda message: print(f">> {message}", flush=True),
-                ask_operator=lambda question: input(f"\n{question}\n> ").strip(),
+                ask_operator=_operator(args),
                 plan_gate=(lambda plan: print(plan) is None and
                            input("Run this plan? [y/N] ").lower() in ('y', 'yes')) if args.plan_gate else None,
             )
@@ -219,6 +219,17 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
     return 0
 
 
+def _operator(args):
+    """Interactive answers, preceded by any rulings the operator gave in advance."""
+    def interactive(question):
+        return input(f"\n{question}\n> ").strip()
+    path = getattr(args, "rulings", None)
+    if not path:
+        return interactive
+    from .project_run import standing_rulings
+    return standing_rulings(path, fallback=interactive)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -324,6 +335,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             "Let the agents write files. Off by default: several models in one "
             "tree is write-thrash, and a reviewer asked to critique will edit."
         ),
+    )
+    engine.add_argument(
+        "--rulings", metavar="FILE",
+        help=("JSON list of {\"about\": regex, \"answer\": text}: answers you give in advance to "
+              "questions the planner may ask. Anything else is asked interactively."),
     )
     engine.add_argument(
         "--neutral-preferences", action="store_true",
