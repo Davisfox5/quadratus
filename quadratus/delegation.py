@@ -114,10 +114,14 @@ def record_invocation(ledger, event):
 
 
 @contextmanager
-def invocation(task, role, origin="seat", prompt_artifact=None):
+def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None):
     context = dict(task=task, role=role, origin=origin)
     if prompt_artifact:
         context["prompt_artifact"] = prompt_artifact
+    if worker_tool:
+        # The lead's in-session worker tool (worker_bridge); Fleet attaches it
+        # to the lead's view only.
+        context["worker_tool"] = worker_tool
     token = invocation_context.set(context)
     try:
         yield

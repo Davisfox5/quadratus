@@ -62,7 +62,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .delegation import NativeChild
 from .providers import LLMProvider, ProviderError, ProviderRefusal, Turn, TurnLimitReached
@@ -956,6 +956,13 @@ class CLISpec:
     #: argued with either.
     native_fanout_off_env: Dict[str, str] = field(default_factory=dict)
     disallowed_tools_flag: str = ""
+    #: How this CLI attaches the in-session ``commission_worker`` tool
+    #: (``worker_bridge``): "claude", "codex", "grok", or "" for none. Each
+    #: form was probed on 2026-09-25; see ``_worker_tool_argv``.
+    worker_tool_style: str = ""
+    #: Names the run-wide denial must drop while the tool is attached, or the
+    #: denial would remove the tool it is meant to leave alone.
+    worker_tool_undeny: Tuple[str, ...] = ()
     #: Arguments that turn the restricted seat into a one-turn, tool-less (or
     #: as close as the CLI documents) summary call. Sent only when a provider
     #: view carries ``summary_only=True``; see ``CLIProvider._build_argv``.
@@ -1104,6 +1111,10 @@ CLAUDE_SPEC = CLISpec(
     # is set and never form under -p; pinned to 0 below anyway.
     native_fanout_off_args=["--disallowed-tools",
                             "Task Agent Workflow SendMessage ListAgents RemoteTrigger CronCreate mcp__*"],
+    # --strict-mcp-config loads only the server Quadratus names, which is what
+    # the mcp__* denial protected against, so the denial can step aside.
+    worker_tool_style="claude",
+    worker_tool_undeny=("mcp__*",),
     native_fanout_off_env={
         # Read at startup: workflows unavailable, not merely denied.
         "CLAUDE_CODE_DISABLE_WORKFLOWS": "1",
@@ -1378,6 +1389,7 @@ CODEX_SPEC = CLISpec(
     extract_usage=_extract_codex_usage,
     prompt_on_stdin=True,
     verified=True,
+    worker_tool_style="codex",
 )
 
 #: Grok Build (``brew install --cask grok-build``), authenticating against
@@ -1507,6 +1519,11 @@ GROK_SPEC = CLISpec(
     # single nonsense name denies: nothing. Hence the separator field.
     native_fanout_off_args=["--disallowed-tools",
                             "Agent,spawn_subagent,workflow,scheduler_create,use_tool,search_tool"],
+    # grok reaches MCP tools through use_tool (and finds them with
+    # search_tool). Attached only inside the container, whose HOME holds no
+    # other integrations; see _worker_tool_argv.
+    worker_tool_style="grok",
+    worker_tool_undeny=("use_tool", "search_tool"),
     disallowed_tools_separator=",",
     # Workflows removed at startup as well as denied by name.
     native_fanout_off_env={"GROK_WORKFLOWS": "0"},
@@ -1828,6 +1845,11 @@ class CLIProvider(LLMProvider):
         #: runtime.Fleet. None sends no flag. A proxy for spend, not a
         #: token ceiling: an 11-turn grok lead still reported 365,138 tokens.
         self.max_turns: Optional[int] = kwargs.pop("max_turns", None)
+        #: The in-session worker tool for this view (``WorkerBridge.spec()``),
+        #: set per lead call by runtime.Fleet. None attaches nothing.
+        self.worker_tool: Optional[dict] = kwargs.pop("worker_tool", None)
+        self._worker_tool_files: List[str] = []
+        self.worker_tool_attached = False
         self._prompt_files = set()
         #: Real token counts from the most recent call, when the CLI reported
         #: them; None otherwise. Read by metering glue, never load-bearing.
@@ -1987,6 +2009,9 @@ class CLIProvider(LLMProvider):
             if os.listdir(self.workdir):
                 raise ProviderError(f"{self.label}: summary_only requires an empty working directory")
             mode = 'off'
+        tool = getattr(self, "worker_tool", None)
+        tool_args = self._worker_tool_argv(tool) if tool and not self.summary_only else None
+        self.worker_tool_attached = tool_args is not None
         if getattr(self, 'native_fanout_off', False):
             # Set per call on a view by runtime.Fleet for a seat whose job
             # excludes delegation (the verifier). The same denial, kill
@@ -2002,6 +2027,8 @@ class CLIProvider(LLMProvider):
                     'when QUADRATUS_NATIVE_DELEGATION=off')
             flag, *names = spec.native_fanout_off_args
             denied = _split_tool_names(" ".join(names), spec.disallowed_tools_separator)
+            if tool_args is not None:
+                denied = [name for name in denied if name not in spec.worker_tool_undeny]
             argv = _fold_disallowed(argv, spec.disallowed_tools_flag or flag, denied,
                                     spec.disallowed_tools_separator)
             self._native_fanout_denied = denied
@@ -2023,6 +2050,7 @@ class CLIProvider(LLMProvider):
         # the spellings that could out-order a weaker form, and the operator
         # contract that overrides land last is one this module already
         # promises.
+        argv += tool_args or []
         argv += list(spec.control_args)
         argv += extra
         if self.summary_only:
@@ -2047,6 +2075,54 @@ class CLIProvider(LLMProvider):
         elif not spec.prompt_on_stdin:
             argv.append(prompt)
         return argv
+
+    def _worker_tool_argv(self, tool: dict) -> Optional[List[str]]:
+        """Arguments that attach the in-session worker tool, or None.
+
+        Forms from the 2026-09-25 probe. claude takes an inline MCP config and
+        --strict-mcp-config, so no user or project server loads beside it.
+        codex takes -c overrides; without the per-server approval mode an MCP
+        call is refused under approval policy "never". grok reads MCP servers
+        only from a project-scoped .grok/config.toml and starts them only in a
+        trusted folder; --trust persists that trust in ~/.grok, so grok gets
+        the tool only inside the container, where HOME is disposable, and only
+        when the directory has no .grok of its own to overwrite.
+        """
+        name = tool["name"]
+        style = self.spec.worker_tool_style
+        if style == "claude":
+            config = {"mcpServers": {name: {"command": tool["command"], "args": tool["args"],
+                                            "env": tool["env"]}}}
+            return ["--mcp-config", json.dumps(config), "--strict-mcp-config",
+                    "--allowedTools", f"mcp__{name}__commission_worker"]
+        if style == "codex":
+            env = "{" + ", ".join(f"{k} = {json.dumps(v)}" for k, v in tool["env"].items()) + "}"
+            prefix = f"mcp_servers.{name}"
+            return ["-c", f"{prefix}.command={json.dumps(tool['command'])}",
+                    "-c", f"{prefix}.args={json.dumps(tool['args'])}",
+                    "-c", f"{prefix}.env={env}",
+                    "-c", f'{prefix}.default_tools_approval_mode="approve"',
+                    "-c", f"{prefix}.tool_timeout_sec={int(tool['timeout'])}",
+                    "-c", f"{prefix}.startup_timeout_sec=30"]
+        if style == "grok" and contained():
+            folder = Path(self.workdir) / ".grok"
+            if folder.exists():
+                return None
+            env = "{ " + ", ".join(f"{k} = {json.dumps(v)}" for k, v in tool["env"].items()) + " }"
+            folder.mkdir()
+            (folder / "config.toml").write_text(
+                f"[mcp_servers.{name}]\ncommand = {json.dumps(tool['command'])}\n"
+                f"args = {json.dumps(tool['args'])}\nenv = {env}\n"
+                f"tool_timeout_sec = {int(tool['timeout'])}\n", encoding="utf-8")
+            # Reassigned, not appended: views are shallow copies.
+            self._worker_tool_files = [*self._worker_tool_files, str(folder)]
+            return ["--trust"]
+        return None
+
+    def _remove_worker_tool_files(self) -> None:
+        for path in self._worker_tool_files:
+            shutil.rmtree(path, ignore_errors=True)
+        self._worker_tool_files = []
 
     def _write_prompt_file(self, prompt: str) -> str:
         """Spill the prompt to a file for CLIs that read it from a path.
@@ -2083,6 +2159,9 @@ class CLIProvider(LLMProvider):
         env = {**os.environ, **self.spec.env}
         if getattr(self, "_native_fanout_denied", None):
             env.update(self.spec.native_fanout_off_env)
+        if self.worker_tool_attached and self.spec.worker_tool_style == "claude":
+            # claude's MCP tool-call timeout, in milliseconds.
+            env["MCP_TOOL_TIMEOUT"] = str(int(self.worker_tool["timeout"]) * 1000)
         # An inherited ANTHROPIC_API_KEY would silently divert a subscription
         # run onto billed API credits, so clear key vars for the child.
         for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
@@ -2109,6 +2188,7 @@ class CLIProvider(LLMProvider):
         except FileNotFoundError as exc:
             raise ProviderError(f"{self.label} CLI vanished from PATH: {exc}") from exc
         finally:
+            self._remove_worker_tool_files()
             if self.spec.prompt_file_flag and self.spec.prompt_file_flag in argv:
                 path = argv[argv.index(self.spec.prompt_file_flag) + 1]
                 try:

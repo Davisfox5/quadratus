@@ -111,8 +111,6 @@ def test_missing_transcript_is_listed_and_hostile_ids_are_not_globbed(tmp_path):
 
 
 def test_grok_whole_stdout_envelope_yields_session_id():
-    from types import SimpleNamespace
-
     from quadratus.cli_providers import GROK_SPEC, CLIProvider
 
     provider = CLIProvider.__new__(CLIProvider)
@@ -122,8 +120,5 @@ def test_grok_whole_stdout_envelope_yields_session_id():
     provider.last_diagnostics = None
     envelope = json.dumps({"sessionId": "33333333-aaaa-bbbb-cccc-000000000003", "text": "hi",
                            "stopReason": "end_turn"}, indent=2)
-    try:
-        provider._observe_output(envelope, SimpleNamespace(model="grok:default"))
-    except TypeError:
-        provider._observe_output(envelope)
+    provider._observe_output(envelope)
     assert provider.last_session_id == "33333333-aaaa-bbbb-cccc-000000000003"
