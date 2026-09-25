@@ -64,8 +64,11 @@ def check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
         summary = json.loads((folder / "summary.json").read_text())
     except (OSError, ValueError):
         summary = None
-    if not isinstance(summary, dict) or not summary.get("target") or not isinstance(summary.get("views"), dict):
-        return False, "no summary.json naming the rendered page (use python -m quadratus.design_evidence)", []
+    if (not isinstance(summary, dict) or not isinstance(summary.get("target"), str) or not summary["target"]
+            or not isinstance(summary.get("views"), dict)
+            or set(summary["views"]) != set(VIEWPORTS)
+            or not all(isinstance(v, dict) for v in summary["views"].values())):
+        return False, "no well-formed summary.json naming the rendered page (use python -m quadratus.design_evidence)", []
     for name, view in summary["views"].items():
         if not view.get("clean"):
             errors = "; ".join(str(e)[:120] for e in (view.get("console_errors") or [])[:3])

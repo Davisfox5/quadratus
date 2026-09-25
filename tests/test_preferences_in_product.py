@@ -94,7 +94,7 @@ def test_design_evidence_is_real_screenshots_at_both_widths(tmp_path):
     page.write_text("<!doctype html><title>t</title><button id=b>Import preview</button>")
     started = time.time() - 1
     ok, problem, _ = check(tmp_path, "t6", started)
-    assert not ok and "no summary.json" in problem
+    assert not ok and "well-formed summary.json" in problem
     try:
         capture(str(page), "t6", tmp_path)
     except Exception as exc:  # noqa: BLE001 -- no browser on this machine
@@ -180,3 +180,18 @@ def test_the_final_renders_go_to_the_cross_vendor_reviewer(tmp_path):
     assert any("overflows at mobile" in f for f in session.open_findings)
     assert session.design_checks[0]["verified"] is True
 
+
+
+def test_malformed_evidence_is_rejected_not_raised(tmp_path):
+    import json
+
+    from quadratus.design_evidence import check, evidence_dir
+    folder = evidence_dir(tmp_path, "t6")
+    folder.mkdir(parents=True)
+    for bad in ({"target": "x", "views": {"desktop": 1, "mobile": {}}}, {"target": "", "views": {}},
+                [1, 2], {"target": "x", "views": {"desktop": {}}}):
+        (folder / "summary.json").write_text(json.dumps(bad))
+        ok, problem, _ = check(tmp_path, "t6", 0)
+        assert not ok and "well-formed" in problem
+    (folder / "summary.json").write_text("{not json")
+    assert not check(tmp_path, "t6", 0)[0]

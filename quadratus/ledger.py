@@ -115,6 +115,10 @@ class Ledger:
         #: UI the brief asked for was never planned).
         self.requirements: Dict[str, str] = {}
         self.requirement_status: Dict[str, str] = {}
+        #: Requirements the review found open to more than one reading. Held
+        #: apart from the status, so COVERS cannot overwrite them; only an
+        #: operator ruling naming the id settles one.
+        self.ambiguous: Dict[str, str] = {}
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -204,6 +208,8 @@ class Ledger:
             blocks.append(
                 "## Requirements (numbered from the goal; the run is done only when every one is met)\n\n"
                 + "\n".join(f"- {rid}: {text} [{self.requirement_status.get(rid, 'open')}]"
+                             + (f" [AMBIGUOUS, needs an operator ruling: {self.ambiguous[rid]}]"
+                                if rid in self.ambiguous and not any(rid in r for r in self.rulings) else "")
                              for rid, text in self.requirements.items())
             )
 

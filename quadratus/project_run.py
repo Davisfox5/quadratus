@@ -240,6 +240,7 @@ def _requirements_record(session):
         return None
     ledger = session.memory.ledger
     return {"listed": dict(ledger.requirements), "status": dict(ledger.requirement_status),
+            "ambiguous": dict(ledger.ambiguous),
             "reviews": list(getattr(session, "requirement_reviews", []) or []),
             "audits": list(getattr(session, "requirement_audits", []) or [])}
 

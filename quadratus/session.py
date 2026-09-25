@@ -2191,11 +2191,13 @@ class Session:
         prompt = (
             f"## Goal (verbatim)\n\n{self.memory.goal.strip()}\n\n## Numbered requirements\n\n"
             + "\n".join(f"{rid}: {text}" for rid, text in ledger.requirements.items())
-            + "\n\nCompare the list with the goal. Reply COMPLETE if it covers everything the goal "
-            "asks for and forbids. Otherwise reply only with lines 'ADD: <one testable requirement "
-            "the list misses>' (deliverables, interfaces, user interface, documentation, "
+            + "\n\nCompare the list with the goal. Reply exactly COMPLETE if it covers everything "
+            "the goal asks for and forbids. Otherwise reply only with lines 'ADD: <one testable "
+            "requirement the list misses>' (deliverables, interfaces, user interface, documentation, "
             "compatibility with existing behaviour, and must-not constraints) and "
-            "'AMBIGUOUS: R<n> - <why the goal allows more than one reading>'."
+            "'AMBIGUOUS: R<n> - <the two readings>'. Mark a requirement ambiguous only when the goal "
+            "supports readings that would build different things: an ambiguous requirement needs an "
+            "operator ruling before the run can finish."
         )
         saved = self._active_spec
         self._active_spec = None
@@ -2207,18 +2209,30 @@ class Session:
             return
         finally:
             self._active_spec = saved
-        added = re.findall(r"^\s*ADD:\s*(.+?)\s*$", reply or "", re.MULTILINE)
-        disputed = re.findall(r"^\s*AMBIGUOUS:\s*(R\d+)\s*[-:—]\s*(.+?)\s*$", reply or "", re.MULTILINE)
+        # Only COMPLETE, or nothing but well-formed ADD / AMBIGUOUS lines, is a
+        # review. Anything else is recorded as a failed review, which keeps
+        # DONE blocked (Codex review of #25: prose used to count as a pass).
+        lines = [line.strip() for line in (reply or "").splitlines() if line.strip()]
+        added = [m.group(1) for m in (re.fullmatch(r"ADD:\s*(.+)", line) for line in lines) if m]
+        disputed = [(m.group(1), m.group(2)) for m in
+                    (re.fullmatch(r"AMBIGUOUS:\s*(R\d+)\s*[-:—]\s*(.+)", line) for line in lines) if m]
+        well_formed = lines == ["COMPLETE"] or (lines and len(added) + len(disputed) == len(lines)
+                                                and all(r in ledger.requirements for r, _ in disputed))
+        if not well_formed:
+            self.requirement_reviews.append(dict(reviewer=reviewer, result="failed: the reply was not "
+                                                 "COMPLETE or only ADD/AMBIGUOUS lines",
+                                                 reply=(reply or "")[:400]))
+            return
         next_id = len(ledger.requirements) + 1
-        for text in added[:12]:
+        for text in added:
             rid = f"R{next_id}"
             next_id += 1
             ledger.requirements[rid] = text
             ledger.requirement_status[rid] = "open (added by the requirements review)"
         for rid, why in disputed:
-            if rid in ledger.requirements:
-                ledger.requirement_status[rid] = f"open: ambiguous -- {why[:160]}"
-        self.requirement_reviews.append(dict(reviewer=reviewer, added=added[:12], ambiguous=disputed))
+            ledger.ambiguous[rid] = why[:300]
+        self.requirement_reviews.append(dict(reviewer=reviewer, result="reviewed", added=added,
+                                             ambiguous=disputed))
 
     def _requirements_satisfied(self) -> bool:
         """Whether DONE may stand: every requirement covered, then audited met.
@@ -2250,6 +2264,15 @@ class Session:
             if any(not s.startswith(("covered", "met")) for s in
                    (ledger.requirement_status.get(r, "open") for r in ledger.requirements)):
                 return self._requirements_satisfied()
+        unsettled = [r for r in ledger.ambiguous
+                     if not any(re.search(rf"\b{r}\b", ruling) for ruling in ledger.rulings)]
+        if unsettled:
+            self._done_refusal = (
+                "\n\n--- DONE SENT BACK ---\nThese requirements are ambiguous and need the "
+                f"operator's ruling: {', '.join(unsettled)}. Ask with 'ASK: <question naming the "
+                "requirement id>'; the answer is recorded as a standing ruling.")
+            self._note(f"DONE sent back: ambiguous requirements without a ruling: {', '.join(unsettled)}")
+            return False
         status = ledger.requirement_status
         uncovered = [r for r in ledger.requirements if not status.get(r, "").startswith(("covered", "met"))]
         if uncovered:
