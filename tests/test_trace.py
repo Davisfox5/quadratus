@@ -113,7 +113,7 @@ def test_missing_transcript_is_listed_and_hostile_ids_are_not_globbed(tmp_path):
 def test_grok_whole_stdout_envelope_yields_session_id():
     from types import SimpleNamespace
 
-    from quadratus.cli_providers import CLIProvider, GROK_SPEC
+    from quadratus.cli_providers import GROK_SPEC, CLIProvider
 
     provider = CLIProvider.__new__(CLIProvider)
     provider.spec = GROK_SPEC
