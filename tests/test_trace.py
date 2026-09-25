@@ -75,7 +75,7 @@ def test_codex_rollout_commands_patches_and_rejections(tmp_path):
                                  "session_id": tid, "task": "T2", "role": "lead"}])
     r = trace.build_traces(tmp_path / "run", ledger, "/work/proj", roots=roots)[0]
     assert [c["outcome"] for c in r["tool_calls"]] == ["error", "denied"]
-    assert r["commands"][0] == {"command": "pytest -q", "exit": 1, "outcome": "error"}
+    assert r["commands"][0] == {"program": "pytest", "exit": 1, "outcome": "error"}
     assert r["files_written"] == ["src/x.py"]
 
 
@@ -94,7 +94,9 @@ def test_grok_session_injected_rules_and_mid_loop_requests(tmp_path):
                                  "session_id": sid, "task": "T3", "role": "lead"}])
     r = trace.build_traces(tmp_path / "run", ledger, "/work/proj", roots=roots)[0]
     assert r["cwd"] == "/work/proj"
-    assert r["injected_rules"][0]["first_line"] == "Always verify in a browser."
+    assert "first_line" not in r["injected_rules"][0] and len(r["injected_rules"][0]["sha256"]) == 64
+    detail = [json.loads(x) for x in (tmp_path / "run" / "native-private" / "trace-detail.jsonl").read_text().splitlines()]
+    assert detail[0]["injected_rules"][0]["first_line"] == "Always verify in a browser."
     assert r["protocol_attempts"][0]["verb"] == "FETCH"
     assert r["files_read"] == ["/work/proj/a.py"] and r["outside_project"] == []
 
@@ -106,7 +108,8 @@ def test_missing_transcript_is_listed_and_hostile_ids_are_not_globbed(tmp_path):
         {"invoked": True, "requested_model": "grok:default", "session_id": None},
     ])
     records = trace.build_traces(tmp_path / "run", ledger, None, roots=roots)
-    assert [r["transcript"] for r in records] == ["missing", "no session id"]
+    assert [r["transcript"] for r in records] == ["unavailable in this environment", "no session id recorded"]
+    assert "unknown here" in trace.render_timeline(records)
     assert trace.locate("claude", "../../etc", roots) is None
 
 
@@ -122,3 +125,34 @@ def test_grok_whole_stdout_envelope_yields_session_id():
                            "stopReason": "end_turn"}, indent=2)
     provider._observe_output(envelope)
     assert provider.last_session_id == "33333333-aaaa-bbbb-cccc-000000000003"
+
+
+def test_secrets_in_commands_and_reasoning_stay_out_of_the_shareable_trace(tmp_path):
+    roots = _roots(tmp_path)
+    sid = "44444444-aaaa-bbbb-cccc-000000000004"
+    secret = "sk-SYNTHETIC-9f8e7d6c5b4a"
+    _jsonl(roots["claude"] / "-proj" / f"{sid}.jsonl", [
+        {"type": "assistant", "cwd": "/work/proj", "message": {"content": [
+            {"type": "thinking", "thinking": f"token is {secret}; WORKER {{\"errand\": \"read\"}}"},
+            {"type": "tool_use", "id": "t1", "name": "Bash",
+             "input": {"command": f"curl -H 'Authorization: Bearer {secret}' https://x"}},
+            {"type": "tool_use", "id": "t2", "name": "Read", "input": {"file_path": "/work/proj/a.py"}},
+        ]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
+            {"type": "tool_result", "tool_use_id": "t2", "content": "ok"}]}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "done"}]}},
+    ])
+    ledger = _ledger(tmp_path, [{"invoked": True, "requested_model": "claude:opus", "session_id": sid,
+                                 "task": "T1", "role": "lead"}])
+    records = trace.build_traces(tmp_path / "run", ledger, "/work/proj", roots=roots)
+    shared = (tmp_path / "run" / "trace.jsonl").read_text()
+    assert secret not in shared and secret not in trace.render_timeline(records)
+    assert records[0]["commands"] == [{"program": "curl", "exit": None, "outcome": "success"}]
+    assert {"name": "Read", "outcome": "success", "path": "/work/proj/a.py"} in records[0]["tool_calls"]
+    assert records[0]["protocol_attempts"] == [{"verb": "WORKER"}]
+    detail = tmp_path / "run" / "native-private" / "trace-detail.jsonl"
+    assert secret in detail.read_text(), "the owner-only detail keeps it for the operator"
+    for path, mode in ((detail, 0o600), (tmp_path / "run" / "trace.jsonl", 0o600),
+                       (tmp_path / "run" / "native-private", 0o700), (tmp_path / "run", 0o700)):
+        assert os.stat(path).st_mode & 0o777 == mode, path

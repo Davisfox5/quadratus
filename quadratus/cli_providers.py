@@ -831,11 +831,14 @@ def _extract_claude_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
         payload = json.loads(stdout)
     except ValueError:
         payload = None
+    # Only an object envelope carries turns or a reread; a malformed, empty
+    # or list envelope must not raise here, or _observe_output loses the rest
+    # of the failure evidence (Codex review of #25, 2026-09-25).
     if isinstance(payload, dict):
         turns = _envelope_turns(payload)
-    if turns is not None:
-        diagnostics.setdefault("model_calls", turns)
-    diagnostics.update(_reread_and_cost(payload.get("usage"),
+        if turns is not None:
+            diagnostics.setdefault("model_calls", turns)
+        diagnostics.update(_reread_and_cost(payload.get("usage"),
                                             payload.get("total_cost_usd")))
     if malformed:
         diagnostics["auxiliary_usage"] = "unknown"

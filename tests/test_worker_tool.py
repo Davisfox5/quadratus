@@ -295,3 +295,20 @@ def test_the_reply_channel_still_infers_needs_from_the_text(tmp_path):
     text = "insert a helper into app.py"
     assert check_errand_fit(text) is not None
     assert check_errand_fit(text, answer_only=True) is None
+
+
+def test_repeated_refused_tool_calls_close_the_channel(tmp_path):
+    """Codex review of #25: refusals were free and unbounded within one call."""
+    store = ArtifactStore(tmp_path / "artifacts")
+    answers = []
+
+    def invoke(model, prompt, system=None, allow_writes=False):
+        for _ in range(4):
+            answers.append(_call_tool({"errand": "nonsense", "instruction": "x"}))
+        return "Done myself."
+
+    session = Session("goal", store, invoke, config=SessionConfig(max_worker_failures=3))
+    session.workers = WorkerPool(store=store, run=lambda *a, **k: pytest.fail("no worker should run"))
+    with invocation("t1", "lead"), pytest.raises(RunStalled, match="not converging"):
+        session._draft_with_channels(OPUS, TaskSpec("t1", "do it"), _memory(store))
+    assert "now closed" in answers[2][0] and "channel is closed" in answers[3][0]
