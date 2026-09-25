@@ -456,7 +456,10 @@ class Fleet:
                 post_return_failure=getattr(failure, 'post_return_failure', False),
                 detail=str(failure)[:200] if failure else "",
                 usage=getattr(view, "last_usage", None),
+                prompt_artifact=context.get("prompt_artifact"),
             )
+            self._report_call(key, view, role, task, seconds, invoked,
+                              type(failure).__name__ if failure else "ok")
             self._observe_native(key, view)
             if not failure or getattr(view, "last_usage", None):
                 self._meter(key, view, prompt, reply)
@@ -489,7 +492,8 @@ class Fleet:
 
     def _record_invocation(self, key, provider, *, role, task, origin,
                            seconds, invoked, outcome, usage=None, detail="",
-                           post_return_failure=False, attempt=1, provider_outcome=None):
+                           post_return_failure=False, attempt=1, provider_outcome=None,
+                           prompt_artifact=None):
         """Append one invocation to the delegation ledger. Never raises."""
         if self.delegation_ledger is None:
             return
@@ -528,6 +532,7 @@ class Fleet:
                 model_turns=raw.get("model_calls") if isinstance(raw.get("model_calls"), int) else None,
                 max_turns=getattr(provider, "max_turns", None),
                 turn_limited=outcome == "TurnLimitReached",
+                prompt_artifact=prompt_artifact,
                 session_id=getattr(provider, "last_session_id", None),
                 post_return_failure=post_return_failure,
                 detail=detail,
@@ -537,6 +542,24 @@ class Fleet:
             record_invocation(self.delegation_ledger, event)
         except Exception:  # noqa: BLE001 -- accounting never fails a run
             log.debug("could not record invocation for %s", key, exc_info=True)
+
+    def _report_call(self, key, provider, role, task, seconds, invoked, outcome) -> None:
+        """One live progress line as each call ends. Never raises.
+
+        Before this, progress named task boundaries only, so a 9-minute,
+        1.9M-token lead call was invisible until the run stopped.
+        """
+        report = getattr(self, "progress", None)
+        if report is None or not invoked:
+            return
+        try:
+            usage = getattr(provider, "last_usage", None) or {}
+            turns = (getattr(provider, "last_diagnostics", None) or {}).get("model_calls")
+            report(f"call ended: {task} {role} {key}: {outcome}, {round(seconds or 0)} s, "
+                   f"{usage.get('input_tokens', '?')} in / {usage.get('output_tokens', '?')} out tokens"
+                   + (f", {turns} turns" if isinstance(turns, int) else ""))
+        except Exception:  # noqa: BLE001 -- reporting never fails a run
+            log.debug("progress line failed", exc_info=True)
 
     def _observe_native(self, key, provider) -> None:
         """Fold any vendor-native children the provider reported into the record.

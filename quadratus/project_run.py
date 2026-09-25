@@ -127,6 +127,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     fleet = fleet_type(settings, project=project, allow_writes=allow_writes,
                        usage_meter=meter, delegation_ledger=delegation,
                        **({'run_budget': budget} if budget else {}))
+    try:
+        fleet.progress = progress  # one live line per call as it ends
+    except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
+        pass
     in_flight = {}
     try:
         if preview and preview['blocked']:
@@ -150,6 +154,14 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             (run_dir / 'in-flight.json').write_text(json.dumps(in_flight, indent=2), encoding='utf-8')
     finally:
         fleet.close()
+    # What each call did inside its own session, from the vendors' transcripts.
+    # Collected after the run so a slow copy never delays a model call.
+    traces = []
+    try:
+        from .trace import build_traces
+        traces = build_traces(run_dir, run_dir / 'invocations.jsonl', project.root)
+    except Exception:  # noqa: BLE001 -- tracing never fails a run
+        traces = []
     diff = project.diff(before)
     completed = bool(session and session.completed and not error)
     checks = session.checks if session else []
@@ -185,6 +197,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     # Who actually ran, kept apart from who was selected, and from what the
     # harness could only witness. Reported next to the API-price counterfactual
     # rather than merged into it: they answer different questions.
+    if traces:
+        from .trace import render_timeline
+        lines += [render_timeline(traces), '']
     lines += [delegation.render_report(), '', '## Task ledger', '', ledger]
     report = '\n'.join(lines)
     (run_dir / 'changes.diff').write_text(diff, encoding='utf-8')
@@ -196,6 +211,11 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'source_changed': bool(diff), 'source_fingerprint': project.fingerprint(),
         'tasks': len(session.history) if session else 0,
         'turn_limited_tasks': list(getattr(session, 'turn_limited', []) or []) if session else [],
+        'trace': {'calls': len(traces),
+                  'transcripts_found': sum(1 for t in traces if t.get('tool_calls') is not None),
+                  'calls_outside_project': sum(1 for t in traces if t.get('outside_project')),
+                  'unserved_requests': sum(len(t.get('protocol_attempts') or []) for t in traces),
+                  'injected_rules': sorted({r['source'] for t in traces for r in t.get('injected_rules') or []})},
         'in_flight': in_flight,
         'policy_preview': preview,
         'policy_plans': getattr(session, 'policy_plans', []),

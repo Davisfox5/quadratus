@@ -255,8 +255,12 @@ class RepositoryPolicy:
         rules = [r for r in doc['path_rules']
                  if any(_applies(p, pattern, self.root) for p in paths for pattern in r['paths'])]
         families = list(dict.fromkeys(f for r in rules for f in r['families']))
+        family_source = ('path rules matched: ' + ', '.join(sorted({p for r in rules for p in r['paths']}))
+                         if families else None)
         if not families:
             families = [doc['defaults']['family']]
+            family_source = ('policy default: no path rule matched' if self.explicit else
+                             'built-in default: the project has no .quadratus/policy.json')
         overlays = list(dict.fromkeys(o for r in rules for o in r.get('overlays', [])))
         blocked = []
         for rule in rules:
@@ -310,7 +314,8 @@ class RepositoryPolicy:
                       policy_source='.quadratus/policy.json' if self.explicit else 'built-in',
                       policy_hash=_hash(doc), library_version=self.library['version'],
                       library_digest=self.library['digest'], declared_paths=paths,
-                      primary_family=families[0], families=families, overlays=overlays,
+                      primary_family=families[0], families=families, family_source=family_source,
+                      overlays=overlays,
                       gates=selected, absent_gates=absent, skipped_gates=skipped, adapters=adapters,
                       deny_write=deny, sensitive=sensitive, defaults=doc['defaults'],
                       capability_policy=capability, blocked=list(dict.fromkeys(blocked)))

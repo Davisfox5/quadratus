@@ -114,8 +114,11 @@ def record_invocation(ledger, event):
 
 
 @contextmanager
-def invocation(task, role, origin="seat"):
-    token = invocation_context.set(dict(task=task, role=role, origin=origin))
+def invocation(task, role, origin="seat", prompt_artifact=None):
+    context = dict(task=task, role=role, origin=origin)
+    if prompt_artifact:
+        context["prompt_artifact"] = prompt_artifact
+    token = invocation_context.set(context)
     try:
         yield
     finally:
@@ -179,6 +182,8 @@ class InvocationEvent:
     #: The turn limit sent with the call, if any, and whether it was hit.
     max_turns: Optional[int] = None
     turn_limited: bool = False
+    #: The artifact holding the exact prompt this call was sent.
+    prompt_artifact: Optional[str] = None
     canonical_model: Optional[str] = None
     invocation_id: Optional[str] = None
     wire_model: Optional[str] = None
