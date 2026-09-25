@@ -27,7 +27,8 @@ _DESCRIPTION = (
     "its answer. Use it for knowledge about the code (layout, conventions, what "
     "exists, what a function does) instead of exploring yourself: a worker answers "
     "in one step at a flat cost, while every step of your own session re-sends "
-    "everything before it. Ask narrowly. Workers cannot edit files or delegate."
+    "everything before it. Ask narrowly. The answer is text: workers cannot edit "
+    "files, run commands or delegate."
 )
 
 

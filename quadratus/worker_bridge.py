@@ -40,12 +40,12 @@ TOOL_TIMEOUT = 900
 
 
 def input_schema() -> dict:
-    """The typed call, from the live worker tree and needs vocabulary."""
-    from .task_kinds import KNOWN_NEEDS
+    """The typed call, from the live worker tree."""
     from .workers import WORKER_TREE
 
-    read_needs = sorted(str(getattr(n, "value", n)) for n in KNOWN_NEEDS)
-    read_needs = [n for n in read_needs if n not in ("patch", "direct-write")]
+    # No needs field: every worker is a restricted seat that can neither run
+    # a command nor write, so the only need a tool call could declare is
+    # refused on arrival (the first draft offered "execute" and nothing else).
     return {
         "type": "object",
         "properties": {
@@ -53,8 +53,6 @@ def input_schema() -> dict:
                        "description": "What kind of errand this is; it picks the worker model."},
             "instruction": {"type": "string", "minLength": 1, "maxLength": 4000,
                             "description": "One bounded request, answerable in one step."},
-            "needs": {"type": "array", "items": {"type": "string", "enum": read_needs},
-                      "description": "execute if the worker must run a command; omit for an answer from reading."},
             "demanding": {"type": "boolean",
                           "description": "Bump one tier up the same vendor's line."},
         },

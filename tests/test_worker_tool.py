@@ -57,8 +57,8 @@ def test_server_lists_a_typed_tool_and_forwards_calls_to_the_session():
     tool = replies[2]["result"]["tools"][0]
     assert tool["name"] == "commission_worker"
     assert tool["inputSchema"]["properties"]["errand"]["enum"] == sorted(WORKER_TREE)
-    # Only read-only needs are offered: write errands stay on the reply channel.
-    assert tool["inputSchema"]["properties"]["needs"]["items"]["enum"] == ["execute"]
+    # Nothing a worker could be refused for is offered: no write, no needs.
+    assert set(tool["inputSchema"]["properties"]) == {"errand", "instruction", "demanding"}
     assert replies[3]["result"] == {"content": [{"type": "text", "text": "answer for read"}], "isError": False}
     assert seen == [{"errand": "read", "instruction": "x"}]
 
@@ -261,3 +261,37 @@ def test_input_schema_is_json_serialisable_and_matches_the_tree():
     assert schema["required"] == ["errand", "instruction"]
     assert set(schema["properties"]["errand"]["enum"]) == set(WORKER_TREE)
     assert sys.executable  # the server is started with the session's interpreter
+
+
+def test_the_tool_does_not_read_a_write_request_into_a_read_errand(tmp_path):
+    """GameTape, 2026-09-25: grok's first tool call, verbatim in substance,
+    was refused as a patch because it named the helper it meant to insert."""
+    store = ArtifactStore(tmp_path / "artifacts")
+    asked = []
+
+    def run(model, prompt, allow_writes=False):
+        asked.append(allow_writes)
+        return "app.py imports csv and io at lines 3-4"
+
+    instruction = ("Report only what is needed to insert a pure helper _read_clip_manifest into "
+                   "/work/app.py and tests into /work/tests/test_basic.py. Quote the first 40 lines "
+                   "of app.py with line numbers.")
+    answers = []
+
+    def invoke(model, prompt, system=None, allow_writes=False):
+        answers.append(_call_tool({"errand": "read", "instruction": instruction}))
+        return "Done."
+
+    session = Session("goal", store, invoke, config=SessionConfig())
+    session.workers = WorkerPool(store=store, run=run)
+    with invocation("t1", "lead"):
+        session._draft_with_channels(OPUS, TaskSpec("t1", "do it"), _memory(store))
+    assert answers[0][1] is False and "csv and io" in answers[0][0]
+    assert asked == [False]  # still no write grant
+
+
+def test_the_reply_channel_still_infers_needs_from_the_text(tmp_path):
+    from quadratus.workers import check_errand_fit
+    text = "insert a helper into app.py"
+    assert check_errand_fit(text) is not None
+    assert check_errand_fit(text, answer_only=True) is None

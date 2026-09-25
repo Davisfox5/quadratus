@@ -901,21 +901,19 @@ class Session:
             return ("Write errands cannot run while your session is open, because their edits "
                     "would land in your working tree mid-call. Make the change yourself, or end "
                     "your reply with a WORKER request that sets write:true."), True
-        request = {k: arguments[k] for k in ("errand", "instruction", "needs", "demanding") if k in arguments}
+        request = {k: arguments[k] for k in ("errand", "instruction", "demanding") if k in arguments}
         # A malformed reply is a stall, because nothing else can be done with
         # it; a malformed tool call is answered, and the lead can fix it.
-        needs = request.get("needs")
         if (request.get("errand") not in WORKER_TREE or not isinstance(request.get("instruction"), str)
                 or not request["instruction"].strip()
-                or type(request.get("demanding", False)) is not bool
-                or not isinstance(needs, (list, type(None)))
-                or any(not isinstance(n, str) for n in needs or ())):
+                or type(request.get("demanding", False)) is not bool):
             return (f"Invalid call: errand must be one of {sorted(WORKER_TREE)}, instruction a "
-                    "non-empty string, needs a list of strings, demanding a boolean."), True
+                    "non-empty string, demanding a boolean."), True
         saved = self._active_call  # the lead's call record, which the worker would overwrite
         try:
             with invocation(spec.task_id, "lead", origin="seat"):
-                texts = self._serve_worker("WORKER " + json.dumps(request), lead, spec, task, state)
+                texts = self._serve_worker("WORKER " + json.dumps(request), lead, spec, task, state,
+                                           answer_only=True)
         except BaseException as exc:  # noqa: BLE001 -- re-raised by the drafting loop
             state["closed"] = exc
             return (f"The worker channel closed: {str(exc)[:400]}. Finish with what you have, "
@@ -925,7 +923,8 @@ class Session:
         text = "\n\n".join(texts)
         return text, text.startswith("Worker errand ")
 
-    def _serve_worker(self, body: str, lead: str, spec: TaskSpec, task: TaskMemory, state: dict) -> List[str]:
+    def _serve_worker(self, body: str, lead: str, spec: TaskSpec, task: TaskMemory, state: dict,
+                      *, answer_only: bool = False) -> List[str]:
         """Serve one ``WORKER {...}`` request; return what the lead is told.
 
         Shared by the reply channel and the in-session tool, so both carry the
@@ -975,7 +974,8 @@ class Session:
             # Reject impossible errands before entering dispatch or
             # reserving any worker attempt. Keep the pool's guard for
             # direct callers and sibling commissions too.
-            mismatch = check_errand_fit(request['instruction'], needs=needs, write=writes)
+            mismatch = check_errand_fit(request['instruction'], needs=needs, write=writes,
+                                        answer_only=answer_only)
             if mismatch is not None:
                 raise ErrandToolMismatch(f"errand {label!r}: {mismatch}")
             if self.workers.remaining(spec.task_id) <= 0:
@@ -985,7 +985,7 @@ class Session:
                        allow_writes=writes, needs=needs,
                        steps=request.get('steps', 1), token_limit=request.get('token_limit'))
             if helper is None:
-                results = [self.workers.commission(task=task, parent_key=lead, **job)]
+                results = [self.workers.commission(task=task, parent_key=lead, answer_only=answer_only, **job)]
             else:
                 mismatch = check_errand_fit(helper['instruction'], needs=helper.get('needs'), write=False)
                 if mismatch is not None:

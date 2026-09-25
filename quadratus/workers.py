@@ -252,7 +252,7 @@ def worker_capabilities(allow_writes: bool):
     return frozenset({Need.PATCH}) if allow_writes else frozenset()
 
 
-def check_errand_fit(instruction: str, *, needs=None, write: bool = False):
+def check_errand_fit(instruction: str, *, needs=None, write: bool = False, answer_only: bool = False):
     """Refuse a mis-scoped errand before any call is made.
 
     ``needs`` is what the lead declared, in the vocabulary of
@@ -265,6 +265,13 @@ def check_errand_fit(instruction: str, *, needs=None, write: bool = False):
     treated as a contradiction: only a lead that *stated* what the errand
     needs can be told its grant disagrees with that statement.
 
+    ``answer_only`` is the in-session tool's contract: no grant, no
+    declared needs, and the answer is text by construction. Reading needs
+    from the wording there protects nothing and refuses good errands -- on
+    GameTape (2026-09-25) "Report only ... quote the first 40 lines of app.py"
+    was refused as a patch because it also named the helper the lead meant to
+    insert, and the lead went back to exploring on its own.
+
     Returns ``None`` when the errand fits, or one sentence naming the
     mismatch and the lead's move. Unknown need labels raise, as they do at
     decomposition: a label that was meant and then dropped is a silent
@@ -273,7 +280,8 @@ def check_errand_fit(instruction: str, *, needs=None, write: bool = False):
     from .task_kinds import Need, needs_from_text, normalise_needs
 
     declared = None if needs is None else normalise_needs(needs)
-    wanted = (declared or frozenset()) | needs_from_text(instruction or "")
+    inferred = frozenset() if answer_only else needs_from_text(instruction or "")
+    wanted = (declared or frozenset()) | inferred
     have = worker_capabilities(write)
     if Need.EXECUTE in wanted:
         return (
@@ -456,6 +464,7 @@ class WorkerPool:
         depth: int = 0,
         steps: int = 1,
         token_limit: Optional[int] = None,
+        answer_only: bool = False,
     ) -> WorkerResult:
         """Run one worker for ``task`` and fold its report into that task.
 
@@ -479,7 +488,7 @@ class WorkerPool:
             )
         # Checked before the budget is charged and before any call: a
         # mis-scoped errand should cost the lead a sentence, not a window.
-        mismatch = check_errand_fit(prompt, needs=needs, write=allow_writes)
+        mismatch = check_errand_fit(prompt, needs=needs, write=allow_writes, answer_only=answer_only)
         if mismatch is not None:
             raise ErrandToolMismatch(f"errand {label!r}: {mismatch}")
         model_key = self.resolve_model(model, errand=errand, demanding=demanding)
