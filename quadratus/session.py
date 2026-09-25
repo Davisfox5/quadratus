@@ -401,6 +401,19 @@ _NEEDS_REQUEST = (
 )
 
 
+_CONTINUES = re.compile(r"^\s*CONTINUES:\s*(\S+)\s*$", re.MULTILINE)
+
+
+def _read_continues(spec):
+    """Split a ``CONTINUES: <task id>`` line off a task, naming the capped
+    task it finishes. Returns (task id or None, spec without the line)."""
+    match = _CONTINUES.search(spec.description or "")
+    if not match:
+        return None, spec
+    description = _CONTINUES.sub("", spec.description).strip()
+    return match.group(1), replace(spec, description=description or spec.description)
+
+
 def _read_task_orientation(description: str):
     """Split ``MAP NOTES:`` lines out of a task description.
 
@@ -613,7 +626,9 @@ class Session:
         #: Tasks whose lead stopped at its turn limit, in order.
         self.turn_limited: List[str] = []
         self._turn_limited_in_a_row = 0
-        self._unresolved_partial = False
+        #: Capped tasks not yet finished by a task that names them in a
+        #: CONTINUES line. Any entry blocks completion.
+        self._partial_tasks: set = set()
 
     def _invoke_model(self, key, prompt, *, allow_writes=False):
         context = invocation_context.get() or dict(task="run", role="direct", origin="seat")
@@ -895,20 +910,34 @@ class Session:
         if state.get("closed") is not None:
             return (f"The worker channel is closed for this task: {state['closed']}. "
                     "Finish with what you have, or report exactly what blocks you."), True
+
+        def refuse(text):
+            # A refusal is free of model calls but not of limits: it counts
+            # toward the same allowance as a failed errand, so a lead cannot
+            # repeat bad calls for the rest of its session (Codex review).
+            state["failures"] += 1
+            if state["failures"] >= self.config.max_worker_failures:
+                state["closed"] = RunStalled(
+                    f"{state['failures']} worker errands failed or were refused for task "
+                    f"{spec.task_id!r}; the lead is not converging. Last: {text[:200]}")
+                return (f"{text} The worker channel is now closed for this task: finish with "
+                        "what you have, or report exactly what blocks you."), True
+            return text, True
+
         if not isinstance(arguments, dict):
-            return "Invalid call: arguments must be an object.", True
+            return refuse("Invalid call: arguments must be an object.")
         if arguments.get("write"):
-            return ("Write errands cannot run while your session is open, because their edits "
-                    "would land in your working tree mid-call. Make the change yourself, or end "
-                    "your reply with a WORKER request that sets write:true."), True
+            return refuse("Write errands cannot run while your session is open, because their edits "
+                          "would land in your working tree mid-call. Make the change yourself, or end "
+                          "your reply with a WORKER request that sets write:true.")
         request = {k: arguments[k] for k in ("errand", "instruction", "demanding") if k in arguments}
         # A malformed reply is a stall, because nothing else can be done with
         # it; a malformed tool call is answered, and the lead can fix it.
         if (request.get("errand") not in WORKER_TREE or not isinstance(request.get("instruction"), str)
                 or not request["instruction"].strip()
                 or type(request.get("demanding", False)) is not bool):
-            return (f"Invalid call: errand must be one of {sorted(WORKER_TREE)}, instruction a "
-                    "non-empty string, demanding a boolean."), True
+            return refuse(f"Invalid call: errand must be one of {sorted(WORKER_TREE)}, instruction a "
+                          "non-empty string, demanding a boolean.")
         saved = self._active_call  # the lead's call record, which the worker would overwrite
         try:
             with invocation(spec.task_id, "lead", origin="seat"):
@@ -1149,20 +1178,13 @@ class Session:
             log.debug("could not capture project source", exc_info=True)
             return None
 
-    def _assess_scope(self, spec: TaskSpec, task: TaskMemory, before) -> Optional[ScopeReport]:
-        """Compare what the task actually changed against what it declared.
+    @property
+    def _unresolved_partial(self) -> bool:
+        return bool(self._partial_tasks)
 
-        Reported to the lead and the record, never reverted. The 2026-09-13
-        over-wide change was also the only work that existed, and discarding it
-        to satisfy a bookkeeping rule would have destroyed real output; user
-        edits and partial work stay exactly where they are. An out-of-scope
-        path is marked blocking. The normal editing dispatcher also stops on
-        a size overrun, retaining this report and the unfinished task.
-        """
+    def _measure_scope(self, spec: TaskSpec, before) -> Optional[ScopeReport]:
+        """The task's current diff against its scope, with no side effects."""
         if spec.scope is None or before is None or not self.project:
-            return None
-        after = self._capture_source()
-        if after is None:
             return None
         from .project import Project
         try:
@@ -1178,6 +1200,48 @@ class Session:
             report = replace(report, out_of_scope=out, within_scope=not out,
                              max_lines=min(limits) if limits else None,
                              overrun_ratio=min(report.overrun_ratio, outer.overrun_ratio))
+        return report
+
+    def _scope_headroom(self, spec: TaskSpec) -> str:
+        """What a revision may still add before the task's hard stop.
+
+        GameTape, 2026-09-25: a 91-line draft inside its ~100-line bound was
+        revised to 189 lines to answer a review, crossing the 150-line stop and
+        ending the run. The stop stays hard (Codex review of #25): the revision
+        is told its remaining room, and a fix that cannot fit is reported as
+        a blocker for the record instead of being made.
+        """
+        report = self._measure_scope(spec, self._task_before)
+        if report is None or report.max_lines is None:
+            return ""
+        stop = int(report.max_lines * report.overrun_ratio)
+        room = max(0, stop - report.changed_lines)
+        return (
+            f"\n\nSize: this task's change is {report.changed_lines} lines now (tests count in "
+            f"full) against a stated bound of ~{report.max_lines}, and the run stops at {stop}. "
+            f"You have {room} lines of room for this revision. Make the fixes that fit. For a "
+            "finding whose fix does not fit, do not make it: write a line 'BLOCKER: <finding> "
+            "needs about N more lines' so it goes to the record as an open question."
+        )
+
+    def _assess_scope(self, spec: TaskSpec, task: TaskMemory, before) -> Optional[ScopeReport]:
+        """Compare what the task actually changed against what it declared.
+
+        Reported to the lead and the record, never reverted. The 2026-09-13
+        over-wide change was also the only work that existed, and discarding it
+        to satisfy a bookkeeping rule would have destroyed real output; user
+        edits and partial work stay exactly where they are. An out-of-scope
+        path is marked blocking. The normal editing dispatcher also stops on
+        a size overrun, retaining this report and the unfinished task.
+        """
+        if spec.scope is None or before is None or not self.project:
+            return None
+        after = self._capture_source()
+        if after is None:
+            return None
+        report = self._measure_scope(spec, before)
+        if report is None:
+            return None
         self.scope_reports.append(report)
         if report.blocking or report.oversized:
             task.record("user", report.render())
@@ -1489,7 +1553,8 @@ class Session:
             + (f" ({exc.turns} turns)" if exc.turns else "")
             + f". Changed, unreviewed and ungated: {changed}"
             + (f" ({state['changed_lines']} lines)" if state["changed"] else "")
-            + ". This task is not done: name the remaining work as a new, smaller task, "
+            + ". This task is not done: name the remaining work as a new, smaller task "
+              f"whose description includes the line 'CONTINUES: {spec.task_id}', "
               "and do not assume any of it is finished."
             + (f" The lead's last words, which are narration and not a result: {said[:300]}"
                if said else " The lead returned no answer text.")
@@ -1863,9 +1928,12 @@ class Session:
                 f"task {len(self.history) + 1}: {spec.description} "
                 f"[{spec.kind}/{spec.complexity}]"
             )
+            continues, spec = _read_continues(spec)
             summary = self.run_task(spec)
             if getattr(summary, "outcome", "closed") == "turn_limited":
-                self._unresolved_partial = True
+                # A capped continuation carries its predecessor's debt forward.
+                self._partial_tasks.discard(continues)
+                self._partial_tasks.add(spec.task_id)
                 self._turn_limited_in_a_row += 1
                 self._note(f"task {len(self.history)} stopped at the lead's turn limit; its "
                            f"work is kept and the orchestrator re-plans")
@@ -1875,7 +1943,10 @@ class Session:
                     break
                 continue
             self._turn_limited_in_a_row = 0
-            self._unresolved_partial = False
+            # Only the task that says it continues the capped one resolves it;
+            # an unrelated clean task must not make the run complete (Codex
+            # review of #25, 2026-09-25).
+            self._partial_tasks.discard(continues)
             self._note(f"task {len(self.history)} closed by {summary.author}")
             if self.open_findings or (self.checks and not self.checks[-1]['passed']):
                 break
@@ -2103,6 +2174,7 @@ class Session:
             "you cannot decide goes to the record as an open question, not "
             "into the void. "
             + self._revision_delivery()
+            + (self._scope_headroom(spec) if self.project and self.config.allow_writes else "")
         )
 
     def _revision_delivery(self) -> str:

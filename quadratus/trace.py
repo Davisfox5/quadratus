@@ -17,7 +17,11 @@ here calls a model, and nothing here can fail a run: every reader degrades to
 
 Raw transcripts contain prompts and source. They stay in
 ``<run>/native-private`` (owner-only) and are never published without
-inspection; the trace carries names, counts and paths, not file contents.
+inspection. So does ``trace-detail.jsonl``, which keeps command text, the
+reasoning around an unserved request and injected rule text. The shareable
+``trace.jsonl`` and the report carry names, outcomes, paths, exit codes and
+hashes only (Codex review of #25): an argument or a sentence of reasoning can
+hold source or a secret, and a file path rarely does.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -301,14 +306,58 @@ def trace_call(vendor: str, path: Path, project_root=None, origin=None) -> dict:
     return trace
 
 
+_FILE_TOOLS = _READ_TOOLS | _WRITE_TOOLS
+
+
+def _program(command: str) -> str:
+    try:
+        words = shlex.split(command or "")
+    except ValueError:
+        words = (command or "").split()
+    return os.path.basename(words[0]) if words else ""
+
+
+def shareable(record: dict) -> dict:
+    """The record with every free-text value removed: argument values,
+    reasoning snippets and rule text stay in the owner-only detail file."""
+    out = {k: v for k, v in record.items()
+           if k not in ("tool_calls", "commands", "protocol_attempts", "injected_rules")}
+    if "tool_calls" in record:
+        out["tool_calls"] = [dict(name=c.get("name"), outcome=c.get("outcome"),
+                                  **({"path": c["target"]} if c.get("name") in _FILE_TOOLS
+                                     and c.get("target") and _ABS_PATH.fullmatch(c["target"]) else {}))
+                             for c in record.get("tool_calls") or []]
+        out["commands"] = [dict(program=_program(c.get("command")), exit=c.get("exit"),
+                                outcome=c.get("outcome")) for c in record.get("commands") or []]
+        out["protocol_attempts"] = [dict(verb=a.get("verb")) for a in record.get("protocol_attempts") or []]
+        out["injected_rules"] = [dict(source=r.get("source"), sha256=r.get("sha256"))
+                                 for r in record.get("injected_rules") or []]
+    return out
+
+
+def _write_private(path: Path, text: str) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    os.chmod(path, 0o600)
+
+
 def build_traces(run_dir, invocations_path, project_root=None, roots=None) -> List[dict]:
     """Copy each invoked call's transcript into the run and write ``trace.jsonl``.
 
-    Returns one record per invoked call, joined to its ledger row. A call whose
-    transcript cannot be found is listed with ``transcript: missing``, never
-    silently dropped.
+    Returns the shareable record per invoked call, joined to its ledger row. A
+    call whose transcript cannot be found here is listed as unavailable, never
+    silently dropped, and never read as "no tools ran": the session may have
+    lived in a container home that was not kept.
     """
     run_dir = Path(run_dir)
+    private = run_dir / "native-private"
+    try:
+        run_dir.chmod(0o700)
+        private.mkdir(parents=True, exist_ok=True, mode=0o700)
+        private.chmod(0o700)
+    except OSError:
+        pass
     roots = roots or session_roots()
     records = []
     for row in _jsonl(Path(invocations_path)):
@@ -324,7 +373,8 @@ def build_traces(run_dir, invocations_path, project_root=None, roots=None) -> Li
                       prompt_artifact=row.get("prompt_artifact"))
         source = locate(vendor, sid, roots)
         if source is None:
-            record["transcript"] = "missing" if sid else "no session id"
+            record["transcript"] = ("unavailable in this environment" if sid
+                                    else "no session id recorded")
         else:
             try:
                 copied = _private_copy(source, run_dir / "native-private" / vendor / source.name)
@@ -333,11 +383,13 @@ def build_traces(run_dir, invocations_path, project_root=None, roots=None) -> Li
             except Exception as exc:  # noqa: BLE001 -- a trace never fails a run
                 record["transcript"] = f"copy failed: {type(exc).__name__}"
         records.append(record)
+    shared = [shareable(r) for r in records]
     try:
-        (run_dir / "trace.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+        _write_private(private / "trace-detail.jsonl", "".join(json.dumps(r) + "\n" for r in records))
+        _write_private(run_dir / "trace.jsonl", "".join(json.dumps(r) + "\n" for r in shared))
     except OSError:
         pass
-    return records
+    return shared
 
 
 def _tool_summary(calls: List[dict]) -> str:
@@ -373,8 +425,8 @@ def render_timeline(records: List[dict]) -> str:
                 f"{round(r.get('seconds') or 0)} s, {tokens}"
                 + (f", {r['model_turns']} turns" if isinstance(r.get("model_turns"), int) else ""))
         lines.append(head)
-        if r.get("transcript") in ("missing", "no session id") or str(r.get("transcript", "")).startswith("copy failed"):
-            lines.append(f"  - transcript: {r.get('transcript')}")
+        if r.get("tool_calls") is None:
+            lines.append(f"  - transcript: {r.get('transcript')}; what this call did is unknown here")
             continue
         lines.append(f"  - tools: {_tool_summary(r.get('tool_calls') or [])}")
         if r.get("files_written"):
@@ -388,5 +440,5 @@ def render_timeline(records: List[dict]) -> str:
             lines.append("  - **requests written mid-session, never served:** "
                          + ", ".join(f"{v} x{n}" for v, n in verbs.items()))
         for rule in r.get("injected_rules") or []:
-            lines.append(f"  - injected: {rule['source']} ({rule['first_line'][:80]})")
+            lines.append(f"  - injected: {rule['source']} (sha256 {str(rule.get('sha256'))[:12]})")
     return "\n".join(lines)

@@ -186,7 +186,8 @@ def _finishes(self):
 
 
 TASK_1 = "KIND: docs simple\n" + _scope() + "\nCorrect the heading in a.md."
-TASK_2 = "KIND: docs simple\n" + _scope() + "\nFinish the heading in a.md."
+TASK_2 = "KIND: docs simple\n" + _scope() + "\nFinish the heading in a.md.\nCONTINUES: t1"
+UNRELATED = "KIND: docs simple\n" + _scope() + "\nFix a typo in a.md."
 
 
 def test_a_capped_lead_hands_its_partial_edit_back_and_the_run_completes(tmp_path, monkeypatch):
@@ -239,3 +240,13 @@ def test_a_capped_lead_that_wrote_outside_its_scope_stops_with_the_work_preserve
     assert not result.completed and "PartialWorkStopped" in (result.error or "")
     assert (tmp_path / "b.md").read_text() == "partial\n"
     assert data["turn_limited_tasks"] == []
+
+
+def test_an_unrelated_clean_task_does_not_resolve_a_capped_one(tmp_path, monkeypatch):
+    """Codex review of #25: any clean task used to clear the partial flag."""
+    result, rows, data, seen = _run(
+        tmp_path, monkeypatch, [_capped_after_writing("half done"), _finishes],
+        tasks=[TASK_1, UNRELATED])
+    assert not result.completed and not result.error
+    assert data["turn_limited_tasks"] == ["t1"]
+    assert "CONTINUES: t1" in seen["orchestrator"][1], "the orchestrator is told how to link the follow-up"
