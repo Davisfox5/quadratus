@@ -1,0 +1,18 @@
+{"topic": "stack", "note": "Primary language: Python (5 files)", "author": "scan", "session": "scan"}
+{"topic": "layout", "note": "Largest source files: app.py (27 lines), auth.py (12 lines), catalog.py (12 lines), access.py (5 lines), presentation.py (5 lines)", "author": "scan", "session": "scan"}
+{"topic": "adapter", "note": "presentation.py:4\u20135 defines `def display_title(value):` and currently returns value unchanged; no imports exist.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "helper", "note": "catalog.py:9\u201312 defines compact_caption(value), using whitespace splitting/joining and text[:23] + \"\u2026\" for truncation.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "endpoint", "note": "app.py:6 imports display_title; app.py:17\u201319 returns {\"caption\": display_title(title)} from /caption.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "checks", "note": "README.md:20\u201322 says the operator supplies external task checks and the final grader; no check script appears in the file inventory.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "helper", "note": "`catalog.compact_caption` is defined in `catalog.py` lines 9\u201312.", "author": "grok:default", "session": "t1"}
+{"topic": "behavior", "note": "it joins split whitespace, keeps strings of length \u2264 24, and truncates longer ones as `text[:23] + \"\u2026\"`.", "author": "grok:default", "session": "t1"}
+{"topic": "change", "note": "`presentation.display_title` now returns `catalog.compact_caption(value)`; signature unchanged.", "author": "grok:default", "session": "t1"}
+{"topic": "route", "note": "`/caption` in `app.py` still returns `{\"caption\": display_title(title)}`; `app.py` was not edited.", "author": "grok:default", "session": "t1"}
+{"topic": "workers", "note": "none invoked.", "author": "grok:default", "session": "t1"}
+{"topic": "checks", "note": "preservation gate 5 passed, 8 deselected; follow-up lookup-or-preservation 8 passed, 5 deselected.", "author": "grok:default", "session": "t1"}
+{"topic": "tests", "note": "no project-local tests; preservation tests do not cover `display_title`.", "author": "grok:default", "session": "t1"}
+{"topic": "scope", "note": "security task not started.", "author": "grok:default", "session": "t1"}
+{"topic": "endpoint", "note": "app.py:22\u201327 defines get_record, uses Depends(current_tenant), checks only record is None, and returns Record(id,title).", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "predicate", "note": "access.py:4\u20135 defines visible_to(record, tenant) but checks only record presence; catalog.py:3\u20136 stores ownership in tenant_id.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "authentication", "note": "auth.py:8\u201312 validates Bearer tokens, returns the mapped tenant, and raises 401 with detail \"Unauthorized\" for invalid authentication.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "display/checks", "note": "presentation.py:6\u20137 delegates to catalog.compact_caption; README.md:20\u201324 assigns checks to the operator; no local tests were found.", "author": "openai:gpt-6-astra", "session": "decomposition"}

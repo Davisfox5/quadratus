@@ -1,0 +1,15 @@
+{
+  "record_sha256": "3adb27eaa65c13548d48c1f454a4d9a3ff7f32107e25d59c66a41f644b228441",
+  "batch_id": "q9v2-rerun2-candidate-1m-2026-09-23",
+  "slots": [
+    {
+      "version": "candidate",
+      "attempt": 1,
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence3/candidate-1/project/.quadratus/runs/20260923T210328Z-53a7a0a0",
+      "started_at": "2026-09-23T21:03:26.416836+00:00",
+      "finished_at": "2026-09-23T21:08:22.962550+00:00",
+      "reported_tokens": 614411,
+      "unknown_usage_attempts": 0
+    }
+  ]
+}

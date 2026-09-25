@@ -1,0 +1,25 @@
+## Verdict: Accept
+
+The code is correct. Two claims can't be verified from this copy, and neither blocks acceptance — but one should be stated more carefully than the answer states it.
+
+### What I verified in the source
+
+**`access.py:5`** — `return bool(record and tenant and record.get("tenant_id") == tenant)`. Fails closed on all three axes the task names: missing record (`None`/empty → falsy), absent tenant (`None`/`""` → falsy), and ownership (`tenant_id` must equal the authenticated tenant). Signature `visible_to(record, tenant)` preserved. No entitlement flag, no alternate identity parameter.
+
+**`app.py:3,26`** — imports `visible_to` and the guard is now `if not visible_to(record, tenant)`, not a missing-record-only check. Missing and foreign records take the identical path to `HTTPException(status_code=404, detail="Not found")` (`app.py:27`), so the two cases are indistinguishable to a caller — no enumeration oracle. `Record(id=record["id"], title=record["title"])` and the `response_model=Record` are unchanged; `/caption` (`app.py:18-20`) and `presentation.py` are untouched.
+
+**Spoofing** — `tenant: str = Depends(current_tenant)` is a dependency, not a query parameter; FastAPI does not bind `?tenant=` to a `Depends` default, so there is no query override. `auth.py:8` reads only the `Authorization` header and raises 401 before returning, so identity has exactly one source. `auth.py` is unedited, as required.
+
+Actual diff is roughly three lines against the ~10 estimate — under the bound, not over. Nothing unsafe is recommended anywhere in the answer.
+
+### Two evidence gaps
+
+**The pytest output is unverifiable here, and the answer's framing understates that.** This source copy contains only `README.md`, `access.py`, `app.py`, `auth.py`, `catalog.py`, `presentation.py` — no test files, no `conftest.py`, no pytest config. So `5 passed, 8 deselected` is a report I have to take on trust; I can neither confirm the numbers nor confirm that the deselected 8 are the security tests. The answer's disclosure ("does not establish full security correctness; the operator's full grader remains required") is the right disclaimer and is correctly stated — my point is narrower: a reader of the answer alone might think the gate was independently checkable. It wasn't, by me.
+
+**Task-1/task-2 separation is asserted, not demonstrable.** The working copy is not a git repository, so there is no diff to confirm that only `app.py` and `access.py` were modified in this task. `presentation.py:7` correctly delegates to `catalog.compact_caption`, consistent with task 1 being already complete, but "I edited only these two files" rests on the author's word. Given the operator's wider limit already permits `presentation.py`, this is low-risk either way.
+
+**Worker invocations:** the answer reports none. I invoked none either — this verification was direct `Glob`/`Grep`/`Read` on the six files above.
+
+### If you want the gaps closed
+
+Nothing in the code needs to change. To close the evidence gaps, have the author paste the exact pytest invocation and the node IDs of the 5 selected and 8 deselected tests, and confirm the gate ran against this same tree. The operator's full grader is still the thing that decides security correctness; the preservation gate only shows nothing pre-existing broke.

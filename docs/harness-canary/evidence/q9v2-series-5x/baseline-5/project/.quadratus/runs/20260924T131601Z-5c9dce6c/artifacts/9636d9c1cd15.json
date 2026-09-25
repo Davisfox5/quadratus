@@ -1,0 +1,1 @@
+{"author": "grok:default", "chars": 247, "id": "9636d9c1cd15", "kind": "closeout-evidence", "lines": 11, "preview": "--- a/presentation.py\n+++ b/presentation.py\n@@ -1,5 +1,7 @@\n \"\"\"Display adapter. Preserve its signature and reuse the catalog helper.\"\"\"\n+\n+import catalog\n \n \n def display_title(value):\n-    return value"}

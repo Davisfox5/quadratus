@@ -1,0 +1,8 @@
+Project: /private/tmp/q9v2.nxS6sx/evidence-series/baseline-3/project; edits enabled
+asking claude:fable for the next task
+claude:fable is out of window; the seat falls to openai:gpt-6-astra
+task 1: Complete task 1 only: import `compact_caption` from `catalog` and delegate the adapter’s return value to it. Estimate: 3 changed code lines, 0 test lines. Report the actual helper lookup evidence and worker invocations (none during this inspection). If the provided check is unavailable, report that limitation without claiming a pass. Preserve evidence and stop before the security task. [refactor/simple]
+task 1 closed by grok:default
+asking openai:gpt-6-astra for the next task
+task 2: Complete task 2 only: import the shared predicate into app.py, use it for the endpoint’s existing 404 guard, and repair access.py to require a present tenant matching the record’s tenant_id. Estimate 8 code diff lines, 0 test lines. Preserve completed task 1. Do not edit auth.py, catalog.py, presentation.py, README.md, tests, or policy. Add no entitlement logic. No installs, commits, pushes, external services, or production data. Report the preservation gate separately from the operator’s later full grader. [security/simple]
+task 2 closed by openai:gpt-5.6-sol

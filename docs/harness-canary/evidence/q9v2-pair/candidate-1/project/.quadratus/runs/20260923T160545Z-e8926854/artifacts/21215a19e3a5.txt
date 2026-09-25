@@ -1,0 +1,10 @@
+Completed task 2 within scope.
+
+- `visible_to` now denies missing records/tenants and requires matching `tenant_id`.
+- `/records/{record_id}` now uses `visible_to`; missing and cross-tenant records return `404 {"detail":"Not found"}`.
+- Record response, auth dependency, and existing 401 behavior remain unchanged.
+- Lookup confirmed the prior predicate checked only record existence and the endpoint guarded only missing records.
+- Workers invoked: none.
+- Preservation gate: `5 passed, 8 deselected in 0.10s` (exit 0). Full grader not run.
+
+CHANGED: ["app.py","access.py"]

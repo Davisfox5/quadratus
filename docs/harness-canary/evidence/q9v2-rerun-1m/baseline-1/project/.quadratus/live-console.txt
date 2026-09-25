@@ -1,0 +1,4 @@
+Project: /private/tmp/q9v2.nxS6sx/evidence2/baseline-1/project; edits enabled
+asking claude:fable for the next task
+claude:fable is out of window; the seat falls to openai:gpt-6-astra
+task 1: Complete task 1 only: import `compact_caption` from `catalog` and return its result from the existing adapter. Estimated diff: 3 code lines, 0 test lines. Report the actual helper lookup and check result. No workers were invoked during this inspection; report any actual worker invocations during implementation. The check is supplied externally; do not substitute an invented check or begin the security task. [refactor/simple]

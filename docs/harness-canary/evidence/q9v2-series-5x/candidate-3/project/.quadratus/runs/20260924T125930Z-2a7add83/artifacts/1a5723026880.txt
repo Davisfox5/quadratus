@@ -1,0 +1,1 @@
+Complete only task 1: import and call the existing catalog helper in `presentation.py`. Budget at most 10 code lines and zero test edits. Report the lookup evidence and actual worker invocations, including none if unused. Run the provided integration check, preserve evidence, and stop before the security task; this gate checks preservation invariants only.

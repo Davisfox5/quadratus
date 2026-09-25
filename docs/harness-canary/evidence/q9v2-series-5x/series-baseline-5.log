@@ -1,0 +1,3 @@
+baseline: /private/tmp/q9v2.nxS6sx/venv/bin/python /private/tmp/q9v2.nxS6sx/launcher-1m-v3/docs/harness-canary/run_fixture.py --project /private/tmp/q9v2.nxS6sx/evidence-series/baseline-5/project --allowance-record /private/tmp/q9v2.nxS6sx/allowance-series.json
+/private/tmp/q9v2.nxS6sx/evidence-series/baseline-5/project/.quadratus/runs/20260924T131601Z-5c9dce6c
+baseline attempt 5: launcher exit 1; series stopped

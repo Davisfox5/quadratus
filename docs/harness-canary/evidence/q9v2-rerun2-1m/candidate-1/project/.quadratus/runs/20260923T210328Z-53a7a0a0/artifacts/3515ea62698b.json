@@ -1,0 +1,1 @@
+{"author": "claude:opus", "chars": 2924, "id": "3515ea62698b", "kind": "verify:claude:opus", "lines": 32, "preview": "I read the whole source copy (6 files) and checked each claim against it.\n\n## Verdict: accept\n\n### Code verified\n\n`access.py:5`\n```python\nreturn record is not None and bool(tenant) and record.get(\"tenant_id\") == tenant\n```"}

@@ -1,0 +1,96 @@
+{
+  "record_sha256": "17d65696b69cc30cc87b2b24a67fbaf24acdd110b248d3f36ffab12e4d02fc12",
+  "batch_id": "q9v2-series-5x-2026-09-24",
+  "slots": [
+    {
+      "version": "baseline",
+      "attempt": 1,
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence-series/baseline-1/project/.quadratus/runs/20260924T123359Z-aada6926",
+      "started_at": "2026-09-24T12:33:58.110163+00:00",
+      "finished_at": "2026-09-24T12:39:55.042443+00:00",
+      "reported_tokens": 1022772,
+      "unknown_usage_attempts": 0
+    },
+    {
+      "version": "candidate",
+      "attempt": 1,
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence-series/candidate-1/project/.quadratus/runs/20260924T123956Z-c93f631c",
+      "started_at": "2026-09-24T12:39:55.359295+00:00",
+      "finished_at": "2026-09-24T12:43:55.137524+00:00",
+      "reported_tokens": 497050,
+      "unknown_usage_attempts": 0
+    },
+    {
+      "version": "baseline",
+      "attempt": 2,
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence-series/baseline-2/project/.quadratus/runs/20260924T124357Z-07a23cdf",
+      "started_at": "2026-09-24T12:43:55.442223+00:00",
+      "finished_at": "2026-09-24T12:49:42.192478+00:00",
+      "reported_tokens": 825482,
+      "unknown_usage_attempts": 0
+    },
+    {
+      "version": "candidate",
+      "attempt": 2,
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence-series/candidate-2/project/.quadratus/runs/20260924T124944Z-d2f91e0c",
+      "started_at": "2026-09-24T12:49:42.515173+00:00",
+      "finished_at": "2026-09-24T12:54:14.665049+00:00",
+      "reported_tokens": 558212,
+      "unknown_usage_attempts": 0
+    },
+    {
+      "version": "baseline",
+      "attempt": 3,
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence-series/baseline-3/project/.quadratus/runs/20260924T125416Z-cfbf929c",
+      "started_at": "2026-09-24T12:54:14.978894+00:00",
+      "finished_at": "2026-09-24T12:59:28.577840+00:00",
+      "reported_tokens": 819308,
+      "unknown_usage_attempts": 0
+    },
+    {
+      "version": "candidate",
+      "attempt": 3,
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence-series/candidate-3/project/.quadratus/runs/20260924T125930Z-2a7add83",
+      "started_at": "2026-09-24T12:59:28.901525+00:00",
+      "finished_at": "2026-09-24T13:05:01.122445+00:00",
+      "reported_tokens": 733210,
+      "unknown_usage_attempts": 0
+    },
+    {
+      "version": "baseline",
+      "attempt": 4,
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence-series/baseline-4/project/.quadratus/runs/20260924T130503Z-4d499557",
+      "started_at": "2026-09-24T13:05:01.526720+00:00",
+      "finished_at": "2026-09-24T13:11:24.885234+00:00",
+      "reported_tokens": 954911,
+      "unknown_usage_attempts": 0
+    },
+    {
+      "version": "candidate",
+      "attempt": 4,
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence-series/candidate-4/project/.quadratus/runs/20260924T131126Z-73e19575",
+      "started_at": "2026-09-24T13:11:25.192347+00:00",
+      "finished_at": "2026-09-24T13:15:59.813902+00:00",
+      "reported_tokens": 594858,
+      "unknown_usage_attempts": 0
+    },
+    {
+      "version": "baseline",
+      "attempt": 5,
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence-series/baseline-5/project/.quadratus/runs/20260924T131601Z-5c9dce6c",
+      "started_at": "2026-09-24T13:16:00.124952+00:00",
+      "finished_at": "2026-09-24T13:21:44.188792+00:00",
+      "reported_tokens": 1121358,
+      "unknown_usage_attempts": 0
+    },
+    {
+      "version": "candidate",
+      "attempt": 5,
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence-series/candidate-5/project/.quadratus/runs/20260924T132146Z-8eeac2b5",
+      "started_at": "2026-09-24T13:21:44.495677+00:00",
+      "finished_at": "2026-09-24T13:26:20.068911+00:00",
+      "reported_tokens": 628120,
+      "unknown_usage_attempts": 0
+    }
+  ]
+}

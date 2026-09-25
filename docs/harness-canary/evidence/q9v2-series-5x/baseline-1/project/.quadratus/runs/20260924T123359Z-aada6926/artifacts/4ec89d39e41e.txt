@@ -1,0 +1,14 @@
+Implemented task 2 within scope:
+
+- [access.py](/private/tmp/q9v2.nxS6sx/evidence-series/baseline-1/project/access.py): `visible_to` now denies missing records, absent tenants, and mismatched `tenant_id`.
+- [app.py](/private/tmp/q9v2.nxS6sx/evidence-series/baseline-1/project/app.py): imports and uses `visible_to` in the existing 404 branch. Authentication remains exclusively through `Depends(current_tenant)`.
+- Required signatures, exact 404 response, `Record(id,title)`, 401 behavior, and completed caption behavior remain unchanged.
+- No worker invoked. No tests or forbidden files edited.
+
+Evidence:
+
+- Predicate checks passed for own, other-tenant, absent-tenant, and missing-record cases.
+- Both edited modules compile under Python 3.11.
+- Untouched-file hashes for `README.md`, `auth.py`, `catalog.py`, and policy match the fixture manifest.
+- The preservation gate could not execute: the available pytest environment uses Python 3.9 and fails collecting the existing `str | None` syntax; Python 3.11–3.14 lack pytest. No dependencies were installed.
+- Generated `__pycache__` artifacts were removed.

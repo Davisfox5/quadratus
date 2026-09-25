@@ -1,0 +1,13 @@
+setup start: 2026-09-23T20:49:57Z
+grok: You are logged in with grok.com.
+allowance-rerun2.json written
+setup ok; preflight: preflight passed: /private/tmp/q9v2.nxS6sx/trial3/.quadratus/preflight.json
+runs start: 2026-09-23T20:50:00Z
+baseline: /private/tmp/q9v2.nxS6sx/venv/bin/python /private/tmp/q9v2.nxS6sx/launcher-1m-v2/docs/harness-canary/run_fixture.py --project /private/tmp/q9v2.nxS6sx/evidence3/baseline-1/project --allowance-record /private/tmp/q9v2.nxS6sx/allowance-rerun2.json
+/private/tmp/q9v2.nxS6sx/evidence3/baseline-1/project/.quadratus/runs/20260923T205001Z-175dc789
+baseline attempt 1: launcher exit 1; series stopped
+series exit for baseline: 1
+batch ceiling: 1701844 reported tokens spent + 1000000 for the next run exceeds max_reported_tokens_batch 2500000
+series exit for candidate: 1
+runs end: 2026-09-23T20:59:32Z
+script exit=0

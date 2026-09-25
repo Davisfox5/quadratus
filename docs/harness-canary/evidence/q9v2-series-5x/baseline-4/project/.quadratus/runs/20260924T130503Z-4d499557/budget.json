@@ -1,0 +1,20 @@
+{
+  "limits": {
+    "max_calls": 24,
+    "max_reported_tokens": 1000000,
+    "wall_seconds": 840,
+    "max_concurrent_workers": 2
+  },
+  "reserved_attempts": 8,
+  "in_flight": 0,
+  "input_tokens": 937355,
+  "output_tokens": 17556,
+  "reported_tokens": 954911,
+  "unknown_usage_attempts": 0,
+  "stop_reason": "",
+  "preserved_responses": [],
+  "elapsed_seconds": 381.7630114160129,
+  "token_boundary": "post-return threshold; in-flight calls can overshoot",
+  "input_boundary": "normalized provider input includes cached input; do not add it again",
+  "wall_boundary": "attempt timeout plus required external process supervisor"
+}

@@ -1,0 +1,82 @@
+{
+  "contained": false,
+  "host": true,
+  "work_tree": {
+    "ok": true,
+    "entries": 7,
+    "read": "README.md"
+  },
+  "vendors": {
+    "claude": {
+      "applicable": false,
+      "detail": "this vendor has no inner sandbox to test; its restriction is a tool denial, which needs no privilege to take effect"
+    },
+    "openai": {
+      "applicable": true,
+      "ok": true,
+      "argv": [
+        "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/codex",
+        "sandbox",
+        "-c",
+        "sandbox_mode=read-only",
+        "--",
+        "cat",
+        "/private/tmp/q9v2.nxS6sx/evidence2/candidate-1/project/README.md"
+      ],
+      "exit_code": 0,
+      "detail": "# Two ordered repairs"
+    },
+    "grok": {
+      "applicable": false,
+      "detail": "this vendor has no inner sandbox to test; its restriction is a tool denial, which needs no privilege to take effect"
+    }
+  },
+  "auth": {
+    "claude": {
+      "applicable": true,
+      "ok": true,
+      "argv": [
+        "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/claude",
+        "auth",
+        "status"
+      ],
+      "exit_code": 0,
+      "proof": "positive",
+      "detail": "{"
+    },
+    "openai": {
+      "applicable": true,
+      "ok": true,
+      "argv": [
+        "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/codex",
+        "login",
+        "status"
+      ],
+      "exit_code": 0,
+      "proof": "positive",
+      "detail": "Logged in using ChatGPT"
+    },
+    "grok": {
+      "applicable": true,
+      "ok": true,
+      "argv": [
+        "/opt/homebrew/bin/grok",
+        "models"
+      ],
+      "exit_code": 0,
+      "proof": "known-failure wording only",
+      "detail": "You are logged in with grok.com."
+    }
+  },
+  "probe_file": "/private/tmp/q9v2.nxS6sx/evidence2/candidate-1/project/README.md",
+  "blockers": [],
+  "ok": true
+}
+Project: /private/tmp/q9v2.nxS6sx/evidence2/candidate-1/project; edits enabled
+asking claude:fable for the next task
+claude:fable reports its window exhausted; routing around it for the rest of this run. claude reported an error: You've reached your Fable limit. Switch to another model, or manage usage credits at claude.ai/settings/usage?from=cc_cli_limit_message, to continue.
+claude:fable is out of window; the seat falls to openai:gpt-6-astra
+task 1: Complete only the non-security display task. Read `catalog.py` before editing, import its existing helper into `presentation.py`, and delegate the adapter’s return value to it. Estimate: at most 10 code lines, zero test lines. Change no other files. Run the provided check and stop; if unavailable, report that limitation without claiming a pass. No workers were invoked during this inspection. [refactor/simple]
+Family: pure-logic; plan 486a4d877eebb1b133e7cd3db221a46a405c9380dd354d17c10ca2ef818d5be1
+grok:default reports its window exhausted; routing around it for the rest of this run. grok did not complete the turn (stopReason None).; Error: You’ve reached your free Grok Build usage limit for now. Get SuperGrok for much higher limits, or try again later: https://grok.com/supergrok?
+{"completed": false, "run_dir": "/private/tmp/q9v2.nxS6sx/evidence2/candidate-1/project/.quadratus/runs/20260923T180452Z-645d4d3a", "error": "WindowExhausted: grok:default: subscription window exhausted (grok did not complete the turn (stopReason None).; Error: You\u2019ve reached your free Grok Build usage limit for now. Get SuperGrok for much higher limits, or try again later: https://grok.com/supergrok?referrer=grok-build)"}

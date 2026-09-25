@@ -1,0 +1,70 @@
+[assistant] Implemented task 2 within scope.
+
+- `access.visible_to` now fails closed unless `record` exists, `tenant` is authenticated/nonempty, and `record["tenant_id"]` matches.
+- `/records/{record_id}` now imports and uses `visible_to`.
+- Preserved the endpoint signature, `Record(id, title)` response, existing 401 authentication, and exact 404 `{"detail":"Not found"}` behavior.
+- No header/query tenant override or feature gate added.
+- Lookup confirmed the prior predicate accepted every nonmissing record; ownership is stored as `tenant_id`, and authentication remains solely through `current_tenant`.
+- Workers invoked: none.
+- Preservation gate: `5 passed, 8 deselected in 0.10s`.
+- Git inspection was unavailable because the directory has no `.git`: exit 128, `fatal: not a git repository (or any of the parent directories): .git`.
+
+CHANGED: ["app.py", "access.py"]
+
+[user] Integration gate PASSED: `gate suite`
+
+[assistant] [claude:opus] I read all five files in the copy. Verification below.
+
+## What the code actually does
+
+`access.py` (the whole file):
+```python
+def visible_to(record, tenant):
+    return bool(record is not None and tenant and record.get("tenant_id") == tenant)
+```
+
+`app.py` lines 3, 23–28:
+```python
+from access import visible_to
+...
+@app.get("/records/{record_id}", response_model=Record)
+def get_record(record_id: str, tenant: str = Depends(current_tenant)) -> Record:
+    record = RECORDS.get(record_id)
+    if not visible_to(record, tenant):
+        raise HTTPException(status_code=404, detail="Not found")
+    return Record(id=record["id"], title=record["title"])
+```
+
+## Correctness against each acceptance condition
+
+- **Signatures preserved.** `def visible_to(record, tenant):` and `def get_record(record_id: str, tenant: str = Depends(current_tenant)) -> Record:` are byte-for-byte as required. ✓
+- **Endpoint calls `visible_to`; only own records visible.** The missing-only guard is gone; the single predicate now gates the response. `RECORDS` (catalog.py) stores ownership as `tenant_id`, and `current_tenant` (auth.py) returns exactly those values (`"alpha"`, `"beta"`), so the `==` comparison is against the right key and the right domain. ✓
+- **Missing and cross-tenant both 404 with the exact envelope.** Missing → `RECORDS.get` returns `None` → first conjunct false. Cross-tenant → `tenant_id` mismatch → false. Both hit the same `HTTPException(404, detail="Not found")`, which FastAPI renders as `{"detail":"Not found"}`. Identical path, so the two cases are indistinguishable to a caller — no enumeration oracle. ✓
+- **Fails closed.** Three independent ways to reach `False`: `record is None`, falsy `tenant`, key mismatch. A record dict lacking `tenant_id` yields `None`, which never equals a nonempty tenant string — closed, not open. ✓
+- **401 behavior preserved.** `Depends(current_tenant)` is unchanged and resolves before the handler body, so an absent/malformed/unknown Bearer token still 401s before any record lookup. `auth.py` is untouched. ✓
+- **`Record(id, title)` and `/caption` preserved.** Return construction is unchanged; `caption` and `presentation.display_title` → `catalog.compact_caption` are untouched by this task. ✓
+- **No spoofing surface added.** The only header read anywhere is `Authorization` in `auth.py`. No `x-tenant`, no query parameter, no entitlement check — consistent with the fixed `trusted-tenant` decision. ✓
+- **Scope and size.** Only `app.py` and `access.py` differ from what task 2 permits; roughly three changed lines against a 15-line budget. No test files, no new modules. ✓
+
+I found no correctness defect and nothing unsafe recommended.
+
+## Claims I could not verify, and how I treat them
+
+1. **"Preservation gate: `5 passed, 8 deselected in 0.10s`."** The gate argv points at `/private/tmp/q9v2.nxS6sx/trial4-instrument/test_contract.py` and its venv — outside this review copy, which I'm bound not to reach into, and I have no shell here. So this is self-reported. The shape is plausible (`-k preservation` against a 13-test contract file), and the code satisfies every preservation invariant I can reason about statically, but **the operator should re-run the gate rather than take the pasted line as evidence.** It doesn't change the verdict; it just isn't independently confirmed.
+
+2. **"Lookup confirmed the prior predicate accepted every nonmissing record."** Unverifiable without history. It's circumstantially supported — `access.py`'s surviving docstring reads "Missing rows must fail closed," which is what you'd write for a `record is not None` predicate — but it remains an assertion about a state I can't observe.
+
+3. **The git claim.** "exit 128, `fatal: not a git repository (or any of the parent directories): .git`" does carry an exit status and a verbatim error, which is the standard for an environment-blocked claim. It's also corroborated independently: this copy contains exactly six files (`README.md`, `access.py`, `app.py`, `auth.py`, `catalog.py`, `presentation.py`) and no `.git`. This one I accept. It's also inconsequential — nothing in task 2 depended on history.
+
+4. **"Workers invoked: none."** Consistent with the reconnaissance note; nothing in the tree contradicts it. Not independently checkable, and harmless either way.
+
+## Two minor notes, neither blocking
+
+- `record.get(...)` assumes a mapping. A non-dict truthy record would raise `AttributeError` → 500 instead of 404. With `RECORDS` a fixed dict-of-dicts this is unreachable; worth knowing only if the predicate is later reused against a different store.
+- The `tenant` truthiness guard is currently defense-in-depth, since `current_tenant` either raises 401 or returns a nonempty string. That's the right thing to have — it's what makes the predicate safe for a future caller that doesn't go through the dependency.
+
+## Verdict
+
+**Accept.** The code is correct, fails closed on all three axes, stays inside scope and budget, and preserves both mandated signatures plus the 401 and `/caption` behavior. Nothing must change.
+
+The one caveat to carry forward: the answer's summary sentence says "Preservation gate: 5 passed" as though verified, and from a read-only copy it isn't. Re-run the `api-tests` gate yourself before accepting — not because I doubt the result, but because the pasted line is the kind of claim that should never be the last word on whether a gate passed. Full grading remains with you, as the task states.

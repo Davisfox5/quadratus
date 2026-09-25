@@ -1,0 +1,10 @@
+Implemented task 2 only.
+
+- `access.py`: `visible_to` now rejects missing records and absent tenants, requiring `record["tenant_id"]` to match the authenticated tenant.
+- `app.py`: imports and uses `visible_to`; endpoint signature, `Record(id, title)`, 401 behavior, and exact 404 response remain unchanged.
+- Lookup confirmed tenant ownership is stored in `catalog.RECORDS[*]["tenant_id"]` and identity comes exclusively from `auth.current_tenant`.
+- Workers invoked: none.
+- Preservation gate: `5 passed, 8 deselected in 0.10s` (exit 0).
+- Operator’s full grader: not run, as instructed.
+
+CHANGED: ["app.py","access.py"]

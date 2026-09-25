@@ -1,0 +1,23 @@
+{"topic": "stack", "note": "Primary language: Python (5 files)", "author": "scan", "session": "scan"}
+{"topic": "layout", "note": "Largest source files: app.py (27 lines), auth.py (12 lines), catalog.py (12 lines), access.py (5 lines), presentation.py (5 lines)", "author": "scan", "session": "scan"}
+{"topic": "adapter", "note": "presentation.py:4\u20135 defines `def display_title(value):` and currently returns value unchanged; no imports exist.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "helper", "note": "catalog.py:9\u201312 defines compact_caption(value); joins split words, then returns text or text[:23] + \"\u2026\" when longer than 24.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "endpoint", "note": "app.py:6 imports display_title; app.py:17\u201319 serves /caption using {\"caption\": display_title(title)}.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "checks", "note": "README.md:20\u201322 says the operator supplies external task checks and the final grader; no check files appear in this copy.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "presentation.py", "note": "only file changed; `display_title` delegates to imported `compact_caption` and keeps `def display_title(value)`.", "author": "grok:default", "session": "t1"}
+{"topic": "compact_caption", "note": "collapses whitespace via `\" \".join(value.split())`, trims, returns text if length \u2264 24 else `text[:23] + \"\u2026\"`.", "author": "grok:default", "session": "t1"}
+{"topic": "app.py", "note": "`/caption` still returns `{\"caption\": display_title(title)}`; file not edited.", "author": "grok:default", "session": "t1"}
+{"topic": "preservation gate", "note": "pytest `-k preservation` on `/private/tmp/q9v2.nxS6sx/trial-instrument/test_contract.py`, exit 0, 5 passed / 8 deselected; not full-grader acceptance.", "author": "grok:default", "session": "t1"}
+{"topic": "session check", "note": "`gate suite` / api-tests passed (exit 0, same 5/8 counts, ~0.13s) under candidate-1 project cwd.", "author": "grok:default", "session": "t1"}
+{"topic": "workers", "note": "none invoked.", "author": "grok:default", "session": "t1"}
+{"topic": "security task", "note": "deferred.", "author": "grok:default", "session": "t1"}
+{"topic": "endpoint", "note": "app.py:22\u201327 already injects current_tenant, fetches RECORDS, raises the required 404 for missing rows, and constructs Record(id,title).", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "predicate", "note": "access.py:4\u20135 defines visible_to(record, tenant), currently returning only record is not None; catalog.py:3\u20136 stores ownership as tenant_id.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "authentication", "note": "auth.py:8\u201312 accepts mapped Bearer tokens and otherwise raises 401 Unauthorized; it returns the authenticated tenant string.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "completed display", "note": "presentation.py:3\u20137 imports and calls compact_caption; catalog.py:9\u201312 collapses whitespace and caps output at 24 characters.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "task scope", "note": "Task 2 only; no authentication, catalog, presentation, README, test, or policy edits.", "author": "openai:gpt-5.6-sol", "session": "t2"}
+{"topic": "ownership rule", "note": "A record is visible only when it exists, the tenant is truthy, and `record[\"tenant_id\"]` matches.", "author": "openai:gpt-5.6-sol", "session": "t2"}
+{"topic": "endpoint behavior", "note": "Missing and cross-tenant records receive identical 404 responses.", "author": "openai:gpt-5.6-sol", "session": "t2"}
+{"topic": "changed files", "note": "`app.py` and `access.py`.", "author": "openai:gpt-5.6-sol", "session": "t2"}
+{"topic": "recorded check", "note": "`gate suite` passed; 5 passed, 8 deselected in 0.10s.", "author": "openai:gpt-5.6-sol", "session": "t2"}
+{"topic": "deferred check", "note": "Full grader not recorded as run.", "author": "openai:gpt-5.6-sol", "session": "t2"}

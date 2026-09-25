@@ -1,0 +1,20 @@
+{"topic": "stack", "note": "Primary language: Python (5 files)", "author": "scan", "session": "scan"}
+{"topic": "layout", "note": "Largest source files: app.py (27 lines), auth.py (12 lines), catalog.py (12 lines), access.py (5 lines), presentation.py (5 lines)", "author": "scan", "session": "scan"}
+{"topic": "adapter", "note": "presentation.py:4\u20135 defines display_title(value), which currently returns value unchanged.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "helper", "note": "catalog.py:9\u201312 defines compact_caption; it collapses whitespace and truncates over 24 characters to 23 plus \u201c\u2026\u201d .", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "endpoint", "note": "app.py:6 imports display_title; app.py:17\u201319 wraps its result in the existing {\"caption\": ...} response.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "checks", "note": "README.md:20\u201322 says the operator supplies external checks; the per-task gate checks preservation only. No check file is in this copy.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "helper", "note": "`catalog.compact_caption` collapses whitespace and truncates past 24 characters (first 23 plus `\u2026`).", "author": "grok:default", "session": "t1"}
+{"topic": "adapter", "note": "`display_title(value)` delegates to `compact_caption`; signature unchanged.", "author": "grok:default", "session": "t1"}
+{"topic": "route", "note": "`/caption` already wraps `display_title`; `app.py` was not changed.", "author": "grok:default", "session": "t1"}
+{"topic": "scope", "note": "only `presentation.py` was changed; no workers; no co-located tests.", "author": "grok:default", "session": "t1"}
+{"topic": "check", "note": "preservation pytest gate passed (5 passed, 8 deselected); it does not exercise caption behavior.", "author": "grok:default", "session": "t1"}
+{"topic": "predicate", "note": "access.py:4\u20135 defines visible_to(record, tenant) but currently checks only whether the record exists.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "endpoint", "note": "app.py:22\u201327 uses Depends(current_tenant), checks only missing records, and returns Record(id,title); visible_to is not imported.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "identity", "note": "auth.py:5\u201312 maps Bearer tokens to alpha/beta and raises 401 Unauthorized; catalog.py:3\u20136 stores ownership in tenant_id.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "display", "note": "presentation.py:3\u20137 already delegates to catalog.compact_caption; catalog.py:9\u201312 collapses whitespace and caps output at 24 characters.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "visible_to", "note": "Requires a record, nonempty tenant, and matching `tenant_id`.", "author": "openai:gpt-5.6-sol", "session": "t2"}
+{"topic": "record visibility", "note": "Missing and foreign records use the same existing 404 response.", "author": "openai:gpt-5.6-sol", "session": "t2"}
+{"topic": "changed files", "note": "Exactly `access.py` and `app.py` in the captured diff.", "author": "openai:gpt-5.6-sol", "session": "t2"}
+{"topic": "preservation gate", "note": "`5 passed, 8 deselected in 0.10s`; full security grading remains deferred.", "author": "openai:gpt-5.6-sol", "session": "t2"}
+{"topic": "scope", "note": "No tests, authentication, catalog, README, policy, or entitlement logic were changed.", "author": "openai:gpt-5.6-sol", "session": "t2"}

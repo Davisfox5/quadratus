@@ -1,0 +1,193 @@
+{
+  "label": "live sample: 1 runs per version, below the 5-run reliability threshold",
+  "versions": {
+    "baseline": {
+      "runs": 1,
+      "launch_sound": 0,
+      "launcher_failed": 1,
+      "launcher_unknown": 0,
+      "instrument_refused": 0,
+      "completed": 0,
+      "completed_unknown": 0,
+      "graded": 1,
+      "grader_passed": "0 of 1 graded",
+      "ungraded": 0,
+      "median_attempts": {
+        "value": 6,
+        "known": 1,
+        "of": 1
+      },
+      "median_reported_tokens": {
+        "value": 556518,
+        "known": 1,
+        "of": 1
+      },
+      "label": "live sample: 1 runs per version, below the 5-run reliability threshold"
+    },
+    "candidate": {
+      "runs": 1,
+      "launch_sound": 0,
+      "launcher_failed": 1,
+      "launcher_unknown": 0,
+      "instrument_refused": 0,
+      "completed": 0,
+      "completed_unknown": 0,
+      "graded": 1,
+      "grader_passed": "0 of 1 graded",
+      "ungraded": 0,
+      "median_attempts": {
+        "value": 8,
+        "known": 1,
+        "of": 1
+      },
+      "median_reported_tokens": {
+        "value": 634736,
+        "known": 1,
+        "of": 1
+      },
+      "label": "live sample: 1 runs per version, below the 5-run reliability threshold"
+    }
+  },
+  "runs": [
+    {
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence/baseline-1/project/.quadratus/runs/20260923T154932Z-68cb919c",
+      "version": "baseline",
+      "runtime_commit": "5d70d312868a3452c6aec9fd8461fd12fcdc31cb",
+      "attempt": 1,
+      "launcher_exit_code": 1,
+      "launched": true,
+      "provenance": "live launcher run (series.json)",
+      "completed": false,
+      "provider_attempts": 6,
+      "reported_tokens": 556518,
+      "unknown_usage_attempts": 0,
+      "wall_seconds": 326.38619091699366,
+      "input_tokens": {
+        "input": 545745,
+        "cached": null,
+        "fresh": null,
+        "rows_input_unknown": 0,
+        "rows_cached_unknown": 1
+      },
+      "grader": {
+        "passed": 13,
+        "failed": 0,
+        "summary": "13 passed in 0.11s"
+      },
+      "only_declared_paths": "no policy plan",
+      "changed_paths": [
+        "access.py",
+        "app.py",
+        "presentation.py"
+      ],
+      "roles": [
+        "orchestrator",
+        "orchestrator",
+        "lead",
+        "closeout",
+        "orchestrator",
+        "lead"
+      ],
+      "cli_evidence": [],
+      "policy_plan": false,
+      "missing": []
+    },
+    {
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence/candidate-1/project/.quadratus/runs/20260923T160545Z-e8926854",
+      "version": "candidate",
+      "runtime_commit": "986c934804dcfb16869562400f3655019c41c66c",
+      "attempt": 1,
+      "launcher_exit_code": 1,
+      "launched": true,
+      "provenance": "live launcher run (series.json)",
+      "completed": false,
+      "provider_attempts": 8,
+      "reported_tokens": 634736,
+      "unknown_usage_attempts": 0,
+      "wall_seconds": 371.035053708998,
+      "input_tokens": {
+        "input": 623178,
+        "cached": null,
+        "fresh": null,
+        "rows_input_unknown": 0,
+        "rows_cached_unknown": 1
+      },
+      "grader": {
+        "passed": 13,
+        "failed": 0,
+        "summary": "13 passed in 0.11s"
+      },
+      "only_declared_paths": {
+        "ok": true,
+        "undeclared": []
+      },
+      "changed_paths": [
+        "access.py",
+        "app.py",
+        "presentation.py"
+      ],
+      "roles": [
+        "orchestrator",
+        "orchestrator",
+        "lead",
+        "closeout",
+        "orchestrator",
+        "lead",
+        "verifier",
+        "closeout"
+      ],
+      "cli_evidence": [
+        {
+          "role": "orchestrator",
+          "model": "openai:gpt-6-astra",
+          "stderr_tail": "Reading prompt from stdin...\n",
+          "tool_failures": [
+            {
+              "command": null,
+              "exit_code": null
+            }
+          ]
+        },
+        {
+          "role": "orchestrator",
+          "model": "openai:gpt-6-astra",
+          "stderr_tail": "Reading prompt from stdin...\n",
+          "tool_failures": [
+            {
+              "command": null,
+              "exit_code": null
+            }
+          ]
+        },
+        {
+          "role": "lead",
+          "model": "openai:gpt-5.6-sol",
+          "stderr_tail": "Reading prompt from stdin...\n",
+          "tool_failures": [
+            {
+              "command": null,
+              "exit_code": null
+            },
+            {
+              "command": "/bin/zsh -lc \"sed -n '1,120p' app.py; sed -n '1,80p' access.py; git status --short; git diff -- presentation.py app.py access.py\"",
+              "exit_code": 129
+            }
+          ]
+        },
+        {
+          "role": "closeout",
+          "model": "openai:gpt-5.6-sol",
+          "stderr_tail": "Reading prompt from stdin...\n",
+          "tool_failures": [
+            {
+              "command": null,
+              "exit_code": null
+            }
+          ]
+        }
+      ],
+      "policy_plan": true,
+      "missing": []
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+Completed task 2 only.
+
+- [access.py](/private/tmp/q9v2.nxS6sx/evidence/baseline-1/project/access.py:4): `visible_to` now denies missing records/tenants and requires matching `tenant_id`.
+- [app.py](/private/tmp/q9v2.nxS6sx/evidence/baseline-1/project/app.py:3): imported and applied `visible_to`; unauthorized records retain exact `404 {"detail":"Not found"}` behavior.
+- Authentication remains exclusively through `current_tenant`; record shape and existing 401 behavior are unchanged.
+- No other files changed. No workers invoked.
+
+Lookup evidence: records store ownership in `catalog.py` under `tenant_id`; `auth.py` derives tenant identity solely from bearer tokens.
+
+Preservation gate:
+
+```text
+5 passed, 8 deselected in 0.14s
+```
+
+Command used: `/private/tmp/q9v2.nxS6sx/venv/bin/pytest /private/tmp/q9v2.nxS6sx/trial-instrument/test_contract.py -k preservation`

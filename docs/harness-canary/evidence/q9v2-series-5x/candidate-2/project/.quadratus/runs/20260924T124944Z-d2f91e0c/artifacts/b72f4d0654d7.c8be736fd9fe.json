@@ -1,0 +1,1 @@
+{"author": "openai:gpt-5.6-sol", "chars": 884, "id": "b72f4d0654d7", "kind": "closeout-evidence", "lines": 29, "preview": "--- a/access.py\n+++ b/access.py\n@@ -2,4 +2,8 @@\n \n \n def visible_to(record, tenant):\n-    return record is not None\n+    return bool(\n+        record is not None\n+        and tenant"}

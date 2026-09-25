@@ -1,0 +1,21 @@
+{"topic": "stack", "note": "Primary language: Python (5 files)", "author": "scan", "session": "scan"}
+{"topic": "layout", "note": "Largest source files: app.py (27 lines), auth.py (12 lines), catalog.py (12 lines), access.py (5 lines), presentation.py (5 lines)", "author": "scan", "session": "scan"}
+{"topic": "adapter", "note": "presentation.py:4-5 defines `def display_title(value):` and currently returns value unchanged.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "helper", "note": "catalog.py:9-12 defines compact_caption(value); collapses whitespace, trims, and truncates beyond 24 characters to 23 plus \u201c\u2026\u201d .", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "endpoint", "note": "app.py:6 imports display_title; app.py:17-19 returns {\"caption\": display_title(title)} from /caption.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "checks", "note": "README.md:20-24 says the operator supplies external checks and the final grader; the per-task gate checks preservation only.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "presentation.py", "note": "imports `compact_caption` from `catalog`; `display_title(value)` returns `compact_caption(value)`; signature unchanged.", "author": "grok:default", "session": "t1"}
+{"topic": "catalog.py", "note": "`compact_caption(value)` at lines 9\u201312; whitespace collapse via `\" \".join(value.split())`, trim, and if length > 24 return `text[:23] + \"\u2026\"`.", "author": "grok:default", "session": "t1"}
+{"topic": "app.py", "note": "`/caption` still `{\"caption\": display_title(title)}`; not edited in task 1.", "author": "grok:default", "session": "t1"}
+{"topic": "task 2", "note": "security repair deferred and not started.", "author": "grok:default", "session": "t1"}
+{"topic": "preservation gate", "note": "pytest `-k preservation` on `/private/tmp/q9v2.nxS6sx/trial4-instrument/test_contract.py`, sha256 `80f1cd5af0112c3f8a786429e38bd4d8648acdb332a87eab8baf27a0138eb9a9`; 5 passed, 8 deselected; own-record 200s and 401s only; does not prove caption behavior.", "author": "grok:default", "session": "t1"}
+{"topic": "workers", "note": "none used.", "author": "grok:default", "session": "t1"}
+{"topic": "endpoint", "note": "app.py:22\u201327 defines get_record with Depends(current_tenant); its guard currently rejects only None before constructing Record(id,title).", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "predicate", "note": "access.py:4\u20135 defines visible_to(record, tenant), currently returning only record is not None; app.py does not import it.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "identity", "note": "catalog.py:3\u20136 stores ownership in tenant_id; auth.py:8\u201312 resolves Bearer tokens and raises 401 Unauthorized for invalid authentication.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "display", "note": "presentation.py:3\u20137 already delegates to compact_caption; catalog.py:9\u201312 collapses whitespace and limits output to 24 characters with an ellipsis.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "task scope", "note": "Only `app.py` and `access.py` were changed in the captured diff.", "author": "openai:gpt-5.6-sol", "session": "t2"}
+{"topic": "visibility rule", "note": "A record is visible only when the record and tenant are present and `record[\"tenant_id\"] == tenant`.", "author": "openai:gpt-5.6-sol", "session": "t2"}
+{"topic": "response behavior", "note": "Missing and tenant-mismatched records return the same 404 response.", "author": "openai:gpt-5.6-sol", "session": "t2"}
+{"topic": "verification", "note": "Preservation check recorded 5 passed and 8 deselected; full grader deferred.", "author": "openai:gpt-5.6-sol", "session": "t2"}
+{"topic": "unknown", "note": "Protected-file manifest hash matching was asserted without supplied supporting evidence.", "author": "openai:gpt-5.6-sol", "session": "t2"}

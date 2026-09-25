@@ -1,0 +1,11 @@
+Implemented task 2 only.
+
+- `access.py`: `visible_to` now requires a present record, nonempty authenticated tenant, and matching `tenant_id`.
+- `app.py`: imports and uses `visible_to`; preserves authentication dependency, exact 404 response, and `Record(id, title)`.
+- Verified from `auth.py` that tenant identity comes only from Bearer-token authentication; query/header spoofing cannot override it.
+- No workers invoked.
+- Preservation gate: `5 passed, 8 deselected in 0.14s`.
+- Focused API checks passed: own tenant 200, cross-tenant/missing/spoofed 404, unauthenticated 401, caption preserved.
+- Full grader intentionally not run.
+
+CHANGED: ["access.py", "app.py"]

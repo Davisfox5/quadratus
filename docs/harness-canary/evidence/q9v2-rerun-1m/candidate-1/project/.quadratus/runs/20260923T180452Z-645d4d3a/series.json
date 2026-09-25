@@ -1,0 +1,9 @@
+{
+  "version": "candidate",
+  "runtime_commit": "d011a5c62a443bc6aef4eb4e81e0fad96873ecba",
+  "attempt": 1,
+  "slot": 1,
+  "allowance_sha256": "ae71b492e206f874c46633744c61570d909272a07e54ea936c5b62d15cec3a1f",
+  "launcher_exit_code": 1,
+  "run_trees_found": 1
+}

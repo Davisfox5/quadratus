@@ -1,0 +1,13 @@
+Implemented task t2 within scope:
+
+- [access.py](/private/tmp/q9v2.nxS6sx/evidence3/baseline-1/project/access.py): `visible_to` now rejects missing records, absent tenants, and mismatched `tenant_id`.
+- [app.py](/private/tmp/q9v2.nxS6sx/evidence3/baseline-1/project/app.py): imports and applies `visible_to`; missing and foreign records both produce `404 {"detail":"Not found"}`.
+- Preserved `Record(id, title)`, `Depends(current_tenant)`, existing authentication behavior, and completed caption behavior.
+- No feature entitlement added. No other files edited. No workers invoked.
+
+Lookup evidence: `RECORDS` stores ownership in `tenant_id`; `current_tenant` derives identity exclusively from the bearer token.
+
+Validation limitations:
+
+- Runtime smoke test was blocked because system `python3` cannot parse the existing `str | None` annotation in `auth.py`.
+- The required preservation command was attempted exactly, but `pytest` is unavailable: `zsh: command not found: pytest` (exit 127). No installation was attempted.

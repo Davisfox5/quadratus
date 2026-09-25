@@ -1,0 +1,32 @@
+I read the full source copy — all six files — and checked the change against each acceptance condition.
+
+## What the code actually does
+
+`access.py`:
+```python
+def visible_to(record, tenant):
+    return bool(record is not None and tenant and record.get("tenant_id") == tenant)
+```
+- Missing record → `record is None` → denies. ✔
+- Absent tenant (`None` or `""`) → short-circuits falsy, `bool()` normalizes → denies. ✔
+- Mismatch, or a record with no `tenant_id` key (`.get` → `None` vs. a truthy tenant) → denies. ✔ Fails closed in the unenumerated case too.
+- Signature preserved verbatim. ✔
+
+`app.py`: imports `visible_to` (line 3), `record = RECORDS.get(record_id)` yields `None` for unknown ids, and the single existing branch `if not visible_to(record, tenant): raise HTTPException(404, detail="Not found")` covers both the missing and the cross-tenant case with a byte-identical body. `get_record`'s signature is verbatim; the success path still returns `Record(id=..., title=...)`, and `response_model=Record` keeps `tenant_id` out of the response. ✔
+
+Identity: `tenant` carries a `Depends(...)` default, so FastAPI binds it as a dependency, never as a query parameter — `?tenant=beta` cannot override it, and `current_tenant` reads only the `Authorization` header it owns. `auth.py` is untouched, so the 401 still raises during dependency resolution, before the endpoint body. ✔ Cross-tenant reads get 404, not 403, so existence isn't leaked. ✔
+
+Scope and size: only `access.py` and `app.py` differ from a plain fixture; `auth.py`, `catalog.py`, `README.md` are intact, `presentation.py` holds only the task-1 delegation to `compact_caption`. Roughly 8 changed lines, well under 20. No entitlement flags, no new dependencies, no `__pycache__` in the tree. ✔
+
+## Claims I could not confirm
+
+- **The preservation gate did not run.** The report says so plainly, which is the right call — declining to `pip install` to make a check pass is correct behavior, not a shortcut. But the task listed running it as a completion condition, so this deliverable is code-complete and gate-incomplete. That is the operator's to close, not something to paper over.
+- **The environment story is unverifiable and slightly mis-stated.** `str | None` in `auth.py:8` is an evaluated default annotation; on Python 3.9 it raises `TypeError` at import, not a syntax error. The conclusion (3.9 can't collect this tree) is likely right; the characterization is loose.
+- **Endpoint-level behavior was asserted, not exercised.** "Predicate checks passed" covers `visible_to` only. The 401 path, the exact 404 body, and the caption response were inferred from unchanged code. Those inferences hold on the source I read, but nothing here is a test result.
+- **"Untouched-file hashes match the fixture manifest"** — I have no manifest. I can only confirm those files are internally consistent with an unedited fixture.
+
+## Verdict
+
+**Accept the code.** The predicate is correct and fails closed, the integration is minimal and uses the existing branch, and no requirement is violated. Nothing in the report recommends anything unsafe.
+
+**Before the operator signs off**, one thing must change: run the preservation gate on a 3.10+ interpreter with pytest available and attach its real output. Until then, "endpoint returns exactly 404 `{"detail":"Not found"}`" and "401 preserved" stand on code reading, which I independently agree with, rather than on an executed check — and the report should not be read as having satisfied that condition.

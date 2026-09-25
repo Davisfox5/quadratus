@@ -1,0 +1,66 @@
+{
+  "contained": false,
+  "host": true,
+  "work_tree": {
+    "ok": true,
+    "entries": 7,
+    "read": "README.md"
+  },
+  "vendors": {
+    "claude": {
+      "applicable": false,
+      "detail": "this vendor has no inner sandbox to test; its restriction is a tool denial, which needs no privilege to take effect"
+    },
+    "openai": {
+      "applicable": true,
+      "ok": true,
+      "argv": [
+        "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/codex",
+        "sandbox",
+        "-c",
+        "sandbox_mode=read-only",
+        "--",
+        "cat",
+        "/private/tmp/q9v2.nxS6sx/evidence-series/baseline-3/project/README.md"
+      ],
+      "exit_code": 0,
+      "detail": "# Two ordered repairs"
+    },
+    "grok": {
+      "applicable": false,
+      "detail": "this vendor has no inner sandbox to test; its restriction is a tool denial, which needs no privilege to take effect"
+    }
+  },
+  "auth": {
+    "claude": {
+      "applicable": false,
+      "detail": "this vendor offers no model-free readout of its session, so nothing here establishes that it is signed in"
+    },
+    "openai": {
+      "applicable": true,
+      "ok": true,
+      "argv": [
+        "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/codex",
+        "login",
+        "status"
+      ],
+      "exit_code": 0,
+      "proof": "positive",
+      "detail": "Logged in using ChatGPT"
+    },
+    "grok": {
+      "applicable": true,
+      "ok": true,
+      "argv": [
+        "/opt/homebrew/bin/grok",
+        "models"
+      ],
+      "exit_code": 0,
+      "proof": "known-failure wording only",
+      "detail": "You are logged in with grok.com."
+    }
+  },
+  "probe_file": "/private/tmp/q9v2.nxS6sx/evidence-series/baseline-3/project/README.md",
+  "blockers": [],
+  "ok": true
+}

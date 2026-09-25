@@ -1,0 +1,11 @@
+Completed task 2.
+
+- `access.visible_to` now requires a present tenant and matching `record["tenant_id"]`.
+- `/records/{record_id}` imports and calls the shared predicate.
+- Preserved the authentication dependency, handler signature, response model/construction, 401 behavior, and identical 404 response for missing/foreign records.
+- Lookup confirmed ownership is stored in `catalog.RECORDS[*]["tenant_id"]`.
+- Workers invoked: none.
+- Preservation gate: exit 0 — `5 passed, 8 deselected in 0.10s`.
+- Full grader was not run; the preservation gate does not establish full correctness.
+
+CHANGED: ["access.py","app.py"]

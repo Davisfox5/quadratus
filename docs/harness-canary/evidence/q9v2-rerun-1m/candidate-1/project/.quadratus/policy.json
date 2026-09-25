@@ -1,0 +1,111 @@
+{
+  "kind": "policy",
+  "schema_version": 1,
+  "repository_id": "fixture/q9-two-task-v2",
+  "library": {
+    "version": "pilot-1"
+  },
+  "instructions": [
+    "README.md"
+  ],
+  "defaults": {
+    "family": "pure-logic",
+    "required_gates": [
+      "scope",
+      "api-tests"
+    ],
+    "scope_max_lines": 60,
+    "overrun_ratio": 1.5,
+    "worker_depth": 1
+  },
+  "capability_policy": {
+    "deny_write": [
+      ".git/**",
+      ".quadratus/policy.json",
+      "README.md",
+      "auth.py",
+      "catalog.py"
+    ],
+    "sensitive": [],
+    "external_effects": "deny",
+    "native_delegation": "deny"
+  },
+  "path_rules": [
+    {
+      "paths": [
+        "presentation.py"
+      ],
+      "families": [
+        "pure-logic"
+      ]
+    },
+    {
+      "paths": [
+        "app.py",
+        "access.py"
+      ],
+      "families": [
+        "scoped-endpoint"
+      ],
+      "overlays": [
+        "tenant-isolation"
+      ]
+    }
+  ],
+  "gate_bindings": {
+    "cross-tenant-test": {
+      "absent": true,
+      "because": "Task correctness is graded externally after both ordered tasks; the common per-task gate checks preservation only."
+    },
+    "import-smoke": {
+      "gate": "api-tests"
+    },
+    "unit-tests": {
+      "absent": true,
+      "because": "Task correctness is graded externally after both ordered tasks; the common per-task gate checks preservation only."
+    },
+    "scope-predicate-grep": {
+      "absent": true,
+      "because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration."
+    },
+    "lint": {
+      "absent": true,
+      "because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration."
+    }
+  },
+  "gates": [
+    {
+      "id": "scope",
+      "runner": "builtin:scope",
+      "required": true
+    },
+    {
+      "id": "api-tests",
+      "runner": "command",
+      "argv": [
+        "/private/tmp/q9v2.nxS6sx/venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "/private/tmp/q9v2.nxS6sx/trial2-instrument/test_contract.py",
+        "-k",
+        "preservation"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 30,
+      "minimum_tests": 5,
+      "required": true,
+      "side_effects": "none"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "trusted-tenant",
+      "state": "fixed",
+      "text": "Tenant comes only from current_tenant Bearer-token authentication. There is no feature gate in this fixture.",
+      "source": "README.md"
+    }
+  ]
+}

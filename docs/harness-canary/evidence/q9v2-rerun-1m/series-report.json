@@ -1,0 +1,148 @@
+{
+  "label": "live sample: 1 runs per version, below the 5-run reliability threshold",
+  "versions": {
+    "baseline": {
+      "runs": 1,
+      "launch_sound": 0,
+      "launcher_failed": 1,
+      "launcher_unknown": 0,
+      "instrument_refused": 0,
+      "completed": 0,
+      "completed_unknown": 0,
+      "graded": 1,
+      "grader_passed": "0 of 1 graded",
+      "ungraded": 0,
+      "median_attempts": {
+        "value": 3,
+        "known": 1,
+        "of": 1
+      },
+      "median_reported_tokens": {
+        "value": 378070,
+        "known": 1,
+        "of": 1
+      },
+      "label": "live sample: 1 runs per version, below the 5-run reliability threshold"
+    },
+    "candidate": {
+      "runs": 1,
+      "launch_sound": 0,
+      "launcher_failed": 1,
+      "launcher_unknown": 0,
+      "instrument_refused": 0,
+      "completed": 0,
+      "completed_unknown": 0,
+      "graded": 1,
+      "grader_passed": "0 of 1 graded",
+      "ungraded": 0,
+      "median_attempts": {
+        "value": 3,
+        "known": 1,
+        "of": 1
+      },
+      "median_reported_tokens": {
+        "value": 65639,
+        "known": 1,
+        "of": 1
+      },
+      "label": "live sample: 1 runs per version, below the 5-run reliability threshold"
+    }
+  },
+  "runs": [
+    {
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence2/baseline-1/project/.quadratus/runs/20260923T180322Z-ad60943c",
+      "version": "baseline",
+      "runtime_commit": "5d70d312868a3452c6aec9fd8461fd12fcdc31cb",
+      "attempt": 1,
+      "launcher_exit_code": 1,
+      "launched": true,
+      "provenance": "live launcher run (series.json)",
+      "completed": false,
+      "provider_attempts": 3,
+      "reported_tokens": 378070,
+      "unknown_usage_attempts": 0,
+      "wall_seconds": 87.74104954098584,
+      "input_tokens": {
+        "input": 372027,
+        "cached": null,
+        "fresh": null,
+        "rows_input_unknown": 0,
+        "rows_cached_unknown": 1
+      },
+      "grader": {
+        "passed": 8,
+        "failed": 5,
+        "summary": "5 failed, 8 passed in 0.18s"
+      },
+      "only_declared_paths": "no policy plan",
+      "changed_paths": [
+        "presentation.py"
+      ],
+      "roles": [
+        "orchestrator",
+        "orchestrator",
+        "lead"
+      ],
+      "cli_evidence": [],
+      "policy_plan": false,
+      "missing": []
+    },
+    {
+      "run_dir": "/private/tmp/q9v2.nxS6sx/evidence2/candidate-1/project/.quadratus/runs/20260923T180452Z-645d4d3a",
+      "version": "candidate",
+      "runtime_commit": "d011a5c62a443bc6aef4eb4e81e0fad96873ecba",
+      "attempt": 1,
+      "launcher_exit_code": 1,
+      "launched": true,
+      "provenance": "live launcher run (series.json)",
+      "completed": false,
+      "provider_attempts": 3,
+      "reported_tokens": 65639,
+      "unknown_usage_attempts": 0,
+      "wall_seconds": 33.80298916599713,
+      "input_tokens": {
+        "input": 65118,
+        "cached": null,
+        "fresh": null,
+        "rows_input_unknown": 0,
+        "rows_cached_unknown": 2
+      },
+      "grader": {
+        "passed": 5,
+        "failed": 8,
+        "summary": "8 failed, 5 passed in 0.16s"
+      },
+      "only_declared_paths": {
+        "ok": true,
+        "undeclared": []
+      },
+      "changed_paths": [],
+      "roles": [
+        "orchestrator",
+        "orchestrator",
+        "lead"
+      ],
+      "cli_evidence": [
+        {
+          "role": "orchestrator",
+          "model": "openai:gpt-6-astra",
+          "stderr_tail": "Reading prompt from stdin...\n",
+          "tool_failures": [
+            {
+              "command": null,
+              "exit_code": null
+            }
+          ]
+        },
+        {
+          "role": "lead",
+          "model": "grok:default",
+          "stderr_tail": "Error: You\u2019ve reached your free Grok Build usage limit for now. Get SuperGrok for much higher limits, or try again later: https://grok.com/supergrok?referrer=grok-build\n",
+          "tool_failures": []
+        }
+      ],
+      "policy_plan": true,
+      "missing": []
+    }
+  ]
+}

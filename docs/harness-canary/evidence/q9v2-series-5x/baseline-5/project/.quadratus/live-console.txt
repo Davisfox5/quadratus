@@ -1,0 +1,7 @@
+Project: /private/tmp/q9v2.nxS6sx/evidence-series/baseline-5/project; edits enabled
+asking claude:fable for the next task
+claude:fable is out of window; the seat falls to openai:gpt-6-astra
+task 1: Complete task 1 only: import and reuse `catalog.compact_caption` without copying its algorithm. Actual lookup established that it collapses whitespace, trims, and limits output to 24 characters, including a final ellipsis when truncated. Estimate: 5 code lines, 0 test lines. Report lookup evidence, actual worker invocations, and check output; then stop. No workers were invoked during this inspection. [refactor/simple]
+task 1 closed by grok:default
+asking openai:gpt-6-astra for the next task
+task 2: Complete task 2 only. Import the shared predicate into `app.py`, replace the endpoint’s missing-record-only guard with that predicate, and repair `access.py` to enforce tenant ownership while failing closed for missing records or absent tenants. Preserve the existing exception and response construction. Add no entitlement checks or alternate identity inputs. Estimate: 10 code diff lines, 0 test lines. Do not edit other files, install dependencies, commit, push, access external services, or use production data. Report actual source lookup evidence and worker invocations, including none if applicable. Preserve the check output and disclose that the preservation gate does not establish full security correctness. [security/simple]

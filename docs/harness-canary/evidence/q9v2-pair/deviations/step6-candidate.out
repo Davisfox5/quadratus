@@ -1,0 +1,6 @@
+candidate start: 2026-09-23T16:05:44Z
+candidate: /private/tmp/q9v2.nxS6sx/venv/bin/python /private/tmp/q9v2.nxS6sx/launcher-1m/docs/harness-canary/run_fixture.py --project /private/tmp/q9v2.nxS6sx/evidence/candidate-1/project --allowance-record /private/tmp/q9v2.nxS6sx/allowance-1m.json
+/private/tmp/q9v2.nxS6sx/evidence/candidate-1/project/.quadratus/runs/20260923T160545Z-e8926854
+candidate attempt 1: launcher exit 1; series stopped
+series exit for candidate: 1
+candidate end: 2026-09-23T16:11:57Z
