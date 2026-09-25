@@ -2075,6 +2075,7 @@ class CLIProvider(LLMProvider):
 
     def _call(self, prompt: str, system: str, history: Sequence[Turn]) -> str:
         self.last_diagnostics = None  # per attempt: a stale record must not describe this call
+        self.last_session_id = None  # likewise: a trace must never join the wrong transcript
         self.last_stderr = ""
         self.last_tool_failures = []
         composed = self._compose_prompt(prompt, system, history)
@@ -2192,12 +2193,22 @@ class CLIProvider(LLMProvider):
                     self.last_session_id = event.get("thread_id")
                 elif event.get("session_id"):
                     self.last_session_id = event["session_id"]
+                elif event.get("sessionId"):
+                    # grok spells it this way; without it no grok row had an id
+                    self.last_session_id = event["sessionId"]
                 # A Claude result names concrete releases, while argv often
                 # uses a moving alias. Auxiliary modelUsage rows are not seats.
                 models = event.get("modelUsage") or {}
                 matching = [name for name in models if self.model and self.model in name]
                 if len(matching) == 1:
                     self.resolved_model = matching[0]
+            if not getattr(self, "last_session_id", None):
+                try:
+                    whole = json.loads(stdout or "")
+                    if isinstance(whole, dict) and isinstance(whole.get("sessionId"), str):
+                        self.last_session_id = whole["sessionId"]
+                except ValueError:
+                    pass
             if self.spec.vendor == "openai" and getattr(self, "last_session_id", None):
                 from .native_sessions import codex_children
                 root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "sessions"

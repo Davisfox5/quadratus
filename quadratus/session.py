@@ -585,6 +585,14 @@ class Session:
                 prompt += "\n\n" + spec.scope.render()
             if self.config.default_scope is not None and spec.scope is not self.config.default_scope:
                 prompt += "\nOperator limits (also binding):\n" + self.config.default_scope.render()
+        # Every prompt is kept, not only an interrupted one: without it there was
+        # no proof of which packet or instructions a seat actually received.
+        try:
+            prompt_ref = self.store.put(prompt, kind="prompt", author=key)
+            self._active_call["prompt_artifact"] = prompt_ref.id
+            context = dict(context, prompt_artifact=prompt_ref.id)
+        except Exception:  # noqa: BLE001 -- evidence never fails a call
+            log.debug("could not keep the prompt", exc_info=True)
         try:
             with capture_invocations(), invocation(**context):
                 if self.project:
