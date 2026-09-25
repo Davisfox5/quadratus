@@ -250,3 +250,27 @@ def test_an_unrelated_clean_task_does_not_resolve_a_capped_one(tmp_path, monkeyp
     assert not result.completed and not result.error
     assert data["turn_limited_tasks"] == ["t1"]
     assert "CONTINUES: t1" in seen["orchestrator"][1], "the orchestrator is told how to link the follow-up"
+
+
+def test_grok_cancelled_at_the_cap_is_the_cap_not_a_failure():
+    """GameTape run 3: stopReason 'cancelled' with num_turns == max_turns."""
+    import json
+
+    from quadratus.cli_providers import GrokCLIProvider
+    from quadratus.providers import ProviderError, TurnLimitReached
+    envelope = json.dumps({"text": "I'll wire the helper into the endpoint", "stopReason": "cancelled",
+                           "num_turns": 14})
+    capped = GrokCLIProvider(model="")
+    capped.max_turns = 14
+    with pytest.raises(TurnLimitReached) as caught:
+        capped._extract(envelope)
+    assert caught.value.turns == 14 and "wire the helper" in (caught.value.partial_text or "")
+    uncapped = GrokCLIProvider(model="")
+    with pytest.raises(ProviderError) as plain:
+        uncapped._extract(envelope)
+    assert not isinstance(plain.value, TurnLimitReached)
+    early = GrokCLIProvider(model="")
+    early.max_turns = 14
+    with pytest.raises(ProviderError) as short:
+        early._extract(json.dumps({"text": "x", "stopReason": "cancelled", "num_turns": 5}))
+    assert not isinstance(short.value, TurnLimitReached), "a cancel before the cap is still a failure"
