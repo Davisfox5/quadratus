@@ -2115,6 +2115,36 @@ class CLIProvider(LLMProvider):
             argv.append(prompt)
         return argv
 
+    def _extract(self, stdout: str) -> str:
+        """The spec's extractor, with the turn cap recognised by count.
+
+        GameTape run 3 (2026-09-25): grok at --max-turns 14 reported
+        stopReason 'cancelled' with num_turns 14, not 'max_turns'. Read as a
+        failed lead with changed source, it stopped the whole run -- the
+        failure Codex warned the cap must not cause. When a cap was set and the
+        envelope's own turn count reached it, an incomplete turn is the cap.
+        """
+        try:
+            return self.spec.extract(stdout)
+        except ProviderRefusal:
+            raise
+        except TurnLimitReached:
+            raise
+        except ProviderError as exc:
+            if not self.max_turns or self.summary_only:
+                raise
+            try:
+                payload = json.loads(stdout or "")
+            except ValueError:
+                raise exc from None
+            turns = _envelope_turns(payload) if isinstance(payload, dict) else None
+            if turns is None or turns < int(self.max_turns):
+                raise
+            text = payload.get("text") or payload.get("result")
+            raise TurnLimitReached(
+                f"{self.spec.vendor} stopped at its turn limit ({turns} of {self.max_turns}) before finishing",
+                partial_text=text if isinstance(text, str) else None, turns=turns) from exc
+
     def _worker_tool_argv(self, tool: dict) -> Optional[List[str]]:
         """Arguments that attach the in-session worker tool, or None.
 
@@ -2250,7 +2280,7 @@ class CLIProvider(LLMProvider):
             # first refusal; only if it has nothing to say does the exit code
             # become the error.
             try:
-                self.spec.extract(proc.stdout)
+                self._extract(proc.stdout)
             except (ProviderError, ProviderRefusal) as parsed:
                 parsed.diagnostics = self.last_diagnostics
                 if isinstance(parsed, TurnLimitReached):
@@ -2270,7 +2300,7 @@ class CLIProvider(LLMProvider):
             )
 
         try:
-            return self.spec.extract(proc.stdout)
+            return self._extract(proc.stdout)
         except ProviderRefusal as refusal:
             refusal.diagnostics = self.last_diagnostics
             refusal.model = self.model
