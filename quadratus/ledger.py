@@ -35,7 +35,7 @@ eventually be summarised out of existence.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from .artifacts import ArtifactRef
 
@@ -108,6 +108,13 @@ class Ledger:
         #: the operator the same question twice is the failure the ASK channel
         #: exists to prevent.
         self.rulings: List[str] = []
+        #: The goal's requirements as the orchestrator numbered them on its
+        #: first decision, and each one's standing. Re-emitted on every
+        #: render like the invariants: a requirement that can scroll out of
+        #: view is one nobody checks before DONE (GameTape, 2026-09-25: the
+        #: UI the brief asked for was never planned).
+        self.requirements: Dict[str, str] = {}
+        self.requirement_status: Dict[str, str] = {}
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -191,6 +198,13 @@ class Ledger:
             blocks.append(
                 "## Operator rulings (asked and answered; do not re-ask)\n\n"
                 + "\n".join(f"- {r}" for r in self.rulings)
+            )
+
+        if self.requirements:
+            blocks.append(
+                "## Requirements (numbered from the goal; the run is done only when every one is met)\n\n"
+                + "\n".join(f"- {rid}: {text} [{self.requirement_status.get(rid, 'open')}]"
+                             for rid, text in self.requirements.items())
             )
 
         shown = self._entries if recent is None else self._entries[-recent:]
