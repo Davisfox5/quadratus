@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -323,6 +324,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             "tree is write-thrash, and a reviewer asked to critique will edit."
         ),
     )
+    engine.add_argument(
+        "--neutral-preferences", action="store_true",
+        help=("Run without the operator's personal CLI configuration (plugins, hooks, rules) "
+              "where each CLI allows it. Account-side rules that cannot be removed are recorded."),
+    )
     engine.add_argument("--policy-preview", action="store_true",
                         help="Show the resolved policy without running models or checks.")
     engine.add_argument("--path", dest="declared_paths", action="append", default=[],
@@ -331,6 +337,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Forbid writes to a project-relative path or glob. Repeat as needed.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging.")
     args = parser.parse_args(argv)
+    if getattr(args, "neutral_preferences", False):
+        os.environ["QUADRATUS_NEUTRAL_PREFERENCES"] = "1"
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,

@@ -966,6 +966,12 @@ class CLISpec:
     #: Names the run-wide denial must drop while the tool is attached, or the
     #: denial would remove the tool it is meant to leave alone.
     worker_tool_undeny: Tuple[str, ...] = ()
+    #: Flags that stop this CLI loading the operator's personal configuration
+    #: (plugins, hooks, rules) for a run with QUADRATUS_NEUTRAL_PREFERENCES
+    #: set. Sign-in is kept. Empty when the CLI offers no such flag.
+    neutral_args: List[str] = field(default_factory=list)
+    #: What neutral mode cannot remove on this CLI, recorded with the run.
+    neutral_gap: str = ""
     #: Arguments that turn the restricted seat into a one-turn, tool-less (or
     #: as close as the CLI documents) summary call. Sent only when a provider
     #: view carries ``summary_only=True``; see ``CLIProvider._build_argv``.
@@ -1118,6 +1124,11 @@ CLAUDE_SPEC = CLISpec(
     # the mcp__* denial protected against, so the denial can step aside.
     worker_tool_style="claude",
     worker_tool_undeny=("mcp__*",),
+    # --bare would also drop the subscription sign-in (it reads only
+    # ANTHROPIC_API_KEY), so neutral mode narrows setting sources instead:
+    # user settings, which carry plugins and hooks, are not loaded.
+    neutral_args=["--setting-sources", "project,local"],
+    neutral_gap="claude: the user CLAUDE.md memory file may still load; --bare would remove it but also the sign-in",
     native_fanout_off_env={
         # Read at startup: workflows unavailable, not merely denied.
         "CLAUDE_CODE_DISABLE_WORKFLOWS": "1",
@@ -1392,6 +1403,9 @@ CODEX_SPEC = CLISpec(
     extract_usage=_extract_codex_usage,
     prompt_on_stdin=True,
     verified=True,
+    # config.toml carries plugins and MCP servers; .rules files carry the
+    # execpolicy. auth.json is still read from CODEX_HOME.
+    neutral_args=["--ignore-user-config", "--ignore-rules"],
     worker_tool_style="codex",
 )
 
@@ -1527,6 +1541,8 @@ GROK_SPEC = CLISpec(
     # other integrations; see _worker_tool_argv.
     worker_tool_style="grok",
     worker_tool_undeny=("use_tool", "search_tool"),
+    neutral_gap=("grok: account-level <user_rules> are attached server-side and have no CLI "
+                 "switch; each call's injected rules are recorded by hash in the trace"),
     disallowed_tools_separator=",",
     # Workflows removed at startup as well as denied by name.
     native_fanout_off_env={"GROK_WORKFLOWS": "0"},
@@ -1723,6 +1739,18 @@ def contained(env: Optional[Mapping[str, str]] = None) -> bool:
 
 class NativeControlOverride(ProviderError):
     """A configuration conflicts with the selected native-delegation policy."""
+
+
+def neutral_preferences(env: Optional[Mapping[str, str]] = None) -> bool:
+    """Whether this run drops the operator's personal CLI configuration.
+
+    Davis's ruling (2026-09-25): his personal rules stay active by default,
+    because they are how he wants the models to work, and Quadratus builds
+    the important ones in as product behaviour. This switch is the option to
+    run without them, for a measurement that must not depend on one account.
+    """
+    environ = os.environ if env is None else env
+    return environ.get("QUADRATUS_NEUTRAL_PREFERENCES", "").strip().lower() in {"1", "true", "yes"}
 
 
 def native_delegation_mode(env: Optional[Mapping[str, str]] = None) -> str:
@@ -1956,6 +1984,8 @@ class CLIProvider(LLMProvider):
         if spec.effort_flag and self.effort:
             argv += [spec.effort_flag, spec.effort_template.format(level=self.effort)]
         argv += list(spec.always_args)
+        if neutral_preferences() and spec.neutral_args:
+            argv += list(spec.neutral_args)
         if self.restricted and spec.restricted_args:
             # A bounded call, not an agent. The permission axis does not apply:
             # readonly_args and write_args both describe what an agent may do

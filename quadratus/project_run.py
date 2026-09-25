@@ -211,6 +211,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'source_changed': bool(diff), 'source_fingerprint': project.fingerprint(),
         'tasks': len(session.history) if session else 0,
         'turn_limited_tasks': list(getattr(session, 'turn_limited', []) or []) if session else [],
+        'personal_preferences': _preferences_record(),
         'trace': {'calls': len(traces),
                   'transcripts_found': sum(1 for t in traces if t.get('tool_calls') is not None),
                   'calls_outside_project': sum(1 for t in traces if t.get('outside_project')),
@@ -230,3 +231,15 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     }, indent=2), encoding='utf-8')
     (run_dir / 'delegation.md').write_text(delegation.render_report(), encoding='utf-8')
     return ProjectResult(completed, report, run_dir, diff, error)
+
+
+def _preferences_record():
+    """Whether the operator's personal CLI configuration shaped this run."""
+    from .cli_providers import CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC, neutral_preferences
+    if not neutral_preferences():
+        return {"mode": "active", "note": "personal CLI configuration and account rules were loaded"}
+    specs = (CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC)
+    return {"mode": "neutralised",
+            "flags": {s.vendor: list(s.neutral_args) for s in specs},
+            "not_removable": [s.neutral_gap for s in specs if s.neutral_gap]}
+

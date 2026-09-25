@@ -327,6 +327,13 @@ class SessionConfig:
     #: WorkerBridge, so delegating no longer ends the lead's session. The
     #: WORKER reply stays for write errands and CLIs without the tool.
     in_session_workers: bool = True
+    #: Design and UI work is verified by the model that did it: the lead is
+    #: told to look at the rendered result at desktop and mobile widths and
+    #: report what it saw. Davis's ruling, 2026-09-25.
+    design_self_verify: bool = True
+    #: Design and UI work also gets a reviewer from another vendor, briefed
+    #: on design and aesthetic choices, even when the task is SIMPLE.
+    design_cross_check: bool = True
     #: Records who actually ran, distinguishing Quadratus-dispatched work from
     #: vendor-native children and vendor-internal auxiliary activity, and
     #: carrying what the harness cannot observe or bound. Observational only.
@@ -400,6 +407,35 @@ _NEEDS_REQUEST = (
     'task that runs tests still needs execute. Requirements do not grant permission.'
 )
 
+
+_UI_PATH = re.compile(r"(?i)(^|/)(templates|static|components|pages|views|styles?)/|\.(html?|css|scss|sass|less|jsx|tsx|vue|svelte)$")
+
+
+def is_design_task(spec) -> bool:
+    """Work that changes what a user sees: the frontend kind, or a declared
+    scope that reaches UI files."""
+    if getattr(spec, "kind", None) == TaskKind.FRONTEND:
+        return True
+    paths = getattr(getattr(spec, "scope", None), "permitted_paths", ()) or ()
+    return any(_UI_PATH.search(str(p)) for p in paths)
+
+
+_DESIGN_SELF_VERIFY = (
+    "This task changes what users see, so you verify it yourself before you finish: "
+    "look at the rendered result in a real browser at a desktop width and at a mobile "
+    "width (quadratus.browser.render_page returns a screenshot, console errors and "
+    "failed requests; your own browser tool is fine too). Check the states the task "
+    "names, for example empty, loading, error and populated. Report in a few lines "
+    "what you looked at and what you saw. A UI change you have not looked at is not finished."
+)
+
+_DESIGN_REVIEW_LENS = (
+    "\n\nThis is design work. Besides correctness, judge the design and aesthetic "
+    "choices: layout and visual hierarchy, consistency with the existing interface, "
+    "readable text and contrast, keyboard and screen-reader access, and how it holds "
+    "up at a mobile width. Mark a design problem BLOCKING only when a user would be "
+    "misled or unable to use the feature."
+)
 
 _CONTINUES = re.compile(r"^\s*CONTINUES:\s*(\S+)\s*$", re.MULTILINE)
 
@@ -809,6 +845,12 @@ class Session:
         # beats failing the task mid-flight when its invocation errors.
         others = [p for p in self.brain_trust if p != lead and self._available(p)]
         chosen = others[: Complexity.collaborator_count(spec.complexity, len(others))]
+        if self.config.design_cross_check and is_design_task(spec):
+            vendor = lead.partition(":")[0]
+            if not any(p.partition(":")[0] != vendor for p in chosen):
+                other = next((p for p in others if p.partition(":")[0] != vendor), None)
+                if other is not None:
+                    chosen.append(other)
         if spec.kind == TaskKind.REVIEW:
             for peer in policy_for(TaskKind.REVIEW).prefer:
                 if peer != lead and peer in others and peer not in chosen:
@@ -2064,6 +2106,8 @@ class Session:
         if map_block:
             parts.append(map_block)
         parts.append("You are leading this task. Produce the complete work.")
+        if self.config.design_self_verify and is_design_task(spec):
+            parts.append(_DESIGN_SELF_VERIFY)
         # Stated before the work, checked after it. Telling a model its bound
         # helps some; measuring the diff is what makes the bound real, and
         # both happen -- see _assess_scope.
@@ -2161,6 +2205,7 @@ class Session:
             "against the revision. If you genuinely find nothing worth changing, "
             "reply exactly 'NO FINDINGS' and nothing else; do not write 'BLOCKING: none'."
             + _review_subject_note(spec)
+            + (_DESIGN_REVIEW_LENS if self.config.design_cross_check and is_design_task(spec) else "")
         )
 
     def _revision_prompt(self, spec: TaskSpec, draft: str, notes: List[str]) -> str:
