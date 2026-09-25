@@ -1032,14 +1032,21 @@ class Session:
         text = "\n\n".join(texts)
         return text, text.startswith("Worker errand ")
 
-    def _note_interim_edits(self, answers: List[str]) -> None:
-        """Tell a re-asked lead which files its task has already changed."""
+    def _interim_edits_note(self) -> str:
+        """Which files this task has already changed, for any re-asked lead.
+
+        Built into the shared prompt builder, so a lead re-asked after a
+        FETCH, a CONSULT, or a served, failed or refused WORKER gets it alike
+        (Codex review of #25). Taken from the harness's own diff, never from
+        the lead's account.
+        """
         if not (self.project and self.config.allow_writes and self._task_before is not None):
-            return
+            return ""
         state = self._inspect_partial_edits(self._task_before)
-        if state.get("changed"):
-            answers.append("Files this task has already changed (kept; build on them, do not redo them): "
-                           + ", ".join(state["changed"]))
+        if not state.get("changed"):
+            return ""
+        return ("Files this task has already changed (kept; build on them, do not redo them): "
+                + ", ".join(state["changed"]))
 
     def _serve_worker(self, body: str, lead: str, spec: TaskSpec, task: TaskMemory, state: dict,
                       *, answer_only: bool = False) -> List[str]:
@@ -1182,6 +1189,9 @@ class Session:
 
         def build(fetched):
             extras = ["## Consult answers and worker evidence\n\n" + "\n\n".join(answers)] if answers else []
+            interim = self._interim_edits_note()
+            if interim:
+                extras.append(interim)
             if fetched:
                 extras.append(_render_fetches(fetched))
             return self._lead_prompt(spec, lead=lead if consults else None, extras=extras)
@@ -1206,7 +1216,6 @@ class Session:
             body = _parse_kind(draft)[2].strip()
             if body.startswith("WORKER "):
                 answers.extend(self._serve_worker(body, lead, spec, task, state))
-                self._note_interim_edits(answers)
                 continue
             requests = _parse_consults(body)
             if not requests:

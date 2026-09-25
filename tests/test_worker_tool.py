@@ -314,8 +314,16 @@ def test_repeated_refused_tool_calls_close_the_channel(tmp_path):
     assert "now closed" in answers[2][0] and "channel is closed" in answers[3][0]
 
 
-def test_a_worker_request_after_edits_is_served_and_the_lead_told_what_it_changed(tmp_path):
-    """GameTape run 5: a lead fixed a test line, then asked for a check."""
+@pytest.mark.parametrize("request_reply,worker", [
+    ('WORKER {"errand":"check","instruction":"review t.py","write":false,"needs":[]}', "ok"),
+    ('WORKER {"errand":"check","instruction":"review t.py","write":false,"needs":[]}', "fail"),
+    ('WORKER {"errand":"check","instruction":"run pytest -q on t.py","write":false,"needs":["execute"]}', "ok"),
+    ("CONSULT claude:opus: is t.py right?", "ok"),
+    ("FETCH: missing-artifact", "ok"),
+])
+def test_every_re_ask_after_edits_tells_the_lead_what_it_changed(tmp_path, request_reply, worker):
+    """GameTape run 5, then Codex: after a served, failed or refused worker,
+    a consult or a fetch, the re-asked lead is told what its task changed."""
     import dataclasses
     store = ArtifactStore(tmp_path / "artifacts")
     project = tmp_path / "p"
@@ -325,16 +333,25 @@ def test_a_worker_request_after_edits_is_served_and_the_lead_told_what_it_change
 
     def invoke(model, prompt, system=None, allow_writes=False):
         prompts.append(prompt)
+        if "colleague leading this task asks you" in prompt:
+            return "Looks right."
         if len(prompts) == 1:
             (project / "t.py").write_text("x = 2\n")
-            return 'WORKER {"errand":"check","instruction":"review t.py","write":false,"needs":[]}'
+            return request_reply
         return "Done."
 
-    session = Session("goal", store, invoke, config=SessionConfig())
+    def run(*args, **kwargs):
+        if worker == "fail":
+            raise RuntimeError("worker broke")
+        return "t.py looks right"
+
+    session = Session("goal", store, invoke, config=SessionConfig(max_worker_failures=5))
     session.project = project
     session.config = dataclasses.replace(session.config, allow_writes=True)
     session._task_before = session._capture_source()
-    session.workers = WorkerPool(store=store, run=lambda *a, **k: "t.py looks right")
+    session.workers = WorkerPool(store=store, run=run)
     with invocation("t1", "lead"):
         session._draft_with_channels(OPUS, TaskSpec("t1", "do it"), _memory(store))
-    assert "already changed (kept" in prompts[1] and "t.py" in prompts[1]
+    lead_prompts = [p for p in prompts if "colleague leading this task asks you" not in p]
+    assert len(lead_prompts) >= 2
+    assert "already changed (kept" in lead_prompts[1] and "t.py" in lead_prompts[1]
