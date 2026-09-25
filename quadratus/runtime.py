@@ -328,13 +328,20 @@ class Fleet:
         # them and re-plans rather than treating the call as failed.
         lead_turns = (self.settings.lead_max_turns
                       if (invocation_context.get() or {}).get("role") == "lead" else None)
+        # The in-session worker tool, served by the session's WorkerBridge for
+        # this lead call only. Set on a per-call view, never on the provider.
+        lead_tool = ((invocation_context.get() or {}).get("worker_tool")
+                     if (invocation_context.get() or {}).get("role") == "lead"
+                     and hasattr(provider, "worker_tool") else None)
         if self.project is None:
-            if verifying or lead_turns:
+            if verifying or lead_turns or lead_tool:
                 provider = copy.copy(provider)
                 if verifying:
                     provider.native_fanout_off = True
                 if lead_turns:
                     provider.max_turns = lead_turns
+                if lead_tool:
+                    provider.worker_tool = lead_tool
             return self._generate(model_key, provider, prompt, role)
         if self.settings.backend_for(model_key.partition(':')[0]) != 'cli':
             raise ProviderError("Project sessions require CLI transport with filesystem access.")
@@ -342,6 +349,8 @@ class Fleet:
             view = provider.in_directory(self.project.root, allow_writes=True)
             if lead_turns:
                 view.max_turns = lead_turns
+            if lead_tool:
+                view.worker_tool = lead_tool
             before = self.project.contents()
             reply = self._generate(model_key, view, prompt, role +
                                   "\nYour working directory is the persistent project. "
@@ -376,6 +385,8 @@ class Fleet:
                 view.native_fanout_off = True
             if lead_turns:
                 view.max_turns = lead_turns
+            if lead_tool:
+                view.worker_tool = lead_tool
             role += ("\nYour working directory is a fresh source copy. Read it to ground your "
                      "answer. Do not change files, commit, push, or use paths outside this copy. "
                      "Cite files by their path relative to the project root, not by the absolute "

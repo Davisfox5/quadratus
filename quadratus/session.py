@@ -23,6 +23,7 @@ does not need judgement.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -322,6 +323,10 @@ class SessionConfig:
     #: stall backstop for that, sitting below WorkerBudget.max_per_task so the
     #: lead still has room to genuinely reroute.
     max_worker_failures: int = 4
+    #: Offer leads the ``commission_worker`` tool, served mid-session by a
+    #: WorkerBridge, so delegating no longer ends the lead's session. The
+    #: WORKER reply stays for write errands and CLIs without the tool.
+    in_session_workers: bool = True
     #: Records who actually ran, distinguishing Quadratus-dispatched work from
     #: vendor-native children and vendor-internal auxiliary activity, and
     #: carrying what the harness cannot observe or bound. Observational only.
@@ -544,6 +549,7 @@ class Session:
         self._task_before = None
         self._task_memory = None
         self._active_call = {}
+        self._worker_tool = None
         self.in_flight = {}
         self.completed = False
         self.checks = []
@@ -585,6 +591,8 @@ class Session:
                 prompt += "\n\n" + spec.scope.render()
             if self.config.default_scope is not None and spec.scope is not self.config.default_scope:
                 prompt += "\nOperator limits (also binding):\n" + self.config.default_scope.render()
+        if context.get("role") == "lead" and getattr(self, "_worker_tool", None):
+            context = dict(context, worker_tool=self._worker_tool)
         # Every prompt is kept, not only an interrupted one: without it there was
         # no proof of which packet or instructions a seat actually received.
         try:
@@ -837,6 +845,169 @@ class Session:
         return None
 
     @_invocation_role("lead")
+    def _tool_worker(self, arguments, lead: str, spec: TaskSpec, task: TaskMemory, state: dict):
+        """One ``commission_worker`` call from inside a lead's session.
+
+        Runs on the bridge thread while the lead's call is still open. A limit
+        that would end the drafting loop on the reply channel (a stall, a spent
+        budget, preserved partial work) closes the channel instead: the lead is
+        told to finish with what it has, and the drafting loop raises the same
+        exception as soon as the lead's call returns.
+        """
+        if state.get("closed") is not None:
+            return (f"The worker channel is closed for this task: {state['closed']}. "
+                    "Finish with what you have, or report exactly what blocks you."), True
+        if not isinstance(arguments, dict):
+            return "Invalid call: arguments must be an object.", True
+        if arguments.get("write"):
+            return ("Write errands cannot run while your session is open, because their edits "
+                    "would land in your working tree mid-call. Make the change yourself, or end "
+                    "your reply with a WORKER request that sets write:true."), True
+        request = {k: arguments[k] for k in ("errand", "instruction", "needs", "demanding") if k in arguments}
+        # A malformed reply is a stall, because nothing else can be done with
+        # it; a malformed tool call is answered, and the lead can fix it.
+        needs = request.get("needs")
+        if (request.get("errand") not in WORKER_TREE or not isinstance(request.get("instruction"), str)
+                or not request["instruction"].strip()
+                or type(request.get("demanding", False)) is not bool
+                or not isinstance(needs, (list, type(None)))
+                or any(not isinstance(n, str) for n in needs or ())):
+            return (f"Invalid call: errand must be one of {sorted(WORKER_TREE)}, instruction a "
+                    "non-empty string, needs a list of strings, demanding a boolean."), True
+        saved = self._active_call  # the lead's call record, which the worker would overwrite
+        try:
+            with invocation(spec.task_id, "lead", origin="seat"):
+                texts = self._serve_worker("WORKER " + json.dumps(request), lead, spec, task, state)
+        except BaseException as exc:  # noqa: BLE001 -- re-raised by the drafting loop
+            state["closed"] = exc
+            return (f"The worker channel closed: {str(exc)[:400]}. Finish with what you have, "
+                    "or report exactly what blocks you."), True
+        finally:
+            self._active_call = saved
+        text = "\n\n".join(texts)
+        return text, text.startswith("Worker errand ")
+
+    def _serve_worker(self, body: str, lead: str, spec: TaskSpec, task: TaskMemory, state: dict) -> List[str]:
+        """Serve one ``WORKER {...}`` request; return what the lead is told.
+
+        Shared by the reply channel and the in-session tool, so both carry the
+        same validation, fit check, budgets, failure rules and ledger rows.
+        ``state`` holds the drafting loop's failure count and failed labels.
+        """
+        out: List[str] = []
+        try:
+            request = json.loads(body[len("WORKER "):])
+            needs = request.get('needs') if isinstance(request, dict) else None
+            if (not isinstance(request, dict) or request.get('errand') not in WORKER_TREE
+                    or not isinstance(request.get('instruction'), str)
+                    or not request['instruction'].strip()
+                    or type(request.get('write', False)) is not bool
+                    or type(request.get('demanding', False)) is not bool
+                    or not isinstance(needs, (list, type(None)))
+                    or any(not isinstance(n, str) for n in needs or ())):
+                raise ValueError('invalid worker request')
+        except (ValueError, TypeError) as exc:
+            raise RunStalled("Expected WORKER JSON with errand and instruction.") from exc
+        helper = request.get('helper')
+        if helper is not None:
+            if (request.get('retry_of') not in state['failed_errands'] or not isinstance(helper, dict)
+                    or helper.get('errand') not in WORKER_TREE
+                    or not isinstance(helper.get('instruction'), str)
+                    or not helper['instruction'].strip() or helper.get('write', False) is not False
+                    or type(helper.get('demanding', False)) is not bool
+                    or helper.get('helper') is not None):
+                raise RunStalled('A sibling helper requires a failed retry_of label and a read-only errand')
+        writes = request.get('write', False)
+        if writes and not (self.project and self.config.allow_writes):
+            raise RunStalled("Worker requested edits without an operator write grant.")
+        label = f"{request['errand']}-{self.workers.spawned(spec.task_id) + 1}"
+        # A worker failure is an outcome, not the end of the run. The
+        # single-worker path used to let the exception escape: on
+        # 2026-09-13 a bounded editor returned prose wrapped around a
+        # corrupt diff, and that one malformed answer aborted the whole
+        # run before the lead could revise the errand, reroute it, or
+        # report an honest blocker. commission_many already reported
+        # errors as results; this path now agrees with it.
+        #
+        # What does *not* change: the patch is still rejected, the
+        # failed fingerprint is still recorded, the budget is still
+        # charged, and no tool is widened to make a bad answer apply.
+        # The lead gets the failure and decides.
+        try:
+            # Reject impossible errands before entering dispatch or
+            # reserving any worker attempt. Keep the pool's guard for
+            # direct callers and sibling commissions too.
+            mismatch = check_errand_fit(request['instruction'], needs=needs, write=writes)
+            if mismatch is not None:
+                raise ErrandToolMismatch(f"errand {label!r}: {mismatch}")
+            if self.workers.remaining(spec.task_id) <= 0:
+                raise FanOutExceeded("Worker budget exhausted before a draft was produced.")
+            job = dict(prompt=request['instruction'], label=label,
+                       errand=request['errand'], demanding=request.get('demanding', False),
+                       allow_writes=writes, needs=needs,
+                       steps=request.get('steps', 1), token_limit=request.get('token_limit'))
+            if helper is None:
+                results = [self.workers.commission(task=task, parent_key=lead, **job)]
+            else:
+                mismatch = check_errand_fit(helper['instruction'], needs=helper.get('needs'), write=False)
+                if mismatch is not None:
+                    raise ErrandToolMismatch('Helper: ' + mismatch)
+                if self.workers.remaining(spec.task_id) < 2:
+                    raise FanOutExceeded('A sibling pair needs two remaining worker attempts')
+                helper_job = dict(prompt=helper['instruction'], label=label + '-helper',
+                                  errand=helper['errand'], demanding=helper.get('demanding', False),
+                                  allow_writes=False, needs=helper.get('needs'),
+                                  steps=helper.get('steps', 1), token_limit=helper.get('token_limit'))
+                results = self.workers.commission_many(task=task, parent_key=lead,
+                                                       jobs=[job, helper_job])
+        except PartialWorkStopped:
+            raise
+        except (FanOutExceeded, RepeatedFailure, ErrandToolMismatch) as exc:
+            # Budget and repeated-failure guards are the lead's own
+            # limits reported back to it, not a crash: it can still
+            # close the task incomplete with what it has.
+            state['failed_errands'].add(label)
+            state['failures'] += 1
+            out.append(
+                f"Worker errand {label!r} was refused: {exc}\n"
+                f"{_WORKER_RECOVERY}"
+            )
+            task.record("user", f"[worker {label}] REFUSED: {str(exc)[:300]}")
+            if state['failures'] >= self.config.max_worker_failures:
+                raise RunStalled(
+                    f"{state['failures']} worker errands failed for task "
+                    f"{spec.task_id!r} without producing a draft; the "
+                    f"lead is not converging. Last: {str(exc)[:200]}"
+                ) from exc
+            return out
+        except Exception as exc:  # noqa: BLE001 -- returned, not raised
+            state['failed_errands'].add(label)
+            state['failures'] += 1
+            detail = str(exc)[:400]
+            task.record("user", f"[worker {label}] FAILED: {detail}")
+            out.append(
+                f"Worker errand {label!r} on {request['errand']} failed "
+                f"and produced nothing: {detail}\n{_WORKER_RECOVERY}"
+            )
+            if state['failures'] >= self.config.max_worker_failures:
+                raise RunStalled(
+                    f"{state['failures']} worker errands failed for task "
+                    f"{spec.task_id!r} without producing a draft; the "
+                    f"lead is not converging. Last: {detail[:200]}"
+                ) from exc
+            return out
+        for result in results:
+            if result.error or result.needs_tool:
+                state['failed_errands'].add(result.label)
+            if result.error:
+                state['failures'] += 1
+            evidence = result.ref.render() if result.ref else ''
+            out.append(f"Worker {result.label} ({result.model}): "
+                       f"{result.error or result.summary}\n{evidence}")
+        if state['failures'] >= self.config.max_worker_failures:
+            raise RunStalled('Worker failures exhausted the task recovery allowance')
+        return out
+
     def _draft_with_channels(self, lead: str, spec: TaskSpec, task: TaskMemory,
                              *, consults: bool = True) -> str:
         """Serve the lead's channel requests until a real draft arrives.
@@ -851,9 +1022,7 @@ class Session:
         prompt offers is a channel the harness serves.
         """
         answers = []
-        consults_used = 0
-        worker_failures = 0
-        failed_errands = set()
+        state = dict(failures=0, failed_errands=set(), closed=None)
 
         def build(fetched):
             extras = ["## Consult answers and worker evidence\n\n" + "\n\n".join(answers)] if answers else []
@@ -861,121 +1030,26 @@ class Session:
                 extras.append(_render_fetches(fetched))
             return self._lead_prompt(spec, lead=lead if consults else None, extras=extras)
 
+        bridge = None
+        if self.config.in_session_workers:
+            from .worker_bridge import WorkerBridge
+            bridge = WorkerBridge(lambda arguments: self._tool_worker(arguments, lead, spec, task, state))
+        with (bridge if bridge is not None else contextlib.nullcontext()):
+            self._worker_tool = bridge.spec() if bridge is not None else None
+            try:
+                return self._drafting_loop(lead, spec, task, build, answers, state, consults)
+            finally:
+                self._worker_tool = None
+
+    def _drafting_loop(self, lead, spec, task, build, answers, state, consults):
+        consults_used = 0
         while True:
             draft = self._invoke_with_fetches(lead, build, task=task, editing=True)
+            if state.get("closed") is not None:
+                raise state["closed"]
             body = _parse_kind(draft)[2].strip()
             if body.startswith("WORKER "):
-                try:
-                    request = json.loads(body[len("WORKER "):])
-                    needs = request.get('needs') if isinstance(request, dict) else None
-                    if (not isinstance(request, dict) or request.get('errand') not in WORKER_TREE
-                            or not isinstance(request.get('instruction'), str)
-                            or not request['instruction'].strip()
-                            or type(request.get('write', False)) is not bool
-                            or type(request.get('demanding', False)) is not bool
-                            or not isinstance(needs, (list, type(None)))
-                            or any(not isinstance(n, str) for n in needs or ())):
-                        raise ValueError('invalid worker request')
-                except (ValueError, TypeError) as exc:
-                    raise RunStalled("Expected WORKER JSON with errand and instruction.") from exc
-                helper = request.get('helper')
-                if helper is not None:
-                    if (request.get('retry_of') not in failed_errands or not isinstance(helper, dict)
-                            or helper.get('errand') not in WORKER_TREE
-                            or not isinstance(helper.get('instruction'), str)
-                            or not helper['instruction'].strip() or helper.get('write', False) is not False
-                            or type(helper.get('demanding', False)) is not bool
-                            or helper.get('helper') is not None):
-                        raise RunStalled('A sibling helper requires a failed retry_of label and a read-only errand')
-                writes = request.get('write', False)
-                if writes and not (self.project and self.config.allow_writes):
-                    raise RunStalled("Worker requested edits without an operator write grant.")
-                label = f"{request['errand']}-{self.workers.spawned(spec.task_id) + 1}"
-                # A worker failure is an outcome, not the end of the run. The
-                # single-worker path used to let the exception escape: on
-                # 2026-09-13 a bounded editor returned prose wrapped around a
-                # corrupt diff, and that one malformed answer aborted the whole
-                # run before the lead could revise the errand, reroute it, or
-                # report an honest blocker. commission_many already reported
-                # errors as results; this path now agrees with it.
-                #
-                # What does *not* change: the patch is still rejected, the
-                # failed fingerprint is still recorded, the budget is still
-                # charged, and no tool is widened to make a bad answer apply.
-                # The lead gets the failure and decides.
-                try:
-                    # Reject impossible errands before entering dispatch or
-                    # reserving any worker attempt. Keep the pool's guard for
-                    # direct callers and sibling commissions too.
-                    mismatch = check_errand_fit(request['instruction'], needs=needs, write=writes)
-                    if mismatch is not None:
-                        raise ErrandToolMismatch(f"errand {label!r}: {mismatch}")
-                    if self.workers.remaining(spec.task_id) <= 0:
-                        raise FanOutExceeded("Worker budget exhausted before a draft was produced.")
-                    job = dict(prompt=request['instruction'], label=label,
-                               errand=request['errand'], demanding=request.get('demanding', False),
-                               allow_writes=writes, needs=needs,
-                               steps=request.get('steps', 1), token_limit=request.get('token_limit'))
-                    if helper is None:
-                        results = [self.workers.commission(task=task, parent_key=lead, **job)]
-                    else:
-                        mismatch = check_errand_fit(helper['instruction'], needs=helper.get('needs'), write=False)
-                        if mismatch is not None:
-                            raise ErrandToolMismatch('Helper: ' + mismatch)
-                        if self.workers.remaining(spec.task_id) < 2:
-                            raise FanOutExceeded('A sibling pair needs two remaining worker attempts')
-                        helper_job = dict(prompt=helper['instruction'], label=label + '-helper',
-                                          errand=helper['errand'], demanding=helper.get('demanding', False),
-                                          allow_writes=False, needs=helper.get('needs'),
-                                          steps=helper.get('steps', 1), token_limit=helper.get('token_limit'))
-                        results = self.workers.commission_many(task=task, parent_key=lead,
-                                                               jobs=[job, helper_job])
-                except PartialWorkStopped:
-                    raise
-                except (FanOutExceeded, RepeatedFailure, ErrandToolMismatch) as exc:
-                    # Budget and repeated-failure guards are the lead's own
-                    # limits reported back to it, not a crash: it can still
-                    # close the task incomplete with what it has.
-                    failed_errands.add(label)
-                    worker_failures += 1
-                    answers.append(
-                        f"Worker errand {label!r} was refused: {exc}\n"
-                        f"{_WORKER_RECOVERY}"
-                    )
-                    task.record("user", f"[worker {label}] REFUSED: {str(exc)[:300]}")
-                    if worker_failures >= self.config.max_worker_failures:
-                        raise RunStalled(
-                            f"{worker_failures} worker errands failed for task "
-                            f"{spec.task_id!r} without producing a draft; the "
-                            f"lead is not converging. Last: {str(exc)[:200]}"
-                        ) from exc
-                    continue
-                except Exception as exc:  # noqa: BLE001 -- returned, not raised
-                    failed_errands.add(label)
-                    worker_failures += 1
-                    detail = str(exc)[:400]
-                    task.record("user", f"[worker {label}] FAILED: {detail}")
-                    answers.append(
-                        f"Worker errand {label!r} on {request['errand']} failed "
-                        f"and produced nothing: {detail}\n{_WORKER_RECOVERY}"
-                    )
-                    if worker_failures >= self.config.max_worker_failures:
-                        raise RunStalled(
-                            f"{worker_failures} worker errands failed for task "
-                            f"{spec.task_id!r} without producing a draft; the "
-                            f"lead is not converging. Last: {detail[:200]}"
-                        ) from exc
-                    continue
-                for result in results:
-                    if result.error or result.needs_tool:
-                        failed_errands.add(result.label)
-                    if result.error:
-                        worker_failures += 1
-                    evidence = result.ref.render() if result.ref else ''
-                    answers.append(f"Worker {result.label} ({result.model}): "
-                                   f"{result.error or result.summary}\n{evidence}")
-                if worker_failures >= self.config.max_worker_failures:
-                    raise RunStalled('Worker failures exhausted the task recovery allowance')
+                answers.extend(self._serve_worker(body, lead, spec, task, state))
                 continue
             requests = _parse_consults(body)
             if not requests:
@@ -1900,6 +1974,13 @@ class Session:
                      'read-only; both are siblings reporting to you. Optional steps (up to 3) '
                      'and token_limit (up to 50000 reported tokens) bound a worker continuation; '
                      'the configured budget may be stricter. Defaults remain one shot.')
+        if self.config.in_session_workers:
+            parts.append('If a commission_worker tool is available in this session, use it for '
+                         'read-only errands instead of a WORKER reply: you keep your session and '
+                         'the answer comes back as the tool result, where a WORKER reply ends your '
+                         'call and you start over. Keep the WORKER reply for write errands, or if '
+                         'the tool is not listed. A request written in your reasoning or mid-answer '
+                         'is not served; only the tool call or a whole WORKER reply is.')
         if self.project:
             # Deliberately no longer "inspect the project source": that told the
             # lead to go exploring in the same breath as the guidance below
