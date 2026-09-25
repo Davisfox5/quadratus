@@ -207,3 +207,20 @@ a preventive bound, the Fleet now runs verifier calls with native delegation off
 cover it). The verifier keeps every read tool. Leads and the orchestrator are
 unchanged; bounding those would change their job, not their cost. **Per-call token ceilings are not supported.** No seat has a limit that holds
 before a call starts; every token figure in this harness is a post-return stop.
+
+## Native runs are not blind
+
+In the Q9-v2 native runs on the Mac, seven baseline Grok leads opened the external
+grader: `test_contract.py`, read in full or in part. Candidate leads never did. The path
+reached every lead through the role packet's gate list and through gate result text, and a
+native run has no filesystem boundary, only path separation, which REVIEW.md already said
+is not an access boundary. Two things follow:
+
+- Seats now see gates by name and outcome only. `GateResult.for_models()` and
+  `policy.role_packet` never carry a gate's command, and absolute paths from the command
+  (and their folders) are redacted from gate output shown to a seat. The operator's
+  records (`result.json`, `report.md`) keep the full command.
+- Blind measurement runs go through `run_isolated` (`tools/acceptance/blind_trial.py`), where
+  the examiner is never mounted. A native fixture run is a smoke test, not a blind
+  measurement, and must not be quoted as one. A lead on a native run can still find a
+  file by searching the disk; redaction removes the pointer, not the file.

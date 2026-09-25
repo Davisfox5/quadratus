@@ -43,11 +43,56 @@ class GateResult:
     receipts: tuple[GateReceipt, ...] = ()
 
     def render(self) -> str:
+        """The operator's view: the exact command, for the run record."""
         status = "PASSED" if self.passed else "FAILED"
         lines = [f"Integration gate {status}: `{self.command}`"]
         if not self.passed and self.output:
             lines.append(self.output)
         return "\n".join(lines)
+
+    def for_models(self) -> str:
+        """What a seat may see: gate names and outcomes, never the command.
+
+        A gate's command can name a file the seats must not open. In the Q9-v2
+        native runs the grader's absolute path reached every lead through this
+        text and the role packet, and seven baseline leads read the grader.
+        Absolute paths from the command, and their folders, are redacted from
+        the output tail as well, since a failing test prints its own path.
+        """
+        status = "PASSED" if self.passed else "FAILED"
+        names = ", ".join(r.id for r in self.receipts) or "project check"
+        lines = [f"Integration gate {status}: {names}"]
+        for r in self.receipts:
+            lines.append(f"{r.id}: {r.status}: {r.reason}"
+                         + (f" ({r.tests} tests)" if r.tests is not None else ""))
+        if not self.passed and self.output:
+            lines.append(redact_command_paths(self.output, self.command_paths()))
+        return "\n".join(lines)
+
+    def command_paths(self) -> list:
+        """Absolute paths named by this result's commands, longest first."""
+        import shlex
+        tokens = []
+        for text in [self.command, *(r.command for r in self.receipts)]:
+            try:
+                tokens += shlex.split(text or "")
+            except ValueError:
+                tokens += (text or "").split()
+        paths = set()
+        for token in tokens:
+            if token.startswith("/") and len(token) > 1:
+                paths.add(token.rstrip("/"))
+                parent = token.rstrip("/").rsplit("/", 1)[0]
+                if parent.count("/") >= 2:
+                    paths.add(parent)
+        return sorted(paths, key=len, reverse=True)
+
+
+def redact_command_paths(text: str, paths) -> str:
+    """Replace each absolute command path, and each folder holding one, with a marker."""
+    for path in paths:
+        text = text.replace(path, "<gate-path>")
+    return text
 
 
 class IntegrationGate:
