@@ -196,7 +196,8 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
                                    allow_navigation=allowed, step_timeout_ms=STEP_TIMEOUT_MS, deadline=deadline)
             out[name] = dict(screenshot=evidence.screenshot_path, clean=evidence.clean,
                              console_errors=evidence.console_errors[:10],
-                             failed_requests=evidence.failed_requests[:10])
+                             failed_requests=evidence.failed_requests[:10],
+                             document_width=evidence.document_width, overflow=evidence.overflow[:5])
             if checked:
                 out[name]["steps"] = evidence.steps
     except BaseException as exc:
@@ -240,6 +241,12 @@ def _step_problem(view: str, requested, done) -> Optional[str]:
                     f"failed: {str(got.get('error'))[:160]}")
     if len(done) != len(requested):
         return f"the {view} render ran {len(done)} of {len(requested)} interaction steps"
+    last = requested[-1] if requested else None
+    if last and last["action"] == "wait" and done[-1].get("visible_before_steps") is True:
+        # Codex, Run 15: the final wait named an element present at load, so
+        # the capture passed whether or not the feature produced anything.
+        return (f"the {view} render's final wait ({last['selector'][:80]}) was already visible before "
+                "any step ran, so it does not show the change; wait on something only the result creates")
     return None
 
 
@@ -313,7 +320,13 @@ def _check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
             problems.append(f"the {name} screenshot predates this task")
             continue
         if abs(width - viewport["width"]) > 64:
-            problems.append(f"the {name} screenshot is {width}px wide, not ~{viewport['width']}px")
+            view = summary["views"].get(name) or {}
+            offenders = [o for o in (view.get("overflow") or []) if isinstance(o, dict)][:5]
+            named = ", ".join(f"{str(o.get('element'))[:80]} (right edge {o.get('right')}px, "
+                              f"{o.get('width')}px wide)" for o in offenders)
+            problems.append(f"the {name} screenshot is {width}px wide, not ~{viewport['width']}px"
+                            + (f"; the page overflows its {viewport['width']}px viewport; elements past the "
+                               f"right edge: {named}" if named else ""))
             continue
         shots.append(str(shot))
     if not problems and summary is not None:
