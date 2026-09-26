@@ -286,6 +286,8 @@ def test_text_diff_roundtrips_files_without_final_newline(tmp_path):
 def test_autodetected_python_check_uses_project_environment(tmp_path):
     from quadratus.repo_scan import scan_repo
     (tmp_path / 'tests').mkdir()
+    # A Python test file, not the folder alone, is the Python signal.
+    (tmp_path / 'tests' / 'test_x.py').write_text('def test_x():\n    pass\n')
     assert scan_repo(tmp_path).check_command[0] == sys.executable
     python = tmp_path / '.venv' / 'bin' / 'python'
     python.parent.mkdir(parents=True)

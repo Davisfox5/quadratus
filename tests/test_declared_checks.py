@@ -5,9 +5,18 @@ test script, and its Node UI tests never ran in-run.
 """
 
 import json
+import shutil
 import sys
 
-from quadratus.project_run import _with_declared_checks
+import pytest
+
+from quadratus.integration import GateCommand, GateSuite, _test_count
+from quadratus.project_run import (
+    _extra_gate_commands,
+    _gate_plan,
+    _merge_extras,
+    _with_declared_checks,
+)
 from quadratus.repo_scan import scan_repo
 
 
@@ -51,3 +60,113 @@ def test_a_package_without_a_test_script_declares_nothing(tmp_path):
     malformed.mkdir()
     (malformed / "package.json").write_text("[1, 2]")
     assert scan_repo(malformed).declared_checks == []
+
+
+# -- Codex review of 3ef9962 -------------------------------------------------------------
+
+
+
+def _tree(root, files):
+    for name, text in files.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(text)
+    return scan_repo(root)
+
+
+@pytest.mark.parametrize("files,expected", [
+    ({"package.json": json.dumps({"scripts": {"test": "node --test tests/ui.test.js"}}),
+      "tests/ui.test.js": "//"}, [["npm", "test", "--silent"]]),                        # JS-only
+    ({"tests/test_x.py": "def test_x(): pass\n"}, ["pytest"]),                           # Python-only
+    ({"package.json": json.dumps({"scripts": {"test": "node --test"}}),
+      "tests/ui/a.test.js": "//", "tests/py/test_b.py": ""}, [["npm", "test", "--silent"], "pytest"]),  # mixed
+    ({"package.json": json.dumps({"scripts": {"build": "tsc"}}), "tests/ui.test.js": "//"}, []),   # absent
+    ({"pyproject.toml": "[project]\nname='x'\n", "tests/data.json": "{}"}, ["pytest"]),  # manifest signal
+])
+def test_a_python_gate_needs_python_evidence_not_just_a_tests_folder(tmp_path, files, expected):
+    declared = _tree(tmp_path, files).declared_checks
+    shape = ["pytest" if c[1:] == ["-m", "pytest", "-q"] else c for c in declared]
+    assert shape == expected
+
+
+@pytest.mark.parametrize("output,count", [
+    ("ℹ tests 1\nℹ suites 0\nℹ pass 0\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\n", 0),   # all skipped
+    ("ℹ tests 3\nℹ pass 2\nℹ fail 1\nℹ skipped 0\n", 3),
+    ("ℹ tests 2\nℹ pass 0\nℹ fail 0\nℹ cancelled 2\n", 0),
+    ("TAP version 13\n# tests 4\n# pass 3\n# fail 0\n# todo 1\n", 3),
+    ("# tests 4\n# skip 1\n", 3),
+    ("ℹ tests 1\nℹ pass 1\nℹ fail 0\n", 1),        # a blank file is one file-level test to Node itself
+    ("12 passed, 1 skipped in 0.3s", 12),
+    ("compiled ok", None),
+])
+def test_runner_summaries_count_only_executed_cases(output, count):
+    assert _test_count(output) == count
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="needs node")
+def test_an_all_skipped_node_suite_fails_and_a_syntax_check_needs_no_count(tmp_path):
+    (tmp_path / "skip.test.js").write_text("require('node:test').test.skip('later', () => {});\n")
+    (tmp_path / "app.js").write_text("const x = 1;\n")
+    gates = _extra_gate_commands([["node", "--test", "skip.test.js"], ["node", "--check", "app.js"]])
+    assert [g.minimum_tests for g in gates] == [1, None]
+    result = GateSuite(gates, cwd=tmp_path).run()
+    by_id = {r.id: r for r in result.receipts}
+    assert not result.passed
+    assert by_id["extra-1"].status == "failed" and by_id["extra-1"].reason == "zero tests executed"
+    assert by_id["extra-2"].status == "passed" and by_id["extra-2"].tests is None
+    assert by_id["extra-1"].source_hash == by_id["extra-2"].source_hash, "one unchanged tree for both"
+
+
+def test_an_extra_may_state_its_own_minimum(tmp_path):
+    (gate,) = _extra_gate_commands([{"argv": ["make", "check"], "minimum_tests": 5}])
+    assert gate.minimum_tests == 5 and gate.argv == ("make", "check")
+
+
+PY = [sys.executable, "-m", "pytest", "-q"]
+
+
+@pytest.mark.parametrize("command,covers", [
+    (PY, True),
+    (["pytest", "-q"], True),
+    (["python3", "-m", "pytest"], True),
+    (["python", "-m", "pytest", "tests/test_one.py"], False),       # a subset
+    (["python", "-m", "pytest", "-q", "-k", "fast"], False),        # a selection
+    (["echo", "pytest"], False),                                    # merely mentions it
+])
+def test_only_an_equivalent_full_suite_covers_the_declared_pytest(tmp_path, command, covers):
+    scan = _tree(tmp_path, {"tests/test_x.py": "def test_x(): pass\n"})
+    gates = _gate_plan(command, [], scan)
+    assert (gates is None) is covers
+    if not covers:
+        assert [g.id for g in gates] == ["check", "declared-" + scan.declared_checks[0][0].rsplit("/", 1)[-1]]
+        assert gates[-1].minimum_tests == 1
+
+
+def test_a_selected_node_file_does_not_cover_the_declared_npm_suite(tmp_path):
+    scan = _tree(tmp_path, {"package.json": json.dumps({"scripts": {"test": "node --test"}}),
+                            "tests/ui.test.js": "//"})
+    gates = _gate_plan(["node", "--test", "tests/ui.test.js"], [], scan)
+    assert [g.id for g in gates] == ["check", "declared-npm"]
+
+
+def test_programmatic_gates_keep_the_extras_and_refuse_a_clash():
+    mine = [GateCommand(id="mine", argv=("true",))]
+    extras = _extra_gate_commands([["node", "--check", "app.js"]])
+    assert [g.id for g in _merge_extras(mine, extras)] == ["mine", "extra-1"]
+    assert _merge_extras(mine, []) == mine
+    with pytest.raises(ValueError, match="clash with configured gate ids: extra-1"):
+        _merge_extras([GateCommand(id="extra-1", argv=("true",))], extras)
+
+
+def test_policy_task_gates_keep_the_operator_extras(tmp_path):
+    from quadratus.policy import load_policy, task_gate
+    from tests.test_policy import document, write_policy
+    doc = document()
+    doc["gates"].append({"id": "lint", "runner": "command", "argv": ["true"], "required": True})
+    doc["defaults"]["required_gates"] = ["scope", "lint"]
+    write_policy(tmp_path, doc)
+    policy = load_policy(tmp_path)
+    existing = GateSuite([GateCommand(id="check", argv=("true",)), *_extra_gate_commands([["true"]])],
+                         cwd=tmp_path)
+    gate = task_gate(policy, policy.resolve(["a.py"]), existing)
+    ids = [c.id for c in gate.commands]
+    assert "lint" in ids and "check" in ids and "extra-1" in ids

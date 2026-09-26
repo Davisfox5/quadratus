@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import re
 import shlex
 import uuid
 from contextlib import contextmanager
@@ -94,9 +95,33 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     fleet_type=Fleet, session_factory=new_session, extras=extras)
 
 
-def _declared_basename(argv):
-    """A check's identity for de-duplication: its runner name and arguments."""
-    return [Path(argv[0]).name, *argv[1:]] if argv else []
+#: Flags that change only how much a runner prints, never what it runs.
+_QUIET_FLAGS = {'-q', '--quiet', '-v', '--verbose', '--silent'}
+
+
+def _check_identity(argv):
+    """A check's identity for de-duplication: exact argv, normalised only
+    where the equivalence is proven. A Python interpreter's name, ``pytest``
+    versus ``python -m pytest``, and output-only flags are normalised;
+    anything that selects tests (a path, ``-k``) is kept, so a subset never
+    stands in for a full suite (Codex review of 3ef9962).
+    """
+    if not argv:
+        return ()
+    head = Path(argv[0]).name
+    rest = list(argv[1:])
+    if re.fullmatch(r'python(\d+(\.\d+)*)?', head):
+        head = 'python'
+    elif head == 'pytest':
+        head, rest = 'python', ['-m', 'pytest', *rest]
+    return (head, *[a for a in rest if a not in _QUIET_FLAGS])
+
+
+def _is_test_suite(argv) -> bool:
+    """Whether a command is a test runner, whose success needs a count."""
+    identity = _check_identity(argv)
+    return (identity[:3] == ('python', '-m', 'pytest') or '--test' in identity
+            or identity[:2] in (('npm', 'test'), ('npm', 't')))
 
 
 def _extra_gate_commands(extra_checks):
@@ -110,12 +135,20 @@ def _extra_gate_commands(extra_checks):
     """
     commands = []
     for index, raw in enumerate(extra_checks or (), 1):
+        minimum = None
+        if isinstance(raw, dict):
+            minimum = raw.get('minimum_tests')
+            raw = raw.get('argv') or ()
         argv = shlex.split(raw) if isinstance(raw, str) else list(raw)
         if not argv or any(not isinstance(a, str) or not a for a in argv):
             raise ValueError(f'Extra check {index} must be a nonempty command')
         if any(ch in a for a in argv for ch in '*?['):
             raise ValueError(f'Extra check {index} contains a pattern; list the files instead')
-        commands.append(GateCommand(id=f'extra-{index}', argv=tuple(argv)))
+        # A test runner must show it ran something; a syntax or build check
+        # has no count and keeps none (Codex review of 3ef9962).
+        if minimum is None and _is_test_suite(argv):
+            minimum = 1
+        commands.append(GateCommand(id=f'extra-{index}', argv=tuple(argv), minimum_tests=minimum))
     return commands
 
 
@@ -138,22 +171,30 @@ def _gate_plan(command, extras, scan):
     """
     if not command and not extras:
         return None       # nothing named and nothing declared: no gate
-    named = [_declared_basename(command)] if command else []
-    named += [_declared_basename(e.argv) for e in extras]
-
-    def covered(c):
-        if _declared_basename(c) in named:
-            return True
-        pytest = Path(c[0]).name.startswith('python') and 'pytest' in c
-        return pytest and any('pytest' in n for n in named)
-    declared = [c for c in scan.declared_checks if not covered(c)]
+    named = {_check_identity(command)} if command else set()
+    named |= {_check_identity(e.argv) for e in extras}
+    declared = [c for c in scan.declared_checks if _check_identity(c) not in named]
     if not extras and not declared:
         return None
     gates = [GateCommand(id='check', argv=tuple(command))] if command else []
     gates += list(extras)
-    gates += [GateCommand(id='declared-' + Path(c[0]).name + (f'-{i}' if i else ''), argv=tuple(c))
+    gates += [GateCommand(id='declared-' + Path(c[0]).name + (f'-{i}' if i else ''), argv=tuple(c),
+                          minimum_tests=1)
               for i, c in enumerate(declared)]
     return gates
+
+
+def _merge_extras(gates, extras):
+    """Caller-supplied gates plus operator extras, never one silently
+    dropping the other (Codex review of 3ef9962). A clashing id is refused
+    before any call."""
+    if not extras:
+        return gates
+    taken = {g.id for g in gates}
+    clash = sorted(taken & {e.id for e in extras})
+    if clash:
+        raise ValueError(f'Extra checks clash with configured gate ids: {", ".join(clash)}')
+    return [*gates, *extras]
 
 
 def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
@@ -168,7 +209,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     code_map = CodebaseMap(state / 'codebase-map.jsonl')
     seed_map(scan, code_map)
     command = shlex.split(check) if check else scan.check_command
-    gates = gates if gates is not None else _gate_plan(command, extras, scan)
+    gates = _merge_extras(list(gates), extras) if gates is not None else _gate_plan(command, extras, scan)
     plan = [dict(id=g.id, argv=list(g.argv), cwd=g.cwd, required=g.required) for g in gates or ()] or (
         [dict(id='check', argv=list(command), cwd='.', required=True)] if command else [])
     # Shown to the operator before any task, and kept with the run. Never put
