@@ -845,6 +845,10 @@ def test_an_ordinary_command_check_keeps_exit_code_semantics(tmp_path, monkeypat
 def _design_run(tmp_path, monkeypatch, *, max_lines=40, lead=None, revision=None, fix=None, review=None,
                 edits=None):
     scope = dict(DESIGN, max_lines=max_lines, **({"edits": edits} if edits else {}))
+    if edits == "none" and revision is None:
+        # The default script's revision edits style.css, which a declared
+        # review-only task may not do.
+        revision = lambda call, replay: "Nothing to change after review.\nCHANGED: []"  # noqa: E731
     decl = "KIND: frontend standard\nSCOPE: " + json.dumps(scope) + "\nReview the import page."
     script = _design_script("Renders refreshed.\nCHANGED: []")
     script.overrides["orchestrator"] = lambda call, replay: decl if len(replay.of("orchestrator")) == 1 else DECL_T2
@@ -889,15 +893,16 @@ def test_a_one_line_ui_fix_is_editing_work_not_an_audit(tmp_path, monkeypatch):
     assert "<button id=import>" in _read(replay, "templates/index.html")
 
 
-def test_a_mislabelled_audit_that_edits_is_still_measured(tmp_path, monkeypatch):
-    """Review-only wording never relaxes the scope check: an out-of-scope
-    write still stops the task with the work preserved."""
+@pytest.mark.parametrize("path", ["README.md", "templates/index.html"])
+def test_a_declared_audit_that_edits_any_source_is_stopped(tmp_path, monkeypatch, path):
+    """Codex review of 9a31aac: edits:none is enforced, even on a permitted
+    path, and the work is preserved; harness fixtures are not source."""
     def lead(call, replay):
-        H.write(call, {"README.md": "# app\n\nedited by an audit\n"})
-        return 'Audited.\nCHANGED: ["README.md"]'
+        H.write(call, {path: "edited by an audit\n"})
+        return f'Audited.\nCHANGED: ["{path}"]'
     replay = _design_run(tmp_path, monkeypatch, max_lines=1, edits="none", lead=lead)
     assert "exceeded its declared scope" in replay.result.error
-    assert "edited by an audit" in _read(replay, "README.md")
+    assert _read(replay, path) == "edited by an audit\n"
 
 
 def test_a_ui_task_with_an_edit_budget_is_still_told_to_repair(tmp_path, monkeypatch):

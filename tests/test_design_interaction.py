@@ -101,7 +101,8 @@ def _summary(root, steps, views):
     folder = evidence_dir(root, "t1")
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "summary.json").write_text(json.dumps(dict(target="http://127.0.0.1:5000/", steps=steps,
-                                                         views=views)))
+                                                         views=views,
+                                                         source_fingerprint=de.source_fingerprint(root))))
 
 
 def test_the_check_names_a_failed_step_and_refuses_partial_runs(tmp_path):
@@ -801,7 +802,7 @@ def _captured(tmp_path, browser_ok=True):
 @pytest.mark.parametrize("change,expected", [
     ("source", "captured on a different source tree than the current one"),
     ("fixture-modified", "fixture .quadratus/capture-fixtures/t2/rows.csv changed after the capture"),
-    ("fixture-deleted", "no longer exists or cannot be read, so the capture cannot be reproduced"),
+    ("fixture-deleted", "no longer exists, so the capture cannot be reproduced"),
 ])
 def test_a_capture_stands_only_for_its_source_and_fixture_bytes(tmp_path, browser, change, expected):
     root = _captured(tmp_path)
@@ -858,7 +859,7 @@ def test_a_symlinked_fixture_ancestor_is_refused(tmp_path):
                        str(root / "index.html"), root, "t2")
 
 
-@pytest.mark.parametrize("value", ["450", "not-a-width", 450.5, 450.0, True, float("nan"), None])
+@pytest.mark.parametrize("value", ["450", "not-a-width", 450.5, 450.0, True, float("nan"), None, 0, -5])
 def test_malformed_measured_width_is_rejected_cleanly(tmp_path, value):
     from tests.lifecycle.harness import evidence
     evidence(tmp_path, "t1", age=0)
@@ -930,3 +931,80 @@ def test_evidence_is_copied_only_for_the_calling_task(tmp_path):
     missing = [".quadratus/design-evidence/t1/mobile/evidence.json"]
     assert evidence_refusals(root, missing, "t1") == [(missing[0], "missing")]
     assert evidence_refusals(root, names * 5, "t1")[-1] == ("", "more than 8 evidence files")
+
+
+# -- Codex review of 9a31aac: required identity, shared exclusions, verifier boundary ----
+
+def test_a_render_with_no_recorded_source_is_not_evidence(tmp_path):
+    from tests.lifecycle.harness import evidence
+    evidence(tmp_path, "t1", age=0)
+    folder = evidence_dir(tmp_path, "t1")
+    summary = json.loads((folder / "summary.json").read_text())
+    for value in ("missing", "not-a-digest", 12):
+        if value == "missing":
+            summary.pop("source_fingerprint")
+        else:
+            summary["source_fingerprint"] = value
+        (folder / "summary.json").write_text(json.dumps(summary))
+        passed, problem = check(tmp_path, "t1", 0)[:2]
+        assert not passed and ("carry no record of the source" in problem
+                               or "source changed while the renders" in problem)
+
+
+def test_capture_and_check_share_the_sessions_exclusions(tmp_path):
+    root = tmp_path / "project"
+    (root / "private").mkdir(parents=True)
+    (root / "private" / "state.json").write_text("{}")
+    (root / "app.py").write_text("x = 1\n")
+    de.write_source_excludes(root, [root / "private", tmp_path / "outside"])
+    assert json.loads((root / de.EXCLUDES_FILE).read_text()) == ["private"], "outside paths are not recorded"
+    before = de.source_fingerprint(root)
+    (root / "private" / "state.json").write_text('{"changed": true}')
+    assert de.source_fingerprint(root) == before, "an excluded file is not source"
+    (root / "app.py").write_text("x = 2\n")
+    assert de.source_fingerprint(root) != before
+    (root / de.EXCLUDES_FILE).write_text(json.dumps(["../escape", "/abs", 3, "private"]))
+    assert de._source_excludes(root) == [root / "private"], "malformed entries are ignored"
+
+
+@pytest.mark.parametrize("label", ["/etc/hostname", "../outside.csv", ".quadratus/capture-fixtures/t9/rows.csv",
+                                   "fixtures/link.csv", "fixtures/api_token.csv"])
+def test_the_fixture_verifier_reads_nothing_outside_its_boundary(tmp_path, monkeypatch, label):
+    import hashlib
+
+    from tests.lifecycle.harness import evidence
+    root = tmp_path / "project"
+    (root / "fixtures").mkdir(parents=True)
+    (tmp_path / "outside.csv").write_text("dummy outside\n")
+    (root / "fixtures" / "rows.csv").write_text("name\n")
+    (root / "fixtures" / "link.csv").symlink_to(root / "fixtures" / "rows.csv")
+    (root / "fixtures" / "api_token.csv").write_text("dummy\n")
+    other = de.fixture_dir(root, "t9")
+    other.mkdir(parents=True)
+    (other / "rows.csv").write_text("name\n")
+    evidence(root, "t1", age=0)
+    folder = evidence_dir(root, "t1")
+    summary = json.loads((folder / "summary.json").read_text())
+    digest = hashlib.sha256(b"dummy outside\n").hexdigest()
+    summary["steps"] = [dict(action="file", selector="#f", label=label, bytes=14, sha256=digest)]
+    for view in summary["views"].values():
+        view["steps"] = [dict(n=1, action="file", selector="#f", file=label, ok=True)]
+    (folder / "summary.json").write_text(json.dumps(summary))
+    read = []
+    monkeypatch.setattr(de, "_digest", lambda path: read.append(str(path)))
+    passed, problem = check(root, "t1", 0)[:2]
+    assert not passed and "is not a permitted fixture now" in problem
+    assert read == [], "no byte of a path outside the fixture boundary was read"
+
+
+def test_a_fixture_step_without_a_valid_digest_is_unverified(tmp_path):
+    from tests.lifecycle.harness import evidence
+    root = _project(tmp_path)
+    evidence(root, "t1", age=0)
+    folder = evidence_dir(root, "t1")
+    summary = json.loads((folder / "summary.json").read_text())
+    summary["steps"] = [dict(action="file", selector="#f", label="fixtures/rows.csv")]
+    for view in summary["views"].values():
+        view["steps"] = [dict(n=1, action="file", selector="#f", file="fixtures/rows.csv", ok=True)]
+    (folder / "summary.json").write_text(json.dumps(summary))
+    assert "has no valid recorded digest" in check(root, "t1", 0)[1]

@@ -28,6 +28,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
+import os
 import re
 import struct
 import sys
@@ -57,12 +58,43 @@ MAX_FIXTURE_BYTES = 1_000_000
 MAX_UPLOAD_BYTES = 5_000_000
 
 
+#: Written by the session: the project-relative paths it excludes from
+#: source, so a capture and the check fingerprint the same selected source
+#: the session measures (Codex review of 9a31aac).
+EXCLUDES_FILE = Path(".quadratus") / "source-excludes.json"
+
+
+def write_source_excludes(root, excludes) -> None:
+    """Record ``excludes`` (absolute paths) that fall inside ``root``."""
+    root = Path(root).resolve()
+    inside = sorted({Path(e).resolve().relative_to(root).as_posix() for e in excludes
+                     if Path(e).resolve().is_relative_to(root) and Path(e).resolve() != root})
+    path = root / EXCLUDES_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(inside))
+
+
+def _source_excludes(root: Path) -> List[Path]:
+    try:
+        entries = json.loads((root / EXCLUDES_FILE).read_text())[:200]
+    except (OSError, ValueError, TypeError):
+        return []
+    out = []
+    for entry in entries if isinstance(entries, list) else []:
+        raw = Path(entry) if isinstance(entry, str) else None
+        if raw is not None and entry and not raw.is_absolute() and ".." not in raw.parts:
+            out.append(root / raw)
+    return out
+
+
 def source_fingerprint(root) -> Optional[str]:
-    """The project's source fingerprint as Project computes it (harness state
-    and caches skipped), or None when it cannot be read."""
+    """The selected source's fingerprint as the session measures it: Project's
+    own skips plus the session's recorded exclusions, whose files are never
+    read. None when it cannot be computed."""
     try:
         from .project import Project
-        return Project(root).fingerprint()
+        root = Path(root)
+        return Project(root, exclude=_source_excludes(root)).fingerprint()
     except Exception:  # noqa: BLE001 -- unknown, which the check treats as a mismatch
         return None
 
@@ -269,6 +301,36 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
     return out
 
 
+def _fixture_problem(root, step: dict, task_id: str) -> Optional[str]:
+    """What stops a recorded fixture from standing as captured, if anything.
+
+    The same boundary a file step passes before capture is applied again
+    before any byte is read (Codex review of 9a31aac: a summary naming an
+    absolute or ../ path had that file hashed), then a bounded read.
+    Missing or malformed digest metadata is unverified, never a match.
+    """
+    label, recorded = step.get("label"), step.get("sha256")
+    if not isinstance(recorded, str) or not re.fullmatch(r"[0-9a-f]{64}", recorded):
+        return "has no valid recorded digest"
+    try:
+        path = _fixture(Path(root), label if isinstance(label, str) else "", task_id)
+    except (ValueError, OSError) as exc:
+        plain = (isinstance(label, str) and label and not Path(label).is_absolute()
+                 and ".." not in Path(label).parts)
+        if plain and not os.path.lexists(Path(root) / label):
+            return "no longer exists, so the capture cannot be reproduced"
+        return f"is not a permitted fixture now ({str(exc)[:120]})"
+    try:
+        if path.stat().st_size > MAX_UPLOAD_BYTES:
+            return "is larger than the upload budget"
+    except OSError:
+        return "no longer exists or cannot be read, so the capture cannot be reproduced"
+    now = _digest(path)
+    if now is None:
+        return "no longer exists or cannot be read, so the capture cannot be reproduced"
+    return "changed after the capture" if now != recorded else None
+
+
 def _write_summary(folder: Path, summary: dict) -> None:
     (folder / "summary.json").write_text(json.dumps(summary, indent=2))
 
@@ -364,22 +426,21 @@ def _check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
             problems.append(f"the {name} render is not clean"
                             + (f" (console: {errors})" if errors else "")
                             + (f" (failed requests: {failed})" if failed else ""))
-    if "source_fingerprint" in summary:
-        recorded = summary["source_fingerprint"]
-        if not isinstance(recorded, str):
-            problems.append("the source changed while the renders were being captured")
-        elif recorded != source_fingerprint(root):
-            problems.append("the renders were captured on a different source tree than the current one")
+    # Required, not optional: a render with no record of the source it shows
+    # is not evidence for any particular tree (Codex review of 9a31aac).
+    recorded = summary.get("source_fingerprint", "missing")
+    if recorded == "missing":
+        problems.append("the renders carry no record of the source they show")
+    elif not isinstance(recorded, str) or not re.fullmatch(r"[0-9a-f]{64}", recorded):
+        problems.append("the source changed while the renders were being captured")
+    elif recorded != source_fingerprint(root):
+        problems.append("the renders were captured on a different source tree than the current one")
     requested = summary.get("steps")
     for index, step in enumerate(requested if isinstance(requested, list) else [], 1):
-        if isinstance(step, dict) and step.get("action") == "file" and "sha256" in step:
-            label = step.get("label")
-            now = _digest(Path(root) / label) if isinstance(label, str) and label else None
-            if now is None:
-                problems.append(f"step {index}'s fixture {str(label)[:80]} no longer exists or cannot be read, "
-                                "so the capture cannot be reproduced")
-            elif now != step["sha256"]:
-                problems.append(f"step {index}'s fixture {str(label)[:80]} changed after the capture")
+        if isinstance(step, dict) and step.get("action") == "file":
+            problem = _fixture_problem(root, step, task_id)
+            if problem:
+                problems.append(f"step {index}'s fixture {str(step.get('label'))[:80]} {problem}")
     for name, view in summary["views"].items():
         if requested is None:
             if "steps" in view:
@@ -421,7 +482,7 @@ def _check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
         if measured is None:
             problems.append(f"the {name} render's page width was not measured")
             continue
-        if not isinstance(measured, int) or isinstance(measured, bool):
+        if not isinstance(measured, int) or isinstance(measured, bool) or measured <= 0:
             problems.append(f"the {name} render's measured page width is malformed ({str(measured)[:40]})")
             continue
         if measured > viewport["width"] + 1:
