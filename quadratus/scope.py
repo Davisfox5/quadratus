@@ -142,6 +142,11 @@ class TaskScope:
     max_lines: Optional[int] = None
     forbidden_paths: Sequence[str] = ()
     overrun_ratio: float = _OVERRUN_TOLERANCE
+    #: Declared review-only intent (SCOPE ``"edits": "none"``): the task
+    #: reports and does not repair. Never inferred from a small max_lines, since
+    #: a one-line fix is still editing work (Codex review of 3d5c3f3). The
+    #: scope and source-truth checks apply unchanged whatever this says.
+    review_only: bool = False
 
     def permits(self, path: str) -> bool:
         """Whether ``path`` may be edited under this scope."""
@@ -196,6 +201,8 @@ class TaskScope:
                 "This task is finished when:\n"
                 + "\n".join(f"  - {a}" for a in self.acceptance)
             )
+        if self.review_only:
+            parts.append("Declared review-only: report findings; do not change project source.")
         if self.max_lines:
             parts.append(
                 f"Expected size: about {self.max_lines} changed lines. If the "
@@ -218,6 +225,7 @@ class TaskScope:
             "intended_result": self.intended_result,
             "acceptance": list(self.acceptance),
             "max_lines": self.max_lines,
+            **({"edits": "none"} if self.review_only else {}),
         }
 
 
@@ -424,7 +432,10 @@ def read_scope(description: str, *, max_lines: int):
         raise ValueError("SCOPE needs verifiable acceptance conditions")
     if type(bound) is not int or not 0 < bound <= max_lines:
         raise ValueError(f"SCOPE max_lines must be between 1 and {max_lines}")
+    edits = data.get("edits", "allowed")
+    if edits not in ("allowed", "none"):
+        raise ValueError('SCOPE edits must be "none" (review only) or omitted')
     body = (description[:matches[0].start()] + description[matches[0].end():]).strip()
-    scope = TaskScope(paths, result, acceptance, bound)
+    scope = TaskScope(paths, result, acceptance, bound, review_only=edits == "none")
     lint_declaration(body, scope)
     return scope, body

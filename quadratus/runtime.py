@@ -781,6 +781,18 @@ _EVIDENCE_PATH = re.compile(
     r"(?:summary\.json|(?:desktop|mobile)/(?:page\.png|evidence\.json))")
 _MAX_EVIDENCE_FILES = 8
 _MAX_EVIDENCE_BYTES = 10_000_000
+_MAX_EVIDENCE_TOTAL = 30_000_000
+
+
+def _evidence_type_ok(rel, data) -> bool:
+    """A .png is a PNG and a .json parses, so nothing else rides in under the name."""
+    if rel.endswith(".png"):
+        return data[:8] == b"\x89PNG\r\n\x1a\n"
+    try:
+        json.loads(data.decode("utf-8"))
+        return True
+    except (UnicodeDecodeError, ValueError):
+        return False
 
 
 def _furnish_evidence(root, directory, paths) -> list:
@@ -794,9 +806,8 @@ def _furnish_evidence(root, directory, paths) -> list:
     not symlinked at any component, bounded in count and size. Anything
     else is skipped. Returns the paths copied.
     """
-    import shutil as _shutil
     root = Path(root)
-    copied = []
+    copied, total = [], 0
     for rel in list(paths)[:_MAX_EVIDENCE_FILES]:
         rel = str(rel)
         if not _EVIDENCE_PATH.fullmatch(rel):
@@ -809,13 +820,18 @@ def _furnish_evidence(root, directory, paths) -> list:
                 linked = True
                 break
         try:
-            if linked or not current.is_file() or current.stat().st_size > _MAX_EVIDENCE_BYTES:
+            size = current.stat().st_size if not linked and current.is_file() else None
+            if size is None or size > _MAX_EVIDENCE_BYTES or total + size > _MAX_EVIDENCE_TOTAL:
+                continue
+            data = current.read_bytes()
+            if len(data) != size or not _evidence_type_ok(rel, data):
                 continue
             target = Path(directory) / rel
             target.parent.mkdir(parents=True, exist_ok=True)
-            _shutil.copyfile(current, target)
+            target.write_bytes(data)
             target.chmod(0o444)
         except OSError:
             continue
+        total += size
         copied.append(rel)
     return copied

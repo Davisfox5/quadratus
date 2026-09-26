@@ -781,3 +781,134 @@ def test_a_page_within_the_tolerance_but_overflowing_fails_in_a_real_browser(tmp
     assert 390 < summary["views"]["mobile"]["document_width"] <= 454, "inside the screenshot tolerance"
     passed, problem, _ = check(root, "t1", 0)
     assert not passed and "div#bar.toolbar" in problem and "so it overflows" in problem
+
+
+# -- Codex review of 3d5c3f3: provenance, budgets, types, contained scrolling ------------
+
+def _captured(tmp_path, browser_ok=True):
+    root = _fixture_root(tmp_path)
+    steps = [dict(action="click", selector="#open"), dict(action="wait", selector="dialog[open]"),
+             dict(action="file", selector="#f", path=".quadratus/capture-fixtures/t2/rows.csv"),
+             dict(action="wait", selector="#t tr[data-status]")]
+    try:
+        capture(str(root / "index.html"), "t2", root, steps)
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"headless browser unavailable: {str(exc)[:120]}")
+    assert check(root, "t2", 0)[0]
+    return root
+
+
+@pytest.mark.parametrize("change,expected", [
+    ("source", "captured on a different source tree than the current one"),
+    ("fixture-modified", "fixture .quadratus/capture-fixtures/t2/rows.csv changed after the capture"),
+    ("fixture-deleted", "no longer exists or cannot be read, so the capture cannot be reproduced"),
+])
+def test_a_capture_stands_only_for_its_source_and_fixture_bytes(tmp_path, browser, change, expected):
+    root = _captured(tmp_path)
+    fixture = de.fixture_dir(root, "t2") / "rows.csv"
+    if change == "source":
+        (root / "index.html").write_text(PAGE.replace("Import", "Import CSV"))
+    elif change == "fixture-modified":
+        fixture.write_text("name\nbeta\n")
+    else:
+        fixture.unlink()
+    passed, problem, _ = check(root, "t2", 0)
+    assert not passed and expected in problem
+
+
+def test_a_render_whose_source_changed_mid_capture_does_not_count(tmp_path):
+    from tests.lifecycle.harness import evidence
+    evidence(tmp_path, "t1", age=0)
+    folder = evidence_dir(tmp_path, "t1")
+    summary = json.loads((folder / "summary.json").read_text())
+    summary["source_fingerprint"] = None
+    (folder / "summary.json").write_text(json.dumps(summary))
+    assert "source changed while the renders were being captured" in check(tmp_path, "t1", 0)[1]
+    summary["source_fingerprint"] = de.source_fingerprint(tmp_path)
+    (folder / "summary.json").write_text(json.dumps(summary))
+    assert check(tmp_path, "t1", 0)[0], "the same tree passes"
+
+
+def test_uploads_have_an_aggregate_budget(tmp_path, monkeypatch):
+    root = _fixture_root(tmp_path)
+    monkeypatch.setattr(de, "MAX_UPLOAD_BYTES", 15)
+    one = dict(action="file", selector="#f", path=".quadratus/capture-fixtures/t2/rows.csv")
+    validate_steps([one], str(root / "index.html"), root, "t2")            # 11 bytes: within
+    with pytest.raises(ValueError, match="more than 15 bytes in all"):
+        validate_steps([one, dict(one, path="fixtures/rows.csv")], str(root / "index.html"), root, "t2")
+
+
+@pytest.mark.parametrize("task", ["../t2", "t2/..", "t%2F2", ".t2", ""])
+def test_a_fixture_task_id_is_one_plain_component(tmp_path, task):
+    root = _fixture_root(tmp_path)
+    with pytest.raises(ValueError):
+        validate_steps([dict(action="file", selector="#f", path=f".quadratus/capture-fixtures/{task}/rows.csv")],
+                       str(root / "index.html"), root, task)
+
+
+def test_a_symlinked_fixture_ancestor_is_refused(tmp_path):
+    root = _project(tmp_path)
+    real = tmp_path / "elsewhere" / "t2"
+    real.mkdir(parents=True)
+    (real / "rows.csv").write_text("x\n")
+    (root / ".quadratus").mkdir()
+    (root / ".quadratus" / "capture-fixtures").symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        validate_steps([dict(action="file", selector="#f", path=".quadratus/capture-fixtures/t2/rows.csv")],
+                       str(root / "index.html"), root, "t2")
+
+
+@pytest.mark.parametrize("value", ["450", 450.5, True, float("nan")])
+def test_malformed_measured_width_is_rejected_cleanly(tmp_path, value):
+    from tests.lifecycle.harness import evidence
+    evidence(tmp_path, "t1", age=0)
+    folder = evidence_dir(tmp_path, "t1")
+    summary = json.loads((folder / "summary.json").read_text())
+    summary["views"]["mobile"]["document_width"] = value
+    (folder / "summary.json").write_text(json.dumps(summary))
+    passed, problem = check(tmp_path, "t1", 0)[:2]
+    assert not passed and "the mobile render's measured page width is malformed" in problem
+
+
+def test_a_symlinked_screenshot_leaves_the_design_unverified(tmp_path):
+    from tests.lifecycle.harness import evidence
+    evidence(tmp_path, "t1", age=0)
+    shot = evidence_dir(tmp_path, "t1") / "mobile" / "page.png"
+    real = tmp_path / "real.png"
+    real.write_bytes(shot.read_bytes())
+    shot.unlink()
+    shot.symlink_to(real)
+    passed, problem = check(tmp_path, "t1", 0)[:2]
+    assert not passed and "the mobile screenshot is a symlink" in problem
+
+
+def test_evidence_furnishing_checks_type_and_an_aggregate_budget(tmp_path, monkeypatch):
+    from quadratus import runtime
+    from tests.lifecycle.harness import evidence
+    root = tmp_path / "project"
+    evidence(root, "t1", age=0)
+    (root / ".quadratus" / "design-evidence" / "t1" / "mobile" / "evidence.json").write_text("not json")
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    names = [".quadratus/design-evidence/t1/desktop/page.png", ".quadratus/design-evidence/t1/mobile/page.png",
+             ".quadratus/design-evidence/t1/mobile/evidence.json"]
+    assert runtime._furnish_evidence(root, copy, names) == names[:2], "a non-JSON evidence.json is skipped"
+    fake = root / ".quadratus" / "design-evidence" / "t1" / "desktop" / "page.png"
+    fake.write_bytes(b"not a png")
+    assert runtime._furnish_evidence(root, tmp_path / "c2", names[:1]) == []
+    monkeypatch.setattr(runtime, "_MAX_EVIDENCE_TOTAL", 1)
+    assert runtime._furnish_evidence(root, tmp_path / "c3", names[1:2]) == [], "over the aggregate budget"
+
+
+CONTAINED = """<!doctype html><title>contained</title>
+<div id=wrap style="overflow-x:auto;width:100%"><table id=timeline><tr><td style="min-width:600px">t</td></tr></table></div>
+"""
+
+
+def test_contained_horizontal_scrolling_is_not_document_overflow(tmp_path, browser):
+    root = _project(tmp_path)
+    (root / "contained.html").write_text(CONTAINED)
+    out = _capture(root, "contained.html", None)
+    assert out["mobile"]["document_width"] <= 391 and out["mobile"]["overflow"] == []
+    passed, problem, _ = check(root, "t1", 0)
+    assert passed, problem
