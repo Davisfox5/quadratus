@@ -360,6 +360,24 @@ def test_a_refused_lead_is_not_retried_or_rerouted(tmp_path, monkeypatch):
     assert _read(replay, "app.py") == FILES["app.py"]
 
 
+@pytest.mark.parametrize("wrote", [False, True], ids=["unchanged", "changed"])
+@pytest.mark.parametrize("turns", [5, 14, 20])
+@pytest.mark.parametrize("stop", ["refusal", "content_filter"])
+def test_a_grok_decline_is_one_lead_at_any_count_on_any_tree(tmp_path, monkeypatch, stop, turns, wrote):
+    """Codex review of f7548a2: a decline on an unchanged tree was handed to another lead."""
+    def lead(call, replay):
+        if wrote:
+            H.write(call, {"README.md": "# app\n\npartial\n"})
+        return H.grok_ok("I can't help with that", stop=stop, num_turns=turns)
+
+    replay = _run(tmp_path, monkeypatch, Script(orchestrator=_continuing(DECL_T2), lead=lead), max_tasks=2,
+                  files=FILES_OK, settings=Settings(backend="cli", lead_max_turns=14))
+    leads = replay.of("lead")
+    assert [(c.vendor, c.task) for c in leads] == [("grok", "t1")], "no replacement, retry or continuation"
+    assert replay.result.error.startswith(f"ProviderRefusal: grok declined the request (stopReason {stop!r})")
+    assert ("partial" in _read(replay, "README.md")) is wrote, "the tree is left exactly as the call left it"
+
+
 # -- 6. the freshness boundary itself, with set timestamps -----------------------------
 
 def test_render_freshness_is_decided_by_timestamp_not_write_order(tmp_path):

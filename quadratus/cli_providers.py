@@ -95,8 +95,9 @@ def _extract_claude_result(stdout: str) -> str:
     payload = json.loads(stdout)
     if payload.get("stop_reason") == "refusal":
         # A classifier decline is not an error to the CLI: it is a completed
-        # turn with nothing in it. Surface it as what it is so the caller can
-        # re-route rather than see "empty response".
+        # turn with nothing in it. Surface it as what it is, not as "empty
+        # response": the run preserves a refusal and never retries or
+        # re-routes the declined request through another model.
         details = payload.get("stop_details") or {}
         category = details.get("category") if isinstance(details, dict) else None
         raise ProviderRefusal(
@@ -200,6 +201,11 @@ def _extract_codex_result(stdout: str) -> str:
     raise ProviderError(f"codex returned no parseable events: {stdout.strip()[:300]}")
 
 
+#: Grok stop reasons that are an explicit decline. Only these: a refusal is
+#: never inferred from prose or from any other stop.
+_GROK_REFUSAL_STOPS = ("refusal", "content_filter")
+
+
 def _is_cap_shaped(payload: dict) -> bool:
     """Whether an incomplete envelope has the one shape a count-read cap takes.
 
@@ -231,9 +237,22 @@ def _extract_grok_result(stdout: str) -> str:
         ) from exc
     if not isinstance(payload, dict):
         raise ProviderError(f"grok returned unexpected JSON: {stdout.strip()[:300]}")
+    stop = payload.get("stopReason")
+    if stop in _GROK_REFUSAL_STOPS:
+        # Before the error and cap handling: an explicit decline is a
+        # refusal at any turn count, never an ordinary failed lead that
+        # another model may take over (Codex review of f7548a2).
+        details = payload.get("stopDetails") or payload.get("stop_details") or {}
+        details = details if isinstance(details, dict) else {}
+        category = details.get("category") or None      # only what grok supplied
+        explanation = details.get("explanation") or (
+            str(payload["error"])[:300] if payload.get("error") else None)
+        raise ProviderRefusal(
+            f"grok declined the request (stopReason {stop!r})"
+            + (f" [{category}]" if category else "") + ".",
+            category=category, explanation=explanation)
     if payload.get("error"):
         raise ProviderError(f"grok reported an error: {str(payload['error'])[:300]}")
-    stop = payload.get("stopReason")
     text = payload.get("text")
     # A turn that did not reach end_turn still carries text, and that text is
     # the narration it had got to -- a denied tool comes back as
