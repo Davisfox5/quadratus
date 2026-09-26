@@ -205,3 +205,73 @@ def test_the_command_line_exits_nonzero_when_a_step_fails(tmp_path, browser, cap
         pytest.skip(f"headless browser unavailable: {str(exc)[:120]}")
     assert code == 1
     assert de.main([str(root / "index.html"), "t1", str(root), "--file", "#f=.env"]) == 2
+
+
+# -- Codex review of c222d62: integrity of the evidence itself --------------------------
+
+def test_a_failed_recapture_invalidates_earlier_fresh_evidence(tmp_path, monkeypatch):
+    """Finding 1: an exception mid-capture left the old summary and PNGs passing."""
+    from quadratus import browser
+    from tests.lifecycle.harness import evidence
+    root = _project(tmp_path)
+    evidence(root, "t1", age=3600)
+    assert check(root, "t1", 0)[0], "fresh earlier evidence passes before the recapture"
+
+    def broken(*a, **k):
+        raise RuntimeError("browser crashed while loading")
+    monkeypatch.setattr(browser, "render_page", broken)
+    with pytest.raises(RuntimeError):
+        capture(str(root / "index.html"), "t1", root, None)
+    passed, problem, _ = check(root, "t1", 0)
+    assert not passed and "the last capture failed: RuntimeError: browser crashed" in problem
+    assert not (evidence_dir(root, "t1") / "desktop" / "page.png").exists()
+
+
+def test_a_capture_that_never_finished_does_not_count(tmp_path):
+    root = _project(tmp_path)
+    folder = evidence_dir(root, "t1")
+    folder.mkdir(parents=True)
+    (folder / "summary.json").write_text(json.dumps(dict(target="x", views={}, capture_in_progress=True)))
+    assert check(root, "t1", 0) == (False, "the last capture did not finish", [])
+
+
+@pytest.mark.parametrize("records,expected", [
+    ([dict(n=1, action="click", selector="#open", ok=True),
+      dict(n=2, action="wait", selector="#unrelated", ok=True)], "does not match the requested step"),
+    ([dict(n=1, action="click", selector="#open", ok=True),
+      dict(n=3, action="wait", selector="#results", ok=True)], "does not match the requested step"),
+    ([dict(n=1, action="click", selector="#open", ok="yes"),
+      dict(n=2, action="wait", selector="#results", ok=True)], "failed"),
+    (["not a record", dict(n=2, action="wait", selector="#results", ok=True)], "record is malformed"),
+    ([dict(n=1, action="click", selector="#open", ok=True)], "ran 1 of 2"),
+    ("not a list", "no interaction step record"),
+])
+def test_step_records_must_match_the_request_exactly(tmp_path, records, expected):
+    """Finding 3: a wrong selector with the right count, a non-bool ok, or a
+    non-dict record passed or raised."""
+    from tests.lifecycle.harness import evidence
+    evidence(tmp_path, "t1", age=0)
+    folder = evidence_dir(tmp_path, "t1")
+    summary = json.loads((folder / "summary.json").read_text())
+    summary["steps"] = [dict(action="click", selector="#open"), dict(action="wait", selector="#results")]
+    for view in summary["views"].values():
+        view["steps"] = records
+    (folder / "summary.json").write_text(json.dumps(summary))
+    passed, problem, _ = check(tmp_path, "t1", 0)
+    assert not passed and expected in problem
+
+
+def test_malformed_summaries_never_raise(tmp_path):
+    from tests.lifecycle.harness import evidence
+    evidence(tmp_path, "t1", age=0)
+    folder = evidence_dir(tmp_path, "t1")
+    summary = json.loads((folder / "summary.json").read_text())
+    for requested in ([1, 2], [dict(action="eval", selector="x")], "steps"):
+        summary["steps"] = requested
+        (folder / "summary.json").write_text(json.dumps(summary))
+        passed, problem, _ = check(tmp_path, "t1", 0)
+        assert not passed and problem
+    summary.pop("steps")
+    summary["views"]["desktop"]["steps"] = [dict(n=1, action="click", selector="#x", ok=True)]
+    (folder / "summary.json").write_text(json.dumps(summary))
+    assert "never requested" in check(tmp_path, "t1", 0)[1]

@@ -145,25 +145,71 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
     from .browser import render_page
     folder = evidence_dir(root, task_id)
     folder.mkdir(parents=True, exist_ok=True)
+    # Invalidate before anything can fail: a capture that raises part-way
+    # must never leave an earlier, successful summary and screenshots standing
+    # as this attempt's evidence (Codex review of c222d62).
+    _write_summary(folder, dict(target=target, views={}, capture_in_progress=True))
+    for name in VIEWPORTS:
+        for leftover in ("page.png", "evidence.json"):
+            (folder / name / leftover).unlink(missing_ok=True)
     try:
         checked, allowed = validate_steps(list(steps or []), target, root)
     except ValueError as exc:
-        (folder / "summary.json").write_text(json.dumps(dict(target=target, views={}, steps_refused=str(exc))))
+        _write_summary(folder, dict(target=target, views={}, steps_refused=str(exc)))
         raise
     deadline = time.monotonic() + CAPTURE_SECONDS if checked else None
     out = {}
-    for name, viewport in VIEWPORTS.items():
-        evidence = render_page(target, out_dir=folder / name, viewport=viewport, steps=checked,
-                               allow_navigation=allowed, step_timeout_ms=STEP_TIMEOUT_MS, deadline=deadline)
-        out[name] = dict(screenshot=evidence.screenshot_path, clean=evidence.clean,
-                         console_errors=evidence.console_errors[:10], failed_requests=evidence.failed_requests[:10])
-        if checked:
-            out[name]["steps"] = evidence.steps
+    try:
+        for name, viewport in VIEWPORTS.items():
+            evidence = render_page(target, out_dir=folder / name, viewport=viewport, steps=checked,
+                                   allow_navigation=allowed, step_timeout_ms=STEP_TIMEOUT_MS, deadline=deadline)
+            out[name] = dict(screenshot=evidence.screenshot_path, clean=evidence.clean,
+                             console_errors=evidence.console_errors[:10],
+                             failed_requests=evidence.failed_requests[:10])
+            if checked:
+                out[name]["steps"] = evidence.steps
+    except BaseException as exc:
+        _write_summary(folder, dict(target=target, views={}, rendered=sorted(out),
+                                    capture_failed=f"{type(exc).__name__}: {str(exc)[:300]}"))
+        raise
     summary = dict(target=target, views=out)
     if checked:
         summary["steps"] = [{k: v for k, v in s.items() if k != "path"} for s in checked]
     (folder / "summary.json").write_text(json.dumps(summary, indent=2))
     return out
+
+
+def _write_summary(folder: Path, summary: dict) -> None:
+    (folder / "summary.json").write_text(json.dumps(summary, indent=2))
+
+
+def _step_problem(view: str, requested, done) -> Optional[str]:
+    """What is wrong with one view's step records against the request, if anything.
+
+    Fails closed: every record must be a dict with the requested order,
+    number, action, selector and file, and ``ok`` exactly True.
+    """
+    if not isinstance(requested, list) or not all(
+            isinstance(r, dict) and r.get("action") in _ACTIONS and isinstance(r.get("selector"), str)
+            for r in requested):
+        return "the requested interaction steps are malformed"
+    if not isinstance(done, list):
+        return f"the {view} render has no interaction step record"
+    for index, (want, got) in enumerate(zip(requested, done, strict=False)):  # lengths compared below
+        if not isinstance(got, dict):
+            return f"the {view} render's step {index + 1} record is malformed"
+        same = (got.get("n") == index + 1 and got.get("action") == want["action"]
+                and got.get("selector") == want["selector"]
+                and (want["action"] != "file" or got.get("file") == want.get("label")))
+        if not same:
+            return (f"the {view} render's step {index + 1} record does not match the requested step "
+                    f"({want['action']} {want['selector'][:80]})")
+        if got.get("ok") is not True:
+            return (f"the {view} render's step {index + 1} ({want['action']} {want['selector'][:80]}) "
+                    f"failed: {str(got.get('error'))[:160]}")
+    if len(done) != len(requested):
+        return f"the {view} render ran {len(done)} of {len(requested)} interaction steps"
+    return None
 
 
 def _png_width(path: Path) -> Optional[int]:
@@ -186,12 +232,23 @@ def check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
     review of #25 rendered a page with a console.error and a missing image,
     and the first version of this check passed it).
     """
+    try:
+        return _check(root, task_id, since)
+    except Exception as exc:  # noqa: BLE001 -- evidence is data; malformed data is a finding
+        return False, f"the evidence could not be read ({type(exc).__name__}: {str(exc)[:160]})", []
+
+
+def _check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
     folder = evidence_dir(root, task_id)
     problems, shots = [], []
     try:
         summary = json.loads((folder / "summary.json").read_text())
     except (OSError, ValueError):
         summary = None
+    if isinstance(summary, dict) and summary.get("capture_failed"):
+        return False, f"the last capture failed: {str(summary['capture_failed'])[:200]}", []
+    if isinstance(summary, dict) and summary.get("capture_in_progress"):
+        return False, "the last capture did not finish", []
     if isinstance(summary, dict) and summary.get("steps_refused"):
         return False, f"the capture's interaction steps were refused: {str(summary['steps_refused'])[:200]}", []
     if (not isinstance(summary, dict) or not isinstance(summary.get("target"), str) or not summary["target"]
@@ -206,17 +263,15 @@ def check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
             problems.append(f"the {name} render is not clean"
                             + (f" (console: {errors})" if errors else "")
                             + (f" (failed requests: {failed})" if failed else ""))
-    requested = summary.get("steps") or []
+    requested = summary.get("steps")
     for name, view in summary["views"].items():
-        if not requested:
+        if requested is None:
+            if "steps" in view:
+                problems.append(f"the {name} render records steps that were never requested")
             continue
-        done = view.get("steps") if isinstance(view.get("steps"), list) else []
-        failed = next((s for s in done if not (isinstance(s, dict) and s.get("ok"))), None)
-        if failed is not None:
-            problems.append(f"the {name} render's step {failed.get('n')} ({failed.get('action')} "
-                            f"{str(failed.get('selector'))[:80]}) failed: {str(failed.get('error'))[:160]}")
-        elif len(done) != len(requested):
-            problems.append(f"the {name} render ran {len(done)} of {len(requested)} interaction steps")
+        problem = _step_problem(name, requested, view.get("steps"))
+        if problem:
+            problems.append(problem)
     for name, viewport in VIEWPORTS.items():
         shot = folder / name / "page.png"
         width = _png_width(shot)
