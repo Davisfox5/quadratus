@@ -2272,7 +2272,8 @@ class Session:
                 f"Task: {spec.description}\n\nThe rendered evidence for this design task is missing "
                 f"or shows a broken page: {problem}.\nFix what the render shows is wrong, then capture "
                 f"it again with exactly:\n    {command}\nReport what you changed and what the new "
-                "screenshots show. " + self._revision_delivery()), role="design-fix")
+                "screenshots show. " + self._revision_delivery() + _design_fix_delivery(
+                    self._interim_edits_note())), role="design-fix")
             self._run_integration_gate(lead, spec, task)
             ok, problem, shots = check(self.project, spec.task_id, self._last_edit_started or 0)
         record.update(verified=ok, problem=problem, screenshots=shots)
@@ -3184,6 +3185,26 @@ class Session:
                    f"{files}; {checked}. Evidence: " + "; ".join(pointers))
         self._note(f"{spec.task_id}: close-out refused by {lead}; harness record kept")
         return summary, "No model-written decision record: the close-out was refused.", []
+
+
+def _design_fix_delivery(already: str) -> str:
+    """What a design-fix call's CHANGED line covers, stated for that call.
+
+    GameTape run 12 (2026-09-26): the design-fix call changed no source. It
+    re-ran the tests and captured fresh renders, then declared the three files
+    the task's earlier draft and revision had edited. Fleet rightly rejected a
+    declaration that did not match what the call itself changed, and the run
+    stopped before the final design review. The check stays exact; the
+    instruction now says which edits belong to this call.
+    """
+    return (
+        ("\n" + already + "." if already else "")
+        + "\nYour CHANGED line lists only files this call itself adds, changes or deletes. "
+        "Files the task changed before this call are already recorded; do not list them "
+        "again. If you only re-run checks or re-capture the renders, end with exactly "
+        "CHANGED: []. The screenshots and summary the capture command writes under "
+        ".quadratus/ are run evidence, not source edits; never list them."
+    )
 
 
 def _closeout_excerpt(text: str, limit: int) -> str:
