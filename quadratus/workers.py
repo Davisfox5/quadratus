@@ -309,6 +309,16 @@ def check_errand_fit(instruction: str, *, needs=None, write: bool = False, answe
     return None
 
 
+#: The one patch shape the harness applies. GameTape run 8: Haiku and Sonnet
+#: returned hunks without file headers four times running.
+_PATCH_FORMAT = (
+    "exactly PATCH: followed by one fenced unified diff, with a/ and b/ file headers "
+    "on every file, for example:\nPATCH:\n```diff\n--- a/tests/test_app.py\n"
+    "+++ b/tests/test_app.py\n@@ -10,3 +10,4 @@\n context line\n+added line\n```\n"
+    "A hunk without its --- and +++ header lines cannot be applied."
+)
+
+
 def capability_preamble(allow_writes: bool, model_key: Optional[str] = None) -> str:
     """Told to the worker, in its own prompt, before the errand.
 
@@ -329,13 +339,12 @@ def capability_preamble(allow_writes: bool, model_key: Optional[str] = None) -> 
         reading = ("You read the source copy in your working directory with read-only shell "
                    "commands (ls, cat, sed -n, rg, grep, head). Those are the only commands you "
                    "may run: do not run tests, install anything, or change a file.")
-        tools = (reading + " You return changes as a patch: exactly PATCH: followed by a fenced "
-                 "unified diff." if allow_writes else reading + " You cannot change files.")
+        tools = (reading + " You return changes as a patch: " + _PATCH_FORMAT
+                 if allow_writes else reading + " You cannot change files.")
     elif allow_writes:
         tools = (
             "You can read the source copy in your working directory, and you "
-            "return changes as a patch: exactly PATCH: followed by a fenced "
-            "unified diff. You have no write tools and no shell."
+            "return changes as a patch: " + _PATCH_FORMAT + " You have no write tools and no shell."
         )
     else:
         tools = (
