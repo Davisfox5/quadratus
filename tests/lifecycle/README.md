@@ -44,7 +44,8 @@ pytest -q tests/lifecycle
 | two caps in a row | `test_two_caps_in_a_row_stop_with_a_named_breaker_and_the_work_kept` | Run 14 (blank `result.error` on a breaker stop) |
 | round budget stated / not stated | `test_a_capped_lead_is_told_its_round_budget`, `test_no_round_budget_is_stated_without_a_cap` | Run 14 (no lead knew a cap existed) |
 | first lead's scoped files | `test_the_first_lead_is_handed_its_scoped_files_as_they_are` | Run 14 t1 (27 discovery calls, no write) |
-| zero-write discovery cap, then continuation | `test_a_zero_write_cap_hands_its_continuation_the_files_and_says_so` | Run 14 t2 (repeated discovery) |
+| cap with no detected change (reading, denied write, checks only, edit then revert), then continuation | `test_a_cap_with_no_detected_change_hands_over_the_files_and_claims_nothing_more` ×4 | Run 14 t2 (repeated discovery); Codex review of 895cf67 (activity was inferred) |
+| tail edit in a 1,600-line file, then continuation | `test_a_tail_edit_in_a_long_file_reaches_the_continuation_as_a_window` | Codex review of 895cf67 (a prefix hid the edit) |
 | capped edits, then continuation | `test_capped_edits_reach_the_continuation_as_the_tree_now_has_them` | handoff shows the tree now, not a transcript |
 | continuation with test setup in scope | `test_a_continuation_is_handed_its_existing_test_setup` | Run 14 t2 (re-read test helpers) |
 | secret, hidden, symlinked, pattern paths in a scope | `test_secret_hidden_and_linked_files_in_a_scope_never_reach_a_prompt` | content never shown; path and reason only |
@@ -64,7 +65,10 @@ prompt and judged by the final review and the independent grader.
 what the harness puts in a lead's prompt (the round budget, the capped
 predecessor's record, the scoped files read fresh with a hash) and how a
 breaker stop is reported. They do not prove a model will read less, write
-earlier or finish inside its cap; only a live run shows that.
+earlier or finish inside its cap; only a live run shows that. A file too long
+to show whole is shown as a marked prefix, or, where a capped predecessor
+changed it, as windows around those changes; code elsewhere in a long file
+still has to be read by the lead.
 
 ## What the scripted cases can and cannot prove
 
