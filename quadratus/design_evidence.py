@@ -53,6 +53,25 @@ def evidence_dir(root, task_id: str) -> Path:
 #: it to keep CHANGED empty, and no later call could re-capture).
 FIXTURE_DIR = Path(".quadratus") / "capture-fixtures"
 MAX_FIXTURE_BYTES = 1_000_000
+#: All file steps of one capture together, ordinary project fixtures included.
+MAX_UPLOAD_BYTES = 5_000_000
+
+
+def source_fingerprint(root) -> Optional[str]:
+    """The project's source fingerprint as Project computes it (harness state
+    and caches skipped), or None when it cannot be read."""
+    try:
+        from .project import Project
+        return Project(root).fingerprint()
+    except Exception:  # noqa: BLE001 -- unknown, which the check treats as a mismatch
+        return None
+
+
+def _digest(path: Path) -> Optional[str]:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
 
 
 def fixture_dir(root, task_id: str) -> Path:
@@ -179,6 +198,7 @@ def validate_steps(steps: List[dict], target: str, root, task_id: Optional[str] 
     if len(steps) > MAX_STEPS:
         raise ValueError(f"at most {MAX_STEPS} steps, not {len(steps)}")
     checked = []
+    uploaded = 0
     for step in steps:
         action, selector = step.get("action"), step.get("selector")
         if action not in _ACTIONS:
@@ -188,9 +208,11 @@ def validate_steps(steps: List[dict], target: str, root, task_id: Optional[str] 
         item = dict(action=action, selector=selector.strip())
         if action == "file":
             path = _fixture(root, step.get("path") or "", task_id)
-            data = path.read_bytes() if path.stat().st_size <= MAX_FIXTURE_BYTES else None
-            item.update(path=str(path), label=step.get("path"), bytes=path.stat().st_size,
-                        sha256=hashlib.sha256(data).hexdigest() if data is not None else None)
+            size = path.stat().st_size
+            uploaded += size
+            if uploaded > MAX_UPLOAD_BYTES:
+                raise ValueError(f"file steps upload more than {MAX_UPLOAD_BYTES:,} bytes in all")
+            item.update(path=str(path), label=step.get("path"), bytes=size, sha256=_digest(path))
         checked.append(item)
     return checked, (_navigation_rule(target, root) if checked else None)
 
@@ -219,8 +241,14 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
         raise
     deadline = time.monotonic() + CAPTURE_SECONDS if checked else None
     out = {}
+    # The tree the renders show (Codex review of 3d5c3f3): recorded, and
+    # compared again by the check, so a render stands only for this source.
+    source = source_fingerprint(root)
     try:
         for name, viewport in VIEWPORTS.items():
+            for item in checked:
+                if item["action"] == "file" and _digest(Path(item["path"])) != item["sha256"]:
+                    raise ValueError(f"fixture {item['label']} changed or vanished during the capture")
             evidence = render_page(target, out_dir=folder / name, viewport=viewport, steps=checked,
                                    allow_navigation=allowed, step_timeout_ms=STEP_TIMEOUT_MS, deadline=deadline)
             out[name] = dict(screenshot=evidence.screenshot_path, clean=evidence.clean,
@@ -233,7 +261,8 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
         _write_summary(folder, dict(target=target, views={}, rendered=sorted(out),
                                     capture_failed=f"{type(exc).__name__}: {str(exc)[:300]}"))
         raise
-    summary = dict(target=target, views=out)
+    summary = dict(target=target, views=out,
+                   source_fingerprint=source if source and source == source_fingerprint(root) else None)
     if checked:
         summary["steps"] = [{k: v for k, v in s.items() if k != "path"} for s in checked]
     (folder / "summary.json").write_text(json.dumps(summary, indent=2))
@@ -335,7 +364,22 @@ def _check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
             problems.append(f"the {name} render is not clean"
                             + (f" (console: {errors})" if errors else "")
                             + (f" (failed requests: {failed})" if failed else ""))
+    if "source_fingerprint" in summary:
+        recorded = summary["source_fingerprint"]
+        if not isinstance(recorded, str):
+            problems.append("the source changed while the renders were being captured")
+        elif recorded != source_fingerprint(root):
+            problems.append("the renders were captured on a different source tree than the current one")
     requested = summary.get("steps")
+    for index, step in enumerate(requested if isinstance(requested, list) else [], 1):
+        if isinstance(step, dict) and step.get("action") == "file" and "sha256" in step:
+            label = step.get("label")
+            now = _digest(Path(root) / label) if isinstance(label, str) and label else None
+            if now is None:
+                problems.append(f"step {index}'s fixture {str(label)[:80]} no longer exists or cannot be read, "
+                                "so the capture cannot be reproduced")
+            elif now != step["sha256"]:
+                problems.append(f"step {index}'s fixture {str(label)[:80]} changed after the capture")
     for name, view in summary["views"].items():
         if requested is None:
             if "steps" in view:
@@ -346,6 +390,9 @@ def _check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
             problems.append(problem)
     for name, viewport in VIEWPORTS.items():
         shot = folder / name / "page.png"
+        if shot.is_symlink():
+            problems.append(f"the {name} screenshot is a symlink, not a capture")
+            continue
         width = _png_width(shot)
         if width is None:
             problems.append(f"no {name} screenshot at {shot.relative_to(root) if shot.is_absolute() else shot}")
@@ -369,7 +416,10 @@ def _check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
         # never looser; the screenshot tolerance above is unchanged.
         view = summary["views"].get(name) or {}
         measured = view.get("document_width")
-        if isinstance(measured, int) and not isinstance(measured, bool) and measured > viewport["width"] + 1:
+        if measured is not None and (not isinstance(measured, int) or isinstance(measured, bool)):
+            problems.append(f"the {name} render's measured page width is malformed ({str(measured)[:40]})")
+            continue
+        if measured is not None and measured > viewport["width"] + 1:
             offenders = [o for o in (view.get("overflow") or []) if isinstance(o, dict)][:5]
             named = ", ".join(f"{str(o.get('element'))[:80]} (past the {o.get('side', 'right')} edge: "
                               f"left {o.get('left')}px, right {o.get('right')}px)" for o in offenders)

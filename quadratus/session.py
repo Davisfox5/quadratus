@@ -382,6 +382,8 @@ _SCOPE_REQUEST = (
     '"max_lines": 100}. Then describe the task. Name narrow project-relative files or '
     'directories; no absolute paths, parent traversal or project-wide wildcard. '
     'max_lines must be a positive integer no greater than 100. Decompose larger work. '
+    'For a task that only reviews or audits and must not change source, add '
+    '"edits": "none" to SCOPE; its findings then go to separately scoped tasks. '
     'These bounds are measured after every editing call; an overrun stops the task '
     'with its work preserved. The line estimate has 50 percent tolerance. '
     'Estimate code lines and test lines separately and set max_lines to their sum: '
@@ -458,11 +460,10 @@ def is_design_task(spec) -> bool:
 
 
 def is_review_only(spec) -> bool:
-    """A task whose declared scope allows no real edit (``max_lines`` of 1 or
-    less): an audit, whatever its kind. Keyed on the ceiling, not the kind,
-    because review work can legitimately carry fixes."""
-    ceiling = getattr(getattr(spec, "scope", None), "max_lines", None)
-    return ceiling is not None and ceiling <= 1
+    """A task whose SCOPE declares ``"edits": "none"``: an audit. Only the
+    declaration counts; a one-line fix is still editing work (Codex review of
+    3d5c3f3), and the scope checks still measure whatever the call changes."""
+    return bool(getattr(getattr(spec, "scope", None), "review_only", False))
 
 
 #: The design instruction for a review-only task over UI files (Codex, Run

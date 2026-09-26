@@ -138,3 +138,34 @@ def test_a_render_of_an_unrelated_page_is_an_open_finding(tmp_path, monkeypatch)
     assert session.design_checks[0]["verified"] is True       # the render itself was clean
     assert any("do not show the changed interface" in f for f in session.open_findings)
     assert not session.completed
+
+
+# -- freshness follows source changes, on success and on failure (Codex review of 3d5c3f3) --
+
+@pytest.mark.parametrize("writes,raises,moves", [
+    (False, False, False),      # an unchanged call keeps earlier renders
+    (True, False, True),        # a changed call invalidates them
+    (True, True, True),         # a call that wrote, then failed, invalidates them too
+    (False, True, False),
+])
+def test_the_freshness_line_moves_only_when_source_changed(tmp_path, writes, raises, moves):
+    from quadratus.providers import ProviderError
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "a.txt").write_text("one\n")
+
+    def invoke(key, prompt, allow_writes=False):
+        if writes:
+            (root / "a.txt").write_text("two\n")
+        if raises:
+            raise ProviderError("stopped at the transport")
+        return "done\nCHANGED: []"
+
+    session = Session("goal", ArtifactStore(tmp_path / "artifacts"), invoke,
+                      config=SessionConfig(project=root, allow_writes=True))
+    session._last_edit_started = 1.0
+    try:
+        session._invoke_model("claude:opus", "edit", allow_writes=True)
+    except ProviderError:
+        pass
+    assert (session._last_edit_started != 1.0) is moves

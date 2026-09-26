@@ -245,9 +245,17 @@ _OVERFLOW_SCRIPT = """([viewport, limit]) => {
   const past = new Set();
   const all = document.querySelectorAll('body *');
   const scanned = Math.min(all.length, limit);
+  // Content that scrolls inside its own container is contained, not spilled:
+  // a wide table in an overflow-x:auto wrapper does not widen the document.
+  const contained = el => {
+    for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+      if (getComputedStyle(a).overflowX !== 'visible') return true;
+    }
+    return false;
+  };
   for (let i = 0; i < scanned; i++) {
     const box = all[i].getBoundingClientRect();
-    if (box.width > 0 && (box.right > viewport + 1 || box.left < -1)) past.add(all[i]);
+    if (box.width > 0 && (box.right > viewport + 1 || box.left < -1) && !contained(all[i])) past.add(all[i]);
   }
   const outermost = [...past].filter(el => !past.has(el.parentElement));
   const name = el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '')

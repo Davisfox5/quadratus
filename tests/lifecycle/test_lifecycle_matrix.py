@@ -842,8 +842,9 @@ def test_an_ordinary_command_check_keeps_exit_code_semantics(tmp_path, monkeypat
 
 # -- 13. Run 16: review-only design tasks, fixtures, freshness, reviewer evidence --------
 
-def _design_run(tmp_path, monkeypatch, *, max_lines=40, lead=None, revision=None, fix=None, review=None):
-    scope = dict(DESIGN, max_lines=max_lines)
+def _design_run(tmp_path, monkeypatch, *, max_lines=40, lead=None, revision=None, fix=None, review=None,
+                edits=None):
+    scope = dict(DESIGN, max_lines=max_lines, **({"edits": edits} if edits else {}))
     decl = "KIND: frontend standard\nSCOPE: " + json.dumps(scope) + "\nReview the import page."
     script = _design_script("Renders refreshed.\nCHANGED: []")
     script.overrides["orchestrator"] = lambda call, replay: decl if len(replay.of("orchestrator")) == 1 else DECL_T2
@@ -867,13 +868,36 @@ def _edits_and_captures(call, replay):
 
 def test_a_review_only_ui_task_is_told_to_report_not_repair(tmp_path, monkeypatch):
     """Codex, Run 16: a 1-line audit over UI paths was told to fix what it saw."""
-    replay = _design_run(tmp_path, monkeypatch, max_lines=1,
+    replay = _design_run(tmp_path, monkeypatch, max_lines=1, edits="none",
                          lead=lambda call, replay: "Looked; nothing captured yet.\nCHANGED: []")
     lead = replay.of("lead")[0].prompt
     assert "allows no source edits" in lead and "fix what is wrong" not in lead
     fix = replay.of("design-fix")[0].prompt
     assert "do not change project source" in fix and "Fix what the render shows" not in fix
     assert "finding for a separately scoped task" in fix
+
+
+def test_a_one_line_ui_fix_is_editing_work_not_an_audit(tmp_path, monkeypatch):
+    """Codex review of 3d5c3f3: max_lines 1 alone must not mean review-only."""
+    def lead(call, replay):
+        H.write(call, {"templates/index.html": "<button id=import>Import</button>\n"})
+        H.evidence(Path(call.cwd), "t1", age=0)
+        return 'Fixed the label.\nCHANGED: ["templates/index.html"]'
+    replay = _design_run(tmp_path, monkeypatch, max_lines=1, lead=lead)
+    prompt = replay.of("lead")[0].prompt
+    assert "fix what is wrong" in prompt and "allows no source edits" not in prompt
+    assert "<button id=import>" in _read(replay, "templates/index.html")
+
+
+def test_a_mislabelled_audit_that_edits_is_still_measured(tmp_path, monkeypatch):
+    """Review-only wording never relaxes the scope check: an out-of-scope
+    write still stops the task with the work preserved."""
+    def lead(call, replay):
+        H.write(call, {"README.md": "# app\n\nedited by an audit\n"})
+        return 'Audited.\nCHANGED: ["README.md"]'
+    replay = _design_run(tmp_path, monkeypatch, max_lines=1, edits="none", lead=lead)
+    assert "exceeded its declared scope" in replay.result.error
+    assert "edited by an audit" in _read(replay, "README.md")
 
 
 def test_a_ui_task_with_an_edit_budget_is_still_told_to_repair(tmp_path, monkeypatch):
@@ -884,7 +908,7 @@ def test_a_ui_task_with_an_edit_budget_is_still_told_to_repair(tmp_path, monkeyp
 
 
 def test_a_review_only_task_still_needs_evidence_and_keeps_its_findings(tmp_path, monkeypatch):
-    replay = _design_run(tmp_path, monkeypatch, max_lines=1, lead=_captures_now,
+    replay = _design_run(tmp_path, monkeypatch, max_lines=1, edits="none", lead=_captures_now,
                          review=lambda call, replay: "BLOCKING: the toolbar overflows at mobile width")
     record = json.loads(replay.artifact_texts("design-evidence")[0])
     assert record["verified"] is True
@@ -919,7 +943,7 @@ def test_a_capture_fixture_is_harness_state_not_a_source_change(tmp_path, monkey
         H.evidence(Path(call.cwd), "t1", age=H.FRESH)
         return "Wrote a capture fixture and re-captured.\nCHANGED: []"
 
-    replay = _design_run(tmp_path, monkeypatch, max_lines=1,
+    replay = _design_run(tmp_path, monkeypatch, max_lines=1, edits="none",
                          lead=lambda call, replay: "Looked; nothing captured yet.\nCHANGED: []", fix=fix)
     assert "CHANGED report" not in replay.result.error, "the fixture is not project source"
     assert (replay.project / ".quadratus" / "capture-fixtures" / "t1" / "rows.csv").is_file(), "kept for later"
@@ -934,6 +958,7 @@ def test_the_design_reviewer_can_read_the_renders_in_its_copy(tmp_path, monkeypa
         cwd = Path(call.cwd)
         seen["cwd_is_project"] = cwd == replay.project
         seen["files"] = sorted(p.relative_to(cwd).as_posix() for p in (cwd / ".quadratus").rglob("*") if p.is_file())
+        seen["png"] = (cwd / ".quadratus/design-evidence/t1/mobile/page.png").read_bytes()[:8]
         seen["prompt"] = call.prompt
         return "APPROVED"
 
@@ -942,5 +967,40 @@ def test_the_design_reviewer_can_read_the_renders_in_its_copy(tmp_path, monkeypa
     assert seen["files"] == [".quadratus/design-evidence/t1/desktop/page.png",
                              ".quadratus/design-evidence/t1/mobile/page.png",
                              ".quadratus/design-evidence/t1/summary.json"]
+    assert seen["png"] == b"\x89PNG\r\n\x1a\n", "the reviewer actually reads the image in its copy"
     assert ".quadratus/design-evidence/t1/desktop/page.png" in seen["prompt"]
     assert str(tmp_path) not in seen["prompt"].split("copied read-only")[1].split("\n")[0]
+
+
+
+def test_a_capture_after_the_revisions_edit_is_fresh(tmp_path, monkeypatch):
+    def revision(call, replay):
+        H.write(call, {"static/style.css": "#import { padding: 8px; }\n"})
+        H.evidence(Path(call.cwd), "t1", age=0)          # re-captured after its own edit
+        return 'Styled the button and re-captured.\nCHANGED: ["static/style.css"]'
+    replay = _design_run(tmp_path, monkeypatch, lead=_edits_and_captures, revision=revision)
+    assert not replay.of("design-fix")
+    assert json.loads(replay.artifact_texts("design-evidence")[0])["verified"] is True
+
+
+def test_consecutive_design_tasks_each_need_their_own_renders(tmp_path, monkeypatch):
+    """t1's renders sit in t1's folder; they never verify t2."""
+    second = dict(DESIGN, max_lines=40)
+    decl2 = "KIND: frontend standard\nSCOPE: " + json.dumps(second) + "\nPolish the import page."
+
+    def orchestrator(call, replay):
+        n = len(replay.of("orchestrator"))
+        return DECL_DESIGN if n == 1 else decl2
+
+    def lead(call, replay):
+        if call.task == "t1":
+            return _edits_and_captures(call, replay)
+        H.write(call, {"static/style.css": "#import { margin: 4px; }\n"})
+        return 'Polished.\nCHANGED: ["static/style.css"]'
+
+    script = _design_script("Renders refreshed.\nCHANGED: []")
+    script.overrides.update(orchestrator=orchestrator, lead=lead)
+    script.overrides["revision"] = lambda call, replay: "Nothing to change after review.\nCHANGED: []"
+    replay = H.run(tmp_path, monkeypatch, script, files=_design_files(), max_tasks=2)
+    fixes = [c.task for c in replay.of("design-fix")]
+    assert "t2" in fixes, "t2 captured nothing of its own, so it gets the fix call"
