@@ -838,3 +838,109 @@ def test_an_ordinary_command_check_keeps_exit_code_semantics(tmp_path, monkeypat
     plan = json.loads((replay.result.run_dir / "gate-plan.json").read_text())
     assert plan[0] == dict(id="check", argv=["true"], cwd=".", required=True, minimum_tests=None)
     assert [(g["id"].startswith("declared-python"), g["minimum_tests"]) for g in plan[1:]] == [(True, 1)]
+
+
+# -- 13. Run 16: review-only design tasks, fixtures, freshness, reviewer evidence --------
+
+def _design_run(tmp_path, monkeypatch, *, max_lines=40, lead=None, revision=None, fix=None, review=None):
+    scope = dict(DESIGN, max_lines=max_lines)
+    decl = "KIND: frontend standard\nSCOPE: " + json.dumps(scope) + "\nReview the import page."
+    script = _design_script("Renders refreshed.\nCHANGED: []")
+    script.overrides["orchestrator"] = lambda call, replay: decl if len(replay.of("orchestrator")) == 1 else DECL_T2
+    for role, handler in (("lead", lead), ("revision", revision), ("design-fix", fix),
+                          ("design-review", review)):
+        if handler is not None:
+            script.overrides[role] = handler
+    return H.run(tmp_path, monkeypatch, script, files=_design_files())
+
+
+def _captures_now(call, replay):
+    H.evidence(Path(call.cwd), "t1", age=0)       # written during this call, after it started
+    return "Captured the page; it shows the import button.\nCHANGED: []"
+
+
+def _edits_and_captures(call, replay):
+    H.write(call, {"templates/index.html": "<button id=import>Import</button>\n"})
+    H.evidence(Path(call.cwd), "t1", age=0)
+    return 'Added the button and captured it.\nCHANGED: ["templates/index.html"]'
+
+
+def test_a_review_only_ui_task_is_told_to_report_not_repair(tmp_path, monkeypatch):
+    """Codex, Run 16: a 1-line audit over UI paths was told to fix what it saw."""
+    replay = _design_run(tmp_path, monkeypatch, max_lines=1,
+                         lead=lambda call, replay: "Looked; nothing captured yet.\nCHANGED: []")
+    lead = replay.of("lead")[0].prompt
+    assert "allows no source edits" in lead and "fix what is wrong" not in lead
+    fix = replay.of("design-fix")[0].prompt
+    assert "do not change project source" in fix and "Fix what the render shows" not in fix
+    assert "finding for a separately scoped task" in fix
+
+
+def test_a_ui_task_with_an_edit_budget_is_still_told_to_repair(tmp_path, monkeypatch):
+    replay = _design_run(tmp_path, monkeypatch, max_lines=40,
+                         lead=lambda call, replay: "Looked; nothing captured yet.\nCHANGED: []")
+    assert "fix what is wrong" in replay.of("lead")[0].prompt
+    assert "Fix what the render shows is wrong" in replay.of("design-fix")[0].prompt
+
+
+def test_a_review_only_task_still_needs_evidence_and_keeps_its_findings(tmp_path, monkeypatch):
+    replay = _design_run(tmp_path, monkeypatch, max_lines=1, lead=_captures_now,
+                         review=lambda call, replay: "BLOCKING: the toolbar overflows at mobile width")
+    record = json.loads(replay.artifact_texts("design-evidence")[0])
+    assert record["verified"] is True
+    assert "overflows at mobile width" in record["final_review"]["verdict"]
+    assert not replay.result.completed, "a genuine finding is not suppressed by the audit wording"
+
+
+def test_an_unchanged_revision_keeps_fresh_renders(tmp_path, monkeypatch):
+    """Codex, Run 16: every write-enabled call reset freshness, changed or not."""
+    replay = _design_run(tmp_path, monkeypatch, max_lines=40,
+                         lead=_edits_and_captures,
+                         revision=lambda call, replay: "Nothing to change after review.\nCHANGED: []")
+    assert replay.of("revision"), "the revision ran"
+    assert not replay.of("design-fix"), "nothing changed after the capture, so it still stands"
+    assert json.loads(replay.artifact_texts("design-evidence")[0])["verified"] is True
+
+
+def test_a_changed_revision_still_invalidates_earlier_renders(tmp_path, monkeypatch):
+    replay = _design_run(tmp_path, monkeypatch, max_lines=40,
+                         lead=_edits_and_captures)
+    assert len(replay.of("design-fix")) == 1, "the revision changed style.css, so the capture predates it"
+    assert "predates this task" in json.loads(replay.artifact_texts("design-evidence")[0])["first_problem"]
+
+
+def test_a_capture_fixture_is_harness_state_not_a_source_change(tmp_path, monkeypatch):
+    """Codex, Run 16: a lead made a valid fixture in tests/, captured, then deleted it."""
+    def fix(call, replay):
+        from quadratus.design_evidence import fixture_dir
+        folder = fixture_dir(Path(call.cwd), "t1")
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "rows.csv").write_text("name\nalpha\n")
+        H.evidence(Path(call.cwd), "t1", age=H.FRESH)
+        return "Wrote a capture fixture and re-captured.\nCHANGED: []"
+
+    replay = _design_run(tmp_path, monkeypatch, max_lines=1,
+                         lead=lambda call, replay: "Looked; nothing captured yet.\nCHANGED: []", fix=fix)
+    assert "CHANGED report" not in replay.result.error, "the fixture is not project source"
+    assert (replay.project / ".quadratus" / "capture-fixtures" / "t1" / "rows.csv").is_file(), "kept for later"
+    assert json.loads(replay.artifact_texts("design-evidence")[0])["verified"] is True
+
+
+def test_the_design_reviewer_can_read_the_renders_in_its_copy(tmp_path, monkeypatch):
+    """Codex, Run 16: the reviewer's reads of the renders outside its copy were denied."""
+    seen = {}
+
+    def review(call, replay):
+        cwd = Path(call.cwd)
+        seen["cwd_is_project"] = cwd == replay.project
+        seen["files"] = sorted(p.relative_to(cwd).as_posix() for p in (cwd / ".quadratus").rglob("*") if p.is_file())
+        seen["prompt"] = call.prompt
+        return "APPROVED"
+
+    _design_run(tmp_path, monkeypatch, max_lines=40, review=review)
+    assert seen["cwd_is_project"] is False, "a fresh source copy, not the project"
+    assert seen["files"] == [".quadratus/design-evidence/t1/desktop/page.png",
+                             ".quadratus/design-evidence/t1/mobile/page.png",
+                             ".quadratus/design-evidence/t1/summary.json"]
+    assert ".quadratus/design-evidence/t1/desktop/page.png" in seen["prompt"]
+    assert str(tmp_path) not in seen["prompt"].split("copied read-only")[1].split("\n")[0]

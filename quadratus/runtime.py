@@ -389,6 +389,8 @@ class Fleet:
                                          partial=dict(changed=changed, inspected=True, reply=reply))
             return reply
         with self.project.snapshot() as directory:
+            _furnish_evidence(self.project.root, directory,
+                              (invocation_context.get() or {}).get("evidence_files") or ())
             view = provider.in_directory(directory, allow_writes=False)
             if verifying:
                 view.native_fanout_off = True
@@ -770,3 +772,50 @@ def _add_missing_headers(patch: str, prompt: str, root) -> str:
 def _looks_exhausted(exc: Exception) -> bool:
     text = str(exc).lower()
     return any(marker in text for marker in _EXHAUSTION_MARKERS)
+
+
+#: Rendered design evidence a review call may be handed: exactly these file
+#: names under a task's evidence folder, and no more than this many or this big.
+_EVIDENCE_PATH = re.compile(
+    r"\.quadratus/design-evidence/[A-Za-z0-9][A-Za-z0-9_.-]*/"
+    r"(?:summary\.json|(?:desktop|mobile)/(?:page\.png|evidence\.json))")
+_MAX_EVIDENCE_FILES = 8
+_MAX_EVIDENCE_BYTES = 10_000_000
+
+
+def _furnish_evidence(root, directory, paths) -> list:
+    """Copy declared design evidence into a review call's source copy.
+
+    Codex, Run 16: the reviewer was pointed at renders under the project's
+    .quadratus folder, which the source copy excludes, and its reads outside
+    the copy were denied, so it judged no image. The exact files a session
+    names are copied in read-only at the same relative paths instead; there
+    is no new read grant. Only a task's own evidence files qualify: regular,
+    not symlinked at any component, bounded in count and size. Anything
+    else is skipped. Returns the paths copied.
+    """
+    import shutil as _shutil
+    root = Path(root)
+    copied = []
+    for rel in list(paths)[:_MAX_EVIDENCE_FILES]:
+        rel = str(rel)
+        if not _EVIDENCE_PATH.fullmatch(rel):
+            continue
+        current = root
+        linked = False
+        for part in Path(rel).parts:
+            current = current / part
+            if current.is_symlink():
+                linked = True
+                break
+        try:
+            if linked or not current.is_file() or current.stat().st_size > _MAX_EVIDENCE_BYTES:
+                continue
+            target = Path(directory) / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _shutil.copyfile(current, target)
+            target.chmod(0o444)
+        except OSError:
+            continue
+        copied.append(rel)
+    return copied

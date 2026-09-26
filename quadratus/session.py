@@ -457,6 +457,30 @@ def is_design_task(spec) -> bool:
     return any(_UI_PATH.search(str(p)) for p in paths)
 
 
+def is_review_only(spec) -> bool:
+    """A task whose declared scope allows no real edit (``max_lines`` of 1 or
+    less): an audit, whatever its kind. Keyed on the ceiling, not the kind,
+    because review work can legitimately carry fixes."""
+    ceiling = getattr(getattr(spec, "scope", None), "max_lines", None)
+    return ceiling is not None and ceiling <= 1
+
+
+#: The design instruction for a review-only task over UI files (Codex, Run
+#: 16: a zero-edit audit was told to "fix what is wrong", which a one-line
+#: budget cannot do). Evidence is still required and findings still stand;
+#: repairs become findings for a separately scoped task.
+_DESIGN_REVIEW_ONLY = (
+    "This task reviews interface files and allows no source edits, so capture the page at "
+    "a desktop and a mobile width with exactly this command (it writes the screenshots the "
+    "harness checks):\n"
+    "    {command}\n"
+    "Look at both screenshots and at the console errors and failed requests it reports. Do "
+    "not change project source to fix what you see: report each problem that needs a "
+    "source change as a finding for a separately scoped task, with the evidence for it. "
+    "Without both screenshots from this task, the review is recorded as unverified."
+    + "\n" + "{shows}"
+)
+
 _DESIGN_SELF_VERIFY = (
     "This task changes what users see, so you verify it yourself before you finish. "
     "Start the app if it needs a server, then capture the page at a desktop and a mobile "
@@ -481,8 +505,10 @@ _DESIGN_RENDER_SHOWS = (
     "command, in order: --click SELECTOR, --wait SELECTOR (waits until it is visible), "
     "--upload SELECTOR project/relative/fixture (two arguments; a non-secret, "
     "non-hidden file inside the project). "
-    "For an upload, use a valid sample of what the control accepts (a file of that "
-    "format inside the task's scope, created as part of the task if none exists); an "
+    "For an upload, use a valid sample of what the control accepts: one already in the "
+    "project, or a capture-only sample you write to .quadratus/capture-fixtures/<task id>/ "
+    "(harness state, not project source: it needs no CHANGED entry and stays for later "
+    "captures, so never create a sample in the source tree and delete it again); an "
     "error response to it, or a file the input's accept list excludes, leaves the "
     "evidence unverified. Finish with a --wait on an element that only the result "
     "creates (for example a result row), never one already on the page at load such as "
@@ -826,9 +852,11 @@ class Session:
         self._batch: List[TaskSpec] = []
         self.parallel_batches: List[dict] = []
         self._design_note = ""
+        #: Evidence files the current task's review calls are handed.
+        self._review_evidence: List[str] = []
         self._task_started: Optional[float] = None
-        #: When the most recent editing call began: renders older than this
-        #: show a tree that has since changed.
+        #: When the most recent editing call that changed source began:
+        #: renders older than this show a tree that has since changed.
         self._last_edit_started: Optional[float] = None
         self.design_checks: List[dict] = []
         self.requirement_audits: List[dict] = []
@@ -836,9 +864,16 @@ class Session:
 
     def _invoke_model(self, key, prompt, *, allow_writes=False):
         context = invocation_context.get() or dict(task="run", role="direct", origin="seat")
+        # Renders are stale once source changes, not once a write-enabled call
+        # happens (Codex, Run 16: a revision and a design-fix that changed
+        # nothing invalidated fresh captures). The call's start becomes the
+        # freshness line only if the source differs afterwards; if either
+        # side cannot be read, it does, which never keeps a stale render.
+        edit_started, source_before = None, None
         if allow_writes and context.get("origin") != "worker":
             import time as _time
-            self._last_edit_started = _time.time()
+            edit_started = _time.time()
+            source_before = self._source_fingerprint()
         self._active_call = dict(context, model=key, allow_writes=allow_writes)
         spec = self._active_spec
         if (context.get("role") != "closeout" and context.get('origin') != 'worker'
@@ -853,6 +888,9 @@ class Session:
                 prompt += "\nOperator limits (also binding):\n" + self.config.default_scope.render()
         if context.get("role") == "lead" and getattr(self, "_worker_tool", None):
             context = dict(context, worker_tool=self._worker_tool)
+        if (not allow_writes and context.get("role") in ("collaborator", "recheck", "design-review")
+                and getattr(self, "_review_evidence", None)):
+            context = dict(context, evidence_files=tuple(self._review_evidence))
         # Every prompt is kept, not only an interrupted one: without it there was
         # no proof of which packet or instructions a seat actually received.
         try:
@@ -884,8 +922,24 @@ class Session:
                 except Exception:
                     log.debug("could not preserve interrupted prompt", exc_info=True)
             raise
+        finally:
+            if edit_started is not None:
+                after = self._source_fingerprint()
+                if source_before is None or after is None or after != source_before:
+                    self._last_edit_started = edit_started
         self._active_call = {}
         return reply
+
+    def _source_fingerprint(self) -> Optional[str]:
+        """The selected project's source fingerprint (excludes applied), or None."""
+        if not self.project:
+            return None
+        try:
+            from .project import Project
+            return Project(self.project, exclude=self.config.project_excludes).fingerprint()
+        except Exception:  # noqa: BLE001 -- unknown, which callers treat as changed
+            log.debug("could not fingerprint project source", exc_info=True)
+            return None
 
     def _edit(self, key, prompt, *, role="revision"):
         """An editing call, with the tree inspected before anything is replayed.
@@ -2350,10 +2404,12 @@ class Session:
             return
         from .design_evidence import check
         ok, _, shots = check(self.project, spec.task_id, self._last_edit_started or 0)
+        self._review_evidence = []
         if ok:
+            self._review_evidence = self._evidence_files(spec, shots)
             self._design_note = (
-                "\n\nThe lead's rendered evidence for this draft (read these files; they are "
-                "outside your source copy on purpose): " + ", ".join(shots)
+                "\n\nThe lead's rendered evidence for this draft, copied read-only into your "
+                "working copy at these paths: " + ", ".join(self._shown(shots))
                 + ". Judge the design from the screenshots as well as the code.")
 
     def _check_design(self, spec, lead, collaborators, task) -> None:
@@ -2383,12 +2439,20 @@ class Session:
             package_root = Path(__file__).resolve().parent.parent
             command = (f"PYTHONPATH={package_root} {_sys.executable} -m quadratus.design_evidence "
                        f"<url of the page> {spec.task_id} .")
+            if is_review_only(spec):
+                # An audit re-captures and reports; it never repairs source.
+                action = ("This task allows no source edits: do not change project source. Capture it "
+                          f"again with exactly:\n    {command}\n" + _DESIGN_RENDER_SHOWS + "\nIf the "
+                          "render shows a problem that needs a source change, report it as a finding for "
+                          "a separately scoped task. Report what the new screenshots show. ")
+            else:
+                action = (f"Fix what the render shows is wrong, then capture it again with exactly:\n"
+                          f"    {command}\n" + _DESIGN_RENDER_SHOWS + "\nReport what you changed and "
+                          "what the new screenshots show. ")
             self._edit(lead, (
                 f"Task: {spec.description}\n\nThe rendered evidence for this design task is missing "
-                f"or shows a broken page: {problem}.\nFix what the render shows is wrong, then capture "
-                f"it again with exactly:\n    {command}\n" + _DESIGN_RENDER_SHOWS + "\nReport what "
-                "you changed and what the new screenshots show. " + self._revision_delivery() + _design_fix_delivery(
-                    self._interim_edits_note())), role="design-fix")
+                f"or shows a broken page: {problem}.\n" + action + self._revision_delivery()
+                + _design_fix_delivery(self._interim_edits_note())), role="design-fix")
             self._run_integration_gate(lead, spec, task)
             ok, problem, shots = check(self.project, spec.task_id, self._last_edit_started or 0)
         record.update(verified=ok, problem=problem, screenshots=shots)
@@ -2412,12 +2476,35 @@ class Session:
         self.design_checks.append(record)
         task.keep(json.dumps(record), kind="design-evidence")
 
+    def _evidence_files(self, spec, shots) -> List[str]:
+        """Project-relative evidence files behind ``shots``, for the Fleet to
+        copy into a review call's source copy (see runtime._furnish_evidence)."""
+        from .design_evidence import evidence_dir
+        folder = evidence_dir(self.project, spec.task_id)
+        files = [folder / "summary.json"]
+        for view in ("desktop", "mobile"):
+            files += [folder / view / "page.png", folder / view / "evidence.json"]
+        root = Path(self.project)
+        return [f.relative_to(root).as_posix() for f in files if f.is_file()]
+
+    def _shown(self, shots) -> List[str]:
+        """``shots`` with absolute screenshot paths made project-relative."""
+        out = []
+        for shot in shots:
+            path = Path(shot)
+            if path.is_absolute() and self.project and path.is_relative_to(Path(self.project)):
+                out.append(path.relative_to(Path(self.project)).as_posix())
+            else:
+                out.append(shot)
+        return out
+
     def _final_design_review(self, spec, reviewer, shots) -> str:
         """The cross-vendor reviewer judges the final renders, not the draft's."""
+        self._review_evidence = self._evidence_files(spec, shots)
         prompt = (
             f"Task: {spec.description}\n\nThese are the final renders of this design work, taken "
-            "after its last edit (read these files; they are outside your source copy on purpose): "
-            + ", ".join(shots) + _DESIGN_REVIEW_LENS
+            "after its last source change, copied read-only into your working copy at these paths: "
+            + ", ".join(self._shown(shots)) + _DESIGN_REVIEW_LENS
             + "\n\nFirst check that the renders show the interface this task added or changed. "
             "If they show a page where that interface does not appear, reply exactly "
             "'BLOCKING: the renders do not show the changed interface' and judge nothing else: "
@@ -2995,7 +3082,8 @@ class Session:
             package_root = Path(__file__).resolve().parent.parent
             command = (f"PYTHONPATH={package_root} {_sys.executable} -m quadratus.design_evidence "
                        f"<url of the page> {spec.task_id} .")
-            parts.append(_DESIGN_SELF_VERIFY.format(command=command, shows=_DESIGN_RENDER_SHOWS))
+            template = _DESIGN_REVIEW_ONLY if is_review_only(spec) else _DESIGN_SELF_VERIFY
+            parts.append(template.format(command=command, shows=_DESIGN_RENDER_SHOWS))
         # Stated before the work, checked after it. Telling a model its bound
         # helps some; measuring the diff is what makes the bound real, and
         # both happen -- see _assess_scope.
