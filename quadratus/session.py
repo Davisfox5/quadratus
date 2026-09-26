@@ -328,6 +328,9 @@ class SessionConfig:
     #: WorkerBridge, so delegating no longer ends the lead's session. The
     #: WORKER reply stays for write errands and CLIs without the tool.
     in_session_workers: bool = True
+    #: Spread simple and standard leads across vendors by how many tasks each
+    #: has led this run (see Session._spread_lead).
+    spread_leads: bool = True
     #: Design and UI work is verified by the model that did it: the lead is
     #: told to look at the rendered result at desktop and mobile widths and
     #: report what it saw. Davis's ruling, 2026-09-25.
@@ -730,6 +733,7 @@ class Session:
         self._done_refusal = ""
         self._requirement_reopens = 0
         self._covers_corrections = 0
+        self._leads_by_vendor: dict = {}
         self._design_note = ""
         self._task_started: Optional[float] = None
         #: When the most recent editing call began: renders older than this
@@ -904,7 +908,37 @@ class Session:
             raise RunStalled(str(exc)) from exc
         if selected is None:
             raise RunStalled("No available lead satisfies this task's requirements.")
+        selected = self._spread_lead(spec, selected)
+        vendor = selected.partition(":")[0]
+        self._leads_by_vendor[vendor] = self._leads_by_vendor.get(vendor, 0) + 1
         return selected
+
+    def _spread_lead(self, spec: TaskSpec, selected: str) -> str:
+        """Where the model does not matter, give the task to the least-used vendor.
+
+        Davis, 2026-09-25: divide the load as much as possible when the task
+        is such that the model does not matter -- the harness (gates, review,
+        scope, ledger) carries the quality. Run 6 had grok lead every one of
+        nine slices because each was labelled simple. Spreading applies to
+        simple and standard work of a kind with no measured pin; complex work
+        keeps its rung, and a pinned kind keeps its pin.
+        """
+        if not self.config.spread_leads or spec.complexity not in (Complexity.SIMPLE, Complexity.STANDARD):
+            return selected
+        if policy_for(spec.kind).prefer:
+            return selected
+        eligible = [p for p in self.brain_trust
+                    if self._available(p) and seat_satisfies(p, spec.needs)]
+        if not eligible:
+            return selected
+        load = self._leads_by_vendor
+        least = min(load.get(p.partition(":")[0], 0) for p in eligible)
+        if load.get(selected.partition(":")[0], 0) == least:
+            return selected
+        choice = next(p for p in eligible if load.get(p.partition(":")[0], 0) == least)
+        self._note(f"lead spread to {choice} (ladder named {selected}; vendor load "
+                   + ", ".join(f"{v} {n}" for v, n in sorted(load.items())) + ")")
+        return choice
 
     def collaborators_for(self, spec: TaskSpec, lead: str) -> List[str]:
         """Which other peers help with this task.

@@ -803,3 +803,25 @@ def test_every_worker_tree_seat_is_bounded():
     from quadratus.workers import DEFAULT_WORKER, WORKER_ESCALATION, WORKER_TREE
     for key in set(WORKER_TREE.values()) | set(WORKER_ESCALATION.values()) | {DEFAULT_WORKER}:
         assert resolve(key).restricted, key
+
+
+def test_codex_usage_is_recovered_from_its_session_record(tmp_path):
+    """GameTape run 6: a dropped stream stopped the run on unknown usage."""
+    import json as _json
+
+    from quadratus.cli_providers import _codex_rollout_usage
+    sid = "01a0dab8-8947-72f1-9283-8b4b15408d54"
+    folder = tmp_path / "2026" / "09" / "25"
+    folder.mkdir(parents=True)
+    empty = {"type": "event_msg", "payload": {"type": "token_count", "info": None}}
+    (folder / f"rollout-2026-09-25T22-38-41-{sid}.jsonl").write_text(_json.dumps(empty) + "\n")
+    assert _codex_rollout_usage(tmp_path, sid) == {
+        "input_tokens": 0, "output_tokens": 0, "usage_source": "codex session record: no tokens consumed"}
+    used = {"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {
+        "input_tokens": 900, "cached_input_tokens": 400, "output_tokens": 50, "reasoning_output_tokens": 10}}}}
+    (folder / f"rollout-2026-09-25T22-38-41-{sid}.jsonl").write_text(
+        _json.dumps(empty) + "\n" + _json.dumps(used) + "\n")
+    got = _codex_rollout_usage(tmp_path, sid)
+    assert got["input_tokens"] == 900 and got["output_tokens"] == 60
+    assert _codex_rollout_usage(tmp_path, "missing-session-id") is None
+    assert _codex_rollout_usage(tmp_path, "../../etc") is None
