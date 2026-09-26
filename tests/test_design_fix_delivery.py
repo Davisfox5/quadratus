@@ -29,7 +29,7 @@ def cli_environment(monkeypatch):
         monkeypatch.delenv(f'QUADRATUS_CLI_ARGS_{vendor}', raising=False)
 
 
-def _run(tmp_path, monkeypatch, fix_reply):
+def _run(tmp_path, monkeypatch, fix_reply, review="APPROVED"):
     root = tmp_path / "project"
     (root / "templates").mkdir(parents=True)
     (root / "templates" / "index.html").write_text("<button>Import</button>\n")
@@ -45,7 +45,7 @@ def _run(tmp_path, monkeypatch, fix_reply):
         if "rendered evidence for this design task is missing" in prompt:
             _fake_evidence(root)          # fresh renders, written by the capture command
             return fix_reply
-        return "APPROVED"                  # the cross-vendor final review
+        return review                      # the cross-vendor final review
     monkeypatch.setattr(fleet, "_generate", generate)
 
     session = Session("goal", ArtifactStore(tmp_path / "artifacts"), fleet.invoke,
@@ -97,3 +97,31 @@ def test_the_fix_prompt_without_earlier_edits_still_states_the_rule(tmp_path):
     text = _design_fix_delivery("")
     assert text.startswith("\nYour CHANGED line lists only files this call itself")
     assert "CHANGED: []" in text
+
+
+# -- renders must show the changed interface (Run 12 grade, 2026-09-26) ----------
+
+def test_every_capture_instruction_asks_for_the_changed_interface(tmp_path, monkeypatch):
+    from quadratus.session import _DESIGN_RENDER_SHOWS
+    _, prompts, _ = _run(tmp_path, monkeypatch, "Renders captured.\nCHANGED: []")
+    fix = next(p for _, p in prompts if "rendered evidence for this design task is missing" in p)
+    review = next(p for _, p in prompts if "final renders" in p)
+    assert _DESIGN_RENDER_SHOWS in fix
+    assert "not evidence for this task" in fix
+    assert "BLOCKING: the renders do not show the changed interface" in review
+
+
+def test_the_lead_prompt_for_design_work_carries_the_rule(tmp_path):
+    from quadratus.session import _DESIGN_RENDER_SHOWS
+    session = Session("goal", ArtifactStore(tmp_path / "a"), lambda *a, **k: "",
+                      config=SessionConfig(project=tmp_path, allow_writes=True))
+    assert _DESIGN_RENDER_SHOWS in session._lead_prompt(_ui())
+
+
+def test_a_render_of_an_unrelated_page_is_an_open_finding(tmp_path, monkeypatch):
+    """A clean render that does not show the change blocks the task."""
+    verdict = "BLOCKING: the renders do not show the changed interface"
+    session, _, _ = _run(tmp_path, monkeypatch, "Renders captured.\nCHANGED: []", review=verdict)
+    assert session.design_checks[0]["verified"] is True       # the render itself was clean
+    assert any("do not show the changed interface" in f for f in session.open_findings)
+    assert not session.completed
