@@ -555,20 +555,34 @@ def test_the_first_lead_is_handed_its_scoped_files_as_they_are(tmp_path, monkeyp
     assert "### tests/test_app.py" in pack and "assert add(1, 2) == 3" in pack
 
 
-def test_a_zero_write_cap_hands_its_continuation_the_files_and_says_so(tmp_path, monkeypatch):
+@pytest.mark.parametrize("narration,act", [
+    ("I'll look at the tests next", None),                              # reading, by its own account
+    ("The write was denied; no file changed.", None),                   # a failed write
+    ("Ran the test suite; 3 passed.", None),                            # checks only
+    ("Tried a README change and reverted it.", "revert"),               # edit, then revert
+])
+def test_a_cap_with_no_detected_change_hands_over_the_files_and_claims_nothing_more(
+        tmp_path, monkeypatch, narration, act):
+    """Codex review of 895cf67: zero changed files does not say the rounds went to reading."""
     def lead(call, replay):
         if call.task == "t1":
-            return H.grok_ok("I'll look at the tests next", stop="cancelled", num_turns=14)
+            if act == "revert":
+                original = Path(call.cwd, "README.md").read_text()
+                H.write(call, {"README.md": "# app\n\nchanged then\n"})
+                H.write(call, {"README.md": original})
+            return H.grok_ok(narration, stop="cancelled", num_turns=14)
         return _finish(call, replay)
 
     replay = _run(tmp_path, monkeypatch, Script(orchestrator=_continuing(DECL_T2), lead=lead), max_tasks=2,
                   files=FILES_OK, settings=Settings(backend="cli", lead_max_turns=14))
     assert replay.result.error == "" and _gate_passed(replay)
-    assert "It wrote nothing: its rounds went to reading" in replay.of("orchestrator")[1].prompt
+    assert "No change to project files was detected after it stopped" in replay.of("orchestrator")[1].prompt
     second = [c for c in replay.of("lead") if c.task == "t2"][0].prompt
     handoff = _section(second, "## Handoff from t1")
-    assert "stopped at its round limit after 14 rounds" in handoff and "It wrote nothing" in handoff
-    assert "narration and not a result: I'll look at the tests next" in handoff
+    assert "stopped at its round limit after 14 rounds" in handoff
+    assert "No change to project files was detected after it stopped" in handoff
+    assert "reading" not in handoff.replace(narration, ""), "the harness claims nothing about the rounds"
+    assert f"narration and not a result: {narration}" in handoff
     pack = _section(second, "## Project files, read by the harness")
     assert "### app.py" in pack and "### tests/test_app.py" in pack and "### README.md" in pack
     assert "This call has at most 14 tool rounds" in second
@@ -622,3 +636,30 @@ def test_secret_hidden_and_linked_files_in_a_scope_never_reach_a_prompt(tmp_path
     pack = _section(replay.of("lead")[0].prompt, "## Project files, read by the harness")
     assert "config/api_token.txt (a credential-like name)" in pack and "docs/.draft.md (hidden" in pack
     assert "tests/*.py (a pattern, not a file)" in pack and "linked.py (goes through a symlink)" in pack
+
+
+def test_a_tail_edit_in_a_long_file_reaches_the_continuation_as_a_window(tmp_path, monkeypatch):
+    """Codex review of 895cf67: a prefix cut at line 297 of 1,669 hid the capped call's tail edit."""
+    long_file = "".join(f"line_{i:04d} = {i}  # filler text to make the file long\n" for i in range(1, 1601))
+    scope = dict(T2, permitted_paths=["README.md", "notes/long.py"], max_lines=40)
+    decl = "KIND: docs simple\nSCOPE: " + json.dumps(scope) + "\nDocument add in README.md."
+
+    def lead(call, replay):
+        if call.task == "t1":
+            text = Path(call.cwd, "notes/long.py").read_text().replace(
+                "line_1590 = 1590", "line_1590 = 'EDITED NEAR THE TAIL'")
+            H.write(call, {"notes/long.py": text})
+            return H.grok_ok("I'll wire the tail helper next", stop="cancelled", num_turns=14)
+        return _finish(call, replay)
+
+    replay = _run(tmp_path, monkeypatch, Script(orchestrator=_continuing(decl), lead=lead), max_tasks=2,
+                  files={**FILES_OK, "notes/long.py": long_file},
+                  settings=Settings(backend="cli", lead_max_turns=14))
+    first = [c for c in replay.of("lead") if c.task == "t1"][0].prompt
+    assert "cut at" in _section(first, "### notes/long.py"), "no capped predecessor: a prefix, marked"
+    second = [c for c in replay.of("lead") if c.task == "t2"][0].prompt
+    entry = _section(second, "## Project files, read by the harness")
+    entry = entry[entry.index("### notes/long.py"):]
+    assert "(1600 lines, sha256 " in entry and "showing only lines 1584-1596" in entry
+    assert "--- lines 1584-1596 ---" in entry and "EDITED NEAR THE TAIL" in entry
+    assert "line_0001 = 1" not in entry, "the window, not the prefix"

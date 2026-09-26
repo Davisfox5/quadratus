@@ -594,6 +594,7 @@ def _handoff_note(record: dict) -> str:
     Only harness-held facts: the call's rounds, the files the tree shows it
     changed, and its last text, labelled as narration. Run 14's continuation
     repeated its predecessor's discovery because none of this reached it.
+    Nothing is inferred about what the rounds were spent on.
     """
     task, lead, turns = record.get("task"), record.get("lead"), record.get("turns")
     changed = record.get("changed") or []
@@ -605,8 +606,11 @@ def _handoff_note(record: dict) -> str:
                      "unreviewed and unchecked. Those files are below as they are now: build on "
                      "them and do not assume any of it is finished.")
     else:
-        lines.append("It wrote nothing: its rounds went to reading. The task's files are below as "
-                     "they are now, so do not repeat that reading.")
+        # Only what the tree shows. Zero changed files does not say what the
+        # rounds went to: a denied write, a check, or an edit then reverted
+        # all look the same from here (Codex review of 895cf67).
+        lines.append("No change to project files was detected after it stopped. The task's "
+                     "files are below as they are now.")
     said = (record.get("partial_text") or "").strip()
     if said:
         lines.append(f"Its last words, which are narration and not a result: {said[:300]}")
@@ -793,6 +797,9 @@ class Session:
         self.turn_limited_records: Dict[str, dict] = {}
         #: The capped task the task now running continues, if any.
         self._continues: Optional[str] = None
+        #: Each capped task's starting content for the files it changed, so
+        #: a continuation can be shown what changed rather than a prefix.
+        self._cap_baselines: Dict[str, Dict[str, bytes]] = {}
         #: Why the run stopped when no exception said so (the consecutive
         #: turn-limit breaker). Empty otherwise. ``project_run`` reports it as
         #: the run's error so a breaker stop is never an unexplained blank.
@@ -1827,14 +1834,18 @@ class Session:
                       note=state["note"], partial_text=said[:4000] or None)
         task.keep(json.dumps(record), kind="turn-limited", author=lead)
         self.turn_limited_records[spec.task_id] = record
+        from .project_files import MAX_INSPECT_BYTES
+        self._cap_baselines[spec.task_id] = {
+            path: (before or {}).get(path, b"") for path in state["changed"]
+            if len((before or {}).get(path, b"")) <= MAX_INSPECT_BYTES}
         changed = ", ".join(state["changed"]) or "no files"
         summary_text = (
             "STOPPED AT THE LEAD TURN LIMIT before finishing"
             + (f" ({exc.turns} turns)" if exc.turns else "")
             + f". Changed, unreviewed and ungated: {changed}"
             + (f" ({state['changed_lines']} lines)" if state["changed"]
-               else ". It wrote nothing: its rounds went to reading, and the continuation "
-                    "is handed the task's files so it need not repeat that")
+               else ". No change to project files was detected after it stopped; the "
+                    "continuation is handed the task's files as they are now")
             + ". This task is not done: name the remaining work as a new, smaller task "
               f"whose description includes the line 'CONTINUES: {spec.task_id}', "
               "and do not assume any of it is finished. Size max_lines for the remaining "
@@ -2904,7 +2915,8 @@ class Session:
             paths.extend(record.get("changed") or [])
         if spec.scope is not None:
             paths.extend(p for p in spec.scope.permitted_paths if spec.scope.permits(p))
-        included, refused = context_pack(self.project, paths, exclude=self.config.project_excludes)
+        included, refused = context_pack(self.project, paths, exclude=self.config.project_excludes,
+                                         baselines=self._cap_baselines.get(self._continues or ""))
         pack = render_pack(included, refused)
         if pack:
             blocks.append(pack)
