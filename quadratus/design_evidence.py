@@ -245,8 +245,13 @@ def _step_problem(view: str, requested, done) -> Optional[str]:
     if last and last["action"] == "wait" and done[-1].get("visible_before_steps") is True:
         # Codex, Run 15: the final wait named an element present at load, so
         # the capture passed whether or not the feature produced anything.
+        # Insufficient evidence, not proof the feature failed: a valid flow
+        # can update a region that was already showing. The selector can
+        # name the new state itself, which keeps the step vocabulary as is.
         return (f"the {view} render's final wait ({last['selector'][:80]}) was already visible before "
-                "any step ran, so it does not show the change; wait on something only the result creates")
+                "any step ran, so seeing it is not evidence of the change; wait on a state only the "
+                "result creates, which the selector can name (for example [data-state=done] or "
+                "#results tr)")
     return None
 
 
@@ -322,11 +327,12 @@ def _check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
         if abs(width - viewport["width"]) > 64:
             view = summary["views"].get(name) or {}
             offenders = [o for o in (view.get("overflow") or []) if isinstance(o, dict)][:5]
-            named = ", ".join(f"{str(o.get('element'))[:80]} (right edge {o.get('right')}px, "
-                              f"{o.get('width')}px wide)" for o in offenders)
+            named = ", ".join(f"{str(o.get('element'))[:80]} (past the {o.get('side', 'right')} edge: "
+                              f"left {o.get('left')}px, right {o.get('right')}px, {o.get('width')}px wide)"
+                              for o in offenders)
             problems.append(f"the {name} screenshot is {width}px wide, not ~{viewport['width']}px"
-                            + (f"; the page overflows its {viewport['width']}px viewport; elements past the "
-                               f"right edge: {named}" if named else ""))
+                            + (f"; the page overflows its {viewport['width']}px viewport; elements past its "
+                               f"edges: {named}" if named else ""))
             continue
         shots.append(str(shot))
     if not problems and summary is not None:

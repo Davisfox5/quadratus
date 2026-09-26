@@ -615,4 +615,60 @@ def test_mobile_overflow_names_the_elements_past_the_edge(tmp_path, browser):
     assert out["desktop"]["overflow"] == []
     passed, problem, _ = check(root, "t1", 0)
     assert not passed
-    assert "the page overflows its 390px viewport; elements past the right edge: table#tags.grid.dense" in problem
+    assert ("the page overflows its 390px viewport; elements past its edges: table#tags.grid.dense "
+            "(past the right edge: left ") in problem
+
+
+
+EDGES = """<!doctype html><title>edges</title>
+<div id=banner style="position:fixed;top:0;left:-40px;width:200px">banner</div>
+<table id=tags><tr><td style="min-width:600px"><span id=pin style="position:sticky;left:0">pin</span></td></tr></table>
+"""
+
+
+def test_overflow_names_both_edges_and_only_outermost_elements(tmp_path, browser):
+    root = _accepting(tmp_path)
+    (root / "edges.html").write_text(EDGES)
+    out = _capture(root, "edges.html", None)
+    named = {o["element"]: o for o in out["mobile"]["overflow"]}
+    assert named["div#banner"]["side"] == "left" and named["div#banner"]["left"] == -40, "fixed, left escape"
+    assert named["table#tags"]["side"] == "right"
+    assert not any(e.startswith(("span", "td", "tr", "tbody")) for e in named), "descendants are not listed"
+
+
+def test_the_overflow_scan_is_bounded(tmp_path, browser, monkeypatch):
+    from quadratus import browser as b
+    monkeypatch.setattr(b, "OVERFLOW_SCAN_LIMIT", 3)
+    root = _accepting(tmp_path)
+    (root / "late.html").write_text("<!doctype html><title>late</title><p>a</p><p>b</p><p>c</p>"
+                                    "<table id=late><tr><td style='min-width:600px'>x</td></tr></table>")
+    out = _capture(root, "late.html", None)
+    assert out["mobile"]["document_width"] > 390, "the gate still sees the width"
+    assert out["mobile"]["overflow"] == [], "an element past the scan limit is not examined"
+    assert not check(root, "t1", 0)[0]
+
+
+@pytest.mark.parametrize("accept,path,ok", [
+    (".csv", "fixtures/rows.csv", True),
+    (".csv", "fixtures/ROWS.CSV", True),                      # uppercase extension
+    (".CSV", "fixtures/rows.csv", True),
+    ("text/csv", "fixtures/rows.csv", True),                  # MIME form
+    ("text/*", "fixtures/rows.csv", True),                    # wildcard MIME
+    ("image/png, .csv", "fixtures/rows.csv", True),           # mixed list, spaces
+    (".json,application/json", "fixtures/rows.csv", False),
+    (".csv", "docs/IMPORT.md", False),
+    ("text/csv", "docs/notes.md", False),
+    (" , ", "docs/IMPORT.md", False),                         # only empty tokens: nothing admitted
+])
+def test_accept_is_matched_by_name_and_type(accept, path, ok):
+    """A filter hint only: a matching .csv can still be invalid, which the
+    HTTP/result checks decide."""
+    from quadratus.browser import _accepts
+    assert _accepts(accept, path) is ok
+
+
+def test_an_input_without_accept_takes_any_fixture(tmp_path, browser):
+    root = _accepting(tmp_path)
+    (root / "plain.html").write_text(ACCEPTING.replace(' accept=".csv,text/csv"', ""))
+    out = _capture(root, "plain.html", _upload("docs/IMPORT.md"))
+    assert all(s["ok"] for s in out["desktop"]["steps"]), "no accept list: nothing to filter on"
