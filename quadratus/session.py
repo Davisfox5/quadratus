@@ -931,6 +931,13 @@ class Session:
         self._active_call = {}
         return reply
 
+    def _trusted_source(self) -> str:
+        """The session's own source fingerprint for the evidence check, from
+        its configured exclusions, never from the solver-writable exclusions
+        file (Codex review of 40ba65b). An unreadable tree gives a value no
+        capture can match, so the check fails closed."""
+        return self._source_fingerprint() or "unavailable"
+
     def _source_fingerprint(self) -> Optional[str]:
         """The selected project's source fingerprint (excludes applied), or None."""
         if not self.project:
@@ -2415,7 +2422,8 @@ class Session:
         if not (self.config.design_cross_check and is_design_task(spec) and self.project):
             return
         from .design_evidence import check
-        ok, _, shots = check(self.project, spec.task_id, self._last_edit_started or 0)
+        ok, _, shots = check(self.project, spec.task_id, self._last_edit_started or 0,
+                              expected_source=self._trusted_source())
         if ok and not self._evidence_refusals(spec, self._evidence_files(spec, shots)):
             self._review_evidence = self._evidence_files(spec, shots)
             self._design_note = (
@@ -2442,7 +2450,8 @@ class Session:
             record.update(verified=None, problem="design self-verification disabled by the operator")
             self.design_checks.append(record)
             return
-        ok, problem, shots = check(self.project, spec.task_id, self._last_edit_started or 0)
+        ok, problem, shots = check(self.project, spec.task_id, self._last_edit_started or 0,
+                              expected_source=self._trusted_source())
         if not ok:
             record["first_problem"] = problem
             self._note(f"task {spec.task_id}: design evidence missing or broken; one fix call ({problem[:100]})")
@@ -2465,7 +2474,8 @@ class Session:
                 f"or shows a broken page: {problem}.\n" + action + self._revision_delivery()
                 + _design_fix_delivery(self._interim_edits_note())), role="design-fix")
             self._run_integration_gate(lead, spec, task)
-            ok, problem, shots = check(self.project, spec.task_id, self._last_edit_started or 0)
+            ok, problem, shots = check(self.project, spec.task_id, self._last_edit_started or 0,
+                              expected_source=self._trusted_source())
         record.update(verified=ok, problem=problem, screenshots=shots)
         if not ok:
             self.open_findings.append(f"Task {spec.task_id} is design work without clean rendered evidence: {problem}.")

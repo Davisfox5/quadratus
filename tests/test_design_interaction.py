@@ -963,8 +963,53 @@ def test_capture_and_check_share_the_sessions_exclusions(tmp_path):
     assert de.source_fingerprint(root) == before, "an excluded file is not source"
     (root / "app.py").write_text("x = 2\n")
     assert de.source_fingerprint(root) != before
-    (root / de.EXCLUDES_FILE).write_text(json.dumps(["../escape", "/abs", 3, "private"]))
-    assert de._source_excludes(root) == [root / "private"], "malformed entries are ignored"
+    for bad in (["../escape"], ["/abs"], [3], ["ok", ""], {"private": 1}, ["x"] * (de.MAX_EXCLUDES + 1)):
+        (root / de.EXCLUDES_FILE).write_text(json.dumps(bad))
+        with pytest.raises(de.ExcludesError):
+            de._source_excludes(root)
+        assert de.source_fingerprint(root) is None, "never a different source boundary"
+
+
+def test_the_exclusions_file_is_bounded_and_never_followed(tmp_path):
+    root = tmp_path / "project"
+    (root / ".quadratus").mkdir(parents=True)
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps(["app.py"]))
+    (root / de.EXCLUDES_FILE).symlink_to(outside)
+    with pytest.raises(de.ExcludesError, match="symlink"):
+        de._source_excludes(root)
+    (root / de.EXCLUDES_FILE).unlink()
+    (root / de.EXCLUDES_FILE).write_text(" " * (de.MAX_EXCLUDES_BYTES + 1))
+    with pytest.raises(de.ExcludesError, match="small regular file"):
+        de._source_excludes(root)
+    (root / de.EXCLUDES_FILE).unlink()
+    assert de._source_excludes(root) == [], "no file: nothing recorded"
+
+
+def test_a_capture_with_untrusted_exclusions_records_why(tmp_path, browser):
+    root = _project(tmp_path)
+    (root / ".quadratus").mkdir(exist_ok=True)
+    (root / de.EXCLUDES_FILE).write_text(json.dumps(["../escape"]))
+    _capture(root, "index.html", None)
+    passed, problem = check(root, "t1", 0)[:2]
+    assert not passed and "the source could not be identified at capture" in problem
+
+
+def test_an_enforcing_check_ignores_a_rewritten_exclusions_file(tmp_path):
+    """Codex review of 40ba65b: rewriting the file to exclude a new source
+    file made old renders pass; the session's own source decides."""
+    from quadratus.project import Project
+    from tests.lifecycle.harness import evidence
+    root = tmp_path / "project"
+    (root / "static").mkdir(parents=True)
+    de.write_source_excludes(root, [])
+    evidence(root, "t1", age=0)
+    (root / "static" / "later.css").write_text("body{}\n")
+    (root / de.EXCLUDES_FILE).write_text(json.dumps(["static/later.css"]))
+    assert check(root, "t1", 0)[0], "the file alone would pass it (the standalone CLI view)"
+    trusted = Project(root).fingerprint()
+    passed, problem = check(root, "t1", 0, expected_source=trusted)[:2]
+    assert not passed and "captured on a different source tree" in problem
 
 
 @pytest.mark.parametrize("label", ["/etc/hostname", "../outside.csv", ".quadratus/capture-fixtures/t9/rows.csv",

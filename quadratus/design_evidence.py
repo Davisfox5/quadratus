@@ -74,23 +74,53 @@ def write_source_excludes(root, excludes) -> None:
     path.write_text(json.dumps(inside))
 
 
+MAX_EXCLUDES_BYTES = 64_000
+MAX_EXCLUDES = 200
+
+
+class ExcludesError(ValueError):
+    """The recorded exclusions cannot be trusted as written; never replaced
+    by a different source boundary."""
+
+
 def _source_excludes(root: Path) -> List[Path]:
-    try:
-        entries = json.loads((root / EXCLUDES_FILE).read_text())[:200]
-    except (OSError, ValueError, TypeError):
+    """The recorded in-project exclusions, or [] when none were recorded.
+
+    Hardened (Codex review of 40ba65b): no symlink at any component and
+    the size checked before the file is opened; malformed, out-of-project
+    or over-budget content raises rather than being silently trimmed.
+    This file only configures a capture: an enforcing session compares
+    against its own configured exclusions (``check(expected_source=...)``).
+    """
+    path = root / EXCLUDES_FILE
+    current = root
+    for part in EXCLUDES_FILE.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ExcludesError("the recorded source exclusions go through a symlink")
+    if not path.exists():
         return []
+    if not path.is_file() or path.stat().st_size > MAX_EXCLUDES_BYTES:
+        raise ExcludesError("the recorded source exclusions are not a small regular file")
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ExcludesError("the recorded source exclusions cannot be read") from exc
+    if not isinstance(entries, list) or len(entries) > MAX_EXCLUDES:
+        raise ExcludesError("the recorded source exclusions are malformed or too many")
     out = []
-    for entry in entries if isinstance(entries, list) else []:
-        raw = Path(entry) if isinstance(entry, str) else None
-        if raw is not None and entry and not raw.is_absolute() and ".." not in raw.parts:
-            out.append(root / raw)
+    for entry in entries:
+        raw = Path(entry) if isinstance(entry, str) and entry else None
+        if raw is None or raw.is_absolute() or ".." in raw.parts:
+            raise ExcludesError(f"the recorded source exclusions name an invalid path: {str(entry)[:80]}")
+        out.append(root / raw)
     return out
 
 
 def source_fingerprint(root) -> Optional[str]:
     """The selected source's fingerprint as the session measures it: Project's
     own skips plus the session's recorded exclusions, whose files are never
-    read. None when it cannot be computed."""
+    read. None when it cannot be computed or the exclusions are untrusted."""
     try:
         from .project import Project
         root = Path(root)
@@ -277,6 +307,11 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
     # compared again by the check, so a render stands only for this source.
     source = source_fingerprint(root)
     try:
+        _source_excludes(Path(root))
+        identity_error = None
+    except ExcludesError as exc:
+        identity_error = str(exc)
+    try:
         for name, viewport in VIEWPORTS.items():
             for item in checked:
                 if item["action"] == "file" and _digest(Path(item["path"])) != item["sha256"]:
@@ -295,6 +330,8 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
         raise
     summary = dict(target=target, views=out,
                    source_fingerprint=source if source and source == source_fingerprint(root) else None)
+    if identity_error:
+        summary["source_identity_error"] = identity_error
     if checked:
         summary["steps"] = [{k: v for k, v in s.items() if k != "path"} for s in checked]
     (folder / "summary.json").write_text(json.dumps(summary, indent=2))
@@ -386,7 +423,7 @@ def _png_width(path: Path) -> Optional[int]:
     return struct.unpack(">I", head[16:20])[0]
 
 
-def check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
+def check(root, task_id: str, since: float, *, expected_source: Optional[str] = None) -> Tuple[bool, str, list]:
     """Whether the task left fresh, clean desktop and mobile renders of a
     named page. Never raises.
 
@@ -396,12 +433,12 @@ def check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
     and the first version of this check passed it).
     """
     try:
-        return _check(root, task_id, since)
+        return _check(root, task_id, since, expected_source)
     except Exception as exc:  # noqa: BLE001 -- evidence is data; malformed data is a finding
         return False, f"the evidence could not be read ({type(exc).__name__}: {str(exc)[:160]})", []
 
 
-def _check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
+def _check(root, task_id: str, since: float, expected_source: Optional[str] = None) -> Tuple[bool, str, list]:
     folder = evidence_dir(root, task_id)
     problems, shots = [], []
     try:
@@ -431,9 +468,14 @@ def _check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
     recorded = summary.get("source_fingerprint", "missing")
     if recorded == "missing":
         problems.append("the renders carry no record of the source they show")
+    elif isinstance(summary.get("source_identity_error"), str):
+        problems.append(f"the source could not be identified at capture: {summary['source_identity_error'][:160]}")
     elif not isinstance(recorded, str) or not re.fullmatch(r"[0-9a-f]{64}", recorded):
         problems.append("the source changed while the renders were being captured")
-    elif recorded != source_fingerprint(root):
+    elif recorded != (expected_source if expected_source is not None else source_fingerprint(root)):
+        # An enforcing session passes the fingerprint of its own configured
+        # source; the recorded exclusions file, which a solver can write,
+        # never decides what that session counts as source.
         problems.append("the renders were captured on a different source tree than the current one")
     requested = summary.get("steps")
     for index, step in enumerate(requested if isinstance(requested, list) else [], 1):
