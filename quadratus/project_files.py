@@ -51,6 +51,12 @@ MAX_TOTAL_BYTES = 32_000
 MAX_INSPECT_BYTES = 512_000
 #: Lines of unchanged context either side of a changed region.
 WINDOW_CONTEXT = 6
+#: The most lines (old plus new) a line-by-line comparison may take, after
+#: the common start and end are trimmed. Beyond it the whole middle is one
+#: coarse region, labelled as such: SequenceMatcher is quadratic on
+#: repetitive text (Codex review of 95b2cd7: 20,000 identical lines did not
+#: finish in 3 seconds), and a prompt build must not cost that.
+MAX_DIFF_LINES = 1_000
 
 
 class _Refused(Exception):
@@ -128,7 +134,8 @@ def context_pack(root, paths: Iterable[str], *, exclude: Sequence[Path] = (),
 
     Each included entry is ``{path, sha, lines, text, truncated, windows}``;
     ``windows`` is a list of 1-based inclusive line ranges when the file is
-    shown in windows, else None. Each refused entry is ``{path, reason}`` and
+    shown in windows, else None; ``coarse`` says the changed region was too
+    large to compare line by line and is shown from its start. Each refused entry is ``{path, reason}`` and
     never carries content.
     """
     root = Path(root)
@@ -160,20 +167,20 @@ def context_pack(root, paths: Iterable[str], *, exclude: Sequence[Path] = (),
             continue
         lines = text.count("\n") + (0 if text.endswith("\n") or not text else 1)
         limit = min(MAX_FILE_BYTES, MAX_TOTAL_BYTES - total)
-        windows = None
+        windows, coarse = None, False
         if len(text.encode()) <= limit:
             shown, truncated = text, False
         elif path in baselines:
-            shown, windows = _changed_windows(baselines[path], text, limit)
+            shown, windows, coarse = _changed_windows(baselines[path], text, limit)
             truncated = True
             if not windows:
                 shown, truncated = _bounded(text, limit)
-                windows = None
+                windows, coarse = None, False
         else:
             shown, truncated = _bounded(text, limit)
         total += len(shown.encode())
         included.append(dict(path=path, sha=hashlib.sha256(data).hexdigest()[:12], lines=lines,
-                             text=shown, truncated=truncated, windows=windows))
+                             text=shown, truncated=truncated, windows=windows, coarse=coarse))
     return included, refused
 
 
@@ -188,32 +195,53 @@ def _bounded(text: str, limit: int) -> Tuple[str, bool]:
     return (cut[:newline + 1] if newline > 0 else cut), True
 
 
-def changed_ranges(before: bytes, text: str) -> List[Tuple[int, int]]:
+def changed_ranges(before: bytes, text: str) -> Tuple[List[Tuple[int, int]], bool]:
     """1-based inclusive line ranges of ``text`` that differ from ``before``.
 
-    A pure deletion is reported as the line it left behind. Empty when the
-    baseline is not UTF-8 text or nothing differs.
+    Returns ``(ranges, coarse)``. The common start and end are trimmed in
+    linear time; only the middle between them is compared line by line, and
+    only when it holds at most ``MAX_DIFF_LINES`` lines. A larger middle is
+    reported whole as one range with ``coarse`` True: every changed line is
+    inside it, but so may be unchanged ones. A pure deletion is reported as
+    the line it left behind. Empty when the baseline is not UTF-8 text or
+    nothing differs.
     """
     try:
         old = before.decode("utf-8").splitlines()
     except UnicodeDecodeError:
-        return []
+        return [], False
     new = text.splitlines()
-    ranges = []
-    matcher = difflib.SequenceMatcher(None, old, new, autojunk=False)
-    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
-        if tag == "equal":
-            continue
+    head, shortest = 0, min(len(old), len(new))
+    while head < shortest and old[head] == new[head]:
+        head += 1
+    tail = 0
+    while tail < shortest - head and old[-1 - tail] == new[-1 - tail]:
+        tail += 1
+    old_mid, new_mid = old[head:len(old) - tail], new[head:len(new) - tail]
+    if not old_mid and not new_mid:
+        return [], False
+
+    def span(j1, j2):
         start = min(j1 + 1, max(len(new), 1))
-        ranges.append((start, max(j2, start)))
-    return ranges
+        return start, max(j2, start)
+
+    if len(old_mid) + len(new_mid) > MAX_DIFF_LINES:
+        return [span(head, len(new) - tail)], True
+    ranges = []
+    matcher = difflib.SequenceMatcher(None, old_mid, new_mid, autojunk=False)
+    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            ranges.append(span(head + j1, head + j2))
+    return ranges, False
 
 
-def _changed_windows(before: bytes, text: str, limit: int) -> Tuple[str, List[Tuple[int, int]]]:
-    """Windows of ``text`` around its changes, within ``limit`` bytes."""
+def _changed_windows(before: bytes, text: str, limit: int) -> Tuple[str, List[Tuple[int, int]], bool]:
+    """Windows of ``text`` around its changes, within ``limit`` bytes, and
+    whether the changes were located only coarsely."""
     new = text.splitlines(keepends=True)
     merged: List[List[int]] = []
-    for start, end in changed_ranges(before, text):
+    ranges, coarse = changed_ranges(before, text)
+    for start, end in ranges:
         lo, hi = max(1, start - WINDOW_CONTEXT), min(len(new), end + WINDOW_CONTEXT)
         if merged and lo <= merged[-1][1] + 1:
             merged[-1][1] = max(merged[-1][1], hi)
@@ -235,7 +263,7 @@ def _changed_windows(before: bytes, text: str, limit: int) -> Tuple[str, List[Tu
         parts.append(header + body)
         shown.append((lo, hi))
         used += len((header + body).encode())
-    return "".join(parts), shown
+    return "".join(parts), shown, coarse
 
 
 def render_pack(included: List[dict], refused: List[dict]) -> str:
@@ -251,6 +279,9 @@ def render_pack(included: List[dict], refused: List[dict]) -> str:
             spans = ", ".join(f"{lo}-{hi}" for lo, hi in entry["windows"])
             note = (f"; showing only lines {spans}, around what changed since the capped task "
                     "began, read the rest yourself if you need it")
+            if entry.get("coarse"):
+                note += ("; the changed region was too large to compare line by line, so this "
+                         "shows the start of the span that contains every change, not each change")
         elif entry["truncated"]:
             note = (f"; cut at {entry['text'].count(chr(10))} of {entry['lines']} lines, read the rest "
                     "yourself if you need it")
