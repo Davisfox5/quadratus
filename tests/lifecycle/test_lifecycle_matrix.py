@@ -306,6 +306,31 @@ def test_a_grok_lead_cancelled_at_the_cap_is_the_cap(tmp_path, monkeypatch):
     assert [c.task for c in replay.of("lead")] == ["t1", "t2"]
 
 
+def test_two_caps_in_a_row_stop_with_a_named_breaker_and_the_work_kept(tmp_path, monkeypatch):
+    """Run 14: the breaker stopped the run and result.error was blank."""
+    def lead(call, replay):
+        if call.task == "t1":
+            H.write(call, {"README.md": "# app\n\npartial\n"})
+            return H.grok_ok("I'll finish the README next", stop="cancelled", num_turns=14)
+        # A zero-write discovery cap, in whichever vendor's envelope drew t2.
+        if call.vendor == "grok":
+            return H.grok_ok("Still reading the tests.", stop="cancelled", num_turns=14)
+        return H.claude_cap("Still reading the tests.", num_turns=15)
+
+    replay = _run(tmp_path, monkeypatch, Script(orchestrator=_continuing(DECL_T2), lead=lead), max_tasks=3,
+                  files=FILES_OK, settings=Settings(backend="cli", lead_max_turns=14))
+    assert [c.task for c in replay.of("lead")] == ["t1", "t2"], "no third lead"
+    assert not replay.result.completed
+    assert replay.result.error.startswith("TurnLimitBreaker: the lead turn limit was reached 2 times in a row "
+                                          "(t1, t2)")
+    assert "partial" in _read(replay, "README.md"), "every capped task's edits stay in place"
+    in_flight = json.loads((replay.result.run_dir / "in-flight.json").read_text())
+    assert in_flight["changed"] == ["README.md"]
+    assert [(r["task"], r["changed"]) for r in in_flight["turn_limited"]] == [("t1", ["README.md"]), ("t2", [])]
+    result = json.loads((replay.result.run_dir / "result.json").read_text())
+    assert result["error"] == replay.result.error and result["completed"] is False
+
+
 def test_a_grok_error_at_the_cap_count_is_a_failure_not_a_continuation(tmp_path, monkeypatch):
     """Grok review of #33: an error field at the count was read as the cap and replanned."""
     def lead(call, replay):

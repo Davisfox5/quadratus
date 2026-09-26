@@ -758,6 +758,13 @@ class Session:
         #: Tasks whose lead stopped at its turn limit, in order.
         self.turn_limited: List[str] = []
         self._turn_limited_in_a_row = 0
+        #: What each capped call left, by task id: the evidence a continuation
+        #: is handed and the breaker's stop names.
+        self.turn_limited_records: Dict[str, dict] = {}
+        #: Why the run stopped when no exception said so (the consecutive
+        #: turn-limit breaker). Empty otherwise. ``project_run`` reports it as
+        #: the run's error so a breaker stop is never an unexplained blank.
+        self.stop_reason = ""
         #: Capped tasks not yet finished by a task that names them in a
         #: CONTINUES line. Any entry blocks completion.
         self._partial_tasks: set = set()
@@ -1779,10 +1786,11 @@ class Session:
                     raise PartialWorkStopped("Turn-limited edits exceed the declared scope; work "
                                              "preserved. " + report.render(), partial=state) from exc
         said = (exc.partial_text or "").strip()
-        task.keep(json.dumps(dict(task=spec.task_id, lead=lead, turns=exc.turns,
-                                  changed=state["changed"], changed_lines=state["changed_lines"],
-                                  note=state["note"], partial_text=said[:4000] or None)),
-                  kind="turn-limited", author=lead)
+        record = dict(task=spec.task_id, lead=lead, turns=exc.turns,
+                      changed=state["changed"], changed_lines=state["changed_lines"],
+                      note=state["note"], partial_text=said[:4000] or None)
+        task.keep(json.dumps(record), kind="turn-limited", author=lead)
+        self.turn_limited_records[spec.task_id] = record
         changed = ", ".join(state["changed"]) or "no files"
         summary_text = (
             "STOPPED AT THE LEAD TURN LIMIT before finishing"
@@ -2153,6 +2161,7 @@ class Session:
         if max_tasks < 1:
             raise ValueError("max_tasks must be at least 1")
         self.completed = False
+        self.stop_reason = ""
         if self.config.plan_gate is not None:
             self._note("asking the orchestrator for the expected task list")
             if not self.config.plan_gate(self.plan()):
@@ -2225,6 +2234,14 @@ class Session:
                 self._note(f"task {len(self.history)} stopped at the lead's turn limit; its "
                            f"work is kept and the orchestrator re-plans")
                 if self._turn_limited_in_a_row > self.config.max_turn_limited_in_a_row:
+                    capped = self.turn_limited[-self._turn_limited_in_a_row:]
+                    # Recorded, not raised: the stop is the breaker working,
+                    # and every capped task's edits stay in place. But it is
+                    # named, so the run's error is never blank (Codex, Run 14).
+                    self.stop_reason = (
+                        f"TurnLimitBreaker: the lead turn limit was reached "
+                        f"{self._turn_limited_in_a_row} times in a row ({', '.join(capped)}); "
+                        "stopped instead of re-planning again. Work preserved.")
                     self._note(f"the lead turn limit was reached {self._turn_limited_in_a_row} "
                                f"times in a row; stopping instead of re-planning again")
                     break
