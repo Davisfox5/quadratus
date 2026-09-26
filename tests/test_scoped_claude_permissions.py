@@ -9,7 +9,7 @@ from quadratus.cli_providers import ClaudeCLIProvider, claude_check_rule
 from quadratus.config import Settings
 from quadratus.delegation import invocation
 from quadratus.integration import GateCommand
-from quadratus.project_run import run_project
+from quadratus.project_run import _project_check_command, run_project
 from quadratus.providers import ProviderError
 from quadratus.runtime import Fleet, new_session
 
@@ -78,6 +78,27 @@ def test_unsafe_allow_rule_is_refused(command):
 
 def test_quoted_filename_is_literal():
     assert claude_check_rule(shlex.join(["pytest", "tests/a b.py"])) == "Bash(pytest 'tests/a b.py')"
+
+
+@pytest.mark.parametrize("argv", [
+    ("python", "/external/examiner/check.py"),
+    ("python", "../examiner/check.py"),
+    ("pytest", "--config=/external/examiner/config.ini"),
+    ("pytest", "-I/external/examiner"),
+    ("/external/examiner/check",),
+])
+def test_external_examiner_checks_remain_runner_only(tmp_path, argv):
+    assert _project_check_command(argv, tmp_path) is None
+
+
+def test_project_script_and_installed_interpreter_can_be_granted(tmp_path):
+    assert _project_check_command(("/usr/bin/python3", "tests/check.py"), tmp_path) == '/usr/bin/python3 tests/check.py'
+
+
+@pytest.mark.parametrize('script', ['check.py', './check.py'])
+def test_symlinked_external_check_is_not_exposed(tmp_path, script):
+    (tmp_path / 'check.py').symlink_to('/external/examiner/check.py')
+    assert _project_check_command(("python", script), tmp_path) is None
 
 
 def test_fleet_grants_check_only_to_authorized_write_view(tmp_path, monkeypatch):

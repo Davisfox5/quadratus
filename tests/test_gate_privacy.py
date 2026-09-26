@@ -42,12 +42,14 @@ def test_no_prompt_ever_carries_the_gate_command(tmp_path, monkeypatch):
                      "print('checked a.md with', __file__)\n"
                      "sys.exit(0 if ok else 1)\n")
     monkeypatch.setattr(CLIProvider, "available", lambda _: True)
-    prompts, plan = [], ["KIND: docs simple\nSCOPE: " + json.dumps({
+    prompts, systems, native_argv, plan = [], [], [], ["KIND: docs simple\nSCOPE: " + json.dumps({
         "permitted_paths": ["a.md"], "intended_result": "Heading reads Hello",
         "acceptance": ["Heading reads Hello"], "max_lines": 10}) + "\nCorrect the heading in a.md."]
 
     def call(self, prompt, system, history):
         prompts.append(prompt)
+        systems.append(system)
+        native_argv.append(self._build_argv(prompt, system))
         self.last_usage = {"input_tokens": 1, "output_tokens": 1}
         if "Name the single next task" in prompt:
             return plan.pop(0) if plan else "DONE"
@@ -67,6 +69,10 @@ def test_no_prompt_ever_carries_the_gate_command(tmp_path, monkeypatch):
     assert any("integration check failed" in p for p in prompts), "the fix round happened"
     leaked = [p[:160] for p in prompts if str(hidden) in p or "check_heading" in p]
     assert not leaked, leaked
+    assert str(hidden) not in json.dumps(systems)
+    assert 'check_heading' not in json.dumps(systems)
+    assert str(hidden) not in json.dumps(native_argv)
+    assert 'check_heading' not in json.dumps(native_argv)
     data = json.loads((result.run_dir / "result.json").read_text())
     assert any(str(check) in json.dumps(c) for c in data["checks"]), "the operator record keeps the command"
     assert (project / "a.md").read_text() == "# Hello\n"

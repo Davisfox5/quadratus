@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import re
 import shlex
 import uuid
 from contextlib import contextmanager
@@ -88,6 +89,30 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     fleet_type=Fleet, session_factory=new_session)
 
 
+def _project_check_command(argv, root):
+    """Expose only a project-owned check, never an external examiner path.
+
+    A conventional interpreter/runner may live outside the project; script,
+    config and other path arguments must remain inside it. Unsupported forms
+    still run through the integration gate without a model-side allowance.
+    """
+    if not argv:
+        return None
+    for index, argument in enumerate(argv):
+        value = argument.split('=', 1)[-1] if argument.startswith('-') else argument
+        if index == 0 and Path(value).is_absolute():
+            if re.fullmatch(r'python(?:\d+(?:\.\d+)*)?|pytest|node|npm|npx|uv', Path(value).name):
+                continue
+        if '/' not in value and not (root / value).is_symlink():
+            continue
+        # A joined flag such as -I/private/path is conservative runner-only.
+        if value.startswith('-'):
+            return None
+        if not (root / value).resolve().is_relative_to(root):
+            return None
+    return shlex.join(argv)
+
+
 def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False):
@@ -103,11 +128,12 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             else IntegrationGate(command, cwd=project.root) if command else None)
     # Only checks configured at the selected project root can be granted to
     # an editing lead. Nested/skipped gates still run through the gate suite.
-    check_commands = (tuple(shlex.join(c.argv) for c in gate.commands
+    check_commands = (tuple(_project_check_command(c.argv, project.root) for c in gate.commands
                             if c.argv and not c.skip_reason
                             and (project.root / c.cwd).resolve() == project.root)
                       if isinstance(gate, GateSuite)
-                      else (shlex.join(command),) if command else ())
+                      else (_project_check_command(command, project.root),) if command else ())
+    check_commands = tuple(c for c in check_commands if c is not None)
     store = ArtifactStore(run_dir / 'artifacts')
     meter = UsageMeter(run_dir / 'usage.jsonl')
     delegation = DelegationLedger(path=run_dir / 'invocations.jsonl')
