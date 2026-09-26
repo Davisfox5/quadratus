@@ -315,3 +315,10 @@ def test_only_grok_reads_the_cap_from_its_count():
     from quadratus.cli_providers import CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC
     assert GROK_SPEC.turn_cap_by_count and not CLAUDE_SPEC.turn_cap_by_count
     assert not CODEX_SPEC.turn_cap_by_count
+
+
+def test_a_claude_error_names_the_envelopes_own_errors():
+    envelope = {"type": "result", "subtype": "error_during_execution", "is_error": True,
+                "num_turns": 3, "errors": ["API Error: overloaded"]}
+    with pytest.raises(ProviderError, match="API Error: overloaded"):
+        _extract_claude_result(json.dumps(envelope))
