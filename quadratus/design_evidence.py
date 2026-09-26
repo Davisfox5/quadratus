@@ -35,6 +35,8 @@ from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
+from .project_files import SECRET_NAMES
+
 VIEWPORTS = {"desktop": {"width": 1280, "height": 800}, "mobile": {"width": 390, "height": 844}}
 EVIDENCE_DIR = Path(".quadratus") / "design-evidence"
 
@@ -53,8 +55,7 @@ _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 #: refused outright (run state, VCS data, .env, .ssh, .codex, tool configs);
 #: these names are refused anywhere else (Codex review of c222d62:
 #: .codex/auth.json and .ssh/id_ecdsa were accepted).
-_BLOCKED_NAMES = ("id_*", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", "*.gpg", "*.asc",
-                  "*.ppk", "*auth*.json", "*credential*", "*secret*", "*token*", "*password*")
+_BLOCKED_NAMES = SECRET_NAMES   # shared with the context pack (project_files)
 
 
 def parse_steps(argv: List[str]) -> Tuple[List[str], List[dict]]:

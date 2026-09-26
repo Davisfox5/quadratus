@@ -538,3 +538,87 @@ def test_a_capped_lead_is_told_its_round_budget(tmp_path, monkeypatch):
 def test_no_round_budget_is_stated_without_a_cap(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, Script(), max_tasks=2)
     assert replay.of("lead") and not any("tool rounds" in c.prompt for c in replay.of("lead"))
+
+
+def _section(prompt, heading):
+    """One ``## heading`` section of a prompt, up to the next ``## ``."""
+    start = prompt.index(heading)
+    end = prompt.find("\n## ", start + len(heading))
+    return prompt[start:end if end != -1 else len(prompt)]
+
+
+def test_the_first_lead_is_handed_its_scoped_files_as_they_are(tmp_path, monkeypatch):
+    """Run 14 t1: 27 discovery calls over the files the task was scoped to."""
+    replay = _run(tmp_path, monkeypatch, Script())
+    pack = _section(replay.of("lead")[0].prompt, "## Project files, read by the harness")
+    assert "### app.py (2 lines, sha256 " in pack and "return 0" in pack
+    assert "### tests/test_app.py" in pack and "assert add(1, 2) == 3" in pack
+
+
+def test_a_zero_write_cap_hands_its_continuation_the_files_and_says_so(tmp_path, monkeypatch):
+    def lead(call, replay):
+        if call.task == "t1":
+            return H.grok_ok("I'll look at the tests next", stop="cancelled", num_turns=14)
+        return _finish(call, replay)
+
+    replay = _run(tmp_path, monkeypatch, Script(orchestrator=_continuing(DECL_T2), lead=lead), max_tasks=2,
+                  files=FILES_OK, settings=Settings(backend="cli", lead_max_turns=14))
+    assert replay.result.error == "" and _gate_passed(replay)
+    assert "It wrote nothing: its rounds went to reading" in replay.of("orchestrator")[1].prompt
+    second = [c for c in replay.of("lead") if c.task == "t2"][0].prompt
+    handoff = _section(second, "## Handoff from t1")
+    assert "stopped at its round limit after 14 rounds" in handoff and "It wrote nothing" in handoff
+    assert "narration and not a result: I'll look at the tests next" in handoff
+    pack = _section(second, "## Project files, read by the harness")
+    assert "### app.py" in pack and "### tests/test_app.py" in pack and "### README.md" in pack
+    assert "This call has at most 14 tool rounds" in second
+
+
+def test_capped_edits_reach_the_continuation_as_the_tree_now_has_them(tmp_path, monkeypatch):
+    def lead(call, replay):
+        if call.task == "t1":
+            H.write(call, {"README.md": "# app\n\npartial draft\n"})
+            return H.grok_ok("I'll finish the README next", stop="cancelled", num_turns=14)
+        return _finish(call, replay)
+
+    replay = _run(tmp_path, monkeypatch, Script(orchestrator=_continuing(DECL_T2), lead=lead), max_tasks=2,
+                  files=FILES_OK, settings=Settings(backend="cli", lead_max_turns=14))
+    second = [c for c in replay.of("lead") if c.task == "t2"][0].prompt
+    assert "It changed README.md (2 lines), unreviewed and unchecked" in _section(second, "## Handoff from t1")
+    pack = _section(second, "## Project files, read by the harness")
+    assert pack.index("### README.md") < pack.index("### app.py"), "the capped call's files come first"
+    assert "partial draft" in pack
+    assert replay.result.error == "" and "finished" in _read(replay, "README.md")
+
+
+def test_a_continuation_is_handed_its_existing_test_setup(tmp_path, monkeypatch):
+    """Run 14 t2 re-read its test helpers; a scoped test file is handed over."""
+    replay = _continuation_run(tmp_path, monkeypatch, cases=6)
+    second = [c for c in replay.of("lead") if c.task == "t2"][0].prompt
+    assert "## Handoff from t1" in second and "It changed app.py" in second
+    pack = _section(second, "## Project files, read by the harness")
+    assert "tests/test_clock.py (does not exist yet)" in pack, "a file to create is named, not guessed at"
+    assert "### app.py" in pack and "return a + b" in pack
+    assert replay.result.error == "" and _gate_passed(replay)
+
+
+def test_secret_hidden_and_linked_files_in_a_scope_never_reach_a_prompt(tmp_path, monkeypatch):
+    # .env itself is refused by the repository policy before any call; a
+    # hidden file the policy allows still must not be shown.
+    scope = dict(T1, permitted_paths=["app.py", "config/api_token.txt", "docs/.draft.md", "linked.py",
+                                      "tests/*.py"])
+    files = {**FILES, "config/api_token.txt": "SECRET-VALUE-1", "docs/.draft.md": "SECRET-VALUE-2"}
+
+    def orchestrator(call, replay):
+        link = replay.project / "linked.py"     # in the selected project, before any lead prompt
+        if not link.is_symlink():
+            link.symlink_to(replay.project / "config" / "api_token.txt")
+        return "KIND: architect complex\nSCOPE: " + json.dumps(scope) + "\nImplement add in app.py."
+
+    replay = _run(tmp_path, monkeypatch, Script(orchestrator=orchestrator), files=files)
+    assert replay.of("lead")
+    for call in replay.calls:
+        assert "SECRET-VALUE" not in call.prompt, call.role
+    pack = _section(replay.of("lead")[0].prompt, "## Project files, read by the harness")
+    assert "config/api_token.txt (a credential-like name)" in pack and "docs/.draft.md (hidden" in pack
+    assert "tests/*.py (a pattern, not a file)" in pack and "linked.py (goes through a symlink)" in pack
