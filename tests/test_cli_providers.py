@@ -826,3 +826,21 @@ def test_codex_session_record_is_a_floor_for_diagnostics_never_a_measurement(tmp
     assert floor["output_tokens"] == 1285, "reasoning tokens are already counted"
     assert "lower bound" in floor["usage_source"]
     assert _codex_rollout_usage(tmp_path, "../../etc") is None
+
+
+def test_a_codex_401_is_a_named_vendor_wide_sign_in_failure():
+    """GameTape run 6: the turn failed 401 after the websocket dropped."""
+    import json as _json
+
+    import pytest
+
+    from quadratus.cli_providers import _extract_codex_result
+    from quadratus.providers import ProviderError
+    stream = "\n".join(_json.dumps(e) for e in [
+        {"type": "thread.started", "thread_id": "x"},
+        {"type": "error", "message": "Reconnecting... 5/5 (unexpected status 401 Unauthorized: ...)"},
+        {"type": "turn.failed", "error": {"message": "unexpected status 401 Unauthorized: Incorrect API key"}},
+    ])
+    with pytest.raises(ProviderError) as caught:
+        _extract_codex_result(stream)
+    assert getattr(caught.value, "auth_invalid", False) and "sign-in was rejected" in str(caught.value)

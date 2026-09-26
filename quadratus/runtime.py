@@ -499,6 +499,13 @@ class Fleet:
                 from .run_budget import RunBudgetExceeded
                 observe(provider, 1, time.monotonic() - started, exc,
                         invoked=not isinstance(exc, RunBudgetExceeded))
+            if isinstance(exc, Exception) and getattr(exc, "auth_invalid", False):
+                # A rejected sign-in takes the whole vendor out, not one model.
+                vendor = key.partition(":")[0]
+                for spec in _roster_for(vendor):
+                    self.mark_exhausted(spec.key, str(exc))
+                self.mark_exhausted(key, str(exc))
+                raise WindowExhausted(f"{key}: {exc}") from exc
             if isinstance(exc, Exception) and _looks_exhausted(exc):
                 self.mark_exhausted(key, str(exc))
                 raise WindowExhausted(f"{key}: subscription window exhausted ({exc})") from exc
