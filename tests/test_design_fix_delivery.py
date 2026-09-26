@@ -29,6 +29,18 @@ def cli_environment(monkeypatch):
         monkeypatch.delenv(f'QUADRATUS_CLI_ARGS_{vendor}', raising=False)
 
 
+def _postdate(root):
+    """Stamp the renders an hour ahead: the check compares mtimes with the
+    editing call's start, and a write inside that call can land either side."""
+    import os
+    import time
+
+    from quadratus.design_evidence import evidence_dir
+    stamp = time.time() + 3600
+    for view in ("desktop", "mobile"):
+        os.utime(evidence_dir(root, "t6") / view / "page.png", (stamp, stamp))
+
+
 def _run(tmp_path, monkeypatch, fix_reply, review="APPROVED"):
     root = tmp_path / "project"
     (root / "templates").mkdir(parents=True)
@@ -44,6 +56,7 @@ def _run(tmp_path, monkeypatch, fix_reply, review="APPROVED"):
         prompts.append((model_key, prompt))
         if "rendered evidence for this design task is missing" in prompt:
             _fake_evidence(root)          # fresh renders, written by the capture command
+            _postdate(root)               # set, not raced against the call's start time
             return fix_reply
         return review                      # the cross-vendor final review
     monkeypatch.setattr(fleet, "_generate", generate)

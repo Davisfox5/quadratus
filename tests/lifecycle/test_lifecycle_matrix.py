@@ -24,6 +24,9 @@ FILES = {
     "README.md": "# app\n",
 }
 FIXED = "def add(a, b):\n    return a + b\n"
+#: A passing baseline for cases whose task does not implement add, so their
+#: gate result is about the case, not about a broken fixture.
+FILES_OK = {**FILES, "app.py": FIXED}
 T1 = dict(permitted_paths=["app.py", "tests/test_app.py"], intended_result="add works",
           acceptance=["add(1, 2) == 3"], max_lines=40)
 T2 = dict(permitted_paths=["README.md"], intended_result="README documents add",
@@ -93,8 +96,14 @@ class Script:
         return "add is defined in app.py and tested in tests/test_app.py."
 
 
-def _run(tmp_path, monkeypatch, script, **kw):
-    return H.run(tmp_path, monkeypatch, script, files=FILES, **kw)
+def _run(tmp_path, monkeypatch, script, files=FILES, **kw):
+    return H.run(tmp_path, monkeypatch, script, files=files, **kw)
+
+
+def _gate_passed(replay):
+    """Every recorded integration check passed, and at least one ran."""
+    results = H.gate_results(replay)
+    return bool(results) and set(results) == {"PASSED"}
 
 
 def _read(replay, name):
@@ -131,7 +140,7 @@ def test_the_whole_task_lifecycle_in_every_request_layout(tmp_path, monkeypatch,
 
     replay = _run(tmp_path, monkeypatch, Script(lead=lead, collaborator=collaborator, revision=revision),
                   max_tasks=2)
-    assert replay.result.error == ""
+    assert replay.result.error == "" and _gate_passed(replay)
     assert _read(replay, "app.py") == FIXED and "test_negative" in _read(replay, "tests/test_app.py")
     assert "returns the sum" in _read(replay, "README.md")
     assert len(replay.of("worker")) == 1
@@ -149,7 +158,7 @@ def test_a_quoted_request_example_in_a_delivery_is_a_draft(tmp_path, monkeypatch
                 'CHANGED: ["app.py"]')
 
     replay = _run(tmp_path, monkeypatch, Script(lead=lead))
-    assert replay.result.error == "" and _read(replay, "app.py") == FIXED
+    assert replay.result.error == "" and _gate_passed(replay) and _read(replay, "app.py") == FIXED
     assert len([c for c in replay.of("lead") if c.task == "t1"]) == 1
 
 
@@ -160,11 +169,13 @@ def test_a_revision_that_repeats_earlier_files_is_rejected(tmp_path, monkeypatch
         revision=lambda call, replay: 'Reviewed; nothing new.\nCHANGED: ["app.py"]'))
     assert "CHANGED report does not match" in replay.result.error
     assert _read(replay, "app.py") == FIXED, "the lead's work is preserved"
+    assert H.gate_results(replay) == [], "stopped before the gate"
 
 
 def test_a_revision_with_no_edits_and_an_empty_declaration_proceeds(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, Script())
-    assert replay.result.error == "" and [c.task for c in replay.of("closeout")] == ["t1"]
+    assert replay.result.error == "" and _gate_passed(replay)
+    assert [c.task for c in replay.of("closeout")] == ["t1"]
 
 
 # -- 3. design work: stale renders corrected with no new source edits ----------------
@@ -182,7 +193,7 @@ def _design_script(fix_reply, review="APPROVED"):
         if call.task != "t1":
             return Script()._lead(call, replay)
         H.write(call, {"templates/index.html": "<button id=import>Import</button>\n"})
-        H.evidence(Path(call.cwd), "t1")            # renders of the draft
+        H.evidence(Path(call.cwd), "t1", age=H.STALE)   # the draft's renders; the revision outdates them
         return 'Added the button and captured it.\nCHANGED: ["templates/index.html"]'
 
     def revision(call, replay):
@@ -191,7 +202,7 @@ def _design_script(fix_reply, review="APPROVED"):
 
     def design_fix(call, replay):
         assert "Files this task has already changed" in call.prompt
-        H.evidence(Path(call.cwd), "t1")            # fresh renders, no source edits
+        H.evidence(Path(call.cwd), "t1", age=H.FRESH)   # fresh renders, no source edits
         return fix_reply
 
     return Script(orchestrator=orchestrator, lead=lead, revision=revision,
@@ -199,13 +210,13 @@ def _design_script(fix_reply, review="APPROVED"):
 
 
 def _design_files():
-    return {**FILES, "templates/index.html": "<p>projects</p>\n", "static/style.css": ""}
+    return {**FILES_OK, "templates/index.html": "<p>projects</p>\n", "static/style.css": ""}
 
 
 def test_stale_renders_are_recaptured_without_source_edits(tmp_path, monkeypatch):
     replay = H.run(tmp_path, monkeypatch, _design_script("Renders refreshed.\nCHANGED: []"),
                    files=_design_files())
-    assert replay.result.error == ""
+    assert replay.result.error == "" and _gate_passed(replay)
     assert len(replay.of("design-fix")) == 1 and len(replay.of("design-review")) == 1
     record = json.loads(replay.artifact_texts("design-evidence")[0])
     assert record["verified"] is True and record["final_review"]["verdict"] == "APPROVED"
@@ -224,8 +235,11 @@ def test_renders_of_an_unrelated_page_are_an_open_finding(tmp_path, monkeypatch)
                    _design_script("Renders refreshed.\nCHANGED: []",
                                   review="BLOCKING: the renders do not show the changed interface"),
                    files=_design_files())
-    assert replay.result.error == "" and not replay.result.completed
+    assert replay.result.error == "" and _gate_passed(replay) and not replay.result.completed
     record = json.loads(replay.artifact_texts("design-evidence")[0])
+    # The verdict is scripted: this proves a BLOCKING verdict becomes a finding
+    # and the prompt asks for the feature's state, not that a model can tell
+    # an unrelated image apart. Live browser acceptance still decides that.
     assert "do not show the changed interface" in record["final_review"]["verdict"]
 
 
@@ -256,7 +270,7 @@ def test_a_claude_lead_at_its_cap_hands_back_partial_work(tmp_path, monkeypatch)
 
     replay = _run(tmp_path, monkeypatch, Script(orchestrator=_continuing(DECL_T1), lead=lead), max_tasks=2,
                   settings=Settings(backend="cli", lead_max_turns=14))
-    assert replay.result.error == ""
+    assert replay.result.error == "" and _gate_passed(replay)
     assert _read(replay, "app.py") == FIXED, "the capped lead's edit is kept"
     assert "--max-turns" in replay.of("lead")[0].argv
     assert "CONTINUES: t1" in replay.of("orchestrator")[1].prompt or "t1" in replay.of("orchestrator")[1].prompt
@@ -285,9 +299,9 @@ def test_a_grok_lead_cancelled_at_the_cap_is_the_cap(tmp_path, monkeypatch):
         return _finish(call, replay)
 
     replay = _run(tmp_path, monkeypatch, Script(orchestrator=_continuing(DECL_T2), lead=lead), max_tasks=2,
-                  settings=Settings(backend="cli", lead_max_turns=14))
+                  files=FILES_OK, settings=Settings(backend="cli", lead_max_turns=14))
     assert replay.of("lead")[0].vendor == "grok"
-    assert replay.result.error == ""
+    assert replay.result.error == "" and _gate_passed(replay)
     assert "finished" in _read(replay, "README.md")
     assert [c.task for c in replay.of("lead")] == ["t1", "t2"]
 
@@ -301,10 +315,10 @@ def test_a_grok_cancel_before_the_cap_is_a_failure_recovered_once_on_an_unchange
         return 'Documented add.\nCHANGED: ["README.md"]'
 
     replay = _run(tmp_path, monkeypatch, Script(orchestrator=lambda c, r: DECL_T2, lead=lead),
-                  settings=Settings(backend="cli", lead_max_turns=14))
+                  files=FILES_OK, settings=Settings(backend="cli", lead_max_turns=14))
     leads = replay.of("lead")
     assert leads[0].vendor == "grok" and len(leads) == 2 and leads[1].vendor != "grok"
-    assert replay.result.error == "" and "returns the sum" in _read(replay, "README.md")
+    assert replay.result.error == "" and _gate_passed(replay) and "returns the sum" in _read(replay, "README.md")
     assert any("lead-recovery" in k for k in replay._kinds_all())
 
 
@@ -315,7 +329,7 @@ def test_a_refused_closeout_keeps_a_harness_record_and_the_run_continues(tmp_pat
         return H.claude_refusal() if call.task == "t1" else CLOSEOUT
 
     replay = _run(tmp_path, monkeypatch, Script(closeout=closeout), max_tasks=2)
-    assert replay.result.error == ""
+    assert replay.result.error == "" and _gate_passed(replay)
     assert [c.task for c in replay.of("closeout")] == ["t1", "t2"], "one close-out call per task, no retry"
     refused = replay.artifact_texts("closeout-refused")
     assert len(refused) == 1 and "declined" in refused[0]
@@ -331,3 +345,24 @@ def test_a_refused_lead_is_not_retried_or_rerouted(tmp_path, monkeypatch):
     assert replay.result.error.startswith("ProviderRefusal: claude declined the request [cyber]")
     assert [c.role for c in replay.calls] == ["orchestrator", "lead"], "no retry and no other model"
     assert _read(replay, "app.py") == FILES["app.py"]
+
+
+# -- 6. the freshness boundary itself, with set timestamps -----------------------------
+
+def test_render_freshness_is_decided_by_timestamp_not_write_order(tmp_path):
+    """Codex review: the matrix raced the write clock. The production check is
+    unchanged; this pins its boundary with explicit mtimes."""
+    import os
+
+    from quadratus.design_evidence import check, evidence_dir
+    H.evidence(tmp_path, "t1", age=0)
+    since = 1_000_000.0
+    for name in ("desktop", "mobile"):
+        os.utime(evidence_dir(tmp_path, "t1") / name / "page.png", (since, since))
+    assert check(tmp_path, "t1", since)[0], "a render at the edit's start counts"
+    assert not check(tmp_path, "t1", since + 1)[0], "a render before the edit is stale"
+    H.evidence(tmp_path, "t2", age=H.STALE)
+    H.evidence(tmp_path, "t3", age=H.FRESH)
+    import time
+    now = time.time()
+    assert not check(tmp_path, "t2", now)[0] and check(tmp_path, "t3", now)[0]
