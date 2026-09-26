@@ -382,7 +382,12 @@ _SCOPE_REQUEST = (
     'with its work preserved. The line estimate has 50 percent tolerance. '
     'Estimate code lines and test lines separately and set max_lines to their sum: '
     'test lines count in full, and a named list of test scenarios is usually the '
-    'larger half. The description is final text: write it once, with no revisions, '
+    'larger half. A new test file also pays a fixed setup cost before its first '
+    'case: imports, fixtures, and stubs or fakes for what the environment lacks '
+    '(a DOM, a browser API, a server, a clock). Count that setup too. When the setup '
+    'alone would take about a third of max_lines or more, make it its own earlier '
+    'task (the harness and one smoke case) and let the behaviour task add cases to '
+    'it. The description is final text: write it once, with no revisions, '
     'alternatives or thinking aloud; if you change your mind, rewrite the line. Give '
     'each function exactly one signature, and quote that signature verbatim in '
     'intended_result and acceptance. A declaration whose signatures disagree is '
@@ -1777,7 +1782,9 @@ class Session:
             + (f" ({state['changed_lines']} lines)" if state["changed"] else "")
             + ". This task is not done: name the remaining work as a new, smaller task "
               f"whose description includes the line 'CONTINUES: {spec.task_id}', "
-              "and do not assume any of it is finished."
+              "and do not assume any of it is finished. Size max_lines for the remaining "
+              "work only, and count every test not yet written in full, including its "
+              "setup (fixtures, stubs, fakes); if that setup is large, give it its own task."
             + (f" The lead's last words, which are narration and not a result: {said[:300]}"
                if said else " The lead returned no answer text.")
         )
