@@ -168,3 +168,70 @@ def test_a_worker_cannot_hire_in_either_layout(tmp_path, answer):
     pool = WorkerPool(store=store, run=lambda *a, **k: answer)
     with pytest.raises(FanOutExceeded, match="cannot hire"):
         pool.commission(task=_memory(store), parent_key=OPUS, prompt="go", label="w")
+
+
+# -- Run 11: a request run onto the end of a sentence --------------------------
+
+#: Grok's final reply in GameTape run 11 t1, verbatim apart from the id.
+RUN11 = ("I'll wire the existing preview builder into a POST endpoint and add Flask tests, "
+         "starting from the clip routes, parser errors, and the client fixture.FETCH: {id}")
+
+
+def test_a_request_run_onto_the_last_sentence_is_split_off():
+    preface, request = split_lead_request(RUN11.format(id="2185e3cf5881"))
+    assert request == "FETCH: 2185e3cf5881" and preface.endswith("the client fixture.")
+    assert split_lead_request("Plan.  WORKER " + LINE)[1] == "WORKER " + LINE
+    assert split_lead_request("Two questions!CONSULT sol: is the schema right?")[1].startswith("CONSULT ")
+
+
+@pytest.mark.parametrize('reply', [
+    "Use FETCH: abc123 to read it.",                          # prose, not after a sentence end
+    "I will FETCH: abc123",
+    "The ids are ready. FETCH: ids are listed above",         # inline FETCH must name one id
+    "Done. `x.FETCH: abc123`",                                # inline code
+    "Example:\n```\nstep one.FETCH: abc123\n```",             # code fence
+    "First.FETCH: abc123. Then.FETCH: def456",                # two inline requests
+    "Read it.FETCH: abc123\nCHANGED: []",                     # delivery and request at once
+    "Read it.FETCH: abc123 and then more prose follows",
+    "Plan.WORKER " + LINE + " then prose",                    # trailing prose after the object
+    "\n".join(["line"] * MAX_REQUEST_PREFACE_LINES) + "\nlast.FETCH: abc123",
+])
+def test_an_inline_request_that_is_not_one_clean_closing_request_is_a_draft(reply):
+    assert split_lead_request(reply) is None
+
+
+def test_the_editing_dispatcher_accepts_the_run11_reply(tmp_path, monkeypatch):
+    """Before the fix Fleet raised 'CHANGED report does not match' on this reply."""
+    (tmp_path / 'a.py').write_text('x\n')
+    reply = RUN11.format(id="2185e3cf5881")
+    fleet = _fleet(tmp_path, monkeypatch, reply)
+    try:
+        assert fleet.invoke(OPUS, 'edit', allow_writes=True) == reply
+    finally:
+        fleet.close()
+
+
+def test_the_drafting_loop_fetches_an_existing_worker_artifact_from_the_run11_reply(tmp_path):
+    """The lead commissions a worker, then asks for the stored result with the
+    request glued to its sentence, as run 11 did; the artifact is served."""
+    store = ArtifactStore(tmp_path / "artifacts")
+    prompts = []
+
+    def invoke(model, prompt, system=None, allow_writes=False):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return 'WORKER {"errand":"read","instruction":"Where is the client fixture?"}'
+        if len(prompts) == 2:
+            worker_ids = [i for i in store.ids() if store.ref(i).kind.startswith("worker:")]
+            assert len(worker_ids) == 1
+            return RUN11.format(id=worker_ids[0])
+        return "Done."
+
+    session = Session("goal", store, invoke, config=SessionConfig())
+    session.workers = WorkerPool(store=store, run=lambda *a, **k: "The fixture is in tests/conftest.py")
+    task = _memory(store)
+    with invocation("t1", "lead"):
+        draft = session._draft_with_channels(OPUS, TaskSpec("t1", "wire the endpoint"), task)
+    assert draft == "Done."
+    assert "The fixture is in tests/conftest.py" in prompts[2]
+    assert any(t.content.startswith("[fetched artifact ") for t in task.turns())
