@@ -41,6 +41,13 @@ pytest -q tests/lifecycle
 | continuation whose tests overrun | `test_a_continuation_whose_tests_overrun_still_stops_with_work_preserved` | ceiling unchanged, tests not trimmed |
 | interactive capture with a failed step | `test_a_capture_whose_interaction_step_failed_leaves_the_design_unverified` | a failed step reaching the check (real-browser cases in `tests/test_design_interaction.py`) |
 | clean render with no steps | `test_a_clean_render_without_steps_still_verifies` | not a defect: static design tasks stay legal |
+| two caps in a row | `test_two_caps_in_a_row_stop_with_a_named_breaker_and_the_work_kept` | Run 14 (blank `result.error` on a breaker stop) |
+| round budget stated / not stated | `test_a_capped_lead_is_told_its_round_budget`, `test_no_round_budget_is_stated_without_a_cap` | Run 14 (no lead knew a cap existed) |
+| first lead's scoped files | `test_the_first_lead_is_handed_its_scoped_files_as_they_are` | Run 14 t1 (27 discovery calls, no write) |
+| zero-write discovery cap, then continuation | `test_a_zero_write_cap_hands_its_continuation_the_files_and_says_so` | Run 14 t2 (repeated discovery) |
+| capped edits, then continuation | `test_capped_edits_reach_the_continuation_as_the_tree_now_has_them` | handoff shows the tree now, not a transcript |
+| continuation with test setup in scope | `test_a_continuation_is_handed_its_existing_test_setup` | Run 14 t2 (re-read test helpers) |
+| secret, hidden, symlinked, pattern paths in a scope | `test_secret_hidden_and_linked_files_in_a_scope_never_reach_a_prompt` | content never shown; path and reason only |
 
 On fdee0d8 (Run 9's base) eight cases fail: the three non-single-line
 request layouts, all three design cases, the Claude error case and the
@@ -52,6 +59,12 @@ clean no-step render still verifies, on purpose: the check does not require
 steps. The failed-step case proves a failed step is caught once a lead
 captures one. Whether a lead captures the changed state is asked by the
 prompt and judged by the final review and the independent grader.
+
+**Run 14's discovery cases prove the handoff, not the behaviour.** They pin
+what the harness puts in a lead's prompt (the round budget, the capped
+predecessor's record, the scoped files read fresh with a hash) and how a
+breaker stop is reported. They do not prove a model will read less, write
+earlier or finish inside its cap; only a live run shows that.
 
 ## What the scripted cases can and cannot prove
 

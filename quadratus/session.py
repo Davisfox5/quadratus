@@ -588,6 +588,32 @@ def _read_continues(spec):
     return match.group(1), replace(spec, description=description or spec.description)
 
 
+def _handoff_note(record: dict) -> str:
+    """What a capped call left, for the lead that continues it.
+
+    Only harness-held facts: the call's rounds, the files the tree shows it
+    changed, and its last text, labelled as narration. Run 14's continuation
+    repeated its predecessor's discovery because none of this reached it.
+    """
+    task, lead, turns = record.get("task"), record.get("lead"), record.get("turns")
+    changed = record.get("changed") or []
+    rounds = f" after {turns} rounds" if turns else ""
+    lines = [f"## Handoff from {task}",
+             f"{task}'s lead ({lead}) stopped at its round limit{rounds}, before finishing."]
+    if changed:
+        lines.append(f"It changed {', '.join(changed)} ({record.get('changed_lines') or 0} lines), "
+                     "unreviewed and unchecked. Those files are below as they are now: build on "
+                     "them and do not assume any of it is finished.")
+    else:
+        lines.append("It wrote nothing: its rounds went to reading. The task's files are below as "
+                     "they are now, so do not repeat that reading.")
+    said = (record.get("partial_text") or "").strip()
+    if said:
+        lines.append(f"Its last words, which are narration and not a result: {said[:300]}")
+    lines.append("Start with the remaining work, write early, and keep rounds for the check.")
+    return "\n".join(lines)
+
+
 def _read_task_orientation(description: str):
     """Split ``MAP NOTES:`` lines out of a task description.
 
@@ -803,6 +829,8 @@ class Session:
         #: What each capped call left, by task id: the evidence a continuation
         #: is handed and the breaker's stop names.
         self.turn_limited_records: Dict[str, dict] = {}
+        #: The capped task the task now running continues, if any.
+        self._continues: Optional[str] = None
         #: Why the run stopped when no exception said so (the consecutive
         #: turn-limit breaker). Empty otherwise. ``project_run`` reports it as
         #: the run's error so a breaker stop is never an unexplained blank.
@@ -1368,6 +1396,7 @@ class Session:
                 extras.append(interim)
             if fetched:
                 extras.append(_render_fetches(fetched))
+            extras.extend(self._lead_context(spec))
             budget = self._turn_budget_note(lead)
             if budget:
                 extras.append(budget)
@@ -1841,7 +1870,9 @@ class Session:
             "STOPPED AT THE LEAD TURN LIMIT before finishing"
             + (f" ({exc.turns} turns)" if exc.turns else "")
             + f". Changed, unreviewed and ungated: {changed}"
-            + (f" ({state['changed_lines']} lines)" if state["changed"] else "")
+            + (f" ({state['changed_lines']} lines)" if state["changed"]
+               else ". It wrote nothing: its rounds went to reading, and the continuation "
+                    "is handed the task's files so it need not repeat that")
             + ". This task is not done: name the remaining work as a new, smaller task "
               f"whose description includes the line 'CONTINUES: {spec.task_id}', "
               "and do not assume any of it is finished. Size max_lines for the remaining "
@@ -2270,7 +2301,11 @@ class Session:
                                       "with a COVERS line using the listed requirement ids.")
                 previous_description = None
                 continue
-            summary = self.run_task(spec)
+            self._continues = continues
+            try:
+                summary = self.run_task(spec)
+            finally:
+                self._continues = None
             if getattr(summary, "outcome", "closed") == "turn_limited":
                 # A capped continuation carries its predecessor's debt forward.
                 self._partial_tasks.discard(continues)
@@ -2885,6 +2920,33 @@ class Session:
         if self.config.codebase_map is None:
             return ""
         return self.config.codebase_map.render()
+
+    def _lead_context(self, spec: TaskSpec) -> List[str]:
+        """The capped predecessor's handoff and the task's files, for a lead.
+
+        Built fresh for every lead prompt from the selected project's working
+        tree, so a continuation sees the files as they are now, not as its
+        predecessor left them in a transcript. The harness picks the files:
+        a capped predecessor's changed files first, then the scope's exact
+        permitted paths. See :mod:`quadratus.project_files` for what is
+        refused.
+        """
+        if not self.project:
+            return []
+        from .project_files import context_pack, render_pack
+        blocks: List[str] = []
+        paths: List[str] = []
+        record = self.turn_limited_records.get(self._continues or "")
+        if record:
+            blocks.append(_handoff_note(record))
+            paths.extend(record.get("changed") or [])
+        if spec.scope is not None:
+            paths.extend(p for p in spec.scope.permitted_paths if spec.scope.permits(p))
+        included, refused = context_pack(self.project, paths, exclude=self.config.project_excludes)
+        pack = render_pack(included, refused)
+        if pack:
+            blocks.append(pack)
+        return blocks
 
     def _turn_budget_note(self, lead: str) -> str:
         """The lead's round budget in words, when a cap applies to its CLI.
