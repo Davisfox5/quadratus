@@ -197,3 +197,82 @@ def test_the_pack_holds_at_most_max_files(tmp_path, monkeypatch):
 
 def test_nothing_to_show_renders_nothing(tmp_path):
     assert render_pack(*context_pack(_root(tmp_path), [])) == ""
+
+
+# -- the window comparison is bounded (Codex review of 95b2cd7) -------------------------
+
+REPEATED = ["x"] * 20_000
+
+
+def _text(lines):
+    return "".join(line + "\n" for line in lines)
+
+
+def _with(lines, index, value):
+    out = list(lines)
+    out[index] = value
+    return out
+
+
+@pytest.mark.parametrize("old,new,expected", [
+    (REPEATED, _with(REPEATED, 0, "y"), [(1, 1)]),                         # edit at the beginning
+    (REPEATED, _with(REPEATED, 9_999, "y"), [(10_000, 10_000)]),           # in the middle
+    (REPEATED, _with(REPEATED, 19_999, "y"), [(20_000, 20_000)]),          # at the end (Codex's probe)
+    (REPEATED, REPEATED[:10_000] + ["y"] + REPEATED[10_000:], [(10_001, 10_001)]),   # an insert
+    (_with(REPEATED, 9_999, "y"), REPEATED[:9_999] + REPEATED[10_000:], [(10_000, 10_000)]),  # a delete
+])
+def test_repeated_lines_are_located_exactly_with_bounded_work(monkeypatch, old, new, expected):
+    compared = []
+    real = pf.difflib.SequenceMatcher
+
+    def recording(junk, a, b, **kw):
+        compared.append(len(a) + len(b))
+        return real(junk, a, b, **kw)
+    monkeypatch.setattr(pf.difflib, "SequenceMatcher", recording)
+    ranges, coarse = pf.changed_ranges(_text(old).encode(), _text(new))
+    assert ranges == expected and coarse is False
+    assert all(n <= pf.MAX_DIFF_LINES for n in compared), compared
+
+
+def test_a_large_dissimilar_middle_is_one_labelled_coarse_region(monkeypatch):
+    def never(*a, **k):
+        raise AssertionError("no line-by-line comparison past the bound")
+    monkeypatch.setattr(pf.difflib, "SequenceMatcher", never)
+    old = [f"same {i}" for i in range(10)] + [f"a{i}" for i in range(2_000)] + [f"end {i}" for i in range(10)]
+    new = [f"same {i}" for i in range(10)] + [f"b{i}" for i in range(2_000)] + [f"end {i}" for i in range(10)]
+    ranges, coarse = pf.changed_ranges(_text(old).encode(), _text(new))
+    assert ranges == [(11, 2_010)] and coarse is True
+
+
+def test_a_coarse_window_says_so(tmp_path, monkeypatch):
+    root = _root(tmp_path)
+    monkeypatch.setattr(pf, "MAX_FILE_BYTES", 300)
+    monkeypatch.setattr(pf, "MAX_DIFF_LINES", 10)
+    old = [f"a{i}" for i in range(100)]
+    new = [f"b{i}" for i in range(100)]
+    (root / "src" / "long.py").write_text(_text(new))
+    (entry,), _ = context_pack(root, ["src/long.py"], baselines={"src/long.py": _text(old).encode()})
+    assert entry["coarse"] and entry["windows"][0][0] == 1
+    assert "too large to compare line by line" in render_pack([entry], [])
+
+
+def test_twenty_thousand_repeated_lines_finish_promptly_under_an_outside_guard(tmp_path):
+    """Codex's probe did not finish in 3 s before the bound. Run in a child
+    process so a regression is killed by the timeout, not left running."""
+    import subprocess
+    import sys
+    script = (
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "from quadratus.project_files import context_pack\n"
+        "root = Path(sys.argv[1])\n"
+        "(root / 'big.txt').write_text('x\\n' * 19999 + 'y\\n')\n"
+        "start = time.monotonic()\n"
+        "(entry,), _ = context_pack(root, ['big.txt'], baselines={'big.txt': b'x\\n' * 20000})\n"
+        "assert entry['windows'] == [(19994, 20000)] and 'y' in entry['text'], entry['windows']\n"
+        "print(round(time.monotonic() - start, 3))\n"
+    )
+    done = subprocess.run([sys.executable, "-c", script, str(tmp_path)], capture_output=True, text=True,
+                          timeout=10, cwd=str(__import__("pathlib").Path(pf.__file__).parent.parent))
+    assert done.returncode == 0, done.stderr
+    assert float(done.stdout) < 1.0, done.stdout
