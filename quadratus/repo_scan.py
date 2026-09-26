@@ -222,8 +222,9 @@ def _declared_checks(root: Path, manifests: List[str]) -> List[List[str]]:
 
 
 def _has_python_tests(tests: Path, limit: int = 2000) -> bool:
-    """Whether ``tests`` holds a Python file, consuming at most ``limit``
-    directory entries in all (Codex review of 8a71d25: the listing was
+    """Whether ``tests`` holds a Python file, consuming at most ``limit`` + 1
+    directory entries in all: the one past the limit is read only to learn
+    the budget is spent (Codex review of 8a71d25: the listing was
     materialised whole before the budget applied).
 
     Hidden, cache and vendored directories and symlinks are skipped, as in

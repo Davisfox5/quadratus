@@ -421,15 +421,25 @@ def task_gate(policy, plan, existing, *, exclude=()):
         # Matching argv is concrete command identity, not guessed gate-name equivalence.
         matches = [g for g in commands if tuple(existing.command) == g.argv
                    and (policy.root / g.cwd).resolve() == Path(existing.cwd).resolve()]
+        # The operator gate's test-count minimum travels with it: dropping it
+        # let an all-skipped or count-free test run pass once a policy was
+        # present (Codex review of 19a0a75). Where both set one, the stricter
+        # stands.
+        operator_minimum = getattr(existing, 'minimum_tests', None)
+
+        def stricter(policy_minimum):
+            known = [m for m in (policy_minimum, operator_minimum) if m is not None]
+            return max(known) if known else None
         if matches:
             from dataclasses import replace
-            commands = [replace(g, timeout=min(g.timeout, existing.timeout), required=True)
+            commands = [replace(g, timeout=min(g.timeout, existing.timeout), required=True,
+                                minimum_tests=stricter(g.minimum_tests))
                         if g in matches else g for g in commands]
             extra = []
         else:
             extra = [integration.GateCommand('operator-check', tuple(existing.command),
                      cwd=Path(existing.cwd).resolve().relative_to(policy.root).as_posix(),
-                     timeout=existing.timeout)]
+                     timeout=existing.timeout, minimum_tests=operator_minimum)]
     elif existing is None:
         extra = []
     else:
