@@ -388,6 +388,56 @@ def _extract_grok_usage(stdout: str) -> Optional[Dict[str, int]]:
     return {"input_tokens": input_tokens, "output_tokens": output_tokens}
 
 
+def _codex_rollout_usage(root: Path, session_id: str) -> Optional[dict]:
+    """Usage from codex's own session record, for a call whose stream ended
+    without a usage report. Never raises.
+
+    GameTape run 6 (2026-09-25): the server closed the stream before
+    response.completed, stdout carried no usage, and the run budget stopped a
+    4.8M-token run on unknown usage. The rollout's token_count events still
+    tell the truth: their last total if any tokens were used, or -- when
+    every event has no usage at all -- zero. Anything else stays unknown.
+    """
+    if not session_id or not re.fullmatch(r"[A-Za-z0-9-]{8,80}", session_id):
+        return None
+    try:
+        files = sorted(Path(root).rglob(f"rollout-*{session_id}.jsonl"))
+    except OSError:
+        return None
+    if not files:
+        return None
+    counts, total = 0, None
+    try:
+        with open(files[-1], encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                payload = row.get("payload") if isinstance(row, dict) else None
+                if not isinstance(payload, dict) or payload.get("type") != "token_count":
+                    continue
+                counts += 1
+                info = payload.get("info")
+                if isinstance(info, dict) and isinstance(info.get("total_token_usage"), dict):
+                    total = info["total_token_usage"]
+    except OSError:
+        return None
+    if total is not None:
+        try:
+            return {"input_tokens": int(total.get("input_tokens") or 0),
+                    "cached_input_tokens": int(total.get("cached_input_tokens") or 0),
+                    "output_tokens": int(total.get("output_tokens") or 0)
+                                     + int(total.get("reasoning_output_tokens") or 0),
+                    "usage_source": "codex session record"}
+        except (TypeError, ValueError):
+            return None
+    if counts:
+        return {"input_tokens": 0, "output_tokens": 0,
+                "usage_source": "codex session record: no tokens consumed"}
+    return None
+
+
 def _envelope_turns(payload) -> Optional[int]:
     """How many model turns one CLI call ran, from its JSON envelope.
 
@@ -2361,6 +2411,8 @@ class CLIProvider(LLMProvider):
             if self.spec.vendor == "openai" and getattr(self, "last_session_id", None):
                 from .native_sessions import codex_children
                 root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "sessions"
+                if self.last_usage is None:
+                    self.last_usage = _codex_rollout_usage(root, self.last_session_id)
                 self.native_children.extend(codex_children(
                     root, self.last_session_id, self.workdir,
                     ended=datetime.now(timezone.utc),

@@ -396,9 +396,8 @@ def test_a_pinned_kind_overrides_the_ladder(store, rec):
 
 
 def test_the_ladder_is_deterministic_not_rotating(store, rec):
-    """Same difficulty, same lead, every time -- load is spread by the
-    orchestrator mixing difficulty labels, not by taking turns."""
-    s = _session(store, rec)
+    """With spreading off, the ladder itself: same difficulty, same lead."""
+    s = _session(store, rec, config=SessionConfig(spread_leads=False))
     leads = {
         s.run_task(TaskSpec(f"t{i}", "work", complexity=Complexity.SIMPLE)).author
         for i in range(3)
@@ -409,7 +408,7 @@ def test_the_ladder_is_deterministic_not_rotating(store, rec):
 def test_mobile_work_rides_the_ladder_like_anything_else(store, rec):
     """The exclusion this used to check named a model that left the lineup;
     what has to keep holding is that the kind still routes and never stalls."""
-    s = _session(store, rec)
+    s = _session(store, rec, config=SessionConfig(spread_leads=False))
     for i in range(len(s.brain_trust) + 1):
         got = s.run_task(
             TaskSpec(f"t{i}", "add the settings screen",
@@ -691,3 +690,21 @@ def test_the_plan_reseats_too(store):
 
     s = Session("Build a parser", store, invoke, available=lambda k: k not in down)
     assert s.plan() == "1. do the thing"
+
+
+def test_simple_and_standard_leads_spread_across_vendors(store, rec):
+    """Davis, 2026-09-25: divide the load where the model does not matter."""
+    s = _session(store, rec)
+    leads = [s.run_task(TaskSpec(f"t{i}", "work", complexity=Complexity.SIMPLE)).author for i in range(6)]
+    vendors = [lead.partition(":")[0] for lead in leads]
+    assert {vendors.count(v) for v in set(vendors)} == {2}, leads
+    assert leads[0] == GROK, "the ladder's own choice wins a tie"
+
+
+def test_complex_work_and_pinned_kinds_are_not_spread(store, rec):
+    s = _session(store, rec)
+    leads = {s.run_task(TaskSpec(f"c{i}", "work", complexity=Complexity.COMPLEX)).author for i in range(3)}
+    assert leads == {OPUS}
+    tests = {s.run_task(TaskSpec(f"q{i}", "write tests", complexity=Complexity.SIMPLE,
+                                 kind=TaskKind.TEST)).author for i in range(3)}
+    assert tests == {SOL}
