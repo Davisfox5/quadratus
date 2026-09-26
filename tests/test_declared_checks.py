@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from quadratus.integration import GateCommand, GateSuite, _test_count
+from quadratus.integration import GateCommand, GateSuite, IntegrationGate, _test_count
 from quadratus.project_run import (
     _extra_gate_commands,
     _gate_plan,
@@ -172,7 +172,7 @@ def test_policy_task_gates_keep_the_operator_extras(tmp_path):
     assert "lint" in ids and "check" in ids and "extra-1" in ids
 
 
-# -- the Python-file probe consumes a bounded number of entries (Codex review of 8a71d25) --
+# -- the Python-file probe reads at most limit + 1 entries (Codex review of 8a71d25) --
 
 class _Entry:
     def __init__(self, name, *, directory=False, path=""):
@@ -247,3 +247,59 @@ def test_the_python_probe_skips_hidden_cache_and_linked_directories(tmp_path):
     (tests / "unit").mkdir()
     (tests / "unit" / "test_z.py").write_text("")
     assert _has_python_tests(tests) is True
+
+
+# -- a policy keeps the operator gate's count minimum (Codex review of 19a0a75) ----------
+
+TWO_PASS = ("const test = require('node:test');\ntest('a', () => {});\ntest('b', () => {});\n")
+ONE_PASS = "const test = require('node:test');\ntest('a', () => {});\n"
+ALL_SKIP = "const test = require('node:test');\ntest.skip('later', () => {});\n"
+
+
+def _policy(root, *, same_argv=None, policy_minimum=None):
+    from quadratus.policy import load_policy
+    from tests.test_policy import document, write_policy
+    doc = document()
+    gate = {"id": "lint", "runner": "command", "argv": ["true"], "required": True}
+    if same_argv is not None:
+        gate = {"id": "ui", "runner": "command", "argv": same_argv, "required": True}
+        if policy_minimum is not None:
+            gate["minimum_tests"] = policy_minimum
+    doc["gates"].append(gate)
+    doc["defaults"]["required_gates"] = ["scope", gate["id"]]
+    write_policy(root, doc)
+    return load_policy(root)
+
+
+def _merged(root, argv, *, minimum, same=False, policy_minimum=None):
+    from quadratus.policy import task_gate
+    policy = _policy(root, same_argv=list(argv) if same else None, policy_minimum=policy_minimum)
+    existing = IntegrationGate(list(argv), cwd=root, minimum_tests=minimum)
+    return task_gate(policy, policy.resolve(["a.py"]), existing)
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="needs node")
+@pytest.mark.parametrize("ui,argv,minimum,passes", [
+    (ONE_PASS, ["node", "--test", "--test-reporter=dot", "ui.test.js"], 1, False),   # count unavailable
+    (ALL_SKIP, ["node", "--test", "ui.test.js"], 1, False),                          # all skipped
+    (ONE_PASS, ["node", "--test", "ui.test.js"], 2, False),                          # fewer than minimum
+    (TWO_PASS, ["node", "--test", "ui.test.js"], 2, True),                           # full pass
+    (ONE_PASS, ["node", "--check", "ui.test.js"], None, True),                       # syntax, no minimum
+])
+@pytest.mark.parametrize("same", [False, True], ids=["unmatched", "same-argv"])
+def test_a_policy_keeps_the_operator_gates_count_minimum(tmp_path, ui, argv, minimum, passes, same):
+    (tmp_path / "ui.test.js").write_text(ui)
+    gate = _merged(tmp_path, argv, minimum=minimum, same=same)
+    carried = [c for c in gate.commands if c.argv == tuple(argv)]
+    assert len(carried) == 1 and carried[0].minimum_tests == minimum
+    assert gate.run().passed is passes
+
+
+def test_the_stricter_of_policy_and_operator_minimums_stands(tmp_path):
+    argv = ["node", "--test", "ui.test.js"]
+    for name in ("a", "b"):
+        (tmp_path / name).mkdir()
+    gate = _merged(tmp_path / "a", argv, minimum=1, same=True, policy_minimum=3)
+    assert [c.minimum_tests for c in gate.commands if c.argv == tuple(argv)] == [3]
+    gate = _merged(tmp_path / "b", argv, minimum=4, same=True, policy_minimum=2)
+    assert [c.minimum_tests for c in gate.commands if c.argv == tuple(argv)] == [4]
