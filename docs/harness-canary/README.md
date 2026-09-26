@@ -4,6 +4,9 @@ State: the authorized pair ran on 2026-09-22 and was not accepted. See RESULT.md
 for the failure, complete retained records, limits and cleanup. The preparation
 record below describes what was frozen before execution.
 
+What that pair taught, what was fixed in the engine because of it, and how the
+next pair runs: NEXT.md.
+
 Compare baseline Quadratus 5d70d31 with candidate e1e1f90288d83990ca801d761ea6e86eeb78ab5e
 (Q1 through Q8 merged). Each receives an identical copy of fixture/app.py,
 fixture/README.md and policy.json at .quadratus/policy.json. The baseline predates

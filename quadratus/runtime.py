@@ -61,6 +61,8 @@ from .delegation import (
     DelegationLedger,
     InvocationEvent,
     Origin,
+    bounded_stderr,
+    bounded_tool_failures,
     capture_invocations,
     invocation_context,
     record_invocation,
@@ -210,6 +212,9 @@ class Fleet:
             effort=spec.effort if spec else "",
             restricted=spec.restricted if spec else False,
         )
+        if getattr(self.settings, "neutral_preferences", False) and hasattr(bound, "neutral"):
+            bound = copy.copy(bound)
+            bound.neutral = True
         if self.run_budget is not None:
             if any(getattr(type(bound), method) is not getattr(LLMProvider, method)
                    for method in ('generate', '_generate_once', '_observed_call')):
@@ -312,12 +317,43 @@ class Fleet:
             if self.project and self.settings.backend_for(model_key.partition(':')[0]) != 'cli':
                 raise ProviderError("Project sessions require CLI transport with filesystem access.")
             return self._closeout(model_key, provider, prompt)
+        # A verifier checks work it did not author; it has no need to hand the
+        # check on. Preventive: the Q9-v2 rerun baseline's Opus verifier call
+        # reported 1,076,547 input tokens, with usage beyond the seat on its
+        # Haiku and Opus rows that the envelope left unattributed (920,656;
+        # evidence/q9v2-rerun2-1m). Delegation is a plausible cause, not an
+        # established one. The verifier keeps every read tool and loses only
+        # native delegation, on a copy so no other seat inherits it.
+        verifying = (invocation_context.get() or {}).get("role") == "verifier"
+        # A lead's agentic turn limit, when the operator set one. Applied per
+        # call on a view, never on the shared provider. A capped lead raises
+        # TurnLimitReached with its edits still in place; the session keeps
+        # them and re-plans rather than treating the call as failed.
+        lead_turns = (self.settings.lead_max_turns
+                      if (invocation_context.get() or {}).get("role") == "lead" else None)
+        # The in-session worker tool, served by the session's WorkerBridge for
+        # this lead call only. Set on a per-call view, never on the provider.
+        lead_tool = ((invocation_context.get() or {}).get("worker_tool")
+                     if (invocation_context.get() or {}).get("role") == "lead"
+                     and hasattr(provider, "worker_tool") else None)
         if self.project is None:
+            if verifying or lead_turns or lead_tool:
+                provider = copy.copy(provider)
+                if verifying:
+                    provider.native_fanout_off = True
+                if lead_turns:
+                    provider.max_turns = lead_turns
+                if lead_tool:
+                    provider.worker_tool = lead_tool
             return self._generate(model_key, provider, prompt, role)
         if self.settings.backend_for(model_key.partition(':')[0]) != 'cli':
             raise ProviderError("Project sessions require CLI transport with filesystem access.")
         if allow_writes and not provider.restricted:
             view = provider.in_directory(self.project.root, allow_writes=True)
+            if lead_turns:
+                view.max_turns = lead_turns
+            if lead_tool:
+                view.worker_tool = lead_tool
             before = self.project.contents()
             reply = self._generate(model_key, view, prompt, role +
                                   "\nYour working directory is the persistent project. "
@@ -325,12 +361,18 @@ class Fleet:
                                   "or change branches. Return a concise account and exactly one "
                                   'closing line CHANGED: ["relative/path"] listing every file this '
                                   'call added, changed or deleted. Use CHANGED: [] for no changes. '
-                                  'A standalone FETCH, CONSULT or WORKER request may omit the line '
-                                  'only if this call changed no files.')
+                                  'A standalone FETCH, CONSULT or WORKER request may omit the line; '
+                                  'any files you changed before it are kept.')
             after = self.project.contents()
             changed = sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
-            control = re.fullmatch(r'\s*(?:FETCH:|CONSULT |WORKER )[^\n]+\s*', reply)
-            if control and not changed:
+            from .taskmeta import lead_request
+            if lead_request(reply) is not None:
+                # A request mid-work is legitimate even after edits: GameTape
+                # run 5 (2026-09-25) had a lead fix one test line, then ask a
+                # worker to check the endpoint, and this refusal ended the run.
+                # The edits stay in place, the task-level scope check still
+                # measures them, and the session tells the lead what it has
+                # changed so far when it asks again.
                 return reply
             rows = re.findall(r'^CHANGED: (.*)$', reply, re.MULTILINE)
             try:
@@ -348,6 +390,12 @@ class Fleet:
             return reply
         with self.project.snapshot() as directory:
             view = provider.in_directory(directory, allow_writes=False)
+            if verifying:
+                view.native_fanout_off = True
+            if lead_turns:
+                view.max_turns = lead_turns
+            if lead_tool:
+                view.worker_tool = lead_tool
             role += ("\nYour working directory is a fresh source copy. Read it to ground your "
                      "answer. Do not change files, commit, push, or use paths outside this copy. "
                      "Cite files by their path relative to the project root, not by the absolute "
@@ -372,7 +420,7 @@ class Fleet:
         if allow_writes:
             match = re.fullmatch(r"\s*PATCH:\s*```(?:diff)?\n(.*?)```\s*", reply, re.DOTALL)
             if match:
-                self.project.apply_patch(match.group(1))
+                self.project.apply_patch(_add_missing_headers(match.group(1), prompt, self.project.root))
                 return reply + "\nPatch applied to the project."
             continuation = (worker_loop_control.get() is not None and reply.startswith('CONTINUE:'))
             if not continuation and not re.match(r"\s*(?:NO CHANGES:|FETCH:|CONSULT |WORKER )", reply):
@@ -428,7 +476,10 @@ class Fleet:
                 post_return_failure=getattr(failure, 'post_return_failure', False),
                 detail=str(failure)[:200] if failure else "",
                 usage=getattr(view, "last_usage", None),
+                prompt_artifact=context.get("prompt_artifact"),
             )
+            self._report_call(key, view, role, task, seconds, invoked,
+                              type(failure).__name__ if failure else "ok")
             self._observe_native(key, view)
             if not failure or getattr(view, "last_usage", None):
                 self._meter(key, view, prompt, reply)
@@ -438,6 +489,8 @@ class Fleet:
         # A custom provider may implement generate directly; cover it too.
         provider.last_usage = None
         provider.last_diagnostics = None
+        provider.last_stderr = ""
+        provider.last_tool_failures = []
         provider.native_children = []
         try:
             reply = provider.generate(prompt, system=system)
@@ -446,6 +499,13 @@ class Fleet:
                 from .run_budget import RunBudgetExceeded
                 observe(provider, 1, time.monotonic() - started, exc,
                         invoked=not isinstance(exc, RunBudgetExceeded))
+            if isinstance(exc, Exception) and getattr(exc, "auth_invalid", False):
+                # A rejected sign-in takes the whole vendor out, not one model.
+                vendor = key.partition(":")[0]
+                for spec in _roster_for(vendor):
+                    self.mark_exhausted(spec.key, str(exc))
+                self.mark_exhausted(key, str(exc))
+                raise WindowExhausted(f"{key}: {exc}") from exc
             if isinstance(exc, Exception) and _looks_exhausted(exc):
                 self.mark_exhausted(key, str(exc))
                 raise WindowExhausted(f"{key}: subscription window exhausted ({exc})") from exc
@@ -459,12 +519,20 @@ class Fleet:
 
     def _record_invocation(self, key, provider, *, role, task, origin,
                            seconds, invoked, outcome, usage=None, detail="",
-                           post_return_failure=False, attempt=1, provider_outcome=None):
+                           post_return_failure=False, attempt=1, provider_outcome=None,
+                           prompt_artifact=None):
         """Append one invocation to the delegation ledger. Never raises."""
         if self.delegation_ledger is None:
             return
         try:
             usage = usage or {}
+            raw = getattr(provider, "last_diagnostics", None) or {}
+            # One cache figure per row: the usage dict's when the extractor
+            # gives one (codex), else the envelope's re-read count (claude,
+            # grok), which is the same subset of input_tokens.
+            cached = usage.get("cached_input_tokens")
+            if cached is None and isinstance(raw.get("cached_input_tokens"), int):
+                cached = raw["cached_input_tokens"]
             event = InvocationEvent(
                 task=task or "-",
                 role=role or "-",
@@ -484,14 +552,41 @@ class Fleet:
                 # Absent stays absent: None is unknown, and unknown is not zero.
                 input_tokens=usage.get("input_tokens"),
                 output_tokens=usage.get("output_tokens"),
-                cached_input_tokens=usage.get("cached_input_tokens"),
+                cached_input_tokens=cached,
+                fresh_input_tokens=(usage["input_tokens"] - cached
+                                    if isinstance(usage.get("input_tokens"), int) and isinstance(cached, int)
+                                    and usage["input_tokens"] >= cached else None),
+                model_turns=raw.get("model_calls") if isinstance(raw.get("model_calls"), int) else None,
+                max_turns=getattr(provider, "max_turns", None),
+                turn_limited=outcome == "TurnLimitReached",
+                prompt_artifact=prompt_artifact,
                 session_id=getattr(provider, "last_session_id", None),
                 post_return_failure=post_return_failure,
                 detail=detail,
+                stderr_tail=bounded_stderr(getattr(provider, "last_stderr", "")),
+                tool_failures=bounded_tool_failures(getattr(provider, "last_tool_failures", None)),
             )
             record_invocation(self.delegation_ledger, event)
         except Exception:  # noqa: BLE001 -- accounting never fails a run
             log.debug("could not record invocation for %s", key, exc_info=True)
+
+    def _report_call(self, key, provider, role, task, seconds, invoked, outcome) -> None:
+        """One live progress line as each call ends. Never raises.
+
+        Before this, progress named task boundaries only, so a 9-minute,
+        1.9M-token lead call was invisible until the run stopped.
+        """
+        report = getattr(self, "progress", None)
+        if report is None or not invoked:
+            return
+        try:
+            usage = getattr(provider, "last_usage", None) or {}
+            turns = (getattr(provider, "last_diagnostics", None) or {}).get("model_calls")
+            report(f"call ended: {task} {role} {key}: {outcome}, {round(seconds or 0)} s, "
+                   f"{usage.get('input_tokens', '?')} in / {usage.get('output_tokens', '?')} out tokens"
+                   + (f", {turns} turns" if isinstance(turns, int) else ""))
+        except Exception:  # noqa: BLE001 -- reporting never fails a run
+            log.debug("progress line failed", exc_info=True)
 
     def _observe_native(self, key, provider) -> None:
         """Fold any vendor-native children the provider reported into the record.
@@ -593,6 +688,22 @@ def new_session(goal, store, *, fleet=None, config=None, invariants=None, settin
 
     if active.usage_meter is not None and conf.usage_meter is active.usage_meter:
         conf = replace(conf, usage_meter=None)
+    if conf.fork is None and getattr(active, "project", None) is not None and isinstance(active, Fleet):
+        def fork(root):
+            """A Fleet for one parallel task's copy of the project, sharing
+            this run's budget, meter and invocation ledger."""
+            from .project import Project
+            child = type(active)(active.settings,
+                                 project=Project(root, exclude=active.project.exclude),
+                                 allow_writes=active.allow_writes, usage_meter=active.usage_meter,
+                                 delegation_ledger=active.delegation_ledger,
+                                 **({"run_budget": active.run_budget} if active.run_budget else {}))
+            try:
+                child.progress = getattr(active, "progress", None)
+            except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
+                pass
+            return child.invoke, child.close
+        conf = replace(conf, fork=fork)
     return Session(
         goal,
         store,
@@ -635,6 +746,23 @@ def _relativise_snapshot_paths(reply: str, directory) -> str:
         reply = reply.replace(spelling + os.sep, "")
         reply = reply.replace(spelling, "the project root")
     return reply
+
+
+def _add_missing_headers(patch: str, prompt: str, root) -> str:
+    """Give a header-less patch its file headers, only when unambiguous.
+
+    A worker that returns bare '@@' hunks cannot be applied. When the errand
+    names exactly one existing project file, that is the only file the hunks
+    can mean; anything else is left alone to fail as before.
+    """
+    if re.search(r"^(---|\+\+\+) ", patch, re.MULTILINE) or not re.search(r"^@@ ", patch, re.MULTILINE):
+        return patch
+    base = Path(root)
+    named = {p.lstrip("./") for p in re.findall(r"[\w./-]+\.[A-Za-z]\w*", prompt or "")}
+    existing = sorted(p for p in named if p and not p.startswith("/") and (base / p).is_file())
+    if len(existing) != 1:
+        return patch
+    return f"--- a/{existing[0]}\n+++ b/{existing[0]}\n" + patch
 
 
 def _looks_exhausted(exc: Exception) -> bool:

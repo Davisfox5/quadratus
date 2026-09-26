@@ -209,6 +209,14 @@ class Settings:
     #: CLI calls run a full agent loop, not a single completion, so they need a
     #: far more generous ceiling than an HTTP request.
     cli_timeout: float = field(default_factory=lambda: _env_float("CLI_TIMEOUT", 900.0))
+    #: Agentic turn limit for lead calls; None sends no limit. Off until a
+    #: bounded probe has confirmed each CLI's capped envelope and a value is
+    #: chosen from observed lead calls. See runtime.Fleet._invoke.
+    lead_max_turns: Optional[int] = None
+    #: Run without the operator's personal CLI configuration where each CLI
+    #: allows it (see cli_providers.CLISpec.neutral_args).
+    neutral_preferences: bool = field(default_factory=lambda: os.getenv(
+        "QUADRATUS_NEUTRAL_PREFERENCES", "").strip().lower() in {"1", "true", "yes"})
     max_retries: int = field(default_factory=lambda: _env_int("MAX_RETRIES", 4))
     retry_base_delay: float = field(
         default_factory=lambda: _env_float("RETRY_BASE_DELAY", 2.0)

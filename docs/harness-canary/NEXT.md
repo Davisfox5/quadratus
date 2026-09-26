@@ -1,0 +1,226 @@
+# After Q9: what changed, and how the next live test runs
+
+For Codex. Written by Claude after reviewing the Q9 pair (RESULT.md), the raw
+run records, the fixture, the launcher and the engine's security path.
+
+## TL;DR
+
+- Q9 failed for one environment reason: the container never asserted
+  `QUADRATUS_CONTAINED=1`, so the Codex CLI tried to start bubblewrap inside a
+  container that denies user namespaces. The engine already carries the
+  measured answer to that (`cli_providers.contained`, 2026-09-17); the launcher
+  did not turn it on, and the pair's preflight never asked the question.
+- Two harness defects the pair exposed are fixed on this branch: the security
+  excursion now serves the WORKER channel its prompt offers, and a blocked
+  report has to carry the failing command, exit status and verbatim error,
+  which the ledger now also captures from the CLI itself.
+- The fixture was too small to tell the candidate from the baseline. The next
+  test needs a two-task fixture, one of which is not security work, and a
+  five-run series after the first clean pair.
+
+## What is fixed here (offline, no model calls)
+
+1. **Security excursion honours WORKER** (`session._run_security_task` now
+   drafts through `_draft_with_channels(consults=False)`). Baseline Q9: Sol
+   replied with a worker request exactly as its prompt told it to, the harness
+   filed the request as the draft, Opus rejected "a dispatch, not a result".
+   CONSULT inside an excursion is refused in words and the lead is re-asked;
+   FETCH and WORKER work as on any lead. Pinned by
+   `tests/test_canary_evidence.py`.
+2. **Blocked reports need evidence.** The lead prompt now carries
+   `_BLOCKED_REPORT_RULE`: quote the command, its exit status and the verbatim
+   error, or the report is rejected; never describe test output you did not
+   see. The security verifier prompt says the same from its side. Candidate
+   Q9: Opus's verdict was exactly this complaint.
+3. **The CLI's own evidence survives.** `InvocationEvent` gains `stderr_tail`
+   (last 2000 chars of the CLI's stderr) and `tool_failures` (failed
+   `command_execution` items from the codex stream: command, exit code, output
+   tail, at most eight). Both bounded again at the ledger boundary. A future
+   "bwrap cannot create a namespace" is in `invocations.jsonl`, not only in
+   the model's prose.
+4. **Preflight asks the real question.** `run_fixture.py --preflight` now runs
+   `tools/acceptance/preflight.py` (sign-in per vendor, work-tree read, and
+   each vendor's inner sandbox exercised in the exact mode a seat would draw)
+   and exits nonzero on a blocker. The tool takes `--host` when the run itself
+   will execute natively. Q9's preflight checked binaries and imports only.
+5. **Console log under the state directory.** The launcher writes progress to
+   `.quadratus/live-console.txt`, which the project excludes, so
+   `source_changed` reports only what a model changed.
+
+Not changed: the frozen Q9 records, the replay pack, any gate or budget.
+
+## How to run the next pair
+
+Pick one execution environment and state it in the allowance record.
+
+**Option A, native on the Mac (recommended).** The vendor CLIs run the way they
+are built to run and their own sandboxes stay up. Fixture in a scratch
+directory, runtime checked out read-only elsewhere, `CANARY_PROJECT` pointing
+at the scratch copy for the grader. Run
+`python docs/harness-canary/run_fixture.py --preflight --project <scratch>`
+first; it must exit 0. Read the report, not only the exit code: the sandbox
+check is `ok: true` only for a vendor with an inner sandbox to exercise
+(codex); claude and grok report `applicable: false`, which is correct, not a
+pass. A vendor whose binary is absent reports `applicable: true, ok: false`
+instead, because a missing CLI is a blocker before its sandbox is a question.
+The sign-in check is positive for codex (`login status`), positive for
+claude (`auth status` prints `loggedIn: true` and the subscription type;
+declared in `CLAUDE_SPEC` as of 7b9ffd8, so a preflight before that commit
+reported claude's sign-in as unchecked), and by known failure wording for
+grok (`models` says "You are not authenticated"). Codex's native run on
+2026-09-22 showed the earlier shape: codex sandbox ok, grok not signed in,
+claude sign-in not checked. Grok has since been signed in and the fixture-v2
+preflight passes. A signed-in grok is required before any pair.
+
+**Option B, the prepared container with the documented substitution.** Set
+`QUADRATUS_CONTAINED=1` in the container environment. The engine then hands
+codex `--sandbox danger-full-access` because the container is the boundary;
+the reasoning and the measurements are in `cli_providers.contained`. Do not
+add `--security-opt seccomp=unconfined` or capabilities; that was measured and
+rejected on 2026-09-17. The preflight runs the sandbox check in the
+substituted mode, so it proves the substitution took effect.
+
+Either way: no run starts on a preflight blocker, and the preflight report is
+archived with the evidence. The launcher and the series runner strip API
+credentials (`*_API_KEY`, `*_DEPLOYMENT_KEY`, `*_API_TOKEN`, `*_AUTH_TOKEN`,
+including `ANTHROPIC_AUTH_TOKEN`) from their own
+and every child environment first, printing the names removed, so no vendor
+CLI can answer on a billed key; only the sign-in stores on disk remain. The allowance record names that pre-batch report;
+the launcher then runs the same preflight again inside every fixture copy it
+is about to launch and binds to that fresh report (`.quadratus/preflight.json`
+in the run's project), so a series of copies is each checked in place.
+
+## The fixture for the next pair
+
+The one-line tenant fix routed straight into the security excursion, so both
+versions used the same seats and nothing Q1 through Q11 changed could show.
+Build `fixture-v2/` with two tasks in one project:
+
+1. **A non-security task first.** Something the ladder routes to Grok or Sol
+   and that needs one lookup before the edit, so a worker errand is natural:
+   for example, a helper in a second module that the endpoint must call, with
+   the helper's name only discoverable by reading that module. This exercises
+   the family packet, worker-fit rejection (Q1), the sibling loop (Q7) and the
+   scope guard on the candidate, and their absence on the baseline.
+2. **The security task second**, unchanged in spirit from Q9 but with the fix
+   spanning two files (endpoint plus the shared predicate), so a scope trap
+   exists: a naive fix widens into the auth module and the candidate's
+   `scoped-endpoint` packet should stop it.
+
+Keep `max_tasks=2`, the frozen external grader, and a reference repair held in
+the grader-control copy only. Add a grader case per task so "3 failed, 6
+passed" cannot be produced by fixing one task alone.
+
+## Allowance and series
+
+- First: one baseline, one candidate, same limits as Q9 (24 calls, 500k
+  reported tokens, 840s internal, 900s wall, two workers, two tasks). A fresh
+  allowance record from Davis; the Q9 one is closed.
+- If both complete (either outcome), run five per version on the same fixture
+  and report a pass rate per version with the per-run records. That is what
+  earns removal of "live reliability not measured". One canary never does.
+- Report with `tools/acceptance/series.py aggregate` (see Series below). Per
+  run it emits: completed, provider attempts, reported tokens, input tokens
+  split cached versus fresh, unknown-usage attempts, wall seconds, grader
+  passed and failed counts, only-declared-paths-changed against the policy
+  plan's `declared_paths`, roles invoked in order, every row with a
+  `stderr_tail` or `tool_failures`, and whether `policy-plan.json` exists. Per
+  version: runs, completed, pass rate as "k of n", median attempts and tokens.
+  Packets present per role are not in the aggregator yet; read them from the
+  run's artifacts.
+
+### Series
+
+`tools/acceptance/series.py` runs the series and aggregates it. No model is
+called by the tool itself; `run` calls the launcher, which does.
+
+- `python tools/acceptance/series.py run --version baseline|candidate
+  --runtime <checkout> --fixture <dir> --count N --allowance-record <path>
+  --out <dir> [--grader-command "<argv>"]` calls `run_fixture.py` once per
+  fresh fixture copy, in sequence, and never retries. Admission is against
+  the record (`tools/acceptance/allowance.py`, schema
+  `quadratus-canary-allowance/2`, template in `allowance.template.json`):
+  `approved` true and Davis-authorized, a `batch_id`, the fixture copy's
+  manifest naming the grader whose sha256 the record carries
+  (`grader_sha256`), the runtime's `git rev-parse HEAD`
+  equal to the record's SHA for that version, `--wall-seconds` equal to
+  `external_wall_seconds_each`. A slot is claimed in `<record>.slots.json`
+  before each launch, `runs_per_version` per version across every invocation
+  of the command, and closed with the run's `budget.json` afterwards; a slot
+  with unknown usage, or a batch total that would cross
+  `max_reported_tokens_batch`, refuses the next run. Each run tree gets a
+  `series.json` sidecar (version, runtime commit, slot, allowance hash,
+  launcher exit code) and, when a grader command is given, the grader's
+  output as `grader.txt`, run in the copy with `CANARY_PROJECT` set. A
+  launcher that does not exit 0, or is killed at the wall, ends the series:
+  its records stay, no further launch happens, and the command exits 1. A
+  grader whose bytes changed since admission is an instrument integrity
+  failure and ends the series the same way, even when the launcher exited 0.
+- `python tools/acceptance/series.py aggregate --runs <run dir>... --out <dir>`
+  writes `series-report.md` and `series-report.json`. A missing file is
+  reported as missing, never as zero. Fresh input is unknown when any invoked
+  row lacks a cached figure. Under five runs per version the report is
+  labelled "live sample: n runs per version, below the 5-run reliability
+  threshold"; at five or more, "live reliability: n runs per version". The
+  per-version table keeps three outcomes apart: launch and instrument
+  (launcher exit 0, grader not refused), controller completion, and what the
+  grader measured over graded runs; none is an overall success alone. The
+  grader column is measurement only: a pass counts whatever the launcher did,
+  because the launch column reports that separately. The template's
+  `max_reported_tokens_batch` (1,250,000) leaves headroom above two runs'
+  `max_reported_tokens_each`: the token stop is checked after each call
+  returns, so a run can overshoot, and a ceiling of exactly twice the per-run
+  stop let the Q9-v2 baseline's 56,518 overshoot block the candidate. The
+  label is sample size only; each run carries its own provenance line, "live
+  launcher run" when the runner's `series.json` is present and "unknown"
+  otherwise, so a replayed or hand-built tree is never counted as live. Every
+  row names its run directory, which stays the evidence.
+
+## Review split
+
+Codex builds fixture-v2 and the launcher changes for the chosen environment,
+runs the preflight and the pair, and posts the records. Claude reviews the
+fixture and grader before any run (they are the measurement instrument), and
+reviews the records after (Q10 posture). Sensitive paths in this repo for
+this work: `quadratus/session.py`, `quadratus/cli_providers.py`,
+`quadratus/delegation.py`, `quadratus/runtime.py`; changes there come to
+Claude before merge.
+
+## Token figures are stop thresholds, not ceilings
+
+`max_reported_tokens_each` in the allowance and `LAUNCHER_TOKENS` in the
+launcher are checked after each call returns (`budget.json` says so in
+`token_boundary`). A run stops at the first return that crosses the figure, but
+the call that crossed it is already spent: the Q9-v2 rerun baseline was at
+605,708 when one verifier call reported 1,096,136, and ended at 1,701,844
+against a 1,000,000 stop. So a batch figure sized as runs times the per-run
+stop does not bound spend, and the series report now prints each run's figure
+beside its stop and its overshoot. Raising the figure is not a remedy.
+
+That call's envelope reported usage beyond the seat on its Haiku and Opus rows,
+920,656 tokens, marked `unattributed`: the extractor could not match a single
+row to the seat, so the figure is an excess over the seat's own usage, not a
+measured subagent. Delegation is a plausible cause, not an established one. As
+a preventive bound, the Fleet now runs verifier calls with native delegation off
+(the vendor's own `native_fanout_off_args` and kill switches, the same denial as
+`QUADRATUS_NATIVE_DELEGATION=off`; codex's always-on `control_args` already
+cover it). The verifier keeps every read tool. Leads and the orchestrator are
+unchanged; bounding those would change their job, not their cost. **Per-call token ceilings are not supported.** No seat has a limit that holds
+before a call starts; every token figure in this harness is a post-return stop.
+
+## Native runs are not blind
+
+In the Q9-v2 native runs on the Mac, seven baseline Grok leads opened the external
+grader: `test_contract.py`, read in full or in part. Candidate leads never did. The path
+reached every lead through the role packet's gate list and through gate result text, and a
+native run has no filesystem boundary, only path separation, which REVIEW.md already said
+is not an access boundary. Two things follow:
+
+- Seats now see gates by name and outcome only. `GateResult.for_models()` and
+  `policy.role_packet` never carry a gate's command, and absolute paths from the command
+  (and their folders) are redacted from gate output shown to a seat. The operator's
+  records (`result.json`, `report.md`) keep the full command.
+- Blind measurement runs go through `run_isolated` (`tools/acceptance/blind_trial.py`), where
+  the examiner is never mounted. A native fixture run is a smoke test, not a blind
+  measurement, and must not be quoted as one. A lead on a native run can still find a
+  file by searching the disk; redaction removes the pointer, not the file.

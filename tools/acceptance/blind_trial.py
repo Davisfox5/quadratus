@@ -66,9 +66,14 @@ def main():
 
     cli._launch = capture
     try:
+        rulings = Path(__file__).with_name('rulings.json')
+        ask = None
+        if rulings.exists():
+            from quadratus.project_run import standing_rulings
+            ask = standing_rulings(rulings)
         result = run_project((project / 'TASK.md').read_text(), project, settings,
                              allow_writes=True, check='python -m pytest -q',
-                             progress=progress, run_limits=limits)
+                             progress=progress, run_limits=limits, ask_operator=ask)
         (state / 'launcher-result.json').write_text(json.dumps({
             'completed': result.completed, 'error': result.error,
             'run_dir': str(result.run_dir),

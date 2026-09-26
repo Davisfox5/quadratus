@@ -23,11 +23,14 @@ does not need judgement.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
 import logging
+import os
 import re
+import time
 from dataclasses import dataclass, field, replace
 from functools import wraps
 from pathlib import Path
@@ -44,7 +47,7 @@ from .delegation import (
     invocation_context,
 )
 from .memory import PersistentMemory, TaskMemory, TaskSummary
-from .providers import PartialWorkSuspected, ProviderError, ProviderRefusal
+from .providers import PartialWorkSuspected, ProviderError, ProviderRefusal, TurnLimitReached
 from .registry import peers_for, resolve
 from .routing import (
     Seat,
@@ -70,7 +73,7 @@ from .task_kinds import (
     seat_satisfies,
 )
 from .task_kinds import route as route_kind
-from .taskmeta import AmbiguousMetadata, TaskMetadata, parse_control, parse_metadata
+from .taskmeta import AmbiguousMetadata, TaskMetadata, lead_request, parse_control, parse_metadata
 from .usage import UsageMeter
 from .workers import (
     WORKER_TREE,
@@ -161,6 +164,16 @@ _SIZE_CEILING = (
     f"instead and leave the rest for the next round. Review quality falls by "
     f"roughly an order of magnitude across this threshold, so a task scoped "
     f"too large is one whose defects will not be found."
+)
+
+#: The one question asked after the task cap is spent. It can only confirm:
+#: the reply is never parsed as a task, so no answer to it can start work.
+_TERMINAL_REQUEST = (
+    "The task cap for this run has been reached. No further task will be run, "
+    "whatever you reply. Reply exactly DONE if the work in the ledger meets the "
+    "goal. Otherwise reply 'NOT DONE: <what remains>'. To read a full artifact "
+    "behind a summary first, reply with exactly 'FETCH: <artifact-id>' and "
+    "nothing else."
 )
 
 
@@ -284,6 +297,10 @@ class SessionConfig:
     #: How many fix rounds a failing integration gate buys the lead before
     #: the failure is carried into the record as an open problem.
     max_gate_fixes: int = 1
+    #: A lead that stops at its turn limit hands its unfinished task back
+    #: for re-planning. This many in a row are tolerated; one more ends the
+    #: run cleanly, so a limit set too low cannot loop.
+    max_turn_limited_in_a_row: int = 1
     # Opt-in v1 contract; False retains the legacy prose path for one release.
     security_verdict_json: bool = False
     #: Called with a one-line note as the run moves: the plan, each task as it
@@ -308,6 +325,36 @@ class SessionConfig:
     #: stall backstop for that, sitting below WorkerBudget.max_per_task so the
     #: lead still has room to genuinely reroute.
     max_worker_failures: int = 4
+    #: Offer leads the ``commission_worker`` tool, served mid-session by a
+    #: WorkerBridge, so delegating no longer ends the lead's session. The
+    #: WORKER reply stays for write errands and CLIs without the tool.
+    in_session_workers: bool = True
+    #: Spread simple and standard leads across vendors by how many tasks each
+    #: has led this run (see Session._spread_lead).
+    spread_leads: bool = True
+    #: How many independent tasks may run at once (Davis, 2026-09-25: run
+    #: tasks in parallel whenever possible). 1 turns parallel batches off.
+    max_parallel_tasks: int = 3
+    #: Supplied by the project runner: given a directory, an ``(invoke,
+    #: close)`` pair bound to a Fleet for that directory, sharing the run's
+    #: budget, meter and ledger. Without it batches run one at a time.
+    fork: Optional[Callable] = None
+    #: Design and UI work is verified by the model that did it: the lead is
+    #: told to look at the rendered result at desktop and mobile widths and
+    #: report what it saw. Davis's ruling, 2026-09-25.
+    design_self_verify: bool = True
+    #: Design and UI work also gets a reviewer from another vendor, briefed
+    #: on design and aesthetic choices, even when the task is SIMPLE.
+    design_cross_check: bool = True
+    #: The orchestrator numbers the goal's requirements, every task names
+    #: what it covers, and DONE needs full coverage plus a cross-vendor audit.
+    #: On by default. QUADRATUS_REQUIREMENTS_LEDGER=0 turns it off, which the
+    #: test suite does for scripted orchestrators that predate the ledger.
+    requirements_ledger: bool = field(default_factory=lambda: os.getenv(
+        "QUADRATUS_REQUIREMENTS_LEDGER", "1").strip() != "0")
+    #: How many times DONE may be sent back for uncovered or unmet
+    #: requirements before the run stops incomplete instead.
+    max_requirement_reopens: int = 3
     #: Records who actually ran, distinguishing Quadratus-dispatched work from
     #: vendor-native children and vendor-internal auxiliary activity, and
     #: carrying what the harness cannot observe or bound. Observational only.
@@ -380,6 +427,128 @@ _NEEDS_REQUEST = (
     'apply; direct-write means the tool itself must write files. A docs/rote '
     'task that runs tests still needs execute. Requirements do not grant permission.'
 )
+
+
+_UI_PATH = re.compile(r"(?i)(^|/)(templates|static|components|pages|views|styles?)/|\.(html?|css|scss|sass|less|jsx|tsx|vue|svelte)$")
+
+
+def is_design_task(spec) -> bool:
+    """Work that changes what a user sees: the frontend kind, or a declared
+    scope that reaches UI files."""
+    if getattr(spec, "kind", None) == TaskKind.FRONTEND:
+        return True
+    paths = getattr(getattr(spec, "scope", None), "permitted_paths", ()) or ()
+    return any(_UI_PATH.search(str(p)) for p in paths)
+
+
+_DESIGN_SELF_VERIFY = (
+    "This task changes what users see, so you verify it yourself before you finish. "
+    "Start the app if it needs a server, then capture the page at a desktop and a mobile "
+    "width with exactly this command (it writes the screenshots the harness checks):\n"
+    "    {command}\n"
+    "Look at both screenshots, and at the console errors and failed requests it reports, "
+    "and fix what is wrong. Check the states the task names, for example empty, loading, "
+    "error and populated. Report in a few lines what you looked at and what you saw. "
+    "Without both screenshots from this task, the task is recorded as unverified design work."
+)
+
+_DESIGN_REVIEW_LENS = (
+    "\n\nThis is design work. Besides correctness, judge the design and aesthetic "
+    "choices: layout and visual hierarchy, consistency with the existing interface, "
+    "readable text and contrast, keyboard and screen-reader access, and how it holds "
+    "up at a mobile width. Mark a design problem BLOCKING only when a user would be "
+    "misled or unable to use the feature."
+)
+
+_REQUIREMENTS_REQUEST = (
+    "Before your first task, number the goal's requirements: a line 'REQUIREMENTS:' "
+    "and then one line per requirement, 'R1: <one testable requirement>'. Take them "
+    "from the goal and cover every deliverable it names -- behaviour, interfaces, "
+    "user interface, documentation, and any promise about working with what the "
+    "product already does -- and every constraint it sets on what must NOT happen "
+    "(for example read-only, no new dependencies, no saving). Then name your first "
+    "task as usual."
+)
+_COVERS_REQUEST = (
+    "Include one line 'COVERS: R2, R5' naming the requirements this task delivers. "
+    "The run is complete only when every requirement is covered by a finished task "
+    "and an independent audit finds it met; DONE before that is sent back to you."
+)
+_ASK_SPARINGLY = (
+    "Ask the operator sparingly. Reply 'ASK: <one question>' only for a large-scale "
+    "production decision that only they can make: scope, data safety, security, cost, "
+    "or an interface other systems rely on. For an ambiguous requirement that is not "
+    "one of those, decide it yourself with a line 'DECIDE: R<n> - <the reading you "
+    "chose and why>', preferring the reading that keeps existing behaviour working and "
+    "satisfies every promise in the goal. Decisions are recorded as yours and the "
+    "audit checks the work against them."
+)
+_DECIDE = re.compile(r"^\s*DECIDE:\s*(R\d+)\s*[-:—]\s*(.+?)\s*$", re.MULTILINE)
+_PARALLEL_REQUEST = (
+    "Independent tasks run in parallel. When two or three tasks change disjoint "
+    "files and none needs another's result, name them together: a line 'PARALLEL', "
+    "then each task as a complete block (KIND, SCOPE, COVERS and description), "
+    "blocks separated by a line '---'. Each SCOPE must list exact file paths, no "
+    "wildcards, and no file may appear in two blocks. Work that shares a file stays "
+    "one task at a time."
+)
+_REQ_BLOCK = re.compile(r"^\s*REQUIREMENTS:\s*\n((?:\s*R\d+\s*[:.)-].*\n?)+)", re.MULTILINE)
+_REQ_LINE = re.compile(r"^\s*(R\d+)\s*[:.)-]\s*(.+?)\s*$", re.MULTILINE)
+_COVERS = re.compile(r"^\s*COVERS:\s*(.+?)\s*$", re.MULTILINE)
+_AUDIT_LINE = re.compile(r"^\s*(R\d+)\s*:\s*(MET|NOT MET)\b[\s:—-]*(.*)$", re.MULTILINE | re.IGNORECASE)
+
+
+def _read_requirements(reply: str):
+    """Split a REQUIREMENTS block off an orchestrator reply."""
+    match = _REQ_BLOCK.search(reply or "")
+    if not match:
+        return {}, reply
+    found = {rid: text for rid, text in _REQ_LINE.findall(match.group(1))}
+    rest = (reply[:match.start()] + reply[match.end():]).strip()
+    return found, rest
+
+
+def _read_covers(spec):
+    """Split a ``COVERS: R1, R3`` line off a task."""
+    match = _COVERS.search(spec.description or "")
+    if not match:
+        return [], spec
+    ids = re.findall(r"R\d+", match.group(1))
+    description = _COVERS.sub("", spec.description).strip()
+    return ids, replace(spec, description=description or spec.description)
+
+
+_PARALLEL_HEAD = re.compile(r"^\s*PARALLEL\s*$", re.MULTILINE)
+
+
+def _parallel_blocks(reply: str):
+    """The task blocks of a 'PARALLEL' reply, or None for a single task."""
+    match = _PARALLEL_HEAD.search(reply or "")
+    if not match:
+        return None
+    blocks = [b.strip() for b in re.split(r"^\s*---\s*$", reply[match.end():], flags=re.MULTILINE)]
+    blocks = [b for b in blocks if b]
+    return blocks if len(blocks) >= 2 else ([blocks[0]] if blocks else None)
+
+
+def _literal_paths(scope) -> Optional[set]:
+    paths = list(getattr(scope, "permitted_paths", ()) or ())
+    if not paths or any(any(ch in p for ch in "*?[]") for p in paths):
+        return None
+    return {p.strip("./") for p in paths}
+
+
+_CONTINUES = re.compile(r"^\s*CONTINUES:\s*(\S+)\s*$", re.MULTILINE)
+
+
+def _read_continues(spec):
+    """Split a ``CONTINUES: <task id>`` line off a task, naming the capped
+    task it finishes. Returns (task id or None, spec without the line)."""
+    match = _CONTINUES.search(spec.description or "")
+    if not match:
+        return None, spec
+    description = _CONTINUES.sub("", spec.description).strip()
+    return match.group(1), replace(spec, description=description or spec.description)
 
 
 def _read_task_orientation(description: str):
@@ -456,6 +625,32 @@ def _invocation_role(role):
     return decorate
 
 
+def _check_for_models(check: dict) -> dict:
+    """A recorded check as a seat may see it: outcomes, never commands or their paths."""
+    import shlex
+
+    from .integration import redact_command_paths
+    paths = set()
+    for text in [check.get("command", "")] + [r.get("command", "") for r in check.get("receipts") or []]:
+        try:
+            tokens = shlex.split(text or "")
+        except ValueError:
+            tokens = (text or "").split()
+        for token in tokens:
+            if token.startswith("/") and len(token) > 1:
+                paths.add(token.rstrip("/"))
+                parent = token.rstrip("/").rsplit("/", 1)[0]
+                if parent.count("/") >= 2:
+                    paths.add(parent)
+    ordered = sorted(paths, key=len, reverse=True)
+    return {
+        "passed": check.get("passed"),
+        "gates": [{"id": r.get("id"), "status": r.get("status"), "reason": r.get("reason"),
+                   "tests": r.get("tests")} for r in check.get("receipts") or []],
+        "output": redact_command_paths(check.get("output") or "", ordered)[-1500:],
+    }
+
+
 def _has_blocking_finding(text: str) -> bool:
     """Only a finding's explicit prefix controls the recheck loop."""
     return any(re.match(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?BLOCKING\s*:",
@@ -504,6 +699,7 @@ class Session:
         self._task_before = None
         self._task_memory = None
         self._active_call = {}
+        self._worker_tool = None
         self.in_flight = {}
         self.completed = False
         self.checks = []
@@ -526,9 +722,32 @@ class Session:
         )
         self._rotation = 0
         self.history: List[TaskSummary] = []
+        #: Tasks whose lead stopped at its turn limit, in order.
+        self.turn_limited: List[str] = []
+        self._turn_limited_in_a_row = 0
+        #: Capped tasks not yet finished by a task that names them in a
+        #: CONTINUES line. Any entry blocks completion.
+        self._partial_tasks: set = set()
+        self._done_refusal = ""
+        self._requirement_reopens = 0
+        self._covers_corrections = 0
+        self._leads_by_vendor: dict = {}
+        self._batch: List[TaskSpec] = []
+        self.parallel_batches: List[dict] = []
+        self._design_note = ""
+        self._task_started: Optional[float] = None
+        #: When the most recent editing call began: renders older than this
+        #: show a tree that has since changed.
+        self._last_edit_started: Optional[float] = None
+        self.design_checks: List[dict] = []
+        self.requirement_audits: List[dict] = []
+        self.requirement_reviews: List[dict] = []
 
     def _invoke_model(self, key, prompt, *, allow_writes=False):
         context = invocation_context.get() or dict(task="run", role="direct", origin="seat")
+        if allow_writes and context.get("origin") != "worker":
+            import time as _time
+            self._last_edit_started = _time.time()
         self._active_call = dict(context, model=key, allow_writes=allow_writes)
         spec = self._active_spec
         if (context.get("role") != "closeout" and context.get('origin') != 'worker'
@@ -541,6 +760,16 @@ class Session:
                 prompt += "\n\n" + spec.scope.render()
             if self.config.default_scope is not None and spec.scope is not self.config.default_scope:
                 prompt += "\nOperator limits (also binding):\n" + self.config.default_scope.render()
+        if context.get("role") == "lead" and getattr(self, "_worker_tool", None):
+            context = dict(context, worker_tool=self._worker_tool)
+        # Every prompt is kept, not only an interrupted one: without it there was
+        # no proof of which packet or instructions a seat actually received.
+        try:
+            prompt_ref = self.store.put(prompt, kind="prompt", author=key)
+            self._active_call["prompt_artifact"] = prompt_ref.id
+            context = dict(context, prompt_artifact=prompt_ref.id)
+        except Exception:  # noqa: BLE001 -- evidence never fails a call
+            log.debug("could not keep the prompt", exc_info=True)
         try:
             with capture_invocations(), invocation(**context):
                 if self.project:
@@ -679,7 +908,37 @@ class Session:
             raise RunStalled(str(exc)) from exc
         if selected is None:
             raise RunStalled("No available lead satisfies this task's requirements.")
+        selected = self._spread_lead(spec, selected)
+        vendor = selected.partition(":")[0]
+        self._leads_by_vendor[vendor] = self._leads_by_vendor.get(vendor, 0) + 1
         return selected
+
+    def _spread_lead(self, spec: TaskSpec, selected: str) -> str:
+        """Where the model does not matter, give the task to the least-used vendor.
+
+        Davis, 2026-09-25: divide the load as much as possible when the task
+        is such that the model does not matter -- the harness (gates, review,
+        scope, ledger) carries the quality. Run 6 had grok lead every one of
+        nine slices because each was labelled simple. Spreading applies to
+        simple and standard work of a kind with no measured pin; complex work
+        keeps its rung, and a pinned kind keeps its pin.
+        """
+        if not self.config.spread_leads or spec.complexity not in (Complexity.SIMPLE, Complexity.STANDARD):
+            return selected
+        if policy_for(spec.kind).prefer:
+            return selected
+        eligible = [p for p in self.brain_trust
+                    if self._available(p) and seat_satisfies(p, spec.needs)]
+        if not eligible:
+            return selected
+        load = self._leads_by_vendor
+        least = min(load.get(p.partition(":")[0], 0) for p in eligible)
+        if load.get(selected.partition(":")[0], 0) == least:
+            return selected
+        choice = next(p for p in eligible if load.get(p.partition(":")[0], 0) == least)
+        self._note(f"lead spread to {choice} (ladder named {selected}; vendor load "
+                   + ", ".join(f"{v} {n}" for v, n in sorted(load.items())) + ")")
+        return choice
 
     def collaborators_for(self, spec: TaskSpec, lead: str) -> List[str]:
         """Which other peers help with this task.
@@ -696,6 +955,12 @@ class Session:
         # beats failing the task mid-flight when its invocation errors.
         others = [p for p in self.brain_trust if p != lead and self._available(p)]
         chosen = others[: Complexity.collaborator_count(spec.complexity, len(others))]
+        if self.config.design_cross_check and is_design_task(spec):
+            vendor = lead.partition(":")[0]
+            if not any(p.partition(":")[0] != vendor for p in chosen):
+                other = next((p for p in others if p.partition(":")[0] != vendor), None)
+                if other is not None:
+                    chosen.append(other)
         if spec.kind == TaskKind.REVIEW:
             for peer in policy_for(TaskKind.REVIEW).prefer:
                 if peer != lead and peer in others and peer not in chosen:
@@ -785,139 +1050,290 @@ class Session:
         return None
 
     @_invocation_role("lead")
-    def _draft_with_channels(self, lead: str, spec: TaskSpec, task: TaskMemory) -> str:
+    def _tool_worker(self, arguments, lead: str, spec: TaskSpec, task: TaskMemory, state: dict):
+        """One ``commission_worker`` call from inside a lead's session.
+
+        Runs on the bridge thread while the lead's call is still open. A limit
+        that would end the drafting loop on the reply channel (a stall, a spent
+        budget, preserved partial work) closes the channel instead: the lead is
+        told to finish with what it has, and the drafting loop raises the same
+        exception as soon as the lead's call returns.
+        """
+        if state.get("closed") is not None:
+            return (f"The worker channel is closed for this task: {state['closed']}. "
+                    "Finish with what you have, or report exactly what blocks you."), True
+        if state.get("workers_closed"):
+            try:
+                return self._request_after_close(state, spec), True
+            except RunStalled as exc:
+                state["closed"] = exc
+                return str(exc), True
+
+        def refuse(text):
+            # A refusal is free of model calls but not of limits: it counts
+            # toward the same allowance as a failed errand, so a lead cannot
+            # repeat bad calls for the rest of its session (Codex review).
+            state["failures"] += 1
+            if state["failures"] >= self.config.max_worker_failures:
+                return f"{text} {self._close_workers(state, spec)}", True
+            return text, True
+
+        if not isinstance(arguments, dict):
+            return refuse("Invalid call: arguments must be an object.")
+        if arguments.get("write"):
+            return refuse("Write errands cannot run while your session is open, because their edits "
+                          "would land in your working tree mid-call. Make the change yourself, or end "
+                          "your reply with a WORKER request that sets write:true.")
+        request = {k: arguments[k] for k in ("errand", "instruction", "demanding") if k in arguments}
+        # A malformed reply is a stall, because nothing else can be done with
+        # it; a malformed tool call is answered, and the lead can fix it.
+        if (request.get("errand") not in WORKER_TREE or not isinstance(request.get("instruction"), str)
+                or not request["instruction"].strip()
+                or type(request.get("demanding", False)) is not bool):
+            return refuse(f"Invalid call: errand must be one of {sorted(WORKER_TREE)}, instruction a "
+                          "non-empty string, demanding a boolean.")
+        saved = self._active_call  # the lead's call record, which the worker would overwrite
+        try:
+            with invocation(spec.task_id, "lead", origin="seat"):
+                texts = self._serve_worker("WORKER " + json.dumps(request), lead, spec, task, state,
+                                           answer_only=True)
+        except BaseException as exc:  # noqa: BLE001 -- re-raised by the drafting loop
+            state["closed"] = exc
+            return (f"The worker channel closed: {str(exc)[:400]}. Finish with what you have, "
+                    "or report exactly what blocks you."), True
+        finally:
+            self._active_call = saved
+        text = "\n\n".join(texts)
+        return text, text.startswith("Worker errand ")
+
+    def _interim_edits_note(self) -> str:
+        """Which files this task has already changed, for any re-asked lead.
+
+        Built into the shared prompt builder, so a lead re-asked after a
+        FETCH, a CONSULT, or a served, failed or refused WORKER gets it alike
+        (Codex review of #25). Taken from the harness's own diff, never from
+        the lead's account.
+        """
+        if not (self.project and self.config.allow_writes and self._task_before is not None):
+            return ""
+        state = self._inspect_partial_edits(self._task_before)
+        if not state.get("changed"):
+            return ""
+        return ("Files this task has already changed (kept; build on them, do not redo them): "
+                + ", ".join(state["changed"]))
+
+    def _close_workers(self, state: dict, spec) -> str:
+        """Out of worker attempts: close the channel, keep the lead.
+
+        GameTape run 8 (2026-09-25): an Opus lead's write errands came back
+        as malformed patches four times and the run ended. The lead could
+        still have done the work itself. So exhausting the allowance closes
+        the worker channel for this task and says so; only asking again
+        after that stalls the run.
+        """
+        state["workers_closed"] = True
+        self._note(f"task {spec.task_id}: worker channel closed after {state['failures']} failed errands")
+        return ("The worker channel is now closed for this task after "
+                f"{state['failures']} failed errands. Do the remaining work yourself in this "
+                "session, or report exactly what blocks you. Another worker request stops the run.")
+
+    def _request_after_close(self, state: dict, spec) -> str:
+        state["closed_requests"] = state.get("closed_requests", 0) + 1
+        if state["closed_requests"] >= 2:
+            raise RunStalled(
+                f"the lead is not converging: it kept requesting workers for task {spec.task_id!r} "
+                "after the worker channel closed")
+        return ("The worker channel is closed for this task. Do the work yourself, or report "
+                "exactly what blocks you. Another worker request stops the run.")
+
+    def _serve_worker(self, body: str, lead: str, spec: TaskSpec, task: TaskMemory, state: dict,
+                      *, answer_only: bool = False) -> List[str]:
+        """Serve one ``WORKER {...}`` request; return what the lead is told.
+
+        Shared by the reply channel and the in-session tool, so both carry the
+        same validation, fit check, budgets, failure rules and ledger rows.
+        ``state`` holds the drafting loop's failure count and failed labels.
+        """
+        out: List[str] = []
+        if state.get("workers_closed"):
+            return [self._request_after_close(state, spec)]
+        try:
+            request = json.loads(body[len("WORKER "):])
+            needs = request.get('needs') if isinstance(request, dict) else None
+            if (not isinstance(request, dict) or request.get('errand') not in WORKER_TREE
+                    or not isinstance(request.get('instruction'), str)
+                    or not request['instruction'].strip()
+                    or type(request.get('write', False)) is not bool
+                    or type(request.get('demanding', False)) is not bool
+                    or not isinstance(needs, (list, type(None)))
+                    or any(not isinstance(n, str) for n in needs or ())):
+                raise ValueError('invalid worker request')
+        except (ValueError, TypeError) as exc:
+            raise RunStalled("Expected WORKER JSON with errand and instruction.") from exc
+        helper = request.get('helper')
+        if helper is not None:
+            if (request.get('retry_of') not in state['failed_errands'] or not isinstance(helper, dict)
+                    or helper.get('errand') not in WORKER_TREE
+                    or not isinstance(helper.get('instruction'), str)
+                    or not helper['instruction'].strip() or helper.get('write', False) is not False
+                    or type(helper.get('demanding', False)) is not bool
+                    or helper.get('helper') is not None):
+                raise RunStalled('A sibling helper requires a failed retry_of label and a read-only errand')
+        writes = request.get('write', False)
+        if writes and not (self.project and self.config.allow_writes):
+            raise RunStalled("Worker requested edits without an operator write grant.")
+        label = f"{request['errand']}-{self.workers.spawned(spec.task_id) + 1}"
+        # A worker failure is an outcome, not the end of the run. The
+        # single-worker path used to let the exception escape: on
+        # 2026-09-13 a bounded editor returned prose wrapped around a
+        # corrupt diff, and that one malformed answer aborted the whole
+        # run before the lead could revise the errand, reroute it, or
+        # report an honest blocker. commission_many already reported
+        # errors as results; this path now agrees with it.
+        #
+        # What does *not* change: the patch is still rejected, the
+        # failed fingerprint is still recorded, the budget is still
+        # charged, and no tool is widened to make a bad answer apply.
+        # The lead gets the failure and decides.
+        try:
+            # Reject impossible errands before entering dispatch or
+            # reserving any worker attempt. Keep the pool's guard for
+            # direct callers and sibling commissions too.
+            mismatch = check_errand_fit(request['instruction'], needs=needs, write=writes,
+                                        answer_only=answer_only)
+            if mismatch is not None:
+                raise ErrandToolMismatch(f"errand {label!r}: {mismatch}")
+            if self.workers.remaining(spec.task_id) <= 0:
+                raise FanOutExceeded("Worker budget exhausted before a draft was produced.")
+            job = dict(prompt=request['instruction'], label=label,
+                       errand=request['errand'], demanding=request.get('demanding', False),
+                       allow_writes=writes, needs=needs,
+                       steps=request.get('steps', 1), token_limit=request.get('token_limit'))
+            if helper is None:
+                results = [self.workers.commission(task=task, parent_key=lead, answer_only=answer_only, **job)]
+            else:
+                mismatch = check_errand_fit(helper['instruction'], needs=helper.get('needs'), write=False)
+                if mismatch is not None:
+                    raise ErrandToolMismatch('Helper: ' + mismatch)
+                if self.workers.remaining(spec.task_id) < 2:
+                    raise FanOutExceeded('A sibling pair needs two remaining worker attempts')
+                helper_job = dict(prompt=helper['instruction'], label=label + '-helper',
+                                  errand=helper['errand'], demanding=helper.get('demanding', False),
+                                  allow_writes=False, needs=helper.get('needs'),
+                                  steps=helper.get('steps', 1), token_limit=helper.get('token_limit'))
+                results = self.workers.commission_many(task=task, parent_key=lead,
+                                                       jobs=[job, helper_job])
+        except PartialWorkStopped:
+            raise
+        except (FanOutExceeded, RepeatedFailure, ErrandToolMismatch) as exc:
+            # Budget and repeated-failure guards are the lead's own
+            # limits reported back to it, not a crash: it can still
+            # close the task incomplete with what it has.
+            state['failed_errands'].add(label)
+            state['failures'] += 1
+            out.append(
+                f"Worker errand {label!r} was refused: {exc}\n"
+                f"{_WORKER_RECOVERY}"
+            )
+            task.record("user", f"[worker {label}] REFUSED: {str(exc)[:300]}")
+            if state['failures'] >= self.config.max_worker_failures:
+                out.append(self._close_workers(state, spec))
+            return out
+        except Exception as exc:  # noqa: BLE001 -- returned, not raised
+            state['failed_errands'].add(label)
+            state['failures'] += 1
+            detail = str(exc)[:400]
+            task.record("user", f"[worker {label}] FAILED: {detail}")
+            out.append(
+                f"Worker errand {label!r} on {request['errand']} failed "
+                f"and produced nothing: {detail}\n{_WORKER_RECOVERY}"
+            )
+            if state['failures'] >= self.config.max_worker_failures:
+                out.append(self._close_workers(state, spec))
+            return out
+        for result in results:
+            if result.error or result.needs_tool:
+                state['failed_errands'].add(result.label)
+            if result.error:
+                state['failures'] += 1
+            evidence = result.ref.render() if result.ref else ''
+            out.append(f"Worker {result.label} ({result.model}): "
+                       f"{result.error or result.summary}\n{evidence}")
+        if state['failures'] >= self.config.max_worker_failures:
+            out.append(self._close_workers(state, spec))
+        return out
+
+    def _draft_with_channels(self, lead: str, spec: TaskSpec, task: TaskMemory,
+                             *, consults: bool = True) -> str:
+        """Serve the lead's channel requests until a real draft arrives.
+
+        ``consults=False`` is the security excursion: the excursion stays a
+        straight line, so a CONSULT is refused in words and the lead is
+        re-asked, while FETCH and WORKER keep working. Before the Q9 canary
+        (2026-09-22) the security path bypassed this loop entirely while its
+        prompt still advertised WORKER; the baseline lead answered with a
+        worker request as instructed, the harness filed it as the draft, and
+        the verifier rejected "a dispatch, not a result". A channel the
+        prompt offers is a channel the harness serves.
+        """
         answers = []
-        consults_used = 0
-        worker_failures = 0
-        failed_errands = set()
+        state = dict(failures=0, failed_errands=set(), closed=None)
 
         def build(fetched):
             extras = ["## Consult answers and worker evidence\n\n" + "\n\n".join(answers)] if answers else []
+            interim = self._interim_edits_note()
+            if interim:
+                extras.append(interim)
             if fetched:
                 extras.append(_render_fetches(fetched))
-            return self._lead_prompt(spec, lead=lead, extras=extras)
+            return self._lead_prompt(spec, lead=lead if consults else None, extras=extras)
 
+        bridge = None
+        if self.config.in_session_workers:
+            from .worker_bridge import WorkerBridge
+            bridge = WorkerBridge(lambda arguments: self._tool_worker(arguments, lead, spec, task, state))
+        with (bridge if bridge is not None else contextlib.nullcontext()):
+            self._worker_tool = bridge.spec() if bridge is not None else None
+            try:
+                return self._drafting_loop(lead, spec, task, build, answers, state, consults)
+            finally:
+                self._worker_tool = None
+
+    def _drafting_loop(self, lead, spec, task, build, answers, state, consults):
+        consults_used = 0
         while True:
             draft = self._invoke_with_fetches(lead, build, task=task, editing=True)
+            if state.get("closed") is not None:
+                raise state["closed"]
             body = _parse_kind(draft)[2].strip()
+            request = lead_request(body)
+            if request is not None and request != body:
+                task.record("assistant", f"[preface to a request] {body[:-len(request)].strip()[:1500]}")
+                body = request
             if body.startswith("WORKER "):
-                try:
-                    request = json.loads(body[len("WORKER "):])
-                    needs = request.get('needs') if isinstance(request, dict) else None
-                    if (not isinstance(request, dict) or request.get('errand') not in WORKER_TREE
-                            or not isinstance(request.get('instruction'), str)
-                            or not request['instruction'].strip()
-                            or type(request.get('write', False)) is not bool
-                            or type(request.get('demanding', False)) is not bool
-                            or not isinstance(needs, (list, type(None)))
-                            or any(not isinstance(n, str) for n in needs or ())):
-                        raise ValueError('invalid worker request')
-                except (ValueError, TypeError) as exc:
-                    raise RunStalled("Expected WORKER JSON with errand and instruction.") from exc
-                helper = request.get('helper')
-                if helper is not None:
-                    if (request.get('retry_of') not in failed_errands or not isinstance(helper, dict)
-                            or helper.get('errand') not in WORKER_TREE
-                            or not isinstance(helper.get('instruction'), str)
-                            or not helper['instruction'].strip() or helper.get('write', False) is not False
-                            or type(helper.get('demanding', False)) is not bool
-                            or helper.get('helper') is not None):
-                        raise RunStalled('A sibling helper requires a failed retry_of label and a read-only errand')
-                writes = request.get('write', False)
-                if writes and not (self.project and self.config.allow_writes):
-                    raise RunStalled("Worker requested edits without an operator write grant.")
-                label = f"{request['errand']}-{self.workers.spawned(spec.task_id) + 1}"
-                # A worker failure is an outcome, not the end of the run. The
-                # single-worker path used to let the exception escape: on
-                # 2026-09-13 a bounded editor returned prose wrapped around a
-                # corrupt diff, and that one malformed answer aborted the whole
-                # run before the lead could revise the errand, reroute it, or
-                # report an honest blocker. commission_many already reported
-                # errors as results; this path now agrees with it.
-                #
-                # What does *not* change: the patch is still rejected, the
-                # failed fingerprint is still recorded, the budget is still
-                # charged, and no tool is widened to make a bad answer apply.
-                # The lead gets the failure and decides.
-                try:
-                    # Reject impossible errands before entering dispatch or
-                    # reserving any worker attempt. Keep the pool's guard for
-                    # direct callers and sibling commissions too.
-                    mismatch = check_errand_fit(request['instruction'], needs=needs, write=writes)
-                    if mismatch is not None:
-                        raise ErrandToolMismatch(f"errand {label!r}: {mismatch}")
-                    if self.workers.remaining(spec.task_id) <= 0:
-                        raise FanOutExceeded("Worker budget exhausted before a draft was produced.")
-                    job = dict(prompt=request['instruction'], label=label,
-                               errand=request['errand'], demanding=request.get('demanding', False),
-                               allow_writes=writes, needs=needs,
-                               steps=request.get('steps', 1), token_limit=request.get('token_limit'))
-                    if helper is None:
-                        results = [self.workers.commission(task=task, parent_key=lead, **job)]
-                    else:
-                        mismatch = check_errand_fit(helper['instruction'], needs=helper.get('needs'), write=False)
-                        if mismatch is not None:
-                            raise ErrandToolMismatch('Helper: ' + mismatch)
-                        if self.workers.remaining(spec.task_id) < 2:
-                            raise FanOutExceeded('A sibling pair needs two remaining worker attempts')
-                        helper_job = dict(prompt=helper['instruction'], label=label + '-helper',
-                                          errand=helper['errand'], demanding=helper.get('demanding', False),
-                                          allow_writes=False, needs=helper.get('needs'),
-                                          steps=helper.get('steps', 1), token_limit=helper.get('token_limit'))
-                        results = self.workers.commission_many(task=task, parent_key=lead,
-                                                               jobs=[job, helper_job])
-                except PartialWorkStopped:
-                    raise
-                except (FanOutExceeded, RepeatedFailure, ErrandToolMismatch) as exc:
-                    # Budget and repeated-failure guards are the lead's own
-                    # limits reported back to it, not a crash: it can still
-                    # close the task incomplete with what it has.
-                    failed_errands.add(label)
-                    worker_failures += 1
-                    answers.append(
-                        f"Worker errand {label!r} was refused: {exc}\n"
-                        f"{_WORKER_RECOVERY}"
-                    )
-                    task.record("user", f"[worker {label}] REFUSED: {str(exc)[:300]}")
-                    if worker_failures >= self.config.max_worker_failures:
-                        raise RunStalled(
-                            f"{worker_failures} worker errands failed for task "
-                            f"{spec.task_id!r} without producing a draft; the "
-                            f"lead is not converging. Last: {str(exc)[:200]}"
-                        ) from exc
-                    continue
-                except Exception as exc:  # noqa: BLE001 -- returned, not raised
-                    failed_errands.add(label)
-                    worker_failures += 1
-                    detail = str(exc)[:400]
-                    task.record("user", f"[worker {label}] FAILED: {detail}")
-                    answers.append(
-                        f"Worker errand {label!r} on {request['errand']} failed "
-                        f"and produced nothing: {detail}\n{_WORKER_RECOVERY}"
-                    )
-                    if worker_failures >= self.config.max_worker_failures:
-                        raise RunStalled(
-                            f"{worker_failures} worker errands failed for task "
-                            f"{spec.task_id!r} without producing a draft; the "
-                            f"lead is not converging. Last: {detail[:200]}"
-                        ) from exc
-                    continue
-                for result in results:
-                    if result.error or result.needs_tool:
-                        failed_errands.add(result.label)
-                    if result.error:
-                        worker_failures += 1
-                    evidence = result.ref.render() if result.ref else ''
-                    answers.append(f"Worker {result.label} ({result.model}): "
-                                   f"{result.error or result.summary}\n{evidence}")
-                if worker_failures >= self.config.max_worker_failures:
-                    raise RunStalled('Worker failures exhausted the task recovery allowance')
+                answers.extend(self._serve_worker(body, lead, spec, task, state))
                 continue
             requests = _parse_consults(body)
             if not requests:
                 if body.startswith(('ASK:', 'CONSULT', 'WORKER', 'FETCH:')):
                     raise RunStalled("An unresolved request cannot be accepted as a draft.")
                 return draft
+            if not consults:
+                # A refusal is charged against the same allowance a served
+                # consult would be, so a lead that keeps asking stalls the run
+                # instead of being re-invoked until the budget is gone (Codex
+                # review of #25: seven identical replies before a sentinel).
+                consults_used += len(requests)
+                if consults_used > self.config.max_consults:
+                    raise RunStalled(
+                        "The lead kept requesting consults inside a security "
+                        "excursion, where none are served; it is not converging.")
+                task.record("user", "[consult refused] not available inside a security excursion")
+                answers.append(
+                    "Consults are not available inside a security excursion. Decide "
+                    "with your own judgment, commission a worker, or report exactly "
+                    "what blocks you.")
+                continue
             if consults_used + len(requests) > self.config.max_consults:
                 raise RunStalled("Consult budget exhausted before a draft was produced.")
             for name, question in requests:
@@ -957,20 +1373,13 @@ class Session:
             log.debug("could not capture project source", exc_info=True)
             return None
 
-    def _assess_scope(self, spec: TaskSpec, task: TaskMemory, before) -> Optional[ScopeReport]:
-        """Compare what the task actually changed against what it declared.
+    @property
+    def _unresolved_partial(self) -> bool:
+        return bool(self._partial_tasks)
 
-        Reported to the lead and the record, never reverted. The 2026-09-13
-        over-wide change was also the only work that existed, and discarding it
-        to satisfy a bookkeeping rule would have destroyed real output; user
-        edits and partial work stay exactly where they are. An out-of-scope
-        path is marked blocking. The normal editing dispatcher also stops on
-        a size overrun, retaining this report and the unfinished task.
-        """
+    def _measure_scope(self, spec: TaskSpec, before) -> Optional[ScopeReport]:
+        """The task's current diff against its scope, with no side effects."""
         if spec.scope is None or before is None or not self.project:
-            return None
-        after = self._capture_source()
-        if after is None:
             return None
         from .project import Project
         try:
@@ -986,6 +1395,48 @@ class Session:
             report = replace(report, out_of_scope=out, within_scope=not out,
                              max_lines=min(limits) if limits else None,
                              overrun_ratio=min(report.overrun_ratio, outer.overrun_ratio))
+        return report
+
+    def _scope_headroom(self, spec: TaskSpec) -> str:
+        """What a revision may still add before the task's hard stop.
+
+        GameTape, 2026-09-25: a 91-line draft inside its ~100-line bound was
+        revised to 189 lines to answer a review, crossing the 150-line stop and
+        ending the run. The stop stays hard (Codex review of #25): the revision
+        is told its remaining room, and a fix that cannot fit is reported as
+        a blocker for the record instead of being made.
+        """
+        report = self._measure_scope(spec, self._task_before)
+        if report is None or report.max_lines is None:
+            return ""
+        stop = int(report.max_lines * report.overrun_ratio)
+        room = max(0, stop - report.changed_lines)
+        return (
+            f"\n\nSize: this task's change is {report.changed_lines} lines now (tests count in "
+            f"full) against a stated bound of ~{report.max_lines}, and the run stops at {stop}. "
+            f"You have {room} lines of room for this revision. Make the fixes that fit. For a "
+            "finding whose fix does not fit, do not make it: write a line 'BLOCKER: <finding> "
+            "needs about N more lines' so it goes to the record as an open question."
+        )
+
+    def _assess_scope(self, spec: TaskSpec, task: TaskMemory, before) -> Optional[ScopeReport]:
+        """Compare what the task actually changed against what it declared.
+
+        Reported to the lead and the record, never reverted. The 2026-09-13
+        over-wide change was also the only work that existed, and discarding it
+        to satisfy a bookkeeping rule would have destroyed real output; user
+        edits and partial work stay exactly where they are. An out-of-scope
+        path is marked blocking. The normal editing dispatcher also stops on
+        a size overrun, retaining this report and the unfinished task.
+        """
+        if spec.scope is None or before is None or not self.project:
+            return None
+        after = self._capture_source()
+        if after is None:
+            return None
+        report = self._measure_scope(spec, before)
+        if report is None:
+            return None
         self.scope_reports.append(report)
         if report.blocking or report.oversized:
             task.record("user", report.render())
@@ -1088,6 +1539,8 @@ class Session:
 
         task = TaskMemory(spec.task_id, lead, self.store)
         self._task_memory = task
+        import time as _time
+        self._task_started = _time.time()
         task.record("user", spec.description)
         task.keep(json.dumps({'needs': sorted(spec.needs)}), kind='task-needs')
         if spec.scope is not None:
@@ -1112,6 +1565,8 @@ class Session:
         # consult channels live: a reply that is a request gets served.
         try:
             draft = self._draft_with_channels(lead, spec, task)
+        except TurnLimitReached as exc:
+            return self._close_turn_limited(lead, spec, task, exc, before)
         except ProviderError as exc:
             # Only a failed lead, not a consultant/worker or policy refusal,
             # may be replaced. Never replay partial or uninspectable edits.
@@ -1149,6 +1604,7 @@ class Session:
         task.keep(draft, kind="draft")
 
         self._assess_scope(spec, task, before)
+        self._brief_design_reviewers(spec)
         from .integration import GateSuite
         if isinstance(self.config.integration_gate, GateSuite):
             cheap = self.config.integration_gate.cheap()
@@ -1248,6 +1704,7 @@ class Session:
                 )
 
         self._run_integration_gate(lead, spec, task)
+        self._check_design(spec, lead, collaborators, task)
 
         self._assess_scope(spec, task, before)
         summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
@@ -1256,6 +1713,63 @@ class Session:
         )
         self.memory.absorb(summary)
         self.history.append(summary)
+        return summary
+
+    def _close_turn_limited(self, lead, spec, task, exc, before) -> TaskSummary:
+        """A lead stopped at its turn limit: keep the work, record it, re-plan.
+
+        The call ran and its usage is already on the ledger. Its edits stay
+        where they are, inspected and held to the task's scope exactly as a
+        finished draft's would be; out-of-scope or unmeasurable edits still
+        stop the run with the work preserved. What does not happen is review,
+        the gate or a close-out call: the task is unfinished, so the harness
+        writes its record from the evidence and hands the rest back to the
+        orchestrator, which names the remaining work as a new task. The lead's
+        final text, if any, is narration of work in progress and is labelled
+        as such, never folded in as a result.
+        """
+        state = self._inspect_partial_edits(before)
+        if self.project and self.config.allow_writes:
+            if not state["inspected"]:
+                raise PartialWorkStopped("Lead stopped at its turn limit and the source could not "
+                                         "be inspected; work preserved.", partial=state) from exc
+            if state["changed"]:
+                report = self._assess_scope(spec, task, before)
+                if spec.scope is not None and report is None:
+                    raise PartialWorkStopped("Turn-limited edits could not be measured against the "
+                                             "task scope; work preserved.", partial=state) from exc
+                if report and (report.blocking or report.oversized):
+                    raise PartialWorkStopped("Turn-limited edits exceed the declared scope; work "
+                                             "preserved. " + report.render(), partial=state) from exc
+        said = (exc.partial_text or "").strip()
+        task.keep(json.dumps(dict(task=spec.task_id, lead=lead, turns=exc.turns,
+                                  changed=state["changed"], changed_lines=state["changed_lines"],
+                                  note=state["note"], partial_text=said[:4000] or None)),
+                  kind="turn-limited", author=lead)
+        changed = ", ".join(state["changed"]) or "no files"
+        summary_text = (
+            "STOPPED AT THE LEAD TURN LIMIT before finishing"
+            + (f" ({exc.turns} turns)" if exc.turns else "")
+            + f". Changed, unreviewed and ungated: {changed}"
+            + (f" ({state['changed_lines']} lines)" if state["changed"] else "")
+            + ". This task is not done: name the remaining work as a new, smaller task "
+              f"whose description includes the line 'CONTINUES: {spec.task_id}', "
+              "and do not assume any of it is finished."
+            + (f" The lead's last words, which are narration and not a result: {said[:300]}"
+               if said else " The lead returned no answer text.")
+        )
+        summary = task.close(
+            summary=summary_text,
+            reasoning=("Recorded by the harness from the stopped call's evidence. No close-out "
+                       "model call is made for an unfinished task."),
+            dead_ends=[],
+        )
+        # TaskSummary is frozen; the outcome is set on a copy, never mutated.
+        from dataclasses import replace
+        summary = replace(summary, outcome="turn_limited")
+        self.memory.absorb(summary)
+        self.history.append(summary)
+        self.turn_limited.append(spec.task_id)
         return summary
 
     def _run_security_task(self, spec: TaskSpec) -> TaskSummary:
@@ -1281,15 +1795,10 @@ class Session:
             self._record_selection(spec, excursion.worker, "lead")
             task.record("user", spec.description)
 
-            # Fetch channel only: the excursion stays a straight line, so
-            # there is no consult here by design.
-            draft = self._invoke_with_fetches(
-                excursion.worker,
-                lambda fetched: self._lead_prompt(
-                    spec, extras=[_render_fetches(fetched)] if fetched else None
-                ),
-                task=task, editing=True,
-            )
+            # Fetch and worker channels, no consult: the excursion stays a
+            # straight line, but the lead's prompt offers WORKER and the
+            # harness has to serve what it offers (Q9 baseline, 2026-09-22).
+            draft = self._draft_with_channels(excursion.worker, spec, task, consults=False)
             task.record("assistant", draft)
             task.keep(draft, kind="draft")
 
@@ -1425,9 +1934,12 @@ class Session:
                     "Name the single next task, or reply exactly DONE if the "
                     "goal is met. To read a full artifact behind a summary "
                     "first, reply with exactly 'FETCH: <artifact-id>' and "
-                    "nothing else. If the decision turns on something only the "
-                    "operator can answer, reply 'ASK: <one question>' instead."
-                    f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}\n\n{_NEEDS_REQUEST}"
+                    "nothing else. " + _ASK_SPARINGLY
+                    + f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}\n\n{_NEEDS_REQUEST}"
+                    + ("\n\n" + (_COVERS_REQUEST if self.memory.ledger.requirements
+                                  else _REQUIREMENTS_REQUEST) if self.config.requirements_ledger else "")
+                    + ("\n\n" + _PARALLEL_REQUEST if self._parallel_enabled() else "")
+                    + (self._done_refusal or "")
                     + ("\n\n" + _SCOPE_REQUEST if self.project and self.config.allow_writes else "")
                     + ("\n\n" + _ORIENT_REQUEST
                        if self.project and self.config.codebase_map is not None else "")
@@ -1448,6 +1960,7 @@ class Session:
 
         for _ in range(_MAX_ASKS_PER_DECISION):
             seat, reply = self._ask_seat(seat, build_with_correction)
+            reply = self._absorb_requirements(reply)
             correction = ""
             # Control messages are recognised through a bounded preface scan.
             # An ASK buried under a paragraph of reasoning used to read as a
@@ -1489,6 +2002,14 @@ class Session:
                 f"An unresolved {control.verb} request cannot become a task."
             )
 
+        blocks = _parallel_blocks(reply) if self._parallel_enabled() else None
+        if blocks:
+            specs = self._batch_specs(blocks, seat)
+            if specs:
+                self._batch = specs[1:]
+                return specs[0]
+            reply = blocks[0]
+
         # One bounded correction, then an explicit failure. Defaulting here is
         # what silently turned a pinned testing task into general/simple work.
         try:
@@ -1501,6 +2022,7 @@ class Session:
                 f"first and the task on the following line."
             )
             seat, reply = self._ask_seat(seat, build_with_correction)
+            reply = self._absorb_requirements(reply)
             retry_control = parse_control(reply)
             if retry_control is not None and retry_control.verb == "DONE":
                 return None
@@ -1598,11 +2120,37 @@ class Session:
                 log.info("plan gate declined the run; nothing executed")
                 return []
         previous_description: Optional[str] = None
-        for _ in range(max_tasks):
+        # Slots, not iterations: a parallel batch spends one slot per task, so
+        # the cap bounds tasks run however they are grouped (Codex review of
+        # #25: a 3-task batch used to cost one slot).
+        used = 0
+        while used < max_tasks:
+            used += 1
             self._note(f"asking {self.seat().key} for the next task")
             spec = self.next_task()
+            self._done_refusal = ""
+            batch, self._batch = ([spec] + self._batch if spec is not None and self._batch else None), []
+            if batch and used - 1 + len(batch) > max_tasks:
+                self._note(f"parallel batch of {len(batch)} exceeds the {max_tasks - used + 1} task "
+                           "slots left; running its first task alone")
+                batch = None
+            if batch:
+                used += len(batch) - 1
+                previous_description = None
+                self._run_batch(batch)
+                if self.open_findings or (self.checks and not self.checks[-1]['passed']):
+                    break
+                continue
             if spec is None:
-                self.completed = not self.open_findings and not any(not c["passed"] for c in self.checks)
+                if not self._requirements_satisfied():
+                    if self._requirement_reopens < self.config.max_requirement_reopens:
+                        self._requirement_reopens += 1
+                        continue
+                    self._note("requirements still open after the reopen allowance; stopping incomplete")
+                    self.completed = False
+                    break
+                self.completed = (not self.open_findings and not self._unresolved_partial
+                                  and not any(not c["passed"] for c in self.checks))
                 self._note("the orchestrator reports the goal met")
                 break
             if spec.description == previous_description:
@@ -1617,11 +2165,577 @@ class Session:
                 f"task {len(self.history) + 1}: {spec.description} "
                 f"[{spec.kind}/{spec.complexity}]"
             )
+            continues, spec = _read_continues(spec)
+            covers, spec = _read_covers(spec)
+            problem = self._covers_problem(covers)
+            if problem:
+                # Corrected before any lead call is spent (Codex review of #25).
+                self._covers_corrections += 1
+                if self._covers_corrections > self.config.max_requirement_reopens:
+                    raise RunStalled(f"the orchestrator kept naming tasks without valid COVERS: {problem}")
+                self._done_refusal = (f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again "
+                                      "with a COVERS line using the listed requirement ids.")
+                previous_description = None
+                continue
             summary = self.run_task(spec)
+            if getattr(summary, "outcome", "closed") == "turn_limited":
+                # A capped continuation carries its predecessor's debt forward.
+                self._partial_tasks.discard(continues)
+                self._partial_tasks.add(spec.task_id)
+                self._turn_limited_in_a_row += 1
+                self._note(f"task {len(self.history)} stopped at the lead's turn limit; its "
+                           f"work is kept and the orchestrator re-plans")
+                if self._turn_limited_in_a_row > self.config.max_turn_limited_in_a_row:
+                    self._note(f"the lead turn limit was reached {self._turn_limited_in_a_row} "
+                               f"times in a row; stopping instead of re-planning again")
+                    break
+                continue
+            self._turn_limited_in_a_row = 0
+            # Only the task that says it continues the capped one resolves it;
+            # an unrelated clean task must not make the run complete (Codex
+            # review of #25, 2026-09-25).
+            self._partial_tasks.discard(continues)
+            status = self.memory.ledger.requirement_status
+            for rid in covers:
+                if rid in self.memory.ledger.requirements:
+                    status[rid] = f"covered by {spec.task_id}"
             self._note(f"task {len(self.history)} closed by {summary.author}")
             if self.open_findings or (self.checks and not self.checks[-1]['passed']):
                 break
+        else:
+            # Every slot went to a task and none of them stopped the loop, so
+            # the orchestrator never had the turn that says the goal is met:
+            # whenever the cap equalled the tasks the goal needed, completion
+            # was unreachable (Q9-v2, 2026-09-23: both tasks closed, grader 13
+            # of 13, completed false). Raising the cap is not the fix -- the
+            # extra iteration runs whatever task it is handed. One terminal
+            # question instead, whose reply is never executed.
+            self.completed = (
+                not self._unresolved_partial
+                and self._confirm_goal_met()
+                and self._requirements_satisfied()
+                and not self.open_findings
+                and not any(not c["passed"] for c in self.checks)
+            )
         return list(self.history)
+
+    def _brief_design_reviewers(self, spec) -> None:
+        """Point the design reviewers at the draft's renders, if it left any.
+        Nothing is judged here: the enforced check runs after the last edit."""
+        self._design_note = ""
+        if not (self.config.design_cross_check and is_design_task(spec) and self.project):
+            return
+        from .design_evidence import check
+        ok, _, shots = check(self.project, spec.task_id, self._last_edit_started or 0)
+        if ok:
+            self._design_note = (
+                "\n\nThe lead's rendered evidence for this draft (read these files; they are "
+                "outside your source copy on purpose): " + ", ".join(shots)
+                + ". Judge the design from the screenshots as well as the code.")
+
+    def _check_design(self, spec, lead, collaborators, task) -> None:
+        """The enforced design check, after the last edit and the gate.
+
+        The renders must postdate the start of the last editing call, be
+        clean, and name their page. One bounded design-fix call is allowed,
+        then the gate is re-run; still missing is an open finding. A reviewer
+        from another vendor then approves the final renders or records
+        blocking design problems. Codex review of #25: a screenshot of the
+        draft must not pass a revised tree, and a render with console errors
+        is not evidence that the UI works.
+        """
+        if not is_design_task(spec) or not (self.project and self.config.allow_writes):
+            return
+        from .design_evidence import check
+        record = dict(task=spec.task_id)
+        if not self.config.design_self_verify:
+            record.update(verified=None, problem="design self-verification disabled by the operator")
+            self.design_checks.append(record)
+            return
+        ok, problem, shots = check(self.project, spec.task_id, self._last_edit_started or 0)
+        if not ok:
+            record["first_problem"] = problem
+            self._note(f"task {spec.task_id}: design evidence missing or broken; one fix call ({problem[:100]})")
+            import sys as _sys
+            package_root = Path(__file__).resolve().parent.parent
+            command = (f"PYTHONPATH={package_root} {_sys.executable} -m quadratus.design_evidence "
+                       f"<url of the page> {spec.task_id} .")
+            self._edit(lead, (
+                f"Task: {spec.description}\n\nThe rendered evidence for this design task is missing "
+                f"or shows a broken page: {problem}.\nFix what the render shows is wrong, then capture "
+                f"it again with exactly:\n    {command}\nReport what you changed and what the new "
+                "screenshots show. " + self._revision_delivery()), role="design-fix")
+            self._run_integration_gate(lead, spec, task)
+            ok, problem, shots = check(self.project, spec.task_id, self._last_edit_started or 0)
+        record.update(verified=ok, problem=problem, screenshots=shots)
+        if not ok:
+            self.open_findings.append(f"Task {spec.task_id} is design work without clean rendered evidence: {problem}.")
+            self._note(f"task {spec.task_id}: design work unverified ({problem[:120]})")
+        vendor = lead.partition(":")[0]
+        reviewer = next((p for p in collaborators if p.partition(":")[0] != vendor), None)
+        if self.config.design_cross_check:
+            if reviewer is None:
+                self.open_findings.append(
+                    f"Task {spec.task_id} is design work with no reviewer from another vendor available.")
+            elif ok:
+                verdict = self._final_design_review(spec, reviewer, shots)
+                record["final_review"] = dict(reviewer=reviewer, verdict=verdict[:600])
+                blocking = [line for line in (verdict or "").splitlines() if line.strip().startswith("BLOCKING:")]
+                if (verdict or "").strip() != "APPROVED" and not blocking:
+                    blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
+                self.open_findings.extend(f"Task {spec.task_id} design: {b.strip()}" for b in blocking)
+        self.design_checks.append(record)
+        task.keep(json.dumps(record), kind="design-evidence")
+
+    def _final_design_review(self, spec, reviewer, shots) -> str:
+        """The cross-vendor reviewer judges the final renders, not the draft's."""
+        prompt = (
+            f"Task: {spec.description}\n\nThese are the final renders of this design work, taken "
+            "after its last edit (read these files; they are outside your source copy on purpose): "
+            + ", ".join(shots) + _DESIGN_REVIEW_LENS
+            + "\n\nReply exactly APPROVED if the delivered interface is acceptable, or one line "
+            "per blocking problem starting 'BLOCKING:'. Nothing else."
+        )
+        with invocation(spec.task_id, "design-review"):
+            return self._invoke_model(reviewer, prompt)
+
+    def _parallel_enabled(self) -> bool:
+        policy = self.config.repository_policy
+        return bool(self.config.fork and self.config.max_parallel_tasks > 1 and self.project
+                    and self.config.allow_writes and not getattr(policy, "explicit", False))
+
+    def _batch_specs(self, blocks, seat) -> Optional[List["TaskSpec"]]:
+        """Specs for a parallel batch, or None (with the reason noted) when the
+        batch cannot run in parallel; the caller then runs the first block alone."""
+        from .scope import read_scope
+        specs = []
+        for i, block in enumerate(blocks):
+            try:
+                meta = self._absorb_orientation(_read_metadata(block), seat)
+                scope, description = read_scope(meta.description, max_lines=MAX_TASK_LINES)
+                specs.append(TaskSpec(task_id=f"t{len(self.history) + 1 + i}", description=description,
+                                      kind=meta.kind, complexity=meta.difficulty,
+                                      metadata_confidence=meta.confidence,
+                                      metadata_notes=list(meta.notes), scope=scope))
+            except (AmbiguousMetadata, ValueError) as exc:
+                self._note(f"parallel batch not run: block {i + 1} is not a valid task ({str(exc)[:120]})")
+                return None
+        if len(specs) < 2:
+            return None
+        if len(specs) > self.config.max_parallel_tasks:
+            self._note(f"parallel batch not run: {len(specs)} tasks, the limit is {self.config.max_parallel_tasks}")
+            return None
+        seen: set = set()
+        for spec in specs:
+            paths = _literal_paths(spec.scope)
+            if paths is None:
+                self._note(f"parallel batch not run: {spec.task_id} has no exact file list")
+                return None
+            if paths & seen:
+                self._note(f"parallel batch not run: files shared between tasks: {', '.join(sorted(paths & seen))}")
+                return None
+            seen |= paths
+        return specs
+
+    def _run_batch(self, specs) -> None:
+        """Run independent tasks at once, each in its own copy, then merge.
+
+        Every task keeps its own lead (spread across vendors), review, fix
+        cycle, scope check and close-out, in a child Session bound to a
+        private copy of the project. Their scopes are exact and disjoint, so
+        the merge copies each task's changed files back; a change outside a
+        task's scope is not merged, its content is kept as an artifact, and
+        the task is recorded partial. The integration gate then runs once on
+        the merged tree, with the usual fix round.
+        """
+        import concurrent.futures
+        import contextlib
+
+        from .project import Project
+        from .run_budget import RunBudgetExceeded
+        parsed = []
+        for spec in specs:
+            continues, spec = _read_continues(spec)
+            covers, spec = _read_covers(spec)
+            problem = self._covers_problem(covers)
+            if problem:
+                self._done_refusal = (f"\n\n--- BATCH SENT BACK ---\n{spec.task_id}: {problem} Name the "
+                                      "tasks again with COVERS lines using the listed requirement ids.")
+                return
+            parsed.append((replace(spec, lead=self._pick_lead(spec)), covers, continues))
+        self._note("running in parallel: " + ", ".join(f"{s.task_id} led by {s.lead}" for s, _, _ in parsed))
+        project = Project(self.project, exclude=self.config.project_excludes)
+        base = project.contents()
+        record = dict(tasks=[s.task_id for s, _, _ in parsed], leads=[s.lead for s, _, _ in parsed])
+        with contextlib.ExitStack() as stack:
+            children, roots = [], []
+            for spec, _, _ in parsed:
+                root = stack.enter_context(project.snapshot())
+                invoke, close = self.config.fork(root)
+                stack.callback(close)
+                tag = spec.task_id
+                child_config = replace(
+                    self.config, project=root, integration_gate=None, requirements_ledger=False,
+                    max_parallel_tasks=1, fork=None,
+                    progress=(lambda message, tag=tag: self._note(f"[{tag}] {message}")))
+                child = Session(self.memory.goal, self.store, invoke, config=child_config,
+                                available=self._available)
+                children.append(child)
+                roots.append(root)
+            started = time.monotonic()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(children)) as pool:
+                futures = [pool.submit(child.run_task, spec) for child, (spec, _, _) in zip(children, parsed, strict=True)]
+                outcomes = []
+                for future in futures:
+                    try:
+                        outcomes.append((future.result(), None))
+                    except BaseException as exc:  # noqa: BLE001 -- merged below, then re-raised if fatal
+                        outcomes.append((None, exc))
+            record["seconds"] = round(time.monotonic() - started, 1)
+            fatal = None
+            for (spec, covers, continues), child, root, (summary, exc) in zip(
+                    parsed, children, roots, outcomes, strict=True):
+                after = Project(root, exclude=self.config.project_excludes).contents()
+                changed = sorted(p for p in base.keys() | after.keys() if base.get(p) != after.get(p))
+                allowed = _literal_paths(spec.scope) or set()
+                outside = [p for p in changed if p.strip("./") not in allowed]
+                self.scope_reports.extend(child.scope_reports)
+                self.design_checks.extend(child.design_checks)
+                self.open_findings.extend(child.open_findings)
+                if outside or exc is not None:
+                    kept = self.store.put(json.dumps({p: (after.get(p) or b"").decode("utf-8", "replace")
+                                                      for p in changed}), kind="parallel-unmerged",
+                                          author=spec.lead)
+                    reason = (f"changed files outside its scope: {', '.join(outside)}" if outside
+                              else f"{type(exc).__name__}: {str(exc)[:200]}")
+                    self.open_findings.append(f"Parallel task {spec.task_id} was not merged ({reason}); "
+                                              f"its files are kept in artifact {kept.id}.")
+                    self._partial_tasks.add(spec.task_id)
+                    self._note(f"{spec.task_id} not merged: {reason[:160]}")
+                    if exc is not None and not isinstance(exc, (PartialWorkStopped, ProviderError, RunStalled)):
+                        fatal = fatal or exc
+                    if isinstance(exc, RunBudgetExceeded):
+                        fatal = fatal or exc
+                    continue
+                for path in changed:
+                    target = Path(self.project) / path
+                    if path in after:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(after[path])
+                    elif target.exists():
+                        target.unlink()
+                self.history.append(summary)
+                self.memory.absorb(summary)
+                if getattr(summary, "outcome", "closed") == "turn_limited":
+                    self.turn_limited.append(spec.task_id)
+                    self._partial_tasks.discard(continues)
+                    self._partial_tasks.add(spec.task_id)
+                else:
+                    self._partial_tasks.discard(continues)
+                    for rid in covers:
+                        if rid in self.memory.ledger.requirements:
+                            self.memory.ledger.requirement_status[rid] = f"covered by {spec.task_id}"
+                self._note(f"{spec.task_id} merged ({len(changed)} files) and closed by {summary.author}")
+        self.parallel_batches.append(record)
+        gate = self.config.integration_gate
+        if gate is not None and not fatal:
+            first = parsed[0][0]
+            union = sorted(set().union(*[(_literal_paths(s.scope) or set()) for s, _, _ in parsed]))
+            from .scope import TaskScope
+            merge = TaskSpec(task_id=f"{parsed[-1][0].task_id}-merge",
+                             description="Make the merged parallel changes pass the project checks.",
+                             scope=TaskScope(permitted_paths=union))
+            task = TaskMemory(merge.task_id, first.lead, self.store)
+            saved = (self._active_spec, self._task_before, self._task_memory)
+            self._active_spec, self._task_before, self._task_memory = merge, self._capture_source(), task
+            try:
+                self._run_integration_gate(first.lead, merge, task)
+            finally:
+                self._active_spec, self._task_before, self._task_memory = saved
+        if fatal is not None:
+            raise fatal
+
+    def _covers_problem(self, covers) -> str:
+        ledger = self.memory.ledger
+        if not self.config.requirements_ledger:
+            return ""
+        if not ledger.requirements:
+            return ("No requirements are listed yet. Start the reply with a 'REQUIREMENTS:' block "
+                    "numbering the goal's requirements (R1: ...), then the task.")
+        if not covers:
+            return "The task has no COVERS line."
+        unknown = [r for r in covers if r not in ledger.requirements]
+        if unknown:
+            return f"COVERS names requirements that do not exist: {', '.join(unknown)}."
+        return ""
+
+    def _absorb_requirements(self, reply: str) -> str:
+        """Take a REQUIREMENTS block into the ledger, once, and any DECIDE
+        lines on ambiguous requirements, off the reply."""
+        ledger = self.memory.ledger
+        for rid, text in _DECIDE.findall(reply or ""):
+            if rid in ledger.ambiguous:
+                ledger.decisions[rid] = text[:400]
+                self._note(f"the orchestrator decided ambiguous {rid}: {text[:120]}")
+        reply = _DECIDE.sub("", reply or "").strip() or reply
+        found, rest = _read_requirements(reply)
+        if not found:
+            return reply
+        ledger = self.memory.ledger
+        if not ledger.requirements and self.config.requirements_ledger:
+            ledger.requirements.update(found)
+            self._note(f"the orchestrator numbered {len(found)} requirements")
+            self._review_requirements()
+        return rest
+
+    def _review_requirements(self) -> None:
+        """A second vendor compares the numbered list with the verbatim goal.
+
+        Codex's review: an auditor that checks an incomplete list faithfully
+        still passes an incomplete product. Missing requirements are added;
+        disputed ones stay open. An unavailable reviewer is recorded, not
+        treated as agreement.
+        """
+        ledger = self.memory.ledger
+        reviewer = self._auditor()
+        if reviewer is None:
+            self.requirement_reviews.append(dict(reviewer=None, result="no reviewer available"))
+            return
+        prompt = (
+            f"## Goal (verbatim)\n\n{self.memory.goal.strip()}\n\n## Numbered requirements\n\n"
+            + "\n".join(f"{rid}: {text}" for rid, text in ledger.requirements.items())
+            + "\n\nCompare the list with the goal. Reply exactly COMPLETE if it covers everything "
+            "the goal asks for and forbids. Otherwise reply only with lines 'ADD: <one testable "
+            "requirement the list misses>' (deliverables, interfaces, user interface, documentation, "
+            "compatibility with existing behaviour, and must-not constraints) and "
+            "'AMBIGUOUS: R<n> - <the two readings>'. Mark a requirement ambiguous only when the goal "
+            "supports readings that would build different things: an ambiguous requirement needs an "
+            "operator ruling before the run can finish."
+        )
+        saved = self._active_spec
+        self._active_spec = None
+        try:
+            with invocation("plan", "requirements-review"):
+                reply = self._invoke_model(reviewer, prompt, allow_writes=False)
+        except ProviderError as exc:
+            self.requirement_reviews.append(dict(reviewer=reviewer, result=f"failed: {type(exc).__name__}"))
+            return
+        finally:
+            self._active_spec = saved
+        # Only COMPLETE, or nothing but well-formed ADD / AMBIGUOUS lines, is a
+        # review. Anything else is recorded as a failed review, which keeps
+        # DONE blocked (Codex review of #25: prose used to count as a pass).
+        lines = [line.strip() for line in (reply or "").splitlines() if line.strip()]
+        added = [m.group(1) for m in (re.fullmatch(r"ADD:\s*(.+)", line) for line in lines) if m]
+        disputed = [(m.group(1), m.group(2)) for m in
+                    (re.fullmatch(r"AMBIGUOUS:\s*(R\d+)\s*[-:—]\s*(.+)", line) for line in lines) if m]
+        well_formed = lines == ["COMPLETE"] or (lines and len(added) + len(disputed) == len(lines)
+                                                and all(r in ledger.requirements for r, _ in disputed))
+        if not well_formed:
+            self.requirement_reviews.append(dict(reviewer=reviewer, result="failed: the reply was not "
+                                                 "COMPLETE or only ADD/AMBIGUOUS lines",
+                                                 reply=(reply or "")[:400]))
+            return
+        next_id = len(ledger.requirements) + 1
+        for text in added:
+            rid = f"R{next_id}"
+            next_id += 1
+            ledger.requirements[rid] = text
+            ledger.requirement_status[rid] = "open (added by the requirements review)"
+        for rid, why in disputed:
+            ledger.ambiguous[rid] = why[:300]
+            ledger.ambiguous_since[rid] = len(ledger.rulings)
+        self.requirement_reviews.append(dict(reviewer=reviewer, result="reviewed", added=added,
+                                             ambiguous=disputed))
+
+    def _requirements_satisfied(self) -> bool:
+        """Whether DONE may stand: every requirement covered, then audited met.
+
+        Not satisfied means DONE goes back to the orchestrator with the gap
+        named. No requirements listed means the ledger is inactive for this
+        run; that is recorded, not invented.
+        """
+        ledger = self.memory.ledger
+        if not self.config.requirements_ledger:
+            return True
+        if not ledger.requirements:
+            self._done_refusal = (
+                "\n\n--- DONE SENT BACK ---\nNo requirements were listed. Before DONE can stand, "
+                "reply with a 'REQUIREMENTS:' block numbering the goal's requirements (R1: ...), "
+                "then name the next task or reply DONE.")
+            self._note("DONE sent back: no requirements listed")
+            return False
+        if not any(r.get("reviewer") and not str(r.get("result", "")).startswith(("failed", "no reviewer"))
+                   for r in self.requirement_reviews):
+            self._review_requirements()
+            if not any(r.get("reviewer") and not str(r.get("result", "")).startswith(("failed", "no reviewer"))
+                       for r in self.requirement_reviews):
+                self._done_refusal = (
+                    "\n\n--- DONE SENT BACK ---\nThe requirement list has not been reviewed against "
+                    "the goal by another vendor (no reviewer available, or the review failed).")
+                self._note("DONE sent back: requirements not independently reviewed")
+                return False
+            if any(not s.startswith(("covered", "met")) for s in
+                   (ledger.requirement_status.get(r, "open") for r in ledger.requirements)):
+                return self._requirements_satisfied()
+        unsettled = [r for r in ledger.ambiguous if not ledger.settled(r)]
+        if unsettled:
+            self._done_refusal = (
+                "\n\n--- DONE SENT BACK ---\nThese requirements are ambiguous and not yet settled: "
+                f"{', '.join(unsettled)}. Settle each with 'DECIDE: R<n> - <reading and why>', or "
+                "ASK the operator only if it is a large-scale production decision.")
+            self._note(f"DONE sent back: unsettled ambiguous requirements: {', '.join(unsettled)}")
+            return False
+        status = ledger.requirement_status
+        uncovered = [r for r in ledger.requirements if not status.get(r, "").startswith(("covered", "met"))]
+        if uncovered:
+            self._done_refusal = (
+                "\n\n--- DONE SENT BACK ---\nThese requirements are not covered by any finished "
+                f"task: {', '.join(uncovered)} (never covered, or found not met by the audit and not "
+                "covered again since). Name a task for them (with COVERS), or explain in the task "
+                "why one cannot be done.")
+            self._note(f"DONE sent back: uncovered {', '.join(uncovered)}")
+            return False
+        verdicts = self._audit_requirements()
+        unmet = {r: why for r, (ok, why) in verdicts.items() if not ok}
+        for rid, (ok, why) in verdicts.items():
+            status[rid] = "met (audited)" if ok else f"NOT MET: {why[:160]}"
+        if unmet:
+            self._done_refusal = (
+                "\n\n--- DONE SENT BACK ---\nAn independent audit found these requirements not met:\n"
+                + "\n".join(f"- {r}: {why[:300]}" for r, why in unmet.items())
+                + "\nName a task that fixes them (with COVERS).")
+            self._note(f"DONE sent back: audit found {', '.join(unmet)} not met")
+            return False
+        return True
+
+    def _auditor(self) -> Optional[str]:
+        """A brain-trust member from a vendor other than the orchestrator's,
+        or None. Never the seat's own vendor: an audit that shares the
+        planner's lineage is not independent (Codex review of #25)."""
+        seat_vendor = self.seat().key.partition(":")[0]
+        return next((p for p in self.brain_trust
+                     if self._available(p) and p.partition(":")[0] != seat_vendor), None)
+
+    def _resolve_citations(self, text: str) -> List[str]:
+        """The cited paths and test names that actually exist in the project."""
+        if not self.project:
+            return re.findall(r"[\w./-]+\.\w+|test_\w+", text)
+        root = Path(self.project)
+        found = []
+        for token in re.findall(r"[\w./-]+\.[A-Za-z]\w*", text):
+            path = token.split("::")[0].lstrip("./")
+            if path and (root / path).is_file():
+                found.append(path)
+        for name in re.findall(r"\btest_\w+", text):
+            for test_file in root.rglob("test*.py"):
+                if ".quadratus" in test_file.parts:
+                    continue
+                try:
+                    if f"def {name}" in test_file.read_text(errors="ignore"):
+                        found.append(f"{test_file.relative_to(root)}::{name}")
+                        break
+                except OSError:
+                    continue
+        return found
+
+    def _audit_requirements(self) -> dict:
+        """One read-only call: each requirement met or not, with evidence."""
+        ledger = self.memory.ledger
+        auditor = self._auditor()
+        if auditor is None:
+            self.requirement_audits.append(dict(auditor=None, result="no auditor from another vendor available"))
+            return {r: (False, "no auditor from another vendor available") for r in ledger.requirements}
+        before = self._capture_source() if self.project else None
+        checks = "\n".join(f"- {c['command']}: {'passed' if c['passed'] else 'FAILED'}" for c in self.checks[-3:])
+        prompt = (
+            f"## Goal (verbatim)\n\n{self.memory.goal.strip()}\n\n## Requirements\n\n"
+            + "\n".join(f"{rid}: {text}" for rid, text in ledger.requirements.items())
+            + (f"\n\n## Latest project checks\n{checks}" if checks else "")
+            + (("\n\n## How ambiguous requirements were settled (judge against these)\n"
+                + "\n".join([f"- {r}: decided by the orchestrator: {t}" for r, t in ledger.decisions.items()]
+                             + [f"- operator ruling: {r}" for r in ledger.rulings]))
+               if ledger.decisions or ledger.rulings else "")
+            + (("\n\n## Rendered design evidence\n" + "\n".join(
+                f"- {d['task']}: " + (", ".join(d.get('screenshots') or []) or d.get('problem', ''))
+                for d in self.design_checks)) if self.design_checks else "")
+            + "\n\nYou are an independent auditor. The project in your working directory is the "
+            "delivered work. For each requirement, check the delivered files themselves: code, "
+            "interface, tests and documentation. Documentation must agree with the goal, not only "
+            "with the code. A requirement about existing product behaviour is met only if it works "
+            "with what the product actually does today. A user-interface requirement is met only "
+            "with rendered evidence above. Reply with exactly one line per requirement and nothing "
+            "else: 'R1: MET - <file path or test name that shows it>' or "
+            "'R1: NOT MET - <what is missing or contradicts the goal>'. A MET without a cited "
+            "file or test is counted as not met."
+        )
+        saved = self._active_spec
+        self._active_spec = None
+        try:
+            with invocation("audit", "auditor"):
+                reply = self._invoke_model(auditor, prompt)
+        except ProviderError as exc:
+            # An audit that could not run is not a pass. Budget stops and
+            # every other exception propagate as from any other call.
+            reply = ""
+            self._note(f"requirements audit failed: {type(exc).__name__}: {str(exc)[:160]}")
+        finally:
+            self._active_spec = saved
+        if self.project and before is not None and self._capture_source() != before:
+            self._note("the source changed during the requirements audit; its verdicts are void")
+            self.requirement_audits.append(dict(auditor=auditor, result="void: the tree changed during the audit"))
+            return {r: (False, "the tree changed during the audit") for r in ledger.requirements}
+        found = {}
+        for m in _AUDIT_LINE.finditer(reply or ""):
+            met, why = m.group(2).upper() == "MET", m.group(3).strip()
+            if met:
+                resolved = self._resolve_citations(why)
+                if not resolved:
+                    met, why = False, f"MET claimed without a file or test that exists in the project ({why[:100]})"
+            found[m.group(1).upper()] = (met, why)
+        verdicts = {r: found.get(r, (False, "the auditor gave no verdict")) for r in ledger.requirements}
+        self.requirement_audits.append(dict(auditor=auditor, verdicts={r: dict(met=ok, why=why)
+                                                                       for r, (ok, why) in verdicts.items()}))
+        return verdicts
+
+    def _confirm_goal_met(self) -> bool:
+        """After the cap: ask once whether the goal is met, and never act on it.
+
+        Only a reply that is exactly ``DONE``, and nothing else, confirms.
+        Anything else -- a proposed next task,
+        an ASK, prose -- reads as not met and is recorded, not executed; the
+        cap is the boundary, and a reply that could start work would make this
+        a further task rather than a confirmation. FETCH is served as on any
+        orchestrator turn, and an exhausted seat re-seats as on any other, so
+        the answer rests on the same originals and the same fallback.
+        """
+        seat = self.seat()
+        self._note(f"task cap reached; asking {seat.key} whether the goal is met")
+        prompt = self.memory.render(
+            current=_TERMINAL_REQUEST,
+            recent=self.config.recent_entries,
+            extra=self._map_block(),
+        )
+
+        def build(fetched: List[tuple]) -> str:
+            if not fetched:
+                return prompt
+            return prompt + "\n\n" + _render_fetches(fetched) + "\n\nWith that read, answer now."
+
+        _, reply = self._ask_seat(seat, build)
+        # Judged whole, not scanned for a DONE line. The loop's own parser
+        # accepts DONE beside a preface and ignores what follows, so
+        # "task 2 is unverified" then DONE, or DONE then "except the security
+        # task", would both have confirmed. At the one point where a run's
+        # completion is decided, a hedge or a contradiction is not a DONE.
+        if (reply or "").strip() == "DONE":
+            self._note("the orchestrator confirms the goal met at the task cap")
+            return True
+        self._note(
+            "the task cap was reached without the goal confirmed: "
+            f"{(reply or '').strip()[:160]}"
+        )
+        return False
 
     def _note(self, message: str) -> None:
         """Tell the caller where the run is. Never fails the run."""
@@ -1682,6 +2796,12 @@ class Session:
         if map_block:
             parts.append(map_block)
         parts.append("You are leading this task. Produce the complete work.")
+        if self.config.design_self_verify and is_design_task(spec):
+            import sys as _sys
+            package_root = Path(__file__).resolve().parent.parent
+            command = (f"PYTHONPATH={package_root} {_sys.executable} -m quadratus.design_evidence "
+                       f"<url of the page> {spec.task_id} .")
+            parts.append(_DESIGN_SELF_VERIFY.format(command=command))
         # Stated before the work, checked after it. Telling a model its bound
         # helps some; measuring the diff is what makes the bound real, and
         # both happen -- see _assess_scope.
@@ -1701,6 +2821,13 @@ class Session:
                      'read-only; both are siblings reporting to you. Optional steps (up to 3) '
                      'and token_limit (up to 50000 reported tokens) bound a worker continuation; '
                      'the configured budget may be stricter. Defaults remain one shot.')
+        if self.config.in_session_workers:
+            parts.append('If a commission_worker tool is available in this session, use it for '
+                         'read-only errands instead of a WORKER reply: you keep your session and '
+                         'the answer comes back as the tool result, where a WORKER reply ends your '
+                         'call and you start over. Keep the WORKER reply for write errands, or if '
+                         'the tool is not listed. A request written in your reasoning or mid-answer '
+                         'is not served; only the tool call or a whole WORKER reply is.')
         if self.project:
             # Deliberately no longer "inspect the project source": that told the
             # lead to go exploring in the same breath as the guidance below
@@ -1709,6 +2836,7 @@ class Session:
                          + ("Implement this task using the edit method in your role instructions; prose alone is not implementation."
                             if self.config.allow_writes else
                             "This run has no edit grant. Return analysis and proposed changes only."))
+            parts.append(_BLOCKED_REPORT_RULE)
         parts.append(
             "To read a filed artifact in full before working, reply with "
             "exactly 'FETCH: <artifact-id>' and nothing else -- you will get "
@@ -1771,6 +2899,8 @@ class Session:
             "against the revision. If you genuinely find nothing worth changing, "
             "reply exactly 'NO FINDINGS' and nothing else; do not write 'BLOCKING: none'."
             + _review_subject_note(spec)
+            + (_DESIGN_REVIEW_LENS + (self._design_note or "")
+               if self.config.design_cross_check and is_design_task(spec) else "")
         )
 
     def _revision_prompt(self, spec: TaskSpec, draft: str, notes: List[str]) -> str:
@@ -1784,6 +2914,7 @@ class Session:
             "you cannot decide goes to the record as an open question, not "
             "into the void. "
             + self._revision_delivery()
+            + (self._scope_headroom(spec) if self.project and self.config.allow_writes else "")
         )
 
     def _revision_delivery(self) -> str:
@@ -1874,13 +3005,13 @@ class Session:
             ceiling = min(ceiling, getattr(self, "_gate_fixes_used", 0) + max_fixes)
         latest_fix = ""
         result = self._check(gate)
-        task.record("user", result.render())
+        task.record("user", result.for_models())
         while not result.passed and getattr(self, "_gate_fixes_used", 0) < ceiling:
             fix = self._edit(
                 lead,
                 f"Task: {spec.description}\n\n"
                 f"The project's own integration check failed after your "
-                f"work:\n{result.render()}\n\n"
+                f"work:\n{result.for_models()}\n\n"
                 "Fix the failure. Produce the complete revised work.",
                 role="gate-fix",
             )
@@ -1889,7 +3020,7 @@ class Session:
             latest_fix = fix
             self._gate_fixes_used = getattr(self, "_gate_fixes_used", 0) + 1
             result = self._check(gate)
-            task.record("user", result.render())
+            task.record("user", result.for_models())
         self.checks.append({"passed": result.passed, "command": result.command,
                             "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
@@ -1937,8 +3068,13 @@ class Session:
             f"You are {label.label if label else verifier}, verifying security "
             "work you did not author. Check it for correctness, for anything "
             "unsafe it recommends, and for anything it asserts without "
-            "evidence. State plainly whether it should be accepted, and what "
-            "must change if not. Do not redo the work; verify it."
+            "evidence. A claim that the environment blocked the work counts "
+            "only when it quotes the failing command, its exit status and the "
+            "verbatim error; without those, treat it as unverified. State "
+            "plainly whether it should be accepted, and what must change if "
+            "not. Start each finding that must be fixed on its own line with "
+            "'BLOCKING:'; anything else in your reply is read as a note, not a "
+            "finding. Do not redo the work; verify it."
         )
 
     @_invocation_role("closeout")
@@ -1962,7 +3098,7 @@ class Session:
             "Recorded conversation": (transcript, 10_000),
             "Source diff captured by the harness": (diff, 12_000),
             "Most recent recorded session check (may predate this task)": (
-                json.dumps(self.checks[-1:], ensure_ascii=False), 2_000),
+                json.dumps([_check_for_models(c) for c in self.checks[-1:]], ensure_ascii=False), 2_000),
         }
         parts, pointers = [], []
         for title, (content, limit) in evidence.items():
@@ -2077,6 +3213,7 @@ def _parse_fetch(reply: str) -> Optional[str]:
     mistaken for one.
     """
     stripped = _parse_kind(reply)[2].strip()
+    stripped = lead_request(stripped) or stripped
     lines = [ln for ln in stripped.splitlines() if ln.strip()]
     if len(lines) == 1 and lines[0].upper().startswith("FETCH:"):
         wanted = lines[0].split(":", 1)[1].strip()
@@ -2127,6 +3264,18 @@ def _parse_consults(reply: str):
 #: discovering the refusal by trying. Closing incomplete is listed last and
 #: explicitly, because a lead with no legal move left must have an honest exit
 #: that is not "keep trying".
+#: What a blocked-work report must carry. Both Q9 canary runs (2026-09-22)
+#: ended with the lead saying its sandbox could not start and nothing else:
+#: no command, no exit status, no verbatim error. The verifier rightly
+#: refused the claim, and nobody could check it afterwards either. A block
+#: is an outcome the harness can act on only when it arrives with evidence.
+_BLOCKED_REPORT_RULE = (
+    "If you cannot read, edit or run something, say so with evidence: quote "
+    "the exact command or tool call you attempted, its exit status, and the "
+    "verbatim error text. A blocked report without those three is rejected. "
+    "Never describe test output you did not see."
+)
+
 _WORKER_RECOVERY = (
     "You may: rewrite the instruction and re-send it; send the same "
     "instruction to a different worker; mark the errand demanding to bump it "

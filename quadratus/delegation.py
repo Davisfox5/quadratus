@@ -48,6 +48,7 @@ import json
 import logging
 import math
 import re
+import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
@@ -114,8 +115,15 @@ def record_invocation(ledger, event):
 
 
 @contextmanager
-def invocation(task, role, origin="seat"):
-    token = invocation_context.set(dict(task=task, role=role, origin=origin))
+def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None):
+    context = dict(task=task, role=role, origin=origin)
+    if prompt_artifact:
+        context["prompt_artifact"] = prompt_artifact
+    if worker_tool:
+        # The lead's in-session worker tool (worker_bridge); Fleet attaches it
+        # to the lead's view only.
+        context["worker_tool"] = worker_tool
+    token = invocation_context.set(context)
     try:
         yield
     finally:
@@ -143,6 +151,9 @@ class Origin:
     #: from the two it can only witness.
     CONTROLLED = (SEAT, WORKER)
 
+
+
+_RECORD_LOCK = threading.RLock()
 
 @dataclass
 class InvocationEvent:
@@ -172,6 +183,15 @@ class InvocationEvent:
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     cached_input_tokens: Optional[int] = None
+    #: input_tokens minus cached_input_tokens, when both are known.
+    fresh_input_tokens: Optional[int] = None
+    #: Model turns the call ran, from the vendor envelope.
+    model_turns: Optional[int] = None
+    #: The turn limit sent with the call, if any, and whether it was hit.
+    max_turns: Optional[int] = None
+    turn_limited: bool = False
+    #: The artifact holding the exact prompt this call was sent.
+    prompt_artifact: Optional[str] = None
     canonical_model: Optional[str] = None
     invocation_id: Optional[str] = None
     wire_model: Optional[str] = None
@@ -188,6 +208,14 @@ class InvocationEvent:
     #: that several sources report.
     session_id: Optional[str] = None
     detail: str = ""
+    #: The tail of the CLI's stderr for this attempt, and the failed tool
+    #: calls the CLI reported (command, exit code, output tail), both bounded.
+    #: Added after the Q9 canary (2026-09-22): both runs closed on a lead
+    #: saying its sandbox could not start, with the bwrap error living only in
+    #: the model's prose. The verifier could not check it and neither could
+    #: anyone reading the record. Older records lack these and read as empty.
+    stderr_tail: str = ""
+    tool_failures: list = field(default_factory=list)
 
     @property
     def tokens_known(self) -> bool:
@@ -291,6 +319,45 @@ def safe_diagnostics(value) -> dict:
     return result
 
 
+#: Bounds re-applied at the durable event boundary, whatever a provider sent.
+STDERR_TAIL_LIMIT = 2_000
+TOOL_FAILURE_LIMIT = 8
+TOOL_FAILURE_TEXT = 500
+
+
+def bounded_stderr(value) -> str:
+    """The tail of a CLI's stderr, as text, never more than the limit."""
+    if isinstance(value, bytes):
+        value = value.decode(errors="replace")
+    if not isinstance(value, str):
+        return ""
+    return value[-STDERR_TAIL_LIMIT:]
+
+
+def bounded_tool_failures(value) -> list:
+    """Failed tool calls as plain bounded dicts: command, exit code, output
+    tail, or an error message. Anything else in the entry is dropped."""
+    if not isinstance(value, list):
+        return []
+    kept = []
+    for entry in value:
+        if len(kept) >= TOOL_FAILURE_LIMIT:
+            break
+        if not isinstance(entry, dict):
+            continue
+        clean = {}
+        for key in ("kind", "command", "status", "message", "output_tail"):
+            text = entry.get(key)
+            if isinstance(text, str) and text:
+                clean[key] = text[-TOOL_FAILURE_TEXT:] if key == "output_tail" else text[:TOOL_FAILURE_TEXT]
+        code = entry.get("exit_code")
+        if type(code) is int:
+            clean["exit_code"] = code
+        if clean:
+            kept.append(clean)
+    return kept
+
+
 @dataclass
 class NativeChild:
     """A vendor-native child session the harness observed but did not dispatch."""
@@ -326,14 +393,16 @@ class DelegationLedger:
     blind_spots: List[str] = field(default_factory=list)
 
     def record(self, event: InvocationEvent) -> InvocationEvent:
-        self.events.append(event)
-        if self.path is not None:
-            try:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                with self.path.open("a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(asdict(event)) + "\n")
-            except OSError:  # noqa: BLE001 -- accounting never fails a run
-                log.debug("could not persist invocation event", exc_info=True)
+        # Parallel tasks record from several threads; one writer at a time.
+        with _RECORD_LOCK:
+            self.events.append(event)
+            if self.path is not None:
+                try:
+                    self.path.parent.mkdir(parents=True, exist_ok=True)
+                    with self.path.open("a", encoding="utf-8") as fh:
+                        fh.write(json.dumps(asdict(event)) + "\n")
+                except OSError:  # noqa: BLE001 -- accounting never fails a run
+                    log.debug("could not persist invocation event", exc_info=True)
         return event
 
     def observe_native(self, child: NativeChild) -> None:

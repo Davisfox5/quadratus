@@ -62,10 +62,10 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .delegation import NativeChild
-from .providers import LLMProvider, ProviderError, ProviderRefusal, Turn
+from .providers import LLMProvider, ProviderError, ProviderRefusal, Turn, TurnLimitReached
 
 log = logging.getLogger(__name__)
 
@@ -106,6 +106,12 @@ def _extract_claude_result(stdout: str) -> str:
             category=category,
             explanation=(details.get("explanation") if isinstance(details, dict) else None),
         )
+    if payload.get("subtype") == "error_max_turns":
+        # The result envelope's turn-cap subtype. Not yet seen from the
+        # installed binary: confirm the exact shape with a bounded probe.
+        raise TurnLimitReached("claude stopped at its turn limit before finishing",
+                               partial_text=payload.get("result"),
+                               turns=_envelope_turns(payload))
     if payload.get("is_error"):
         raise ProviderError(f"claude reported an error: {payload.get('result', '')[:300]}")
     return payload.get("result", "") or ""
@@ -136,6 +142,7 @@ def _extract_codex_result(stdout: str) -> str:
     """
     answer = ""
     errors: List[str] = []
+    failed = ""
     saw_json = False
     for line in stdout.splitlines():
         line = line.strip()
@@ -146,6 +153,8 @@ def _extract_codex_result(stdout: str) -> str:
         except ValueError:
             continue
         saw_json = True
+        if event.get("type") == "turn.failed" and isinstance(event.get("error"), dict):
+            failed = str(event["error"].get("message") or "")
         item = event.get("item")
         if not isinstance(item, dict):
             continue
@@ -160,6 +169,18 @@ def _extract_codex_result(stdout: str) -> str:
                 errors.append(message.strip())
     if answer:
         return answer
+    if re.search(r"\b401\b.*unauthori[sz]ed|unauthori[sz]ed.*\b401\b", failed, re.IGNORECASE):
+        # GameTape run 6: the turn failed with 401 after the websocket dropped.
+        # A run on a copied sign-in loses it when another codex client on the
+        # same account refreshes the token. Named, and vendor-wide.
+        error = ProviderError(
+            "codex sign-in was rejected (401 Unauthorized). The subscription token in this "
+            "environment is no longer valid -- usually because another codex client on the same "
+            "account refreshed it. Sign in again before the next run.")
+        error.auth_invalid = True
+        raise error
+    if failed and not errors:
+        raise ProviderError(f"codex turn failed: {failed[:300]}")
     if errors:
         raise ProviderError(f"codex reported an error: {errors[-1][:300]}")
     if saw_json:
@@ -201,6 +222,11 @@ def _extract_grok_result(stdout: str) -> str:
     # completed turn is therefore an error, including a stop reason this code
     # has never seen: guessing that an unknown one is benign is how the
     # narration got mistaken for an answer in the first place.
+    if stop == "max_turns":
+        # Capped, not failed: the call ran and may have written. The text is
+        # where the loop had got to, kept as evidence and never as an answer.
+        raise TurnLimitReached("grok stopped at its turn limit before finishing",
+                               partial_text=text, turns=_envelope_turns(payload))
     if stop != "end_turn":
         diagnostics = _extract_grok_diagnostics(stdout) or {}
         attempted = diagnostics.get("attempted_tools")
@@ -261,6 +287,9 @@ def _extract_grok_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
         diagnostics["model_calls"] = calls
     # This envelope reports both, and grok is where the re-read cost is
     # largest: 383,104 of attempt 8's 437,173 input tokens.
+    turns = _envelope_turns(payload)
+    if turns is not None:
+        diagnostics.setdefault("model_calls", turns)
     diagnostics.update(_reread_and_cost(payload.get("usage"),
                                         payload.get("total_cost_usd")))
     names: List[str] = []
@@ -374,6 +403,77 @@ def _extract_grok_usage(stdout: str) -> Optional[Dict[str, int]]:
     return {"input_tokens": input_tokens, "output_tokens": output_tokens}
 
 
+def _codex_rollout_usage(root: Path, session_id: str) -> Optional[dict]:
+    """A lower bound on a failed call's usage, from codex's own session
+    record, for diagnostics. Never raises; None when nothing was recorded.
+
+    Not a measurement. GameTape run 6 (2026-09-25): a stream closed before
+    response.completed and the budget stopped on unknown usage. The first
+    version of this function turned token_count events with ``info: null``
+    into zero and cleared that stop; Codex's review showed null info is an
+    absence of accounting (that call also ended in a 401), and that
+    ``output_tokens`` already includes reasoning tokens. So: the last
+    recorded total, as a floor, or None.
+    """
+    if not session_id or not re.fullmatch(r"[A-Za-z0-9-]{8,80}", session_id):
+        return None
+    try:
+        files = sorted(Path(root).rglob(f"rollout-*{session_id}.jsonl"))
+    except OSError:
+        return None
+    if not files:
+        return None
+    counts, total = 0, None
+    try:
+        with open(files[-1], encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                payload = row.get("payload") if isinstance(row, dict) else None
+                if not isinstance(payload, dict) or payload.get("type") != "token_count":
+                    continue
+                counts += 1
+                info = payload.get("info")
+                if isinstance(info, dict) and isinstance(info.get("total_token_usage"), dict):
+                    total = info["total_token_usage"]
+    except OSError:
+        return None
+    if total is None:
+        return None
+    try:
+        return {"input_tokens": int(total.get("input_tokens") or 0),
+                "cached_input_tokens": int(total.get("cached_input_tokens") or 0),
+                # already includes reasoning_output_tokens
+                "output_tokens": int(total.get("output_tokens") or 0),
+                "usage_source": "codex session record, lower bound (stream ended early)",
+                "token_count_events": counts}
+    except (TypeError, ValueError):
+        return None
+
+
+def _envelope_turns(payload) -> Optional[int]:
+    """How many model turns one CLI call ran, from its JSON envelope.
+
+    claude and grok report ``num_turns``; grok also counts ``modelCalls`` per
+    model inside ``modelUsage``, which the top-level lookup used to miss, so
+    the 32-turn GameTape UI lead recorded no turn count at all.
+    """
+    if not isinstance(payload, dict):
+        return None
+    turns = payload.get("num_turns")
+    if isinstance(turns, int) and not isinstance(turns, bool) and turns >= 0:
+        return turns
+    rows = payload.get("modelUsage")
+    if isinstance(rows, dict):
+        counts = [r.get("modelCalls") for r in rows.values() if isinstance(r, dict)]
+        counts = [n for n in counts if isinstance(n, int) and not isinstance(n, bool) and n >= 0]
+        if counts:
+            return sum(counts)
+    return None
+
+
 def _reread_and_cost(usage, cost=None) -> Dict[str, object]:
     """How much of this call's input was text the model had already seen.
 
@@ -424,6 +524,67 @@ def _extract_codex_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
         diagnostics = {"stop_reason": "turn.completed"}
         diagnostics.update(_reread_and_cost(event.get("usage")))
     return diagnostics or None
+
+
+#: Upper bound on retained tool failures per call, and on each field's text.
+TOOL_FAILURE_LIMIT = 8
+TOOL_FAILURE_TEXT = 500
+
+
+def _extract_codex_tool_failures(stdout: str) -> List[Dict[str, object]]:
+    """Commands the codex agent ran that failed, from ``codex exec --json``.
+
+    Bounded evidence, not a transcript: only ``command_execution`` items with
+    a nonzero exit or a failed status, plus ``error`` items, each cut to a
+    command line, an exit code and an output tail. Both Q9 canary runs
+    (2026-09-22) ended with the lead reporting that its sandbox could not
+    start, and nothing retained showed the command that said so. The verifier
+    called the claim unevidenced and was right; this is the evidence.
+
+    Item shape observed on codex-cli 0.154.0::
+
+        {"type":"item.completed","item":{"id":"item_2","type":"command_execution",
+         "command":"cat app.py","aggregated_output":"...","exit_code":1,
+         "status":"failed"}}
+
+    Field names beyond ``command``, ``aggregated_output``, ``exit_code`` and
+    ``status`` are not relied on; a shape change degrades to fewer entries,
+    never to an exception.
+    """
+    failures: List[Dict[str, object]] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        item = event.get("item") if isinstance(event, dict) else None
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("type")
+        if kind == "command_execution":
+            exit_code = item.get("exit_code")
+            status = item.get("status")
+            failed = (type(exit_code) is int and exit_code != 0) or status in ("failed", "declined")
+            if not failed:
+                continue
+            output = item.get("aggregated_output")
+            failures.append({
+                "kind": "command",
+                "command": str(item.get("command", ""))[:TOOL_FAILURE_TEXT],
+                "exit_code": exit_code if type(exit_code) is int else None,
+                "status": str(status) if status is not None else "",
+                "output_tail": (output if isinstance(output, str) else "")[-TOOL_FAILURE_TEXT:],
+            })
+        elif kind == "error":
+            message = item.get("message")
+            if isinstance(message, str) and message.strip():
+                failures.append({"kind": "error", "message": message.strip()[:TOOL_FAILURE_TEXT]})
+        if len(failures) >= TOOL_FAILURE_LIMIT:
+            break
+    return failures
 
 
 def _extract_plain(stdout: str) -> str:
@@ -735,7 +896,13 @@ def _extract_claude_diagnostics(stdout: str) -> Optional[Dict[str, object]]:
         payload = json.loads(stdout)
     except ValueError:
         payload = None
+    # Only an object envelope carries turns or a reread; a malformed, empty
+    # or list envelope must not raise here, or _observe_output loses the rest
+    # of the failure evidence (Codex review of #25, 2026-09-25).
     if isinstance(payload, dict):
+        turns = _envelope_turns(payload)
+        if turns is not None:
+            diagnostics.setdefault("model_calls", turns)
         diagnostics.update(_reread_and_cost(payload.get("usage"),
                                             payload.get("total_cost_usd")))
     if malformed:
@@ -857,10 +1024,27 @@ class CLISpec:
     #: argued with either.
     native_fanout_off_env: Dict[str, str] = field(default_factory=dict)
     disallowed_tools_flag: str = ""
+    #: How this CLI attaches the in-session ``commission_worker`` tool
+    #: (``worker_bridge``): "claude", "codex", "grok", or "" for none. Each
+    #: form was probed on 2026-09-25; see ``_worker_tool_argv``.
+    worker_tool_style: str = ""
+    #: Names the run-wide denial must drop while the tool is attached, or the
+    #: denial would remove the tool it is meant to leave alone.
+    worker_tool_undeny: Tuple[str, ...] = ()
+    #: Flags that stop this CLI loading the operator's personal configuration
+    #: (plugins, hooks, rules) for a run with QUADRATUS_NEUTRAL_PREFERENCES
+    #: set. Sign-in is kept. Empty when the CLI offers no such flag.
+    neutral_args: List[str] = field(default_factory=list)
+    #: What neutral mode cannot remove on this CLI, recorded with the run.
+    neutral_gap: str = ""
     #: Arguments that turn the restricted seat into a one-turn, tool-less (or
     #: as close as the CLI documents) summary call. Sent only when a provider
     #: view carries ``summary_only=True``; see ``CLIProvider._build_argv``.
     summary_only_args: List[str] = field(default_factory=list)
+    #: The flag that caps agentic turns in one call, for a lead's turn limit
+    #: (``Settings.lead_max_turns``). Empty where the CLI has none (codex):
+    #: there the call is bounded by time and attempts only.
+    max_turns_flag: str = ""
     #: How the CLI separates several names in one ``disallowed_tools_flag``
     #: value. Claude takes whitespace; grok's ``--help`` says comma-separated,
     #: and a space-joined list would reach it as one nonsense tool name that
@@ -895,6 +1079,10 @@ class CLISpec:
     #: count, attempted tool names), for the ledger. None where the CLI's
     #: output carries nothing of the kind.
     extract_diagnostics: Optional[Callable[[str], Optional[Dict[str, object]]]] = None
+    #: Failed tool calls the agent made during this call (command, exit code,
+    #: output tail), bounded, for the ledger. None where the CLI's output does
+    #: not report its tool calls in a parseable form.
+    extract_tool_failures: Optional[Callable[[str], List[Dict[str, object]]]] = None
     #: Whether these flags have been checked against a real binary.
     verified: bool = False
     #: Environment variables to set for the subprocess.
@@ -997,6 +1185,15 @@ CLAUDE_SPEC = CLISpec(
     # is set and never form under -p; pinned to 0 below anyway.
     native_fanout_off_args=["--disallowed-tools",
                             "Task Agent Workflow SendMessage ListAgents RemoteTrigger CronCreate mcp__*"],
+    # --strict-mcp-config loads only the server Quadratus names, which is what
+    # the mcp__* denial protected against, so the denial can step aside.
+    worker_tool_style="claude",
+    worker_tool_undeny=("mcp__*",),
+    # --bare would also drop the subscription sign-in (it reads only
+    # ANTHROPIC_API_KEY), so neutral mode narrows setting sources instead:
+    # user settings, which carry plugins and hooks, are not loaded.
+    neutral_args=["--setting-sources", "project,local"],
+    neutral_gap="claude: the user CLAUDE.md memory file may still load; --bare would remove it but also the sign-in",
     native_fanout_off_env={
         # Read at startup: workflows unavailable, not merely denied.
         "CLAUDE_CODE_DISABLE_WORKFLOWS": "1",
@@ -1008,6 +1205,7 @@ CLAUDE_SPEC = CLISpec(
     # mode and "exits with an error when the limit is reached". Together they
     # make the closeout a single model call over the prompt it was given.
     summary_only_args=["--tools", "", "--max-turns", "1"],
+    max_turns_flag="--max-turns",
     extract=_extract_claude_result,
     # Mandatory, not merely safer: --disallowed-tools is variadic, so a
     # positional prompt after it is swallowed as another tool name and the CLI
@@ -1017,6 +1215,13 @@ CLAUDE_SPEC = CLISpec(
     verified=True,
     extract_usage=_extract_claude_usage,
     extract_diagnostics=_extract_claude_diagnostics,
+    # ``claude auth status`` is a model-free readout that reports
+    # ``loggedIn`` (observed true, with the subscription tier, on Davis's Mac
+    # on 2026-09-22 by Codex). Before this the preflight reported claude's
+    # sign-in as not applicable, which read as untested rather than untestable.
+    auth_check_args=["auth", "status"],
+    auth_ok_pattern=r"(?i)loggedIn\W+true|logged in",
+    auth_failure_pattern=r"(?i)loggedIn\W+false|not logged in|not authenticated",
 )
 
 #: Codex feature switches that admit vendor-native sub-agents (``spawn_agent``
@@ -1242,6 +1447,7 @@ CODEX_SPEC = CLISpec(
     auth_check_args=["login", "status"],
     auth_ok_pattern=r"(?i)logged in",
     extract_diagnostics=_extract_codex_diagnostics,
+    extract_tool_failures=_extract_codex_tool_failures,
     always_args=["--skip-git-repo-check"],
     # No seat on this transport may spawn its own agents. A Sol review on
     # 2026-09-13 used the CLI's spawn_agent to create a second Sol that passed
@@ -1262,6 +1468,13 @@ CODEX_SPEC = CLISpec(
     extract_usage=_extract_codex_usage,
     prompt_on_stdin=True,
     verified=True,
+    # config.toml carries plugins and MCP servers; auth.json is still read
+    # from CODEX_HOME. Not --ignore-rules: it drops the project's .rules too,
+    # and a switch for personal preferences must not remove repository
+    # safety policy (Codex review of #25).
+    neutral_args=["--ignore-user-config"],
+    neutral_gap="codex: user .rules execpolicy files still load, because the only switch also drops the project's",
+    worker_tool_style="codex",
 )
 
 #: Grok Build (``brew install --cask grok-build``), authenticating against
@@ -1328,6 +1541,10 @@ CODEX_SPEC = CLISpec(
 #: exec, and a clear refusal well short of it is worth the lost headroom.
 MAX_ARGV_PROMPT = 200_000
 
+#: How much of a CLI's stderr survives into the ledger per attempt. Enough to
+#: hold a sandbox refusal or an auth failure verbatim; not a transcript.
+STDERR_TAIL = 2_000
+
 GROK_SPEC = CLISpec(
     vendor="grok",
     binary="grok",
@@ -1387,6 +1604,13 @@ GROK_SPEC = CLISpec(
     # single nonsense name denies: nothing. Hence the separator field.
     native_fanout_off_args=["--disallowed-tools",
                             "Agent,spawn_subagent,workflow,scheduler_create,use_tool,search_tool"],
+    # grok reaches MCP tools through use_tool (and finds them with
+    # search_tool). Attached only inside the container, whose HOME holds no
+    # other integrations; see _worker_tool_argv.
+    worker_tool_style="grok",
+    worker_tool_undeny=("use_tool", "search_tool"),
+    neutral_gap=("grok: account-level <user_rules> are attached server-side and have no CLI "
+                 "switch; each call's injected rules are recorded by hash in the trace"),
     disallowed_tools_separator=",",
     # Workflows removed at startup as well as denied by name.
     native_fanout_off_env={"GROK_WORKFLOWS": "0"},
@@ -1395,6 +1619,7 @@ GROK_SPEC = CLISpec(
     # restricted read-only allowlist and the full denial. A read tool that
     # is present but has no turn to run in is the honest description.
     summary_only_args=["--max-turns", "1"],
+    max_turns_flag="--max-turns",
     disallowed_tools_flag="--disallowed-tools",
     # Every *agentic* call, read-only included: without it the turn is
     # cancelled silently the first time a tool is called. A restricted seat
@@ -1584,6 +1809,18 @@ class NativeControlOverride(ProviderError):
     """A configuration conflicts with the selected native-delegation policy."""
 
 
+def neutral_preferences(env: Optional[Mapping[str, str]] = None) -> bool:
+    """Whether this run drops the operator's personal CLI configuration.
+
+    Davis's ruling (2026-09-25): his personal rules stay active by default,
+    because they are how he wants the models to work, and Quadratus builds
+    the important ones in as product behaviour. This switch is the option to
+    run without them, for a measurement that must not depend on one account.
+    """
+    environ = os.environ if env is None else env
+    return environ.get("QUADRATUS_NEUTRAL_PREFERENCES", "").strip().lower() in {"1", "true", "yes"}
+
+
 def native_delegation_mode(env: Optional[Mapping[str, str]] = None) -> str:
     environ = os.environ if env is None else env
     raw = environ.get('QUADRATUS_NATIVE_DELEGATION', '').strip().lower()
@@ -1703,6 +1940,17 @@ class CLIProvider(LLMProvider):
         #: One-turn, tool-less summary call on the restricted seat (closeout).
         #: Off by default; a per-call view sets it. See ``_build_argv``.
         self.summary_only: bool = bool(kwargs.pop("summary_only", False))
+        #: A lead's agentic turn limit for this view, set per call by
+        #: runtime.Fleet. None sends no flag. A proxy for spend, not a
+        #: token ceiling: an 11-turn grok lead still reported 365,138 tokens.
+        self.max_turns: Optional[int] = kwargs.pop("max_turns", None)
+        #: The in-session worker tool for this view (``WorkerBridge.spec()``),
+        #: set per lead call by runtime.Fleet. None attaches nothing.
+        self.worker_tool: Optional[dict] = kwargs.pop("worker_tool", None)
+        #: Per-run neutral mode from Settings; None falls back to the env var.
+        self.neutral: Optional[bool] = None
+        self._worker_tool_files: List[str] = []
+        self.worker_tool_attached = False
         self._prompt_files = set()
         #: Real token counts from the most recent call, when the CLI reported
         #: them; None otherwise. Read by metering glue, never load-bearing.
@@ -1720,6 +1968,12 @@ class CLIProvider(LLMProvider):
         #: the start of every attempt so a stale record never describes a
         #: later call. Attached to a raised ProviderError as ``diagnostics``.
         self.last_diagnostics: Optional[Dict[str, object]] = None
+        #: The tail of the CLI's stderr and the failed tool calls it reported,
+        #: kept per attempt for the ledger. Q9 (2026-09-22): a blocked lead's
+        #: bwrap error existed only in the model's prose, so nobody could
+        #: check it. Bounded; never the whole transcript.
+        self.last_stderr: str = ""
+        self.last_tool_failures: List[Dict[str, object]] = []
         super().__init__(model, api_key="cli-oauth", **kwargs)
 
     # -- lifecycle -----------------------------------------------------------
@@ -1800,6 +2054,9 @@ class CLIProvider(LLMProvider):
         if spec.effort_flag and self.effort:
             argv += [spec.effort_flag, spec.effort_template.format(level=self.effort)]
         argv += list(spec.always_args)
+        neutral = getattr(self, "neutral", None)
+        if (neutral_preferences() if neutral is None else neutral) and spec.neutral_args:
+            argv += list(spec.neutral_args)
         if self.restricted and spec.restricted_args:
             # A bounded call, not an agent. The permission axis does not apply:
             # readonly_args and write_args both describe what an agent may do
@@ -1856,6 +2113,14 @@ class CLIProvider(LLMProvider):
             if os.listdir(self.workdir):
                 raise ProviderError(f"{self.label}: summary_only requires an empty working directory")
             mode = 'off'
+        tool = getattr(self, "worker_tool", None)
+        tool_args = self._worker_tool_argv(tool) if tool and not self.summary_only else None
+        self.worker_tool_attached = tool_args is not None
+        if getattr(self, 'native_fanout_off', False):
+            # Set per call on a view by runtime.Fleet for a seat whose job
+            # excludes delegation (the verifier). The same denial, kill
+            # switches and refusal of overrides as the run-wide off mode.
+            mode = 'off'
         if mode == 'off' and spec.native_fanout_off_args:
             # Vendor-specific flag precedence is not a reliable generic
             # parser. In this strict opt-in mode, reject overrides rather
@@ -1866,6 +2131,8 @@ class CLIProvider(LLMProvider):
                     'when QUADRATUS_NATIVE_DELEGATION=off')
             flag, *names = spec.native_fanout_off_args
             denied = _split_tool_names(" ".join(names), spec.disallowed_tools_separator)
+            if tool_args is not None:
+                denied = [name for name in denied if name not in spec.worker_tool_undeny]
             argv = _fold_disallowed(argv, spec.disallowed_tools_flag or flag, denied,
                                     spec.disallowed_tools_separator)
             self._native_fanout_denied = denied
@@ -1887,10 +2154,13 @@ class CLIProvider(LLMProvider):
         # the spellings that could out-order a weaker form, and the operator
         # contract that overrides land last is one this module already
         # promises.
+        argv += tool_args or []
         argv += list(spec.control_args)
         argv += extra
         if self.summary_only:
             argv += list(spec.summary_only_args)
+        elif self.max_turns and spec.max_turns_flag:
+            argv += [spec.max_turns_flag, str(int(self.max_turns))]
         if self.restricted and spec.restricted_prompt_flag:
             if len(prompt) > MAX_ARGV_PROMPT:
                 # Falling back to a prompt file here would silently drop the
@@ -1909,6 +2179,84 @@ class CLIProvider(LLMProvider):
         elif not spec.prompt_on_stdin:
             argv.append(prompt)
         return argv
+
+    def _extract(self, stdout: str) -> str:
+        """The spec's extractor, with the turn cap recognised by count.
+
+        GameTape run 3 (2026-09-25): grok at --max-turns 14 reported
+        stopReason 'cancelled' with num_turns 14, not 'max_turns'. Read as a
+        failed lead with changed source, it stopped the whole run -- the
+        failure Codex warned the cap must not cause. When a cap was set and the
+        envelope's own turn count reached it, an incomplete turn is the cap.
+        """
+        try:
+            return self.spec.extract(stdout)
+        except ProviderRefusal:
+            raise
+        except TurnLimitReached:
+            raise
+        except ProviderError as exc:
+            if not self.max_turns or self.summary_only:
+                raise
+            try:
+                payload = json.loads(stdout or "")
+            except ValueError:
+                raise exc from None
+            turns = _envelope_turns(payload) if isinstance(payload, dict) else None
+            if turns is None or turns < int(self.max_turns):
+                raise
+            text = payload.get("text") or payload.get("result")
+            raise TurnLimitReached(
+                f"{self.spec.vendor} stopped at its turn limit ({turns} of {self.max_turns}) before finishing",
+                partial_text=text if isinstance(text, str) else None, turns=turns) from exc
+
+    def _worker_tool_argv(self, tool: dict) -> Optional[List[str]]:
+        """Arguments that attach the in-session worker tool, or None.
+
+        Forms from the 2026-09-25 probe. claude takes an inline MCP config and
+        --strict-mcp-config, so no user or project server loads beside it.
+        codex takes -c overrides; without the per-server approval mode an MCP
+        call is refused under approval policy "never". grok reads MCP servers
+        only from a project-scoped .grok/config.toml and starts them only in a
+        trusted folder; --trust persists that trust in ~/.grok, so grok gets
+        the tool only inside the container, where HOME is disposable, and only
+        when the directory has no .grok of its own to overwrite.
+        """
+        name = tool["name"]
+        style = self.spec.worker_tool_style
+        if style == "claude":
+            config = {"mcpServers": {name: {"command": tool["command"], "args": tool["args"],
+                                            "env": tool["env"]}}}
+            return ["--mcp-config", json.dumps(config), "--strict-mcp-config",
+                    "--allowedTools", f"mcp__{name}__commission_worker"]
+        if style == "codex":
+            env = "{" + ", ".join(f"{k} = {json.dumps(v)}" for k, v in tool["env"].items()) + "}"
+            prefix = f"mcp_servers.{name}"
+            return ["-c", f"{prefix}.command={json.dumps(tool['command'])}",
+                    "-c", f"{prefix}.args={json.dumps(tool['args'])}",
+                    "-c", f"{prefix}.env={env}",
+                    "-c", f'{prefix}.default_tools_approval_mode="approve"',
+                    "-c", f"{prefix}.tool_timeout_sec={int(tool['timeout'])}",
+                    "-c", f"{prefix}.startup_timeout_sec=30"]
+        if style == "grok" and contained():
+            folder = Path(self.workdir) / ".grok"
+            if folder.exists():
+                return None
+            env = "{ " + ", ".join(f"{k} = {json.dumps(v)}" for k, v in tool["env"].items()) + " }"
+            folder.mkdir()
+            (folder / "config.toml").write_text(
+                f"[mcp_servers.{name}]\ncommand = {json.dumps(tool['command'])}\n"
+                f"args = {json.dumps(tool['args'])}\nenv = {env}\n"
+                f"tool_timeout_sec = {int(tool['timeout'])}\n", encoding="utf-8")
+            # Reassigned, not appended: views are shallow copies.
+            self._worker_tool_files = [*self._worker_tool_files, str(folder)]
+            return ["--trust"]
+        return None
+
+    def _remove_worker_tool_files(self) -> None:
+        for path in self._worker_tool_files:
+            shutil.rmtree(path, ignore_errors=True)
+        self._worker_tool_files = []
 
     def _write_prompt_file(self, prompt: str) -> str:
         """Spill the prompt to a file for CLIs that read it from a path.
@@ -1937,11 +2285,17 @@ class CLIProvider(LLMProvider):
 
     def _call(self, prompt: str, system: str, history: Sequence[Turn]) -> str:
         self.last_diagnostics = None  # per attempt: a stale record must not describe this call
+        self.last_session_id = None  # likewise: a trace must never join the wrong transcript
+        self.last_stderr = ""
+        self.last_tool_failures = []
         composed = self._compose_prompt(prompt, system, history)
         argv = self._build_argv(composed, system)
         env = {**os.environ, **self.spec.env}
         if getattr(self, "_native_fanout_denied", None):
             env.update(self.spec.native_fanout_off_env)
+        if self.worker_tool_attached and self.spec.worker_tool_style == "claude":
+            # claude's MCP tool-call timeout, in milliseconds.
+            env["MCP_TOOL_TIMEOUT"] = str(int(self.worker_tool["timeout"]) * 1000)
         # An inherited ANTHROPIC_API_KEY would silently divert a subscription
         # run onto billed API credits, so clear key vars for the child.
         for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
@@ -1959,6 +2313,8 @@ class CLIProvider(LLMProvider):
             )
         except subprocess.TimeoutExpired as exc:
             output = exc.output.decode(errors="replace") if isinstance(exc.output, bytes) else exc.output
+            errors = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr
+            self.last_stderr = (errors or "")[-STDERR_TAIL:]
             self._observe_output(output or "")
             raise TimeoutError(
                 f"{self.label} CLI timed out after {self.timeout}s"
@@ -1966,6 +2322,7 @@ class CLIProvider(LLMProvider):
         except FileNotFoundError as exc:
             raise ProviderError(f"{self.label} CLI vanished from PATH: {exc}") from exc
         finally:
+            self._remove_worker_tool_files()
             if self.spec.prompt_file_flag and self.spec.prompt_file_flag in argv:
                 path = argv[argv.index(self.spec.prompt_file_flag) + 1]
                 try:
@@ -1975,6 +2332,7 @@ class CLIProvider(LLMProvider):
                 self._prompt_files.discard(path)
 
         self._observe_output(proc.stdout)
+        self.last_stderr = (proc.stderr or "")[-STDERR_TAIL:]
 
         if proc.returncode != 0:
             # A failing exit code does not mean there is nothing to read. The
@@ -1987,9 +2345,11 @@ class CLIProvider(LLMProvider):
             # first refusal; only if it has nothing to say does the exit code
             # become the error.
             try:
-                self.spec.extract(proc.stdout)
+                self._extract(proc.stdout)
             except (ProviderError, ProviderRefusal) as parsed:
                 parsed.diagnostics = self.last_diagnostics
+                if isinstance(parsed, TurnLimitReached) or getattr(parsed, "auth_invalid", False):
+                    raise
                 if isinstance(parsed, ProviderRefusal):
                     parsed.model = self.model
                     raise
@@ -2005,7 +2365,7 @@ class CLIProvider(LLMProvider):
             )
 
         try:
-            return self.spec.extract(proc.stdout)
+            return self._extract(proc.stdout)
         except ProviderRefusal as refusal:
             refusal.diagnostics = self.last_diagnostics
             refusal.model = self.model
@@ -2020,6 +2380,9 @@ class CLIProvider(LLMProvider):
             self.last_usage = self.spec.extract_usage(stdout) if self.spec.extract_usage else None
             self.last_diagnostics = (
                 self.spec.extract_diagnostics(stdout) if self.spec.extract_diagnostics else None
+            )
+            self.last_tool_failures = (
+                self.spec.extract_tool_failures(stdout or "") if self.spec.extract_tool_failures else []
             )
             self.native_children = _extract_native_children(stdout)
             denied = list(getattr(self, "_native_fanout_denied", []) or [])
@@ -2044,15 +2407,33 @@ class CLIProvider(LLMProvider):
                     self.last_session_id = event.get("thread_id")
                 elif event.get("session_id"):
                     self.last_session_id = event["session_id"]
+                elif event.get("sessionId"):
+                    # grok spells it this way; without it no grok row had an id
+                    self.last_session_id = event["sessionId"]
                 # A Claude result names concrete releases, while argv often
                 # uses a moving alias. Auxiliary modelUsage rows are not seats.
                 models = event.get("modelUsage") or {}
                 matching = [name for name in models if self.model and self.model in name]
                 if len(matching) == 1:
                     self.resolved_model = matching[0]
+            if not getattr(self, "last_session_id", None):
+                try:
+                    whole = json.loads(stdout or "")
+                    if isinstance(whole, dict) and isinstance(whole.get("sessionId"), str):
+                        self.last_session_id = whole["sessionId"]
+                except ValueError:
+                    pass
             if self.spec.vendor == "openai" and getattr(self, "last_session_id", None):
                 from .native_sessions import codex_children
                 root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "sessions"
+                if self.last_usage is None:
+                    # Diagnostic only (Codex review of #25): a stream that ended
+                    # before response.completed may have unreported usage, so
+                    # the session record's total is a lower bound and never
+                    # clears unknown usage. The budget still stops on it.
+                    floor = _codex_rollout_usage(root, self.last_session_id)
+                    if floor is not None:
+                        self.last_diagnostics = dict(self.last_diagnostics or {}, usage_lower_bound=floor)
                 self.native_children.extend(codex_children(
                     root, self.last_session_id, self.workdir,
                     ended=datetime.now(timezone.utc),

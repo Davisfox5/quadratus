@@ -202,6 +202,108 @@ def test_run_respects_the_task_cap(store):
     assert len(s.run(max_tasks=3)) == 3
 
 
+class CapRecorder(Recorder):
+    """Also answers the one terminal question asked after the task cap."""
+
+    def __init__(self, terminal, **kw):
+        super().__init__(**kw)
+        self.terminal = terminal
+        self.terminal_asks = 0
+
+    def __call__(self, model, prompt, system=None):
+        if "The task cap for this run has been reached" in prompt:
+            self.calls.append({"model": model, "prompt": prompt})
+            self.terminal_asks += 1
+            return self.terminal
+        return super().__call__(model, prompt, system)
+
+
+def _counting_run_task(s):
+    ran = []
+    real = s.run_task
+
+    def run_task(spec):
+        ran.append(spec.description)
+        return real(spec)
+
+    s.run_task = run_task
+    return ran
+
+
+def test_a_run_that_fills_its_cap_can_still_report_the_goal_met(store):
+    """Q9-v2: two tasks, a cap of two, both closed, and completed stayed false
+    because the orchestrator never had the turn that says DONE."""
+    rec = CapRecorder("DONE", next_tasks=["task one", "task two"])
+    s = _session(store, rec)
+    ran = _counting_run_task(s)
+    assert len(s.run(max_tasks=2)) == 2
+    assert ran == ["task one", "task two"]
+    assert rec.terminal_asks == 1
+    assert s.completed is True
+
+
+def test_a_post_cap_reply_proposing_a_task_is_never_run(store):
+    """The terminal question can only confirm. A reply naming task three is
+    recorded as not met; run_task stays at two calls."""
+    rec = CapRecorder("KIND: refactor simple\ntask three: rewrite the parser",
+                      next_tasks=["task one", "task two"])
+    s = _session(store, rec)
+    ran = _counting_run_task(s)
+    s.run(max_tasks=2)
+    assert ran == ["task one", "task two"]
+    assert len(s.history) == 2
+    assert rec.terminal_asks == 1
+    assert s.completed is False
+
+
+@pytest.mark.parametrize("reply, completed", [
+    ("DONE", True),
+    ("  DONE\n", True),
+    ("Task 2 is not verified yet.\nDONE", False),
+    ("DONE\nexcept the security task, which still needs review", False),
+    ("NOT DONE: the security task is unverified", False),
+    ("done", False),
+    ("DONE.", False),
+])
+def test_only_a_reply_that_is_exactly_done_confirms_at_the_cap(store, reply, completed):
+    """A DONE line beside reasoning is a contradiction or a hedge, not a
+    confirmation; the terminal reply is judged whole."""
+    rec = CapRecorder(reply, next_tasks=["task one", "task two"])
+    s = _session(store, rec)
+    s.run(max_tasks=2)
+    assert rec.terminal_asks == 1
+    assert s.completed is completed
+
+
+def test_terminal_done_does_not_complete_a_run_with_a_failed_gate(store):
+    """DONE at the cap completes only when every gate passed, the same rule
+    as a DONE inside the loop."""
+    rec = CapRecorder("DONE", next_tasks=["task one", "task two"])
+    s = _session(store, rec)
+    real = s.run_task
+
+    def run_task(spec):
+        summary = real(spec)
+        if spec.description == "task one":
+            # A gate that failed, then passed on the fix round: the loop goes
+            # on, but the failure is on the record.
+            s.checks += [{"passed": False}, {"passed": True}]
+        return summary
+
+    s.run_task = run_task
+    s.run(max_tasks=2)
+    assert rec.terminal_asks == 1
+    assert s.completed is False
+
+
+def test_a_run_stopped_early_is_not_asked_the_terminal_question(store):
+    rec = CapRecorder("DONE", next_tasks=["task one", "DONE"])
+    s = _session(store, rec)
+    s.run(max_tasks=5)
+    assert rec.terminal_asks == 0
+    assert s.completed is True
+
+
 def test_tasks_accumulate_in_the_ledger_in_order(store):
     rec = Recorder(next_tasks=["a", "b", "DONE"])
     s = _session(store, rec)
@@ -294,9 +396,8 @@ def test_a_pinned_kind_overrides_the_ladder(store, rec):
 
 
 def test_the_ladder_is_deterministic_not_rotating(store, rec):
-    """Same difficulty, same lead, every time -- load is spread by the
-    orchestrator mixing difficulty labels, not by taking turns."""
-    s = _session(store, rec)
+    """With spreading off, the ladder itself: same difficulty, same lead."""
+    s = _session(store, rec, config=SessionConfig(spread_leads=False))
     leads = {
         s.run_task(TaskSpec(f"t{i}", "work", complexity=Complexity.SIMPLE)).author
         for i in range(3)
@@ -307,7 +408,7 @@ def test_the_ladder_is_deterministic_not_rotating(store, rec):
 def test_mobile_work_rides_the_ladder_like_anything_else(store, rec):
     """The exclusion this used to check named a model that left the lineup;
     what has to keep holding is that the kind still routes and never stalls."""
-    s = _session(store, rec)
+    s = _session(store, rec, config=SessionConfig(spread_leads=False))
     for i in range(len(s.brain_trust) + 1):
         got = s.run_task(
             TaskSpec(f"t{i}", "add the settings screen",
@@ -589,3 +690,21 @@ def test_the_plan_reseats_too(store):
 
     s = Session("Build a parser", store, invoke, available=lambda k: k not in down)
     assert s.plan() == "1. do the thing"
+
+
+def test_simple_and_standard_leads_spread_across_vendors(store, rec):
+    """Davis, 2026-09-25: divide the load where the model does not matter."""
+    s = _session(store, rec)
+    leads = [s.run_task(TaskSpec(f"t{i}", "work", complexity=Complexity.SIMPLE)).author for i in range(6)]
+    vendors = [lead.partition(":")[0] for lead in leads]
+    assert {vendors.count(v) for v in set(vendors)} == {2}, leads
+    assert leads[0] == GROK, "the ladder's own choice wins a tie"
+
+
+def test_complex_work_and_pinned_kinds_are_not_spread(store, rec):
+    s = _session(store, rec)
+    leads = {s.run_task(TaskSpec(f"c{i}", "work", complexity=Complexity.COMPLEX)).author for i in range(3)}
+    assert leads == {OPUS}
+    tests = {s.run_task(TaskSpec(f"q{i}", "write tests", complexity=Complexity.SIMPLE,
+                                 kind=TaskKind.TEST)).author for i in range(3)}
+    assert tests == {SOL}

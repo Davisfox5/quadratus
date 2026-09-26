@@ -127,6 +127,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     fleet = fleet_type(settings, project=project, allow_writes=allow_writes,
                        usage_meter=meter, delegation_ledger=delegation,
                        **({'run_budget': budget} if budget else {}))
+    try:
+        fleet.progress = progress  # one live line per call as it ends
+    except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
+        pass
     in_flight = {}
     try:
         if preview and preview['blocked']:
@@ -150,6 +154,14 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             (run_dir / 'in-flight.json').write_text(json.dumps(in_flight, indent=2), encoding='utf-8')
     finally:
         fleet.close()
+    # What each call did inside its own session, from the vendors' transcripts.
+    # Collected after the run so a slow copy never delays a model call.
+    traces = []
+    try:
+        from .trace import build_traces
+        traces = build_traces(run_dir, run_dir / 'invocations.jsonl', project.root)
+    except Exception:  # noqa: BLE001 -- tracing never fails a run
+        traces = []
     diff = project.diff(before)
     completed = bool(session and session.completed and not error)
     checks = session.checks if session else []
@@ -185,6 +197,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     # Who actually ran, kept apart from who was selected, and from what the
     # harness could only witness. Reported next to the API-price counterfactual
     # rather than merged into it: they answer different questions.
+    if traces:
+        from .trace import render_timeline
+        lines += [render_timeline(traces), '']
     lines += [delegation.render_report(), '', '## Task ledger', '', ledger]
     report = '\n'.join(lines)
     (run_dir / 'changes.diff').write_text(diff, encoding='utf-8')
@@ -195,6 +210,16 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'allow_writes': allow_writes, 'error': error, 'checks': checks,
         'source_changed': bool(diff), 'source_fingerprint': project.fingerprint(),
         'tasks': len(session.history) if session else 0,
+        'turn_limited_tasks': list(getattr(session, 'turn_limited', []) or []) if session else [],
+        'personal_preferences': _preferences_record(settings),
+        'requirements': _requirements_record(session),
+        'design_checks': list(getattr(session, 'design_checks', []) or []) if session else [],
+        'parallel_batches': list(getattr(session, 'parallel_batches', []) or []) if session else [],
+        'trace': {'calls': len(traces),
+                  'transcripts_found': sum(1 for t in traces if t.get('tool_calls') is not None),
+                  'calls_outside_project': sum(1 for t in traces if t.get('outside_project')),
+                  'unserved_requests': sum(len(t.get('protocol_attempts') or []) for t in traces),
+                  'injected_rules': sorted({r['source'] for t in traces for r in t.get('injected_rules') or []})},
         'in_flight': in_flight,
         'policy_preview': preview,
         'policy_plans': getattr(session, 'policy_plans', []),
@@ -209,3 +234,62 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     }, indent=2), encoding='utf-8')
     (run_dir / 'delegation.md').write_text(delegation.render_report(), encoding='utf-8')
     return ProjectResult(completed, report, run_dir, diff, error)
+
+
+def _requirements_record(session):
+    if session is None:
+        return None
+    ledger = session.memory.ledger
+    return {"listed": dict(ledger.requirements), "status": dict(ledger.requirement_status),
+            "ambiguous": dict(ledger.ambiguous),
+            "decided_by_orchestrator": dict(ledger.decisions),
+            "operator_rulings": list(ledger.rulings),
+            "reviews": list(getattr(session, "requirement_reviews", []) or []),
+            "audits": list(getattr(session, "requirement_audits", []) or [])}
+
+
+def _preferences_record(settings=None):
+    """What this run asked for about the operator's personal CLI configuration.
+
+    An intent, not an observation: the flags below were passed, and what each
+    CLI then loaded is not independently verified here (Codex review of #25).
+    """
+    from .cli_providers import CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC, neutral_preferences
+    requested = (getattr(settings, "neutral_preferences", False) if settings is not None
+                 else neutral_preferences())
+    specs = (CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC)
+    if not requested:
+        return {"requested": "personal configuration not suppressed",
+                "note": "each CLI loaded whatever user configuration and account rules it has"}
+    return {"requested": "neutral", "observed": "not verified per CLI",
+            "flags_passed": {s.vendor: list(s.neutral_args) for s in specs},
+            "not_removable": [s.neutral_gap for s in specs if s.neutral_gap]}
+
+
+def standing_rulings(path, fallback=None):
+    """An ask_operator that answers from rulings the operator gave in advance.
+
+    The file is JSON: a list of {"about": "<regex>", "answer": "<text>"}. A
+    question matching an entry gets its answer, recorded as a standing ruling
+    like any other; anything else goes to ``fallback`` (an interactive
+    prompt), or stops the run with OperatorInputNeeded. A blind run can then
+    carry answers the operator already gave without anyone at the keyboard.
+    """
+    import json as _json
+    import re as _re
+    entries = _json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(entries, list) or not all(
+            isinstance(e, dict) and isinstance(e.get("about"), str) and isinstance(e.get("answer"), str)
+            for e in entries):
+        raise ValueError(f"{path}: expected a list of {{'about': regex, 'answer': text}}")
+
+    def ask(question: str) -> str:
+        for entry in entries:
+            if _re.search(entry["about"], question, _re.IGNORECASE):
+                return entry["answer"]
+        if fallback is not None:
+            return fallback(question)
+        from .session import OperatorInputNeeded
+        raise OperatorInputNeeded(question)
+    return ask
+

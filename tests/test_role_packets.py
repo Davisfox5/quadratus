@@ -84,7 +84,9 @@ def test_instruction_symlink_escape_is_refused(packet_session, tmp_path):
     ('CHANGED: ["../a.py"]', False),
     ('CHANGED: ["a.py", "a.py", "new.bin", "old.py"]', False),
     ('CHANGED: []\nCHANGED: ["a.py", "new.bin", "old.py"]', False),
-    ('FETCH: anything', False),
+    # A request mid-work after edits is kept, not refused (GameTape run 5,
+    # 2026-09-25); the task-level scope check still measures the edits.
+    ('FETCH: anything', True),
 ])
 def test_unrestricted_delivery_compares_added_modified_deleted_bytes(tmp_path, monkeypatch, reply, success):
     root = tmp_path / 'project'

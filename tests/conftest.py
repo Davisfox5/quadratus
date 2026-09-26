@@ -75,3 +75,11 @@ def settings() -> Settings:
     )
     s.retry_base_delay = 0.0
     return s
+
+
+@pytest.fixture(autouse=True)
+def _scripted_orchestrators_predate_the_requirements_ledger(monkeypatch, request):
+    """Most tests script an orchestrator that never lists requirements. The
+    ledger is on in the product; its own tests switch it back on explicitly."""
+    if "requirements_ledger" not in request.keywords:
+        monkeypatch.setenv("QUADRATUS_REQUIREMENTS_LEDGER", "0")

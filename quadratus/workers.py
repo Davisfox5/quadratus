@@ -252,7 +252,7 @@ def worker_capabilities(allow_writes: bool):
     return frozenset({Need.PATCH}) if allow_writes else frozenset()
 
 
-def check_errand_fit(instruction: str, *, needs=None, write: bool = False):
+def check_errand_fit(instruction: str, *, needs=None, write: bool = False, answer_only: bool = False):
     """Refuse a mis-scoped errand before any call is made.
 
     ``needs`` is what the lead declared, in the vocabulary of
@@ -265,6 +265,13 @@ def check_errand_fit(instruction: str, *, needs=None, write: bool = False):
     treated as a contradiction: only a lead that *stated* what the errand
     needs can be told its grant disagrees with that statement.
 
+    ``answer_only`` is the in-session tool's contract: no grant, no
+    declared needs, and the answer is text by construction. Reading needs
+    from the wording there protects nothing and refuses good errands -- on
+    GameTape (2026-09-25) "Report only ... quote the first 40 lines of app.py"
+    was refused as a patch because it also named the helper the lead meant to
+    insert, and the lead went back to exploring on its own.
+
     Returns ``None`` when the errand fits, or one sentence naming the
     mismatch and the lead's move. Unknown need labels raise, as they do at
     decomposition: a label that was meant and then dropped is a silent
@@ -273,7 +280,8 @@ def check_errand_fit(instruction: str, *, needs=None, write: bool = False):
     from .task_kinds import Need, needs_from_text, normalise_needs
 
     declared = None if needs is None else normalise_needs(needs)
-    wanted = (declared or frozenset()) | needs_from_text(instruction or "")
+    inferred = frozenset() if answer_only else needs_from_text(instruction or "")
+    wanted = (declared or frozenset()) | inferred
     have = worker_capabilities(write)
     if Need.EXECUTE in wanted:
         return (
@@ -301,7 +309,17 @@ def check_errand_fit(instruction: str, *, needs=None, write: bool = False):
     return None
 
 
-def capability_preamble(allow_writes: bool) -> str:
+#: The one patch shape the harness applies. GameTape run 8: Haiku and Sonnet
+#: returned hunks without file headers four times running.
+_PATCH_FORMAT = (
+    "exactly PATCH: followed by one fenced unified diff, with a/ and b/ file headers "
+    "on every file, for example:\nPATCH:\n```diff\n--- a/tests/test_app.py\n"
+    "+++ b/tests/test_app.py\n@@ -10,3 +10,4 @@\n context line\n+added line\n```\n"
+    "A hunk without its --- and +++ header lines cannot be applied."
+)
+
+
+def capability_preamble(allow_writes: bool, model_key: Optional[str] = None) -> str:
     """Told to the worker, in its own prompt, before the errand.
 
     The worker used to be handed the lead's instruction and nothing else: not
@@ -309,12 +327,24 @@ def capability_preamble(allow_writes: bool) -> str:
     the *lead* about that channel and the worker was never in the room. A
     helper that does not know it may ask will instead do the best it can with
     what it has, which is how an errand it could not perform became prose.
+
+    Reading is described per vendor. codex has no read tool: it reads through
+    shell commands. Told "no shell", a Luna worker on GameTape (2026-09-25)
+    concluded it could not read at all and answered NEED TOOL without a single
+    call. Read-only commands are safe for that seat: on the host the codex
+    sandbox is read-only, and in the container the worker runs in a
+    disposable source copy.
     """
-    if allow_writes:
+    if (model_key or "").startswith("openai:"):
+        reading = ("You read the source copy in your working directory with read-only shell "
+                   "commands (ls, cat, sed -n, rg, grep, head). Those are the only commands you "
+                   "may run: do not run tests, install anything, or change a file.")
+        tools = (reading + " You return changes as a patch: " + _PATCH_FORMAT
+                 if allow_writes else reading + " You cannot change files.")
+    elif allow_writes:
         tools = (
             "You can read the source copy in your working directory, and you "
-            "return changes as a patch: exactly PATCH: followed by a fenced "
-            "unified diff. You have no write tools and no shell."
+            "return changes as a patch: " + _PATCH_FORMAT + " You have no write tools and no shell."
         )
     else:
         tools = (
@@ -456,6 +486,7 @@ class WorkerPool:
         depth: int = 0,
         steps: int = 1,
         token_limit: Optional[int] = None,
+        answer_only: bool = False,
     ) -> WorkerResult:
         """Run one worker for ``task`` and fold its report into that task.
 
@@ -479,7 +510,7 @@ class WorkerPool:
             )
         # Checked before the budget is charged and before any call: a
         # mis-scoped errand should cost the lead a sentence, not a window.
-        mismatch = check_errand_fit(prompt, needs=needs, write=allow_writes)
+        mismatch = check_errand_fit(prompt, needs=needs, write=allow_writes, answer_only=answer_only)
         if mismatch is not None:
             raise ErrandToolMismatch(f"errand {label!r}: {mismatch}")
         model_key = self.resolve_model(model, errand=errand, demanding=demanding)
@@ -502,7 +533,7 @@ class WorkerPool:
             self._charge(task.task_id)
 
         scratch = NoMemory()  # explicit: a worker carries nothing in or out
-        briefed = capability_preamble(allow_writes) + "\n## Errand\n" + prompt
+        briefed = capability_preamble(allow_writes, model_key) + "\n## Errand\n" + prompt
         def charge():
             with self._lock:
                 self._charge(task.task_id)
