@@ -8,15 +8,29 @@ the right widths, written during this task -- before the task can count as
 complete. The cross-vendor design reviewer is pointed at the same files.
 
     python -m quadratus.design_evidence <url-or-html-file> <task-id> [project-root]
+        [--click SELECTOR] [--wait SELECTOR] [--file SELECTOR=project/fixture.csv] ...
+
+Steps reach the state the task changed before the screenshot (Codex review
+of #25, Run 13: a dialog and its results appear only after a click and a
+file choice, so a render at load proves nothing about them). They run in the
+order given, each with a bound; every outcome is recorded in summary.json and
+any failed step makes the evidence unverified. There is no script, typing or
+navigation step. With steps, the page must be a local preview (localhost or
+a file inside the project), and navigation off it is blocked. A file step
+takes a regular, non-symlinked file inside the project, never under .git or
+.quadratus and never a credential-like name.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import struct
 import sys
+import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
+from urllib.parse import urlparse
 
 VIEWPORTS = {"desktop": {"width": 1280, "height": 800}, "mobile": {"width": 390, "height": 844}}
 EVIDENCE_DIR = Path(".quadratus") / "design-evidence"
@@ -26,15 +40,129 @@ def evidence_dir(root, task_id: str) -> Path:
     return Path(root) / EVIDENCE_DIR / task_id
 
 
-def capture(target: str, task_id: str, root=".") -> dict:
-    """Render ``target`` at each width into the task's evidence folder."""
+#: Bounds on an interactive capture: steps, per step, and per capture.
+MAX_STEPS = 12
+STEP_TIMEOUT_MS = 5000
+CAPTURE_SECONDS = 90
+_ACTIONS = ("click", "wait", "file")
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+#: Never uploaded, whatever the task asks: run state, VCS data, credentials.
+_BLOCKED_DIRS = {".git", ".quadratus"}
+_BLOCKED_NAMES = (".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*", "id_ed25519*",
+                  ".netrc", ".npmrc", ".pypirc", "*credential*", "*secret*", "*token*")
+
+
+def parse_steps(argv: List[str]) -> Tuple[List[str], List[dict]]:
+    """Split ``--click/--wait/--file`` steps from positional arguments."""
+    positional, steps = [], []
+    items = list(argv)
+    while items:
+        item = items.pop(0)
+        if item in ("--click", "--wait", "--file"):
+            if not items:
+                raise ValueError(f"{item} needs a value")
+            value = items.pop(0)
+            action = item[2:]
+            if action == "file":
+                selector, sep, path = value.partition("=")
+                if not sep:
+                    raise ValueError("--file takes SELECTOR=project/relative/path")
+                steps.append(dict(action="file", selector=selector, path=path))
+            else:
+                steps.append(dict(action=action, selector=value))
+        else:
+            positional.append(item)
+    return positional, steps
+
+
+def _fixture(root: Path, relative: str) -> Path:
+    """A project-owned, non-secret, non-symlinked regular file, or ValueError."""
+    raw = Path(relative)
+    if not relative or raw.is_absolute() or ".." in raw.parts:
+        raise ValueError(f"file step path must be project-relative without '..': {relative!r}")
+    if any(part in _BLOCKED_DIRS for part in raw.parts):
+        raise ValueError(f"file step path is under run state or version control: {relative!r}")
+    if any(fnmatch.fnmatch(part.lower(), pattern) for part in raw.parts for pattern in _BLOCKED_NAMES):
+        raise ValueError(f"file step path looks like a credential: {relative!r}")
+    current = root
+    for part in raw.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"file step path goes through a symlink: {relative!r}")
+    if not current.is_file() or not current.resolve().is_relative_to(root.resolve()):
+        raise ValueError(f"file step path is not a regular file in the project: {relative!r}")
+    return current.resolve()
+
+
+def _navigation_rule(target: str, root: Path):
+    """The allowed origin for an interactive capture, as a URL predicate."""
+    if "://" not in target or target.startswith("file://"):
+        page = Path(urlparse(target).path if target.startswith("file://") else target).resolve()
+        if not page.is_relative_to(root.resolve()):
+            raise ValueError("an interactive capture of a file must use a file inside the project")
+
+        def allowed(url: str) -> bool:
+            parsed = urlparse(url)
+            return parsed.scheme == "file" and Path(parsed.path).resolve().is_relative_to(root.resolve())
+        return allowed
+    parsed = urlparse(target)
+    if parsed.scheme not in ("http", "https") or parsed.hostname not in _LOCAL_HOSTS:
+        raise ValueError("an interactive capture must target a local preview (http://localhost or 127.0.0.1)")
+    origin = (parsed.scheme, parsed.hostname, parsed.port)
+
+    def allowed(url: str) -> bool:
+        other = urlparse(url)
+        return (other.scheme, other.hostname, other.port) == origin
+    return allowed
+
+
+def validate_steps(steps: List[dict], target: str, root) -> Tuple[List[dict], object]:
+    """Checked steps (file paths resolved) and the navigation rule, or ValueError."""
+    root = Path(root)
+    if len(steps) > MAX_STEPS:
+        raise ValueError(f"at most {MAX_STEPS} steps, not {len(steps)}")
+    checked = []
+    for step in steps:
+        action, selector = step.get("action"), step.get("selector")
+        if action not in _ACTIONS:
+            raise ValueError(f"unknown step {action!r}; use --click, --wait or --file")
+        if not isinstance(selector, str) or not selector.strip() or len(selector) > 300:
+            raise ValueError("each step needs a selector of at most 300 characters")
+        item = dict(action=action, selector=selector.strip())
+        if action == "file":
+            item.update(path=str(_fixture(root, step.get("path") or "")), label=step.get("path"))
+        checked.append(item)
+    return checked, (_navigation_rule(target, root) if checked else None)
+
+
+def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = None) -> dict:
+    """Render ``target`` at each width into the task's evidence folder.
+
+    With ``steps``, each width runs them on a fresh page before its
+    screenshot. Refused steps are written into summary.json and raised, so the
+    design check reports why instead of accepting an earlier render.
+    """
     from .browser import render_page
+    folder = evidence_dir(root, task_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        checked, allowed = validate_steps(list(steps or []), target, root)
+    except ValueError as exc:
+        (folder / "summary.json").write_text(json.dumps(dict(target=target, views={}, steps_refused=str(exc))))
+        raise
+    deadline = time.monotonic() + CAPTURE_SECONDS if checked else None
     out = {}
     for name, viewport in VIEWPORTS.items():
-        evidence = render_page(target, out_dir=evidence_dir(root, task_id) / name, viewport=viewport)
+        evidence = render_page(target, out_dir=folder / name, viewport=viewport, steps=checked,
+                               allow_navigation=allowed, step_timeout_ms=STEP_TIMEOUT_MS, deadline=deadline)
         out[name] = dict(screenshot=evidence.screenshot_path, clean=evidence.clean,
                          console_errors=evidence.console_errors[:10], failed_requests=evidence.failed_requests[:10])
-    (evidence_dir(root, task_id) / "summary.json").write_text(json.dumps(dict(target=target, views=out), indent=2))
+        if checked:
+            out[name]["steps"] = evidence.steps
+    summary = dict(target=target, views=out)
+    if checked:
+        summary["steps"] = [{k: v for k, v in s.items() if k != "path"} for s in checked]
+    (folder / "summary.json").write_text(json.dumps(summary, indent=2))
     return out
 
 
@@ -64,6 +192,8 @@ def check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
         summary = json.loads((folder / "summary.json").read_text())
     except (OSError, ValueError):
         summary = None
+    if isinstance(summary, dict) and summary.get("steps_refused"):
+        return False, f"the capture's interaction steps were refused: {str(summary['steps_refused'])[:200]}", []
     if (not isinstance(summary, dict) or not isinstance(summary.get("target"), str) or not summary["target"]
             or not isinstance(summary.get("views"), dict)
             or set(summary["views"]) != set(VIEWPORTS)
@@ -76,6 +206,17 @@ def check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
             problems.append(f"the {name} render is not clean"
                             + (f" (console: {errors})" if errors else "")
                             + (f" (failed requests: {failed})" if failed else ""))
+    requested = summary.get("steps") or []
+    for name, view in summary["views"].items():
+        if not requested:
+            continue
+        done = view.get("steps") if isinstance(view.get("steps"), list) else []
+        failed = next((s for s in done if not (isinstance(s, dict) and s.get("ok"))), None)
+        if failed is not None:
+            problems.append(f"the {name} render's step {failed.get('n')} ({failed.get('action')} "
+                            f"{str(failed.get('selector'))[:80]}) failed: {str(failed.get('error'))[:160]}")
+        elif len(done) != len(requested):
+            problems.append(f"the {name} render ran {len(done)} of {len(requested)} interaction steps")
     for name, viewport in VIEWPORTS.items():
         shot = folder / name / "page.png"
         width = _png_width(shot)
@@ -91,16 +232,32 @@ def check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
         shots.append(str(shot))
     if not problems and summary is not None:
         shots.append(f"target: {summary['target']}")
+        if requested:
+            shots.append("steps: " + "; ".join(
+                f"{s['action']} {s['selector']}" + (f" = {s.get('label')}" if s["action"] == "file" else "")
+                for s in requested))
     return not problems, "; ".join(problems), shots
 
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if len(argv) not in (2, 3):
-        print(__doc__.strip().splitlines()[-1].strip())
+    try:
+        positional, steps = parse_steps(argv)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 2
-    print(json.dumps(capture(argv[0], argv[1], argv[2] if len(argv) == 3 else "."), indent=2))
-    return 0
+    if len(positional) not in (2, 3):
+        print("usage: python -m quadratus.design_evidence <url-or-html-file> <task-id> [project-root] "
+              "[--click SEL] [--wait SEL] [--file SEL=path]", file=sys.stderr)
+        return 2
+    try:
+        out = capture(positional[0], positional[1], positional[2] if len(positional) == 3 else ".", steps)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(out, indent=2))
+    failed = [s for view in out.values() for s in view.get("steps", []) if not s.get("ok")]
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

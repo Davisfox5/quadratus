@@ -423,3 +423,31 @@ def test_a_continuation_whose_tests_overrun_still_stops_with_work_preserved(tmp_
     assert "Task exceeded its declared scope" in replay.result.error
     assert "stopped past 90" in replay.result.error and "in tests" in replay.result.error
     assert "test_case_13" in _read(replay, "tests/test_clock.py"), "the work is preserved"
+
+
+# -- 8. an interactive capture whose step failed (Codex review, Run 13) ---------------
+
+def test_a_capture_whose_interaction_step_failed_leaves_the_design_unverified(tmp_path, monkeypatch):
+    """Fresh, clean renders do not count when the step that reaches the change failed."""
+    from quadratus.design_evidence import evidence_dir
+
+    def failed_capture(call, replay):
+        root = Path(call.cwd)
+        H.evidence(root, "t1", age=H.FRESH)
+        summary_path = evidence_dir(root, "t1") / "summary.json"
+        summary = json.loads(summary_path.read_text())
+        summary["steps"] = [dict(action="click", selector="#import"), dict(action="wait", selector="dialog[open]")]
+        for view in summary["views"].values():
+            view["steps"] = [dict(n=1, action="click", selector="#import", ok=True),
+                             dict(n=2, action="wait", selector="dialog[open]", ok=False,
+                                  error="Timeout 5000ms exceeded.")]
+        summary_path.write_text(json.dumps(summary))
+        return "Renders refreshed.\nCHANGED: []"
+
+    script = _design_script("unused")
+    script.overrides["design-fix"] = failed_capture
+    replay = H.run(tmp_path, monkeypatch, script, files=_design_files())
+    assert replay.result.error == "" and not replay.result.completed
+    record = json.loads(replay.artifact_texts("design-evidence")[0])
+    assert record["verified"] is False and "step 2 (wait dialog[open]) failed" in record["problem"]
+    assert not replay.of("design-review"), "no final review of unverified renders"
