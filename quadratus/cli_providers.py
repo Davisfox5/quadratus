@@ -389,14 +389,16 @@ def _extract_grok_usage(stdout: str) -> Optional[Dict[str, int]]:
 
 
 def _codex_rollout_usage(root: Path, session_id: str) -> Optional[dict]:
-    """Usage from codex's own session record, for a call whose stream ended
-    without a usage report. Never raises.
+    """A lower bound on a failed call's usage, from codex's own session
+    record, for diagnostics. Never raises; None when nothing was recorded.
 
-    GameTape run 6 (2026-09-25): the server closed the stream before
-    response.completed, stdout carried no usage, and the run budget stopped a
-    4.8M-token run on unknown usage. The rollout's token_count events still
-    tell the truth: their last total if any tokens were used, or -- when
-    every event has no usage at all -- zero. Anything else stays unknown.
+    Not a measurement. GameTape run 6 (2026-09-25): a stream closed before
+    response.completed and the budget stopped on unknown usage. The first
+    version of this function turned token_count events with ``info: null``
+    into zero and cleared that stop; Codex's review showed null info is an
+    absence of accounting (that call also ended in a 401), and that
+    ``output_tokens`` already includes reasoning tokens. So: the last
+    recorded total, as a floor, or None.
     """
     if not session_id or not re.fullmatch(r"[A-Za-z0-9-]{8,80}", session_id):
         return None
@@ -423,19 +425,17 @@ def _codex_rollout_usage(root: Path, session_id: str) -> Optional[dict]:
                     total = info["total_token_usage"]
     except OSError:
         return None
-    if total is not None:
-        try:
-            return {"input_tokens": int(total.get("input_tokens") or 0),
-                    "cached_input_tokens": int(total.get("cached_input_tokens") or 0),
-                    "output_tokens": int(total.get("output_tokens") or 0)
-                                     + int(total.get("reasoning_output_tokens") or 0),
-                    "usage_source": "codex session record"}
-        except (TypeError, ValueError):
-            return None
-    if counts:
-        return {"input_tokens": 0, "output_tokens": 0,
-                "usage_source": "codex session record: no tokens consumed"}
-    return None
+    if total is None:
+        return None
+    try:
+        return {"input_tokens": int(total.get("input_tokens") or 0),
+                "cached_input_tokens": int(total.get("cached_input_tokens") or 0),
+                # already includes reasoning_output_tokens
+                "output_tokens": int(total.get("output_tokens") or 0),
+                "usage_source": "codex session record, lower bound (stream ended early)",
+                "token_count_events": counts}
+    except (TypeError, ValueError):
+        return None
 
 
 def _envelope_turns(payload) -> Optional[int]:
@@ -2412,7 +2412,13 @@ class CLIProvider(LLMProvider):
                 from .native_sessions import codex_children
                 root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "sessions"
                 if self.last_usage is None:
-                    self.last_usage = _codex_rollout_usage(root, self.last_session_id)
+                    # Diagnostic only (Codex review of #25): a stream that ended
+                    # before response.completed may have unreported usage, so
+                    # the session record's total is a lower bound and never
+                    # clears unknown usage. The budget still stops on it.
+                    floor = _codex_rollout_usage(root, self.last_session_id)
+                    if floor is not None:
+                        self.last_diagnostics = dict(self.last_diagnostics or {}, usage_lower_bound=floor)
                 self.native_children.extend(codex_children(
                     root, self.last_session_id, self.workdir,
                     ended=datetime.now(timezone.utc),
