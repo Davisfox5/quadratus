@@ -366,3 +366,60 @@ def test_render_freshness_is_decided_by_timestamp_not_write_order(tmp_path):
     import time
     now = time.time()
     assert not check(tmp_path, "t2", now)[0] and check(tmp_path, "t3", now)[0]
+
+
+# -- 7. continuation sizing and test setup cost (Run 13, 2026-09-26) --------------------
+
+def _setup_and_cases(cases):
+    """A new test file: a fixed setup block, then ``cases`` one-line tests."""
+    setup = ["import types", "", "", "class FakeClock:", "    def __init__(self):", "        self.now = 0",
+             "", "    def tick(self, seconds):", "        self.now += seconds", "", "",
+             "def fixture_env():", "    env = types.SimpleNamespace(clock=FakeClock(), log=[])",
+             "    env.log.append('ready')", "    return env", "", ""]
+    body = []
+    for i in range(cases):
+        body += [f"def test_case_{i}():", "    env = fixture_env()", f"    env.clock.tick({i})",
+                 f"    assert env.clock.now == {i}", "", ""]
+    return "\n".join(["from app import add", ""] + setup + body) + "\n"
+
+
+def _continuation_run(tmp_path, monkeypatch, cases, estimate=60):
+    extra = dict(permitted_paths=["tests/test_clock.py"], intended_result="clock cases",
+                 acceptance=["tests/test_clock.py passes"], max_lines=estimate)
+
+    def orchestrator(call, replay):
+        if len(replay.of("orchestrator")) == 1:
+            return DECL_T1
+        return ("KIND: testing standard\nSCOPE: " + json.dumps(extra)
+                + "\nFinish the capped work: the clock test cases.\nCONTINUES: t1")
+
+    def lead(call, replay):
+        if call.task == "t1":
+            H.write(call, {"app.py": FIXED})
+            return H.claude_cap("Fixed add; clock tests not written yet.", num_turns=14)
+        H.write(call, {"tests/test_clock.py": _setup_and_cases(cases)})
+        return 'Added the clock tests.\nCHANGED: ["tests/test_clock.py"]'
+
+    return _run(tmp_path, monkeypatch, Script(orchestrator=orchestrator, lead=lead), max_tasks=2,
+                settings=Settings(backend="cli", lead_max_turns=14))
+
+
+def test_the_planner_is_told_to_count_test_setup_and_split_heavy_setup(tmp_path, monkeypatch):
+    replay = _continuation_run(tmp_path, monkeypatch, cases=6)
+    first, second = replay.of("orchestrator")[:2]
+    assert "fixed setup cost" in first.prompt and "its own earlier" in first.prompt
+    assert "count every test not yet written in full, including its" in second.prompt
+
+
+def test_a_continuation_sized_for_its_tests_and_setup_proceeds(tmp_path, monkeypatch):
+    replay = _continuation_run(tmp_path, monkeypatch, cases=6)       # ~55 lines against ~60
+    assert replay.result.error == "" and _gate_passed(replay)
+    assert "test_case_5" in _read(replay, "tests/test_clock.py")
+
+
+def test_a_continuation_whose_tests_overrun_still_stops_with_work_preserved(tmp_path, monkeypatch):
+    """The ceiling is unchanged: 1.5 x 60 = 90 lines, and the tests are not trimmed to fit."""
+    replay = _continuation_run(tmp_path, monkeypatch, cases=14)      # ~103 lines
+    assert "Task exceeded its declared scope" in replay.result.error
+    assert "stopped past 90" in replay.result.error and "in tests" in replay.result.error
+    assert "test_case_13" in _read(replay, "tests/test_clock.py"), "the work is preserved"

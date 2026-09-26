@@ -34,6 +34,9 @@ pytest -q tests/lifecycle
 | Grok cancelled before the cap | `test_a_grok_cancel_before_the_cap_is_a_failure_recovered_once_on_an_unchanged_tree` | lead recovery, once |
 | close-out safeguard refusal | `test_a_refused_closeout_keeps_a_harness_record_and_the_run_continues` | Run 10 |
 | lead safeguard refusal | `test_a_refused_lead_is_not_retried_or_rerouted` | refusal preserved |
+| planner and continuation told to count test setup | `test_the_planner_is_told_to_count_test_setup_and_split_heavy_setup` | Run 13 (prompt only) |
+| continuation within its estimate, tests and setup counted | `test_a_continuation_sized_for_its_tests_and_setup_proceeds` | |
+| continuation whose tests overrun | `test_a_continuation_whose_tests_overrun_still_stops_with_work_preserved` | ceiling unchanged, tests not trimmed |
 
 On fdee0d8 (Run 9's base) eight cases fail: the three non-single-line
 request layouts, all three design cases, the Claude error case and the
