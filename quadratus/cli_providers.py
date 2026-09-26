@@ -1045,6 +1045,14 @@ class CLISpec:
     #: (``Settings.lead_max_turns``). Empty where the CLI has none (codex):
     #: there the call is bounded by time and attempts only.
     max_turns_flag: str = ""
+    #: Whether a failed envelope whose turn count reached the cap is read as
+    #: the cap. True only where the CLI's reported count is the cap's own
+    #: counter and the cap has no explicit marker (grok, GameTape run 3).
+    #: Claude marks a real cap with ``subtype: error_max_turns``, and its
+    #: success ``num_turns`` counts every user message, one per tool result,
+    #: so it can pass the cap without reaching it (frozen 2.1.269, Run 12:
+    #: num_turns 17 at --max-turns 14, end_turn, 16 tool results).
+    turn_cap_by_count: bool = False
     #: How the CLI separates several names in one ``disallowed_tools_flag``
     #: value. Claude takes whitespace; grok's ``--help`` says comma-separated,
     #: and a space-joined list would reach it as one nonsense tool name that
@@ -1620,6 +1628,7 @@ GROK_SPEC = CLISpec(
     # is present but has no turn to run in is the honest description.
     summary_only_args=["--max-turns", "1"],
     max_turns_flag="--max-turns",
+    turn_cap_by_count=True,
     disallowed_tools_flag="--disallowed-tools",
     # Every *agentic* call, read-only included: without it the turn is
     # cancelled silently the first time a tool is called. A restricted seat
@@ -2187,7 +2196,10 @@ class CLIProvider(LLMProvider):
         stopReason 'cancelled' with num_turns 14, not 'max_turns'. Read as a
         failed lead with changed source, it stopped the whole run -- the
         failure Codex warned the cap must not cause. When a cap was set and the
-        envelope's own turn count reached it, an incomplete turn is the cap.
+        envelope's own turn count reached it, an incomplete turn is the cap --
+        for a CLI whose count is the cap's counter (``turn_cap_by_count``).
+        Claude's is not, and it marks a real cap explicitly, which its
+        extractor already raises as ``TurnLimitReached``.
         """
         try:
             return self.spec.extract(stdout)
@@ -2196,7 +2208,7 @@ class CLIProvider(LLMProvider):
         except TurnLimitReached:
             raise
         except ProviderError as exc:
-            if not self.max_turns or self.summary_only:
+            if not self.max_turns or self.summary_only or not self.spec.turn_cap_by_count:
                 raise
             try:
                 payload = json.loads(stdout or "")
