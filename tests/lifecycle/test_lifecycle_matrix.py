@@ -1095,3 +1095,24 @@ def test_a_copy_that_fails_after_preflight_stops_the_review_before_the_model(tmp
     verdict = json.loads(replay.artifact_texts("design-evidence")[0])["final_review"]["verdict"]
     assert "was not all delivered to the review copy" in verdict
     assert not replay.result.completed
+
+
+
+def test_a_rewritten_exclusions_file_cannot_hide_a_source_change(tmp_path, monkeypatch):
+    """Codex review of 40ba65b, through the whole controller: after the
+    capture the lead changes a permitted file and rewrites the exclusions
+    file to hide it; the session's own source still decides."""
+    from quadratus.design_evidence import EXCLUDES_FILE
+
+    def lead(call, replay):
+        reply = _edits_and_captures(call, replay)
+        H.write(call, {"static/style.css": "#import { color: red; }\n"})
+        Path(call.cwd, EXCLUDES_FILE).write_text(json.dumps(["static/style.css"]))
+        return reply.replace('CHANGED: ["templates/index.html"]',
+                             'CHANGED: ["static/style.css", "templates/index.html"]')
+
+    replay = _design_run(tmp_path, monkeypatch, lead=lead,
+                         revision=lambda call, replay: "Nothing to change after review.\nCHANGED: []")
+    record = json.loads(replay.artifact_texts("design-evidence")[0])
+    assert "captured on a different source tree" in record["first_problem"]
+    assert len(replay.of("design-fix")) == 1
