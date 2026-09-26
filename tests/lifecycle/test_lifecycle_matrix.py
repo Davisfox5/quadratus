@@ -1004,3 +1004,62 @@ def test_consecutive_design_tasks_each_need_their_own_renders(tmp_path, monkeypa
     replay = H.run(tmp_path, monkeypatch, script, files=_design_files(), max_tasks=2)
     fixes = [c.task for c in replay.of("design-fix")]
     assert "t2" in fixes, "t2 captured nothing of its own, so it gets the fix call"
+
+
+
+# -- Codex review of 3d5c3f3: no cross-task evidence, honest transfer, capture order ----
+
+def test_a_later_non_ui_tasks_reviewers_get_no_earlier_renders(tmp_path, monkeypatch):
+    copies = {}
+
+    architect = "KIND: architect complex\nSCOPE: " + json.dumps(T2) + "\nDocument add in README.md."
+
+    def orchestrator(call, replay):
+        return DECL_DESIGN if len(replay.of("orchestrator")) == 1 else architect
+
+    def lead(call, replay):
+        if call.task == "t1":
+            return _edits_and_captures(call, replay)
+        return Script()._lead(call, replay)
+
+    def collaborator(call, replay):
+        copies.setdefault(call.task, []).append(
+            sorted(p.relative_to(call.cwd).as_posix() for p in Path(call.cwd, ".quadratus").rglob("*")
+                   if p.is_file()))
+        return "No blocking findings."
+
+    script = _design_script("Renders refreshed.\nCHANGED: []")
+    script.overrides.update(orchestrator=orchestrator, lead=lead, collaborator=collaborator)
+    script.overrides["revision"] = lambda call, replay: "Nothing to change after review.\nCHANGED: []"
+    H.run(tmp_path, monkeypatch, script, files=_design_files(), max_tasks=2)
+    assert copies.get("t1") and any(copies["t1"]), "t1's own reviewers saw its renders"
+    assert copies.get("t2") and not any(copies["t2"]), "t2's reviewers got nothing from t1"
+
+
+def test_an_incomplete_evidence_transfer_blocks_the_review_instead_of_claiming_it(tmp_path, monkeypatch):
+    def lead(call, replay):
+        reply = _edits_and_captures(call, replay)
+        Path(call.cwd, ".quadratus/design-evidence/t1/mobile/evidence.json").write_text("not json")
+        return reply
+
+    replay = _design_run(tmp_path, monkeypatch, lead=lead,
+                         revision=lambda call, replay: "Nothing to change after review.\nCHANGED: []")
+    assert not replay.of("design-review"), "no reviewer was asked to judge an incomplete set"
+    record = json.loads(replay.artifact_texts("design-evidence")[0])
+    assert "renders could not be handed to the reviewer" in record["final_review"]["verdict"]
+    assert "not the file type its name says" in record["final_review"]["verdict"]
+    assert not replay.result.completed
+
+
+def test_a_capture_taken_before_an_edit_in_the_same_call_is_stale(tmp_path, monkeypatch):
+    """Codex review of 3d5c3f3: a start-of-call timestamp let it pass."""
+    def lead(call, replay):
+        H.evidence(Path(call.cwd), "t1", age=0)                                   # capture first...
+        H.write(call, {"templates/index.html": "<button id=import>Import</button>\n"})   # ...then edit
+        return 'Captured, then added the button.\nCHANGED: ["templates/index.html"]'
+
+    replay = _design_run(tmp_path, monkeypatch, lead=lead,
+                         revision=lambda call, replay: "Nothing to change after review.\nCHANGED: []")
+    record = json.loads(replay.artifact_texts("design-evidence")[0])
+    assert "captured on a different source tree" in record["first_problem"]
+    assert len(replay.of("design-fix")) == 1

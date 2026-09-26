@@ -228,8 +228,11 @@ def evidence(root: Path, task_id: str, *, age: float, target="http://127.0.0.1:5
         (folder / "page.png").write_bytes(png(width))
         stamp = time.time() + age
         os.utime(folder / "page.png", (stamp, stamp))
-        views[name] = dict(clean=True, console_errors=[], failed_requests=[])
-    (evidence_dir(root, task_id) / "summary.json").write_text(json.dumps(dict(target=target, views=views)))
+        views[name] = dict(clean=True, console_errors=[], failed_requests=[], document_width=width, overflow=[])
+    from quadratus.design_evidence import source_fingerprint
+    # As a real capture records it: the tree these renders show is the tree now.
+    (evidence_dir(root, task_id) / "summary.json").write_text(json.dumps(dict(
+        target=target, views=views, source_fingerprint=source_fingerprint(root))))
 
 
 def gate_results(replay: Replay) -> List[str]:

@@ -749,7 +749,7 @@ def test_only_a_tasks_declared_evidence_is_furnished_to_a_review_copy(tmp_path):
         ".quadratus/design-evidence/t1/desktop/page.png", ".quadratus/design-evidence/t1/summary.json",
         ".quadratus/design-evidence/t1/desktop/evidence.json",       # a symlink: skipped
         ".quadratus/runs/secret.json",                               # not evidence: skipped
-        "../outside.png", "/etc/passwd"])
+        "../outside.png", "/etc/passwd"], task="t1")
     assert copied == [".quadratus/design-evidence/t1/desktop/page.png", ".quadratus/design-evidence/t1/summary.json"]
     assert sorted(p.relative_to(copy).as_posix() for p in copy.rglob("*") if p.is_file()) == copied
     assert not os.access(copy / copied[0], os.W_OK) or os.geteuid() == 0, "read-only in the copy"
@@ -858,7 +858,7 @@ def test_a_symlinked_fixture_ancestor_is_refused(tmp_path):
                        str(root / "index.html"), root, "t2")
 
 
-@pytest.mark.parametrize("value", ["450", 450.5, True, float("nan")])
+@pytest.mark.parametrize("value", ["450", "not-a-width", 450.5, 450.0, True, float("nan"), None])
 def test_malformed_measured_width_is_rejected_cleanly(tmp_path, value):
     from tests.lifecycle.harness import evidence
     evidence(tmp_path, "t1", age=0)
@@ -867,7 +867,8 @@ def test_malformed_measured_width_is_rejected_cleanly(tmp_path, value):
     summary["views"]["mobile"]["document_width"] = value
     (folder / "summary.json").write_text(json.dumps(summary))
     passed, problem = check(tmp_path, "t1", 0)[:2]
-    assert not passed and "the mobile render's measured page width is malformed" in problem
+    expected = "page width was not measured" if value is None else "measured page width is malformed"
+    assert not passed and f"the mobile render's {expected}" in problem
 
 
 def test_a_symlinked_screenshot_leaves_the_design_unverified(tmp_path):
@@ -892,12 +893,12 @@ def test_evidence_furnishing_checks_type_and_an_aggregate_budget(tmp_path, monke
     copy.mkdir()
     names = [".quadratus/design-evidence/t1/desktop/page.png", ".quadratus/design-evidence/t1/mobile/page.png",
              ".quadratus/design-evidence/t1/mobile/evidence.json"]
-    assert runtime._furnish_evidence(root, copy, names) == names[:2], "a non-JSON evidence.json is skipped"
+    assert runtime._furnish_evidence(root, copy, names, task="t1") == names[:2], "a non-JSON evidence.json is skipped"
     fake = root / ".quadratus" / "design-evidence" / "t1" / "desktop" / "page.png"
     fake.write_bytes(b"not a png")
-    assert runtime._furnish_evidence(root, tmp_path / "c2", names[:1]) == []
+    assert runtime._furnish_evidence(root, tmp_path / "c2", names[:1], task="t1") == []
     monkeypatch.setattr(runtime, "_MAX_EVIDENCE_TOTAL", 1)
-    assert runtime._furnish_evidence(root, tmp_path / "c3", names[1:2]) == [], "over the aggregate budget"
+    assert runtime._furnish_evidence(root, tmp_path / "c3", names[1:2], task="t1") == [], "over the aggregate budget"
 
 
 CONTAINED = """<!doctype html><title>contained</title>
@@ -912,3 +913,20 @@ def test_contained_horizontal_scrolling_is_not_document_overflow(tmp_path, brows
     assert out["mobile"]["document_width"] <= 391 and out["mobile"]["overflow"] == []
     passed, problem, _ = check(root, "t1", 0)
     assert passed, problem
+
+
+
+def test_evidence_is_copied_only_for_the_calling_task(tmp_path):
+    from quadratus.runtime import _furnish_evidence, evidence_refusals
+    from tests.lifecycle.harness import evidence
+    root = tmp_path / "project"
+    evidence(root, "t1", age=0)
+    names = [".quadratus/design-evidence/t1/desktop/page.png", ".quadratus/design-evidence/t1/summary.json"]
+    assert _furnish_evidence(root, tmp_path / "t2-copy", names, task="t2") == []
+    assert _furnish_evidence(root, tmp_path / "none-copy", names, task=None) == []
+    assert _furnish_evidence(root, tmp_path / "t1-copy", iter(names), task="t1") == names, "any iterable"
+    assert [r for _, r in evidence_refusals(root, names, "t2")] == ["another task's evidence"] * 2
+    assert evidence_refusals(root, names, "t1") == []
+    missing = [".quadratus/design-evidence/t1/mobile/evidence.json"]
+    assert evidence_refusals(root, missing, "t1") == [(missing[0], "missing")]
+    assert evidence_refusals(root, names * 5, "t1")[-1] == ("", "more than 8 evidence files")
