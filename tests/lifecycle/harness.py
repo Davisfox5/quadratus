@@ -81,9 +81,12 @@ def codex_ok(text):
     return "\n".join(json.dumps(e) for e in events)
 
 
-def grok_ok(text, *, stop="end_turn", num_turns=1):
-    return json.dumps({"text": text, "stopReason": stop, "num_turns": num_turns,
-                       "sessionId": str(uuid.uuid4()), "usage": USAGE})
+def grok_ok(text, *, stop="end_turn", num_turns=1, error=None):
+    envelope = {"text": text, "stopReason": stop, "num_turns": num_turns,
+                "sessionId": str(uuid.uuid4()), "usage": USAGE}
+    if error is not None:
+        envelope["error"] = error
+    return json.dumps(envelope)
 
 
 ENVELOPE = {"claude": claude_ok, "codex": codex_ok, "grok": grok_ok}
