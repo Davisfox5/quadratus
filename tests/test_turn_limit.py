@@ -21,7 +21,7 @@ from quadratus.cli_providers import (
 from quadratus.config import Settings
 from quadratus.delegation import invocation
 from quadratus.project_run import run_project
-from quadratus.providers import ProviderError, TurnLimitReached
+from quadratus.providers import ProviderError, ProviderRefusal, TurnLimitReached
 from quadratus.runtime import Fleet
 
 
@@ -328,9 +328,8 @@ def test_a_claude_error_names_the_envelopes_own_errors():
 
 @pytest.mark.parametrize("envelope,named", [
     ({"text": "x", "stopReason": "cancelled", "error": "overloaded", "num_turns": 14}, "overloaded"),
-    ({"text": "x", "stopReason": "refusal", "num_turns": 14}, "refusal"),
-    ({"text": "x", "stopReason": "content_filter", "num_turns": 14}, "content_filter"),
     ({"text": "x", "stopReason": "error", "num_turns": 14}, "'error'"),
+    ({"text": "x", "stopReason": "error", "error": "upstream reset", "num_turns": 14}, "upstream reset"),
 ])
 def test_a_grok_error_or_other_stop_at_the_count_stays_a_failure(envelope, named):
     from quadratus.cli_providers import GrokCLIProvider
@@ -338,8 +337,41 @@ def test_a_grok_error_or_other_stop_at_the_count_stays_a_failure(envelope, named
     capped.max_turns = 14
     with pytest.raises(ProviderError) as caught:
         capped._extract(json.dumps(envelope))
-    assert not isinstance(caught.value, TurnLimitReached)
+    assert not isinstance(caught.value, (TurnLimitReached, ProviderRefusal))
     assert named in str(caught.value)
+
+
+@pytest.mark.parametrize("turns", [5, 14, 20])
+@pytest.mark.parametrize("stop", ["refusal", "content_filter"])
+def test_an_explicit_grok_decline_is_a_refusal_at_any_count(stop, turns):
+    """Codex review of f7548a2: kept as ProviderError, a decline was replaced by another lead."""
+    from quadratus.cli_providers import GrokCLIProvider
+    capped = GrokCLIProvider(model="")
+    capped.max_turns = 14
+    with pytest.raises(ProviderRefusal) as caught:
+        capped._extract(json.dumps({"text": "I can't help with that", "stopReason": stop,
+                                    "num_turns": turns}))
+    assert f"stopReason {stop!r}" in str(caught.value)
+    assert caught.value.category is None and caught.value.explanation is None, "nothing invented"
+
+
+def test_a_grok_decline_keeps_the_details_it_actually_supplied():
+    from quadratus.cli_providers import _extract_grok_result
+    envelope = {"text": "", "stopReason": "refusal", "error": "policy",
+                "stopDetails": {"category": "cyber", "explanation": "declined by policy"}}
+    with pytest.raises(ProviderRefusal) as caught:
+        _extract_grok_result(json.dumps(envelope))
+    assert caught.value.category == "cyber" and caught.value.explanation == "declined by policy"
+    assert "[cyber]" in str(caught.value)
+
+
+@pytest.mark.parametrize("text", ["I can't help with that.", "This request was refused by policy."])
+def test_prose_alone_never_makes_a_refusal(text):
+    from quadratus.cli_providers import _extract_grok_result
+    assert _extract_grok_result(json.dumps({"text": text, "stopReason": "end_turn"})) == text
+    with pytest.raises(ProviderError) as caught:
+        _extract_grok_result(json.dumps({"text": text, "stopReason": "cancelled"}))
+    assert not isinstance(caught.value, ProviderRefusal)
 
 
 def test_a_claude_error_with_an_empty_errors_list_still_names_something():

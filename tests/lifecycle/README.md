@@ -35,6 +35,7 @@ pytest -q tests/lifecycle
 | Grok error field at the cap's count | `test_a_grok_error_at_the_cap_count_is_a_failure_not_a_continuation` | Grok review of #33 (error read as the cap, message dropped) |
 | close-out safeguard refusal | `test_a_refused_closeout_keeps_a_harness_record_and_the_run_continues` | Run 10 |
 | lead safeguard refusal | `test_a_refused_lead_is_not_retried_or_rerouted` | refusal preserved |
+| Grok `refusal` / `content_filter` stop, below / at / above the cap, unchanged / changed tree | `test_a_grok_decline_is_one_lead_at_any_count_on_any_tree` ×12 | Codex review of f7548a2 (a decline handed to another lead) |
 | planner and continuation told to count test setup | `test_the_planner_is_told_to_count_test_setup_and_split_heavy_setup` | Run 13 (prompt only) |
 | continuation within its estimate, tests and setup counted | `test_a_continuation_sized_for_its_tests_and_setup_proceeds` | |
 | continuation whose tests overrun | `test_a_continuation_whose_tests_overrun_still_stops_with_work_preserved` | ceiling unchanged, tests not trimmed |
