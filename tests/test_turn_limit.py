@@ -384,3 +384,19 @@ def test_a_claude_error_with_an_empty_errors_list_still_names_something():
                 "num_turns": 3, "errors": []}
     with pytest.raises(ProviderError, match="no detail in the envelope .subtype 'error_during_execution'"):
         _extract_claude_result(json.dumps(envelope))
+
+
+def test_the_round_budget_is_stated_only_where_a_cap_applies(tmp_path):
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.session import Session, SessionConfig
+
+    def session(**kw):
+        return Session("goal", ArtifactStore(tmp_path / "a"), lambda *a, **k: "",
+                       config=SessionConfig(project=tmp_path, **kw))
+    capped = session(allow_writes=True, lead_max_turns=12)
+    note = capped._turn_budget_note("grok:default")
+    assert "at most 12 tool rounds" in note and "about round 4" in note and "about round 8" in note
+    assert capped._turn_budget_note("claude:opus")
+    assert capped._turn_budget_note("openai:gpt-5.6-sol") == "", "codex has no round cap"
+    assert session(allow_writes=True)._turn_budget_note("grok:default") == ""
+    assert session(allow_writes=False, lead_max_turns=12)._turn_budget_note("grok:default") == ""

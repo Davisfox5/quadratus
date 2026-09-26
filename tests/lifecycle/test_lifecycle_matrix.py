@@ -524,3 +524,17 @@ def test_a_clean_render_without_steps_still_verifies(tmp_path, monkeypatch):
                           / "summary.json").read_text())
     assert "steps" not in summary and not any("steps" in v for v in summary["views"].values())
     assert record["verified"] is True and len(replay.of("design-review")) == 1
+
+
+# -- 9. discovery before writing (Run 14, 2026-09-26) ---------------------------------
+
+def test_a_capped_lead_is_told_its_round_budget(tmp_path, monkeypatch):
+    replay = _run(tmp_path, monkeypatch, Script(), max_tasks=2, settings=Settings(backend="cli", lead_max_turns=14))
+    for call in replay.of("lead"):
+        assert "This call has at most 14 tool rounds" in call.prompt, call.vendor
+        assert "finish reading by about round 4" in call.prompt and "written by about round 9" in call.prompt
+
+
+def test_no_round_budget_is_stated_without_a_cap(tmp_path, monkeypatch):
+    replay = _run(tmp_path, monkeypatch, Script(), max_tasks=2)
+    assert replay.of("lead") and not any("tool rounds" in c.prompt for c in replay.of("lead"))

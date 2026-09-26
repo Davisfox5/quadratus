@@ -308,6 +308,10 @@ class SessionConfig:
     #: for re-planning. This many in a row are tolerated; one more ends the
     #: run cleanly, so a limit set too low cannot loop.
     max_turn_limited_in_a_row: int = 1
+    #: The lead's agentic round limit (``Settings.lead_max_turns``), so the
+    #: lead prompt can state it. The cap itself is applied by the Fleet; this
+    #: only lets the model plan reading, writing and checking against it.
+    lead_max_turns: Optional[int] = None
     # Opt-in v1 contract; False retains the legacy prose path for one release.
     security_verdict_json: bool = False
     #: Called with a one-line note as the run moves: the plan, each task as it
@@ -1364,6 +1368,9 @@ class Session:
                 extras.append(interim)
             if fetched:
                 extras.append(_render_fetches(fetched))
+            budget = self._turn_budget_note(lead)
+            if budget:
+                extras.append(budget)
             return self._lead_prompt(spec, lead=lead if consults else None, extras=extras)
 
         bridge = None
@@ -2878,6 +2885,31 @@ class Session:
         if self.config.codebase_map is None:
             return ""
         return self.config.codebase_map.render()
+
+    def _turn_budget_note(self, lead: str) -> str:
+        """The lead's round budget in words, when a cap applies to its CLI.
+
+        Run 14: both leads spent every round reading and were capped with no
+        write (Grok) or with the edit last and no check (Claude). Neither
+        prompt said a cap existed. Text only: the Fleet applies the cap, and
+        nothing here changes it.
+        """
+        limit = self.config.lead_max_turns
+        if not limit or not (self.project and self.config.allow_writes):
+            return ""
+        from .cli_providers import CLI_SPECS
+        spec = CLI_SPECS.get(lead.partition(":")[0])
+        if spec is None or not spec.max_turns_flag:
+            return ""       # codex has no round cap, so there is nothing to plan against
+        read_by = max(1, limit // 3)
+        write_by = max(read_by + 1, (2 * limit) // 3)
+        return (f"## Your round budget\n"
+                f"This call has at most {limit} tool rounds. At round {limit} it stops with "
+                "whatever is on disk, and the task goes back unfinished, unreviewed and "
+                f"unchecked. Plan against it: finish reading by about round {read_by}, starting "
+                "from the files and notes in this prompt, which are current; have the edit "
+                f"written by about round {write_by}; keep the last rounds for running the "
+                "project's check and fixing what it shows.")
 
     def _lead_prompt(
         self,
