@@ -186,6 +186,18 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             (run_dir / 'in-flight.json').write_text(json.dumps(in_flight, indent=2), encoding='utf-8')
     finally:
         fleet.close()
+    if not error and session is not None and getattr(session, 'stop_reason', ''):
+        # A stop the session chose (the turn-limit breaker) rather than one an
+        # exception forced. Reported as the error so the result says why, and
+        # the capped tasks' preserved edits are listed as in-flight work.
+        error = session.stop_reason
+        records = list((getattr(session, 'turn_limited_records', {}) or {}).values())
+        changed = sorted({name for r in records for name in r.get('changed') or []})
+        in_flight = dict(
+            note='Stopped by the turn-limit breaker; every capped task\'s edits are preserved.',
+            changed=changed, changed_lines=sum(r.get('changed_lines') or 0 for r in records),
+            turn_limited=records)
+        (run_dir / 'in-flight.json').write_text(json.dumps(in_flight, indent=2), encoding='utf-8')
     # What each call did inside its own session, from the vendors' transcripts.
     # Collected after the run so a slow copy never delays a model call.
     traces = []

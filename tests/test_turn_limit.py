@@ -228,8 +228,13 @@ def test_two_caps_in_a_row_stop_the_run_instead_of_looping(tmp_path, monkeypatch
         tmp_path, monkeypatch,
         [_capped_after_writing("first"), _capped_after_writing("second"), _finishes],
         tasks=[TASK_1, TASK_2, "KIND: docs simple\n" + _scope() + "\nTry the heading again."])
-    assert not result.completed and not result.error
+    assert not result.completed
+    # Named, not blank (Codex, Run 14): the breaker is why the run stopped.
+    assert result.error.startswith("TurnLimitBreaker: the lead turn limit was reached 2 times in a row (t1, t2)")
+    assert data["error"] == result.error
     assert data["turn_limited_tasks"] == ["t1", "t2"]
+    assert data["in_flight"]["changed"] == ["a.md"]
+    assert [r["task"] for r in data["in_flight"]["turn_limited"]] == ["t1", "t2"]
     assert seen["leads"] == 2, "no third lead after two caps in a row"
     assert (tmp_path / "a.md").read_text() == "partial\n", "the kept work stays in place"
 
