@@ -50,6 +50,7 @@ import hashlib
 import inspect
 import json
 import logging
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
@@ -553,7 +554,7 @@ class WorkerPool:
                 before_calls = control.calls if control else 0
                 with invocation(task.task_id, f"worker:{label}", "worker"):
                     raw = self._run(model_key, instruction, allow_writes=allow_writes)
-                if raw.lstrip().startswith(('WORKER ', 'CONSULT ', 'FETCH:')):
+                if re.match(r'\s*(?:WORKER\s|CONSULT |FETCH:)', raw):
                     raise FanOutExceeded('A worker cannot hire, consult or fetch through lead channels')
                 if not raw.startswith('CONTINUE:'):
                     break

@@ -73,7 +73,14 @@ from .task_kinds import (
     seat_satisfies,
 )
 from .task_kinds import route as route_kind
-from .taskmeta import AmbiguousMetadata, TaskMetadata, lead_request, parse_control, parse_metadata
+from .taskmeta import (
+    AmbiguousMetadata,
+    TaskMetadata,
+    lead_request,
+    parse_control,
+    parse_metadata,
+    split_lead_request,
+)
 from .usage import UsageMeter
 from .workers import (
     WORKER_TREE,
@@ -1306,10 +1313,11 @@ class Session:
             if state.get("closed") is not None:
                 raise state["closed"]
             body = _parse_kind(draft)[2].strip()
-            request = lead_request(body)
-            if request is not None and request != body:
-                task.record("assistant", f"[preface to a request] {body[:-len(request)].strip()[:1500]}")
-                body = request
+            split = split_lead_request(body)
+            if split is not None:
+                preface, body = split
+                if preface:
+                    task.record("assistant", f"[preface to a request] {preface[:1500]}")
             if body.startswith("WORKER "):
                 answers.extend(self._serve_worker(body, lead, spec, task, state))
                 continue

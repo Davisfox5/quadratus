@@ -423,7 +423,9 @@ class Fleet:
                 self.project.apply_patch(_add_missing_headers(match.group(1), prompt, self.project.root))
                 return reply + "\nPatch applied to the project."
             continuation = (worker_loop_control.get() is not None and reply.startswith('CONTINUE:'))
-            if not continuation and not re.match(r"\s*(?:NO CHANGES:|FETCH:|CONSULT |WORKER )", reply):
+            from .taskmeta import lead_request
+            if (not continuation and not re.match(r"\s*(?:NO CHANGES:|FETCH:|CONSULT |WORKER )", reply)
+                    and lead_request(reply) is None):
                 raise ProviderError("Bounded editor returned no PATCH or explicit NO CHANGES result.")
         return reply
 
