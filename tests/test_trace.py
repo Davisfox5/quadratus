@@ -57,6 +57,41 @@ def test_claude_transcript_tools_outcomes_and_outside_paths(tmp_path):
     assert "outside the project" in timeline and "never served" in timeline and "Bash 1 (1 denied)" in timeline
 
 
+def test_a_denied_write_is_an_attempt_not_a_written_file(tmp_path):
+    """GameTape run 9 t8: every Edit/Write was denied and the diff was empty,
+    yet the trace listed the file as written."""
+    roots = _roots(tmp_path)
+    sid = "11111111-aaaa-bbbb-cccc-000000000009"
+    denied = "Claude requested permissions to write to /work/csv_preview.py, but you haven't granted it yet."
+    _jsonl(roots["claude"] / "-work" / f"{sid}.jsonl", [
+        {"type": "assistant", "cwd": "/work", "message": {"content": [
+            {"type": "tool_use", "id": "e1", "name": "Edit", "input": {"file_path": "/work/csv_preview.py"}},
+            {"type": "tool_use", "id": "w1", "name": "Write", "input": {"file_path": "/work/.scratch_write_probe"}},
+            {"type": "tool_use", "id": "e2", "name": "Edit", "input": {"file_path": "/work/app.py"}},
+            {"type": "tool_use", "id": "w2", "name": "Write", "input": {"file_path": "/work/notes.md"}},
+            {"type": "tool_use", "id": "w3", "name": "Write", "input": {"file_path": "/work/done.py"}},
+        ]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "e1", "content": denied, "is_error": True},
+            {"type": "tool_result", "tool_use_id": "w1", "content": denied, "is_error": True},
+            {"type": "tool_result", "tool_use_id": "e2", "content": "old_string not found", "is_error": True},
+            {"type": "tool_result", "tool_use_id": "w3", "content": "File created"},
+        ]}},
+    ])
+    ledger = _ledger(tmp_path, [{"invoked": True, "requested_model": "claude:opus", "session_id": sid,
+                                 "task": "t8", "role": "lead", "outcome": "ok"}])
+    r = trace.build_traces(tmp_path / "run", ledger, "/work", roots=roots)[0]
+    assert [c["outcome"] for c in r["tool_calls"]] == ["denied", "denied", "error", "unknown", "success"]
+    assert r["files_written"] == ["/work/done.py"]
+    assert r["files_not_written"] == ["/work/csv_preview.py", "/work/.scratch_write_probe",
+                                      "/work/app.py", "/work/notes.md"]
+    shared = json.loads((tmp_path / "run" / "trace.jsonl").read_text())
+    assert shared["files_written"] == ["/work/done.py"] and len(shared["files_not_written"]) == 4
+    timeline = trace.render_timeline([r])
+    assert "wrote: /work/done.py" in timeline and "csv_preview.py" not in timeline.split("wrote:")[1].split("\n")[0]
+    assert "write attempted, not confirmed" in timeline
+
+
 def test_codex_rollout_commands_patches_and_rejections(tmp_path):
     roots = _roots(tmp_path)
     tid = "0199aaaa-bbbb-cccc-dddd-eeeeffff0001"
@@ -76,7 +111,8 @@ def test_codex_rollout_commands_patches_and_rejections(tmp_path):
     r = trace.build_traces(tmp_path / "run", ledger, "/work/proj", roots=roots)[0]
     assert [c["outcome"] for c in r["tool_calls"]] == ["error", "denied"]
     assert r["commands"][0] == {"program": "pytest", "exit": 1, "outcome": "error"}
-    assert r["files_written"] == ["src/x.py"]
+    # The patch was rejected, so it is an attempt, not a written file.
+    assert r["files_written"] == [] and r["files_not_written"] == ["src/x.py"]
 
 
 def test_grok_session_injected_rules_and_mid_loop_requests(tmp_path):
