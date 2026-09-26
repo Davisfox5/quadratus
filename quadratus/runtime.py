@@ -44,6 +44,7 @@ counterfactual rather than a bill.
 from __future__ import annotations
 
 import copy
+import itertools
 import json
 import logging
 import os
@@ -389,6 +390,17 @@ class Fleet:
                                          partial=dict(changed=changed, inspected=True, reply=reply))
             return reply
         with self.project.snapshot() as directory:
+            context = invocation_context.get() or {}
+            declared = tuple(itertools.islice(iter(context.get("evidence_files") or ()), _MAX_EVIDENCE_FILES + 1))
+            copied = _furnish_evidence(self.project.root, directory, declared, task=context.get("task"))
+            if declared and sorted(copied) != sorted(declared) and context.get("role") == "design-review":
+                # Checked on what actually landed, since files can change or
+                # fail between the session's preflight and this copy. The final
+                # design review is the verification gate, so it is refused;
+                # other review calls are told below exactly what they received.
+                raise EvidenceNotDelivered(
+                    "design evidence was not all delivered to the review copy: "
+                    + ", ".join(str(p) for p in declared if p not in copied))
             view = provider.in_directory(directory, allow_writes=False)
             if verifying:
                 view.native_fanout_off = True
@@ -396,6 +408,13 @@ class Fleet:
                 view.max_turns = lead_turns
             if lead_tool:
                 view.worker_tool = lead_tool
+            if declared:
+                # Stated from what was actually copied, never from the request.
+                role += ("\nDesign evidence copied read-only into this copy: "
+                         + (", ".join(copied) if copied else "none")
+                         + (". Not copied (refused or unreadable): "
+                            + ", ".join(str(p) for p in declared if p not in copied)
+                            if len(copied) < len(tuple(declared)) else "") + ".")
             role += ("\nYour working directory is a fresh source copy. Read it to ground your "
                      "answer. Do not change files, commit, push, or use paths outside this copy. "
                      "Cite files by their path relative to the project root, not by the absolute "
@@ -423,7 +442,9 @@ class Fleet:
                 self.project.apply_patch(_add_missing_headers(match.group(1), prompt, self.project.root))
                 return reply + "\nPatch applied to the project."
             continuation = (worker_loop_control.get() is not None and reply.startswith('CONTINUE:'))
-            if not continuation and not re.match(r"\s*(?:NO CHANGES:|FETCH:|CONSULT |WORKER )", reply):
+            from .taskmeta import lead_request
+            if (not continuation and not re.match(r"\s*(?:NO CHANGES:|FETCH:|CONSULT |WORKER )", reply)
+                    and lead_request(reply) is None):
                 raise ProviderError("Bounded editor returned no PATCH or explicit NO CHANGES result.")
         return reply
 
@@ -768,3 +789,120 @@ def _add_missing_headers(patch: str, prompt: str, root) -> str:
 def _looks_exhausted(exc: Exception) -> bool:
     text = str(exc).lower()
     return any(marker in text for marker in _EXHAUSTION_MARKERS)
+
+
+#: Rendered design evidence a review call may be handed: exactly these file
+#: names under a task's evidence folder, and no more than this many or this big.
+_EVIDENCE_PATH = re.compile(
+    r"\.quadratus/design-evidence/[A-Za-z0-9][A-Za-z0-9_.-]*/"
+    r"(?:summary\.json|(?:desktop|mobile)/(?:page\.png|evidence\.json))")
+_MAX_EVIDENCE_FILES = 8
+_MAX_EVIDENCE_BYTES = 10_000_000
+_MAX_EVIDENCE_TOTAL = 30_000_000
+
+
+def _evidence_type_ok(rel, data) -> bool:
+    """A .png is a PNG and a .json parses, so nothing else rides in under the name."""
+    if rel.endswith(".png"):
+        return data[:8] == b"\x89PNG\r\n\x1a\n"
+    try:
+        json.loads(data.decode("utf-8"))
+        return True
+    except (UnicodeDecodeError, ValueError):
+        return False
+
+
+def evidence_refusals(root, paths, task) -> list:
+    """``(path, reason)`` for each declared evidence file that would not be
+    copied for ``task``; empty when every one would be. Never raises."""
+    items = list(itertools.islice(iter(paths), _MAX_EVIDENCE_FILES + 1))
+    refusals, total = [], 0
+    for rel in items[:_MAX_EVIDENCE_FILES]:
+        reason = _evidence_problem(Path(root), str(rel), task)
+        if not reason:
+            try:
+                total += (Path(root) / str(rel)).stat().st_size
+            except OSError:
+                reason = "unreadable"
+            else:
+                # The same aggregate the copy enforces (Codex review of
+                # d0cf78d: a set over it passed preflight and was not copied).
+                if total > _MAX_EVIDENCE_TOTAL:
+                    reason = "over the aggregate evidence budget"
+        if reason:
+            refusals.append((str(rel), reason))
+    if len(items) > _MAX_EVIDENCE_FILES:
+        refusals.append(("", f"more than {_MAX_EVIDENCE_FILES} evidence files"))
+    return refusals
+
+
+class EvidenceNotDelivered(ProviderError):
+    """Declared design evidence did not all reach a review call's copy.
+
+    Raised before the model is asked, so no review is made of, and no
+    verdict accepted for, a set the reviewer did not receive."""
+
+
+def _evidence_problem(root: Path, rel: str, task) -> str:
+    if not _EVIDENCE_PATH.fullmatch(rel):
+        return "not a design evidence file name"
+    if not task or Path(rel).parts[2] != str(task):
+        return "another task's evidence"
+    current = root
+    for part in Path(rel).parts:
+        current = current / part
+        try:
+            if current.is_symlink():
+                return "a symlink"
+        except OSError:
+            return "unreadable"
+    try:
+        if not current.is_file():
+            return "missing"
+        size = current.stat().st_size
+        if size > _MAX_EVIDENCE_BYTES:
+            return "too large"
+        if not _evidence_type_ok(rel, current.read_bytes()):
+            return "not the file type its name says"
+    except OSError:
+        return "unreadable"
+    return ""
+
+
+def _furnish_evidence(root, directory, paths, *, task=None) -> list:
+    """Copy declared design evidence into a review call's source copy.
+
+    Codex, Run 16: the reviewer was pointed at renders under the project's
+    .quadratus folder, which the source copy excludes, and its reads outside
+    the copy were denied, so it judged no image. The exact files a session
+    names are copied in read-only at the same relative paths instead; there
+    is no new read grant. Only the calling task's own evidence files qualify
+    (``task``, from the harness's invocation context; Codex review of
+    3d5c3f3: a later task's reviewers were handed an earlier task's
+    renders): regular, not symlinked at any component, of the type their
+    name says, bounded in count and size. Anything else is skipped, and the
+    caller states only what was copied. Returns the paths copied.
+    """
+    root = Path(root)
+    copied, total = [], 0
+    for rel in itertools.islice(iter(paths), _MAX_EVIDENCE_FILES):
+        rel = str(rel)
+        if _evidence_problem(root, rel, task):
+            continue
+        current = root / rel
+        try:
+            size = current.stat().st_size
+            if total + size > _MAX_EVIDENCE_TOTAL:
+                continue
+            data = current.read_bytes()
+            if len(data) != size or not _evidence_type_ok(rel, data):
+                continue
+            target = Path(directory) / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            target.chmod(0o444)
+        except OSError:
+            continue
+        total += size
+        copied.append(rel)
+    return copied

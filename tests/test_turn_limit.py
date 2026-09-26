@@ -21,7 +21,7 @@ from quadratus.cli_providers import (
 from quadratus.config import Settings
 from quadratus.delegation import invocation
 from quadratus.project_run import run_project
-from quadratus.providers import ProviderError, TurnLimitReached
+from quadratus.providers import ProviderError, ProviderRefusal, TurnLimitReached
 from quadratus.runtime import Fleet
 
 
@@ -228,8 +228,13 @@ def test_two_caps_in_a_row_stop_the_run_instead_of_looping(tmp_path, monkeypatch
         tmp_path, monkeypatch,
         [_capped_after_writing("first"), _capped_after_writing("second"), _finishes],
         tasks=[TASK_1, TASK_2, "KIND: docs simple\n" + _scope() + "\nTry the heading again."])
-    assert not result.completed and not result.error
+    assert not result.completed
+    # Named, not blank (Codex, Run 14): the breaker is why the run stopped.
+    assert result.error.startswith("TurnLimitBreaker: the lead turn limit was reached 2 times in a row (t1, t2)")
+    assert data["error"] == result.error
     assert data["turn_limited_tasks"] == ["t1", "t2"]
+    assert data["in_flight"]["changed"] == ["a.md"]
+    assert [r["task"] for r in data["in_flight"]["turn_limited"]] == ["t1", "t2"]
     assert seen["leads"] == 2, "no third lead after two caps in a row"
     assert (tmp_path / "a.md").read_text() == "partial\n", "the kept work stays in place"
 
@@ -274,3 +279,124 @@ def test_grok_cancelled_at_the_cap_is_the_cap_not_a_failure():
     with pytest.raises(ProviderError) as short:
         early._extract(json.dumps({"text": "x", "stopReason": "cancelled", "num_turns": 5}))
     assert not isinstance(short.value, TurnLimitReached), "a cancel before the cap is still a failure"
+
+
+# -- Claude's num_turns is not the cap's counter (GameTape run 12) -------------------
+
+
+@pytest.mark.parametrize("envelope", [
+    # A failure after parallel tool rounds: num_turns counts user messages.
+    {"type": "result", "subtype": "error_during_execution", "is_error": True, "num_turns": 17},
+    {"type": "result", "subtype": "success", "is_error": True, "num_turns": 20,
+     "result": "API Error: overloaded"},
+])
+def test_a_claude_failure_past_the_count_stays_a_failure(envelope):
+    capped = ClaudeCLIProvider(model="opus")
+    capped.max_turns = 14
+    with pytest.raises(ProviderError) as caught:
+        capped._extract(json.dumps(envelope))
+    assert not isinstance(caught.value, TurnLimitReached)
+
+
+def test_a_claude_cap_is_still_the_cap_by_its_own_marker():
+    capped = ClaudeCLIProvider(model="opus")
+    capped.max_turns = 14
+    envelope = {"type": "result", "subtype": "error_max_turns", "is_error": False, "num_turns": 15}
+    with pytest.raises(TurnLimitReached) as caught:
+        capped._extract(json.dumps(envelope))
+    assert caught.value.turns == 15
+
+
+def test_a_claude_success_past_the_count_is_a_success():
+    """Run 12 call-008: num_turns 17 at --max-turns 14, end_turn, not an error."""
+    capped = ClaudeCLIProvider(model="opus")
+    capped.max_turns = 14
+    envelope = {"type": "result", "subtype": "success", "is_error": False, "num_turns": 17,
+                "stop_reason": "end_turn", "result": "Done.\nCHANGED: []"}
+    assert capped._extract(json.dumps(envelope)) == "Done.\nCHANGED: []"
+
+
+def test_only_grok_reads_the_cap_from_its_count():
+    from quadratus.cli_providers import CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC
+    assert GROK_SPEC.turn_cap_by_count and not CLAUDE_SPEC.turn_cap_by_count
+    assert not CODEX_SPEC.turn_cap_by_count
+
+
+def test_a_claude_error_names_the_envelopes_own_errors():
+    envelope = {"type": "result", "subtype": "error_during_execution", "is_error": True,
+                "num_turns": 3, "errors": ["API Error: overloaded"]}
+    with pytest.raises(ProviderError, match="API Error: overloaded"):
+        _extract_claude_result(json.dumps(envelope))
+
+
+# -- Only a clean cancel at the count is a cap (Grok review of #33, 2026-09-26) -------
+
+@pytest.mark.parametrize("envelope,named", [
+    ({"text": "x", "stopReason": "cancelled", "error": "overloaded", "num_turns": 14}, "overloaded"),
+    ({"text": "x", "stopReason": "error", "num_turns": 14}, "'error'"),
+    ({"text": "x", "stopReason": "error", "error": "upstream reset", "num_turns": 14}, "upstream reset"),
+])
+def test_a_grok_error_or_other_stop_at_the_count_stays_a_failure(envelope, named):
+    from quadratus.cli_providers import GrokCLIProvider
+    capped = GrokCLIProvider(model="")
+    capped.max_turns = 14
+    with pytest.raises(ProviderError) as caught:
+        capped._extract(json.dumps(envelope))
+    assert not isinstance(caught.value, (TurnLimitReached, ProviderRefusal))
+    assert named in str(caught.value)
+
+
+@pytest.mark.parametrize("turns", [5, 14, 20])
+@pytest.mark.parametrize("stop", ["refusal", "content_filter"])
+def test_an_explicit_grok_decline_is_a_refusal_at_any_count(stop, turns):
+    """Codex review of f7548a2: kept as ProviderError, a decline was replaced by another lead."""
+    from quadratus.cli_providers import GrokCLIProvider
+    capped = GrokCLIProvider(model="")
+    capped.max_turns = 14
+    with pytest.raises(ProviderRefusal) as caught:
+        capped._extract(json.dumps({"text": "I can't help with that", "stopReason": stop,
+                                    "num_turns": turns}))
+    assert f"stopReason {stop!r}" in str(caught.value)
+    assert caught.value.category is None and caught.value.explanation is None, "nothing invented"
+
+
+def test_a_grok_decline_keeps_the_details_it_actually_supplied():
+    from quadratus.cli_providers import _extract_grok_result
+    envelope = {"text": "", "stopReason": "refusal", "error": "policy",
+                "stopDetails": {"category": "cyber", "explanation": "declined by policy"}}
+    with pytest.raises(ProviderRefusal) as caught:
+        _extract_grok_result(json.dumps(envelope))
+    assert caught.value.category == "cyber" and caught.value.explanation == "declined by policy"
+    assert "[cyber]" in str(caught.value)
+
+
+@pytest.mark.parametrize("text", ["I can't help with that.", "This request was refused by policy."])
+def test_prose_alone_never_makes_a_refusal(text):
+    from quadratus.cli_providers import _extract_grok_result
+    assert _extract_grok_result(json.dumps({"text": text, "stopReason": "end_turn"})) == text
+    with pytest.raises(ProviderError) as caught:
+        _extract_grok_result(json.dumps({"text": text, "stopReason": "cancelled"}))
+    assert not isinstance(caught.value, ProviderRefusal)
+
+
+def test_a_claude_error_with_an_empty_errors_list_still_names_something():
+    envelope = {"type": "result", "subtype": "error_during_execution", "is_error": True,
+                "num_turns": 3, "errors": []}
+    with pytest.raises(ProviderError, match="no detail in the envelope .subtype 'error_during_execution'"):
+        _extract_claude_result(json.dumps(envelope))
+
+
+def test_the_round_budget_is_stated_only_where_a_cap_applies(tmp_path):
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.session import Session, SessionConfig
+
+    def session(**kw):
+        return Session("goal", ArtifactStore(tmp_path / "a"), lambda *a, **k: "",
+                       config=SessionConfig(project=tmp_path, **kw))
+    capped = session(allow_writes=True, lead_max_turns=12)
+    note = capped._turn_budget_note("grok:default")
+    assert "at most 12 tool rounds" in note and "about round 4" in note and "about round 8" in note
+    assert capped._turn_budget_note("claude:opus")
+    assert capped._turn_budget_note("openai:gpt-5.6-sol") == "", "codex has no round cap"
+    assert session(allow_writes=True)._turn_budget_note("grok:default") == ""
+    assert session(allow_writes=False, lead_max_turns=12)._turn_budget_note("grok:default") == ""

@@ -132,7 +132,19 @@ def _target(args) -> str:
 
 def _empty(vendor: str) -> dict:
     return dict(vendor=vendor, cwd=None, tool_calls=[], commands=[], files_read=[], files_written=[],
-                outside_project=[], protocol_attempts=[], injected_rules=[], texts=[], reasoning=[])
+                files_not_written=[], outside_project=[], protocol_attempts=[], injected_rules=[], texts=[], reasoning=[])
+
+
+def _record_write(trace: dict, path: str, outcome) -> None:
+    """File a write under what it did, not what it tried.
+
+    Only a write the transcript reports as successful is a written file.
+    GameTape run 9 (2026-09-26): t8's trace listed /work/csv_preview.py as
+    written while every Edit on it had been denied and the project diff was
+    empty. Denied, failed and unconfirmed attempts are kept apart, because
+    an attempt is still evidence of what the call was trying to do.
+    """
+    trace["files_written" if outcome == "success" else "files_not_written"].append(path)
 
 
 def _claude(path: Path) -> dict:
@@ -204,7 +216,7 @@ def _codex(path: Path) -> dict:
             trace["commands"].append(dict(command=cmd[:300], exit=codes[0] if codes else None,
                                           outcome=outcome))
         for patched in re.findall(r"\*\*\* (?:Update|Add|Delete) File: ([^\n\\'\"]+)", text):
-            trace["files_written"].append(patched.strip())
+            _record_write(trace, patched.strip(), outcome)
     return trace
 
 
@@ -283,7 +295,7 @@ def trace_call(vendor: str, path: Path, project_root=None, origin=None) -> dict:
         if name in _READ_TOOLS and target:
             trace["files_read"].append(target)
         elif name in _WRITE_TOOLS and target:
-            trace["files_written"].append(target)
+            _record_write(trace, target, call.get("outcome"))
         elif name in _SHELL_TOOLS and target:
             trace["commands"].append(dict(command=target, exit=None, outcome=call.get("outcome")))
     # Requests the harness serves only as a whole reply: anything in the
@@ -301,6 +313,7 @@ def trace_call(vendor: str, path: Path, project_root=None, origin=None) -> dict:
     trace["outside_project"] = _outside(paths, trace.get("cwd"), project_root)
     trace["files_read"] = list(dict.fromkeys(trace["files_read"]))[:80]
     trace["files_written"] = list(dict.fromkeys(trace["files_written"]))[:80]
+    trace["files_not_written"] = list(dict.fromkeys(trace["files_not_written"]))[:80]
     trace.pop("texts", None)
     trace.pop("reasoning", None)
     return trace
@@ -431,6 +444,9 @@ def render_timeline(records: List[dict]) -> str:
         lines.append(f"  - tools: {_tool_summary(r.get('tool_calls') or [])}")
         if r.get("files_written"):
             lines.append(f"  - wrote: {', '.join(r['files_written'][:12])}")
+        if r.get("files_not_written"):
+            lines.append("  - write attempted, not confirmed (denied, failed or no result): "
+                         f"{', '.join(r['files_not_written'][:12])}")
         if r.get("outside_project"):
             lines.append(f"  - **outside the project:** {', '.join(r['outside_project'][:8])}")
         if r.get("protocol_attempts"):

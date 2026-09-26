@@ -95,8 +95,9 @@ def _extract_claude_result(stdout: str) -> str:
     payload = json.loads(stdout)
     if payload.get("stop_reason") == "refusal":
         # A classifier decline is not an error to the CLI: it is a completed
-        # turn with nothing in it. Surface it as what it is so the caller can
-        # re-route rather than see "empty response".
+        # turn with nothing in it. Surface it as what it is, not as "empty
+        # response": the run preserves a refusal and never retries or
+        # re-routes the declined request through another model.
         details = payload.get("stop_details") or {}
         category = details.get("category") if isinstance(details, dict) else None
         raise ProviderRefusal(
@@ -113,7 +114,15 @@ def _extract_claude_result(stdout: str) -> str:
                                partial_text=payload.get("result"),
                                turns=_envelope_turns(payload))
     if payload.get("is_error"):
-        raise ProviderError(f"claude reported an error: {payload.get('result', '')[:300]}")
+        # An error_during_execution envelope carries no result, only an
+        # ``errors`` list; without it the message read "claude reported an
+        # error: " and named nothing (lifecycle replay matrix, 2026-09-26).
+        errors = payload.get("errors")
+        detail = payload.get("result") or (
+            "; ".join(str(e) for e in errors) if isinstance(errors, list) else "")
+        if not str(detail).strip():
+            detail = f"no detail in the envelope (subtype {payload.get('subtype')!r})"
+        raise ProviderError(f"claude reported an error: {str(detail)[:300]}")
     return payload.get("result", "") or ""
 
 
@@ -192,6 +201,23 @@ def _extract_codex_result(stdout: str) -> str:
     raise ProviderError(f"codex returned no parseable events: {stdout.strip()[:300]}")
 
 
+#: Grok stop reasons that are an explicit decline. Only these: a refusal is
+#: never inferred from prose or from any other stop.
+_GROK_REFUSAL_STOPS = ("refusal", "content_filter")
+
+
+def _is_cap_shaped(payload: dict) -> bool:
+    """Whether an incomplete envelope has the one shape a count-read cap takes.
+
+    GameTape run 3's cap was a bare ``stopReason: cancelled`` at the cap's
+    count. An ``error`` field, or any other stop (refusal, content_filter,
+    error), is a failure whatever the count says; reading it as the cap
+    replanned a safeguard or transport error and dropped its message (Grok
+    review of #33, 2026-09-26).
+    """
+    return not payload.get("error") and payload.get("stopReason") == "cancelled"
+
+
 def _extract_grok_result(stdout: str) -> str:
     """Pull the final answer out of ``grok --output-format json``.
 
@@ -211,9 +237,22 @@ def _extract_grok_result(stdout: str) -> str:
         ) from exc
     if not isinstance(payload, dict):
         raise ProviderError(f"grok returned unexpected JSON: {stdout.strip()[:300]}")
+    stop = payload.get("stopReason")
+    if stop in _GROK_REFUSAL_STOPS:
+        # Before the error and cap handling: an explicit decline is a
+        # refusal at any turn count, never an ordinary failed lead that
+        # another model may take over (Codex review of f7548a2).
+        details = payload.get("stopDetails") or payload.get("stop_details") or {}
+        details = details if isinstance(details, dict) else {}
+        category = details.get("category") or None      # only what grok supplied
+        explanation = details.get("explanation") or (
+            str(payload["error"])[:300] if payload.get("error") else None)
+        raise ProviderRefusal(
+            f"grok declined the request (stopReason {stop!r})"
+            + (f" [{category}]" if category else "") + ".",
+            category=category, explanation=explanation)
     if payload.get("error"):
         raise ProviderError(f"grok reported an error: {str(payload['error'])[:300]}")
-    stop = payload.get("stopReason")
     text = payload.get("text")
     # A turn that did not reach end_turn still carries text, and that text is
     # the narration it had got to -- a denied tool comes back as
@@ -1045,6 +1084,14 @@ class CLISpec:
     #: (``Settings.lead_max_turns``). Empty where the CLI has none (codex):
     #: there the call is bounded by time and attempts only.
     max_turns_flag: str = ""
+    #: Whether a failed envelope whose turn count reached the cap is read as
+    #: the cap. True only where the CLI's reported count is the cap's own
+    #: counter and the cap has no explicit marker (grok, GameTape run 3).
+    #: Claude marks a real cap with ``subtype: error_max_turns``, and its
+    #: success ``num_turns`` counts every user message, one per tool result,
+    #: so it can pass the cap without reaching it (frozen 2.1.269, Run 12:
+    #: num_turns 17 at --max-turns 14, end_turn, 16 tool results).
+    turn_cap_by_count: bool = False
     #: How the CLI separates several names in one ``disallowed_tools_flag``
     #: value. Claude takes whitespace; grok's ``--help`` says comma-separated,
     #: and a space-joined list would reach it as one nonsense tool name that
@@ -1620,6 +1667,7 @@ GROK_SPEC = CLISpec(
     # is present but has no turn to run in is the honest description.
     summary_only_args=["--max-turns", "1"],
     max_turns_flag="--max-turns",
+    turn_cap_by_count=True,
     disallowed_tools_flag="--disallowed-tools",
     # Every *agentic* call, read-only included: without it the turn is
     # cancelled silently the first time a tool is called. A restricted seat
@@ -2187,7 +2235,10 @@ class CLIProvider(LLMProvider):
         stopReason 'cancelled' with num_turns 14, not 'max_turns'. Read as a
         failed lead with changed source, it stopped the whole run -- the
         failure Codex warned the cap must not cause. When a cap was set and the
-        envelope's own turn count reached it, an incomplete turn is the cap.
+        envelope's own turn count reached it, an incomplete turn is the cap --
+        for a CLI whose count is the cap's counter (``turn_cap_by_count``).
+        Claude's is not, and it marks a real cap explicitly, which its
+        extractor already raises as ``TurnLimitReached``.
         """
         try:
             return self.spec.extract(stdout)
@@ -2196,13 +2247,15 @@ class CLIProvider(LLMProvider):
         except TurnLimitReached:
             raise
         except ProviderError as exc:
-            if not self.max_turns or self.summary_only:
+            if not self.max_turns or self.summary_only or not self.spec.turn_cap_by_count:
                 raise
             try:
                 payload = json.loads(stdout or "")
             except ValueError:
                 raise exc from None
-            turns = _envelope_turns(payload) if isinstance(payload, dict) else None
+            if not isinstance(payload, dict) or not _is_cap_shaped(payload):
+                raise
+            turns = _envelope_turns(payload)
             if turns is None or turns < int(self.max_turns):
                 raise
             text = payload.get("text") or payload.get("result")

@@ -292,33 +292,180 @@ def _split_label(label: str, known_kinds, known_difficulties):
 MAX_REQUEST_PREFACE_LINES = 20
 
 
-def lead_request(reply: str) -> Optional[str]:
-    """A lead's FETCH / CONSULT / WORKER request, if its reply ends with one.
+#: A line that opens a WORKER request: the verb alone, or the verb and then
+#: whitespace. ``WORKERS`` or ``WORKER:`` in prose is not one.
+_WORKER_LINE = re.compile(r"WORKER(?:\s|$)")
 
-    The request must be the reply's final line, with at most a short preface
-    before it and no CHANGED line anywhere. GameTape run 7 (2026-09-25): an
-    Opus lead explained its plan in a few lines and ended with a WORKER write
-    errand; the editing dispatcher and the drafting loop both required the
-    request to be the whole reply, so the run stopped as misreported edits.
-    A WORKER line must carry a JSON object, so prose that happens to end with
-    the word WORKER is still a draft.
+
+def _is_request_line(line: str) -> bool:
+    """A preface line that is itself a request, not prose about one."""
+    upper = line.upper()
+    return (bool(re.match(r"WORKER\s*(?:\{|$)", line)) or upper.startswith("FETCH:")
+            or (upper.startswith("CONSULT ") and ":" in line))
+
+
+def _terminal_worker(lines: List[str]) -> Optional[tuple]:
+    """``(start, request)`` for a WORKER request closing ``lines``, else None.
+
+    The JSON object may follow the verb on the same line or on the lines
+    after it, and must be the only thing left: one object, then nothing.
     """
-    lines = [line.strip() for line in (reply or "").strip().splitlines() if line.strip()]
-    if not lines or len(lines) > MAX_REQUEST_PREFACE_LINES + 1:
+    start = next((i for i in range(len(lines) - 1, -1, -1) if _WORKER_LINE.match(lines[i])), None)
+    if start is None:
         return None
-    if any(line.startswith("CHANGED:") for line in lines):
+    text = "\n".join(lines[start:])[len("WORKER"):].strip()
+    try:
+        value, end = json.JSONDecoder().raw_decode(text)
+    except ValueError:
         return None
-    last = lines[-1]
-    if last.startswith("WORKER "):
-        try:
-            if isinstance(json.loads(last[len("WORKER "):]), dict):
-                return last
-        except ValueError:
+    if not isinstance(value, dict) or text[end:].strip():
+        return None
+    body = text[:end]
+    # One line, the shape every dispatcher parses; a request that was already
+    # one line is passed on byte-for-byte.
+    return start, "WORKER " + (body if "\n" not in body else json.dumps(value, ensure_ascii=False))
+
+
+def split_lead_request(reply: str) -> Optional[tuple]:
+    """``(preface, request)`` if a lead's reply ends with a FETCH / CONSULT / WORKER request.
+
+    The request must close the reply, with at most a short preface before it,
+    no CHANGED line anywhere, and no second request in the preface. GameTape
+    run 7 (2026-09-25): an Opus lead explained its plan in a few lines and
+    ended with a WORKER write errand; the editing dispatcher and the drafting
+    loop both required the request to be the whole reply, so the run stopped
+    as misreported edits. Run 9 (2026-09-26): after write refusals an Opus
+    lead ended with ``WORKER`` on its own line and the JSON object on the
+    next, and the same stop recurred. A WORKER request must carry exactly one
+    JSON object, so prose that happens to end with the word WORKER is still a
+    draft. Consecutive closing CONSULT lines are one request; the drafting
+    loop serves each of them against the consult budget.
+
+    Run 11 (2026-09-26): a Grok lead ended ``...the client fixture.FETCH:
+    2185e3cf5881``, the request run onto the end of its last sentence. A
+    request that follows sentence-ending punctuation on its line is split off
+    and parsed the same way; see :func:`_inline_request_start`.
+
+    ``request`` is normalised for the dispatchers: ``WORKER {...}`` on one
+    line, ``FETCH: id``, or the closing CONSULT lines.
+    """
+    text = (reply or "").strip()
+    split = _split_request_lines(text)
+    if split is not None or any(line.strip().startswith("CHANGED:") for line in text.splitlines()):
+        return split
+    start = _inline_request_start(text)
+    if start is None:
+        return None
+    return _split_request_lines(text[:start] + "\n" + text[start:])
+
+
+#: A request verb run onto the end of a sentence: ``.``, ``!`` or ``?``,
+#: optional spaces, then the verb.
+_INLINE_REQUEST = re.compile(r"(?<=[.!?])[ \t]*(?=(?:FETCH:|CONSULT |WORKER(?:\s|$)))")
+
+
+#: An artifact id as ``ArtifactStore`` issues it. An inline FETCH must name
+#: exactly this and nothing else, so a quoted example (``"...FETCH: id"``)
+#: keeps its closing quote in the token and is not a request.
+_ARTIFACT_ID = re.compile(r"[0-9a-f]{12}")
+
+#: A fence opener or closer: up to three spaces, then three or more backticks
+#: or tildes (CommonMark).
+_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
+
+
+def _code_spans(text: str) -> List[tuple]:
+    """``(start, end)`` offsets of fenced code blocks and inline code spans.
+
+    Fences of backticks or tildes close on a run of the same character at
+    least as long; an unclosed fence runs to the end. Inline spans close on a
+    backtick run of the same length. An unclosed run is treated as code to the
+    end of the text: conservative, since a false request is worse than a
+    missed one here (a missed request surfaces as a loud stop, not an action).
+    """
+    spans, offset, fence = [], 0, None
+    for line in text.splitlines(keepends=True):
+        match = _FENCE.match(line)
+        if fence is not None:
+            if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= fence[1]:
+                spans.append((fence[2], offset + len(line)))
+                fence = None
+        elif match:
+            fence = (match.group(1)[0], len(match.group(1)), offset)
+        else:
+            position = 0
+            while True:
+                opener = re.compile(r"`+").search(line, position)
+                if opener is None:
+                    break
+                closer = re.compile(r"(?<!`)" + re.escape(opener.group()) + r"(?!`)").search(line, opener.end())
+                if closer is None:
+                    spans.append((offset + opener.start(), len(text)))
+                    return spans
+                spans.append((offset + opener.start(), offset + closer.end()))
+                position = closer.end()
+        offset += len(line)
+    if fence is not None:
+        spans.append((fence[2], len(text)))
+    return spans
+
+
+def _inline_request_start(text: str) -> Optional[int]:
+    """Where a request starts mid-line, if exactly one such start exists.
+
+    Only after sentence-ending punctuation, never inside fenced or inline
+    code, never inside an open double quote on its line, and never at the
+    start of a line (the line-based parser already covers those). More than
+    one candidate is ambiguous and yields None, so a preface that runs two
+    requests together stays a draft. An inline FETCH must name exactly one
+    artifact id. Every rule errs toward leaving a reply as a draft.
+    """
+    code = _code_spans(text)
+    found, offset = [], 0
+    for line in text.splitlines(keepends=True):
+        for match in _INLINE_REQUEST.finditer(line):
+            at = offset + match.end()
+            head = line[:match.start()]
+            if not head.strip() or any(a <= at < b for a, b in code):
+                continue
+            if (head.count('"') + head.count("\u201c") - head.count("\u201d")) % 2:
+                continue
+            found.append((at, line[match.end():].strip()))
+        offset += len(line)
+    if len(found) != 1:
+        return None
+    start, tail = found[0]
+    if tail.startswith("FETCH:") and not _ARTIFACT_ID.fullmatch(tail[len("FETCH:"):].strip()):
+        return None
+    return start
+
+
+def _split_request_lines(text: str) -> Optional[tuple]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines or any(line.startswith("CHANGED:") for line in lines):
+        return None
+    worker = _terminal_worker(lines)
+    if worker is not None:
+        start, request = worker
+    else:
+        last = lines[-1]
+        if last.upper().startswith("FETCH:") and last.split(":", 1)[1].strip():
+            start = len(lines) - 1
+        elif last.upper().startswith("CONSULT ") and ":" in last:
+            start = len(lines) - 1
+            while start and lines[start - 1].upper().startswith("CONSULT ") and ":" in lines[start - 1]:
+                start -= 1
+        else:
             return None
+        request = "\n".join(lines[start:])
+    preface = lines[:start]
+    if len(preface) > MAX_REQUEST_PREFACE_LINES or any(_is_request_line(line) for line in preface):
         return None
-    if last.upper().startswith("FETCH:") and last.split(":", 1)[1].strip():
-        return last
-    if last.upper().startswith("CONSULT ") and ":" in last:
-        return last
-    return None
+    return "\n".join(preface), request
+
+
+def lead_request(reply: str) -> Optional[str]:
+    """The normalised request closing a lead's reply; see :func:`split_lead_request`."""
+    split = split_lead_request(reply)
+    return split[1] if split is not None else None
 

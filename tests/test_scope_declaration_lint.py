@@ -197,3 +197,19 @@ def test_a_signature_quoted_only_in_acceptance_needs_a_def_to_be_checked():
     # No `def` anywhere: nothing is declared, so nothing can contradict.
     body = "Call `helper(a, b)` and then `helper(a, b, c)` as convenient."
     assert declared_signatures(body, [], []) == {}
+
+
+# -- declared review-only intent (Codex review of 3d5c3f3) -------------------------------
+
+def test_review_only_is_declared_not_inferred_from_a_small_ceiling():
+    from quadratus.scope import read_scope
+    audit, _ = read_scope(_declaration(FINAL, max_lines=1, edits="none"), max_lines=100)
+    assert audit.review_only is True and audit.to_dict()["edits"] == "none"
+    assert "Declared review-only" in audit.render()
+    one_line_fix, _ = read_scope(_declaration(FINAL, max_lines=1), max_lines=100)
+    assert one_line_fix.review_only is False and "edits" not in one_line_fix.to_dict()
+    explicit, _ = read_scope(_declaration(FINAL, edits="allowed"), max_lines=100)
+    assert explicit.review_only is False
+    for bad in ("some", True, None, ""):
+        with pytest.raises(ValueError, match='edits must be "none"'):
+            read_scope(_declaration(FINAL, edits=bad), max_lines=100)

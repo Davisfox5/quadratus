@@ -143,8 +143,11 @@ def _fake_evidence(root, clean=True, width=(1280, 390)):
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "page.png").write_bytes(png(w))
         views[name] = dict(clean=clean, console_errors=[] if clean else ["Uncaught TypeError: x"],
-                           failed_requests=[] if clean else ["GET /missing.png 404"])
-    (evidence_dir(root, "t6") / "summary.json").write_text(json.dumps(dict(target="http://127.0.0.1:5000/", views=views)))
+                           failed_requests=[] if clean else ["GET /missing.png 404"],
+                           document_width={"desktop": 1280, "mobile": 390}[name], overflow=[])
+    from quadratus.design_evidence import source_fingerprint
+    (evidence_dir(root, "t6") / "summary.json").write_text(json.dumps(dict(
+        target="http://127.0.0.1:5000/", views=views, source_fingerprint=source_fingerprint(root))))
 
 
 def test_a_render_with_console_errors_or_failed_requests_fails_the_check(tmp_path):

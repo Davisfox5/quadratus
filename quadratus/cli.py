@@ -107,6 +107,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
             result = run_project(
                 goal, project, settings, allow_writes=args.allow_writes,
                 check=args.check or '', state_dir=args.state_dir,
+                extra_checks=getattr(args, "extra_check", None) or (),
                 forbid=args.forbid, declared_paths=args.declared_paths,
                 max_tasks=args.max_tasks, mode=args.mode,
                 security_verdict_json=getattr(args, "security_verdict_json", False),
@@ -326,6 +327,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             "The project's own check command, run after each task's work is "
             "final (e.g. --check 'pytest -q'). The deterministic half of "
             "'do the pieces fit together'."
+        ),
+    )
+    engine.add_argument(
+        "--extra-check",
+        metavar="CMD",
+        action="append",
+        help=(
+            "A further required check run beside --check, split without a "
+            "shell (repeatable; e.g. --extra-check 'node --test tests/ui/a.test.js'). "
+            "Patterns are refused: name the files."
         ),
     )
     engine.add_argument(
