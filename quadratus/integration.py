@@ -198,9 +198,20 @@ def _test_count(output):
     """Recognize runner summaries only; absent evidence is not zero or success."""
     if re.search(r'\bno tests (?:ran|collected|found)\b', output, re.I):
         return 0
-    tap = re.findall(r'(?m)^# tests (\d+)\s*$', output)
+    # Node's test runner, in TAP ("# pass 1") or its spec reporter
+    # ("ℹ pass 1"). Executed cases are pass + fail when both are reported;
+    # skipped, todo and cancelled did not run. An all-skipped run is zero,
+    # which fails (Codex review of 3ef9962: "ℹ tests 1 / ℹ pass 0 /
+    # ℹ skipped 1" passed with no count).
+    def node(name):
+        found = re.findall(rf'(?m)^(?:#|\u2139)\s*{name} (\d+)\s*$', output)
+        return int(found[-1]) if found else None
+    passed, failed = node('pass'), node('fail')
+    if passed is not None and failed is not None:
+        return passed + failed
+    tap = re.findall(r'(?m)^(?:#|\u2139)\s*tests (\d+)\s*$', output)
     if tap:
-        skipped = re.findall(r'(?m)^# (?:skipped|skip|todo) (\d+)\s*$', output)
+        skipped = re.findall(r'(?m)^(?:#|\u2139)\s*(?:skipped|skip|todo|cancelled) (\d+)\s*$', output)
         return max(0, int(tap[-1]) - sum(map(int, skipped)))
     unittest = re.findall(r'Ran (\d+) tests?\b', output)
     if unittest:

@@ -220,14 +220,41 @@ def _declared_checks(root: Path, manifests: List[str]) -> List[List[str]]:
     return found
 
 
+def _has_python_tests(tests: Path, limit: int = 2000) -> bool:
+    """Whether ``tests`` holds a Python file, looking at no more than ``limit`` entries."""
+    seen = 0
+    stack = [tests]
+    while stack:
+        try:
+            entries = list(stack.pop().iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            seen += 1
+            if seen > limit:
+                return False
+            if entry.is_symlink():
+                continue
+            if entry.is_dir():
+                stack.append(entry)
+            elif entry.suffix == ".py":
+                return True
+    return False
+
+
 def _python_check(root: Path, manifests: List[str]) -> Optional[List[str]]:
+    # A tests/ directory alone is not a Python signal: a JS-only project with
+    # tests/ui.test.js gained a pytest gate that failed on zero tests (Codex
+    # review of 3ef9962). A manifest, pytest.ini or a Python file under
+    # tests/ is.
+    tests = root / "tests"
     python_signals = (
         "pyproject.toml" in manifests
         or "setup.py" in manifests
         or (root / "pytest.ini").exists()
-        or (root / "tests").is_dir()
+        or (tests.is_dir() and _has_python_tests(tests))
     )
-    if python_signals and (root / "tests").is_dir():
+    if python_signals and tests.is_dir():
         local_python = root / '.venv' / 'bin' / 'python'
         interpreter = str(local_python) if local_python.is_file() else sys.executable
         return [interpreter, "-m", "pytest", "-q"]
