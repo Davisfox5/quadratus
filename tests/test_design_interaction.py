@@ -435,3 +435,69 @@ def test_a_capture_past_its_budget_fails_before_the_second_width(tmp_path, brows
     assert "capture time limit" in summary["capture_failed"] and summary["rendered"] == []
     passed, problem, _ = check(root, "t1", 0)
     assert not passed and "the last capture failed" in problem
+
+
+# -- Codex review of c222d62: secret names, the CLI split, file URLs with spaces ---------
+
+@pytest.mark.parametrize("path", [".codex/auth.json", ".ssh/id_ecdsa", ".aws/credentials", ".config/app.csv",
+                                  "fixtures/.hidden.csv", "id_ecdsa", "keys/deploy.p12", "certs/store.jks",
+                                  "release.keystore", "backup.gpg", "signing.asc", "putty.ppk",
+                                  "gh_auth.json", "db_password.txt"])
+def test_hidden_paths_and_key_material_are_never_uploaded(tmp_path, path):
+    """Finding 4: .codex/auth.json and .ssh/id_ecdsa were accepted."""
+    root = _project(tmp_path)
+    target = root / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("dummy, not a real secret")
+    with pytest.raises(ValueError, match="hidden|credential"):
+        validate_steps([dict(action="file", selector="#f", path=path)], str(root / "index.html"), root)
+
+
+def test_an_ordinary_fixture_whose_name_has_an_equals_sign_is_accepted(tmp_path):
+    root = _project(tmp_path)
+    (root / "fixtures" / "rows=2.csv").write_text("name\nbeta\n")
+    checked, _ = validate_steps([dict(action="file", selector="#f", path="fixtures/rows=2.csv")],
+                                str(root / "index.html"), root)
+    assert checked[0]["label"] == "fixtures/rows=2.csv"
+
+
+def test_upload_takes_an_attribute_selector_and_a_path_as_two_arguments():
+    """Finding 6: --file split input[type=file]=x.csv at the first '='."""
+    _, steps = parse_steps(["p.html", "t1", "--upload", "input[type=file]", "fixtures/rows=2.csv"])
+    assert steps == [dict(action="file", selector="input[type=file]", path="fixtures/rows=2.csv")]
+    _, steps = parse_steps(["p.html", "t1", "--file", "#f=fixtures/rows=2.csv"])
+    assert steps == [dict(action="file", selector="#f", path="fixtures/rows=2.csv")]
+    with pytest.raises(ValueError, match="use --upload"):
+        parse_steps(["p.html", "t1", "--file", "input[type=file]=fixtures/rows.csv"])
+    with pytest.raises(ValueError, match="SELECTOR PATH"):
+        parse_steps(["p.html", "t1", "--upload", "#f"])
+
+
+def test_the_prompt_and_usage_name_the_unambiguous_form(capsys):
+    from quadratus.session import _DESIGN_RENDER_SHOWS
+    assert "--upload SELECTOR project/relative/fixture" in _DESIGN_RENDER_SHOWS
+    assert de.main(["only-one-arg"]) == 2
+    assert "--upload SEL path" in capsys.readouterr().err
+
+
+def test_file_urls_are_percent_decoded_before_the_project_check(tmp_path):
+    """Finding 7: a project root with a space failed its own navigation rule."""
+    root = tmp_path / "My Project"
+    root.mkdir()
+    (root / "index.html").write_text(PAGE)
+    page = root / "index.html"
+    _, allowed = validate_steps([dict(action="click", selector="#open")], page.as_uri(), root)
+    assert "%20" in page.as_uri() and allowed(page.as_uri())
+    assert not allowed((tmp_path / "other.html").as_uri())
+    assert not allowed("file://evil.example" + str(page))
+
+
+def test_an_interactive_capture_in_a_folder_with_a_space_passes(tmp_path, browser):
+    root = tmp_path / "My Project"
+    (root / "fixtures").mkdir(parents=True)
+    (root / "fixtures" / "rows.csv").write_text("name\nalpha\n")
+    (root / "index.html").write_text(PAGE)
+    out = _capture(root, "index.html", FLOW)
+    assert all(s["ok"] for view in out.values() for s in view["steps"])
+    passed, problem, _ = check(root, "t1", 0)
+    assert passed, problem
