@@ -275,3 +275,163 @@ def test_malformed_summaries_never_raise(tmp_path):
     summary["views"]["desktop"]["steps"] = [dict(n=1, action="click", selector="#x", ok=True)]
     (folder / "summary.json").write_text(json.dumps(summary))
     assert "never requested" in check(tmp_path, "t1", 0)[1]
+
+
+# -- Codex review of c222d62: the navigation boundary and the time budget --------------
+
+class _Servers:
+    """Two loopback origins: A serves the preview, B counts every request it gets."""
+
+    def __init__(self, pages):
+        import http.server
+        import threading
+        self.hits_b = []
+        servers = self
+
+        class A(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = pages.get(self.path.split("?")[0], "<title>a</title>ok").replace(
+                    "{B}", f"http://127.0.0.1:{servers.b.server_port}").encode()
+                self.send_response(200 if self.path.split("?")[0] in pages or self.path == "/next" else 404)
+                self.send_header("Content-Type", "text/html")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        class B(A):
+            def do_GET(self):
+                servers.hits_b.append(self.path)
+                super().do_GET()
+
+        self.a = http.server.ThreadingHTTPServer(("127.0.0.1", 0), A)
+        self.b = http.server.ThreadingHTTPServer(("127.0.0.1", 0), B)
+        for server in (self.a, self.b):
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.a.server_port}"
+
+    def close(self):
+        for server in (self.a, self.b):
+            server.shutdown()
+            server.server_close()
+
+
+BOUNDARY_PAGES = {
+    "/popup": '<title>p</title><a id=go target=_blank href="{B}/x">open</a><div id=ready>ready</div>',
+    "/late": ('<title>l</title><button id=go onclick="setTimeout(() => location.href = \'{B}/late\', 300)">'
+              'go</button><div id=ready>ready</div>'),
+    "/same": '<title>s</title><a id=go href="/next">next</a>',
+    "/next": '<title>n</title><div id=arrived>arrived</div>',
+}
+
+
+@pytest.fixture
+def servers():
+    s = _Servers(BOUNDARY_PAGES)
+    yield s
+    s.close()
+
+
+def _capture_url(root, url, steps):
+    try:
+        return capture(url, "t1", root, steps)
+    except Exception as exc:  # noqa: BLE001
+        if "Executable doesn't exist" in str(exc) or "BrowserType.launch" in str(exc):
+            pytest.skip(f"headless browser unavailable: {str(exc)[:120]}")
+        raise
+
+
+def test_a_popup_to_another_origin_is_refused_and_fails_the_step(tmp_path, browser, servers):
+    """Finding 2: a target=_blank link reached another loopback port and passed."""
+    out = _capture_url(tmp_path, servers.url + "/popup", [dict(action="click", selector="#go")])
+    for view in out.values():
+        step = view["steps"][0]
+        assert step["ok"] is False and "navigation outside the preview was blocked" in step["error"]
+    assert servers.hits_b == [], "the other origin never received a request"
+    passed, problem, _ = check(tmp_path, "t1", 0)
+    assert not passed and "step 1 (click #go) failed" in problem
+
+
+def test_a_delayed_navigation_after_the_last_step_still_invalidates(tmp_path, browser, servers):
+    """Finding 2: a forbidden navigation that fires after the step returned."""
+    out = _capture_url(tmp_path, servers.url + "/late", [dict(action="click", selector="#go"),
+                                                         dict(action="wait", selector="#ready")])
+    steps = out["desktop"]["steps"]
+    assert [s["ok"] for s in steps] == [True, False]
+    assert "blocked after this step" in steps[-1]["error"]
+    assert servers.hits_b == []
+    assert not check(tmp_path, "t1", 0)[0]
+
+
+def test_same_origin_navigation_is_still_allowed(tmp_path, browser, servers):
+    out = _capture_url(tmp_path, servers.url + "/same", [dict(action="click", selector="#go"),
+                                                         dict(action="wait", selector="#arrived")])
+    assert all(s["ok"] for view in out.values() for s in view["steps"])
+    passed, problem, _ = check(tmp_path, "t1", 0)
+    assert passed, problem
+
+
+class _FakePage:
+    """Records the timeout each blocking call was handed."""
+
+    def __init__(self):
+        self.calls = []
+
+    def click(self, selector, timeout):
+        self.calls.append(("click", timeout))
+
+    def wait_for_timeout(self, ms):
+        self.calls.append(("pause", ms))
+
+    def wait_for_selector(self, selector, state, timeout):
+        self.calls.append(("wait", timeout))
+
+    def set_input_files(self, selector, path, timeout):
+        self.calls.append(("file", timeout))
+
+
+def test_every_step_timeout_is_clamped_to_the_time_left():
+    """Finding 5: each step took its full timeout whatever remained."""
+    import time
+
+    from quadratus.browser import _run_steps
+    page = _FakePage()
+    steps = [dict(action="click", selector="#a"), dict(action="wait", selector="#b")]
+    records = _run_steps(page, steps, [], 5000, time.monotonic() + 0.4)
+    assert [r["ok"] for r in records] == [True, True]
+    assert all(0 < ms <= 400 for _, ms in page.calls), page.calls
+
+
+def test_a_spent_deadline_stops_the_next_step_with_a_record():
+    import time
+
+    from quadratus.browser import _run_steps
+    page = _FakePage()
+    records = _run_steps(page, [dict(action="click", selector="#a")], [], 5000, time.monotonic() - 1)
+    assert records == [dict(n=1, action="click", selector="#a", ok=False,
+                            error="capture time limit reached before this step")]
+    assert page.calls == []
+
+
+def test_the_budget_never_hands_playwright_a_zero_timeout():
+    """Zero means "no timeout" to Playwright, so a spent budget raises instead."""
+    import time
+
+    from quadratus.browser import _Budget
+    assert _Budget(None).ms(30_000) == 30_000
+    assert 0 < _Budget(time.monotonic() + 0.2).ms(30_000) <= 200
+    with pytest.raises(TimeoutError, match="capture time limit"):
+        _Budget(time.monotonic() - 0.01).ms(30_000)
+
+
+def test_a_capture_past_its_budget_fails_before_the_second_width(tmp_path, browser, monkeypatch):
+    """Finding 5: the second width could run past the shared 90 second budget."""
+    root = _project(tmp_path)
+    monkeypatch.setattr(de, "CAPTURE_SECONDS", 0)
+    with pytest.raises(TimeoutError):
+        capture(str(root / "index.html"), "t1", root, FLOW)
+    summary = json.loads((evidence_dir(root, "t1") / "summary.json").read_text())
+    assert "capture time limit" in summary["capture_failed"] and summary["rendered"] == []
+    passed, problem, _ = check(root, "t1", 0)
+    assert not passed and "the last capture failed" in problem

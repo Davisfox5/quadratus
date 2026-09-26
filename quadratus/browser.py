@@ -102,11 +102,13 @@ def render_page(
             ``{"action": "file", "selector": ..., "path": <absolute path>}``.
             The first failure stops the rest; every outcome is recorded. No
             script evaluation, typing or navigation step exists.
-        allow_navigation: With ``steps``, a predicate on each main-frame
-            navigation URL; a refused navigation is aborted and fails the
-            step that caused it.
+        allow_navigation: With ``steps``, a predicate on each navigation URL
+            in any frame or window; a refused navigation is aborted and fails
+            the step that caused it. With ``steps``, a new window or tab is
+            always refused and closed.
+        deadline: With ``steps``, launch, load, waits, steps and screenshot
+            are all clamped to the time left; none can outlast it.
         step_timeout_ms: Per-step bound.
-        deadline: ``time.monotonic()`` value past which no further step runs.
 
     Raises:
         PlaywrightMissing: when the optional dependency is not installed.
@@ -133,13 +135,20 @@ def render_page(
     console_errors: List[str] = []
     failed_requests: List[str] = []
 
+    interactive = bool(steps)
+    budget = _Budget(deadline if interactive else None)
+    budget.require("before the browser started")
+
     with sync_playwright() as pw:
         launch_kwargs = {}
         if executable_path:
             launch_kwargs["executable_path"] = executable_path
+        if budget.active:
+            launch_kwargs["timeout"] = budget.ms(30_000)
         browser = pw.chromium.launch(**launch_kwargs)
         try:
-            page = browser.new_page(viewport=viewport)
+            context = browser.new_context(viewport=viewport)
+            page = context.new_page()
             page.on(
                 "console",
                 lambda msg: console_errors.append(msg.text)
@@ -158,24 +167,46 @@ def render_page(
                 if res.status >= 400 else None,
             )
             blocked: List[str] = []
-            if steps and allow_navigation is not None:
+            if interactive:
+                # Guarded at the context, so a popup's own navigation is
+                # caught too; and any new window is refused outright (Codex
+                # review of c222d62: a target=_blank link reached another
+                # loopback port and the capture still passed).
                 def guard(route):
                     request = route.request
-                    if (request.is_navigation_request() and request.frame == page.main_frame
+                    if (request.is_navigation_request() and allow_navigation is not None
                             and not allow_navigation(request.url)):
                         blocked.append(request.url)
                         route.abort()
                     else:
                         route.continue_()
-                page.route("**/*", guard)
-            page.goto(url)
-            page.wait_for_timeout(wait_ms)
+                context.route("**/*", guard)
+
+                def refuse_popup(new_page):
+                    blocked.append("a new window or tab: " + (new_page.url or "about:blank"))
+                    try:
+                        new_page.close()
+                    except Exception:  # noqa: BLE001 -- it may already be gone
+                        pass
+                context.on("page", refuse_popup)
+                page.set_default_timeout(budget.ms(30_000))
+                page.set_default_navigation_timeout(budget.ms(30_000))
+            page.goto(url, **({"timeout": budget.ms(30_000)} if budget.active else {}))
+            page.wait_for_timeout(budget.ms(wait_ms) if budget.active else wait_ms)
             records = _run_steps(page, steps or [], blocked, step_timeout_ms, deadline)
             if records:
-                page.wait_for_timeout(min(wait_ms, 500))
+                seen = len(blocked)
+                page.wait_for_timeout(budget.ms(min(wait_ms, 500)))
+                if len(blocked) > seen and records[-1].get("ok"):
+                    # A navigation or window that fired after the last step
+                    # still leaves the evidence invalid.
+                    records[-1]["ok"] = False
+                    records[-1]["error"] = ("navigation outside the preview was blocked after this step: "
+                                            + blocked[-1][:200])
             title = page.title()
             shot = out / "page.png"
-            page.screenshot(path=str(shot), full_page=True)
+            page.screenshot(path=str(shot), full_page=True,
+                            **({"timeout": budget.ms(30_000)} if budget.active else {}))
         finally:
             browser.close()
 
@@ -194,6 +225,37 @@ def render_page(
     return evidence
 
 
+class _Budget:
+    """What remains of an interactive capture's time, for every blocking call.
+
+    ``ms(cap)`` is ``cap`` clamped to the remaining time; once nothing
+    remains it raises TimeoutError instead of returning 0, which Playwright
+    would read as "no timeout". Inactive (no deadline) it returns ``cap``.
+    """
+
+    def __init__(self, deadline: Optional[float]):
+        self.deadline = deadline
+        self.active = deadline is not None
+
+    def remaining_ms(self) -> Optional[int]:
+        if not self.active:
+            return None
+        return int((self.deadline - time.monotonic()) * 1000)
+
+    def require(self, when: str) -> None:
+        left = self.remaining_ms()
+        if left is not None and left <= 0:
+            raise TimeoutError(f"capture time limit reached {when}")
+
+    def ms(self, cap: int) -> int:
+        left = self.remaining_ms()
+        if left is None:
+            return cap
+        if left <= 0:
+            raise TimeoutError("capture time limit reached")
+        return max(1, min(cap, left))
+
+
 def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
     """Run interaction steps in order; stop at the first failure.
 
@@ -207,18 +269,21 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
         if action == "file":
             record["file"] = step.get("label") or Path(step["path"]).name
         records.append(record)
-        if deadline is not None and time.monotonic() > deadline:
+        budget = _Budget(deadline)
+        left = budget.remaining_ms()
+        if left is not None and left <= 0:
             record["error"] = "capture time limit reached before this step"
             break
+        limit = budget.ms(timeout_ms)
         before = len(blocked)
         try:
             if action == "click":
-                page.click(selector, timeout=timeout_ms)
-                page.wait_for_timeout(200)   # let a navigation the click started reach the guard
+                page.click(selector, timeout=limit)
+                page.wait_for_timeout(min(200, budget.ms(200)))  # let a started navigation reach the guard
             elif action == "wait":
-                page.wait_for_selector(selector, state="visible", timeout=timeout_ms)
+                page.wait_for_selector(selector, state="visible", timeout=limit)
             elif action == "file":
-                page.set_input_files(selector, step["path"], timeout=timeout_ms)
+                page.set_input_files(selector, step["path"], timeout=limit)
             else:
                 raise ValueError(f"unknown step action {action!r}")
         except Exception as exc:  # noqa: BLE001 -- a failed step is evidence, not a crash
