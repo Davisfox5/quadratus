@@ -222,7 +222,8 @@ def test_the_tool_refuses_write_errands_and_bad_errands_for_free(tmp_path):
     assert answers[1][1] is True and session.workers.spawned("t1") == 0
 
 
-def test_a_stall_inside_the_tool_closes_the_channel_and_ends_the_draft(tmp_path):
+def test_exhausted_workers_close_the_channel_and_the_lead_may_finish_itself(tmp_path):
+    """GameTape run 8: exhausting the allowance used to end the whole run."""
     store = ArtifactStore(tmp_path / "artifacts")
     answers = []
 
@@ -232,15 +233,31 @@ def test_a_stall_inside_the_tool_closes_the_channel_and_ends_the_draft(tmp_path)
     def invoke(model, prompt, system=None, allow_writes=False):
         answers.append(_call_tool({"errand": "read", "instruction": "one"}))
         answers.append(_call_tool({"errand": "read", "instruction": "two"}))
+        return "Finished it myself."
+
+    session = Session("goal", store, invoke, config=SessionConfig(max_worker_failures=1))
+    session.workers = WorkerPool(store=store, run=fails)
+    with invocation("t1", "lead"):
+        draft = session._draft_with_channels(OPUS, TaskSpec("t1", "do it"), _memory(store))
+    assert draft == "Finished it myself."
+    assert "now closed" in answers[0][0] and "channel is closed" in answers[1][0]
+
+
+def test_asking_again_after_the_channel_closed_stops_the_run(tmp_path):
+    store = ArtifactStore(tmp_path / "artifacts")
+
+    def fails(model, prompt, allow_writes=False):
+        raise RuntimeError("worker broke")
+
+    def invoke(model, prompt, system=None, allow_writes=False):
+        for i in range(3):
+            _call_tool({"errand": "read", "instruction": f"attempt {i}"})
         return "Finished anyway."
 
     session = Session("goal", store, invoke, config=SessionConfig(max_worker_failures=1))
     session.workers = WorkerPool(store=store, run=fails)
-    with invocation("t1", "lead"), pytest.raises(RunStalled):
+    with invocation("t1", "lead"), pytest.raises(RunStalled, match="not converging"):
         session._draft_with_channels(OPUS, TaskSpec("t1", "do it"), _memory(store))
-    assert "channel closed" in answers[0][0]
-    assert "channel is closed" in answers[1][0]
-
 
 def test_the_tool_is_offered_only_when_enabled(tmp_path):
     store = ArtifactStore(tmp_path / "artifacts")
@@ -298,12 +315,13 @@ def test_the_reply_channel_still_infers_needs_from_the_text(tmp_path):
 
 
 def test_repeated_refused_tool_calls_close_the_channel(tmp_path):
-    """Codex review of #25: refusals were free and unbounded within one call."""
+    """Codex review of #25: refusals count; the channel closes; asking on
+    after that stops the run."""
     store = ArtifactStore(tmp_path / "artifacts")
     answers = []
 
     def invoke(model, prompt, system=None, allow_writes=False):
-        for _ in range(4):
+        for _ in range(5):
             answers.append(_call_tool({"errand": "nonsense", "instruction": "x"}))
         return "Done myself."
 
@@ -312,7 +330,6 @@ def test_repeated_refused_tool_calls_close_the_channel(tmp_path):
     with invocation("t1", "lead"), pytest.raises(RunStalled, match="not converging"):
         session._draft_with_channels(OPUS, TaskSpec("t1", "do it"), _memory(store))
     assert "now closed" in answers[2][0] and "channel is closed" in answers[3][0]
-
 
 @pytest.mark.parametrize("request_reply,worker", [
     ('WORKER {"errand":"check","instruction":"review t.py","write":false,"needs":[]}', "ok"),
@@ -404,3 +421,17 @@ def test_the_drafting_loop_serves_a_prefaced_worker_request(tmp_path):
     with invocation("t1", "lead"):
         draft = session._draft_with_channels(OPUS, TaskSpec("t1", "do it"), _memory(store))
     assert draft == "Done." and ran == [1]
+
+
+def test_a_header_less_patch_gets_headers_only_when_one_file_is_named(tmp_path):
+    from quadratus.runtime import _add_missing_headers
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_app.py").write_text("x\n")
+    (tmp_path / "app.py").write_text("y\n")
+    hunk = "@@ -1,1 +1,2 @@\n x\n+z\n"
+    fixed = _add_missing_headers(hunk, "add a case to tests/test_app.py", tmp_path)
+    assert fixed.startswith("--- a/tests/test_app.py\n+++ b/tests/test_app.py\n")
+    assert _add_missing_headers(hunk, "edit app.py and tests/test_app.py", tmp_path) == hunk
+    assert _add_missing_headers(hunk, "edit missing.py", tmp_path) == hunk
+    whole = "--- a/app.py\n+++ b/app.py\n" + hunk
+    assert _add_missing_headers(whole, "app.py", tmp_path) == whole

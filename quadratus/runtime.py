@@ -420,7 +420,7 @@ class Fleet:
         if allow_writes:
             match = re.fullmatch(r"\s*PATCH:\s*```(?:diff)?\n(.*?)```\s*", reply, re.DOTALL)
             if match:
-                self.project.apply_patch(match.group(1))
+                self.project.apply_patch(_add_missing_headers(match.group(1), prompt, self.project.root))
                 return reply + "\nPatch applied to the project."
             continuation = (worker_loop_control.get() is not None and reply.startswith('CONTINUE:'))
             if not continuation and not re.match(r"\s*(?:NO CHANGES:|FETCH:|CONSULT |WORKER )", reply):
@@ -746,6 +746,23 @@ def _relativise_snapshot_paths(reply: str, directory) -> str:
         reply = reply.replace(spelling + os.sep, "")
         reply = reply.replace(spelling, "the project root")
     return reply
+
+
+def _add_missing_headers(patch: str, prompt: str, root) -> str:
+    """Give a header-less patch its file headers, only when unambiguous.
+
+    A worker that returns bare '@@' hunks cannot be applied. When the errand
+    names exactly one existing project file, that is the only file the hunks
+    can mean; anything else is left alone to fail as before.
+    """
+    if re.search(r"^(---|\+\+\+) ", patch, re.MULTILINE) or not re.search(r"^@@ ", patch, re.MULTILINE):
+        return patch
+    base = Path(root)
+    named = {p.lstrip("./") for p in re.findall(r"[\w./-]+\.[A-Za-z]\w*", prompt or "")}
+    existing = sorted(p for p in named if p and not p.startswith("/") and (base / p).is_file())
+    if len(existing) != 1:
+        return patch
+    return f"--- a/{existing[0]}\n+++ b/{existing[0]}\n" + patch
 
 
 def _looks_exhausted(exc: Exception) -> bool:

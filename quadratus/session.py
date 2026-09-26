@@ -1062,6 +1062,12 @@ class Session:
         if state.get("closed") is not None:
             return (f"The worker channel is closed for this task: {state['closed']}. "
                     "Finish with what you have, or report exactly what blocks you."), True
+        if state.get("workers_closed"):
+            try:
+                return self._request_after_close(state, spec), True
+            except RunStalled as exc:
+                state["closed"] = exc
+                return str(exc), True
 
         def refuse(text):
             # A refusal is free of model calls but not of limits: it counts
@@ -1069,11 +1075,7 @@ class Session:
             # repeat bad calls for the rest of its session (Codex review).
             state["failures"] += 1
             if state["failures"] >= self.config.max_worker_failures:
-                state["closed"] = RunStalled(
-                    f"{state['failures']} worker errands failed or were refused for task "
-                    f"{spec.task_id!r}; the lead is not converging. Last: {text[:200]}")
-                return (f"{text} The worker channel is now closed for this task: finish with "
-                        "what you have, or report exactly what blocks you."), True
+                return f"{text} {self._close_workers(state, spec)}", True
             return text, True
 
         if not isinstance(arguments, dict):
@@ -1120,6 +1122,30 @@ class Session:
         return ("Files this task has already changed (kept; build on them, do not redo them): "
                 + ", ".join(state["changed"]))
 
+    def _close_workers(self, state: dict, spec) -> str:
+        """Out of worker attempts: close the channel, keep the lead.
+
+        GameTape run 8 (2026-09-25): an Opus lead's write errands came back
+        as malformed patches four times and the run ended. The lead could
+        still have done the work itself. So exhausting the allowance closes
+        the worker channel for this task and says so; only asking again
+        after that stalls the run.
+        """
+        state["workers_closed"] = True
+        self._note(f"task {spec.task_id}: worker channel closed after {state['failures']} failed errands")
+        return ("The worker channel is now closed for this task after "
+                f"{state['failures']} failed errands. Do the remaining work yourself in this "
+                "session, or report exactly what blocks you. Another worker request stops the run.")
+
+    def _request_after_close(self, state: dict, spec) -> str:
+        state["closed_requests"] = state.get("closed_requests", 0) + 1
+        if state["closed_requests"] >= 2:
+            raise RunStalled(
+                f"the lead is not converging: it kept requesting workers for task {spec.task_id!r} "
+                "after the worker channel closed")
+        return ("The worker channel is closed for this task. Do the work yourself, or report "
+                "exactly what blocks you. Another worker request stops the run.")
+
     def _serve_worker(self, body: str, lead: str, spec: TaskSpec, task: TaskMemory, state: dict,
                       *, answer_only: bool = False) -> List[str]:
         """Serve one ``WORKER {...}`` request; return what the lead is told.
@@ -1129,6 +1155,8 @@ class Session:
         ``state`` holds the drafting loop's failure count and failed labels.
         """
         out: List[str] = []
+        if state.get("workers_closed"):
+            return [self._request_after_close(state, spec)]
         try:
             request = json.loads(body[len("WORKER "):])
             needs = request.get('needs') if isinstance(request, dict) else None
@@ -1209,11 +1237,7 @@ class Session:
             )
             task.record("user", f"[worker {label}] REFUSED: {str(exc)[:300]}")
             if state['failures'] >= self.config.max_worker_failures:
-                raise RunStalled(
-                    f"{state['failures']} worker errands failed for task "
-                    f"{spec.task_id!r} without producing a draft; the "
-                    f"lead is not converging. Last: {str(exc)[:200]}"
-                ) from exc
+                out.append(self._close_workers(state, spec))
             return out
         except Exception as exc:  # noqa: BLE001 -- returned, not raised
             state['failed_errands'].add(label)
@@ -1225,11 +1249,7 @@ class Session:
                 f"and produced nothing: {detail}\n{_WORKER_RECOVERY}"
             )
             if state['failures'] >= self.config.max_worker_failures:
-                raise RunStalled(
-                    f"{state['failures']} worker errands failed for task "
-                    f"{spec.task_id!r} without producing a draft; the "
-                    f"lead is not converging. Last: {detail[:200]}"
-                ) from exc
+                out.append(self._close_workers(state, spec))
             return out
         for result in results:
             if result.error or result.needs_tool:
@@ -1240,7 +1260,7 @@ class Session:
             out.append(f"Worker {result.label} ({result.model}): "
                        f"{result.error or result.summary}\n{evidence}")
         if state['failures'] >= self.config.max_worker_failures:
-            raise RunStalled('Worker failures exhausted the task recovery allowance')
+            out.append(self._close_workers(state, spec))
         return out
 
     def _draft_with_channels(self, lead: str, spec: TaskSpec, task: TaskMemory,
