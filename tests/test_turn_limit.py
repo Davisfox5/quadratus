@@ -274,3 +274,44 @@ def test_grok_cancelled_at_the_cap_is_the_cap_not_a_failure():
     with pytest.raises(ProviderError) as short:
         early._extract(json.dumps({"text": "x", "stopReason": "cancelled", "num_turns": 5}))
     assert not isinstance(short.value, TurnLimitReached), "a cancel before the cap is still a failure"
+
+
+# -- Claude's num_turns is not the cap's counter (GameTape run 12) -------------------
+
+
+@pytest.mark.parametrize("envelope", [
+    # A failure after parallel tool rounds: num_turns counts user messages.
+    {"type": "result", "subtype": "error_during_execution", "is_error": True, "num_turns": 17},
+    {"type": "result", "subtype": "success", "is_error": True, "num_turns": 20,
+     "result": "API Error: overloaded"},
+])
+def test_a_claude_failure_past_the_count_stays_a_failure(envelope):
+    capped = ClaudeCLIProvider(model="opus")
+    capped.max_turns = 14
+    with pytest.raises(ProviderError) as caught:
+        capped._extract(json.dumps(envelope))
+    assert not isinstance(caught.value, TurnLimitReached)
+
+
+def test_a_claude_cap_is_still_the_cap_by_its_own_marker():
+    capped = ClaudeCLIProvider(model="opus")
+    capped.max_turns = 14
+    envelope = {"type": "result", "subtype": "error_max_turns", "is_error": False, "num_turns": 15}
+    with pytest.raises(TurnLimitReached) as caught:
+        capped._extract(json.dumps(envelope))
+    assert caught.value.turns == 15
+
+
+def test_a_claude_success_past_the_count_is_a_success():
+    """Run 12 call-008: num_turns 17 at --max-turns 14, end_turn, not an error."""
+    capped = ClaudeCLIProvider(model="opus")
+    capped.max_turns = 14
+    envelope = {"type": "result", "subtype": "success", "is_error": False, "num_turns": 17,
+                "stop_reason": "end_turn", "result": "Done.\nCHANGED: []"}
+    assert capped._extract(json.dumps(envelope)) == "Done.\nCHANGED: []"
+
+
+def test_only_grok_reads_the_cap_from_its_count():
+    from quadratus.cli_providers import CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC
+    assert GROK_SPEC.turn_cap_by_count and not CLAUDE_SPEC.turn_cap_by_count
+    assert not CODEX_SPEC.turn_cap_by_count
