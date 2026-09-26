@@ -26,7 +26,8 @@ pytest -q tests/lifecycle
 | inherited task edits vs this call's edits | `test_a_revision_that_repeats_earlier_files_is_rejected`, `..._with_no_edits_and_an_empty_declaration_proceeds` | source-truth check stays exact |
 | stale renders re-captured with no source edits | `test_stale_renders_are_recaptured_without_source_edits` | Run 12 (design-fix CHANGED mismatch) |
 | design-fix repeating earlier files | `test_a_design_fix_that_repeats_the_tasks_files_is_rejected` | still rejected |
-| render of an unrelated page | `test_renders_of_an_unrelated_page_are_an_open_finding` | Run 12 grade |
+| render of an unrelated page | `test_renders_of_an_unrelated_page_are_an_open_finding` | Run 12 grade (scripted verdict, see below) |
+| render freshness boundary | `test_render_freshness_is_decided_by_timestamp_not_write_order` | frozen-image timing flake |
 | Claude cap envelope | `test_a_claude_lead_at_its_cap_hands_back_partial_work` | capped continuation |
 | Claude error with `num_turns` above the cap | `test_a_claude_failure_past_the_turn_count_is_not_read_as_a_cap` | 818ecd0; and the empty error message |
 | Grok cancelled at the cap | `test_a_grok_lead_cancelled_at_the_cap_is_the_cap` | Run 3 |
@@ -38,6 +39,19 @@ On fdee0d8 (Run 9's base) eight cases fail: the three non-single-line
 request layouts, all three design cases, the Claude error case and the
 refused close-out. The single-line layout and the refusal, cap and recovery
 cases pass there too, as they should.
+
+## What the scripted cases can and cannot prove
+
+- The gate is real: `pytest` runs with this test's own interpreter
+  (`harness.GATE`), and each passing case asserts every recorded check
+  PASSED. Cases whose task does not implement `add` start from a passing
+  fixture, so their gate result is about the case.
+- Render timestamps are set explicitly (`harness.STALE` / `harness.FRESH`),
+  never left to the write clock; the production freshness check is unchanged.
+- The unrelated-page case scripts the reviewer's BLOCKING verdict. It proves
+  that verdict becomes an open finding and that the prompts ask for the
+  feature's state. It does not prove a model recognises an unrelated image;
+  live browser and feature-state acceptance still decides that.
 
 ## Not covered yet
 

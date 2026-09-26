@@ -15,8 +15,12 @@ does with a given reply, never how often a model produces it.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 import subprocess
+import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +33,18 @@ from quadratus.project_run import run_project
 from quadratus.run_budget import RunLimits
 
 USAGE = {"input_tokens": 100, "output_tokens": 10}
+
+#: The real integration gate, run with this test's own interpreter: a bare
+#: ``python`` is not on every host (Codex review: "command not found" on the
+#: Mac made four lifecycle cases stop after t1).
+GATE = f"{shlex.quote(sys.executable)} -m pytest -q"
+
+#: Render timestamps are set, never left to the write clock. The design check
+#: compares a screenshot's mtime with the start of the last editing call; a
+#: render written inside that call can land on either side on a coarse or
+#: containerised filesystem (frozen-image run: 5 of 46 failed once, then passed).
+STALE = -3600.0
+FRESH = 3600.0
 
 
 # -- vendor envelopes -------------------------------------------------------------
@@ -161,7 +177,7 @@ def write(call: Call, files: Dict[str, str]) -> None:
         target.write_text(text)
 
 
-def run(tmp_path, monkeypatch, responder, *, files, check="python -m pytest -q", max_tasks=1,
+def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
         limits=None, settings=None) -> Replay:
     project = tmp_path / "project"
     project.mkdir()
@@ -186,8 +202,12 @@ def run(tmp_path, monkeypatch, responder, *, files, check="python -m pytest -q",
     return replay
 
 
-def evidence(root: Path, task_id: str, *, target="http://127.0.0.1:5000/import") -> None:
-    """Clean desktop and mobile renders, as ``quadratus.design_evidence`` writes them."""
+def evidence(root: Path, task_id: str, *, age: float, target="http://127.0.0.1:5000/import") -> None:
+    """Clean desktop and mobile renders, as ``quadratus.design_evidence`` writes them.
+
+    ``age`` is the screenshots' mtime offset from now: ``STALE`` predates any
+    later editing call, ``FRESH`` postdates the current one.
+    """
     import struct
     import zlib
 
@@ -203,8 +223,15 @@ def evidence(root: Path, task_id: str, *, target="http://127.0.0.1:5000/import")
         folder = evidence_dir(root, task_id) / name
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "page.png").write_bytes(png(width))
+        stamp = time.time() + age
+        os.utime(folder / "page.png", (stamp, stamp))
         views[name] = dict(clean=True, console_errors=[], failed_requests=[])
     (evidence_dir(root, task_id) / "summary.json").write_text(json.dumps(dict(target=target, views=views)))
+
+
+def gate_results(replay: Replay) -> List[str]:
+    """PASSED/FAILED for each integration check the run recorded, in order."""
+    return re.findall(r"^Check (PASSED|FAILED): ", replay.result.report, re.MULTILINE)
 
 
 def result_json(replay: Replay) -> dict:
