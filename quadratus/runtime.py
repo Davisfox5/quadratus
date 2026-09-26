@@ -391,8 +391,16 @@ class Fleet:
             return reply
         with self.project.snapshot() as directory:
             context = invocation_context.get() or {}
-            declared = context.get("evidence_files") or ()
+            declared = tuple(itertools.islice(iter(context.get("evidence_files") or ()), _MAX_EVIDENCE_FILES + 1))
             copied = _furnish_evidence(self.project.root, directory, declared, task=context.get("task"))
+            if declared and sorted(copied) != sorted(declared) and context.get("role") == "design-review":
+                # Checked on what actually landed, since files can change or
+                # fail between the session's preflight and this copy. The final
+                # design review is the verification gate, so it is refused;
+                # other review calls are told below exactly what they received.
+                raise EvidenceNotDelivered(
+                    "design evidence was not all delivered to the review copy: "
+                    + ", ".join(str(p) for p in declared if p not in copied))
             view = provider.in_directory(directory, allow_writes=False)
             if verifying:
                 view.native_fanout_off = True
@@ -808,11 +816,31 @@ def evidence_refusals(root, paths, task) -> list:
     """``(path, reason)`` for each declared evidence file that would not be
     copied for ``task``; empty when every one would be. Never raises."""
     items = list(itertools.islice(iter(paths), _MAX_EVIDENCE_FILES + 1))
-    refusals = [(str(rel), reason) for rel in items[:_MAX_EVIDENCE_FILES]
-                if (reason := _evidence_problem(Path(root), str(rel), task))]
+    refusals, total = [], 0
+    for rel in items[:_MAX_EVIDENCE_FILES]:
+        reason = _evidence_problem(Path(root), str(rel), task)
+        if not reason:
+            try:
+                total += (Path(root) / str(rel)).stat().st_size
+            except OSError:
+                reason = "unreadable"
+            else:
+                # The same aggregate the copy enforces (Codex review of
+                # d0cf78d: a set over it passed preflight and was not copied).
+                if total > _MAX_EVIDENCE_TOTAL:
+                    reason = "over the aggregate evidence budget"
+        if reason:
+            refusals.append((str(rel), reason))
     if len(items) > _MAX_EVIDENCE_FILES:
         refusals.append(("", f"more than {_MAX_EVIDENCE_FILES} evidence files"))
     return refusals
+
+
+class EvidenceNotDelivered(ProviderError):
+    """Declared design evidence did not all reach a review call's copy.
+
+    Raised before the model is asked, so no review is made of, and no
+    verdict accepted for, a set the reviewer did not receive."""
 
 
 def _evidence_problem(root: Path, rel: str, task) -> str:

@@ -2535,8 +2535,12 @@ class Session:
             + "\n\nReply exactly APPROVED if the delivered interface is acceptable, or one line "
             "per blocking problem starting 'BLOCKING:'. Nothing else."
         )
-        with invocation(spec.task_id, "design-review"):
-            return self._invoke_model(reviewer, prompt)
+        from .runtime import EvidenceNotDelivered
+        try:
+            with invocation(spec.task_id, "design-review"):
+                return self._invoke_model(reviewer, prompt)
+        except EvidenceNotDelivered as exc:
+            return f"BLOCKING: the renders could not be handed to the reviewer ({str(exc)[:300]})"
 
     def _parallel_enabled(self) -> bool:
         policy = self.config.repository_policy

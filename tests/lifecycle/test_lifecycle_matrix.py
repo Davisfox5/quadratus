@@ -1068,3 +1068,30 @@ def test_a_capture_taken_before_an_edit_in_the_same_call_is_stale(tmp_path, monk
     record = json.loads(replay.artifact_texts("design-evidence")[0])
     assert "captured on a different source tree" in record["first_problem"]
     assert len(replay.of("design-fix")) == 1
+
+
+def test_an_evidence_set_over_the_aggregate_budget_is_never_reviewed(tmp_path, monkeypatch):
+    """Codex review of d0cf78d: preflight ignored the aggregate, the reviewer
+    ran with no images and its APPROVED verified the design."""
+    from quadratus import runtime
+    monkeypatch.setattr(runtime, "_MAX_EVIDENCE_TOTAL", 1)
+    replay = _design_run(tmp_path, monkeypatch, lead=_edits_and_captures,
+                         revision=lambda call, replay: "Nothing to change after review.\nCHANGED: []")
+    assert not replay.of("design-review")
+    verdict = json.loads(replay.artifact_texts("design-evidence")[0])["final_review"]["verdict"]
+    assert "over the aggregate evidence budget" in verdict and verdict.startswith("BLOCKING")
+    assert not replay.result.completed
+
+
+def test_a_copy_that_fails_after_preflight_stops_the_review_before_the_model(tmp_path, monkeypatch):
+    """Delivery is checked on what landed, not on the preflight's word."""
+    from quadratus import runtime
+    real = runtime._furnish_evidence
+    monkeypatch.setattr(runtime, "_furnish_evidence",
+                        lambda root, directory, paths, task=None: real(root, directory, list(paths)[:1], task=task))
+    replay = _design_run(tmp_path, monkeypatch, lead=_edits_and_captures,
+                         revision=lambda call, replay: "Nothing to change after review.\nCHANGED: []")
+    assert not replay.of("design-review"), "no model call for an incompletely delivered set"
+    verdict = json.loads(replay.artifact_texts("design-evidence")[0])["final_review"]["verdict"]
+    assert "was not all delivered to the review copy" in verdict
+    assert not replay.result.completed
