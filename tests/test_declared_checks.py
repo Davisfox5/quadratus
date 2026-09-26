@@ -170,3 +170,80 @@ def test_policy_task_gates_keep_the_operator_extras(tmp_path):
     gate = task_gate(policy, policy.resolve(["a.py"]), existing)
     ids = [c.id for c in gate.commands]
     assert "lint" in ids and "check" in ids and "extra-1" in ids
+
+
+# -- the Python-file probe consumes a bounded number of entries (Codex review of 8a71d25) --
+
+class _Entry:
+    def __init__(self, name, *, directory=False, path=""):
+        self.name, self.path, self._dir = name, path or name, directory
+
+    def is_symlink(self):
+        return False
+
+    def is_dir(self, follow_symlinks=True):
+        return self._dir
+
+
+class _Listing:
+    """A scandir stand-in that fails the test if read past the budget."""
+
+    consumed = 0
+
+    def __init__(self, entries, budget):
+        self.entries, self.budget = entries, budget
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __iter__(self):
+        for entry in self.entries:
+            _Listing.consumed += 1
+            if _Listing.consumed > self.budget + 1:
+                raise AssertionError("read past the budget")
+            yield entry
+
+
+@pytest.mark.parametrize("layout,found", [
+    ("flat", False),              # 100,000 non-Python entries: stops at the budget
+    ("at-limit", True),           # the Python file is entry number `limit`
+    ("past-limit", False),        # one entry further: not proven
+    ("deep", False),              # a chain of directories deeper than the budget
+])
+def test_the_python_probe_stops_at_its_budget(monkeypatch, tmp_path, layout, found):
+    from quadratus import repo_scan
+    limit = 50
+    _Listing.consumed = 0
+
+    def scandir(path):
+        path = str(path)
+        if layout == "flat":
+            return _Listing((_Entry(f"f{i}.js") for i in range(100_000)), limit)
+        if layout == "at-limit":
+            return _Listing([*(_Entry(f"f{i}.js") for i in range(limit - 1)), _Entry("test_x.py")], limit)
+        if layout == "past-limit":
+            return _Listing([*(_Entry(f"f{i}.js") for i in range(limit)), _Entry("test_x.py")], limit)
+        return _Listing([_Entry("d", directory=True, path=path + "/d")], limit)       # deep
+    monkeypatch.setattr(repo_scan.os, "scandir", scandir)
+    assert repo_scan._has_python_tests(tmp_path, limit=limit) is found
+    assert _Listing.consumed <= limit + 1
+
+
+def test_the_python_probe_skips_hidden_cache_and_linked_directories(tmp_path):
+    from quadratus.repo_scan import _has_python_tests
+    tests = tmp_path / "tests"
+    for hidden in (".cache", "__pycache__", "node_modules"):
+        (tests / hidden).mkdir(parents=True)
+        (tests / hidden / "test_x.py").write_text("")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "test_y.py").write_text("")
+    (tests / "linked").symlink_to(elsewhere, target_is_directory=True)
+    (tests / "ui.test.js").write_text("//")
+    assert _has_python_tests(tests) is False
+    (tests / "unit").mkdir()
+    (tests / "unit" / "test_z.py").write_text("")
+    assert _has_python_tests(tests) is True

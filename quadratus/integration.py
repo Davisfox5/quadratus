@@ -106,12 +106,17 @@ class IntegrationGate:
             must not hang the whole session.
     """
 
-    def __init__(self, command: Sequence[str], *, cwd=None, timeout: int = 600):
+    def __init__(self, command: Sequence[str], *, cwd=None, timeout: int = 600,
+                 minimum_tests: Optional[int] = None):
         if not command:
             raise ValueError("the gate needs a command to run")
         self.command = list(command)
         self.cwd = cwd
         self.timeout = timeout
+        #: Set for a recognised test runner: exit 0 then passes only with a
+        #: runner summary showing at least this many executed cases (Codex
+        #: review of 8a71d25: a sole all-skipped node --test suite passed).
+        self.minimum_tests = minimum_tests
 
     def run(self) -> GateResult:
         shown = " ".join(self.command)
@@ -135,8 +140,15 @@ class IntegrationGate:
                 output=f"(command not found: {exc})",
             )
         combined = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        passed = proc.returncode == 0
+        if passed and self.minimum_tests is not None:
+            count = _test_count(combined)
+            if count is None:
+                passed, combined = False, "(test count unavailable)\n" + combined
+            elif count < self.minimum_tests:
+                passed, combined = False, f"(zero tests executed: {count} ran)\n" + combined
         return GateResult(
-            passed=proc.returncode == 0,
+            passed=passed,
             command=shown,
             returncode=proc.returncode,
             output=combined[-_TAIL_CHARS:],
