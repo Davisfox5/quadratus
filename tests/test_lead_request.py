@@ -235,3 +235,25 @@ def test_the_drafting_loop_fetches_an_existing_worker_artifact_from_the_run11_re
     assert draft == "Done."
     assert "The fixture is in tests/conftest.py" in prompts[2]
     assert any(t.content.startswith("[fetched artifact ") for t in task.turns())
+
+
+@pytest.mark.parametrize('reply', [
+    # Codex review of 03be7e3: quoted and code examples are not requests.
+    'Example: "Plan.FETCH: 2185e3cf5881"',
+    "Example: 'Plan.FETCH: 2185e3cf5881'",
+    'Example: ``Plan.FETCH: 2185e3cf5881``',
+    'Example:\n~~~\nPlan.FETCH: 2185e3cf5881',                  # unclosed tilde fence
+    'Example:\n````\nPlan.FETCH: 2185e3cf5881\n```',             # a shorter run does not close it
+    'Example: `Plan.FETCH: 2185e3cf5881',                         # unclosed backtick run
+    'He wrote “Plan.FETCH: 2185e3cf5881',                    # open curly quote
+    'Example: "Plan.CONSULT sol: is this right?"',
+    'Done.FETCH: abc123',                                         # not an artifact id
+    'Done.FETCH: 2185E3CF5881',
+])
+def test_a_quoted_or_code_example_of_an_inline_request_is_a_draft(reply):
+    assert split_lead_request(reply) is None
+
+
+def test_an_inline_request_after_a_closed_fence_still_counts():
+    reply = "Plan:\n~~~\nPlan.FETCH: aaaaaaaaaaaa\n~~~\nNow I read the result.FETCH: 2185e3cf5881"
+    assert split_lead_request(reply)[1] == "FETCH: 2185e3cf5881"
