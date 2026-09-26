@@ -37,6 +37,7 @@ pytest -q tests/lifecycle
 | planner and continuation told to count test setup | `test_the_planner_is_told_to_count_test_setup_and_split_heavy_setup` | Run 13 (prompt only) |
 | continuation within its estimate, tests and setup counted | `test_a_continuation_sized_for_its_tests_and_setup_proceeds` | |
 | continuation whose tests overrun | `test_a_continuation_whose_tests_overrun_still_stops_with_work_preserved` | ceiling unchanged, tests not trimmed |
+| interactive capture with a failed step | `test_a_capture_whose_interaction_step_failed_leaves_the_design_unverified` | Run 13 (real-browser cases in `tests/test_design_interaction.py`) |
 
 On fdee0d8 (Run 9's base) eight cases fail: the three non-single-line
 request layouts, all three design cases, the Claude error case and the

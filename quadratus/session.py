@@ -471,12 +471,17 @@ _DESIGN_SELF_VERIFY = (
 #: passed. A clean render of a page that does not show the change proves only
 #: that the page still loads.
 _DESIGN_RENDER_SHOWS = (
-    "Capture the URL where the controls this task added or changed are visible, in "
-    "the state a user meets them (for example with sample data loaded, or the dialog "
-    "or result the task adds open, if a URL can reach that state). Name that URL and "
-    "state in your report. If no URL can show the change, say so plainly rather than "
-    "capturing another page: a clean render of a page that does not show the change "
-    "is not evidence for this task."
+    "Capture the state where the controls this task added or changed are visible, as "
+    "a user meets them (for example with sample data loaded, or the dialog or result "
+    "the task adds open). When that state needs interaction, add steps to the same "
+    "command, in order: --click SELECTOR, --wait SELECTOR (waits until it is visible), "
+    "--file SELECTOR=project/relative/fixture (a non-secret file inside the project). "
+    "Finish with a --wait on the element that proves the change happened. Each step "
+    "must succeed, or the evidence is recorded as unverified with the failed step "
+    "named. Steps need a local preview URL (localhost) or a page file in the project. "
+    "Name the state in your report. If the change cannot be reached this way, say so "
+    "plainly rather than capturing another page: a clean render of a page that does "
+    "not show the change is not evidence for this task."
 )
 
 _DESIGN_REVIEW_LENS = (
