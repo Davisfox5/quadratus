@@ -730,3 +730,50 @@ def test_a_project_without_a_declared_script_keeps_the_single_check(tmp_path, mo
     replay = _run(tmp_path, monkeypatch, Script(), files=FILES)
     output = _gate_output(replay)
     assert H.gate_results(replay) == ["PASSED"] and "declared-" not in output
+
+
+
+# -- 11. operator extra checks: a prose-documented suite named explicitly (Run 15) -------
+
+EXAMINER = "examiner/ui.test.js"
+
+
+def _examiner_project(ui_test):
+    return {**FILES, EXAMINER: ui_test}
+
+
+def test_an_operator_extra_check_runs_beside_the_check_and_stays_out_of_prompts(tmp_path, monkeypatch,
+                                                                               real_runners):
+    replay = _run(tmp_path, monkeypatch, Script(), files=_examiner_project(NODE_PASS),
+                  extra_checks=[["node", "--test", EXAMINER]])
+    checks = H.result_json(replay)["checks"]
+    assert checks and all(c["passed"] for c in checks) and replay.result.error == ""
+    assert "check: passed" in _gate_output(replay) and "extra-1: passed" in _gate_output(replay)
+    plan = json.loads((replay.result.run_dir / "gate-plan.json").read_text())
+    assert [(g["id"], g["argv"]) for g in plan] == [("check", plan[0]["argv"]),
+                                                     ("extra-1", ["node", "--test", EXAMINER])]
+    assert not any(EXAMINER in c.prompt for c in replay.calls), "the gate plan never reaches a model"
+
+
+def test_a_failing_extra_check_fails_the_gate_even_with_pytest_passing(tmp_path, monkeypatch, real_runners):
+    replay = _run(tmp_path, monkeypatch, Script(), files=_examiner_project(NODE_FAIL),
+                  extra_checks=["node --test " + EXAMINER])
+    assert not H.result_json(replay)["checks"][-1]["passed"] and not replay.result.completed
+    assert "extra-1: failed" in _gate_output(replay) and "check: passed" in _gate_output(replay)
+
+
+def test_an_extra_check_with_a_missing_runner_is_blocked(tmp_path, monkeypatch, real_runners):
+    empty = tmp_path / "no-runners"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    replay = _run(tmp_path, monkeypatch, Script(), files=_examiner_project(NODE_PASS),
+                  extra_checks=[["node", "--test", EXAMINER]])
+    assert not H.result_json(replay)["checks"][-1]["passed"]
+    assert "extra-1: blocked: runner unavailable" in _gate_output(replay)
+
+
+@pytest.mark.parametrize("extra", [["node", "--test", "tests/ui/*.test.js"], "node --test tests/ui/[ab].js", [],
+                                   ["node", ""]])
+def test_a_pattern_or_empty_extra_check_is_refused_before_any_call(tmp_path, monkeypatch, extra):
+    with pytest.raises(ValueError, match="Extra check 1"):
+        _run(tmp_path, monkeypatch, Script(), files=FILES, extra_checks=[extra])

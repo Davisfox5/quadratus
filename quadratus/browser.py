@@ -234,21 +234,28 @@ def render_page(
     return evidence
 
 
-_OVERFLOW_SCRIPT = """(viewport) => {
+#: Elements examined for overflow. The report names at most five, and the
+#: scan itself is bounded so a huge page cannot make the diagnostic costly.
+OVERFLOW_SCAN_LIMIT = 5000
+
+_OVERFLOW_SCRIPT = """([viewport, limit]) => {
   const doc = document.documentElement;
   const width = Math.max(doc.scrollWidth, document.body ? document.body.scrollWidth : 0);
-  if (!viewport || width <= viewport + 1) return {width, offenders: []};
-  const past = [];
-  for (const el of document.querySelectorAll('body *')) {
-    const box = el.getBoundingClientRect();
-    if (box.width > 0 && box.right > viewport + 1) past.push(el);
+  if (!viewport) return {width, offenders: [], scanned: 0};
+  const past = new Set();
+  const all = document.querySelectorAll('body *');
+  const scanned = Math.min(all.length, limit);
+  for (let i = 0; i < scanned; i++) {
+    const box = all[i].getBoundingClientRect();
+    if (box.width > 0 && (box.right > viewport + 1 || box.left < -1)) past.add(all[i]);
   }
-  const outermost = past.filter(el => !past.includes(el.parentElement));
+  const outermost = [...past].filter(el => !past.has(el.parentElement));
   const name = el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '')
     + Array.from(el.classList).slice(0, 2).map(c => '.' + c).join('');
-  return {width, offenders: outermost.slice(0, 5).map(el => {
+  return {width, scanned, offenders: outermost.slice(0, 5).map(el => {
     const box = el.getBoundingClientRect();
-    return {element: name(el), right: Math.round(box.right), width: Math.round(box.width)};
+    return {element: name(el), left: Math.round(box.left), right: Math.round(box.right),
+            width: Math.round(box.width), side: box.left < -1 ? 'left' : 'right'};
   })};
 }"""
 
@@ -258,13 +265,18 @@ def _measure_overflow(page, viewport_width):
 
     A harness diagnostic, not an interaction step (Codex, Run 15: the mobile
     render was 470px at a 390px viewport and nothing said what overflowed).
-    The width gate itself stays on the screenshot; this only names a target
-    for whoever fixes it. Never raises.
+    Elements escaping either edge are named, fixed and sticky ones included,
+    outermost only, at most five, from at most ``OVERFLOW_SCAN_LIMIT``
+    elements. The width gate itself stays on the screenshot and its
+    threshold is unchanged; this only names a target for whoever fixes it.
+    A left escape does not widen the screenshot, so it is recorded here but
+    does not by itself fail the gate. Never raises.
     """
     try:
-        measured = page.evaluate(_OVERFLOW_SCRIPT, viewport_width)
-        offenders = [dict(element=str(o.get("element"))[:120], right=int(o.get("right")),
-                          width=int(o.get("width"))) for o in (measured.get("offenders") or [])][:5]
+        measured = page.evaluate(_OVERFLOW_SCRIPT, [viewport_width, OVERFLOW_SCAN_LIMIT])
+        offenders = [dict(element=str(o.get("element"))[:120], side=str(o.get("side")),
+                          left=int(o.get("left")), right=int(o.get("right")), width=int(o.get("width")))
+                     for o in (measured.get("offenders") or [])][:5]
         return int(measured.get("width")), offenders
     except Exception:  # noqa: BLE001 -- a diagnostic never fails the capture
         return None, []

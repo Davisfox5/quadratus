@@ -53,8 +53,13 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 state_dir=None, max_tasks=20, mode='adversarial',
                 progress=None, ask_operator=None, plan_gate=None,
                 default_scope=None, run_limits=None, forbid=(), declared_paths=(),
-                security_verdict_json=False, gates=None):
-    """Keep both successful and interrupted runs next to their source tree."""
+                security_verdict_json=False, gates=None, extra_checks=()):
+    """Keep both successful and interrupted runs next to their source tree.
+
+    ``extra_checks`` are further operator checks, each an argv list (or a
+    string split without a shell), run as required gates beside ``check``
+    in the selected project. A pattern is never expanded: name the files.
+    """
     from .runtime import Fleet, new_session
 
     if not goal.strip():
@@ -78,6 +83,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
             raise ValueError('Use either default_scope or declared_paths, not both')
         default_scope = TaskScope(permitted_paths=tuple(declared_paths))
     default_scope = policy.scope(default_scope)
+    extras = _extra_gate_commands(extra_checks)
     with _project_lock(project):
         return _run(goal, project, settings, state=state, allow_writes=allow_writes,
                     check=check, max_tasks=max_tasks, mode=mode, progress=progress,
@@ -85,7 +91,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     default_scope=default_scope,
                     run_limits=run_limits, policy=policy, gates=gates,
                     security_verdict_json=security_verdict_json,
-                    fleet_type=Fleet, session_factory=new_session)
+                    fleet_type=Fleet, session_factory=new_session, extras=extras)
 
 
 def _declared_basename(argv):
@@ -93,32 +99,67 @@ def _declared_basename(argv):
     return [Path(argv[0]).name, *argv[1:]] if argv else []
 
 
-def _with_declared_checks(command, scan):
-    """The gate as required commands when the project declares more checks
-    than ``command`` covers, else None (the single-command gate stands).
+def _extra_gate_commands(extra_checks):
+    """Operator extra checks as required GateCommands, or ValueError.
 
-    Codex, Run 15: the operator's check was pytest, the project also
-    declares a ``package.json`` test script, and the Node UI tests never ran
-    in-run. Each declared check the command does not already name is added as
-    a required gate: a missing runner is blocked and a failure fails the
-    gate, so neither can pass as complete.
+    Codex, Run 15: the selected project documents its Node UI suite in prose
+    and has no package.json, so nothing declared it; the operator names it
+    instead. Same grant as ``--check``: run in the selected project, no
+    shell. A glob is refused rather than passed through literally, since
+    without a shell it would reach the runner unexpanded.
     """
-    if not command:
+    commands = []
+    for index, raw in enumerate(extra_checks or (), 1):
+        argv = shlex.split(raw) if isinstance(raw, str) else list(raw)
+        if not argv or any(not isinstance(a, str) or not a for a in argv):
+            raise ValueError(f'Extra check {index} must be a nonempty command')
+        if any(ch in a for a in argv for ch in '*?['):
+            raise ValueError(f'Extra check {index} contains a pattern; list the files instead')
+        commands.append(GateCommand(id=f'extra-{index}', argv=tuple(argv)))
+    return commands
+
+
+def _with_declared_checks(command, scan):
+    """The gate with the project's declared checks, when ``command`` does
+    not already cover them; see :func:`_gate_plan`."""
+    return _gate_plan(command, (), scan)
+
+
+def _gate_plan(command, extras, scan):
+    """Every required check for the run as GateCommands, or None when the
+    single-command gate stands.
+
+    ``command`` (the operator's ``--check`` or the scanned one) comes first,
+    then operator extra checks, then each check the project declares that
+    neither already names (Codex, Run 15: a package.json test script beside
+    an operator pytest never ran). All are required: a missing runner is
+    blocked and a failure fails the gate, so none can pass as complete, and
+    an explicit ``--check`` cannot crowd the others out.
+    """
+    if not command and not extras:
+        return None       # nothing named and nothing declared: no gate
+    named = [_declared_basename(command)] if command else []
+    named += [_declared_basename(e.argv) for e in extras]
+
+    def covered(c):
+        if _declared_basename(c) in named:
+            return True
+        pytest = Path(c[0]).name.startswith('python') and 'pytest' in c
+        return pytest and any('pytest' in n for n in named)
+    declared = [c for c in scan.declared_checks if not covered(c)]
+    if not extras and not declared:
         return None
-    ours = _declared_basename(command)
-    extra = [c for c in scan.declared_checks
-             if _declared_basename(c) != ours
-             and not (Path(c[0]).name.startswith('python') and 'pytest' in c and 'pytest' in command)]
-    if not extra:
-        return None
-    return [GateCommand(id='check', argv=tuple(command)),
-            *[GateCommand(id='declared-' + Path(c[0]).name + (f'-{i}' if i else ''), argv=tuple(c))
-              for i, c in enumerate(extra)]]
+    gates = [GateCommand(id='check', argv=tuple(command))] if command else []
+    gates += list(extras)
+    gates += [GateCommand(id='declared-' + Path(c[0]).name + (f'-{i}' if i else ''), argv=tuple(c))
+              for i, c in enumerate(declared)]
+    return gates
 
 
 def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
-         default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False):
+         default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
+         extras=()):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
@@ -127,7 +168,14 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     code_map = CodebaseMap(state / 'codebase-map.jsonl')
     seed_map(scan, code_map)
     command = shlex.split(check) if check else scan.check_command
-    gates = gates if gates is not None else _with_declared_checks(command, scan)
+    gates = gates if gates is not None else _gate_plan(command, extras, scan)
+    plan = [dict(id=g.id, argv=list(g.argv), cwd=g.cwd, required=g.required) for g in gates or ()] or (
+        [dict(id='check', argv=list(command), cwd='.', required=True)] if command else [])
+    # Shown to the operator before any task, and kept with the run. Never put
+    # into a model prompt: a gate command can name an examiner path.
+    (run_dir / 'gate-plan.json').write_text(json.dumps(plan, indent=2), encoding='utf-8')
+    if progress:
+        progress('Checks: ' + ('; '.join(f"{g['id']}: {' '.join(g['argv'])}" for g in plan) or 'none'))
     gate = (GateSuite(gates, cwd=project.root, exclude=project.exclude) if gates is not None
             else IntegrationGate(command, cwd=project.root) if command else None)
     store = ArtifactStore(run_dir / 'artifacts')

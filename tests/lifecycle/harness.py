@@ -181,7 +181,7 @@ def write(call: Call, files: Dict[str, str]) -> None:
 
 
 def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
-        limits=None, settings=None) -> Replay:
+        limits=None, settings=None, extra_checks=()) -> Replay:
     project = tmp_path / "project"
     project.mkdir()
     for name, text in files.items():
@@ -199,7 +199,7 @@ def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
     settings.backend_overrides = {}
     settings.openai_api_key = settings.anthropic_api_key = settings.xai_api_key = None
     replay.result = run_project("Build the feature.", project, settings, allow_writes=True,
-                                check=check, max_tasks=max_tasks,
+                                check=check, max_tasks=max_tasks, extra_checks=extra_checks,
                                 run_limits=limits or RunLimits(max_calls=120, max_reported_tokens=6_000_000,
                                                                wall_seconds=600, max_concurrent_workers=2))
     return replay
