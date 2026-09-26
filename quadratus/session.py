@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field, replace
 from functools import wraps
 from pathlib import Path
@@ -331,6 +332,13 @@ class SessionConfig:
     #: Spread simple and standard leads across vendors by how many tasks each
     #: has led this run (see Session._spread_lead).
     spread_leads: bool = True
+    #: How many independent tasks may run at once (Davis, 2026-09-25: run
+    #: tasks in parallel whenever possible). 1 turns parallel batches off.
+    max_parallel_tasks: int = 3
+    #: Supplied by the project runner: given a directory, an ``(invoke,
+    #: close)`` pair bound to a Fleet for that directory, sharing the run's
+    #: budget, meter and ledger. Without it batches run one at a time.
+    fork: Optional[Callable] = None
     #: Design and UI work is verified by the model that did it: the lead is
     #: told to look at the rendered result at desktop and mobile widths and
     #: report what it saw. Davis's ruling, 2026-09-25.
@@ -476,6 +484,14 @@ _ASK_SPARINGLY = (
     "audit checks the work against them."
 )
 _DECIDE = re.compile(r"^\s*DECIDE:\s*(R\d+)\s*[-:—]\s*(.+?)\s*$", re.MULTILINE)
+_PARALLEL_REQUEST = (
+    "Independent tasks run in parallel. When two or three tasks change disjoint "
+    "files and none needs another's result, name them together: a line 'PARALLEL', "
+    "then each task as a complete block (KIND, SCOPE, COVERS and description), "
+    "blocks separated by a line '---'. Each SCOPE must list exact file paths, no "
+    "wildcards, and no file may appear in two blocks. Work that shares a file stays "
+    "one task at a time."
+)
 _REQ_BLOCK = re.compile(r"^\s*REQUIREMENTS:\s*\n((?:\s*R\d+\s*[:.)-].*\n?)+)", re.MULTILINE)
 _REQ_LINE = re.compile(r"^\s*(R\d+)\s*[:.)-]\s*(.+?)\s*$", re.MULTILINE)
 _COVERS = re.compile(r"^\s*COVERS:\s*(.+?)\s*$", re.MULTILINE)
@@ -500,6 +516,26 @@ def _read_covers(spec):
     ids = re.findall(r"R\d+", match.group(1))
     description = _COVERS.sub("", spec.description).strip()
     return ids, replace(spec, description=description or spec.description)
+
+
+_PARALLEL_HEAD = re.compile(r"^\s*PARALLEL\s*$", re.MULTILINE)
+
+
+def _parallel_blocks(reply: str):
+    """The task blocks of a 'PARALLEL' reply, or None for a single task."""
+    match = _PARALLEL_HEAD.search(reply or "")
+    if not match:
+        return None
+    blocks = [b.strip() for b in re.split(r"^\s*---\s*$", reply[match.end():], flags=re.MULTILINE)]
+    blocks = [b for b in blocks if b]
+    return blocks if len(blocks) >= 2 else ([blocks[0]] if blocks else None)
+
+
+def _literal_paths(scope) -> Optional[set]:
+    paths = list(getattr(scope, "permitted_paths", ()) or ())
+    if not paths or any(any(ch in p for ch in "*?[]") for p in paths):
+        return None
+    return {p.strip("./") for p in paths}
 
 
 _CONTINUES = re.compile(r"^\s*CONTINUES:\s*(\S+)\s*$", re.MULTILINE)
@@ -734,6 +770,8 @@ class Session:
         self._requirement_reopens = 0
         self._covers_corrections = 0
         self._leads_by_vendor: dict = {}
+        self._batch: List[TaskSpec] = []
+        self.parallel_batches: List[dict] = []
         self._design_note = ""
         self._task_started: Optional[float] = None
         #: When the most recent editing call began: renders older than this
@@ -1914,6 +1952,7 @@ class Session:
                     + f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}\n\n{_NEEDS_REQUEST}"
                     + ("\n\n" + (_COVERS_REQUEST if self.memory.ledger.requirements
                                   else _REQUIREMENTS_REQUEST) if self.config.requirements_ledger else "")
+                    + ("\n\n" + _PARALLEL_REQUEST if self._parallel_enabled() else "")
                     + (self._done_refusal or "")
                     + ("\n\n" + _SCOPE_REQUEST if self.project and self.config.allow_writes else "")
                     + ("\n\n" + _ORIENT_REQUEST
@@ -1976,6 +2015,14 @@ class Session:
             raise RunStalled(
                 f"An unresolved {control.verb} request cannot become a task."
             )
+
+        blocks = _parallel_blocks(reply) if self._parallel_enabled() else None
+        if blocks:
+            specs = self._batch_specs(blocks, seat)
+            if specs:
+                self._batch = specs[1:]
+                return specs[0]
+            reply = blocks[0]
 
         # One bounded correction, then an explicit failure. Defaulting here is
         # what silently turned a pinned testing task into general/simple work.
@@ -2091,6 +2138,13 @@ class Session:
             self._note(f"asking {self.seat().key} for the next task")
             spec = self.next_task()
             self._done_refusal = ""
+            batch, self._batch = ([spec] + self._batch if spec is not None and self._batch else None), []
+            if batch:
+                previous_description = None
+                self._run_batch(batch)
+                if self.open_findings or (self.checks and not self.checks[-1]['passed']):
+                    break
+                continue
             if spec is None:
                 if not self._requirements_satisfied():
                     if self._requirement_reopens < self.config.max_requirement_reopens:
@@ -2248,6 +2302,162 @@ class Session:
         )
         with invocation(spec.task_id, "design-review"):
             return self._invoke_model(reviewer, prompt)
+
+    def _parallel_enabled(self) -> bool:
+        policy = self.config.repository_policy
+        return bool(self.config.fork and self.config.max_parallel_tasks > 1 and self.project
+                    and self.config.allow_writes and not getattr(policy, "explicit", False))
+
+    def _batch_specs(self, blocks, seat) -> Optional[List["TaskSpec"]]:
+        """Specs for a parallel batch, or None (with the reason noted) when the
+        batch cannot run in parallel; the caller then runs the first block alone."""
+        from .scope import read_scope
+        specs = []
+        for i, block in enumerate(blocks):
+            try:
+                meta = self._absorb_orientation(_read_metadata(block), seat)
+                scope, description = read_scope(meta.description, max_lines=MAX_TASK_LINES)
+                specs.append(TaskSpec(task_id=f"t{len(self.history) + 1 + i}", description=description,
+                                      kind=meta.kind, complexity=meta.difficulty,
+                                      metadata_confidence=meta.confidence,
+                                      metadata_notes=list(meta.notes), scope=scope))
+            except (AmbiguousMetadata, ValueError) as exc:
+                self._note(f"parallel batch not run: block {i + 1} is not a valid task ({str(exc)[:120]})")
+                return None
+        if len(specs) < 2:
+            return None
+        if len(specs) > self.config.max_parallel_tasks:
+            self._note(f"parallel batch not run: {len(specs)} tasks, the limit is {self.config.max_parallel_tasks}")
+            return None
+        seen: set = set()
+        for spec in specs:
+            paths = _literal_paths(spec.scope)
+            if paths is None:
+                self._note(f"parallel batch not run: {spec.task_id} has no exact file list")
+                return None
+            if paths & seen:
+                self._note(f"parallel batch not run: files shared between tasks: {', '.join(sorted(paths & seen))}")
+                return None
+            seen |= paths
+        return specs
+
+    def _run_batch(self, specs) -> None:
+        """Run independent tasks at once, each in its own copy, then merge.
+
+        Every task keeps its own lead (spread across vendors), review, fix
+        cycle, scope check and close-out, in a child Session bound to a
+        private copy of the project. Their scopes are exact and disjoint, so
+        the merge copies each task's changed files back; a change outside a
+        task's scope is not merged, its content is kept as an artifact, and
+        the task is recorded partial. The integration gate then runs once on
+        the merged tree, with the usual fix round.
+        """
+        import concurrent.futures
+        import contextlib
+
+        from .project import Project
+        from .run_budget import RunBudgetExceeded
+        parsed = []
+        for spec in specs:
+            continues, spec = _read_continues(spec)
+            covers, spec = _read_covers(spec)
+            problem = self._covers_problem(covers)
+            if problem:
+                self._done_refusal = (f"\n\n--- BATCH SENT BACK ---\n{spec.task_id}: {problem} Name the "
+                                      "tasks again with COVERS lines using the listed requirement ids.")
+                return
+            parsed.append((replace(spec, lead=self._pick_lead(spec)), covers, continues))
+        self._note("running in parallel: " + ", ".join(f"{s.task_id} led by {s.lead}" for s, _, _ in parsed))
+        project = Project(self.project, exclude=self.config.project_excludes)
+        base = project.contents()
+        record = dict(tasks=[s.task_id for s, _, _ in parsed], leads=[s.lead for s, _, _ in parsed])
+        with contextlib.ExitStack() as stack:
+            children, roots = [], []
+            for spec, _, _ in parsed:
+                root = stack.enter_context(project.snapshot())
+                invoke, close = self.config.fork(root)
+                stack.callback(close)
+                tag = spec.task_id
+                child_config = replace(
+                    self.config, project=root, integration_gate=None, requirements_ledger=False,
+                    max_parallel_tasks=1, fork=None,
+                    progress=(lambda message, tag=tag: self._note(f"[{tag}] {message}")))
+                child = Session(self.memory.goal, self.store, invoke, config=child_config,
+                                available=self._available)
+                children.append(child)
+                roots.append(root)
+            started = time.monotonic()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(children)) as pool:
+                futures = [pool.submit(child.run_task, spec) for child, (spec, _, _) in zip(children, parsed, strict=True)]
+                outcomes = []
+                for future in futures:
+                    try:
+                        outcomes.append((future.result(), None))
+                    except BaseException as exc:  # noqa: BLE001 -- merged below, then re-raised if fatal
+                        outcomes.append((None, exc))
+            record["seconds"] = round(time.monotonic() - started, 1)
+            fatal = None
+            for (spec, covers, continues), child, root, (summary, exc) in zip(
+                    parsed, children, roots, outcomes, strict=True):
+                after = Project(root, exclude=self.config.project_excludes).contents()
+                changed = sorted(p for p in base.keys() | after.keys() if base.get(p) != after.get(p))
+                allowed = _literal_paths(spec.scope) or set()
+                outside = [p for p in changed if p.strip("./") not in allowed]
+                self.scope_reports.extend(child.scope_reports)
+                self.design_checks.extend(child.design_checks)
+                self.open_findings.extend(child.open_findings)
+                if outside or exc is not None:
+                    kept = self.store.put(json.dumps({p: (after.get(p) or b"").decode("utf-8", "replace")
+                                                      for p in changed}), kind="parallel-unmerged",
+                                          author=spec.lead)
+                    reason = (f"changed files outside its scope: {', '.join(outside)}" if outside
+                              else f"{type(exc).__name__}: {str(exc)[:200]}")
+                    self.open_findings.append(f"Parallel task {spec.task_id} was not merged ({reason}); "
+                                              f"its files are kept in artifact {kept.id}.")
+                    self._partial_tasks.add(spec.task_id)
+                    self._note(f"{spec.task_id} not merged: {reason[:160]}")
+                    if exc is not None and not isinstance(exc, (PartialWorkStopped, ProviderError, RunStalled)):
+                        fatal = fatal or exc
+                    if isinstance(exc, RunBudgetExceeded):
+                        fatal = fatal or exc
+                    continue
+                for path in changed:
+                    target = Path(self.project) / path
+                    if path in after:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(after[path])
+                    elif target.exists():
+                        target.unlink()
+                self.history.append(summary)
+                self.memory.absorb(summary)
+                if getattr(summary, "outcome", "closed") == "turn_limited":
+                    self.turn_limited.append(spec.task_id)
+                    self._partial_tasks.discard(continues)
+                    self._partial_tasks.add(spec.task_id)
+                else:
+                    self._partial_tasks.discard(continues)
+                    for rid in covers:
+                        if rid in self.memory.ledger.requirements:
+                            self.memory.ledger.requirement_status[rid] = f"covered by {spec.task_id}"
+                self._note(f"{spec.task_id} merged ({len(changed)} files) and closed by {summary.author}")
+        self.parallel_batches.append(record)
+        gate = self.config.integration_gate
+        if gate is not None and not fatal:
+            first = parsed[0][0]
+            union = sorted(set().union(*[(_literal_paths(s.scope) or set()) for s, _, _ in parsed]))
+            from .scope import TaskScope
+            merge = TaskSpec(task_id=f"{parsed[-1][0].task_id}-merge",
+                             description="Make the merged parallel changes pass the project checks.",
+                             scope=TaskScope(permitted_paths=union))
+            task = TaskMemory(merge.task_id, first.lead, self.store)
+            saved = (self._active_spec, self._task_before, self._task_memory)
+            self._active_spec, self._task_before, self._task_memory = merge, self._capture_source(), task
+            try:
+                self._run_integration_gate(first.lead, merge, task)
+            finally:
+                self._active_spec, self._task_before, self._task_memory = saved
+        if fatal is not None:
+            raise fatal
 
     def _covers_problem(self, covers) -> str:
         ledger = self.memory.ledger
