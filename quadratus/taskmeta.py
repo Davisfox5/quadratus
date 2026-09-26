@@ -364,34 +364,78 @@ def split_lead_request(reply: str) -> Optional[tuple]:
 _INLINE_REQUEST = re.compile(r"(?<=[.!?])[ \t]*(?=(?:FETCH:|CONSULT |WORKER(?:\s|$)))")
 
 
+#: An artifact id as ``ArtifactStore`` issues it. An inline FETCH must name
+#: exactly this and nothing else, so a quoted example (``"...FETCH: id"``)
+#: keeps its closing quote in the token and is not a request.
+_ARTIFACT_ID = re.compile(r"[0-9a-f]{12}")
+
+#: A fence opener or closer: up to three spaces, then three or more backticks
+#: or tildes (CommonMark).
+_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
+
+
+def _code_spans(text: str) -> List[tuple]:
+    """``(start, end)`` offsets of fenced code blocks and inline code spans.
+
+    Fences of backticks or tildes close on a run of the same character at
+    least as long; an unclosed fence runs to the end. Inline spans close on a
+    backtick run of the same length. An unclosed run is treated as code to the
+    end of the text: conservative, since a false request is worse than a
+    missed one here (a missed request surfaces as a loud stop, not an action).
+    """
+    spans, offset, fence = [], 0, None
+    for line in text.splitlines(keepends=True):
+        match = _FENCE.match(line)
+        if fence is not None:
+            if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= fence[1]:
+                spans.append((fence[2], offset + len(line)))
+                fence = None
+        elif match:
+            fence = (match.group(1)[0], len(match.group(1)), offset)
+        else:
+            position = 0
+            while True:
+                opener = re.compile(r"`+").search(line, position)
+                if opener is None:
+                    break
+                closer = re.compile(r"(?<!`)" + re.escape(opener.group()) + r"(?!`)").search(line, opener.end())
+                if closer is None:
+                    spans.append((offset + opener.start(), len(text)))
+                    return spans
+                spans.append((offset + opener.start(), offset + closer.end()))
+                position = closer.end()
+        offset += len(line)
+    if fence is not None:
+        spans.append((fence[2], len(text)))
+    return spans
+
+
 def _inline_request_start(text: str) -> Optional[int]:
     """Where a request starts mid-line, if exactly one such start exists.
 
-    Only after sentence-ending punctuation, never inside a code fence or an
-    inline code span, and never at the start of a line (the line-based parser
-    already covers those). More than one candidate is ambiguous and yields
-    None, so a preface that runs two requests together stays a draft. A
-    WORKER JSON object carrying the same pattern inside a string would count
-    twice; that also stays a draft, which errs toward refusing.
+    Only after sentence-ending punctuation, never inside fenced or inline
+    code, never inside an open double quote on its line, and never at the
+    start of a line (the line-based parser already covers those). More than
+    one candidate is ambiguous and yields None, so a preface that runs two
+    requests together stays a draft. An inline FETCH must name exactly one
+    artifact id. Every rule errs toward leaving a reply as a draft.
     """
-    found = []
-    offset = 0
-    fenced = False
+    code = _code_spans(text)
+    found, offset = [], 0
     for line in text.splitlines(keepends=True):
-        if line.lstrip().startswith("```"):
-            fenced = not fenced
-        elif not fenced:
-            for match in _INLINE_REQUEST.finditer(line):
-                head = line[:match.start()]
-                if head.strip() and head.count("`") % 2 == 0:
-                    found.append((offset + match.end(), line[match.end():].strip()))
+        for match in _INLINE_REQUEST.finditer(line):
+            at = offset + match.end()
+            head = line[:match.start()]
+            if not head.strip() or any(a <= at < b for a, b in code):
+                continue
+            if (head.count('"') + head.count("\u201c") - head.count("\u201d")) % 2:
+                continue
+            found.append((at, line[match.end():].strip()))
         offset += len(line)
     if len(found) != 1:
         return None
     start, tail = found[0]
-    # An inline FETCH names one artifact id and nothing else, so a sentence
-    # that merely begins "FETCH: ids are..." stays prose.
-    if tail.startswith("FETCH:") and len(tail[len("FETCH:"):].split()) != 1:
+    if tail.startswith("FETCH:") and not _ARTIFACT_ID.fullmatch(tail[len("FETCH:"):].strip()):
         return None
     return start
 
