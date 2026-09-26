@@ -777,3 +777,64 @@ def test_an_extra_check_with_a_missing_runner_is_blocked(tmp_path, monkeypatch, 
 def test_a_pattern_or_empty_extra_check_is_refused_before_any_call(tmp_path, monkeypatch, extra):
     with pytest.raises(ValueError, match="Extra check 1"):
         _run(tmp_path, monkeypatch, Script(), files=FILES, extra_checks=[extra])
+
+
+# -- 12. a sole test-runner check needs a count too (Codex review of 8a71d25) ------------
+
+NODE_SKIP = "const test = require('node:test');\ntest.skip('later', () => {});\n"
+JS_ONLY = {"app.py": "def add(a, b):\n    return 0\n", "README.md": "# app\n",
+           "package.json": json.dumps({"private": True, "scripts": {"test": "node --test tests/ui.test.js"}})}
+
+
+@pytest.mark.parametrize("ui,passes", [(NODE_PASS, True), (NODE_SKIP, False), (NODE_FAIL, False)])
+def test_a_sole_declared_npm_suite_is_held_to_its_count(tmp_path, monkeypatch, ui, passes):
+    replay = _run(tmp_path, monkeypatch, Script(), files={**JS_ONLY, "tests/ui.test.js": ui}, check="")
+    plan = json.loads((replay.result.run_dir / "gate-plan.json").read_text())
+    assert [(g["id"], g["argv"], g["minimum_tests"]) for g in plan] == [
+        ("check", ["npm", "test", "--silent"], 1)]
+    assert H.gate_results(replay) == (["PASSED"] if passes else ["FAILED"])
+    if ui is NODE_SKIP:
+        assert "(zero tests executed: 0 ran)" in _gate_output(replay)
+        assert not replay.result.completed
+
+
+@pytest.mark.parametrize("check,ui,expected", [
+    ("node --test tests/ui.test.js", NODE_PASS, "PASSED"),
+    ("node --test tests/ui.test.js", NODE_SKIP, "FAILED"),
+    ("node --test --test-reporter=dot tests/ui.test.js", NODE_PASS, "FAILED"),   # no count shown
+])
+def test_an_explicit_node_check_is_held_to_its_count(tmp_path, monkeypatch, real_runners, check, ui, expected):
+    """The project also declares npm test, a different command, so both run;
+    each test runner must show executed cases."""
+    replay = _run(tmp_path, monkeypatch, Script(), files={**JS_ONLY, "tests/ui.test.js": ui}, check=check)
+    assert H.gate_results(replay) == [expected]
+    plan = json.loads((replay.result.run_dir / "gate-plan.json").read_text())
+    assert [(g["id"], g["minimum_tests"]) for g in plan] == [("check", 1), ("declared-npm", 1)]
+    if "dot" in check:
+        assert "check: blocked: test count unavailable" in _gate_output(replay)
+
+
+def test_a_sole_pytest_check_with_every_case_skipped_fails(tmp_path, monkeypatch):
+    skipped = "import pytest\n\n\n@pytest.mark.skip\ndef test_add():\n    pass\n"
+    replay = _run(tmp_path, monkeypatch, Script(), files={**FILES, "tests/test_app.py": skipped})
+    assert H.gate_results(replay) == ["FAILED"] and "(zero tests executed: 0 ran)" in _gate_output(replay)
+    assert not replay.result.completed
+
+
+def test_a_primary_suite_beside_a_syntax_extra_counts_only_the_suite(tmp_path, monkeypatch, real_runners):
+    files = {**JS_ONLY, "tests/ui.test.js": NODE_PASS, "static/app.js": "const x = 1;\n"}
+    replay = _run(tmp_path, monkeypatch, Script(), files=files, check="",
+                  extra_checks=[["node", "--check", "static/app.js"]])
+    plan = json.loads((replay.result.run_dir / "gate-plan.json").read_text())
+    assert [(g["id"], g["minimum_tests"]) for g in plan] == [("check", 1), ("extra-1", None)]
+    assert "check: passed" in _gate_output(replay) and "extra-1: passed" in _gate_output(replay)
+
+
+def test_an_ordinary_command_check_keeps_exit_code_semantics(tmp_path, monkeypatch, real_runners):
+    """A non-test command passes on exit 0 with no count; the declared suite
+    beside it still needs one."""
+    replay = _run(tmp_path, monkeypatch, Script(), files=FILES, check="true")
+    assert H.gate_results(replay) == ["PASSED"]
+    plan = json.loads((replay.result.run_dir / "gate-plan.json").read_text())
+    assert plan[0] == dict(id="check", argv=["true"], cwd=".", required=True, minimum_tests=None)
+    assert [(g["id"].startswith("declared-python"), g["minimum_tests"]) for g in plan[1:]] == [(True, 1)]

@@ -26,6 +26,7 @@ seeds with real provenance.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -221,24 +222,36 @@ def _declared_checks(root: Path, manifests: List[str]) -> List[List[str]]:
 
 
 def _has_python_tests(tests: Path, limit: int = 2000) -> bool:
-    """Whether ``tests`` holds a Python file, looking at no more than ``limit`` entries."""
+    """Whether ``tests`` holds a Python file, consuming at most ``limit``
+    directory entries in all (Codex review of 8a71d25: the listing was
+    materialised whole before the budget applied).
+
+    Hidden, cache and vendored directories and symlinks are skipped, as in
+    the main scan. Running out of budget answers False: no Python file was
+    shown to exist, so no Python gate is declared from it.
+    """
     seen = 0
     stack = [tests]
     while stack:
         try:
-            entries = list(stack.pop().iterdir())
+            listing = os.scandir(stack.pop())
         except OSError:
             continue
-        for entry in entries:
-            seen += 1
-            if seen > limit:
-                return False
-            if entry.is_symlink():
-                continue
-            if entry.is_dir():
-                stack.append(entry)
-            elif entry.suffix == ".py":
-                return True
+        with listing:
+            for entry in listing:
+                seen += 1
+                if seen > limit:
+                    return False
+                try:
+                    if entry.is_symlink():
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        if not entry.name.startswith(".") and entry.name not in _SKIP_DIRS:
+                            stack.append(Path(entry.path))
+                    elif entry.name.endswith(".py"):
+                        return True
+                except OSError:
+                    continue
     return False
 
 

@@ -198,7 +198,8 @@ def _gate_plan(command, extras, scan):
     declared = [c for c in scan.declared_checks if _check_identity(c) not in named]
     if not extras and not declared:
         return None
-    gates = [GateCommand(id='check', argv=tuple(command))] if command else []
+    gates = ([GateCommand(id='check', argv=tuple(command),
+                          minimum_tests=1 if _is_test_suite(command) else None)] if command else [])
     gates += list(extras)
     gates += [GateCommand(id='declared-' + Path(c[0]).name + (f'-{i}' if i else ''), argv=tuple(c),
                           minimum_tests=1)
@@ -232,15 +233,18 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     seed_map(scan, code_map)
     command = shlex.split(check) if check else scan.check_command
     gates = _merge_extras(list(gates), extras) if gates is not None else _gate_plan(command, extras, scan)
-    plan = [dict(id=g.id, argv=list(g.argv), cwd=g.cwd, required=g.required) for g in gates or ()] or (
-        [dict(id='check', argv=list(command), cwd='.', required=True)] if command else [])
+    plan = [dict(id=g.id, argv=list(g.argv), cwd=g.cwd, required=g.required, minimum_tests=g.minimum_tests)
+            for g in gates or ()] or (
+        [dict(id='check', argv=list(command), cwd='.', required=True,
+              minimum_tests=1 if _is_test_suite(command) else None)] if command else [])
     # Shown to the operator before any task, and kept with the run. Never put
     # into a model prompt: a gate command can name an examiner path.
     (run_dir / 'gate-plan.json').write_text(json.dumps(plan, indent=2), encoding='utf-8')
     if progress:
         progress('Checks: ' + ('; '.join(f"{g['id']}: {' '.join(g['argv'])}" for g in plan) or 'none'))
     gate = (GateSuite(gates, cwd=project.root, exclude=project.exclude) if gates is not None
-            else IntegrationGate(command, cwd=project.root) if command else None)
+            else IntegrationGate(command, cwd=project.root,
+                                 minimum_tests=1 if _is_test_suite(command) else None) if command else None)
     # Only checks configured at the selected project root can be granted to
     # an editing lead. Nested/skipped gates still run through the gate suite.
     check_commands = (tuple(_project_check_command(c.argv, project.root) for c in gate.commands
