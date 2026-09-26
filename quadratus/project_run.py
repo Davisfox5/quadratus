@@ -101,6 +101,13 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     command = shlex.split(check) if check else scan.check_command
     gate = (GateSuite(gates, cwd=project.root, exclude=project.exclude) if gates is not None
             else IntegrationGate(command, cwd=project.root) if command else None)
+    # Only checks configured at the selected project root can be granted to
+    # an editing lead. Nested/skipped gates still run through the gate suite.
+    check_commands = (tuple(shlex.join(c.argv) for c in gate.commands
+                            if c.argv and not c.skip_reason
+                            and (project.root / c.cwd).resolve() == project.root)
+                      if isinstance(gate, GateSuite)
+                      else (shlex.join(command),) if command else ())
     store = ArtifactStore(run_dir / 'artifacts')
     meter = UsageMeter(run_dir / 'usage.jsonl')
     delegation = DelegationLedger(path=run_dir / 'invocations.jsonl')
@@ -125,6 +132,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             max_concurrent=run_limits.max_concurrent_workers,
         )
     fleet = fleet_type(settings, project=project, allow_writes=allow_writes,
+                       check_commands=check_commands,
                        usage_meter=meter, delegation_ledger=delegation,
                        **({'run_budget': budget} if budget else {}))
     try:
@@ -292,4 +300,3 @@ def standing_rulings(path, fallback=None):
         from .session import OperatorInputNeeded
         raise OperatorInputNeeded(question)
     return ask
-

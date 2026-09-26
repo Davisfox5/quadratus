@@ -1148,6 +1148,15 @@ class CLISpec:
             return []
 
 
+def claude_check_rule(command: str) -> str:
+    """Represent one literal check; never turn shell/rule syntax into a grant."""
+    if (not isinstance(command, str) or not command.strip()
+            or any(ord(char) < 32 or ord(char) == 127 for char in command)
+            or any(char in command for char in '*();&|<>`$\\')):
+        raise ProviderError("Configured check cannot be represented as an exact Claude Bash rule")
+    return f"Bash({command})"
+
+
 #: Verified against claude 2.1.228. ``--system-prompt`` fully replaces the
 #: default Claude Code system prompt (it does not merely append), which keeps
 #: an assigned collaboration role from competing with the coding-agent persona.
@@ -1159,6 +1168,7 @@ CLAUDE_SPEC = CLISpec(
     model_flag="--model",
     output_args=["--output-format", "json"],
     readonly_args=["--disallowed-tools", "Bash Edit Write NotebookEdit"],
+    write_args=["--permission-mode", "acceptEdits"],
     # Levels verified on claude 2.1.269: low, medium, high, xhigh, max.
     effort_flag="--effort",
     # A worker call. Task is the expensive one -- each subagent is a fresh
@@ -1937,6 +1947,8 @@ class CLIProvider(LLMProvider):
         self._workdir = workdir
         self._owned_workdir: Optional[str] = None
         self._allow_writes = allow_writes
+        # Configured checks only, on an authorized per-call project view.
+        self.check_commands = tuple(kwargs.pop("check_commands", ()))
         #: One-turn, tool-less summary call on the restricted seat (closeout).
         #: Off by default; a per-call view sets it. See ``_build_argv``.
         self.summary_only: bool = bool(kwargs.pop("summary_only", False))
@@ -2155,6 +2167,13 @@ class CLIProvider(LLMProvider):
         # contract that overrides land last is one this module already
         # promises.
         argv += tool_args or []
+        if spec.worker_tool_style == "claude":
+            allowed = ([f"mcp__{tool['name']}__commission_worker"]
+                       if tool_args is not None else [])
+            if self._allow_writes and not self.restricted and not self.summary_only:
+                allowed += [claude_check_rule(command) for command in self.check_commands]
+            if allowed:
+                argv += ["--allowedTools", *allowed]
         argv += list(spec.control_args)
         argv += extra
         if self.summary_only:
@@ -2227,8 +2246,7 @@ class CLIProvider(LLMProvider):
         if style == "claude":
             config = {"mcpServers": {name: {"command": tool["command"], "args": tool["args"],
                                             "env": tool["env"]}}}
-            return ["--mcp-config", json.dumps(config), "--strict-mcp-config",
-                    "--allowedTools", f"mcp__{name}__commission_worker"]
+            return ["--mcp-config", json.dumps(config), "--strict-mcp-config"]
         if style == "codex":
             env = "{" + ", ".join(f"{k} = {json.dumps(v)}" for k, v in tool["env"].items()) + "}"
             prefix = f"mcp_servers.{name}"

@@ -56,6 +56,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from .cli_providers import claude_check_rule
 from .config import Settings
 from .delegation import (
     DelegationLedger,
@@ -158,10 +159,24 @@ class Fleet:
         usage_meter: Optional[UsageMeter] = None,
         delegation_ledger: Optional[DelegationLedger] = None,
         run_budget=None,
+        check_commands=(),
         system: str = "You are collaborating on a software engineering task.",
     ) -> None:
         self.settings = settings or Settings.from_env()
         self.allow_writes = allow_writes
+        # Unsupported rule syntax stays runner-only. Reject the allowance,
+        # without preventing the existing integration gate from running it.
+        self.check_commands = ()
+        if allow_writes:
+            checks = []
+            for command in check_commands:
+                try:
+                    claude_check_rule(command)
+                except ProviderError:
+                    log.warning("Configured check remains runner-only: unsupported exact permission rule")
+                else:
+                    checks.append(command)
+            self.check_commands = tuple(dict.fromkeys(checks))
         self.project = project if isinstance(project, Project) else Project(project) if project else None
         self.usage_meter = usage_meter
         self.delegation_ledger = delegation_ledger
@@ -350,12 +365,17 @@ class Fleet:
             raise ProviderError("Project sessions require CLI transport with filesystem access.")
         if allow_writes and not provider.restricted:
             view = provider.in_directory(self.project.root, allow_writes=True)
+            if hasattr(view, "check_commands"):
+                view.check_commands = self.check_commands
             if lead_turns:
                 view.max_turns = lead_turns
             if lead_tool:
                 view.worker_tool = lead_tool
             before = self.project.contents()
-            reply = self._generate(model_key, view, prompt, role +
+            check_hint = ("\nConfigured checks may be run exactly as written, from this project: "
+                          + json.dumps(self.check_commands) + ". Do not add a shell prefix, "
+                          "redirection, or additional commands.") if self.check_commands else ""
+            reply = self._generate(model_key, view, prompt, role + check_hint +
                                   "\nYour working directory is the persistent project. "
                                   "Implement the requested changes in files. Do not commit, push, "
                                   "or change branches. Return a concise account and exactly one "
@@ -698,6 +718,7 @@ def new_session(goal, store, *, fleet=None, config=None, invariants=None, settin
             child = type(active)(active.settings,
                                  project=Project(root, exclude=active.project.exclude),
                                  allow_writes=active.allow_writes, usage_meter=active.usage_meter,
+                                 check_commands=active.check_commands,
                                  delegation_ledger=active.delegation_ledger,
                                  **({"run_budget": active.run_budget} if active.run_budget else {}))
             try:
