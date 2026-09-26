@@ -8,7 +8,7 @@ the right widths, written during this task -- before the task can count as
 complete. The cross-vendor design reviewer is pointed at the same files.
 
     python -m quadratus.design_evidence <url-or-html-file> <task-id> [project-root]
-        [--click SELECTOR] [--wait SELECTOR] [--file SELECTOR=project/fixture.csv] ...
+        [--click SELECTOR] [--wait SELECTOR] [--upload SELECTOR project/fixture.csv] ...
 
 Steps reach the state the task changed before the screenshot (Codex review
 of #25, Run 13: a dialog and its results appear only after a click and a
@@ -17,8 +17,10 @@ order given, each with a bound; every outcome is recorded in summary.json and
 any failed step makes the evidence unverified. There is no script, typing or
 navigation step. With steps, the page must be a local preview (localhost or
 a file inside the project), and navigation off it is blocked. A file step
-takes a regular, non-symlinked file inside the project, never under .git or
-.quadratus and never a credential-like name.
+takes a regular, non-symlinked file inside the project, never under a hidden
+directory (.git, .quadratus, .ssh, ...), never a hidden file, and never a
+credential-like name. ``--file SELECTOR=path`` is kept for simple selectors;
+a selector with ``[`` must use ``--upload``, since its ``=`` is ambiguous.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 VIEWPORTS = {"desktop": {"width": 1280, "height": 800}, "mobile": {"width": 390, "height": 844}}
 EVIDENCE_DIR = Path(".quadratus") / "design-evidence"
@@ -46,19 +49,32 @@ STEP_TIMEOUT_MS = 5000
 CAPTURE_SECONDS = 90
 _ACTIONS = ("click", "wait", "file")
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
-#: Never uploaded, whatever the task asks: run state, VCS data, credentials.
-_BLOCKED_DIRS = {".git", ".quadratus"}
-_BLOCKED_NAMES = (".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*", "id_ed25519*",
-                  ".netrc", ".npmrc", ".pypirc", "*credential*", "*secret*", "*token*")
+#: Never uploaded, whatever the task asks. Any hidden path component is
+#: refused outright (run state, VCS data, .env, .ssh, .codex, tool configs);
+#: these names are refused anywhere else (Codex review of c222d62:
+#: .codex/auth.json and .ssh/id_ecdsa were accepted).
+_BLOCKED_NAMES = ("id_*", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", "*.gpg", "*.asc",
+                  "*.ppk", "*auth*.json", "*credential*", "*secret*", "*token*", "*password*")
 
 
 def parse_steps(argv: List[str]) -> Tuple[List[str], List[dict]]:
-    """Split ``--click/--wait/--file`` steps from positional arguments."""
+    """Split ``--click/--wait/--upload/--file`` steps from positional arguments.
+
+    ``--upload SELECTOR PATH`` takes two arguments, so neither may need
+    escaping. ``--file SELECTOR=PATH`` splits at the first ``=``, which is
+    only unambiguous when the selector has no attribute part; one with ``[``
+    is refused and pointed at ``--upload``.
+    """
     positional, steps = [], []
     items = list(argv)
     while items:
         item = items.pop(0)
-        if item in ("--click", "--wait", "--file"):
+        if item == "--upload":
+            if len(items) < 2:
+                raise ValueError("--upload takes SELECTOR PATH")
+            selector, path = items.pop(0), items.pop(0)
+            steps.append(dict(action="file", selector=selector, path=path))
+        elif item in ("--click", "--wait", "--file"):
             if not items:
                 raise ValueError(f"{item} needs a value")
             value = items.pop(0)
@@ -67,6 +83,8 @@ def parse_steps(argv: List[str]) -> Tuple[List[str], List[dict]]:
                 selector, sep, path = value.partition("=")
                 if not sep:
                     raise ValueError("--file takes SELECTOR=project/relative/path")
+                if "[" in selector:
+                    raise ValueError("--file cannot split a selector with [ ]; use --upload SELECTOR PATH")
                 steps.append(dict(action="file", selector=selector, path=path))
             else:
                 steps.append(dict(action=action, selector=value))
@@ -80,8 +98,8 @@ def _fixture(root: Path, relative: str) -> Path:
     raw = Path(relative)
     if not relative or raw.is_absolute() or ".." in raw.parts:
         raise ValueError(f"file step path must be project-relative without '..': {relative!r}")
-    if any(part in _BLOCKED_DIRS for part in raw.parts):
-        raise ValueError(f"file step path is under run state or version control: {relative!r}")
+    if any(part.startswith(".") for part in raw.parts):
+        raise ValueError(f"file step path is hidden or under a hidden directory: {relative!r}")
     if any(fnmatch.fnmatch(part.lower(), pattern) for part in raw.parts for pattern in _BLOCKED_NAMES):
         raise ValueError(f"file step path looks like a credential: {relative!r}")
     current = root
@@ -97,13 +115,13 @@ def _fixture(root: Path, relative: str) -> Path:
 def _navigation_rule(target: str, root: Path):
     """The allowed origin for an interactive capture, as a URL predicate."""
     if "://" not in target or target.startswith("file://"):
-        page = Path(urlparse(target).path if target.startswith("file://") else target).resolve()
-        if not page.is_relative_to(root.resolve()):
+        page = _file_url_path(target) if target.startswith("file://") else Path(target)
+        if page is None or not page.resolve().is_relative_to(root.resolve()):
             raise ValueError("an interactive capture of a file must use a file inside the project")
 
         def allowed(url: str) -> bool:
-            parsed = urlparse(url)
-            return parsed.scheme == "file" and Path(parsed.path).resolve().is_relative_to(root.resolve())
+            path = _file_url_path(url)
+            return path is not None and path.resolve().is_relative_to(root.resolve())
         return allowed
     parsed = urlparse(target)
     if parsed.scheme not in ("http", "https") or parsed.hostname not in _LOCAL_HOSTS:
@@ -114,6 +132,18 @@ def _navigation_rule(target: str, root: Path):
         other = urlparse(url)
         return (other.scheme, other.hostname, other.port) == origin
     return allowed
+
+
+def _file_url_path(url: str) -> Optional[Path]:
+    """The local path a file URL names, percent-decoded, or None.
+
+    Chromium encodes a space as %20, so the raw URL path of a project in
+    "My Project" never matched the root (Codex review of c222d62).
+    """
+    parsed = urlparse(url)
+    if parsed.scheme != "file" or parsed.netloc not in ("", "localhost"):
+        return None
+    return Path(url2pathname(parsed.path))
 
 
 def validate_steps(steps: List[dict], target: str, root) -> Tuple[List[dict], object]:
@@ -303,7 +333,7 @@ def main(argv=None) -> int:
         return 2
     if len(positional) not in (2, 3):
         print("usage: python -m quadratus.design_evidence <url-or-html-file> <task-id> [project-root] "
-              "[--click SEL] [--wait SEL] [--file SEL=path]", file=sys.stderr)
+              "[--click SEL] [--wait SEL] [--upload SEL path] [--file SEL=path]", file=sys.stderr)
         return 2
     try:
         out = capture(positional[0], positional[1], positional[2] if len(positional) == 3 else ".", steps)
