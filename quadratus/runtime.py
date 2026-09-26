@@ -681,6 +681,22 @@ def new_session(goal, store, *, fleet=None, config=None, invariants=None, settin
 
     if active.usage_meter is not None and conf.usage_meter is active.usage_meter:
         conf = replace(conf, usage_meter=None)
+    if conf.fork is None and getattr(active, "project", None) is not None and isinstance(active, Fleet):
+        def fork(root):
+            """A Fleet for one parallel task's copy of the project, sharing
+            this run's budget, meter and invocation ledger."""
+            from .project import Project
+            child = type(active)(active.settings,
+                                 project=Project(root, exclude=active.project.exclude),
+                                 allow_writes=active.allow_writes, usage_meter=active.usage_meter,
+                                 delegation_ledger=active.delegation_ledger,
+                                 **({"run_budget": active.run_budget} if active.run_budget else {}))
+            try:
+                child.progress = getattr(active, "progress", None)
+            except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
+                pass
+            return child.invoke, child.close
+        conf = replace(conf, fork=fork)
     return Session(
         goal,
         store,

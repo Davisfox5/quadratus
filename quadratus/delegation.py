@@ -48,6 +48,7 @@ import json
 import logging
 import math
 import re
+import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
@@ -150,6 +151,9 @@ class Origin:
     #: from the two it can only witness.
     CONTROLLED = (SEAT, WORKER)
 
+
+
+_RECORD_LOCK = threading.RLock()
 
 @dataclass
 class InvocationEvent:
@@ -389,14 +393,16 @@ class DelegationLedger:
     blind_spots: List[str] = field(default_factory=list)
 
     def record(self, event: InvocationEvent) -> InvocationEvent:
-        self.events.append(event)
-        if self.path is not None:
-            try:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                with self.path.open("a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(asdict(event)) + "\n")
-            except OSError:  # noqa: BLE001 -- accounting never fails a run
-                log.debug("could not persist invocation event", exc_info=True)
+        # Parallel tasks record from several threads; one writer at a time.
+        with _RECORD_LOCK:
+            self.events.append(event)
+            if self.path is not None:
+                try:
+                    self.path.parent.mkdir(parents=True, exist_ok=True)
+                    with self.path.open("a", encoding="utf-8") as fh:
+                        fh.write(json.dumps(asdict(event)) + "\n")
+                except OSError:  # noqa: BLE001 -- accounting never fails a run
+                    log.debug("could not persist invocation event", exc_info=True)
         return event
 
     def observe_native(self, child: NativeChild) -> None:
