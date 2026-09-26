@@ -322,3 +322,28 @@ def test_a_claude_error_names_the_envelopes_own_errors():
                 "num_turns": 3, "errors": ["API Error: overloaded"]}
     with pytest.raises(ProviderError, match="API Error: overloaded"):
         _extract_claude_result(json.dumps(envelope))
+
+
+# -- Only a clean cancel at the count is a cap (Grok review of #33, 2026-09-26) -------
+
+@pytest.mark.parametrize("envelope,named", [
+    ({"text": "x", "stopReason": "cancelled", "error": "overloaded", "num_turns": 14}, "overloaded"),
+    ({"text": "x", "stopReason": "refusal", "num_turns": 14}, "refusal"),
+    ({"text": "x", "stopReason": "content_filter", "num_turns": 14}, "content_filter"),
+    ({"text": "x", "stopReason": "error", "num_turns": 14}, "'error'"),
+])
+def test_a_grok_error_or_other_stop_at_the_count_stays_a_failure(envelope, named):
+    from quadratus.cli_providers import GrokCLIProvider
+    capped = GrokCLIProvider(model="")
+    capped.max_turns = 14
+    with pytest.raises(ProviderError) as caught:
+        capped._extract(json.dumps(envelope))
+    assert not isinstance(caught.value, TurnLimitReached)
+    assert named in str(caught.value)
+
+
+def test_a_claude_error_with_an_empty_errors_list_still_names_something():
+    envelope = {"type": "result", "subtype": "error_during_execution", "is_error": True,
+                "num_turns": 3, "errors": []}
+    with pytest.raises(ProviderError, match="no detail in the envelope .subtype 'error_during_execution'"):
+        _extract_claude_result(json.dumps(envelope))

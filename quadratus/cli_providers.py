@@ -119,6 +119,8 @@ def _extract_claude_result(stdout: str) -> str:
         errors = payload.get("errors")
         detail = payload.get("result") or (
             "; ".join(str(e) for e in errors) if isinstance(errors, list) else "")
+        if not str(detail).strip():
+            detail = f"no detail in the envelope (subtype {payload.get('subtype')!r})"
         raise ProviderError(f"claude reported an error: {str(detail)[:300]}")
     return payload.get("result", "") or ""
 
@@ -196,6 +198,18 @@ def _extract_codex_result(stdout: str) -> str:
             "it. Check `codex exec --model <name>` by hand."
         )
     raise ProviderError(f"codex returned no parseable events: {stdout.strip()[:300]}")
+
+
+def _is_cap_shaped(payload: dict) -> bool:
+    """Whether an incomplete envelope has the one shape a count-read cap takes.
+
+    GameTape run 3's cap was a bare ``stopReason: cancelled`` at the cap's
+    count. An ``error`` field, or any other stop (refusal, content_filter,
+    error), is a failure whatever the count says; reading it as the cap
+    replanned a safeguard or transport error and dropped its message (Grok
+    review of #33, 2026-09-26).
+    """
+    return not payload.get("error") and payload.get("stopReason") == "cancelled"
 
 
 def _extract_grok_result(stdout: str) -> str:
@@ -2239,7 +2253,9 @@ class CLIProvider(LLMProvider):
                 payload = json.loads(stdout or "")
             except ValueError:
                 raise exc from None
-            turns = _envelope_turns(payload) if isinstance(payload, dict) else None
+            if not isinstance(payload, dict) or not _is_cap_shaped(payload):
+                raise
+            turns = _envelope_turns(payload)
             if turns is None or turns < int(self.max_turns):
                 raise
             text = payload.get("text") or payload.get("result")

@@ -1650,7 +1650,10 @@ class Session:
             state = self._inspect_partial_edits(before)
             if not state['inspected'] or state['changed']:
                 raise PartialWorkStopped(
-                    'Lead failed; source is changed or unverified. Work preserved.',
+                    # The cause is named: "overloaded" was dropped from a
+                    # capped-looking Grok error (Grok review of #33).
+                    f'Lead failed ({type(exc).__name__}: {str(exc)[:200]}); '
+                    'source is changed or unverified. Work preserved.',
                     partial=state,
                 ) from exc
             excluded = policy_for(spec.kind).exclude

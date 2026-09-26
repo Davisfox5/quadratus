@@ -306,6 +306,19 @@ def test_a_grok_lead_cancelled_at_the_cap_is_the_cap(tmp_path, monkeypatch):
     assert [c.task for c in replay.of("lead")] == ["t1", "t2"]
 
 
+def test_a_grok_error_at_the_cap_count_is_a_failure_not_a_continuation(tmp_path, monkeypatch):
+    """Grok review of #33: an error field at the count was read as the cap and replanned."""
+    def lead(call, replay):
+        H.write(call, {"README.md": "# app\n\npartial\n"})
+        return H.grok_ok("I'll finish the README next", stop="cancelled", num_turns=14, error="overloaded")
+
+    replay = _run(tmp_path, monkeypatch, Script(orchestrator=_continuing(DECL_T2), lead=lead), max_tasks=2,
+                  files=FILES_OK, settings=Settings(backend="cli", lead_max_turns=14))
+    assert [c.task for c in replay.of("lead")] == ["t1"], "one lead, no continuation, no recovery"
+    assert "overloaded" in replay.result.error
+    assert "partial" in _read(replay, "README.md"), "the written work is preserved"
+
+
 def test_a_grok_cancel_before_the_cap_is_a_failure_recovered_once_on_an_unchanged_tree(tmp_path, monkeypatch):
     """Not a cap: the unchanged tree lets another lead take the task, once."""
     def lead(call, replay):
