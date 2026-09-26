@@ -103,10 +103,8 @@ def _project_check_command(argv, root):
         if index == 0 and Path(value).is_absolute():
             if re.fullmatch(r'python(?:\d+(?:\.\d+)*)?|pytest|node|npm|npx|uv', Path(value).name):
                 continue
-        if '/' not in value and not (root / value).is_symlink():
-            continue
         # A joined flag such as -I/private/path is conservative runner-only.
-        if value.startswith('-'):
+        if value.startswith('-') and '/' in value:
             return None
         if not (root / value).resolve().is_relative_to(root):
             return None

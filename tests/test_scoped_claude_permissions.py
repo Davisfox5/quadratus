@@ -83,6 +83,8 @@ def test_quoted_filename_is_literal():
 @pytest.mark.parametrize("argv", [
     ("python", "/external/examiner/check.py"),
     ("python", "../examiner/check.py"),
+    ("pytest", ".."),
+    ("pytest", "--rootdir=.."),
     ("pytest", "--config=/external/examiner/config.ini"),
     ("pytest", "-I/external/examiner"),
     ("/external/examiner/check",),
