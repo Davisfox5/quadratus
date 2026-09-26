@@ -373,3 +373,34 @@ def test_fleet_takes_the_whole_vendor_out_on_a_rejected_sign_in(monkeypatch):
         fleet._generate("openai:gpt-5.6-sol", provider, "p", "")
     spent = fleet.exhausted if isinstance(fleet.exhausted, dict) else fleet.exhausted()
     assert "openai:gpt-6-astra" in spent and "openai:gpt-5.6-sol" in spent
+
+
+def test_a_request_after_a_short_preface_is_still_a_request():
+    """GameTape run 7: an Opus lead explained its plan, then ended with WORKER."""
+    from quadratus.taskmeta import lead_request
+    worker = 'WORKER {"errand":"code","instruction":"add tests","write":true,"needs":["patch"]}'
+    assert lead_request("I edited app.py.\nThe tests are next:\n" + worker) == worker
+    assert lead_request("FETCH: abc123") == "FETCH: abc123"
+    assert lead_request("Here is my plan.\nCONSULT claude:opus: is this right?").startswith("CONSULT ")
+    assert lead_request("Done.\nCHANGED: [\"a.py\"]") is None
+    assert lead_request("Wrote the helper.\nNext I would ask a WORKER for docs.") is None
+    assert lead_request("code\n" + worker + "\nmore text after") is None
+    assert lead_request("\n".join(["line"] * 25) + "\n" + worker) is None
+
+
+def test_the_drafting_loop_serves_a_prefaced_worker_request(tmp_path):
+    store = ArtifactStore(tmp_path / "artifacts")
+    prompts = []
+
+    def invoke(model, prompt, system=None, allow_writes=False):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return 'Plan: check helpers first.\nWORKER {"errand":"read","instruction":"where are helpers?"}'
+        return "Done."
+
+    session = Session("goal", store, invoke, config=SessionConfig())
+    ran = []
+    session.workers = WorkerPool(store=store, run=lambda *a, **k: ran.append(1) or "util.py")
+    with invocation("t1", "lead"):
+        draft = session._draft_with_channels(OPUS, TaskSpec("t1", "do it"), _memory(store))
+    assert draft == "Done." and ran == [1]

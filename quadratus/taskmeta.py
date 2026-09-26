@@ -40,6 +40,7 @@ resolved in either direction.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -285,3 +286,39 @@ def _split_label(label: str, known_kinds, known_difficulties):
     # not a difficulty as the offender, so the correction prompt can quote it.
     offender = next((p for p in parts if p not in known_difficulties), parts[0])
     return None, difficulty, offender
+
+
+#: How much explanation may precede a lead's closing request.
+MAX_REQUEST_PREFACE_LINES = 20
+
+
+def lead_request(reply: str) -> Optional[str]:
+    """A lead's FETCH / CONSULT / WORKER request, if its reply ends with one.
+
+    The request must be the reply's final line, with at most a short preface
+    before it and no CHANGED line anywhere. GameTape run 7 (2026-09-25): an
+    Opus lead explained its plan in a few lines and ended with a WORKER write
+    errand; the editing dispatcher and the drafting loop both required the
+    request to be the whole reply, so the run stopped as misreported edits.
+    A WORKER line must carry a JSON object, so prose that happens to end with
+    the word WORKER is still a draft.
+    """
+    lines = [line.strip() for line in (reply or "").strip().splitlines() if line.strip()]
+    if not lines or len(lines) > MAX_REQUEST_PREFACE_LINES + 1:
+        return None
+    if any(line.startswith("CHANGED:") for line in lines):
+        return None
+    last = lines[-1]
+    if last.startswith("WORKER "):
+        try:
+            if isinstance(json.loads(last[len("WORKER "):]), dict):
+                return last
+        except ValueError:
+            return None
+        return None
+    if last.upper().startswith("FETCH:") and last.split(":", 1)[1].strip():
+        return last
+    if last.upper().startswith("CONSULT ") and ":" in last:
+        return last
+    return None
+

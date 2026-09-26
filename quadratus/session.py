@@ -73,7 +73,7 @@ from .task_kinds import (
     seat_satisfies,
 )
 from .task_kinds import route as route_kind
-from .taskmeta import AmbiguousMetadata, TaskMetadata, parse_control, parse_metadata
+from .taskmeta import AmbiguousMetadata, TaskMetadata, lead_request, parse_control, parse_metadata
 from .usage import UsageMeter
 from .workers import (
     WORKER_TREE,
@@ -1286,6 +1286,10 @@ class Session:
             if state.get("closed") is not None:
                 raise state["closed"]
             body = _parse_kind(draft)[2].strip()
+            request = lead_request(body)
+            if request is not None and request != body:
+                task.record("assistant", f"[preface to a request] {body[:-len(request)].strip()[:1500]}")
+                body = request
             if body.startswith("WORKER "):
                 answers.extend(self._serve_worker(body, lead, spec, task, state))
                 continue
@@ -3189,6 +3193,7 @@ def _parse_fetch(reply: str) -> Optional[str]:
     mistaken for one.
     """
     stripped = _parse_kind(reply)[2].strip()
+    stripped = lead_request(stripped) or stripped
     lines = [ln for ln in stripped.splitlines() if ln.strip()]
     if len(lines) == 1 and lines[0].upper().startswith("FETCH:"):
         wanted = lines[0].split(":", 1)[1].strip()

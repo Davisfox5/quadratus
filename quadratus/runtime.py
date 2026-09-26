@@ -365,8 +365,8 @@ class Fleet:
                                   'any files you changed before it are kept.')
             after = self.project.contents()
             changed = sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
-            control = re.fullmatch(r'\s*(?:FETCH:|CONSULT |WORKER )[^\n]+\s*', reply)
-            if control:
+            from .taskmeta import lead_request
+            if lead_request(reply) is not None:
                 # A request mid-work is legitimate even after edits: GameTape
                 # run 5 (2026-09-25) had a lead fix one test line, then ask a
                 # worker to check the endpoint, and this refusal ended the run.
