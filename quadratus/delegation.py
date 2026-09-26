@@ -115,7 +115,7 @@ def record_invocation(ledger, event):
 
 
 @contextmanager
-def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None):
+def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None, evidence_files=None):
     context = dict(task=task, role=role, origin=origin)
     if prompt_artifact:
         context["prompt_artifact"] = prompt_artifact
@@ -123,6 +123,10 @@ def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None
         # The lead's in-session worker tool (worker_bridge); Fleet attaches it
         # to the lead's view only.
         context["worker_tool"] = worker_tool
+    if evidence_files:
+        # Declared design evidence a read-only review call is handed; Fleet
+        # copies exactly these into its source copy (runtime._furnish_evidence).
+        context["evidence_files"] = tuple(evidence_files)
     token = invocation_context.set(context)
     try:
         yield

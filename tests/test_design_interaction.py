@@ -672,3 +672,112 @@ def test_an_input_without_accept_takes_any_fixture(tmp_path, browser):
     (root / "plain.html").write_text(ACCEPTING.replace(' accept=".csv,text/csv"', ""))
     out = _capture(root, "plain.html", _upload("docs/IMPORT.md"))
     assert all(s["ok"] for s in out["desktop"]["steps"]), "no accept list: nothing to filter on"
+
+
+# -- Codex, Run 16: capture fixtures, reviewer evidence, measured overflow ---------------
+
+def _fixture_root(tmp_path):
+    root = _project(tmp_path)
+    folder = de.fixture_dir(root, "t2")
+    folder.mkdir(parents=True)
+    (folder / "rows.csv").write_text("name\nalpha\n")
+    return root
+
+
+def test_a_tasks_own_capture_fixture_is_accepted_with_provenance(tmp_path):
+    import hashlib
+    root = _fixture_root(tmp_path)
+    (checked,), _ = validate_steps([dict(action="file", selector="#f", path=".quadratus/capture-fixtures/t2/rows.csv")],
+                                   str(root / "index.html"), root, "t2")
+    assert checked["bytes"] == 11 and checked["sha256"] == hashlib.sha256(b"name\nalpha\n").hexdigest()
+
+
+@pytest.mark.parametrize("path,task", [
+    (".quadratus/capture-fixtures/t2/rows.csv", "t3"),            # another task's fixture
+    (".quadratus/capture-fixtures/t2/rows.csv", None),            # no task named
+    (".quadratus/capture-fixtures/t2/sub/rows.csv", "t2"),        # nested
+    (".quadratus/capture-fixtures/t2/.hidden.csv", "t2"),         # hidden name
+    (".quadratus/capture-fixtures/t2/api_token.csv", "t2"),       # credential-like name
+    (".quadratus/capture-fixtures/t2/link.csv", "t2"),            # symlink
+    (".quadratus/capture-fixtures/t2/big.csv", "t2"),             # over the size bound
+    (".quadratus/runs/r1/result.json", "t2"),                     # other harness state
+])
+def test_other_hidden_or_unsafe_fixture_paths_are_refused(tmp_path, path, task):
+    root = _fixture_root(tmp_path)
+    folder = de.fixture_dir(root, "t2")
+    (folder / "sub").mkdir()
+    for name in ("sub/rows.csv", ".hidden.csv", "api_token.csv"):
+        (folder / name).write_text("x\n")
+    (folder / "link.csv").symlink_to(folder / "rows.csv")
+    with (folder / "big.csv").open("wb") as handle:
+        handle.truncate(de.MAX_FIXTURE_BYTES + 1)
+    (root / ".quadratus" / "runs" / "r1").mkdir(parents=True)
+    (root / ".quadratus" / "runs" / "r1" / "result.json").write_text("{}")
+    with pytest.raises(ValueError):
+        validate_steps([dict(action="file", selector="#f", path=path)], str(root / "index.html"), root, task)
+
+
+def test_a_capture_records_its_fixture_and_the_check_reports_it(tmp_path, browser):
+    root = _fixture_root(tmp_path)
+    (root / "index.html").write_text(PAGE)
+    steps = [dict(action="click", selector="#open"), dict(action="wait", selector="dialog[open]"),
+             dict(action="file", selector="#f", path=".quadratus/capture-fixtures/t2/rows.csv"),
+             dict(action="wait", selector="#t tr[data-status]")]
+    try:
+        capture(str(root / "index.html"), "t2", root, steps)
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"headless browser unavailable: {str(exc)[:120]}")
+    summary = json.loads((evidence_dir(root, "t2") / "summary.json").read_text())
+    assert summary["steps"][2]["sha256"] and summary["steps"][2]["bytes"] == 11
+    passed, problem, shots = check(root, "t2", 0)
+    assert passed, problem
+    assert any("= .quadratus/capture-fixtures/t2/rows.csv (sha256 " in s for s in shots)
+
+
+def test_only_a_tasks_declared_evidence_is_furnished_to_a_review_copy(tmp_path):
+    from quadratus.runtime import _furnish_evidence
+    from tests.lifecycle.harness import evidence
+    root = tmp_path / "project"
+    evidence(root, "t1", age=0)
+    (root / ".quadratus" / "runs").mkdir()
+    (root / ".quadratus" / "runs" / "secret.json").write_text("{}")
+    (root / ".quadratus" / "design-evidence" / "t1" / "desktop" / "evidence.json").symlink_to(
+        root / ".quadratus" / "runs" / "secret.json")
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    copied = _furnish_evidence(root, copy, [
+        ".quadratus/design-evidence/t1/desktop/page.png", ".quadratus/design-evidence/t1/summary.json",
+        ".quadratus/design-evidence/t1/desktop/evidence.json",       # a symlink: skipped
+        ".quadratus/runs/secret.json",                               # not evidence: skipped
+        "../outside.png", "/etc/passwd"])
+    assert copied == [".quadratus/design-evidence/t1/desktop/page.png", ".quadratus/design-evidence/t1/summary.json"]
+    assert sorted(p.relative_to(copy).as_posix() for p in copy.rglob("*") if p.is_file()) == copied
+    assert not os.access(copy / copied[0], os.W_OK) or os.geteuid() == 0, "read-only in the copy"
+
+
+@pytest.mark.parametrize("width,passes", [(390, True), (391, True), (392, False), (450, False)])
+def test_measured_overflow_fails_inside_the_screenshot_tolerance(tmp_path, width, passes):
+    """Codex, Run 16: a 450px page at a 390px viewport fit the 64px tolerance."""
+    from tests.lifecycle.harness import evidence
+    evidence(tmp_path, "t1", age=0)
+    folder = evidence_dir(tmp_path, "t1")
+    summary = json.loads((folder / "summary.json").read_text())
+    summary["views"]["mobile"].update(document_width=width, overflow=[dict(
+        element="div.toolbar", side="right", left=0, right=width, width=width)] if width > 391 else [])
+    (folder / "summary.json").write_text(json.dumps(summary))
+    passed, problem, _ = check(tmp_path, "t1", 0)
+    assert passed is passes, problem
+    if not passes:
+        assert f"the mobile page is {width}px wide at a 390px viewport, so it overflows" in problem
+        assert "div.toolbar (past the right edge" in problem
+
+
+def test_a_page_within_the_tolerance_but_overflowing_fails_in_a_real_browser(tmp_path, browser):
+    root = _project(tmp_path)
+    (root / "near.html").write_text("<!doctype html><title>near</title>"
+                                    "<div id=bar class=toolbar style='width:440px'>toolbar</div>")
+    _capture(root, "near.html", None)
+    summary = json.loads((evidence_dir(root, "t1") / "summary.json").read_text())
+    assert 390 < summary["views"]["mobile"]["document_width"] <= 454, "inside the screenshot tolerance"
+    passed, problem, _ = check(root, "t1", 0)
+    assert not passed and "div#bar.toolbar" in problem and "so it overflows" in problem

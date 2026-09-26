@@ -26,7 +26,9 @@ a selector with ``[`` must use ``--upload``, since its ``=`` is ambiguous.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
+import re
 import struct
 import sys
 import time
@@ -43,6 +45,18 @@ EVIDENCE_DIR = Path(".quadratus") / "design-evidence"
 
 def evidence_dir(root, task_id: str) -> Path:
     return Path(root) / EVIDENCE_DIR / task_id
+
+
+#: Capture-only fixtures: harness state, not project source, so a lead can
+#: make one without a CHANGED entry and it survives for later captures
+#: (Codex, Run 16: a lead made a valid CSV in tests/, captured, then deleted
+#: it to keep CHANGED empty, and no later call could re-capture).
+FIXTURE_DIR = Path(".quadratus") / "capture-fixtures"
+MAX_FIXTURE_BYTES = 1_000_000
+
+
+def fixture_dir(root, task_id: str) -> Path:
+    return Path(root) / FIXTURE_DIR / task_id
 
 
 #: Bounds on an interactive capture: steps, per step, and per capture.
@@ -94,13 +108,22 @@ def parse_steps(argv: List[str]) -> Tuple[List[str], List[dict]]:
     return positional, steps
 
 
-def _fixture(root: Path, relative: str) -> Path:
-    """A project-owned, non-secret, non-symlinked regular file, or ValueError."""
+def _fixture(root: Path, relative: str, task_id: Optional[str] = None) -> Path:
+    """A project-owned, non-secret, non-symlinked regular file, or ValueError.
+
+    The one hidden location allowed is this task's own capture-fixture
+    folder, ``.quadratus/capture-fixtures/<task_id>/<name>``.
+    """
     raw = Path(relative)
     if not relative or raw.is_absolute() or ".." in raw.parts:
         raise ValueError(f"file step path must be project-relative without '..': {relative!r}")
-    if any(part.startswith(".") for part in raw.parts):
-        raise ValueError(f"file step path is hidden or under a hidden directory: {relative!r}")
+    own = (task_id is not None and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", task_id)
+           and raw.parts[:3] == (*FIXTURE_DIR.parts, task_id) and len(raw.parts) == 4)
+    visible = raw.parts[3:] if own else raw.parts
+    if any(part.startswith(".") for part in visible):
+        raise ValueError(f"file step path is hidden or under a hidden directory: {relative!r}"
+                         + (f" (capture-only fixtures go in {FIXTURE_DIR.as_posix()}/{task_id}/)"
+                            if task_id else ""))
     if any(fnmatch.fnmatch(part.lower(), pattern) for part in raw.parts for pattern in _BLOCKED_NAMES):
         raise ValueError(f"file step path looks like a credential: {relative!r}")
     current = root
@@ -110,6 +133,8 @@ def _fixture(root: Path, relative: str) -> Path:
             raise ValueError(f"file step path goes through a symlink: {relative!r}")
     if not current.is_file() or not current.resolve().is_relative_to(root.resolve()):
         raise ValueError(f"file step path is not a regular file in the project: {relative!r}")
+    if own and current.stat().st_size > MAX_FIXTURE_BYTES:
+        raise ValueError(f"capture fixture is larger than {MAX_FIXTURE_BYTES:,} bytes: {relative!r}")
     return current.resolve()
 
 
@@ -147,8 +172,9 @@ def _file_url_path(url: str) -> Optional[Path]:
     return Path(url2pathname(parsed.path))
 
 
-def validate_steps(steps: List[dict], target: str, root) -> Tuple[List[dict], object]:
-    """Checked steps (file paths resolved) and the navigation rule, or ValueError."""
+def validate_steps(steps: List[dict], target: str, root, task_id: Optional[str] = None) -> Tuple[List[dict], object]:
+    """Checked steps (file paths resolved, with provenance) and the navigation
+    rule, or ValueError. ``task_id`` admits that task's capture fixtures."""
     root = Path(root)
     if len(steps) > MAX_STEPS:
         raise ValueError(f"at most {MAX_STEPS} steps, not {len(steps)}")
@@ -161,7 +187,10 @@ def validate_steps(steps: List[dict], target: str, root) -> Tuple[List[dict], ob
             raise ValueError("each step needs a selector of at most 300 characters")
         item = dict(action=action, selector=selector.strip())
         if action == "file":
-            item.update(path=str(_fixture(root, step.get("path") or "")), label=step.get("path"))
+            path = _fixture(root, step.get("path") or "", task_id)
+            data = path.read_bytes() if path.stat().st_size <= MAX_FIXTURE_BYTES else None
+            item.update(path=str(path), label=step.get("path"), bytes=path.stat().st_size,
+                        sha256=hashlib.sha256(data).hexdigest() if data is not None else None)
         checked.append(item)
     return checked, (_navigation_rule(target, root) if checked else None)
 
@@ -184,7 +213,7 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
         for leftover in ("page.png", "evidence.json"):
             (folder / name / leftover).unlink(missing_ok=True)
     try:
-        checked, allowed = validate_steps(list(steps or []), target, root)
+        checked, allowed = validate_steps(list(steps or []), target, root, task_id)
     except ValueError as exc:
         _write_summary(folder, dict(target=target, views={}, steps_refused=str(exc)))
         raise
@@ -334,12 +363,27 @@ def _check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
                             + (f"; the page overflows its {viewport['width']}px viewport; elements past its "
                                f"edges: {named}" if named else ""))
             continue
+        # The measured document width as well as the screenshot's: a page
+        # 60px wider than the viewport fits the 64px screenshot tolerance
+        # and is still overflow (Codex, Run 16: 450px at 390px). Stricter,
+        # never looser; the screenshot tolerance above is unchanged.
+        view = summary["views"].get(name) or {}
+        measured = view.get("document_width")
+        if isinstance(measured, int) and not isinstance(measured, bool) and measured > viewport["width"] + 1:
+            offenders = [o for o in (view.get("overflow") or []) if isinstance(o, dict)][:5]
+            named = ", ".join(f"{str(o.get('element'))[:80]} (past the {o.get('side', 'right')} edge: "
+                              f"left {o.get('left')}px, right {o.get('right')}px)" for o in offenders)
+            problems.append(f"the {name} page is {measured}px wide at a {viewport['width']}px viewport, so it "
+                            "overflows" + (f"; elements past its edges: {named}" if named else ""))
+            continue
         shots.append(str(shot))
     if not problems and summary is not None:
         shots.append(f"target: {summary['target']}")
         if requested:
             shots.append("steps: " + "; ".join(
-                f"{s['action']} {s['selector']}" + (f" = {s.get('label')}" if s["action"] == "file" else "")
+                f"{s['action']} {s['selector']}"
+                + (f" = {s.get('label')}" + (f" (sha256 {str(s['sha256'])[:12]}, {s.get('bytes')} bytes)"
+                                            if s.get("sha256") else "") if s["action"] == "file" else "")
                 for s in requested))
     return not problems, "; ".join(problems), shots
 
