@@ -341,10 +341,63 @@ def split_lead_request(reply: str) -> Optional[tuple]:
     draft. Consecutive closing CONSULT lines are one request; the drafting
     loop serves each of them against the consult budget.
 
+    Run 11 (2026-09-26): a Grok lead ended ``...the client fixture.FETCH:
+    2185e3cf5881``, the request run onto the end of its last sentence. A
+    request that follows sentence-ending punctuation on its line is split off
+    and parsed the same way; see :func:`_inline_request_start`.
+
     ``request`` is normalised for the dispatchers: ``WORKER {...}`` on one
     line, ``FETCH: id``, or the closing CONSULT lines.
     """
-    lines = [line.strip() for line in (reply or "").strip().splitlines() if line.strip()]
+    text = (reply or "").strip()
+    split = _split_request_lines(text)
+    if split is not None or any(line.strip().startswith("CHANGED:") for line in text.splitlines()):
+        return split
+    start = _inline_request_start(text)
+    if start is None:
+        return None
+    return _split_request_lines(text[:start] + "\n" + text[start:])
+
+
+#: A request verb run onto the end of a sentence: ``.``, ``!`` or ``?``,
+#: optional spaces, then the verb.
+_INLINE_REQUEST = re.compile(r"(?<=[.!?])[ \t]*(?=(?:FETCH:|CONSULT |WORKER(?:\s|$)))")
+
+
+def _inline_request_start(text: str) -> Optional[int]:
+    """Where a request starts mid-line, if exactly one such start exists.
+
+    Only after sentence-ending punctuation, never inside a code fence or an
+    inline code span, and never at the start of a line (the line-based parser
+    already covers those). More than one candidate is ambiguous and yields
+    None, so a preface that runs two requests together stays a draft. A
+    WORKER JSON object carrying the same pattern inside a string would count
+    twice; that also stays a draft, which errs toward refusing.
+    """
+    found = []
+    offset = 0
+    fenced = False
+    for line in text.splitlines(keepends=True):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        elif not fenced:
+            for match in _INLINE_REQUEST.finditer(line):
+                head = line[:match.start()]
+                if head.strip() and head.count("`") % 2 == 0:
+                    found.append((offset + match.end(), line[match.end():].strip()))
+        offset += len(line)
+    if len(found) != 1:
+        return None
+    start, tail = found[0]
+    # An inline FETCH names one artifact id and nothing else, so a sentence
+    # that merely begins "FETCH: ids are..." stays prose.
+    if tail.startswith("FETCH:") and len(tail[len("FETCH:"):].split()) != 1:
+        return None
+    return start
+
+
+def _split_request_lines(text: str) -> Optional[tuple]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines or any(line.startswith("CHANGED:") for line in lines):
         return None
     worker = _terminal_worker(lines)
