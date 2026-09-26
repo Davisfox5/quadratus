@@ -159,3 +159,67 @@ def test_closeout_timeout_is_one_attempt_and_normal_provider_stays_unchanged(clo
     assert not launches[0][0].exists()
     assert budget.snapshot()['reserved_attempts'] == 1
     assert owner.timeout == 900 and owner.max_retries == 4
+
+
+def test_closeout_asks_for_recorded_decisions_not_reasoning(tmp_path):
+    """GameTape run 10: the close-out's request for 'why' was refused by a
+    vendor safeguard. The record asks for what the evidence states."""
+    store = ArtifactStore(tmp_path / 'artifacts')
+    prompts = []
+
+    def invoke(model, prompt, **kwargs):
+        prompts.append(prompt)
+        return 'SUMMARY: done\nDECISIONS: kept the parser pure (stated in turn 2)\nDEAD ENDS: none'
+
+    session = Session('goal', store, invoke, config=SessionConfig())
+    memory = TaskMemory('t1', 'claude:opus', store)
+    summary, decisions, dead_ends = session._close_out('claude:opus', TaskSpec('t1', 'do it'), memory)
+    assert 'DECISIONS:' in prompts[-1] and 'REASONING:' not in prompts[-1]
+    assert 'why' not in prompts[-1].split('Task description')[0].lower()
+    assert summary == 'done' and decisions == 'kept the parser pure (stated in turn 2)'
+
+
+def test_an_older_reasoning_section_still_parses():
+    from quadratus.session import _parse_closeout
+    assert _parse_closeout('SUMMARY: s\nREASONING: r')[1] == 'r'
+
+
+def test_a_refused_closeout_keeps_a_harness_record_without_retrying(tmp_path):
+    """The refusal stands: one call, no retry or other model, and the task
+    closes on facts the harness measured, labelled as not model-written."""
+    from quadratus.providers import ProviderRefusal
+    root = tmp_path / 'project'
+    root.mkdir()
+    (root / 'app.py').write_text('before\n')
+    store = ArtifactStore(tmp_path / 'artifacts')
+    calls, notes = [], []
+
+    def invoke(model, prompt, **kwargs):
+        calls.append(model)
+        raise ProviderRefusal('safeguard declined the request')
+
+    session = Session('goal', store, invoke, config=SessionConfig(project=root, progress=notes.append))
+    session._task_before = Project(root).contents()
+    (root / 'app.py').write_text('after\n')
+    (root / 'new.py').write_text('x\n')
+    session.checks = [{'passed': True, 'command': 'python -m pytest -q', 'output': '135 passed'}]
+    memory = TaskMemory('t2', 'claude:opus', store)
+    summary, decisions, dead_ends = session._close_out('claude:opus', TaskSpec('t2', 'do it'), memory)
+    assert calls == ['claude:opus']
+    assert summary.startswith('Close-out not written: claude:opus declined')
+    assert 'changed files: app.py, new.py' in summary
+    assert 'PASSED: python -m pytest -q' in summary and 'artifact' in summary
+    assert 'refused' in decisions and dead_ends == []
+    assert any(ref.kind == 'closeout-refused' for ref in memory.refs)
+    assert any('close-out refused' in n for n in notes)
+
+
+def test_other_closeout_failures_still_raise(tmp_path):
+    store = ArtifactStore(tmp_path / 'artifacts')
+
+    def invoke(model, prompt, **kwargs):
+        raise ProviderError('transport failed')
+
+    session = Session('goal', store, invoke, config=SessionConfig())
+    with pytest.raises(ProviderError, match='transport failed'):
+        session._close_out('claude:opus', TaskSpec('t1', 'do it'), TaskMemory('t1', 'claude:opus', store))
