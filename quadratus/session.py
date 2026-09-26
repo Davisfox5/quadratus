@@ -3169,9 +3169,16 @@ class Session:
             files = "changed files: " + ", ".join(changed[:40]) + (" ..." if len(changed) > 40 else "")
         else:
             files = "no source changes"
-        check = self.checks[-1] if self.checks else None
-        checked = (f"last recorded check {'PASSED' if check['passed'] else 'FAILED'}: {check['command']}"
-                   if check else "no check recorded")
+        # The model view of the check, never its command: this summary reaches
+        # the orchestrator's memory, and a gate command can name an examiner
+        # path seats must not see (tests/test_gate_privacy.py).
+        check = _check_for_models(self.checks[-1]) if self.checks else None
+        if check is None:
+            checked = "no check recorded"
+        else:
+            gates = ", ".join(f"{g.get('id')}: {g.get('status')}" for g in check["gates"])
+            checked = ("last recorded check (may predate this task) "
+                       + ("PASSED" if check["passed"] else "FAILED") + (f" [{gates}]" if gates else ""))
         summary = (f"Close-out not written: {lead} declined the summary request "
                    f"(vendor refusal). Harness-recorded facts for {spec.task_id}: "
                    f"{files}; {checked}. Evidence: " + "; ".join(pointers))
