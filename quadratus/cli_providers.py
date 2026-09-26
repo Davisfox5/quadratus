@@ -142,6 +142,7 @@ def _extract_codex_result(stdout: str) -> str:
     """
     answer = ""
     errors: List[str] = []
+    failed = ""
     saw_json = False
     for line in stdout.splitlines():
         line = line.strip()
@@ -152,6 +153,8 @@ def _extract_codex_result(stdout: str) -> str:
         except ValueError:
             continue
         saw_json = True
+        if event.get("type") == "turn.failed" and isinstance(event.get("error"), dict):
+            failed = str(event["error"].get("message") or "")
         item = event.get("item")
         if not isinstance(item, dict):
             continue
@@ -166,6 +169,18 @@ def _extract_codex_result(stdout: str) -> str:
                 errors.append(message.strip())
     if answer:
         return answer
+    if re.search(r"\b401\b.*unauthori[sz]ed|unauthori[sz]ed.*\b401\b", failed, re.IGNORECASE):
+        # GameTape run 6: the turn failed with 401 after the websocket dropped.
+        # A run on a copied sign-in loses it when another codex client on the
+        # same account refreshes the token. Named, and vendor-wide.
+        error = ProviderError(
+            "codex sign-in was rejected (401 Unauthorized). The subscription token in this "
+            "environment is no longer valid -- usually because another codex client on the same "
+            "account refreshed it. Sign in again before the next run.")
+        error.auth_invalid = True
+        raise error
+    if failed and not errors:
+        raise ProviderError(f"codex turn failed: {failed[:300]}")
     if errors:
         raise ProviderError(f"codex reported an error: {errors[-1][:300]}")
     if saw_json:
@@ -2333,7 +2348,7 @@ class CLIProvider(LLMProvider):
                 self._extract(proc.stdout)
             except (ProviderError, ProviderRefusal) as parsed:
                 parsed.diagnostics = self.last_diagnostics
-                if isinstance(parsed, TurnLimitReached):
+                if isinstance(parsed, TurnLimitReached) or getattr(parsed, "auth_invalid", False):
                     raise
                 if isinstance(parsed, ProviderRefusal):
                     parsed.model = self.model

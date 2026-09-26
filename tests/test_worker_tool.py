@@ -355,3 +355,21 @@ def test_every_re_ask_after_edits_tells_the_lead_what_it_changed(tmp_path, reque
     lead_prompts = [p for p in prompts if "colleague leading this task asks you" not in p]
     assert len(lead_prompts) >= 2
     assert "already changed (kept" in lead_prompts[1] and "t.py" in lead_prompts[1]
+
+
+def test_fleet_takes_the_whole_vendor_out_on_a_rejected_sign_in(monkeypatch):
+    from quadratus.providers import ProviderError
+    from quadratus.runtime import WindowExhausted
+    fleet = Fleet(Settings())
+    provider = CodexCLIProvider("gpt-5.6-sol")
+    monkeypatch.setattr(fleet, "provider_for", lambda key: provider)
+
+    def boom(*a, **k):
+        error = ProviderError("codex sign-in was rejected (401 Unauthorized)")
+        error.auth_invalid = True
+        raise error
+    monkeypatch.setattr(provider, "generate", boom)
+    with pytest.raises(WindowExhausted):
+        fleet._generate("openai:gpt-5.6-sol", provider, "p", "")
+    spent = fleet.exhausted if isinstance(fleet.exhausted, dict) else fleet.exhausted()
+    assert "openai:gpt-6-astra" in spent and "openai:gpt-5.6-sol" in spent
