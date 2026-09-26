@@ -113,7 +113,13 @@ def _extract_claude_result(stdout: str) -> str:
                                partial_text=payload.get("result"),
                                turns=_envelope_turns(payload))
     if payload.get("is_error"):
-        raise ProviderError(f"claude reported an error: {payload.get('result', '')[:300]}")
+        # An error_during_execution envelope carries no result, only an
+        # ``errors`` list; without it the message read "claude reported an
+        # error: " and named nothing (lifecycle replay matrix, 2026-09-26).
+        errors = payload.get("errors")
+        detail = payload.get("result") or (
+            "; ".join(str(e) for e in errors) if isinstance(errors, list) else "")
+        raise ProviderError(f"claude reported an error: {str(detail)[:300]}")
     return payload.get("result", "") or ""
 
 
