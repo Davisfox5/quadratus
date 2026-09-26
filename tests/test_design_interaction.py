@@ -501,3 +501,28 @@ def test_an_interactive_capture_in_a_folder_with_a_space_passes(tmp_path, browse
     assert all(s["ok"] for view in out.values() for s in view["steps"])
     passed, problem, _ = check(root, "t1", 0)
     assert passed, problem
+
+
+# -- Grok review of #33: encoded traversal, and a failed step with the request removed ---
+
+def test_an_encoded_parent_segment_in_a_file_url_is_refused(tmp_path):
+    root = tmp_path / "qproj"
+    root.mkdir()
+    (root / "index.html").write_text(PAGE)
+    (tmp_path / "secret.html").write_text("outside")
+    _, allowed = validate_steps([dict(action="click", selector="#open")], str(root / "index.html"), root)
+    assert not allowed(root.as_uri() + "/%2e%2e/secret.html")
+    assert not allowed(root.as_uri() + "/%2E%2E/secret.html")
+    assert allowed(root.as_uri() + "/index.html")
+
+
+def test_a_failed_view_step_fails_even_when_the_request_list_was_removed(tmp_path):
+    from tests.lifecycle.harness import evidence
+    evidence(tmp_path, "t1", age=0)
+    folder = evidence_dir(tmp_path, "t1")
+    summary = json.loads((folder / "summary.json").read_text())
+    summary.pop("steps", None)
+    summary["views"]["desktop"]["steps"] = [dict(n=1, action="click", selector="#x", ok=False, error="gone")]
+    (folder / "summary.json").write_text(json.dumps(summary))
+    passed, problem, _ = check(tmp_path, "t1", 0)
+    assert not passed and problem

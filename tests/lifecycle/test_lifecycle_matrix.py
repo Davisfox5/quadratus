@@ -464,3 +464,20 @@ def test_a_capture_whose_interaction_step_failed_leaves_the_design_unverified(tm
     record = json.loads(replay.artifact_texts("design-evidence")[0])
     assert record["verified"] is False and "step 2 (wait dialog[open]) failed" in record["problem"]
     assert not replay.of("design-review"), "no final review of unverified renders"
+
+
+def test_a_clean_render_without_steps_still_verifies(tmp_path, monkeypatch):
+    """Static design tasks stay legal, so the check does not require steps.
+
+    This is why the failed-step case above is not Run 13 coverage: Run 13
+    captured no steps, and a clean no-step render still verifies. Only the
+    prompt asks for steps; the cross-vendor final review and the independent
+    grader decide whether the render shows the change (Grok review of #33).
+    """
+    replay = H.run(tmp_path, monkeypatch, _design_script("Renders refreshed.\nCHANGED: []"),
+                   files=_design_files())
+    record = json.loads(replay.artifact_texts("design-evidence")[0])
+    summary = json.loads((Path(replay.project) / ".quadratus" / "design-evidence" / "t1"
+                          / "summary.json").read_text())
+    assert "steps" not in summary and not any("steps" in v for v in summary["views"].values())
+    assert record["verified"] is True and len(replay.of("design-review")) == 1

@@ -32,17 +32,25 @@ pytest -q tests/lifecycle
 | Claude error with `num_turns` above the cap | `test_a_claude_failure_past_the_turn_count_is_not_read_as_a_cap` | 818ecd0; and the empty error message |
 | Grok cancelled at the cap | `test_a_grok_lead_cancelled_at_the_cap_is_the_cap` | Run 3 |
 | Grok cancelled before the cap | `test_a_grok_cancel_before_the_cap_is_a_failure_recovered_once_on_an_unchanged_tree` | lead recovery, once |
+| Grok error field at the cap's count | `test_a_grok_error_at_the_cap_count_is_a_failure_not_a_continuation` | Grok review of #33 (error read as the cap, message dropped) |
 | close-out safeguard refusal | `test_a_refused_closeout_keeps_a_harness_record_and_the_run_continues` | Run 10 |
 | lead safeguard refusal | `test_a_refused_lead_is_not_retried_or_rerouted` | refusal preserved |
 | planner and continuation told to count test setup | `test_the_planner_is_told_to_count_test_setup_and_split_heavy_setup` | Run 13 (prompt only) |
 | continuation within its estimate, tests and setup counted | `test_a_continuation_sized_for_its_tests_and_setup_proceeds` | |
 | continuation whose tests overrun | `test_a_continuation_whose_tests_overrun_still_stops_with_work_preserved` | ceiling unchanged, tests not trimmed |
-| interactive capture with a failed step | `test_a_capture_whose_interaction_step_failed_leaves_the_design_unverified` | Run 13 (real-browser cases in `tests/test_design_interaction.py`) |
+| interactive capture with a failed step | `test_a_capture_whose_interaction_step_failed_leaves_the_design_unverified` | a failed step reaching the check (real-browser cases in `tests/test_design_interaction.py`) |
+| clean render with no steps | `test_a_clean_render_without_steps_still_verifies` | not a defect: static design tasks stay legal |
 
 On fdee0d8 (Run 9's base) eight cases fail: the three non-single-line
 request layouts, all three design cases, the Claude error case and the
 refused close-out. The single-line layout and the refusal, cap and recovery
 cases pass there too, as they should.
+
+**Run 13 is not closed by the harness.** Run 13 captured no steps, and a
+clean no-step render still verifies, on purpose: the check does not require
+steps. The failed-step case proves a failed step is caught once a lead
+captures one. Whether a lead captures the changed state is asked by the
+prompt and judged by the final review and the independent grader.
 
 ## What the scripted cases can and cannot prove
 
@@ -64,5 +72,7 @@ cases pass there too, as they should.
 - Parallel batches (`max_parallel_tasks > 1`) and forked Fleets.
 - Security excursions and consults.
 - Budget stops (`RunBudgetExceeded`) mid-lifecycle; unit-tested elsewhere.
+- A Grok cancel after a write (by inspection `PartialWorkStopped`).
+- A launch that exits nonzero: `fake_launch` always exits 0.
 - In-session MCP worker tool calls: the harness answers at the CLI boundary,
   so it cannot run the tool loop inside a vendor turn.
