@@ -112,3 +112,18 @@ def test_without_a_fork_batches_are_not_offered(tmp_path):
     session = Session("g", ArtifactStore(tmp_path / "a"), script.invoke_for(project),
                       config=SessionConfig(project=project, allow_writes=True))
     assert not session._parallel_enabled()
+
+
+def test_a_batch_spends_one_task_slot_per_task(tmp_path):
+    """Codex review: a 2-task batch under max_tasks=1 must not run two tasks."""
+    script = Orchestrated([BATCH, "DONE"])
+    notes = []
+    session, project = _session(tmp_path, script, progress=notes.append)
+    session.run(max_tasks=1)
+    assert len(session.history) == 1 and not session.parallel_batches
+    assert any("exceeds the 1 task slots left" in n for n in notes)
+    script = Orchestrated([BATCH, "DONE"])
+    (tmp_path / "second").mkdir()
+    session, project = _session(tmp_path / "second", script)
+    session.run(max_tasks=2)
+    assert len(session.history) == 2 and session.parallel_batches

@@ -2096,12 +2096,22 @@ class Session:
                 log.info("plan gate declined the run; nothing executed")
                 return []
         previous_description: Optional[str] = None
-        for _ in range(max_tasks):
+        # Slots, not iterations: a parallel batch spends one slot per task, so
+        # the cap bounds tasks run however they are grouped (Codex review of
+        # #25: a 3-task batch used to cost one slot).
+        used = 0
+        while used < max_tasks:
+            used += 1
             self._note(f"asking {self.seat().key} for the next task")
             spec = self.next_task()
             self._done_refusal = ""
             batch, self._batch = ([spec] + self._batch if spec is not None and self._batch else None), []
+            if batch and used - 1 + len(batch) > max_tasks:
+                self._note(f"parallel batch of {len(batch)} exceeds the {max_tasks - used + 1} task "
+                           "slots left; running its first task alone")
+                batch = None
             if batch:
+                used += len(batch) - 1
                 previous_description = None
                 self._run_batch(batch)
                 if self.open_findings or (self.checks and not self.checks[-1]['passed']):
