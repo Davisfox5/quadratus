@@ -416,10 +416,15 @@ def _check(root, task_id: str, since: float) -> Tuple[bool, str, list]:
         # never looser; the screenshot tolerance above is unchanged.
         view = summary["views"].get(name) or {}
         measured = view.get("document_width")
-        if measured is not None and (not isinstance(measured, int) or isinstance(measured, bool)):
+        # Unknown is not "no overflow" (Codex review of 3d5c3f3): a missing,
+        # null or non-integer measurement leaves the render unverified.
+        if measured is None:
+            problems.append(f"the {name} render's page width was not measured")
+            continue
+        if not isinstance(measured, int) or isinstance(measured, bool):
             problems.append(f"the {name} render's measured page width is malformed ({str(measured)[:40]})")
             continue
-        if measured is not None and measured > viewport["width"] + 1:
+        if measured > viewport["width"] + 1:
             offenders = [o for o in (view.get("overflow") or []) if isinstance(o, dict)][:5]
             named = ", ".join(f"{str(o.get('element'))[:80]} (past the {o.get('side', 'right')} edge: "
                               f"left {o.get('left')}px, right {o.get('right')}px)" for o in offenders)

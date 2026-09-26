@@ -44,6 +44,7 @@ counterfactual rather than a bill.
 from __future__ import annotations
 
 import copy
+import itertools
 import json
 import logging
 import os
@@ -389,8 +390,9 @@ class Fleet:
                                          partial=dict(changed=changed, inspected=True, reply=reply))
             return reply
         with self.project.snapshot() as directory:
-            _furnish_evidence(self.project.root, directory,
-                              (invocation_context.get() or {}).get("evidence_files") or ())
+            context = invocation_context.get() or {}
+            declared = context.get("evidence_files") or ()
+            copied = _furnish_evidence(self.project.root, directory, declared, task=context.get("task"))
             view = provider.in_directory(directory, allow_writes=False)
             if verifying:
                 view.native_fanout_off = True
@@ -398,6 +400,13 @@ class Fleet:
                 view.max_turns = lead_turns
             if lead_tool:
                 view.worker_tool = lead_tool
+            if declared:
+                # Stated from what was actually copied, never from the request.
+                role += ("\nDesign evidence copied read-only into this copy: "
+                         + (", ".join(copied) if copied else "none")
+                         + (". Not copied (refused or unreadable): "
+                            + ", ".join(str(p) for p in declared if p not in copied)
+                            if len(copied) < len(tuple(declared)) else "") + ".")
             role += ("\nYour working directory is a fresh source copy. Read it to ground your "
                      "answer. Do not change files, commit, push, or use paths outside this copy. "
                      "Cite files by their path relative to the project root, not by the absolute "
@@ -795,33 +804,67 @@ def _evidence_type_ok(rel, data) -> bool:
         return False
 
 
-def _furnish_evidence(root, directory, paths) -> list:
+def evidence_refusals(root, paths, task) -> list:
+    """``(path, reason)`` for each declared evidence file that would not be
+    copied for ``task``; empty when every one would be. Never raises."""
+    items = list(itertools.islice(iter(paths), _MAX_EVIDENCE_FILES + 1))
+    refusals = [(str(rel), reason) for rel in items[:_MAX_EVIDENCE_FILES]
+                if (reason := _evidence_problem(Path(root), str(rel), task))]
+    if len(items) > _MAX_EVIDENCE_FILES:
+        refusals.append(("", f"more than {_MAX_EVIDENCE_FILES} evidence files"))
+    return refusals
+
+
+def _evidence_problem(root: Path, rel: str, task) -> str:
+    if not _EVIDENCE_PATH.fullmatch(rel):
+        return "not a design evidence file name"
+    if not task or Path(rel).parts[2] != str(task):
+        return "another task's evidence"
+    current = root
+    for part in Path(rel).parts:
+        current = current / part
+        try:
+            if current.is_symlink():
+                return "a symlink"
+        except OSError:
+            return "unreadable"
+    try:
+        if not current.is_file():
+            return "missing"
+        size = current.stat().st_size
+        if size > _MAX_EVIDENCE_BYTES:
+            return "too large"
+        if not _evidence_type_ok(rel, current.read_bytes()):
+            return "not the file type its name says"
+    except OSError:
+        return "unreadable"
+    return ""
+
+
+def _furnish_evidence(root, directory, paths, *, task=None) -> list:
     """Copy declared design evidence into a review call's source copy.
 
     Codex, Run 16: the reviewer was pointed at renders under the project's
     .quadratus folder, which the source copy excludes, and its reads outside
     the copy were denied, so it judged no image. The exact files a session
     names are copied in read-only at the same relative paths instead; there
-    is no new read grant. Only a task's own evidence files qualify: regular,
-    not symlinked at any component, bounded in count and size. Anything
-    else is skipped. Returns the paths copied.
+    is no new read grant. Only the calling task's own evidence files qualify
+    (``task``, from the harness's invocation context; Codex review of
+    3d5c3f3: a later task's reviewers were handed an earlier task's
+    renders): regular, not symlinked at any component, of the type their
+    name says, bounded in count and size. Anything else is skipped, and the
+    caller states only what was copied. Returns the paths copied.
     """
     root = Path(root)
     copied, total = [], 0
-    for rel in list(paths)[:_MAX_EVIDENCE_FILES]:
+    for rel in itertools.islice(iter(paths), _MAX_EVIDENCE_FILES):
         rel = str(rel)
-        if not _EVIDENCE_PATH.fullmatch(rel):
+        if _evidence_problem(root, rel, task):
             continue
-        current = root
-        linked = False
-        for part in Path(rel).parts:
-            current = current / part
-            if current.is_symlink():
-                linked = True
-                break
+        current = root / rel
         try:
-            size = current.stat().st_size if not linked and current.is_file() else None
-            if size is None or size > _MAX_EVIDENCE_BYTES or total + size > _MAX_EVIDENCE_TOTAL:
+            size = current.stat().st_size
+            if total + size > _MAX_EVIDENCE_TOTAL:
                 continue
             data = current.read_bytes()
             if len(data) != size or not _evidence_type_ok(rel, data):

@@ -2401,12 +2401,14 @@ class Session:
         """Point the design reviewers at the draft's renders, if it left any.
         Nothing is judged here: the enforced check runs after the last edit."""
         self._design_note = ""
+        # Reset before any early return: a non-design task must never inherit
+        # the previous task's renders (Codex review of 3d5c3f3).
+        self._review_evidence = []
         if not (self.config.design_cross_check and is_design_task(spec) and self.project):
             return
         from .design_evidence import check
         ok, _, shots = check(self.project, spec.task_id, self._last_edit_started or 0)
-        self._review_evidence = []
-        if ok:
+        if ok and not self._evidence_refusals(spec, self._evidence_files(spec, shots)):
             self._review_evidence = self._evidence_files(spec, shots)
             self._design_note = (
                 "\n\nThe lead's rendered evidence for this draft, copied read-only into your "
@@ -2499,9 +2501,21 @@ class Session:
                 out.append(shot)
         return out
 
+    def _evidence_refusals(self, spec, files) -> list:
+        from .runtime import evidence_refusals
+        return evidence_refusals(self.project, files, spec.task_id)
+
     def _final_design_review(self, spec, reviewer, shots) -> str:
         """The cross-vendor reviewer judges the final renders, not the draft's."""
-        self._review_evidence = self._evidence_files(spec, shots)
+        files = self._evidence_files(spec, shots)
+        refused = self._evidence_refusals(spec, files)
+        if refused:
+            # A reviewer handed an incomplete set would be judging less than
+            # the prompt claims; the design stays unverified instead.
+            self._review_evidence = []
+            return ("BLOCKING: the renders could not be handed to the reviewer ("
+                    + "; ".join(f"{p or 'set'}: {r}" for p, r in refused)[:300] + ")")
+        self._review_evidence = files
         prompt = (
             f"Task: {spec.description}\n\nThese are the final renders of this design work, taken "
             "after its last source change, copied read-only into your working copy at these paths: "
