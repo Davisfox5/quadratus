@@ -457,6 +457,21 @@ _DESIGN_SELF_VERIFY = (
     "and fix what is wrong. Check the states the task names, for example empty, loading, "
     "error and populated. Report in a few lines what you looked at and what you saw. "
     "Without both screenshots from this task, the task is recorded as unverified design work."
+    + "\n" + "{shows}"
+)
+
+#: What a design render must show to count as evidence. GameTape run 12
+#: (2026-09-26): the captured page was the app's empty project list, where the
+#: new import controls do not appear; it rendered cleanly and would have
+#: passed. A clean render of a page that does not show the change proves only
+#: that the page still loads.
+_DESIGN_RENDER_SHOWS = (
+    "Capture the URL where the controls this task added or changed are visible, in "
+    "the state a user meets them (for example with sample data loaded, or the dialog "
+    "or result the task adds open, if a URL can reach that state). Name that URL and "
+    "state in your report. If no URL can show the change, say so plainly rather than "
+    "capturing another page: a clean render of a page that does not show the change "
+    "is not evidence for this task."
 )
 
 _DESIGN_REVIEW_LENS = (
@@ -2309,8 +2324,8 @@ class Session:
             self._edit(lead, (
                 f"Task: {spec.description}\n\nThe rendered evidence for this design task is missing "
                 f"or shows a broken page: {problem}.\nFix what the render shows is wrong, then capture "
-                f"it again with exactly:\n    {command}\nReport what you changed and what the new "
-                "screenshots show. " + self._revision_delivery() + _design_fix_delivery(
+                f"it again with exactly:\n    {command}\n" + _DESIGN_RENDER_SHOWS + "\nReport what "
+                "you changed and what the new screenshots show. " + self._revision_delivery() + _design_fix_delivery(
                     self._interim_edits_note())), role="design-fix")
             self._run_integration_gate(lead, spec, task)
             ok, problem, shots = check(self.project, spec.task_id, self._last_edit_started or 0)
@@ -2340,6 +2355,10 @@ class Session:
             f"Task: {spec.description}\n\nThese are the final renders of this design work, taken "
             "after its last edit (read these files; they are outside your source copy on purpose): "
             + ", ".join(shots) + _DESIGN_REVIEW_LENS
+            + "\n\nFirst check that the renders show the interface this task added or changed. "
+            "If they show a page where that interface does not appear, reply exactly "
+            "'BLOCKING: the renders do not show the changed interface' and judge nothing else: "
+            "a clean render of an unrelated page is not evidence for this task."
             + "\n\nReply exactly APPROVED if the delivered interface is acceptable, or one line "
             "per blocking problem starting 'BLOCKING:'. Nothing else."
         )
@@ -2848,7 +2867,7 @@ class Session:
             package_root = Path(__file__).resolve().parent.parent
             command = (f"PYTHONPATH={package_root} {_sys.executable} -m quadratus.design_evidence "
                        f"<url of the page> {spec.task_id} .")
-            parts.append(_DESIGN_SELF_VERIFY.format(command=command))
+            parts.append(_DESIGN_SELF_VERIFY.format(command=command, shows=_DESIGN_RENDER_SHOWS))
         # Stated before the work, checked after it. Telling a model its bound
         # helps some; measuring the diff is what makes the bound real, and
         # both happen -- see _assess_scope.
