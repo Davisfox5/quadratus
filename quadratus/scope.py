@@ -144,8 +144,8 @@ class TaskScope:
     overrun_ratio: float = _OVERRUN_TOLERANCE
     #: Declared review-only intent (SCOPE ``"edits": "none"``): the task
     #: reports and does not repair. Never inferred from a small max_lines, since
-    #: a one-line fix is still editing work (Codex review of 3d5c3f3). The
-    #: scope and source-truth checks apply unchanged whatever this says.
+    #: a one-line fix is still editing work (Codex review of 3d5c3f3), and
+    #: enforced by :meth:`assess`: any source change is out of scope.
     review_only: bool = False
 
     def permits(self, path: str) -> bool:
@@ -163,8 +163,14 @@ class TaskScope:
         lines = count_change_lines(diff)
         by_path = count_change_lines_by_path(diff)
         test_lines = sum(n for path, n in by_path.items() if is_test_path(path))
-        out = sorted(p for p in changed if not self.permits(p))
+        # A declared review-only task changes no source at all: every changed
+        # path is out of scope (Codex review of 9a31aac: edits:none was prompt
+        # only). Harness state such as capture fixtures is not source, so it
+        # never reaches this diff. An empty diff passes as before.
+        out = sorted(changed if self.review_only else (p for p in changed if not self.permits(p)))
         notes: List[str] = []
+        if self.review_only and changed:
+            notes.append("This task declared no source edits (edits: none).")
         if not self.permitted_paths and not self.forbidden_paths:
             notes.append(
                 "No permitted paths were declared for this task, so no path "

@@ -2278,6 +2278,14 @@ class Session:
             raise ValueError("max_tasks must be at least 1")
         self.completed = False
         self.stop_reason = ""
+        if self.project:
+            # Captures fingerprint the same selected source this session
+            # measures, exclusions included (design_evidence.source_fingerprint).
+            try:
+                from .design_evidence import write_source_excludes
+                write_source_excludes(self.project, self.config.project_excludes)
+            except OSError:
+                log.debug("could not record source exclusions", exc_info=True)
         if self.config.plan_gate is not None:
             self._note("asking the orchestrator for the expected task list")
             if not self.config.plan_gate(self.plan()):
