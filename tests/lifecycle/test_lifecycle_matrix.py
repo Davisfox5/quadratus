@@ -503,7 +503,13 @@ def test_a_capture_whose_interaction_step_failed_leaves_the_design_unverified(tm
     script = _design_script("unused")
     script.overrides["design-fix"] = failed_capture
     replay = H.run(tmp_path, monkeypatch, script, files=_design_files())
-    assert replay.result.error == "" and not replay.result.completed
+    assert not replay.result.completed
+    # Named, not blank (Codex, Run 15), with the check's own problem in it.
+    assert replay.result.error.startswith("DesignUnverified: task t1 is design work without clean rendered "
+                                          "evidence: ")
+    assert "step 2 (wait dialog[open]) failed" in replay.result.error
+    assert H.result_json(replay)["error"] == replay.result.error
+    assert "<button id=import>" in _read(replay, "templates/index.html"), "the task's source is preserved"
     record = json.loads(replay.artifact_texts("design-evidence")[0])
     assert record["verified"] is False and "step 2 (wait dialog[open]) failed" in record["problem"]
     assert not replay.of("design-review"), "no final review of unverified renders"
@@ -663,3 +669,64 @@ def test_a_tail_edit_in_a_long_file_reaches_the_continuation_as_a_window(tmp_pat
     assert "(1600 lines, sha256 " in entry and "showing only lines 1584-1596" in entry
     assert "--- lines 1584-1596 ---" in entry and "EDITED NEAR THE TAIL" in entry
     assert "line_0001 = 1" not in entry, "the window, not the prefix"
+
+
+
+# -- 10. every check the project declares runs in the gate (Run 15, 2026-09-26) ----------
+
+NODE_PASS = "const test = require('node:test');\ntest('ui renders', () => {});\n"
+NODE_FAIL = ("const test = require('node:test');\nconst assert = require('node:assert');\n"
+             "test('ui renders', () => { assert.strictEqual(1, 2); });\n")
+PACKAGE = json.dumps({"name": "fixture", "private": True, "scripts": {"test": "node --test tests/ui.test.js"}})
+
+
+@pytest.fixture
+def real_runners(monkeypatch):
+    """The harness fakes ``shutil.which`` so vendor CLIs look installed; the
+    gate resolves real runners, so it gets the real lookup."""
+    import shutil
+    import types
+
+    from quadratus import integration
+    monkeypatch.setattr(integration, "shutil", types.SimpleNamespace(which=shutil.which))
+
+
+def _node_project(ui_test):
+    return {**FILES, "package.json": PACKAGE, "tests/ui.test.js": ui_test}
+
+
+def _gate_output(replay):
+    return "\n".join(c["output"] for c in H.result_json(replay)["checks"])
+
+
+def test_a_declared_node_suite_runs_beside_the_operator_check(tmp_path, monkeypatch, real_runners):
+    replay = _run(tmp_path, monkeypatch, Script(), files=_node_project(NODE_PASS))
+    checks = H.result_json(replay)["checks"]
+    assert checks and all(c["passed"] for c in checks) and replay.result.error == ""
+    output = _gate_output(replay)
+    assert "check: passed" in output and "declared-npm: passed" in output, output
+
+
+def test_a_failing_declared_node_suite_fails_the_gate(tmp_path, monkeypatch, real_runners):
+    replay = _run(tmp_path, monkeypatch, Script(), files=_node_project(NODE_FAIL))
+    checks = H.result_json(replay)["checks"]
+    assert checks and not checks[-1]["passed"]
+    assert "declared-npm: failed" in _gate_output(replay) and "check: passed" in _gate_output(replay)
+    assert not replay.result.completed
+
+
+def test_a_missing_node_runner_blocks_the_gate(tmp_path, monkeypatch, real_runners):
+    empty = tmp_path / "no-runners"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))       # the operator's check uses an absolute interpreter
+    replay = _run(tmp_path, monkeypatch, Script(), files=_node_project(NODE_PASS))
+    checks = H.result_json(replay)["checks"]
+    assert checks and not checks[-1]["passed"]
+    assert "declared-npm: blocked: runner unavailable" in _gate_output(replay)
+    assert not replay.result.completed
+
+
+def test_a_project_without_a_declared_script_keeps_the_single_check(tmp_path, monkeypatch):
+    replay = _run(tmp_path, monkeypatch, Script(), files=FILES)
+    output = _gate_output(replay)
+    assert H.gate_results(replay) == ["PASSED"] and "declared-" not in output

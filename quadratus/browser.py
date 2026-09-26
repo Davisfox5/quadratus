@@ -52,9 +52,15 @@ class PageEvidence:
     #: convenience for gates; the lists are the actual evidence.
     clean: bool = True
     #: Interaction steps run before the screenshot, each with its outcome:
-    #: ``{"n", "action", "selector", "ok", "error"?, "file"?}``. Empty when
-    #: the page was captured at load.
+    #: ``{"n", "action", "selector", "ok", "error"?, "file"?}``, and on a
+    #: wait ``visible_before_steps`` (its target was already showing before
+    #: the first step ran). Empty when the page was captured at load.
     steps: List[dict] = field(default_factory=list)
+    #: The document's width at the screenshot, and when it is wider than the
+    #: viewport, up to five outermost elements past the right edge as
+    #: ``{"element", "right", "width"}``. Measured by the harness, not a step.
+    document_width: Optional[int] = None
+    overflow: List[dict] = field(default_factory=list)
 
     def render(self) -> str:
         """One block for a prompt or a close-out."""
@@ -204,6 +210,7 @@ def render_page(
                     records[-1]["error"] = ("navigation outside the preview was blocked after this step: "
                                             + blocked[-1][:200])
             title = page.title()
+            document_width, overflow = _measure_overflow(page, (viewport or {}).get("width"))
             shot = out / "page.png"
             page.screenshot(path=str(shot), full_page=True,
                             **({"timeout": budget.ms(30_000)} if budget.active else {}))
@@ -218,11 +225,68 @@ def render_page(
         failed_requests=failed_requests,
         clean=not console_errors and not failed_requests,
         steps=records,
+        document_width=document_width,
+        overflow=overflow,
     )
     (out / "evidence.json").write_text(
         json.dumps(asdict(evidence), indent=2), encoding="utf-8"
     )
     return evidence
+
+
+_OVERFLOW_SCRIPT = """(viewport) => {
+  const doc = document.documentElement;
+  const width = Math.max(doc.scrollWidth, document.body ? document.body.scrollWidth : 0);
+  if (!viewport || width <= viewport + 1) return {width, offenders: []};
+  const past = [];
+  for (const el of document.querySelectorAll('body *')) {
+    const box = el.getBoundingClientRect();
+    if (box.width > 0 && box.right > viewport + 1) past.push(el);
+  }
+  const outermost = past.filter(el => !past.includes(el.parentElement));
+  const name = el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '')
+    + Array.from(el.classList).slice(0, 2).map(c => '.' + c).join('');
+  return {width, offenders: outermost.slice(0, 5).map(el => {
+    const box = el.getBoundingClientRect();
+    return {element: name(el), right: Math.round(box.right), width: Math.round(box.width)};
+  })};
+}"""
+
+
+def _measure_overflow(page, viewport_width):
+    """``(document_width, offenders)`` for the page as it will be captured.
+
+    A harness diagnostic, not an interaction step (Codex, Run 15: the mobile
+    render was 470px at a 390px viewport and nothing said what overflowed).
+    The width gate itself stays on the screenshot; this only names a target
+    for whoever fixes it. Never raises.
+    """
+    try:
+        measured = page.evaluate(_OVERFLOW_SCRIPT, viewport_width)
+        offenders = [dict(element=str(o.get("element"))[:120], right=int(o.get("right")),
+                          width=int(o.get("width"))) for o in (measured.get("offenders") or [])][:5]
+        return int(measured.get("width")), offenders
+    except Exception:  # noqa: BLE001 -- a diagnostic never fails the capture
+        return None, []
+
+
+def _accepts(accept: str, path: str) -> bool:
+    """Whether a file input's ``accept`` list admits ``path``, by name and type."""
+    import mimetypes
+    name = Path(path).name.lower()
+    kind = (mimetypes.guess_type(name)[0] or "").lower()
+    for token in (t.strip().lower() for t in accept.split(",")):
+        if not token:
+            continue
+        if token.startswith("."):
+            if name.endswith(token):
+                return True
+        elif token.endswith("/*"):
+            if kind.startswith(token[:-1]):
+                return True
+        elif token == kind:
+            return True
+    return False
 
 
 class _Budget:
@@ -263,11 +327,23 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
     selector that did not happen instead of surfacing as a generic timeout.
     """
     records = []
+    # What each wait's target looked like before anything ran: a final wait
+    # on something already showing at load proves nothing about the change
+    # (Codex, Run 15: an always-present status element).
+    showing = {}
+    for step in steps:
+        if step.get("action") == "wait" and step.get("selector") not in showing:
+            try:
+                showing[step["selector"]] = bool(page.is_visible(step["selector"]))
+            except Exception:  # noqa: BLE001 -- unknown stays unknown
+                showing[step["selector"]] = None
     for n, step in enumerate(steps, 1):
         action, selector = step["action"], step["selector"]
         record = {"n": n, "action": action, "selector": selector, "ok": False}
         if action == "file":
             record["file"] = step.get("label") or Path(step["path"]).name
+        if action == "wait":
+            record["visible_before_steps"] = showing.get(selector)
         records.append(record)
         budget = _Budget(deadline)
         left = budget.remaining_ms()
@@ -283,7 +359,14 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
             elif action == "wait":
                 page.wait_for_selector(selector, state="visible", timeout=limit)
             elif action == "file":
-                page.set_input_files(selector, step["path"], timeout=limit)
+                # The input's own accept list, checked before the upload:
+                # Run 15 uploaded a Markdown document to a CSV control and
+                # met the app's 400, which is the right answer to the wrong file.
+                accept = page.get_attribute(selector, "accept", timeout=limit) or ""
+                if accept.strip() and not _accepts(accept, step["path"]):
+                    raise ValueError(f"the file {Path(step['path']).name} does not match the input's "
+                                     f"accept list ({accept.strip()[:80]})")
+                page.set_input_files(selector, step["path"], timeout=budget.ms(timeout_ms))
             else:
                 raise ValueError(f"unknown step action {action!r}")
         except Exception as exc:  # noqa: BLE001 -- a failed step is evidence, not a crash

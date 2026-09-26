@@ -526,3 +526,93 @@ def test_a_failed_view_step_fails_even_when_the_request_list_was_removed(tmp_pat
     (folder / "summary.json").write_text(json.dumps(summary))
     passed, problem, _ = check(tmp_path, "t1", 0)
     assert not passed and problem
+
+
+# -- Codex, Run 15: a capture must prove the feature, not just load the page ------------
+
+ACCEPTING = """<!doctype html><title>import</title>
+<div id=status>Ready</div>
+<button id=open>Import</button>
+<dialog id=d><input type=file accept=".csv,text/csv" id=f><table id=t></table></dialog>
+<script>
+  document.getElementById('open').onclick = () => document.getElementById('d').showModal();
+  document.getElementById('f').onchange = (e) => {
+    document.getElementById('t').innerHTML = '<tr data-status="ok"><td>' + e.target.files[0].name + '</td></tr>';
+  };
+</script>
+"""
+WIDE = """<!doctype html><title>wide</title>
+<main><table id=tags class="grid dense"><tr><td style="min-width:600px">tag</td></tr></table></main>
+"""
+
+
+def _accepting(tmp_path):
+    root = _project(tmp_path)
+    (root / "docs").mkdir()
+    (root / "docs" / "IMPORT.md").write_text("# how to import\n")
+    (root / "accepting.html").write_text(ACCEPTING)
+    (root / "wide.html").write_text(WIDE)
+    return root
+
+
+def _upload(path):
+    return [dict(action="click", selector="#open"), dict(action="wait", selector="dialog[open]"),
+            dict(action="file", selector="#f", path=path), dict(action="wait", selector="#t tr[data-status]")]
+
+
+def test_a_valid_fixture_reaching_a_result_only_the_upload_creates_passes(tmp_path, browser):
+    root = _accepting(tmp_path)
+    out = _capture(root, "accepting.html", _upload("fixtures/rows.csv"))
+    assert all(s["ok"] for view in out.values() for s in view["steps"])
+    assert out["desktop"]["steps"][-1]["visible_before_steps"] is False
+    passed, problem, _ = check(root, "t1", 0)
+    assert passed, problem
+
+
+def test_a_fixture_the_input_does_not_accept_fails_at_its_step(tmp_path, browser):
+    """Run 15 uploaded docs/CSV_IMPORT.md to a CSV control."""
+    root = _accepting(tmp_path)
+    out = _capture(root, "accepting.html", _upload("docs/IMPORT.md"))
+    step = out["desktop"]["steps"][2]
+    assert step["ok"] is False
+    assert "does not match the input's accept list (.csv,text/csv)" in step["error"]
+    passed, problem, _ = check(root, "t1", 0)
+    assert not passed and "step 3 (file #f) failed" in problem
+
+
+def test_a_final_wait_on_something_present_at_load_does_not_verify(tmp_path, browser):
+    """Run 15 waited for an always-present status element."""
+    root = _accepting(tmp_path)
+    steps = _upload("fixtures/rows.csv")[:3] + [dict(action="wait", selector="#status")]
+    out = _capture(root, "accepting.html", steps)
+    assert all(s["ok"] for s in out["desktop"]["steps"]), "every step ran"
+    assert out["desktop"]["steps"][-1]["visible_before_steps"] is True
+    passed, problem, _ = check(root, "t1", 0)
+    assert not passed and "final wait (#status) was already visible before any step ran" in problem
+
+
+def test_an_error_response_to_the_upload_leaves_the_evidence_unverified(tmp_path, browser):
+    page = ACCEPTING.replace("document.getElementById('t').innerHTML",
+                             "fetch('/api/import', {method: 'POST'}); document.getElementById('t').innerHTML")
+    servers_pages = dict(BOUNDARY_PAGES)
+    servers_pages["/import"] = page
+    s = _Servers(servers_pages)
+    try:
+        (tmp_path / "fixtures").mkdir()
+        (tmp_path / "fixtures" / "rows.csv").write_text("name\nalpha\n")
+        _capture_url(tmp_path, s.url + "/import", _upload("fixtures/rows.csv"))
+    finally:
+        s.close()
+    passed, problem, _ = check(tmp_path, "t1", 0)
+    assert not passed and "render is not clean" in problem and "/api/import" in problem
+
+
+def test_mobile_overflow_names_the_elements_past_the_edge(tmp_path, browser):
+    root = _accepting(tmp_path)
+    out = _capture(root, "wide.html", None)
+    assert out["mobile"]["document_width"] > 390
+    assert out["mobile"]["overflow"][0]["element"] == "table#tags.grid.dense"
+    assert out["desktop"]["overflow"] == []
+    passed, problem, _ = check(root, "t1", 0)
+    assert not passed
+    assert "the page overflows its 390px viewport; elements past the right edge: table#tags.grid.dense" in problem

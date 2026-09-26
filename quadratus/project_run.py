@@ -14,7 +14,7 @@ from pathlib import Path
 from .artifacts import ArtifactStore
 from .codebase_map import CodebaseMap
 from .delegation import DelegationLedger, reconcile
-from .integration import GateSuite, IntegrationGate
+from .integration import GateCommand, GateSuite, IntegrationGate
 from .policy import load_policy
 from .project import Project
 from .providers import ProviderError
@@ -88,6 +88,34 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     fleet_type=Fleet, session_factory=new_session)
 
 
+def _declared_basename(argv):
+    """A check's identity for de-duplication: its runner name and arguments."""
+    return [Path(argv[0]).name, *argv[1:]] if argv else []
+
+
+def _with_declared_checks(command, scan):
+    """The gate as required commands when the project declares more checks
+    than ``command`` covers, else None (the single-command gate stands).
+
+    Codex, Run 15: the operator's check was pytest, the project also
+    declares a ``package.json`` test script, and the Node UI tests never ran
+    in-run. Each declared check the command does not already name is added as
+    a required gate: a missing runner is blocked and a failure fails the
+    gate, so neither can pass as complete.
+    """
+    if not command:
+        return None
+    ours = _declared_basename(command)
+    extra = [c for c in scan.declared_checks
+             if _declared_basename(c) != ours
+             and not (Path(c[0]).name.startswith('python') and 'pytest' in c and 'pytest' in command)]
+    if not extra:
+        return None
+    return [GateCommand(id='check', argv=tuple(command)),
+            *[GateCommand(id='declared-' + Path(c[0]).name + (f'-{i}' if i else ''), argv=tuple(c))
+              for i, c in enumerate(extra)]]
+
+
 def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False):
@@ -99,6 +127,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     code_map = CodebaseMap(state / 'codebase-map.jsonl')
     seed_map(scan, code_map)
     command = shlex.split(check) if check else scan.check_command
+    gates = gates if gates is not None else _with_declared_checks(command, scan)
     gate = (GateSuite(gates, cwd=project.root, exclude=project.exclude) if gates is not None
             else IntegrationGate(command, cwd=project.root) if command else None)
     store = ArtifactStore(run_dir / 'artifacts')
@@ -156,17 +185,19 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     finally:
         fleet.close()
     if not error and session is not None and getattr(session, 'stop_reason', ''):
-        # A stop the session chose (the turn-limit breaker) rather than one an
-        # exception forced. Reported as the error so the result says why, and
-        # the capped tasks' preserved edits are listed as in-flight work.
+        # A stop the session chose rather than one an exception forced (the
+        # turn-limit breaker, unverified design evidence). Reported as the
+        # error so the result says why; a breaker stop also lists the capped
+        # tasks' preserved edits as in-flight work.
         error = session.stop_reason
         records = list((getattr(session, 'turn_limited_records', {}) or {}).values())
-        changed = sorted({name for r in records for name in r.get('changed') or []})
-        in_flight = dict(
-            note='Stopped by the turn-limit breaker; every capped task\'s edits are preserved.',
-            changed=changed, changed_lines=sum(r.get('changed_lines') or 0 for r in records),
-            turn_limited=records)
-        (run_dir / 'in-flight.json').write_text(json.dumps(in_flight, indent=2), encoding='utf-8')
+        if error.startswith('TurnLimitBreaker') and records:
+            changed = sorted({name for r in records for name in r.get('changed') or []})
+            in_flight = dict(
+                note='Stopped by the turn-limit breaker; every capped task\'s edits are preserved.',
+                changed=changed, changed_lines=sum(r.get('changed_lines') or 0 for r in records),
+                turn_limited=records)
+            (run_dir / 'in-flight.json').write_text(json.dumps(in_flight, indent=2), encoding='utf-8')
     # What each call did inside its own session, from the vendors' transcripts.
     # Collected after the run so a slow copy never delays a model call.
     traces = []

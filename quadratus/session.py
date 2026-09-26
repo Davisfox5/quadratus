@@ -481,9 +481,16 @@ _DESIGN_RENDER_SHOWS = (
     "command, in order: --click SELECTOR, --wait SELECTOR (waits until it is visible), "
     "--upload SELECTOR project/relative/fixture (two arguments; a non-secret, "
     "non-hidden file inside the project). "
-    "Finish with a --wait on the element that proves the change happened. Each step "
-    "must succeed, or the evidence is recorded as unverified with the failed step "
-    "named. Steps need a local preview URL (localhost) or a page file in the project. "
+    "For an upload, use a valid sample of what the control accepts (a file of that "
+    "format inside the task's scope, created as part of the task if none exists); an "
+    "error response to it, or a file the input's accept list excludes, leaves the "
+    "evidence unverified. Finish with a --wait on an element that only the result "
+    "creates (for example a result row), never one already on the page at load such as "
+    "a status line or loading indicator: a wait on something visible before the steps "
+    "is recorded as not showing the change. Each step must succeed, or the evidence is "
+    "recorded as unverified with the failed step named. A page wider than the viewport "
+    "is unverified too, and the check names the elements past its right edge. Steps "
+    "need a local preview URL (localhost) or a page file in the project. "
     "Name the state in your report. If the change cannot be reached this way, say so "
     "plainly rather than capturing another page: a clean render of a page that does "
     "not show the change is not evidence for this task."
@@ -804,6 +811,9 @@ class Session:
         #: turn-limit breaker). Empty otherwise. ``project_run`` reports it as
         #: the run's error so a breaker stop is never an unexplained blank.
         self.stop_reason = ""
+        #: ``(task id, problem)`` for each task whose design evidence was
+        #: left unverified, so a stop it causes is named.
+        self._design_unverified: List[tuple] = []
         #: Capped tasks not yet finished by a task that names them in a
         #: CONTINUES line. Any entry blocks completion.
         self._partial_tasks: set = set()
@@ -2236,6 +2246,7 @@ class Session:
                 previous_description = None
                 self._run_batch(batch)
                 if self.open_findings or (self.checks and not self.checks[-1]['passed']):
+                    self._name_findings_stop()
                     break
                 continue
             if spec is None:
@@ -2310,6 +2321,7 @@ class Session:
                     status[rid] = f"covered by {spec.task_id}"
             self._note(f"task {len(self.history)} closed by {summary.author}")
             if self.open_findings or (self.checks and not self.checks[-1]['passed']):
+                self._name_findings_stop()
                 break
         else:
             # Every slot went to a task and none of them stopped the loop, so
@@ -2380,6 +2392,7 @@ class Session:
         record.update(verified=ok, problem=problem, screenshots=shots)
         if not ok:
             self.open_findings.append(f"Task {spec.task_id} is design work without clean rendered evidence: {problem}.")
+            self._design_unverified.append((spec.task_id, problem))
             self._note(f"task {spec.task_id}: design work unverified ({problem[:120]})")
         vendor = lead.partition(":")[0]
         reviewer = next((p for p in collaborators if p.partition(":")[0] != vendor), None)
@@ -2893,6 +2906,18 @@ class Session:
         if self.config.codebase_map is None:
             return ""
         return self.config.codebase_map.render()
+
+    def _name_findings_stop(self) -> None:
+        """Name a stop caused by unverified design evidence.
+
+        Codex, Run 15: the run stopped on unverified design evidence with
+        ``completed`` false and ``result.error`` blank. Other open-finding and
+        failed-check stops are left as they were.
+        """
+        if self._design_unverified and not self.stop_reason:
+            task_id, problem = self._design_unverified[-1]
+            self.stop_reason = (f"DesignUnverified: task {task_id} is design work without clean rendered "
+                                f"evidence: {str(problem)[:400]}. Work preserved.")
 
     def _lead_context(self, spec: TaskSpec) -> List[str]:
         """The capped predecessor's handoff and the task's files, for a lead.

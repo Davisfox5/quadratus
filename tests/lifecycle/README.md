@@ -45,6 +45,8 @@ pytest -q tests/lifecycle
 | round budget stated / not stated | `test_a_capped_lead_is_told_its_round_budget`, `test_no_round_budget_is_stated_without_a_cap` | Run 14 (no lead knew a cap existed) |
 | first lead's scoped files | `test_the_first_lead_is_handed_its_scoped_files_as_they_are` | Run 14 t1 (27 discovery calls, no write) |
 | cap with no detected change (reading, denied write, checks only, edit then revert), then continuation | `test_a_cap_with_no_detected_change_hands_over_the_files_and_claims_nothing_more` ×4 | Run 14 t2 (repeated discovery); Codex review of 895cf67 (activity was inferred) |
+| design evidence left unverified | `test_a_capture_whose_interaction_step_failed_leaves_the_design_unverified` | Run 15 (blank `result.error`; now `DesignUnverified: ...`) |
+| declared Node suite beside the operator's pytest: passes / fails / runner missing / not declared | `test_a_declared_node_suite_runs_beside_the_operator_check`, `test_a_failing_declared_node_suite_fails_the_gate`, `test_a_missing_node_runner_blocks_the_gate`, `test_a_project_without_a_declared_script_keeps_the_single_check` | Run 15 (Node UI tests never ran in-run) |
 | tail edit in a 1,600-line file, then continuation | `test_a_tail_edit_in_a_long_file_reaches_the_continuation_as_a_window` | Codex review of 895cf67 (a prefix hid the edit) |
 | capped edits, then continuation | `test_capped_edits_reach_the_continuation_as_the_tree_now_has_them` | handoff shows the tree now, not a transcript |
 | continuation with test setup in scope | `test_a_continuation_is_handed_its_existing_test_setup` | Run 14 t2 (re-read test helpers) |
