@@ -83,7 +83,10 @@ def canonical(value) -> Optional[str]:
 
 
 def stages_for(required: Required, intent: str) -> Tuple[str, ...]:
-    """The stages this contract expects, in order."""
+    """The stages this contract expects, in order. A security task runs in
+    its excursion: no collaborator review, a mandatory verification."""
+    if required.security_verification:
+        return tuple(["draft"] + (["checks"] if required.checks else []) + ["verification", "closeout"])
     stages = ["draft", "review"]
     if required.checks:
         stages.append("checks")

@@ -2360,9 +2360,11 @@ class Session:
             # Fetch and worker channels, no consult: the excursion stays a
             # straight line, but the lead's prompt offers WORKER and the
             # harness has to serve what it offers (Q9 baseline, 2026-09-22).
+            self._stage("draft")
             draft = self._draft_with_channels(excursion.worker, spec, task, consults=False)
             task.record("assistant", draft)
             task.keep(draft, kind="draft")
+            self._edge("draft", True)
 
             # Mandatory, not complexity-scaled: an unverified security answer
             # is the failure the excursion exists to prevent, so SIMPLE does
@@ -2384,6 +2386,10 @@ class Session:
                     verifier = crossed
             draft = self._run_integration_gate(excursion.worker, spec, task) or draft
             self._record_selection(spec, verifier, "verifier")
+            # The verification edge is set only from a verdict the verifier
+            # actually returned; a refusal or any other interruption leaves it
+            # unset, so the record says it was not attempted to completion.
+            self._stage("verification")
             if self.config.security_verdict_json:
                 self._verify_security_json(spec, task, draft, excursion.worker, verifier)
             else:
@@ -2395,13 +2401,18 @@ class Session:
                 task.keep(verdict, kind=f"verify:{verifier}", author=verifier)
                 if 'BLOCKING' in verdict.upper() or 'UNRESOLVED' in verdict.upper():
                     self._open_finding("security", verdict)
+                    self._edge("verification", False)
+                else:
+                    self._edge("verification", True)
 
+            self._stage("closeout")
             summary_text, reasoning, dead_ends = self._close_out(
                 excursion.worker, spec, task
             )
             summary = task.close(
                 summary=summary_text, reasoning=reasoning, dead_ends=dead_ends
             )
+            self._edge("closeout", True)
             self.memory.absorb(summary)
             self.history.append(summary)
             return summary
@@ -2447,8 +2458,10 @@ class Session:
                     raise StructuredError('Source changed during security verification')
             except StructuredError as exc:
                 self._open_finding('security', f'Security verification incomplete: {exc}')
+                self._edge("verification", False)
                 return
             if verdict['verdict'] == 'accept':
+                self._edge("verification", True)
                 return
             if (verdict['verdict'] == 'reject' and round_index == 0
                     and self._gate_fixes_used < self.config.max_gate_fixes):
@@ -2462,6 +2475,7 @@ class Session:
                 self._run_integration_gate(worker, spec, task, max_fixes=0)
                 continue
             self._open_finding("security", f"Security verification {verdict['verdict']}: {raw}")
+            self._edge("verification", False)
             return
 
     # -- orchestration -------------------------------------------------------

@@ -169,6 +169,8 @@ class TaskOutcome:
         wanted = []
         if required.get("checks"):
             wanted.append("checks")
+        if required.get("security_verification"):
+            wanted.append("verification")
         if required.get("design_evidence") in ("harness", "self"):
             wanted.append("evidence")
         if required.get("design_review"):

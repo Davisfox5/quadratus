@@ -187,3 +187,73 @@ def test_the_contract_travels_with_a_passing_check_and_no_design_requirement(tmp
     t1 = _task(replay, "t1")
     assert t1["mismatches"] == [] and t1["unsatisfied"] == []
     assert json.dumps(t1["contract"])  # serialisable as recorded
+
+
+# -- security verification is a recorded mandatory edge (Codex, 5857677398) ------------
+
+SECURITY = "KIND: security standard\nSCOPE: " + json.dumps(dict(
+    permitted_paths=["app.py"], intended_result="add is audited", acceptance=["add has no injection"],
+    max_lines=10, edits="none")) + "\nAudit add in app.py."
+
+
+def _security(verifier_reply, *, structured=False):
+    def lead(call, replay):
+        return "add only adds; no input reaches a shell.\nCHANGED: []"
+    return Script(orchestrator=_then_done(SECURITY), lead=lead,
+                  verifier=verifier_reply if callable(verifier_reply) else (lambda call, replay: verifier_reply),
+                  **{"security-fix": lambda call, replay: "Re-read the caller; no change.\nCHANGED: []"})
+
+
+def _security_run(tmp_path, monkeypatch, reply, **kw):
+    return H.run(tmp_path, monkeypatch, _security(reply), files=FILES_OK_SECURITY, max_tasks=3, **kw)
+
+
+FILES_OK_SECURITY = {**FILES, "app.py": FIXED}
+
+
+def test_a_security_contract_expects_verification_and_an_accept_satisfies_it(tmp_path, monkeypatch):
+    replay = _security_run(tmp_path, monkeypatch, "Accepted: correct, and it cites the function.")
+    t1 = _task(replay, "t1")
+    assert t1["contract"]["required"]["security_verification"] is True
+    assert t1["contract"]["allowed_next"] == ["draft", "checks", "verification", "closeout"]
+    assert "verification" in t1["stages"] and t1["edges"]["verification"] is True
+    assert t1["unsatisfied"] == [] and replay.result.completed
+
+
+def test_a_blocking_security_verdict_leaves_verification_unsatisfied(tmp_path, monkeypatch):
+    replay = _security_run(tmp_path, monkeypatch, "BLOCKING: the audit never read the caller.")
+    t1 = _task(replay, "t1")
+    assert t1["edges"]["verification"] is False and "verification" in t1["unsatisfied"]
+    assert t1["primary"] == "security" and not replay.result.completed
+
+
+def test_verification_interrupted_before_a_verdict_is_attempted_but_not_satisfied(tmp_path, monkeypatch):
+    replay = _security_run(tmp_path, monkeypatch, lambda call, replay: H.claude_refusal("cyber"))
+    t1 = _task(replay, "t1")
+    assert "verification" in t1["stages"] and "verification" not in t1["edges"]
+    assert "verification" in t1["unsatisfied"] and t1["closed_as"].startswith("stopped:")
+
+
+def _structured(verdict, snapshot_from):
+    def reply(call, replay):
+        import re
+        snapshot = re.search(r"Snapshot hash: ([0-9a-f]{64})", call.prompt).group(1)
+        criteria = json.loads(re.search(r"Acceptance criteria: (\[.*\])", call.prompt).group(1))
+        status = "passed" if verdict == "accept" else "failed"
+        return H.ENVELOPE[call.vendor](json.dumps(dict(schema_version=1, verdict=verdict, snapshot_hash=snapshot,
+                               acceptance_results=[dict(criterion=c, status=status, evidence="read app.py")
+                                                   for c in criteria],
+                               blocking_findings=[] if verdict == "accept" else ["the caller was not read"],
+                               limitations=[])))
+    return reply
+
+
+@pytest.mark.parametrize("verdict, satisfied", [("accept", True), ("reject", False)])
+def test_structured_security_verdicts_set_the_same_edge(tmp_path, monkeypatch, verdict, satisfied):
+    from quadratus import project_run
+    real = project_run.SessionConfig
+    monkeypatch.setattr(project_run, "SessionConfig", lambda **kw: real(**{**kw, "security_verdict_json": True}))
+    replay = _security_run(tmp_path, monkeypatch, _structured(verdict, None))
+    t1 = _task(replay, "t1")
+    assert t1["edges"]["verification"] is satisfied
+    assert ("verification" in t1["unsatisfied"]) is (not satisfied)
