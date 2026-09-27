@@ -46,6 +46,12 @@ from .delegation import (
     invocation,
     invocation_context,
 )
+from .deptree import (
+    DependencyGuard,
+    DependencyIdentityUnavailable,
+    DependencyTreeChanged,
+    DependencyWatch,
+)
 from .memory import PersistentMemory, TaskMemory, TaskSummary
 from .providers import PartialWorkSuspected, ProviderError, ProviderRefusal, TurnLimitReached
 from .registry import peers_for, resolve
@@ -373,6 +379,11 @@ class SessionConfig:
     #: ``(key, command) -> bool``: whether an editing call on ``key`` could run
     #: ``command`` unaided (runtime.Fleet.lead_can_run). None means yes.
     lead_can_run: Optional[Callable[[str, str], bool]] = None
+    #: Operator-declared cache paths inside dependency trees (for example
+    #: ``node_modules/.cache``) whose changes are recorded but do not stop the
+    #: run. Fixed before any call, never set by a model, empty by default:
+    #: transpile caches can hold executable output (quadratus.deptree).
+    dependency_cache_exemptions: tuple = ()
     #: Design and UI work also gets a reviewer from another vendor, briefed
     #: on design and aesthetic choices, even when the task is SIMPLE.
     design_cross_check: bool = True
@@ -417,6 +428,21 @@ _SCOPE_REQUEST = (
     'each function exactly one signature, and quote that signature verbatim in '
     'intended_result and acceptance. A declaration whose signatures disagree is '
     'rejected and comes back for correction.'
+)
+
+#: What a UI task's SCOPE capture declares when the harness captures (Run 19:
+#: a favicon task declared a wait on an element visible at load, and the
+#: qualifier rightly rejected the render). Guidance only; the qualifier and
+#: the finding's measured state are unchanged.
+_CAPTURE_SCOPE_REQUEST = (
+    'A task that changes or reviews what users see adds "capture": {"path": "/page", '
+    '"steps": [...]} to its SCOPE: the page the harness renders and the interaction steps '
+    '(click, wait, file) that reach the state showing the change. Declare steps only when '
+    'the change is reached by interaction; a change visible without interaction (a '
+    'favicon, a header, copy) declares "steps": []. A final wait must name something only '
+    'the result creates, never an element already on the page at load. A task that '
+    'RESOLVES a finding declares that finding\'s page and steps as measured; "steps": [] '
+    'never replaces them.'
 )
 
 #: How many facts one decomposition may add, and how long each may be. The map
@@ -928,10 +954,38 @@ class Session:
         #: renders older than this show a tree that has since changed.
         self._last_edit_started: Optional[float] = None
         self.design_checks: List[dict] = []
+        #: The run's runtime-dependency identity (quadratus.deptree), set at
+        #: run start when a project is selected.
+        self.dependency_watch: Optional[DependencyWatch] = None
         self.requirement_audits: List[dict] = []
         self.requirement_reviews: List[dict] = []
 
+    def _verify_dependencies(self, window: str) -> None:
+        """Stop the run if a runtime-dependency tree left its run-start
+        identity or cannot be identified (quadratus.deptree)."""
+        if self.dependency_watch is not None:
+            self.dependency_watch.verify(window)
+
     def _invoke_model(self, key, prompt, *, allow_writes=False):
+        """One model call. An editing call on the selected project is
+        bracketed by the dependency identity: checked before any vendor call
+        and after it returns. A failed call is re-checked without masking
+        its own outcome."""
+        watch = self.dependency_watch
+        if watch is None or not (allow_writes and self.project and self.config.allow_writes):
+            return self._invoke_model_call(key, prompt, allow_writes=allow_writes)
+        context = invocation_context.get() or {}
+        window = f"{context.get('role', 'editing')} ({context.get('task', 'run')})"
+        self._verify_dependencies(f"before {window}")
+        try:
+            reply = self._invoke_model_call(key, prompt, allow_writes=allow_writes)
+        except BaseException as primary:
+            watch.after_failure(f"during {window}", primary)
+            raise
+        self._verify_dependencies(f"during {window}")
+        return reply
+
+    def _invoke_model_call(self, key, prompt, *, allow_writes=False):
         context = invocation_context.get() or dict(task="run", role="direct", origin="seat")
         # Renders are stale once source changes, not once a write-enabled call
         # happens (Codex, Run 16: a revision and a design-fix that changed
@@ -1019,7 +1073,7 @@ class Session:
             log.debug("could not fingerprint project source", exc_info=True)
             return None
 
-    def _edit(self, key, prompt, *, role="revision"):
+    def _edit(self, key, prompt, *, role="revision", capped=None):
         """An editing call, with the tree inspected before anything is replayed.
 
         A timeout is not a null result. On 2026-09-13 a 900-second editing call
@@ -1039,6 +1093,10 @@ class Session:
         try:
             with invocation(getattr(self._active_spec, "task_id", "run"), role):
                 return self._invoke_model(key, prompt, allow_writes=allow_writes)
+        except TurnLimitReached as exc:
+            if capped is None:
+                raise
+            return self._capped_fix(key, capped[0], capped[1], exc, role)
         except PartialWorkStopped as exc:
             if exc.partial.get('reply'):
                 self.store.put(exc.partial['reply'], kind='changed-report-mismatch', author=key)
@@ -1046,6 +1104,34 @@ class Session:
         except PartialWorkSuspected as exc:
             state = self._inspect_partial_edits(before)
             raise PartialWorkStopped(str(exc), partial=state) from exc
+
+    def _capped_fix(self, lead, spec, task, exc, role) -> str:
+        """A gate-fix or design-fix stopped at the lead's turn limit.
+
+        It is one attempt spent, never continued, replayed or rerouted. Its
+        edits stay and are held to the task's scope as any editing call's are;
+        the caller then re-runs the gate or capture it would have run, so the
+        required checks still decide. Returns the text recorded for it.
+        """
+        report = self._assess_scope(spec, task, self._task_before) if self.project else None
+        if self.project and self.config.allow_writes:
+            if spec.scope is not None and report is None:
+                raise PartialWorkStopped(f"A capped {role} could not be measured against the task "
+                                         "scope; work preserved.",
+                                         partial=self._inspect_partial_edits(self._task_before)) from exc
+            if report and (report.blocking or report.oversized):
+                raise PartialWorkStopped(f"A capped {role} exceeded the declared scope; work preserved. "
+                                         + report.render(),
+                                         partial=self._inspect_partial_edits(self._task_before)) from exc
+        said = (exc.partial_text or "").strip()
+        text = (f"[{role} stopped at the lead turn limit"
+                + (f" ({exc.turns} turns)" if exc.turns else "")
+                + "; its edits are kept and the checks run again. Its last words, narration "
+                  "and not a result: " + (said[:600] or "none") + "]")
+        task.keep(json.dumps(dict(task=spec.task_id, role=role, lead=lead, turns=exc.turns,
+                                  partial_text=said[:4000] or None)), kind="capped-fix", author=lead)
+        self._note(f"task {spec.task_id}: {role} stopped at the turn limit; checking what it left")
+        return text
 
     def _inspect_partial_edits(self, before) -> dict:
         """What, if anything, the stopped call had already written.
@@ -1462,6 +1548,8 @@ class Session:
             if state['failures'] >= self.config.max_worker_failures:
                 out.append(self._close_workers(state, spec))
             return out
+        except (DependencyTreeChanged, DependencyIdentityUnavailable):
+            raise       # a run stop, never an errand's failure
         except Exception as exc:  # noqa: BLE001 -- returned, not raised
             state['failed_errands'].add(label)
             state['failures'] += 1
@@ -1896,12 +1984,17 @@ class Session:
             if n.strip().upper().rstrip(".") != "NO FINDINGS"
         ]
         if notes:
-            revision = self._edit(
-                lead,
-                self._revision_prompt(
-                    spec, draft, [f"[{labels[p]}]\n{n}" for p, n in notes]
-                ),
-            )
+            try:
+                revision = self._edit(
+                    lead,
+                    self._revision_prompt(
+                        spec, draft, [f"[{labels[p]}]\n{n}" for p, n in notes]
+                    ),
+                )
+            except TurnLimitReached as exc:
+                # A capped revision takes the capped-task path: kept,
+                # measured, unreviewed and ungated, re-planned by name.
+                return self._close_turn_limited(lead, spec, task, exc, before)
             task.record("assistant", revision)
             task.keep(revision, kind="revision")
 
@@ -1911,13 +2004,16 @@ class Session:
                 spec, blocking, revision, task, labels=labels
             )
             while unresolved and cycles < self.config.max_fix_cycles:
-                revision = self._edit(
-                    lead,
-                    self._fix_prompt(
-                        spec, revision,
-                        [(labels[p], v) for p, v in unresolved],
-                    ),
-                )
+                try:
+                    revision = self._edit(
+                        lead,
+                        self._fix_prompt(
+                            spec, revision,
+                            [(labels[p], v) for p, v in unresolved],
+                        ),
+                    )
+                except TurnLimitReached as exc:
+                    return self._close_turn_limited(lead, spec, task, exc, before)
                 task.record("assistant", revision)
                 task.keep(revision, kind="revision")
                 cycles += 1
@@ -2185,6 +2281,9 @@ class Session:
                     + (self._done_refusal or "")
                     + self._findings_prompt()
                     + ("\n\n" + _SCOPE_REQUEST if self.project and self.config.allow_writes else "")
+                    + ("\n\n" + _CAPTURE_SCOPE_REQUEST
+                       if self.project and self.config.allow_writes and self.config.capture_profile is not None
+                       and self.config.design_self_verify else "")
                     + ("\n\n" + _ORIENT_REQUEST
                        if self.project and self.config.codebase_map is not None else "")
                 ),
@@ -2373,6 +2472,13 @@ class Session:
                 self._distrust_resolutions(f"the findings could not be re-checked after "
                                            f"{type(exc).__name__} ({type(failure).__name__})")
             raise
+        try:
+            # A tree a failed or capped call changed may not have met another
+            # check before the run ended; the end of the run is one.
+            self._verify_dependencies("at the end of the run")
+        except (DependencyTreeChanged, DependencyIdentityUnavailable) as exc:
+            self.completed = False
+            self.stop_reason = self.stop_reason or f"{type(exc).__name__}: {exc}"
         if not self.completed:
             # The record says what holds at the end, whatever stopped the run.
             self._recheck_resolved_findings()
@@ -2390,6 +2496,10 @@ class Session:
                 write_source_excludes(self.project, self.config.project_excludes)
             except OSError:
                 log.debug("could not record source exclusions", exc_info=True)
+            # Before any model call: over the bounds is a stop with no call made.
+            self.dependency_watch = DependencyWatch(DependencyGuard(
+                self.project, exempt=self.config.dependency_cache_exemptions))
+            self.dependency_watch.start()
         if self.config.plan_gate is not None:
             self._note("asking the orchestrator for the expected task list")
             if not self.config.plan_gate(self.plan()):
@@ -2432,6 +2542,7 @@ class Session:
                     self._note("requirements still open after the reopen allowance; stopping incomplete")
                     self.completed = False
                     break
+                self._verify_dependencies("at DONE")
                 self.completed = (not self.open_findings and not self._unresolved_partial
                                   and not self._open_findings_for(None)
                                   and not any(not c["passed"] for c in self.checks))
@@ -2629,7 +2740,7 @@ class Session:
                 f"shows a problem: {problem}.\nFix it in source. Do not start servers or run capture "
                 "commands: the harness captures the declared page again after your fix and the checks. "
                 + self._revision_delivery() + _design_fix_delivery(self._interim_edits_note())),
-                role="design-fix")
+                role="design-fix", capped=(spec, task))
             self._run_integration_gate(lead, spec, task)
             failure = self._harness_capture(spec)
             if failure:
@@ -2658,7 +2769,7 @@ class Session:
             self._edit(lead, (
                 f"Task: {spec.description}\n\nThe rendered evidence for this design task is missing "
                 f"or shows a broken page: {problem}.\n" + action + self._revision_delivery()
-                + _design_fix_delivery(self._interim_edits_note())), role="design-fix")
+                + _design_fix_delivery(self._interim_edits_note())), role="design-fix", capped=(spec, task))
             self._run_integration_gate(lead, spec, task)
             ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
                                                         expected_source=self._trusted_source())
@@ -3401,8 +3512,7 @@ class Session:
         if profile is not None:
             capture = getattr(spec.scope, "capture", None)
             if not capture:
-                return ('A UI task must declare what the harness captures: add "capture": '
-                        '{"path": "/...", "steps": [...]} to its SCOPE.')
+                return ('A UI task must declare what the harness captures. ' + _CAPTURE_SCOPE_REQUEST)
             own = f".quadratus/capture-fixtures/{spec.task_id}/"
             for step in capture["steps"]:
                 if step["action"] == "file" and not (step["path"].startswith(own)
@@ -3439,8 +3549,10 @@ class Session:
         if self.checks and self._task_checks_failed():
             return "the harness did not capture because the task's last check failed"
         from .preview import capture_task
+        self._verify_dependencies(f"before preview ({spec.task_id})")
         before = self._source_fingerprint()
         failure = capture_task(self.config.capture_profile, self.project, spec.task_id, spec.scope.capture)
+        self._verify_dependencies(f"during preview ({spec.task_id})")
         if before is None or self._source_fingerprint() != before:
             return "the project source changed while the harness previewed and captured it"
         return failure
@@ -3494,6 +3606,7 @@ class Session:
         Returns the named findings still open."""
         if not self._current_resolves:
             return []
+        self._verify_dependencies(f"at settlement of {spec.task_id}")
         reasons = []
         gates = self.checks[checks_before:]
         if gates and not gates[-1]["passed"]:
@@ -3880,14 +3993,17 @@ class Session:
         result = self._check(gate)
         task.record("user", result.for_models())
         while not result.passed and getattr(self, "_gate_fixes_used", 0) < ceiling:
-            fix = self._edit(
-                lead,
-                f"Task: {spec.description}\n\n"
-                f"The project's own integration check failed after your "
-                f"work:\n{result.for_models()}\n\n"
-                "Fix the failure. Produce the complete revised work.",
-                role="gate-fix",
-            )
+            try:
+                fix = self._edit(
+                    lead,
+                    f"Task: {spec.description}\n\n"
+                    f"The project's own integration check failed after your "
+                    f"work:\n{result.for_models()}\n\n"
+                    "Fix the failure. Produce the complete revised work.",
+                    role="gate-fix",
+                )
+            except TurnLimitReached as exc:
+                fix = self._capped_fix(lead, spec, task, exc, "gate-fix")
             task.record("assistant", fix)
             task.keep(fix, kind="gate-fix")
             latest_fix = fix
@@ -3925,8 +4041,12 @@ class Session:
         """
         from .project import Project
         project = Project(self.project, exclude=self.config.project_excludes) if self.project else None
+        task = getattr(self._active_spec, "task_id", "run")
+        self._verify_dependencies(f"before check ({task})")
         before = project.contents() if project else None
         result = gate.run()
+        # A receipt taken with a changed dependency tree is never accepted.
+        self._verify_dependencies(f"during check ({task})")
         if project is not None:
             after = project.contents()
             if before != after:

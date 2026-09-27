@@ -128,6 +128,10 @@ _EXHAUSTION_MARKERS = (
 )
 
 
+#: The editing roles the lead owns, each bound by ``Settings.lead_max_turns``.
+LEAD_CAPPED_ROLES = frozenset({"lead", "revision", "gate-fix", "design-fix"})
+
+
 class Fleet:
     """The vendor CLIs, addressed by roster key.
 
@@ -345,9 +349,12 @@ class Fleet:
         # A lead's agentic turn limit, when the operator set one. Applied per
         # call on a view, never on the shared provider. A capped lead raises
         # TurnLimitReached with its edits still in place; the session keeps
-        # them and re-plans rather than treating the call as failed.
+        # them and re-plans rather than treating the call as failed. It binds
+        # every editing role the lead owns (Run 19: an uncapped gate-fix and
+        # design-fix ran past the operator's 14 rounds); reviewers, closeout,
+        # workers and the orchestrator stay uncapped.
         lead_turns = (self.settings.lead_max_turns
-                      if (invocation_context.get() or {}).get("role") == "lead" else None)
+                      if (invocation_context.get() or {}).get("role") in LEAD_CAPPED_ROLES else None)
         # The in-session worker tool, served by the session's WorkerBridge for
         # this lead call only. Set on a per-call view, never on the provider.
         lead_tool = ((invocation_context.get() or {}).get("worker_tool")

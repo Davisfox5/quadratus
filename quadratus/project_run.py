@@ -362,6 +362,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'requirements': _requirements_record(session),
         'design_checks': list(getattr(session, 'design_checks', []) or []) if session else [],
         'findings': list(getattr(session, 'findings', []) or []) if session else [],
+        'dependency_identity': (getattr(getattr(session, 'dependency_watch', None), 'record', None)
+                                if session else None),
         'parallel_batches': list(getattr(session, 'parallel_batches', []) or []) if session else [],
         'trace': {'calls': len(traces),
                   'transcripts_found': sum(1 for t in traces if t.get('tool_calls') is not None),

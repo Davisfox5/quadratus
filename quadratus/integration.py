@@ -88,6 +88,12 @@ class GateResult:
         """
         status = "PASSED" if self.passed else "FAILED"
         names = ", ".join(r.id for r in self.receipts) or "project check"
+        failed = [r.id for r in self.receipts if r.status not in ("passed", "skipped")]
+        passed = [r.id for r in self.receipts if r.status == "passed"]
+        if not self.passed and failed and passed:
+            # Run 19: "FAILED: check, extra1, extra2" sent a fix call after
+            # checks that had passed. The heading names what failed.
+            names = ", ".join(failed) + " (passed: " + ", ".join(passed) + ")"
         lines = [f"Integration gate {status}: {names}"]
         for r in self.receipts:
             lines.append(f"{r.id}: {r.status}: {r.reason}"

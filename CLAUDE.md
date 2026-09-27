@@ -417,6 +417,18 @@ Key design decisions already settled:
   survivor is carried loudly into the close-out. Sequencing + the map keep
   pieces consistent; only execution proves them, and no model is in this
   loop.
+- **A runtime-dependency tree is part of what a check proves**
+  (`deptree.py`, contract v2 on #25). Run 19: a lead wrote a
+  `node_modules` shim the source checks could not see, and the project's
+  check resolved it. Every `node_modules`, `.venv`, `venv` and `env` in the
+  project is content-hashed at run start and must hold before and after
+  every editing call, check and preview, at settlement and at DONE; any
+  difference is `DependencyTreeChanged`. Bounds fail closed (250,000
+  entries, 2 GiB read, 120 s per pass). No allow flag; only an operator's
+  hidden cache path inside a tree may be exempt, and none is by default.
+  Nothing outside the project is guarded. The lead's cap
+  (`lead_max_turns`) binds revision, gate-fix and design-fix as well as the
+  draft; a capped fix is one attempt spent and the checks still decide.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
