@@ -45,6 +45,7 @@ _EXCEPTION_CLASS = {
     "OperatorInputNeeded": "operator",
     "RunStalled": "operator",
     "PolicyError": "operator",
+    "CapabilityProbeFailed": "operator",
     "RunBudgetExceeded": "budget",
     "TurnLimitReached": "cap",
     "WindowExhausted": "transport",
@@ -107,6 +108,8 @@ class TaskOutcome:
     attempts: Dict[str, int] = field(default_factory=dict)
     checks: List[dict] = field(default_factory=list)
     evidence: Optional[dict] = None
+    #: Renders actually handed to the reviewer: path to sha256, as bound.
+    delivery: Optional[dict] = None
     partial: Optional[dict] = None
     source_before: Optional[str] = None
     source_after: Optional[str] = None
@@ -118,6 +121,11 @@ class TaskOutcome:
     #: ledger, which stays the authority.
     open_at_close: Dict[str, List[str]] = field(default_factory=dict)
     facts: List[Fact] = field(default_factory=list)
+    #: The dispatch contract (quadratus.contract), fixed for this invocation.
+    contract: Optional[dict] = None
+    #: Places where a legacy applicability decision disagreed with the
+    #: contract's derived requirement. Recorded, never acted on (phase 2).
+    mismatches: List[str] = field(default_factory=list)
     #: Legacy mirror: "closed", "turn_limited" or "stopped:<Exception>".
     #: Temporary; removed in phase 3 when history reads outcomes.
     closed_as: str = "open"
@@ -152,10 +160,28 @@ class TaskOutcome:
         ranked = _ranked(self.active)
         return ranked[0].kind if ranked else "clean"
 
+    def unsatisfied(self) -> List[str]:
+        """The contract's mandatory edges this task did not satisfy (not
+        attempted, or attempted and failed). Reporting only in phase 2."""
+        if not self.contract:
+            return []
+        required = self.contract.get("required") or {}
+        wanted = []
+        if required.get("checks"):
+            wanted.append("checks")
+        if required.get("design_evidence") in ("harness", "self"):
+            wanted.append("evidence")
+        if required.get("design_review"):
+            wanted += ["delivered", "reviewer"]
+        if required.get("settlement"):
+            wanted.append("settlement")
+        return [edge for edge in wanted if self.edges.get(edge) is not True]
+
     def to_dict(self) -> dict:
         data = asdict(self)
         data["primary"] = self.primary
         data["secondary"] = [f.kind for f in _ranked(self.active)[1:]]
+        data["unsatisfied"] = self.unsatisfied()
         return data
 
 
@@ -163,6 +189,8 @@ class TaskOutcome:
 class RunOutcome:
     facts: List[Fact] = field(default_factory=list)
     done_accepted: bool = False
+    #: Readiness probe receipts from run start (quadratus.readiness).
+    readiness: List[dict] = field(default_factory=list)
 
     def note(self, kind: str, detail: str, *, terminal: bool = True, legacy: Optional[str] = None,
              stage: str = "run") -> Fact:
@@ -185,7 +213,9 @@ def missing_facts(task: TaskOutcome) -> List[str]:
     integrity failure has no receipt to accept, by design. Every recorded
     attempt must point at its kept output; a lost artifact is missing, and
     its ``output_artifact_error`` says why."""
-    missing = []
+    missing = [f"{task.task_id}.contract mismatch: {m}" for m in task.mismatches]
+    if task.contract is None and task.closed_as != "open":
+        missing.append(f"{task.task_id}.contract")
     if task.closed_as in ("closed", "turn_limited"):
         for name in ("lead", "source_before", "source_after", "dependency"):
             if not getattr(task, name):

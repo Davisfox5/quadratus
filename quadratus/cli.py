@@ -109,6 +109,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
                 check=args.check or '', state_dir=args.state_dir,
                 extra_checks=getattr(args, "extra_check", None) or (),
                 capture_profile=getattr(args, "capture_profile", None),
+                readiness=getattr(args, "readiness", None),
                 forbid=args.forbid, declared_paths=args.declared_paths,
                 max_tasks=args.max_tasks, mode=args.mode,
                 security_verdict_json=getattr(args, "security_verdict_json", False),
@@ -328,6 +329,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             "The project's own check command, run after each task's work is "
             "final (e.g. --check 'pytest -q'). The deterministic half of "
             "'do the pieces fit together'."
+        ),
+    )
+    engine.add_argument(
+        "--readiness",
+        metavar="JSON",
+        help=(
+            "The operator's capability readiness probes, run once before any model "
+            "call under this environment: [{\"id\": \"browser\", \"argv\": [...], "
+            "\"timeout\": 30}]. A failing probe stops the run as an operator handoff; "
+            "passing proves readiness only, never acceptance."
         ),
     )
     engine.add_argument(

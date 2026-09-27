@@ -54,7 +54,8 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 state_dir=None, max_tasks=20, mode='adversarial',
                 progress=None, ask_operator=None, plan_gate=None,
                 default_scope=None, run_limits=None, forbid=(), declared_paths=(),
-                security_verdict_json=False, gates=None, extra_checks=(), capture_profile=None):
+                security_verdict_json=False, gates=None, extra_checks=(), capture_profile=None,
+                readiness=None):
     """Keep both successful and interrupted runs next to their source tree.
 
     ``extra_checks`` are further operator checks, each an argv list (or a
@@ -64,6 +65,11 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
     ``capture_profile`` is a path to the operator's preview profile
     (quadratus.preview), validated against the selected project here, before
     any model call; with it the harness captures UI tasks' renders itself.
+
+    ``readiness`` is the operator's capability readiness probes
+    (quadratus.readiness): a JSON path or list, validated here and run once
+    before the first model call. A failing probe stops the run as an
+    operator handoff; a passing one proves readiness, never acceptance.
     """
     from .runtime import Fleet, new_session
 
@@ -93,6 +99,10 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
     if capture_profile:
         from .preview import load_profile
         profile = load_profile(capture_profile, project.root)
+    probes = ()
+    if readiness:
+        from .readiness import probes_from
+        probes = probes_from(readiness, project.root)
     with _project_lock(project):
         return _run(goal, project, settings, state=state, allow_writes=allow_writes,
                     check=check, max_tasks=max_tasks, mode=mode, progress=progress,
@@ -101,7 +111,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     run_limits=run_limits, policy=policy, gates=gates,
                     security_verdict_json=security_verdict_json,
                     fleet_type=Fleet, session_factory=new_session, extras=extras,
-                    capture_profile=profile)
+                    capture_profile=profile, readiness=probes)
 
 
 #: Flags that change only how much a runner prints, never what it runs.
@@ -210,7 +220,7 @@ def _merge_extras(gates, extras):
 def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
-         extras=(), capture_profile=None):
+         extras=(), capture_profile=None, readiness=()):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
@@ -245,6 +255,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         default_scope=default_scope, repository_policy=policy,
         security_verdict_json=security_verdict_json,
         capture_profile=capture_profile,
+        readiness_probes=tuple(readiness or ()),
     )
     preview = policy.resolve(default_scope.permitted_paths if default_scope else (),
                              writing=allow_writes) if policy else None

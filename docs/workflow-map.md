@@ -416,3 +416,57 @@ Each temporary parity field added in P1 names its P3 removal step in code.
 
   G7 ("no BLOCKING findings" read as a finding) is a strict xfail for P3.
 
+
+## 11. Phase 2 status
+
+Cleared by Codex in 5857457064. No legacy decision changes route in P2. The
+one new route is operator-declared readiness probes: absent a declaration,
+nothing about a run changes.
+
+**`quadratus/contract.py`, the `TaskContract`:**
+
+- Built once in `run_task` at dispatch and frozen for that invocation.
+- Its intent is validated as audit / implementation / repair.
+- It references existing grants and never mints authority:
+  - `authority.write_grant`: operator or none;
+  - `authority.edits`: none / `scoped:<max_lines>` / unscoped.
+- Its fields:
+  - `required` (checks, design_evidence, design_review, security_verification, settlement), derived from the same facts the legacy applicability decisions read;
+  - `required_checks`, the gate ids;
+  - `intended_state`, the harness capture page and steps, plus the RESOLVES findings as measured;
+  - `acceptance`;
+  - `capabilities`, the probes that passed;
+  - `allowed_next`, the stages the contract expects;
+  - a digest.
+- **Consistency:** `_contract_agrees` records any disagreement at the security branch, the full gate, `_check_design` and the design review. The legacy decision still decides. P3 switches these sites to the contract and removes the duplicates.
+- **CONTINUES:** a continuation gets a new contract, with a different digest. Its `inherits` carries the predecessor's intended state, `open_at_close`, changed files and close state.
+
+**`quadratus/readiness.py`, operator readiness probes:**
+
+- Declared with `--readiness` / `run_project(readiness=)` and validated before the run:
+  - at most 8 probes;
+  - at most 120 s each;
+  - no shell syntax;
+  - unique ids;
+  - no extra fields.
+- Run once after the dependency baseline and before the plan gate and any model call, under `os.environ` in each probe's own process group.
+- Each probe gets a harness-owned scratch directory and bytecode prefix, removed afterwards. Its output is kept as a 2,000-character tail and a `readiness-output` artifact.
+- The first failure ends probing and stops the run with `CapabilityProbeFailed`: class operator, zero model calls.
+- A probe that changes source gives `PartialWorkStopped` (integrity).
+- Passing proves readiness only. It is never a check or acceptance, and there is no retry, replay or allowance.
+
+**Delivery and response edges:**
+
+- `delivered` records the files and hashes as bound (`TaskOutcome.delivery`), or false when the renders were refused, changed or not delivered.
+- `reviewer` is true only for an APPROVED response with no BLOCKING line.
+- `unsatisfied` lists the contract's mandatory edges that were not satisfied. A missing delivery or response keeps the task incomplete; legacy already stops on it.
+
+**Completeness:** a task must carry its contract, and any contract/legacy mismatch is a missing fact. The replay harness asserts this on every run.
+
+**J30 (required errands):** nothing declares an errand required today. Every errand is optional, and its failure stays an errand result. A required-errand declaration would be a new contract field that no current source fills; it's noted, not invented.
+
+**Tests:**
+
+- `tests/lifecycle/test_workflow_contract.py`: 19 cases.
+- `tests/test_readiness.py`: 3 cases.
+- **Red on 3efac78:** 11 of the 19 fail because the features don't exist there. The other 8 are declaration-validation cases for the new module, which has no prior counterpart.

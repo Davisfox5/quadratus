@@ -38,6 +38,7 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 from .artifacts import ArtifactStore
 from .codebase_map import CodebaseMap
+from .contract import Required, TaskContract, canonical, stages_for
 from .delegation import (
     DelegationLedger,
     InvocationEvent,
@@ -385,6 +386,9 @@ class SessionConfig:
     #: run. Fixed before any call, never set by a model, empty by default:
     #: transpile caches can hold executable output (quadratus.deptree).
     dependency_cache_exemptions: tuple = ()
+    #: Operator-declared capability readiness probes (quadratus.readiness),
+    #: run once before the first model call. Fixed before the run.
+    readiness_probes: tuple = ()
     #: Design and UI work also gets a reviewer from another vendor, briefed
     #: on design and aesthetic choices, even when the task is SIMPLE.
     design_cross_check: bool = True
@@ -1830,6 +1834,8 @@ class Session:
             lead=spec.lead or "", covers=list(getattr(self, "_current_covers", []) or []),
             resolves=resolves, continues=getattr(self, "_continues", None) or "")
         outcome.stage("dispatch")
+        self._contract = self._build_contract(spec, outcome)
+        outcome.contract = self._contract.to_dict()
         outcome.source_before = self._source_identity()
         prior, self._outcome = self._outcome, outcome
         self.task_outcomes.append(outcome)
@@ -1846,6 +1852,97 @@ class Session:
             return summary
         finally:
             self._outcome = prior
+
+    def _run_readiness(self) -> None:
+        """The operator's readiness probes, once, before any model call. A
+        failure is an operator handoff: no model call, no application edit.
+        Probes may not change project source or dependency trees."""
+        from .readiness import CapabilityProbeFailed, run_probes
+        before = self._source_identity()
+        receipts = run_probes(self.config.readiness_probes, self.project or ".")
+        for receipt in receipts:
+            try:
+                receipt["output_artifact"] = self.store.put(receipt["output"], kind="readiness-output",
+                                                            author="harness").id
+            except Exception as exc:  # noqa: BLE001 -- recorded, never hidden
+                receipt["output_artifact"] = "unavailable"
+                receipt["output_artifact_error"] = f"{type(exc).__name__}: {str(exc)[:160]}"
+        self.run_outcome.readiness = receipts
+        self._verify_dependencies("during readiness probes")
+        if self._source_identity() != before:
+            raise PartialWorkStopped("A readiness probe changed project source; it must only observe.")
+        failed = [r for r in receipts if not r["passed"]]
+        if failed:
+            first = failed[0]
+            raise CapabilityProbeFailed(
+                f"readiness probe {first['id']} failed ({first['reason']}); no model call was made. "
+                f"Output tail: {first['output'][-400:]}")
+
+    def _build_contract(self, spec, outcome) -> TaskContract:
+        """The task's contract, derived once at dispatch from the same facts
+        the legacy applicability decisions read (see _contract_agrees)."""
+        scope = getattr(spec, "scope", None)
+        security = spec.work_class == WorkClass.SECURITY
+        editing = bool(self.project and self.config.allow_writes)
+        if security or not (is_design_task(spec) and editing):
+            evidence = "none"
+        elif not self.config.design_self_verify:
+            evidence = "disabled"
+        else:
+            evidence = "harness" if self._harness_captures(spec) else "self"
+        gate = self.config.integration_gate
+        required = Required(
+            checks=gate is not None,
+            design_evidence=evidence,
+            design_review=bool(self.config.design_cross_check and evidence in ("harness", "self")),
+            security_verification=security,
+            settlement=bool(outcome.resolves))
+        commands = getattr(gate, "commands", None)
+        checks = tuple(c.id for c in commands) if commands is not None else (("check",) if gate else ())
+        intended = None
+        capture = getattr(scope, "capture", None)
+        if evidence == "harness" and capture:
+            intended = dict(page=capture.get("path"), steps=[[s.get("action"), s.get("selector")]
+                                                              for s in capture.get("steps") or []])
+        if outcome.resolves:
+            measured = [dict(finding=f["id"], target=f.get("target"), steps=f.get("steps"))
+                        for f in self.findings if f["id"] in outcome.resolves]
+            intended = dict(intended or {}, findings=measured)
+        inherits = None
+        if outcome.continues:
+            before = next((o for o in reversed(self.task_outcomes)
+                           if o.task_id == outcome.continues and o is not outcome), None)
+            inherits = dict(task=outcome.continues, found=before is not None)
+            if before is not None:
+                inherits.update(
+                    intended_state=(before.contract or {}).get("intended_state"),
+                    open_at_close=before.open_at_close,
+                    changed=(before.partial or {}).get("changed"),
+                    closed_as=before.closed_as)
+        passed = tuple(r["id"] for r in self.run_outcome.readiness if r.get("passed"))
+        authority = (("write_grant", "operator" if editing else "none"),
+                     ("edits", "none" if is_review_only(spec) else
+                      f"scoped:{getattr(scope, 'max_lines', None)}" if scope is not None else "unscoped"))
+        return TaskContract(
+            task_id=spec.task_id, intent=outcome.intent, covers=tuple(outcome.covers),
+            resolves=tuple(outcome.resolves), continues=outcome.continues,
+            scope=canonical(scope.to_dict()) if scope is not None else None,
+            authority=authority, capabilities=passed, required_checks=checks,
+            intended_state=canonical(intended),
+            acceptance=tuple(getattr(scope, "acceptance", ()) or ()),
+            required=required, allowed_next=stages_for(required, outcome.intent),
+            inherits=canonical(inherits))
+
+    def _contract_agrees(self, requirement: str, legacy) -> None:
+        """Record where a legacy applicability decision disagrees with the
+        contract's derived requirement. Observational: the legacy decision
+        still decides until phase 3."""
+        outcome, contract = self._outcome, getattr(self, "_contract", None)
+        if outcome is None or contract is None or contract.task_id != outcome.task_id:
+            return
+        want = getattr(contract.required, requirement)
+        if want != legacy:
+            outcome.mismatches.append(f"{requirement}: contract {want!r}, legacy {legacy!r}")
 
     def _source_identity(self) -> str:
         """The selected source's fingerprint, or an explicit reason there is
@@ -1938,6 +2035,7 @@ class Session:
 
     def _run_task(self, spec: TaskSpec) -> TaskSummary:
         """Work one task to completion and fold it into the ledger."""
+        self._contract_agrees("security_verification", spec.work_class == WorkClass.SECURITY)
         if spec.work_class == WorkClass.SECURITY:
             return self._run_security_task(spec)
 
@@ -2631,6 +2729,8 @@ class Session:
             self.dependency_watch = DependencyWatch(DependencyGuard(
                 self.project, exempt=self.config.dependency_cache_exemptions))
             self.dependency_watch.start()
+        if self.config.readiness_probes:
+            self._run_readiness()
         if self.config.plan_gate is not None:
             self._note("asking the orchestrator for the expected task list")
             if not self.config.plan_gate(self.plan()):
@@ -2857,10 +2957,13 @@ class Session:
         is not evidence that the UI works.
         """
         if not is_design_task(spec) or not (self.project and self.config.allow_writes):
+            self._contract_agrees("design_evidence", "none")
             return
         self._stage("design")
         from .design_evidence import check_records
         record = dict(task=spec.task_id)
+        self._contract_agrees("design_evidence", "disabled" if not self.config.design_self_verify
+                              else "harness" if self._harness_captures(spec) else "self")
         if not self.config.design_self_verify:
             record.update(verified=None, problem="design self-verification disabled by the operator")
             self.design_checks.append(record)
@@ -2948,8 +3051,11 @@ class Session:
             self._note(f"task {spec.task_id}: design work unverified ({problem[:120]})")
         vendor = lead.partition(":")[0]
         reviewer = next((p for p in collaborators if p.partition(":")[0] != vendor), None)
+        self._contract_agrees("design_review", bool(self.config.design_cross_check))
         if self.config.design_cross_check:
             if reviewer is None:
+                self._edge("delivered", False)
+                self._edge("reviewer", False)
                 self._open_finding(
                     "unverified", f"Task {spec.task_id} is design work with no reviewer from another vendor available.")
             elif ok:
@@ -2960,6 +3066,7 @@ class Session:
                     blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
                 for line in blocking:
                     self._open_finding("unverified", f"Task {spec.task_id} design: {line.strip()}")
+                self._edge("reviewer", not blocking)
                 if not blocking and self._current_resolves:
                     # Committed only once the whole task has passed, and only
                     # for the renders snapshotted before the review and
@@ -3005,6 +3112,7 @@ class Session:
             # A reviewer handed an incomplete set would be judging less than
             # the prompt claims; the design stays unverified instead.
             self._review_evidence = []
+            self._edge("delivered", False)
             return ("BLOCKING: the renders could not be handed to the reviewer ("
                     + "; ".join(f"{p or 'set'}: {r}" for p, r in refused)[:300] + ")")
         # The identity is taken before the call and the copy is bound to it,
@@ -3018,6 +3126,7 @@ class Session:
         snapshot = (spec.task_id, *self._capture_state(spec.task_id))
         if any(hashes.get(rel) != digest for rel, digest in _snapshot_files(snapshot).items()):
             self._review_evidence = []
+            self._edge("delivered", False)
             return "BLOCKING: the renders changed while they were being prepared for review"
         self._review_evidence, self._review_evidence_hashes, self._review_snapshot = files, hashes, snapshot
         prompt = (
@@ -3034,9 +3143,15 @@ class Session:
         from .runtime import EvidenceNotDelivered
         try:
             with invocation(spec.task_id, "design-review"):
-                return self._invoke_model(reviewer, prompt)
+                verdict = self._invoke_model(reviewer, prompt)
         except EvidenceNotDelivered as exc:
+            self._edge("delivered", False)
             return f"BLOCKING: the renders could not be handed to the reviewer ({str(exc)[:300]})"
+        # Delivered as bound: the files and hashes the copy was checked against.
+        self._edge("delivered", True)
+        if self._outcome is not None:
+            self._outcome.delivery = dict(reviewer=reviewer, files=dict(hashes))
+        return verdict
 
     def _parallel_enabled(self) -> bool:
         policy = self.config.repository_policy
@@ -4156,6 +4271,8 @@ class Session:
         into the task memory so the close-out and the ledger carry it as an
         open problem instead of a silent one.
         """
+        if gate is None:
+            self._contract_agrees("checks", self.config.integration_gate is not None)
         gate = gate if gate is not None else self.config.integration_gate
         if gate is None:
             return ""
