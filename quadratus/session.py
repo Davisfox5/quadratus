@@ -2218,7 +2218,14 @@ class Session:
             for peer in collaborators:
                 self._record_selection(spec, peer, 'collaborator')
             # Deliberately outside the first call's try: no second recovery.
-            draft = self._draft_with_channels(lead, spec, task)
+            # A cap on the redraft is the same capped close as a cap on the
+            # first draft (map G1): work kept and measured, no retry, no
+            # further call; the contract keeps its dispatched owner and the
+            # record names the recovery lead that was invoked.
+            try:
+                draft = self._draft_with_channels(lead, spec, task)
+            except TurnLimitReached as exc:
+                return self._close_turn_limited(lead, spec, task, exc, before)
         task.record("assistant", draft)
         task.keep(draft, kind="draft")
         self._edge("draft", True)
@@ -2454,7 +2461,13 @@ class Session:
             # straight line, but the lead's prompt offers WORKER and the
             # harness has to serve what it offers (Q9 baseline, 2026-09-22).
             self._stage("draft")
-            draft = self._draft_with_channels(excursion.worker, spec, task, consults=False)
+            try:
+                draft = self._draft_with_channels(excursion.worker, spec, task, consults=False)
+            except TurnLimitReached as exc:
+                # A capped security draft is a capped task (map G2): the
+                # verification never ran, so its edge stays unset and nothing
+                # is reported as verified; the excursion still closes.
+                return self._close_turn_limited(excursion.worker, spec, task, exc, self._task_before)
             task.record("assistant", draft)
             task.keep(draft, kind="draft")
             self._edge("draft", True)
