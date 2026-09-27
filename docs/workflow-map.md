@@ -312,14 +312,14 @@ parity assertion to those and fills the rest.
 
 ## 8. Retirement list (each is removed in the phase that replaces it)
 
-| Legacy input | Replaced by | Removed in |
-| --- | --- | --- |
-| `open_findings` as a decision input | `TaskOutcome.unresolved` / `primary` | P3; kept as report text |
-| `_partial_tasks`, `turn_limited`, `_design_unverified` | derived from outcomes | P3 |
-| `stop_reason` strings | typed terminal outcome (same names) | P3 |
-| Generic gate-fix for any failure | structured attribution routing | P3 |
-| 11 `is_design_task` applicability checks | `TaskContract.required` computed at dispatch | P2 |
-| DONE computed twice (2546, 2657) | one function reading outcomes and ledger | P3 |
+| Legacy input | Replaced by | Removed in | Status at aa03e72 |
+| --- | --- | --- | --- |
+| `open_findings` as a decision input | `TaskOutcome.unresolved` / `primary` | P3; kept as report text | **still decides**; see P3.4 |
+| `_partial_tasks`, `turn_limited`, `_design_unverified` | derived from outcomes | P3 | **still decide**; see P3.4 |
+| `stop_reason` strings | typed terminal outcome (same names) | P3 | **still written** beside the typed stop; see P3.4 |
+| Generic gate-fix for any failure | structured attribution routing | P3 | **retired** in P3.2 |
+| 11 `is_design_task` applicability checks | `TaskContract.required` computed at dispatch | P2 | **still decide** (11 call sites; the contract only records disagreement); see P3.4 |
+| DONE computed twice (2546, 2657) | one function reading outcomes and ledger | P3 | **still two sites**, both ending in `_guard_completion`; see P3.4 |
 
 Each temporary parity field added in P1 names its P3 removal step in code.
 
@@ -539,3 +539,89 @@ failure" (section 8) and closes J4, J5, J6 and J33 (G10).
   diagnostics; a bare shared name is redacted. Commands are displayed with
   shell quoting so a path with spaces is still found; the operator record
   keeps it exactly.
+
+**P3.3, one decision site per package.** Each carries a behavioural red on
+the commit before it and was cleared by Codex before the next began.
+
+| Package | Commit | Site |
+| --- | --- | --- |
+| G12 / J38 | 0550dde | standing check failures judged per task at DONE |
+| G7 | 1920af8, 46bf2fe | security verdict findings read as anchored markers |
+| G4 | ca69c13 | capture eligibility from the current task's own checks |
+| G9 | aa8adb9 | every silent stop named; an end-of-run dependency change outranks a cap |
+| G1 / G2 | 28cbacc | a capped recovery redraft or security draft closes as capped |
+| G5 | a291d88 | the merge gate has its own gate-fix allowance |
+| G6 | c5b4eed | a sent-back parallel batch counts like a serial send-back |
+| G8 | a582a26 | design debt bound to its own task; carried back from parallel children |
+| G11 | dedb571 | a design-fix call carries the lead's role packet |
+| J9b | 1126251, b5fa308, f1a704f | observed evidence identity mismatch is an `integrity` stop |
+| J27 | aa03e72 | an unclassified worker failure is handed to the operator unchanged |
+
+**P3.4, retirement status (documentation only; nothing is removed).** A
+legacy input is removed only when the same journeys prove both parity and
+failure behaviour with it gone; green typed tests alone are not that proof.
+None of the six below has that proof yet, so each stays and says why.
+
+What already holds on every whole-controller replay (`harness.run`):
+completion, the legacy error name and each closed task agree between the
+legacy state and the typed record (`parity.agree`), and the record is complete
+(`parity.complete`), which includes no contract/legacy applicability mismatch.
+That is agreement on outcomes, not proof that a legacy input can go.
+
+| Legacy input | Where it still decides | Typed counterpart | Controls that bear on it | Needed before removal |
+| --- | --- | --- | --- | --- |
+| `open_findings` | serial and batch stop after a task (`if self.open_findings or ...`), both DONE conjunctions, `_open_work` reasons, settlement's "closed with open findings" | every writer goes through `_open_finding`, which notes a fact of the route's class, except the batch: it merges each child's list (typed in the child's outcome) and appends an unmerged child's finding directly | J15 (`test_j15_...`), J10, G9 `test_named_stops.py`, settlement tests in `test_audit_findings.py` | the one direct writer (an unmerged parallel child) typed on every path; each decision site switched alone with a red; report text kept |
+| `_partial_tasks` | `_unresolved_partial` at both DONE sites; `_open_work` reasons | `cap` facts, `_recover_continued`, CONTINUES discharge in `completion_blockers` | J20, J22, J23, `test_capped_drafts.py`, `test_completion_guard.py` CONTINUES cases | outcome-derived partiality proven equal on every CONTINUES shape, including the parallel merge path |
+| `turn_limited` | names the capped tasks in the breaker's `TurnLimitBreaker` stop (the count itself is `_turn_limited_in_a_row`) | `cap` facts per task | J23 | the breaker's names read from consecutive `cap` outcomes, byte-identical on J23 |
+| `_design_unverified` | the named design stop (`DesignUnverified`) | `invalid_proof` / `unverified` facts per task | `test_design_debt_binding.py` (G8), J9a, J9b controls | the stop's name and task binding derived from facts, on serial and parallel paths |
+| `stop_reason` | written by `_stop_with` beside the typed stop; decides whether `_name_findings_stop` still names a stop (`not self.stop_reason`); read by `project_run` for the result error and by the open-finding annotations | the run's terminal fact (`legacy` name) | parity (legacy error name equals the typed stop's) on every replay; `test_named_stops.py` | the report and `result.json` error read from the typed stop, byte-identical on every replay |
+| `is_design_task` applicability | 11 call sites (design brief, evidence, review, capture eligibility, RESOLVES, prompts) | `TaskContract.required` | `_contract_agrees` mismatches are missing facts on every replay | each site switched alone with a red, starting with `design_evidence` and `design_review`, which `_contract_agrees` already watches |
+| DONE computed twice | the DONE reply and the cap's goal confirmation each compute their own legacy conjunction | `_guard_completion` / `completion_blockers` at both | `test_completion_guard.py` (17 cases), G9, G12 | one function for both, with the short-circuit order at the cap kept (the goal question only when no capped or audit debt) |
+
+**Known gap, recorded rather than fixed here.** An unmerged parallel child
+appends to `open_findings` directly and notes a typed fact only when the
+child has a `TaskOutcome`. `run_task` builds the contract before it appends
+the outcome, so an exception from `_build_contract` leaves that one finding
+untyped. The run still stops typed: such an exception is fatal to the batch
+and re-raised.
+
+**Unproven limits (none is claimed as covered):**
+
+- **Step-record forgery.** Malformed, mismatched or failed step records are
+  invalid proof. Nothing establishes that a step record was forged, and J9b
+  does not classify them.
+- **J9b timing.** A mismatch present at the first evidence check spends no
+  fix. One observed only after the one authorized design-fix comes after that
+  fix.
+- **J9b bytes.** The approved snapshot is kept as digests only; its bytes
+  cannot be reconstructed from the `evidence-identity` record.
+- **J27 in-flight call.** An open lead call cannot be interrupted. On the
+  in-session bridge it is told to stop and the exception is re-raised when it
+  returns; it can write before then. The harness diff and dependency checks
+  still apply.
+- **J27 coverage.** A harness bug that raises a declared type
+  (`ProviderError`, `FanOutExceeded`, `RepeatedFailure`, `ErrandToolMismatch`)
+  follows that declared route. `RunBudgetExceeded` from a worker keeps its
+  pre-existing route.
+- **G8.** The serial stale-name case is a defended invariant, unreachable in
+  today's serial loop.
+- **G11.** The control is at the policy-backed invocation seam. A replay
+  without a repository policy cannot tell role packets apart.
+- **Gate attribution.** Only the harness-owned pytest producer is supported;
+  any other runner's failure is always a handoff.
+
+**P4 entry criteria (P4 is Codex-owned):**
+
+1. Every P3 package above independently cleared on its exact base.
+2. An independent installed-wheel validation of the head commit, outside the
+   source tree.
+3. Integration and operator-profile review, including the profile's checks
+   declaring the harness report producer where product repair is wanted.
+4. The limits above accepted as limits for the live run, or closed first.
+5. The existing bounds unchanged: 120 calls, 6 million reported tokens as a
+   post-return stop threshold, 7,200 s internal and 7,500 s outer wall time,
+   two concurrent workers, 20 tasks, unknown usage kept unknown.
+6. No live call, profile activation or adoption into the 90cc5d9 execution
+   tree before that review.
+
+Overall P3 is not complete: the six legacy inputs above still decide.
