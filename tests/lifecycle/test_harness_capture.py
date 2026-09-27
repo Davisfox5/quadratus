@@ -62,7 +62,7 @@ def _profile(tmp_path, preview=None):
 
 
 def _run(tmp_path, monkeypatch, plan, leads, *, profile=None, runs_commands=True, max_tasks=6,
-         files=None, roles=None, lead="claude:opus"):
+         files=None, roles=None, lead="claude:opus", settings_kw=None):
     """Leads are pinned to ``lead`` (claude by default: the transport whose
     editing calls run only granted commands, as in Run 18)."""
     from quadratus.session import Session
@@ -80,7 +80,7 @@ def _run(tmp_path, monkeypatch, plan, leads, *, profile=None, runs_commands=True
     }
     replay = H.run(tmp_path, monkeypatch, Script(**overrides), files=files or {
         **_design_files(), "templates/index.html": WIDE_PAGE}, max_tasks=max_tasks,
-        settings=Settings(backend="cli"), lead_runs_commands=runs_commands,
+        settings=Settings(backend="cli", **(settings_kw or {})), lead_runs_commands=runs_commands,
         capture_profile=str(profile) if profile else None)
     replay.findings = H.result_json(replay).get("findings", [])
     return replay
@@ -332,3 +332,29 @@ def test_a_preview_that_writes_source_as_it_shuts_down_is_caught(tmp_path, monke
                   files={**_design_files(), "templates/index.html": FITTING_PAGE, "serve.py": serve})
     assert replay.result.error.startswith("DesignUnverified")
     assert "source changed while the harness previewed" in replay.result.error
+
+
+def test_a_capped_call_denied_the_harness_command_is_a_capability_stop(tmp_path, monkeypatch):
+    audit = AUDIT.replace(', "capture": ' + json.dumps(CAPTURE), "")
+    capped = json.loads(H.claude_cap("Kept trying to capture."))
+    capped["permission_denials"] = [dict(tool_name="Bash", tool_input={
+        "command": "PYTHONPATH=/pkg python -m quadratus.design_evidence http://localhost:5000/ t1 ."})]
+    replay = _run(tmp_path, monkeypatch, [REQS + audit, REQS + audit], {"t1": lambda call, replay: json.dumps(capped)},
+                  settings_kw={"lead_max_turns": 14})
+    assert replay.result.error.startswith("CapabilityUnavailable") and "turn limit" in replay.result.error
+    assert [c.task for c in replay.of("lead")] == ["t1"], "no continuation"
+
+
+def test_a_malformed_denial_field_changes_nothing(tmp_path, monkeypatch):
+    audit = AUDIT.replace(', "capture": ' + json.dumps(CAPTURE), "")
+
+    def lead(call, replay):
+        H.evidence(Path(call.cwd), call.task, age=0)
+        envelope = json.loads(H.claude_ok("Captured the page.\nCHANGED: []"))
+        envelope["permission_denials"] = 42
+        return json.dumps(envelope)
+    replay = _run(tmp_path, monkeypatch, [REQS + audit], {"t1": lead},
+                  files={**_design_files(), "templates/index.html": FITTING_PAGE})
+    assert replay.result.completed, replay.result.error
+    usage = (replay.result.run_dir / "usage.jsonl").read_text()
+    assert usage.strip(), "the call's usage is still metered"

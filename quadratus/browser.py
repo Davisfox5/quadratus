@@ -195,10 +195,22 @@ def render_page(
                     except Exception:  # noqa: BLE001 -- it may already be gone
                         pass
                 context.on("page", refuse_popup)
+
+                def check_landing(frame):
+                    # A server redirect is followed below the route guard,
+                    # so where the main frame actually landed is checked too
+                    # (Codex review of 3a55d82: a 302 to another loopback
+                    # service was captured as the target).
+                    if (frame == page.main_frame and allow_navigation is not None
+                            and not allow_navigation(frame.url)):
+                        blocked.append("landed on " + frame.url)
+                page.on("framenavigated", check_landing)
                 page.set_default_timeout(budget.ms(30_000))
                 page.set_default_navigation_timeout(budget.ms(30_000))
             page.goto(url, **({"timeout": budget.ms(30_000)} if budget.active else {}))
             page.wait_for_timeout(budget.ms(wait_ms) if budget.active else wait_ms)
+            if interactive and allow_navigation is not None and not allow_navigation(page.url):
+                blocked.append("landed on " + page.url)
             records = _run_steps(page, steps or [], blocked, step_timeout_ms, deadline)
             if blocked and not records:
                 # A pinned capture with no steps (the harness's own, Codex

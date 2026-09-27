@@ -73,7 +73,7 @@ from .delegation import (
 )
 from .latest import alias_for, resolution_source
 from .project import Project
-from .providers import LLMProvider, ProviderError, build_provider
+from .providers import LLMProvider, ProviderError, TurnLimitReached, build_provider
 from .registry import VENDORS, resolve
 from .usage import UsageMeter
 
@@ -392,7 +392,8 @@ class Fleet:
             check_hint = ("\nConfigured checks may be run exactly as written, from this project: "
                           + json.dumps(self.check_commands) + ". Do not add a shell prefix, "
                           "redirection, or additional commands.") if self.check_commands else ""
-            reply = self._generate(model_key, view, prompt, role + check_hint +
+            try:
+                reply = self._generate(model_key, view, prompt, role + check_hint +
                                   "\nYour working directory is the persistent project. "
                                   "Implement the requested changes in files. Do not commit, push, "
                                   "or change branches. Return a concise account and exactly one "
@@ -400,6 +401,20 @@ class Fleet:
                                   'call added, changed or deleted. Use CHANGED: [] for no changes. '
                                   'A standalone FETCH, CONSULT or WORKER request may omit the line; '
                                   'any files you changed before it are kept.')
+            except TurnLimitReached as exc:
+                # A capped call may have spent its rounds on exactly the
+                # denied command; that is the capability stop, not an
+                # ordinary continuation (Codex review of 3a55d82). A refusal
+                # never reaches here, so it keeps its precedence.
+                denied = _relevant_denials(getattr(view, "last_tool_failures", None),
+                                           getattr(self, "check_commands", ()) or ())
+                if denied:
+                    from .session import CapabilityUnavailable
+                    raise CapabilityUnavailable(
+                        f"{model_key} reached its turn limit after being denied a command the harness "
+                        "itself requires: " + "; ".join(c[:160] for c in denied[:3])
+                        + ". Declare it as a check or a capture profile. Work preserved.") from exc
+                raise
             denied = _relevant_denials(getattr(view, "last_tool_failures", None),
                                        getattr(self, "check_commands", ()) or ())
             if denied:
@@ -790,13 +805,28 @@ def _relevant_denials(failures, checks) -> List[str]:
     or the harness's own capture command. Other denials (exploration) are
     only recorded in the ledger."""
     out = []
-    for entry in failures or ():
+    for entry in failures if isinstance(failures, list) else ():
         if not isinstance(entry, dict) or entry.get("kind") != "permission_denied":
             continue
         command = entry.get("command")
-        if isinstance(command, str) and (command in checks or "quadratus.design_evidence" in command):
+        if isinstance(command, str) and (command in checks or _is_capture_invocation(command)):
             out.append(command)
     return out
+
+
+def _is_capture_invocation(command: str) -> bool:
+    """Whether ``command`` is the harness's capture invocation itself (an
+    interpreter running ``-m quadratus.design_evidence``, after any leading
+    VAR=value assignments), not a command that merely mentions it."""
+    import shlex
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    while words and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[0]):
+        words = words[1:]
+    return (len(words) >= 3 and re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", Path(words[0]).name) is not None
+            and words[1:3] == ["-m", "quadratus.design_evidence"])
 
 
 def _roster_for(vendor: str):
