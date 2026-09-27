@@ -486,24 +486,30 @@ nothing about a run changes.
 P2 cleared by Codex at 9c6024b (5857957044). Each P3 commit changes one
 decision site and carries its own red control on the commit before it.
 
-**P3.1, completion guard (b2446c3).** Both DONE sites (the DONE reply and the
-cap's goal confirmation) now also ask the typed record, and only after the
-legacy inputs already said complete. `outcome.completion_blockers` lists:
+**P3.1, completion guard (b2446c3, corrected in 6ca0cb4; cleared by Codex
+in 5858419581).** Both DONE sites (the DONE reply and the cap's goal
+confirmation) now also ask the typed record, and only after the legacy inputs
+already said complete. `outcome.completion_blockers` lists:
 
 - a task that never closed;
-- any missing fact (record completeness);
-- a mandatory contract edge not satisfied;
+- any missing fact, including a malformed record: an unsupported dispatch
+  state, an empty owner or reason, an incomplete owner change, a contract
+  naming another task, or a missing or mistyped requirement declaration;
+- a mandatory contract edge not satisfied and not discharged by fact;
 - an active terminal fact on any task;
 - a reference the ledger still owes, read live through `_open_refs`.
 
-A waiver covers a task's unmet *edges* only, never its missing facts, owed
-references or active facts. It holds for a task continued (CONTINUES) by a
-later task that closed clean or is itself waived, cycle-guarded, and for an
-audit whose unmet evidence became ledger findings. An unknown, later or
-cyclic CONTINUES reference is itself a blocker. Any blocker turns completion
-into `CompletionUnproven` (typed `unverified`) with no model call.
+Only an unmet edge is ever discharged, and only by fact. A later task in the
+CONTINUES chain, recorded complete with no active fact, must have satisfied
+that same edge under a contract requiring it; for evidence, delivered and
+reviewer it must also carry the predecessor's own declared intended state.
+Settled audit debt (findings that audit recorded, all resolved) discharges
+only the audit's evidence, delivered and reviewer edges, never checks,
+verification or settlement. An unknown, later or cyclic CONTINUES reference
+is a blocker. Any blocker turns completion into `CompletionUnproven` (typed
+`unverified`) with no model call.
 
-**P3.2, gate attribution (5bb03a4).** Retires "generic gate-fix for any
+**P3.2, gate attribution (0a4ae0d, privacy f2b664d).** Retires "generic gate-fix for any
 failure" (section 8) and closes J4, J5, J6 and J33 (G10).
 
 - The only supported report producer is harness-owned:
@@ -526,5 +532,10 @@ failure" (section 8) and closes J4, J5, J6 and J33 (G10).
 - A check with no declared report is never repaired. Other runners have no
   producer yet, so their failures are always handoffs. The operator
   profile's checks are P4 work.
-- `redact_command_paths` now also redacts relative spellings of a gate's
-  command files, which pytest prints for a grader outside the project.
+- `redact_command_paths` now also redacts the relative and bare spellings of
+  a gate's command files, which pytest prints for a grader outside the
+  project. It matches only the private file's own trailing path components,
+  so a public file sharing the basename in another folder keeps its
+  diagnostics; a bare shared name is redacted. Commands are displayed with
+  shell quoting so a path with spaces is still found; the operator record
+  keeps it exactly.
