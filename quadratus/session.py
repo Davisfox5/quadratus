@@ -2347,14 +2347,7 @@ class Session:
                     if self._requirement_reopens < self.config.max_requirement_reopens:
                         self._requirement_reopens += 1
                         continue
-                    open_ids = [f["id"] for f in self.findings if f["status"] == "open"]
-                    for finding in self.findings:
-                        if finding["status"] == "open":
-                            finding["unresolved_reason"] = "open when the reopen allowance ran out"
-                    self.stop_reason = (f"FindingsUnresolved: audit findings {', '.join(open_ids)} are still "
-                                        "open after the reopen allowance. Work preserved.")
-                    self._note("audit findings still open after the reopen allowance; stopping incomplete")
-                    self.completed = False
+                    self._stop_findings_unresolved("the reopen allowance ran out")
                     break
                 if not self._requirements_satisfied():
                     if self._requirement_reopens < self.config.max_requirement_reopens:
@@ -2392,8 +2385,10 @@ class Session:
                                       "with a COVERS line using the listed requirement ids.")
                 previous_description = None
                 continue
+            lines = len(_RESOLVES.findall(spec.description or ""))
             resolves, spec = _read_resolves(spec)
-            problem = self._resolves_problem(resolves, covers)
+            problem = (self._resolves_problem(resolves, covers) if lines <= 1 else
+                       "RESOLVES appears on more than one line; name every finding on one line.")
             if problem:
                 # The same allowance as COVERS: refused before any lead call.
                 self._covers_corrections += 1
@@ -2455,6 +2450,11 @@ class Session:
             # of 13, completed false). Raising the cap is not the fix -- the
             # extra iteration runs whatever task it is handed. One terminal
             # question instead, whose reply is never executed.
+            self._recheck_resolved_findings()
+            if self._open_findings_for(None):
+                # No slot is left to repay them, so the goal question is not asked.
+                self._stop_findings_unresolved("the task cap was reached")
+                return list(self.history)
             self.completed = (
                 not self._unresolved_partial
                 and not self._open_findings_for(None)
@@ -2561,7 +2561,7 @@ class Session:
                     blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
                 self.open_findings.extend(f"Task {spec.task_id} design: {b.strip()}" for b in blocking)
                 if not blocking and self._current_resolves:
-                    self._resolve_findings(spec, shots)
+                    self._resolve_findings(spec)
         self.design_checks.append(record)
         task.keep(json.dumps(record), kind="design-evidence")
 
@@ -3145,14 +3145,13 @@ class Session:
         return ("\n\n--- OPEN AUDIT FINDINGS ---\nThese measured faults were found by a review-only task "
                 "and keep their requirements NOT MET. Name a task that fixes one or more of them, with a "
                 "COVERS line including their requirements and a line 'RESOLVES: F<n>' naming them. It "
-                "resolves a finding only if its own fresh renders of the same page verify with no overflow "
+                "resolves a finding only if its own fresh renders of the same page, reached by the same "
+                "interaction steps and fixture, verify with no overflow "
                 "and are approved by the cross-vendor design review.\n" + "\n".join(lines))
 
-    def _findings_block_done(self) -> bool:
-        """Whether open findings refuse DONE, after re-checking resolved ones
-        against the current source; sets the refusal text when they do."""
-        if not self.findings:
-            return False
+    def _recheck_resolved_findings(self) -> None:
+        """Reopen each resolved finding whose resolving renders no longer
+        verify against the trusted source (a later task changed it)."""
         from .design_evidence import check
         for finding in self.findings:
             if finding["status"] != "resolved" or not self.project:
@@ -3163,6 +3162,23 @@ class Session:
                 finding.update(status="open", reopened=f"its resolving evidence no longer holds: {problem[:160]}")
                 for rid in finding["requirements"]:
                     self.memory.ledger.requirement_status[rid] = f"NOT MET: open finding {finding['id']}"
+
+    def _stop_findings_unresolved(self, why: str) -> None:
+        opened = self._open_findings_for(None)
+        for finding in self.findings:
+            if finding["status"] == "open":
+                finding["unresolved_reason"] = f"open when {why}"
+        self.stop_reason = (f"FindingsUnresolved: audit findings {', '.join(opened)} are still open; "
+                            f"{why}. Work preserved.")
+        self._note(f"audit findings still open when {why}; stopping incomplete")
+        self.completed = False
+
+    def _findings_block_done(self) -> bool:
+        """Whether open findings refuse DONE, after re-checking resolved ones
+        against the current source; sets the refusal text when they do."""
+        if not self.findings:
+            return False
+        self._recheck_resolved_findings()
         opened = self._open_findings_for(None)
         if not opened:
             return False
@@ -3170,22 +3186,46 @@ class Session:
         self._note(f"DONE sent back: open audit findings {', '.join(opened)}")
         return True
 
+    def _capture_state(self, task_id):
+        """``(target, steps, evidence)`` for a task's renders, from its summary.
+
+        ``steps`` is the ordered interaction as ``[action, selector, fixture
+        sha256]``: one URL can show several states (Run 17: the project list,
+        an empty dialog and the populated preview all share it), so a finding
+        is bound to the state it was measured in, not to the address alone.
+        ``evidence`` holds the summary's and each screenshot's sha256.
+        """
+        from .design_evidence import VIEWPORTS, evidence_dir
+        folder = evidence_dir(self.project, task_id)
+        root = Path(self.project)
+
+        def digest(path):
+            return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+        try:
+            summary = json.loads((folder / "summary.json").read_text())
+        except (OSError, ValueError):
+            summary = {}
+        requested = summary.get("steps") if isinstance(summary, dict) else None
+        steps = [[s.get("action"), s.get("selector"), s.get("sha256")]
+                 for s in (requested if isinstance(requested, list) else []) if isinstance(s, dict)]
+        evidence = dict(summary=(folder / "summary.json").relative_to(root).as_posix(),
+                        sha256=digest(folder / "summary.json"),
+                        screenshots={name: digest(folder / name / "page.png") for name in VIEWPORTS})
+        return (summary.get("target") if isinstance(summary, dict) else None), steps, evidence
+
     def _record_audit_findings(self, spec, records) -> List[str]:
         """Record each measured overflow of a review-only task as a finding
         owned by that task and its COVERS ids (from the harness, never model
         prose). Every COVERS id is marked unmet: the harness cannot attribute
         an overflow to one requirement, so all of them block until resolved."""
-        from .design_evidence import evidence_dir
-        summary = evidence_dir(self.project, spec.task_id) / "summary.json"
-        digest = hashlib.sha256(summary.read_bytes()).hexdigest() if summary.is_file() else None
+        _target, steps, evidence = self._capture_state(spec.task_id)
         ids = []
         for record in records:
             fid = f"F{len(self.findings) + 1}"
             self.findings.append(dict(
                 id=fid, task=spec.task_id, requirements=list(self._current_covers), kind=record["kind"],
-                target=record.get("target"), view=record.get("view"), width=record.get("width"),
-                viewport=record.get("viewport"), message=record["message"][:300],
-                evidence=dict(summary=summary.relative_to(Path(self.project)).as_posix(), sha256=digest),
+                target=record.get("target"), steps=steps, view=record.get("view"), width=record.get("width"),
+                viewport=record.get("viewport"), message=record["message"][:300], evidence=evidence,
                 status="open"))
             ids.append(fid)
         for rid in self._current_covers:
@@ -3202,21 +3242,20 @@ class Session:
                 and bool(self._current_covers) and bool(records)
                 and all(r.get("kind") == "product.overflow" for r in records))
 
-    def _resolve_findings(self, spec, shots) -> None:
+    def _resolve_findings(self, spec) -> None:
         """Close each finding this task names in RESOLVES whose acceptance its
-        own verified, approved renders establish: the same page, no overflow."""
-        target = next((s[len("target: "):] for s in shots if s.startswith("target: ")), None)
-        from .design_evidence import evidence_dir
-        summary = evidence_dir(self.project, spec.task_id) / "summary.json"
+        own verified, approved renders establish: the same page reached by the
+        same interaction (fixture content included), with no overflow."""
+        target, steps, evidence = self._capture_state(spec.task_id)
         for finding in self.findings:
             if finding["id"] not in self._current_resolves or finding["status"] != "open":
                 continue
-            if target != finding["target"]:
-                finding["last_attempt"] = f"{spec.task_id} rendered {target}, not {finding['target']}"
+            if target != finding["target"] or steps != finding["steps"]:
+                finding["last_attempt"] = (f"{spec.task_id} rendered a different state: {target} after "
+                                           f"{len(steps)} steps, not {finding['target']} after "
+                                           f"{len(finding['steps'])} steps as measured")
                 continue
-            finding.update(status="resolved", resolved_by=spec.task_id, reopened=None, resolution=dict(
-                summary=summary.relative_to(Path(self.project)).as_posix(),
-                sha256=hashlib.sha256(summary.read_bytes()).hexdigest()))
+            finding.update(status="resolved", resolved_by=spec.task_id, reopened=None, resolution=evidence)
             self._note(f"task {spec.task_id} resolved audit finding {finding['id']}")
 
     def _name_findings_stop(self) -> None:
