@@ -2064,6 +2064,20 @@ class Session:
         if want != legacy:
             outcome.mismatches.append(f"{requirement}: contract {want!r}, legacy {legacy!r}")
 
+    def _required(self, requirement: str, legacy):
+        """The current task's own requirement, from the contract fixed at
+        dispatch, with ``legacy`` (today's live reading) recorded beside it
+        through :meth:`_contract_agrees`. With no contract for this task the
+        legacy reading decides, as before, and the missing contract is a
+        recorded mismatch, so the run cannot count as complete."""
+        self._contract_agrees(requirement, legacy)
+        outcome, contract = self._outcome, getattr(self, "_contract", None)
+        if outcome is None or contract is None or contract.task_id != outcome.task_id:
+            if outcome is not None:
+                outcome.mismatches.append(f"{requirement}: contract missing, legacy {legacy!r}")
+            return legacy
+        return getattr(contract.required, requirement)
+
     def _source_identity(self) -> str:
         """The selected source's fingerprint, or an explicit reason there is
         none: "n/a" with no project, "unavailable" when it cannot be read."""
@@ -3146,19 +3160,23 @@ class Session:
         draft must not pass a revised tree, and a render with console errors
         is not evidence that the UI works.
         """
-        if not is_design_task(spec) or not (self.project and self.config.allow_writes):
-            self._contract_agrees("design_evidence", "none")
+        # Applicability is the task's own contract, fixed at dispatch (map
+        # P3.4, package 2). Today's live reading is still computed and any
+        # disagreement is recorded, so the run cannot count as complete.
+        legacy = ("none" if not is_design_task(spec) or not (self.project and self.config.allow_writes)
+                  else "disabled" if not self.config.design_self_verify
+                  else "harness" if self._harness_captures(spec) else "self")
+        evidence = self._required("design_evidence", legacy)
+        if evidence == "none":
             return
         self._stage("design")
         from .design_evidence import check_records
         record = dict(task=spec.task_id)
-        self._contract_agrees("design_evidence", "disabled" if not self.config.design_self_verify
-                              else "harness" if self._harness_captures(spec) else "self")
-        if not self.config.design_self_verify:
+        if evidence == "disabled":
             record.update(verified=None, problem="design self-verification disabled by the operator")
             self.design_checks.append(record)
             return
-        harness = self._harness_captures(spec)
+        harness = evidence == "harness"
         if harness:
             failure = self._harness_capture(spec)
             if failure:

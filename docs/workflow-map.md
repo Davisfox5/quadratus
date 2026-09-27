@@ -637,3 +637,13 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
    parallel child's "not merged" finding now always has its typed fact. The
    stop, the sibling's merge and dispatch authority are unchanged
    (`tests/test_contract_failure_outcome.py`).
+2. *`design_evidence` applicability from the contract.* `_check_design`
+   decides "none", "disabled", "harness" or "self" from the task's own
+   contract, fixed at dispatch, through `_required`. Today's live reading is
+   still computed and handed to `_contract_agrees`, so a disagreement is a
+   recorded mismatch and the run cannot count as complete. With no contract
+   for the task the live reading decides, as before, and the missing
+   contract is recorded. Configuration drift between dispatch and the check
+   can no longer drop or add the evidence requirement
+   (`tests/lifecycle/test_contract_applicability.py`). `design_review` is
+   package 3.
