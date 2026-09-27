@@ -288,7 +288,7 @@ def _redirecting(root, port, to):
         "        if self.path.startswith('/go'):\n"
         f"            self.send_response(302); self.send_header('Location', {to!r}); self.end_headers(); return\n"
         "        super().do_GET()\n"
-        f"socketserver.TCPServer(('127.0.0.1', {port}), H).serve_forever()\n")
+        f"socketserver.ThreadingTCPServer(('127.0.0.1', {port}), H).serve_forever()\n")
     return [sys.executable, "redirect.py"]
 
 
@@ -302,24 +302,56 @@ def test_a_redirecting_ready_path_is_not_ready(tmp_path):
             pass
 
 
+def _other_service(tmp_path, port):
+    """A live, unrelated loopback service that logs every request it gets."""
+    # Logged outside the project, so the log is never a source change.
+    log = open(tmp_path.parent / f"other-{port}.log", "w")
+    proc = subprocess.Popen(_server(port), cwd=tmp_path, stdout=log, stderr=subprocess.STDOUT)
+    deadline = time.monotonic() + 10
+    while not preview._listening("127.0.0.1", port) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    return proc, tmp_path.parent / f"other-{port}.log"
+
+
 @pytest.mark.skipif(not os.environ.get("QUADRATUS_CHROMIUM"), reason="needs a browser")
-def test_a_zero_step_redirect_to_another_loopback_service_is_blocked(tmp_path):
+@pytest.mark.parametrize("capture_path, page", [
+    ("/go", "<html><head><link rel=icon href='data:,'></head><body>ok</body></html>"),
+    ("/index.html", "<html><head><link rel=icon href='data:,'></head><body>ok"
+                    "<img src='http://127.0.0.1:{other}/index.html'></body></html>"),
+    ("/index.html", "<html><head><link rel=icon href='data:,'></head><body>ok<script>"
+                    "setTimeout(() => location.href = 'http://127.0.0.1:{other}/index.html', 50)</script></body></html>"),
+], ids=["server-redirect", "subresource", "script-navigation"])
+def test_nothing_reaches_another_live_loopback_service(tmp_path, capture_path, page):
+    """Codex review of 7a8c432: a 302 to a live second listener reached it and
+    the capture passed. Now no request leaves the origin, and the render fails."""
     from quadratus.design_evidence import check, source_fingerprint
     port, other = _free_port(), _free_port()
-    (tmp_path / "index.html").write_text("<html><head><link rel=icon href='data:,'></head><body>ok</body></html>")
-    unrelated = subprocess.Popen(_server(other), cwd=tmp_path, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    (tmp_path / "index.html").write_text(page.format(other=other))
+    unrelated, log = _other_service(tmp_path, other)
     try:
-        deadline = time.monotonic() + 10
-        while not preview._listening("127.0.0.1", other) and time.monotonic() < deadline:
-            time.sleep(0.1)
         profile = _profile(tmp_path, _redirecting(tmp_path, port, f"http://127.0.0.1:{other}/index.html"), port,
                            ready_path="/index.html")
-        assert capture_task(profile, tmp_path, "t1", {"path": "/go", "steps": []}) == ""
+        failure = capture_task(profile, tmp_path, "t1", {"path": capture_path, "steps": []})
         ok, problem, _ = check(tmp_path, "t1", 0, expected_source=source_fingerprint(tmp_path))
-        assert not ok and "navigation outside the preview was blocked" in problem
+        # Either the capture itself stops on the blocked navigation, or the
+        # render it leaves is unclean; never a passing check.
+        assert not ok and "outside the preview" in (failure + " " + problem), (failure, problem)
+        assert "source changed" not in problem
     finally:
         unrelated.kill()
         unrelated.wait()
+    assert "GET" not in log.read_text(), "the other service was never contacted"
+
+
+@pytest.mark.skipif(not os.environ.get("QUADRATUS_CHROMIUM"), reason="needs a browser")
+def test_a_same_origin_redirect_is_followed_and_passes(tmp_path):
+    from quadratus.design_evidence import check, source_fingerprint
+    port = _free_port()
+    (tmp_path / "index.html").write_text("<html><head><link rel=icon href='data:,'></head><body>ok</body></html>")
+    profile = _profile(tmp_path, _redirecting(tmp_path, port, "/index.html"), port, ready_path="/index.html")
+    assert capture_task(profile, tmp_path, "t1", {"path": "/go", "steps": []}) == ""
+    ok, problem, _ = check(tmp_path, "t1", 0, expected_source=source_fingerprint(tmp_path))
+    assert ok, problem
 
 
 @pytest.mark.parametrize("path", ["/etc/DUMMY", "../x/y/z", ".quadratus/capture-fixtures/t1/a/b", "fixtures/a.csv"])

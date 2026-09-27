@@ -91,6 +91,7 @@ def render_page(
     allow_navigation: Optional[Callable[[str], bool]] = None,
     step_timeout_ms: int = 5000,
     deadline: Optional[float] = None,
+    pin_requests: bool = False,
 ) -> PageEvidence:
     """Load ``target`` in headless Chromium and capture the evidence.
 
@@ -180,6 +181,30 @@ def render_page(
                 # loopback port and the capture still passed).
                 def guard(route):
                     request = route.request
+                    if pin_requests and allow_navigation is not None:
+                        # The harness's own capture (Codex review of
+                        # 7a8c432): no request may leave the origin at all,
+                        # and a navigation is fetched here without following
+                        # redirects, so an off-origin Location is refused
+                        # before the browser ever asks for it.
+                        url = request.url
+                        if not url.startswith(("data:", "blob:", "about:")) and not allow_navigation(url):
+                            (blocked if request.is_navigation_request() else failed_requests).append(
+                                ("" if request.is_navigation_request() else "blocked outside the preview: ") + url)
+                            route.abort()
+                            return
+                        if request.is_navigation_request():
+                            response = route.fetch(max_redirects=0)
+                            location = response.headers.get("location")
+                            if 300 <= response.status < 400 and location:
+                                from urllib.parse import urljoin
+                                target = urljoin(url, location)
+                                if not allow_navigation(target):
+                                    blocked.append("redirect to " + target)
+                                    route.abort()
+                                    return
+                            route.fulfill(response=response)
+                            return
                     if (request.is_navigation_request() and allow_navigation is not None
                             and not allow_navigation(request.url)):
                         blocked.append(request.url)
@@ -207,7 +232,12 @@ def render_page(
                 page.on("framenavigated", check_landing)
                 page.set_default_timeout(budget.ms(30_000))
                 page.set_default_navigation_timeout(budget.ms(30_000))
-            page.goto(url, **({"timeout": budget.ms(30_000)} if budget.active else {}))
+            try:
+                page.goto(url, **({"timeout": budget.ms(30_000)} if budget.active else {}))
+            except Exception as exc:  # noqa: BLE001 -- re-raised, named when the guard caused it
+                if blocked:
+                    raise RuntimeError("navigation outside the preview was blocked: " + blocked[-1][:200]) from exc
+                raise
             page.wait_for_timeout(budget.ms(wait_ms) if budget.active else wait_ms)
             if interactive and allow_navigation is not None and not allow_navigation(page.url):
                 blocked.append("landed on " + page.url)

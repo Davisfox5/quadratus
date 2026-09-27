@@ -321,6 +321,7 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
                 if item["action"] == "file" and _digest(Path(item["path"])) != item["sha256"]:
                     raise ValueError(f"fixture {item['label']} changed or vanished during the capture")
             evidence = render_page(target, out_dir=folder / name, viewport=viewport, steps=checked,
+                                   pin_requests=pinned,
                                    allow_navigation=allowed, step_timeout_ms=STEP_TIMEOUT_MS, deadline=deadline)
             out[name] = dict(screenshot=evidence.screenshot_path, clean=evidence.clean,
                              console_errors=evidence.console_errors[:10],
