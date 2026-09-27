@@ -53,6 +53,7 @@ from .deptree import (
     DependencyWatch,
 )
 from .memory import PersistentMemory, TaskMemory, TaskSummary
+from .outcome import RunOutcome, TaskOutcome, classify
 from .providers import PartialWorkSuspected, ProviderError, ProviderRefusal, TurnLimitReached
 from .registry import peers_for, resolve
 from .routing import (
@@ -957,8 +958,30 @@ class Session:
         #: The run's runtime-dependency identity (quadratus.deptree), set at
         #: run start when a project is selected.
         self.dependency_watch: Optional[DependencyWatch] = None
+        #: Typed outcomes recorded beside the legacy decisions (quadratus.outcome,
+        #: phase 1). Observational until phase 3 switches decisions to them.
+        self.task_outcomes: List[TaskOutcome] = []
+        self.run_outcome = RunOutcome()
+        self._outcome: Optional[TaskOutcome] = None
         self.requirement_audits: List[dict] = []
         self.requirement_reviews: List[dict] = []
+
+    def _open_finding(self, kind: str, text: str, *, legacy_route: bool = False) -> None:
+        """Append a legacy open finding and record it as a typed fact.
+
+        ``kind`` is the outcome class today's route implies (quadratus.outcome).
+        The legacy list stays the decision input until phase 3.
+        """
+        self.open_findings.append(text)
+        if self._outcome is not None:
+            self._outcome.note(kind, text, legacy_route=legacy_route)
+        else:
+            self.run_outcome.note(kind, text)
+
+    def _stop_with(self, kind: str, reason: str) -> None:
+        """Set the legacy ``stop_reason`` and record the run's typed stop."""
+        self.stop_reason = reason
+        self.run_outcome.note(kind, reason, legacy=reason.split(":", 1)[0].strip())
 
     def _verify_dependencies(self, window: str) -> None:
         """Stop the run if a runtime-dependency tree left its run-start
@@ -1759,7 +1782,8 @@ class Session:
             if report.blocking:
                 # Recorded as an open finding so the run cannot close clean
                 # while a task wrote somewhere it was told not to.
-                self.open_findings.append(
+                self._open_finding(
+                    "integrity",
                     f"Task {spec.task_id} changed paths outside its declared "
                     f"scope: {', '.join(report.out_of_scope)}. The work is "
                     f"preserved; decide whether it was wanted."
@@ -1794,6 +1818,54 @@ class Session:
 
     # -- one task ------------------------------------------------------------
     def run_task(self, spec: TaskSpec) -> TaskSummary:
+        """One task, with its typed outcome recorded beside the legacy state.
+
+        The outcome is observational in phase 1 (quadratus.outcome): every
+        decision below still reads the legacy inputs.
+        """
+        resolves = list(getattr(self, "_current_resolves", []) or [])
+        outcome = TaskOutcome(
+            task_id=spec.task_id,
+            intent=("audit" if is_review_only(spec) else "repair" if resolves else "implementation"),
+            lead=spec.lead or "", covers=list(getattr(self, "_current_covers", []) or []),
+            resolves=resolves, continues=getattr(self, "_continues", None) or "")
+        outcome.stage("dispatch")
+        prior, self._outcome = self._outcome, outcome
+        self.task_outcomes.append(outcome)
+        try:
+            summary = self._run_task_recorded(spec)
+        except BaseException as exc:
+            outcome.note(classify(exc), f"{type(exc).__name__}: {exc}")
+            outcome.closed_as = f"stopped:{type(exc).__name__}"
+            outcome.partial = dict(getattr(self, "in_flight", {}) or {}) or None
+            raise
+        else:
+            outcome.closed_as = getattr(summary, "outcome", "closed")
+            return summary
+        finally:
+            self._outcome = prior
+
+    def _stage(self, name: str) -> None:
+        if self._outcome is not None:
+            self._outcome.stage(name)
+
+    def _edge(self, name: str, satisfied) -> None:
+        if self._outcome is not None:
+            self._outcome.edge(name, satisfied)
+
+    def _count(self, attempt: str) -> None:
+        if self._outcome is not None:
+            self._outcome.count(attempt)
+
+    def _recover_continued(self, continues) -> None:
+        """A task that CONTINUES a capped one takes over its debt: the
+        predecessor's cap stops blocking, and its record stays (mirrors the
+        legacy ``_partial_tasks.discard``; removed in phase 3 with it)."""
+        for outcome in self.task_outcomes:
+            if continues and outcome.task_id == continues:
+                outcome.recover("cap")
+
+    def _run_task_recorded(self, spec: TaskSpec) -> TaskSummary:
         if self.project and self.config.allow_writes and spec.scope is None:
             raise RunStalled("Editing tasks must declare a scope before dispatch.")
         policy = self.config.repository_policy
@@ -1882,6 +1954,7 @@ class Session:
 
         # The lead drafts with full working memory, and with the fetch and
         # consult channels live: a reply that is a request gets served.
+        self._stage("draft")
         try:
             draft = self._draft_with_channels(lead, spec, task)
         except TurnLimitReached as exc:
@@ -1908,6 +1981,9 @@ class Session:
                                   available=lambda key: key not in excluded and self._available(key))
             if fresh is None:
                 raise
+            self._count("lead_recovery")
+            if self._outcome is not None:
+                self._outcome.note("transport", f"{type(exc).__name__}: {str(exc)[:200]}", stage="draft").recovered = True
             recovery = dict(task=spec.task_id, failed_lead=lead, next_lead=fresh,
                             failure=type(exc).__name__, source_unchanged=True,
                             needs=sorted(spec.needs), recovery_attempt=1)
@@ -1924,6 +2000,7 @@ class Session:
             draft = self._draft_with_channels(lead, spec, task)
         task.record("assistant", draft)
         task.keep(draft, kind="draft")
+        self._edge("draft", True)
 
         self._assess_scope(spec, task, before)
         self._brief_design_reviewers(spec)
@@ -1933,7 +2010,7 @@ class Session:
             if cheap.commands:
                 draft = self._run_integration_gate(lead, spec, task, gate=cheap) or draft
                 if not self.checks[-1]['passed']:
-                    self.open_findings.append('Cheap gates failed before review')
+                    self._open_finding('product', 'Cheap gates failed before review', legacy_route=True)
                     summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
                     summary = task.close(summary=summary_text, reasoning=reasoning, dead_ends=dead_ends)
                     self.memory.absorb(summary)
@@ -1952,6 +2029,7 @@ class Session:
         labels = {peer: f"Reviewer {chr(65 + i)}"
                   for i, peer in enumerate(collaborators)}
         notes: List[tuple] = []
+        self._stage("review")
         for peer in collaborators:
             with invocation(spec.task_id, "collaborator"):
                 note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
@@ -1983,7 +2061,10 @@ class Session:
             (p, n) for p, n in notes
             if n.strip().upper().rstrip(".") != "NO FINDINGS"
         ]
+        self._edge("review", True)
         if notes:
+            self._stage("revision")
+            self._count("revision")
             try:
                 revision = self._edit(
                     lead,
@@ -2004,6 +2085,7 @@ class Session:
                 spec, blocking, revision, task, labels=labels
             )
             while unresolved and cycles < self.config.max_fix_cycles:
+                self._count("revision")
                 try:
                     revision = self._edit(
                         lead,
@@ -2023,7 +2105,8 @@ class Session:
                     revision, task, labels=labels,
                 )
             if unresolved:
-                self.open_findings.extend(v for _, v in unresolved)
+                for _, verdict in unresolved:
+                    self._open_finding("unverified", verdict)
                 # The cap ran out with findings still open. They go to the
                 # record loudly rather than being lost in the transcript.
                 task.record(
@@ -2035,12 +2118,18 @@ class Session:
 
         self._run_integration_gate(lead, spec, task)
         self._check_design(spec, lead, collaborators, task)
+        if (self._outcome is not None and self.design_checks
+                and self.design_checks[-1].get("task") == spec.task_id):
+            self._outcome.evidence = dict(self.design_checks[-1])
+            self._outcome.edge("evidence", self.design_checks[-1].get("verified"))
 
         self._assess_scope(spec, task, before)
+        self._stage("closeout")
         summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
         summary = task.close(
             summary=summary_text, reasoning=reasoning, dead_ends=dead_ends
         )
+        self._edge("closeout", True)
         self.memory.absorb(summary)
         self.history.append(summary)
         return summary
@@ -2059,6 +2148,9 @@ class Session:
         as such, never folded in as a result.
         """
         state = self._inspect_partial_edits(before)
+        if self._outcome is not None:
+            self._outcome.note("cap", f"stopped at the lead turn limit ({exc.turns or '?'} turns)")
+            self._outcome.partial = dict(changed=state["changed"], changed_lines=state["changed_lines"])
         if self.project and self.config.allow_writes:
             if not state["inspected"]:
                 raise PartialWorkStopped("Lead stopped at its turn limit and the source could not "
@@ -2171,7 +2263,7 @@ class Session:
                 task.record("assistant", f"[{verifier}] {verdict}")
                 task.keep(verdict, kind=f"verify:{verifier}", author=verifier)
                 if 'BLOCKING' in verdict.upper() or 'UNRESOLVED' in verdict.upper():
-                    self.open_findings.append(verdict)
+                    self._open_finding("security", verdict)
 
             summary_text, reasoning, dead_ends = self._close_out(
                 excursion.worker, spec, task
@@ -2223,7 +2315,7 @@ class Session:
                 if self._security_snapshot(spec, draft) != snapshot:
                     raise StructuredError('Source changed during security verification')
             except StructuredError as exc:
-                self.open_findings.append(f'Security verification incomplete: {exc}')
+                self._open_finding('security', f'Security verification incomplete: {exc}')
                 return
             if verdict['verdict'] == 'accept':
                 return
@@ -2238,7 +2330,7 @@ class Session:
                 self._gate_fixes_used += 1
                 self._run_integration_gate(worker, spec, task, max_fixes=0)
                 continue
-            self.open_findings.append(f"Security verification {verdict['verdict']}: {raw}")
+            self._open_finding("security", f"Security verification {verdict['verdict']}: {raw}")
             return
 
     # -- orchestration -------------------------------------------------------
@@ -2462,6 +2554,8 @@ class Session:
         try:
             history = self._run_tasks(max_tasks)
         except BaseException as exc:
+            self.run_outcome.note(classify(exc), f"{type(exc).__name__}: {str(exc)[:300]}",
+                                  legacy=type(exc).__name__)
             try:
                 # A resolution a later task's changes undid must not persist as
                 # resolved because the run ended on an exception.
@@ -2478,7 +2572,10 @@ class Session:
             self._verify_dependencies("at the end of the run")
         except (DependencyTreeChanged, DependencyIdentityUnavailable) as exc:
             self.completed = False
-            self.stop_reason = self.stop_reason or f"{type(exc).__name__}: {exc}"
+            if self.stop_reason:
+                self.run_outcome.note("integrity", f"{type(exc).__name__}: {exc}")
+            else:
+                self._stop_with("integrity", f"{type(exc).__name__}: {exc}")
         if not self.completed:
             # The record says what holds at the end, whatever stopped the run.
             self._recheck_resolved_findings()
@@ -2488,6 +2585,7 @@ class Session:
     def _run_tasks(self, max_tasks: int) -> List[TaskSummary]:
         self.completed = False
         self.stop_reason = ""
+        self.run_outcome = RunOutcome()
         if self.project:
             # Captures fingerprint the same selected source this session
             # measures, exclusions included (design_evidence.source_fingerprint).
@@ -2503,6 +2601,7 @@ class Session:
         if self.config.plan_gate is not None:
             self._note("asking the orchestrator for the expected task list")
             if not self.config.plan_gate(self.plan()):
+                self.run_outcome.note("operator", "the plan gate declined the run", legacy="")
                 log.info("plan gate declined the run; nothing executed")
                 return []
         previous_description: Optional[str] = None
@@ -2532,20 +2631,28 @@ class Session:
                 if self._findings_block_done():
                     if self._requirement_reopens < self.config.max_requirement_reopens:
                         self._requirement_reopens += 1
+                        self.run_outcome.note("unverified", "DONE sent back: audit findings open", terminal=False)
                         continue
                     self._stop_findings_unresolved("the reopen allowance ran out")
                     break
                 if not self._requirements_satisfied():
                     if self._requirement_reopens < self.config.max_requirement_reopens:
                         self._requirement_reopens += 1
+                        self.run_outcome.note("unverified", "DONE sent back: requirements open", terminal=False)
                         continue
                     self._note("requirements still open after the reopen allowance; stopping incomplete")
                     self.completed = False
+                    # A silent legacy stop (map G9): recorded with legacy "".
+                    self.run_outcome.note("unverified", "requirements still open after the reopen allowance",
+                                          legacy="")
                     break
                 self._verify_dependencies("at DONE")
+                self.run_outcome.done_accepted = True
                 self.completed = (not self.open_findings and not self._unresolved_partial
                                   and not self._open_findings_for(None)
                                   and not any(not c["passed"] for c in self.checks))
+                if not self.completed:
+                    self.run_outcome.note("unverified", "DONE with open work", legacy="")
                 self._note("the orchestrator reports the goal met")
                 break
             if spec.description == previous_description:
@@ -2603,6 +2710,7 @@ class Session:
             if getattr(summary, "outcome", "closed") == "turn_limited":
                 # A capped continuation carries its predecessor's debt forward.
                 self._partial_tasks.discard(continues)
+                self._recover_continued(continues)
                 self._partial_tasks.add(spec.task_id)
                 self._turn_limited_in_a_row += 1
                 self._note(f"task {len(self.history)} stopped at the lead's turn limit; its "
@@ -2612,10 +2720,10 @@ class Session:
                     # Recorded, not raised: the stop is the breaker working,
                     # and every capped task's edits stay in place. But it is
                     # named, so the run's error is never blank (Codex, Run 14).
-                    self.stop_reason = (
+                    self._stop_with("cap", (
                         f"TurnLimitBreaker: the lead turn limit was reached "
                         f"{self._turn_limited_in_a_row} times in a row ({', '.join(capped)}); "
-                        "stopped instead of re-planning again. Work preserved.")
+                        "stopped instead of re-planning again. Work preserved."))
                     self._note(f"the lead turn limit was reached {self._turn_limited_in_a_row} "
                                f"times in a row; stopping instead of re-planning again")
                     break
@@ -2625,7 +2733,10 @@ class Session:
             # an unrelated clean task must not make the run complete (Codex
             # review of #25, 2026-09-25).
             self._partial_tasks.discard(continues)
+            self._recover_continued(continues)
             unresolved = self._settle_resolution(spec, checks_before, open_before)
+            if resolves and self.task_outcomes:
+                self.task_outcomes[-1].edge("settlement", not unresolved)
             for rid in covers:
                 self._mark_covered(rid, spec.task_id)
             self._current_covers, self._current_resolves = [], []
@@ -2636,9 +2747,9 @@ class Session:
             if unresolved:
                 # An explicit attempt that did not establish its acceptance is
                 # a stop, never an automatic second repair (contract v3).
-                self.stop_reason = (f"FindingsUnresolved: task {spec.task_id} named RESOLVES "
-                                    f"{', '.join(unresolved)} but did not establish their acceptance. "
-                                    "Work preserved.")
+                self._stop_with("unverified", (f"FindingsUnresolved: task {spec.task_id} named RESOLVES "
+                                               f"{', '.join(unresolved)} but did not establish their "
+                                               "acceptance. Work preserved."))
                 self._note(f"task {spec.task_id} did not resolve {', '.join(unresolved)}; stopping incomplete")
                 break
         else:
@@ -2662,6 +2773,10 @@ class Session:
                 and not self.open_findings
                 and not any(not c["passed"] for c in self.checks)
             )
+            self.run_outcome.done_accepted = self.completed
+            if not self.completed:
+                self.run_outcome.note("unverified", "the task cap was reached without a confirmed, "
+                                      "satisfied goal", legacy="")
         return list(self.history)
 
     def _brief_design_reviewers(self, spec) -> None:
@@ -2701,6 +2816,7 @@ class Session:
         """
         if not is_design_task(spec) or not (self.project and self.config.allow_writes):
             return
+        self._stage("design")
         from .design_evidence import check_records
         record = dict(task=spec.task_id)
         if not self.config.design_self_verify:
@@ -2712,8 +2828,8 @@ class Session:
             failure = self._harness_capture(spec)
             if failure:
                 record.update(verified=False, problem=failure, harness_capture=True)
-                self.open_findings.append(f"Task {spec.task_id} is design work without clean rendered "
-                                          f"evidence: {failure}.")
+                self._open_finding("invalid_proof", f"Task {spec.task_id} is design work without clean "
+                                                    f"rendered evidence: {failure}.")
                 self._design_unverified.append((spec.task_id, failure))
                 self.design_checks.append(record)
                 task.keep(json.dumps(record), kind="design-evidence")
@@ -2735,6 +2851,7 @@ class Session:
         elif not ok and harness:
             record["first_problem"] = problem
             self._note(f"task {spec.task_id}: design evidence shows a problem; one fix call ({problem[:100]})")
+            self._count("design_fix")
             self._edit(lead, (
                 f"Task: {spec.description}\n\nThe harness rendered this design task and the render "
                 f"shows a problem: {problem}.\nFix it in source. Do not start servers or run capture "
@@ -2752,6 +2869,7 @@ class Session:
         elif not ok:
             record["first_problem"] = problem
             self._note(f"task {spec.task_id}: design evidence missing or broken; one fix call ({problem[:100]})")
+            self._count("design_fix")
             import sys as _sys
             package_root = Path(__file__).resolve().parent.parent
             command = (f"PYTHONPATH={package_root} {_sys.executable} -m quadratus.design_evidence "
@@ -2782,22 +2900,24 @@ class Session:
                 return
         record.update(verified=ok, problem=problem, screenshots=shots)
         if not ok:
-            self.open_findings.append(f"Task {spec.task_id} is design work without clean rendered evidence: {problem}.")
+            self._open_finding("invalid_proof",
+                               f"Task {spec.task_id} is design work without clean rendered evidence: {problem}.")
             self._design_unverified.append((spec.task_id, problem))
             self._note(f"task {spec.task_id}: design work unverified ({problem[:120]})")
         vendor = lead.partition(":")[0]
         reviewer = next((p for p in collaborators if p.partition(":")[0] != vendor), None)
         if self.config.design_cross_check:
             if reviewer is None:
-                self.open_findings.append(
-                    f"Task {spec.task_id} is design work with no reviewer from another vendor available.")
+                self._open_finding(
+                    "unverified", f"Task {spec.task_id} is design work with no reviewer from another vendor available.")
             elif ok:
                 verdict = self._final_design_review(spec, reviewer, shots)
                 record["final_review"] = dict(reviewer=reviewer, verdict=verdict[:600])
                 blocking = [line for line in (verdict or "").splitlines() if line.strip().startswith("BLOCKING:")]
                 if (verdict or "").strip() != "APPROVED" and not blocking:
                     blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
-                self.open_findings.extend(f"Task {spec.task_id} design: {b.strip()}" for b in blocking)
+                for line in blocking:
+                    self._open_finding("unverified", f"Task {spec.task_id} design: {line.strip()}")
                 if not blocking and self._current_resolves:
                     # Committed only once the whole task has passed, and only
                     # for the renders snapshotted before the review and
@@ -2989,6 +3109,8 @@ class Session:
                 self.scope_reports.extend(child.scope_reports)
                 self.design_checks.extend(child.design_checks)
                 self.open_findings.extend(child.open_findings)
+                self.task_outcomes.extend(child.task_outcomes)
+                mine = next((o for o in child.task_outcomes if o.task_id == spec.task_id), None)
                 if outside or exc is not None:
                     kept = self.store.put(json.dumps({p: (after.get(p) or b"").decode("utf-8", "replace")
                                                       for p in changed}), kind="parallel-unmerged",
@@ -2997,6 +3119,10 @@ class Session:
                               else f"{type(exc).__name__}: {str(exc)[:200]}")
                     self.open_findings.append(f"Parallel task {spec.task_id} was not merged ({reason}); "
                                               f"its files are kept in artifact {kept.id}.")
+                    if mine is not None:
+                        mine.note("integrity" if outside else classify(exc), f"not merged: {reason}",
+                                  stage="merge")
+                        mine.closed_as = mine.closed_as if exc is not None else "stopped:unmerged"
                     self._partial_tasks.add(spec.task_id)
                     self._note(f"{spec.task_id} not merged: {reason[:160]}")
                     if exc is not None and not isinstance(exc, (PartialWorkStopped, ProviderError, RunStalled)):
@@ -3016,9 +3142,11 @@ class Session:
                 if getattr(summary, "outcome", "closed") == "turn_limited":
                     self.turn_limited.append(spec.task_id)
                     self._partial_tasks.discard(continues)
+                    self._recover_continued(continues)
                     self._partial_tasks.add(spec.task_id)
                 else:
                     self._partial_tasks.discard(continues)
+                    self._recover_continued(continues)
                     for rid in covers:
                         self._mark_covered(rid, spec.task_id)
                 self._note(f"{spec.task_id} merged ({len(changed)} files) and closed by {summary.author}")
@@ -3451,8 +3579,8 @@ class Session:
         for finding in self.findings:
             if finding["status"] == "open":
                 finding["unresolved_reason"] = f"open when {why}"
-        self.stop_reason = (f"FindingsUnresolved: audit findings {', '.join(opened)} are still open; "
-                            f"{why}. Work preserved.")
+        self._stop_with("unverified", (f"FindingsUnresolved: audit findings {', '.join(opened)} are still "
+                                       f"open; {why}. Work preserved."))
         self._note(f"audit findings still open when {why}; stopping incomplete")
         self.completed = False
 
@@ -3705,8 +3833,11 @@ class Session:
         """
         if self._design_unverified and not self.stop_reason:
             task_id, problem = self._design_unverified[-1]
-            self.stop_reason = (f"DesignUnverified: task {task_id} is design work without clean rendered "
-                                f"evidence: {str(problem)[:400]}. Work preserved.")
+            self._stop_with("unverified", (f"DesignUnverified: task {task_id} is design work without clean "
+                                           f"rendered evidence: {str(problem)[:400]}. Work preserved."))
+        elif not self.stop_reason:
+            # A silent legacy stop (map G9): open findings or a failed check.
+            self.run_outcome.note("unverified", "stopped on open findings or a failed check", legacy="")
 
     def _lead_context(self, spec: TaskSpec) -> List[str]:
         """The capped predecessor's handoff and the task's files, for a lead.
@@ -3986,6 +4117,7 @@ class Session:
         gate = gate if gate is not None else self.config.integration_gate
         if gate is None:
             return ""
+        self._stage("checks")
         ceiling = self.config.max_gate_fixes
         if max_fixes is not None:
             ceiling = min(ceiling, getattr(self, "_gate_fixes_used", 0) + max_fixes)
@@ -4013,6 +4145,19 @@ class Session:
         self.checks.append({"passed": result.passed, "command": result.command,
                             "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
+        # Today any failed check entry blocks DONE, even when a later check in
+        # the same task passed (map G12), so the fact is never recovered here.
+        # Classed as a product repair because that is today's route (map G10).
+        if self._outcome is not None:
+            self._outcome.checks.append(dict(passed=result.passed,
+                                             receipts=[[r.id, r.status] for r in result.receipts]))
+            self._outcome.attempts["gate_fix"] = getattr(self, "_gate_fixes_used", 0)
+            self._outcome.edge("checks", result.passed)
+            if not result.passed:
+                self._outcome.note("product", "the integration gate was failing at close",
+                                   stage="checks", legacy_route=True)
+        elif not result.passed:
+            self.run_outcome.note("product", "a gate outside any task (the merge gate) was failing")
         if not result.passed:
             task.record(
                 "user",

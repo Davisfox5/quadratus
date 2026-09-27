@@ -113,6 +113,8 @@ class Replay:
     calls: List[Call] = field(default_factory=list)
     project: Optional[Path] = None
     result: object = None
+    #: result.json "workflow": the typed outcomes and their parity record.
+    workflow: dict = field(default_factory=dict)
 
     def artifacts(self, kind_prefix: str) -> List[str]:
         """Ids of stored artifacts with any recorded kind starting ``kind_prefix``."""
@@ -211,6 +213,13 @@ def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
                                 **({"capture_profile": capture_profile} if capture_profile else {}),
                                 run_limits=limits or RunLimits(max_calls=120, max_reported_tokens=6_000_000,
                                                                wall_seconds=600, max_concurrent_workers=2))
+    # Phase 1 of the shared workflow plan: on every whole-controller replay,
+    # the typed outcome must describe what the legacy decisions decided.
+    result = Path(replay.result.run_dir) / "result.json"
+    if result.exists():
+        replay.workflow = json.loads(result.read_text()).get("workflow") or {}
+        parity = replay.workflow.get("parity") or {}
+        assert parity.get("agree"), f"typed outcome parity failed: {parity or replay.workflow}"
     return replay
 
 

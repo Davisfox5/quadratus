@@ -1,7 +1,9 @@
 # Workflow map and whole-journey matrix (phase 0)
 
 Phase 0 of the shared workflow plan agreed on #25 (5853881701 to 5853910988,
-initiated in 5856716643). No engine behaviour changes in this phase. This map
+initiated in 5856716643), amended by Codex's review (5856768605, folded in
+below). No engine behaviour changed in phase 0. Phase 1's status is in
+section 10. This map
 is the reference that phases 1 to 3 are measured against. Line numbers are
 from `6382cf2`.
 
@@ -16,13 +18,13 @@ from `6382cf2`.
 - **Every failed check is treated as a product defect.** The gate can't tell
   "tests ran and failed" from "the runner never started", and there is no
   structured test report anywhere.
-- **Eleven concrete gaps** turned up while mapping (section 6). Some are real
+- **Twelve concrete gaps** turned up while mapping (section 6). Some are real
   defects, such as a turn cap escaping on two paths and stale state read
   across tasks. They go into the matrix as journeys, not as side fixes.
-- **The matrix has 31 journeys** (section 7). Each one names what the current
+- **The matrix has 38 journeys** (section 7; J9 is split into J9a and J9b, and J32 to J38 were added from review). Each one names what the current
   engine does, what the agreed plan requires, and the phase that changes it.
   Phase 1 adds no behaviour: it records a typed outcome beside today's
-  decisions and asserts they agree on all 31.
+  decisions and asserts they agree on every whole-run replay.
 
 ## 1. The journey as the code runs it today
 
@@ -169,6 +171,36 @@ review.
 11. unverified (delivery, review or settlement missing);
 12. clean.
 
+**Rules for using the precedence** (amendment 1):
+
+- **`primary` is for reporting.** It never licenses ignoring another active
+  constraint.
+- **Stops dominate repair.** Refusal, security, integrity and relevant denial
+  outrank repair wherever they occur, worker errands included.
+- **A latched budget forbids another call** whatever ranks first.
+- **Security acceptance is not a security failure.** An accepted security task
+  can end clean.
+
+**History versus terminal blockers** (amendment 3):
+
+- A fact is history.
+- A recovered failure keeps its record and stops blocking once every
+  mandatory edge and inherited debt is satisfied: a transport error the lead
+  recovered from (J25), a successful repair (J2), a recapture (J8), or a
+  CONTINUES that finished (J22).
+- A cap or budget that ends the work stays incomplete.
+- `stages` records what was attempted; `edges` records which mandatory edges
+  were satisfied (amendment 5).
+
+**Ownership** (amendments to the names):
+
+- `TaskContract.scope` and `.authority` reference grants that were already
+  validated; they never mint authority.
+- The requirements ledger stays authoritative for requirement and finding
+  identity and settlement. Outcomes carry references to it.
+- An outcome may be finalised by runtime-owned updates while its dispatch
+  contract stays fixed.
+
 **Structured failure attribution** (phase 3):
 
 - A check declares its report format: JUnit XML for pytest (`--junitxml`) or a
@@ -198,6 +230,10 @@ review.
 - **G9:** four stop paths leave `error == ""` (section 2).
 - **G10:** the gate can't tell a runner crash from an assertion failure.
 - **G11 (1004):** `design-fix` gets the reviewer role packet, not the lead's.
+- **G12 (DONE, 2546 / 2657):** any failed `checks` entry blocks DONE, even
+  when a later check in the same task passed. A task whose gate failed, then
+  passed after its design-fix, ends the run incomplete with a blank error.
+  Found by the phase 1 prospective case (checks `[False, True]`, `error ""`).
 
 ## 7. Whole-journey acceptance matrix
 
@@ -207,6 +243,16 @@ review.
 - **Required** is the agreed plan.
 - **Phase** is where Today changes. P1 journeys change nothing; they add the
   typed outcome and a parity assertion.
+
+**How journeys are tested in each phase** (amendment 4):
+
+- In P1 a journey asserts today's route, known-wrong routes included, and
+  never decides them.
+- Where the plan changes a route, the prospective expectation sits beside it
+  as a strict xfail naming its phase, so it must flip when that phase lands.
+- A changed-route test must be red on the immediate pre-change commit of its
+  own phase.
+- J2 needs no structured report in P1.
 
 **Every journey asserts:**
 
@@ -227,7 +273,8 @@ review.
 | J6 | Capability lost mid-suite (some tests ran, then the browser died) | gate-fix | operator handoff | P3 |
 | J7 | Preflight capability probe fails | no probe exists | stop before any model call | P2 |
 | J8 | Evidence invalid, source and capability fine: recapture intended state | one design-fix | `invalid proof`, bounded recapture | P1, then P3 |
-| J9 | Evidence missing, stale or tampered | design-fix, then unverified | `invalid proof`, then unverified; never approved | P1 |
+| J9a | Evidence missing, stale or invalid | design-fix, then unverified | `invalid proof`, then unverified; never approved | P1 |
+| J9b | Evidence tampered, or its identity mismatches (sha, source, fixture) | design-fix, then unverified | `integrity`; never recapture or product repair (amendment 2) | P3 |
 | J10 | Checks pass, reviewer response missing or not delivered | synthetic BLOCKING, open finding | `unverified`; not completed | P1 |
 | J11 | Harness capture after an earlier task's failed check (G4) | capture skipped wrongly | scoped to this task | P3 |
 | J12 | Audit finds overflow, becomes debt `F<n>` | debt recorded | same, typed | P1 |
@@ -250,6 +297,13 @@ review.
 | J29 | Parallel batch: one child merged, one out of scope, merge gate | merged / unmerged / gate | per-child outcomes; G5 and G6 fixed | P1, then P3 |
 | J30 | Worker errand: optional failure vs required failure | error-as-result | optional recorded; required fails its edge | P2 |
 | J31 | Design-fix role packet (G11) | reviewer packet | lead packet | P3 |
+| J32 | Preflight passes, then the source or dependency tree changes, or the identity becomes unavailable | dependency stop | `integrity` above everything but refusal and security | P1 (dependency), P2 (preflight) |
+| J33 | Compound: product assertion failure plus a setup failure, denial or latched budget | gate-fix, or the stop | the dominating stop; **no repair call** | P3 |
+| J34 | CONTINUES carries unresolved requirement and finding ids | ids re-listed | carried once, never double-counted or settled early | P2 |
+| J35 | Parallel child debt | child finding kept open | the merge gate cannot close unresolved child debt | P1, then P3 |
+| J36 | CHANGED report mismatch | PartialWorkStopped | `integrity`, reply kept | P1 |
+| J37 | Transport timeout after writes | PartialWorkSuspected, then Stopped | `integrity`, tree inspected | P1 |
+| J38 | A check fails, then passes later in the same task (G12) | incomplete, blank error | the recovered failure is history; DONE can stand | P3 |
 
 J1 to J31 are whole-controller replays through `tests/lifecycle/harness.py`
 (only the CLI launch is faked). Existing lifecycle cases already cover parts of
@@ -276,3 +330,49 @@ Each temporary parity field added in P1 names its P3 removal step in code.
 - New roles, authority or limits.
 - Patching preserved outputs.
 - The interview / empty-repository stage.
+
+## 10. Phase 1 status
+
+**What phase 1 adds, and what it doesn't change:**
+
+- `quadratus/outcome.py` holds `TaskOutcome`, `RunOutcome`, the precedence,
+  `classify` and `parity`.
+- The session records facts at the points where it already acts:
+  - `_open_finding` wraps every open-finding writer, with the class today's
+    route implies;
+  - `_stop_with` wraps every `stop_reason`;
+  - run-level facts cover exceptions, silent stops (`legacy ""`), DONE and the
+    task cap;
+  - task facts cover the gate, design evidence, caps and recovery;
+  - CONTINUES recovery mirrors `_partial_tasks.discard`.
+- **No decision reads the typed record.** `result.json` gains `workflow`
+  (`tasks`, `run`, `parity`).
+- **Parity** checks three things:
+  - completion agrees;
+  - an incomplete run's legacy error name is the one its typed stop recorded;
+  - every task the legacy history closed has a typed outcome closed the same way.
+
+  It is observational: a disagreement is recorded, never raised in a run.
+- **Every whole-controller replay** in `tests/lifecycle` asserts parity
+  (`harness.run`).
+
+**Temporary duplicates and where they go:**
+
+| Field | Removed in |
+| --- | --- |
+| `TaskOutcome.closed_as` (mirror of history) | P3, when history reads outcomes |
+| `_open_finding` writing both the list and the fact | P3, when `open_findings` stops being a decision input |
+| `_stop_with` writing `stop_reason` | P3, when the terminal outcome replaces `stop_reason` |
+| `_recover_continued` beside `_partial_tasks` | P3, with `_partial_tasks` |
+| `legacy_route` product facts from any failed check | P3, structured attribution |
+
+**Journey coverage in P1:**
+
+- `tests/lifecycle/test_workflow_outcomes.py` pins the typed record for
+  J1, J2, J3, J9a, J10, J15, J16, J17, J18, J20, J22, J23, J24, J25 and J26.
+- Strict xfails: J4 (runner crash, no gate-fix) and J38 / G12.
+- Every other lifecycle replay (184 cases, among them audit debt J12 to J14,
+  harness capture, dependency identity J16 and J32, caps J20, and parallel
+  batches where present) asserts parity.
+- J27, J29, J30, J33, J34 and J35 get dedicated cases in the phase that
+  changes them.

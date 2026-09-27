@@ -364,6 +364,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'findings': list(getattr(session, 'findings', []) or []) if session else [],
         'dependency_identity': (getattr(getattr(session, 'dependency_watch', None), 'record', None)
                                 if session else None),
+        'workflow': _workflow_record(session, completed, error),
         'parallel_batches': list(getattr(session, 'parallel_batches', []) or []) if session else [],
         'trace': {'calls': len(traces),
                   'transcripts_found': sum(1 for t in traces if t.get('tool_calls') is not None),
@@ -416,6 +417,28 @@ def _preferences_record(settings=None):
     return {"requested": "neutral", "observed": "not verified per CLI",
             "flags_passed": {s.vendor: list(s.neutral_args) for s in specs},
             "not_removable": [s.neutral_gap for s in specs if s.neutral_gap]}
+
+
+def _workflow_record(session, completed, error):
+    """The typed task and run outcomes and their parity with the legacy
+    decisions (quadratus.outcome, phase 1). Observational: never fails a run."""
+    if session is None or not hasattr(session, 'run_outcome'):
+        return None
+    try:
+        from dataclasses import asdict
+
+        from .outcome import parity
+        try:
+            open_ids = list(session._open_findings_for(None))
+        except Exception:  # noqa: BLE001 -- recorded as unknown, never raised
+            open_ids = ['unknown']
+        history = [f"{s.task_id}:{getattr(s, 'outcome', 'closed')}" for s in session.history]
+        return {'tasks': [t.to_dict() for t in session.task_outcomes],
+                'run': asdict(session.run_outcome),
+                'parity': parity(session.run_outcome, session.task_outcomes, open_findings=open_ids,
+                                 legacy_completed=completed, legacy_error=error, history=history)}
+    except Exception as exc:  # noqa: BLE001 -- observation never fails a run
+        return {'error': f'{type(exc).__name__}: {exc}'}
 
 
 def standing_rulings(path, fallback=None):
