@@ -118,3 +118,64 @@ def test_an_operator_disabled_check_is_recorded_not_satisfied(tmp_path, monkeypa
     assert record["verified"] is None and "disabled by the operator" in record["problem"]
     assert _t1(replay)["contract"]["required"]["design_evidence"] == "disabled"
     assert not replay.of("design-fix")
+
+
+# -- package 3: design_review applicability ------------------------------------
+
+def _review_drift_at_check(monkeypatch, value):
+    check = Session._check_design
+
+    def drifted(self, spec, *args):
+        self.config = dataclasses.replace(self.config, design_cross_check=value)
+        return check(self, spec, *args)
+    monkeypatch.setattr(Session, "_check_design", drifted)
+
+
+def _reviews(replay):
+    return [c for c in replay.of("design-review") if c.task == "t1"]
+
+
+def test_a_required_review_is_not_dropped_when_the_setting_drifts_off(tmp_path, monkeypatch):
+    _review_drift_at_check(monkeypatch, False)
+    replay = _run(tmp_path, monkeypatch, _edits_and_captures, record_complete=False)
+    assert len(_reviews(replay)) == 1, "the review fixed at dispatch still ran"
+    assert _evidence(replay)["final_review"]["verdict"] == "APPROVED"
+    assert "design_review: contract True, legacy False" in json.dumps(_t1(replay))
+    assert not replay.result.completed
+
+
+def test_an_unrequired_review_is_not_added_when_the_setting_drifts_on(tmp_path, monkeypatch):
+    run_task = Session.run_task
+
+    def dispatched_off(self, spec):
+        self.config = dataclasses.replace(self.config, design_cross_check=spec.task_id != "t1")
+        return run_task(self, spec)
+    monkeypatch.setattr(Session, "run_task", dispatched_off)
+    _review_drift_at_check(monkeypatch, True)
+    replay = _run(tmp_path, monkeypatch, _edits_and_captures, record_complete=False)
+    assert not _reviews(replay), "no review the contract did not require"
+    assert "no reviewer from another vendor" not in json.dumps(replay.workflow)
+    assert "design_review: contract False, legacy True" in json.dumps(_t1(replay))
+    assert not replay.result.completed
+
+
+def test_the_default_design_task_still_gets_one_cross_vendor_review(tmp_path, monkeypatch):
+    replay = _run(tmp_path, monkeypatch, _edits_and_captures)
+    reviews = _reviews(replay)
+    lead = next(c for c in replay.of("lead") if c.task == "t1")
+    assert len(reviews) == 1 and reviews[0].vendor != lead.vendor, "one review, from another vendor"
+    assert _t1(replay)["contract"]["required"]["design_review"] is True
+    assert _t1(replay)["edges"]["reviewer"] is True
+
+
+def test_with_the_review_off_throughout_no_review_is_required(tmp_path, monkeypatch):
+    run_task = Session.run_task
+
+    def off(self, spec):
+        self.config = dataclasses.replace(self.config, design_cross_check=False)
+        return run_task(self, spec)
+    monkeypatch.setattr(Session, "run_task", off)
+    replay = _run(tmp_path, monkeypatch, _edits_and_captures)
+    assert not _reviews(replay)
+    assert _t1(replay)["contract"]["required"]["design_review"] is False
+    assert _evidence(replay)["verified"] is True

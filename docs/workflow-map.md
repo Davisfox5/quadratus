@@ -647,3 +647,10 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
    can no longer drop or add the evidence requirement
    (`tests/lifecycle/test_contract_applicability.py`). `design_review` is
    package 3.
+3. *`design_review` applicability from the contract.* Whether
+   `_check_design` requires the cross-vendor design review is the task's own
+   `required.design_review`, fixed at dispatch, through `_required`; the
+   live `design_cross_check` is still compared and a disagreement recorded.
+   Collaborator selection and the prompt text still read the live setting
+   and are unchanged. Drift between dispatch and the check can no longer
+   drop or add the review (`tests/lifecycle/test_contract_applicability.py`).

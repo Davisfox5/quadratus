@@ -3266,8 +3266,10 @@ class Session:
             self._note(f"task {spec.task_id}: design work unverified ({problem[:120]})")
         vendor = lead.partition(":")[0]
         reviewer = next((p for p in collaborators if p.partition(":")[0] != vendor), None)
-        self._contract_agrees("design_review", bool(self.config.design_cross_check))
-        if self.config.design_cross_check:
+        # Whether a cross-vendor review is required is the task's own
+        # contract, fixed at dispatch (map P3.4, package 3); the live
+        # setting is still compared and a disagreement recorded.
+        if self._required("design_review", bool(self.config.design_cross_check)):
             if reviewer is None:
                 self._edge("delivered", False)
                 self._edge("reviewer", False)
