@@ -206,11 +206,12 @@ def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
 
 
 def evidence(root: Path, task_id: str, *, age: float, target="http://127.0.0.1:5000/import",
-             measured=None, clean=True) -> None:
+             measured=None, clean=True, steps=None) -> None:
     """Clean desktop and mobile renders, as ``quadratus.design_evidence`` writes them.
 
     ``age`` is the screenshots' mtime offset from now: ``STALE`` predates any
-    later editing call, ``FRESH`` postdates the current one.
+    later editing call, ``FRESH`` postdates the current one. ``steps`` is a
+    list of ``(action, selector)`` clicks and waits, each recorded as done.
     """
     import struct
     import zlib
@@ -234,10 +235,15 @@ def evidence(root: Path, task_id: str, *, age: float, target="http://127.0.0.1:5
                            failed_requests=[], document_width=wide,
                            overflow=[dict(element="div.toolbar", side="right", left=0, right=wide, width=wide)]
                            if wide > width + 1 else [])
+        if steps:
+            views[name]["steps"] = [dict(n=i, action=a, selector=sel, ok=True)
+                                    for i, (a, sel) in enumerate(steps, 1)]
     from quadratus.design_evidence import source_fingerprint
     # As a real capture records it: the tree these renders show is the tree now.
-    (evidence_dir(root, task_id) / "summary.json").write_text(json.dumps(dict(
-        target=target, views=views, source_fingerprint=source_fingerprint(root))))
+    summary = dict(target=target, views=views, source_fingerprint=source_fingerprint(root))
+    if steps:
+        summary["steps"] = [dict(action=a, selector=sel) for a, sel in steps]
+    (evidence_dir(root, task_id) / "summary.json").write_text(json.dumps(summary))
 
 
 def gate_results(replay: Replay) -> List[str]:
