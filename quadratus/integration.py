@@ -39,9 +39,13 @@ __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateS
 #: (phase 3, #25). Other runners have no producer: their failures are never
 #: attributable, so never repaired.
 REPORT_TOKEN = "{report}"
-PRODUCER = "quadratus-pytest/2"
-_PRODUCER_DIR = str(Path(__file__).resolve().parent / "_gate_producer")
-_PRODUCER_MODULE = "quadratus_gate_report"
+PRODUCER = "quadratus-pytest/3"
+_PRODUCER_FILE = Path(__file__).resolve().parent / "_gate_producer" / "quadratus_gate_report.py"
+#: Kept for the install-layout proof: where the shipped producer lives.
+_PRODUCER_DIR = str(_PRODUCER_FILE.parent)
+_REPORT_FAILURES = 200
+_WHEN = ("setup", "call", "teardown")
+_COUNTS = ("passed", "failed", "errors", "skipped")
 _REPORT_MAX_BYTES = 1024 * 1024
 
 
@@ -59,57 +63,138 @@ class CheckUnattributable(RuntimeError):
 def _report_slot(argv, env):
     """``argv`` and ``env`` for one invocation: with the report token
     replaced by a harness-owned path and the producer loaded, when the check
-    declares it. Yields (argv, env, path, nonce); path is None otherwise."""
+    declares it. Yields (argv, env, path, expected); path and expected are
+    None otherwise.
+
+    The shipped producer is copied into a directory made for this
+    invocation, under a module name derived from a fresh nonce, so a project
+    module cannot shadow it by name or import order; ``expected`` holds the
+    nonce, the copy's real path and the shipped source digest the report
+    must state. Binding, not secrecy: test code in the same process that is
+    written to forge a report can do so, as it could fake a pass."""
     argv = list(argv)
     if not any(REPORT_TOKEN in a for a in argv):
         yield argv, env, None, None
         return
     import secrets
     owned = tempfile.mkdtemp(prefix="quadratus-report-")
-    path, nonce = os.path.join(owned, "report.json"), secrets.token_hex(16)
+    nonce = secrets.token_hex(16)
+    module = f"quadratus_gate_report_{secrets.token_hex(8)}"
+    source = _PRODUCER_FILE.read_bytes()
+    copy = os.path.join(owned, module + ".py")
+    with open(copy, "wb") as out:
+        out.write(source)
+    expected = dict(nonce=nonce, module_file=os.path.realpath(copy),
+                    module_sha256=hashlib.sha256(source).hexdigest())
+    path = os.path.join(owned, "report.json")
     plugins = [p for p in env.get("PYTEST_PLUGINS", "").split(",") if p.strip()]
-    env = dict(env, QUADRATUS_GATE_NONCE=nonce,
-               PYTEST_PLUGINS=",".join(plugins + [_PRODUCER_MODULE]),
-               PYTHONPATH=os.pathsep.join([_PRODUCER_DIR] + [p for p in [env.get("PYTHONPATH")] if p]))
+    env = dict(env, QUADRATUS_GATE_NONCE=nonce, PYTEST_PLUGINS=",".join(plugins + [module]),
+               PYTHONPATH=os.pathsep.join([owned] + [p for p in [env.get("PYTHONPATH")] if p]))
     try:
-        yield [a.replace(REPORT_TOKEN, path) for a in argv], env, path, nonce
+        yield [a.replace(REPORT_TOKEN, path) for a in argv], env, path, expected
     finally:
         shutil.rmtree(owned, ignore_errors=True)
 
 
-def read_report(path, nonce) -> dict:
-    """The producer's report, bounded. ``state``: undeclared, missing,
-    unparsable, foreign (another producer or invocation) or parsed."""
+def _read_capped(path):
+    """The report's bytes, read without following a link, without blocking
+    on a FIFO or device, and never more than the cap plus one byte: from a
+    descriptor whose regular-file identity matches what was stat'ed.
+    Returns (bytes, None) or (None, (state, detail))."""
+    import stat as st
+    try:
+        before = os.lstat(path)
+    except OSError:
+        return None, ("missing", "")
+    if not st.S_ISREG(before.st_mode):
+        return None, ("unparsable", "not a regular file")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        return None, ("unparsable", f"{type(exc).__name__}: {str(exc)[:120]}")
+    try:
+        opened = os.fstat(fd)
+        if (not st.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)):
+            return None, ("unparsable", "replaced while being opened")
+        chunks, total = [], 0
+        while total <= _REPORT_MAX_BYTES:
+            chunk = os.read(fd, min(65536, _REPORT_MAX_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        if total > _REPORT_MAX_BYTES:
+            return None, ("unparsable", f"more than {_REPORT_MAX_BYTES} bytes")
+        return b"".join(chunks), None
+    except OSError as exc:
+        return None, ("unparsable", f"{type(exc).__name__}: {str(exc)[:120]}")
+    finally:
+        os.close(fd)
+
+
+def _is_count(value) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _malformed(data) -> str:
+    """Why a report's fields are malformed or impossible; "" when sound."""
+    counts, failures = data.get("counts"), data.get("failures")
+    if not (type(data.get("exitstatus")) is int and 0 <= data["exitstatus"] <= 5):
+        return "exitstatus"
+    if not _is_count(data.get("collected")) or not _is_count(data.get("collect_errors")):
+        return "collected or collect_errors"
+    if not isinstance(counts, dict) or set(counts) != set(_COUNTS) or not all(_is_count(counts[k]) for k in _COUNTS):
+        return "counts"
+    if type(data.get("truncated")) is not bool:
+        return "truncated"
+    if not isinstance(failures, list) or len(failures) > _REPORT_FAILURES:
+        return "failures"
+    for f in failures:
+        if (not isinstance(f, dict) or not isinstance(f.get("nodeid"), str) or f.get("when") not in _WHEN
+                or type(f.get("assertion")) is not bool
+                or not (f.get("exc_type") is None or isinstance(f.get("exc_type"), str))):
+            return "a failure record"
+    if counts["passed"] + counts["failed"] + counts["skipped"] > data["collected"]:
+        return "more executed than collected"
+    in_call = sum(1 for f in failures if f["when"] == "call")
+    if in_call > counts["failed"] or len(failures) - in_call > counts["errors"]:
+        return "more failure records than failures"
+    if not data["truncated"] and len(failures) != counts["failed"] + counts["errors"]:
+        return "failure records do not match the counts"
+    if data["truncated"] and len(failures) != _REPORT_FAILURES:
+        return "truncation flag without a full record"
+    return ""
+
+
+def read_report(path, expected) -> dict:
+    """The producer's report, bounded and validated. ``state``: undeclared,
+    missing, unparsable (unreadable, oversized, malformed or impossible),
+    foreign (another producer, invocation or module identity) or parsed."""
     if path is None:
         return dict(state="undeclared")
+    raw, problem = _read_capped(path)
+    if problem:
+        return dict(state=problem[0], **({"detail": problem[1]} if problem[1] else {}))
     try:
-        size = os.path.getsize(path)
-    except OSError:
-        return dict(state="missing")
-    if size > _REPORT_MAX_BYTES:
-        return dict(state="unparsable", detail=f"{size} bytes exceeds {_REPORT_MAX_BYTES}")
-    try:
-        with open(path, encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError) as exc:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         return dict(state="unparsable", detail=f"{type(exc).__name__}: {str(exc)[:160]}")
     if not isinstance(data, dict):
         return dict(state="unparsable", detail="not an object")
-    if data.get("producer") != PRODUCER or data.get("nonce") != nonce:
-        return dict(state="foreign", detail=f"producer {str(data.get('producer'))[:40]!r}")
-    counts, failures = data.get("counts"), data.get("failures")
-    if (not isinstance(counts, dict) or not isinstance(failures, list)
-            or not all(isinstance(counts.get(k), int) for k in ("passed", "failed", "errors", "skipped"))
-            or not all(isinstance(data.get(k), int) for k in ("exitstatus", "collected", "collect_errors"))
-            or not all(isinstance(f, dict) for f in failures)):
-        return dict(state="unparsable", detail="missing or mistyped fields")
+    expected = expected or {}
+    if (data.get("producer") != PRODUCER or data.get("nonce") != expected.get("nonce")
+            or data.get("module_file") != expected.get("module_file")
+            or data.get("module_sha256") != expected.get("module_sha256")):
+        return dict(state="foreign", detail=f"producer {str(data.get('producer'))[:40]!r}, module "
+                                            f"{str(data.get('module_file'))[-60:]!r}")
+    problem = _malformed(data)
+    if problem:
+        return dict(state="unparsable", detail=f"malformed or impossible: {problem}")
     return dict(state="parsed", exitstatus=data["exitstatus"], collected=data["collected"],
-                collect_errors=data["collect_errors"], counts={k: counts[k] for k in
-                                                              ("passed", "failed", "errors", "skipped")},
-                failures=[dict(nodeid=str(f.get("nodeid", ""))[:300], when=f.get("when"),
-                               exc_type=str(f.get("exc_type"))[:120], assertion=f.get("assertion") is True)
-                          for f in failures[:200]],
-                truncated=bool(data.get("truncated")))
+                collect_errors=data["collect_errors"], counts={k: data["counts"][k] for k in _COUNTS},
+                failures=[dict(nodeid=f["nodeid"][:300], when=f["when"], exc_type=(f["exc_type"] or "")[:120],
+                               assertion=f["assertion"]) for f in data["failures"]],
+                truncated=data["truncated"])
 
 
 def _report_reasons(gid, status, reason, returncode, report) -> list:
@@ -128,9 +213,11 @@ def _report_reasons(gid, status, reason, returncode, report) -> list:
         found.append(f"{gid}: {report['collect_errors']} collection error(s)")
     if counts["errors"]:
         found.append(f"{gid}: {counts['errors']} setup or teardown error(s)")
-    if report["truncated"] or counts["failed"] != len(failures) - counts["errors"] or not counts["failed"]:
-        found.append(f"{gid}: inconsistent or empty failure record "
-                     f"({counts['failed']} failed, {len(failures)} recorded)")
+    if (report["truncated"] or not report["collected"] or not counts["failed"]
+            or counts["failed"] + counts["errors"] != len(failures)
+            or counts["passed"] + counts["failed"] + counts["skipped"] > report["collected"]):
+        found.append(f"{gid}: inconsistent, truncated or empty failure record ({report['collected']} "
+                     f"collected, {counts['failed']} failed, {len(failures)} recorded)")
     # The producer records whether the exception's type *is* AssertionError;
     # a name is only shown, never trusted.
     other = sorted({f["exc_type"] for f in failures if f["when"] != "call" or not f["assertion"]})
@@ -307,7 +394,7 @@ class IntegrationGate:
         # Quoted, so a path with spaces survives command_paths (redaction).
         shown = shlex.join(self.command)
         try:
-            with _fresh_bytecode_env() as fresh, _report_slot(self.command, fresh) as (argv, env, path, nonce):
+            with _fresh_bytecode_env() as fresh, _report_slot(self.command, fresh) as (argv, env, path, expected):
                 proc = subprocess.run(
                     argv,
                     capture_output=True,
@@ -317,7 +404,7 @@ class IntegrationGate:
                     check=False,
                     env=env,
                 )
-                report = read_report(path, nonce)
+                report = read_report(path, expected)
         except subprocess.TimeoutExpired:
             return GateResult(
                 passed=False, command=shown, returncode=None,
@@ -502,10 +589,10 @@ class GateSuite:
                 if command.cacheable and runner and key in self._cache:
                     receipts.append(replace(self._cache[key], cached=True))
                     continue
-                with _fresh_bytecode_env() as fresh, _report_slot(command.argv, fresh) as (argv, env, path, nonce):
+                with _fresh_bytecode_env() as fresh, _report_slot(command.argv, fresh) as (argv, env, path, expected):
                     proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
                                           timeout=command.timeout, check=False, env=env)
-                    report = read_report(path, nonce)
+                    report = read_report(path, expected)
                 output = ((proc.stdout or '') + '\n' + (proc.stderr or '')).strip()
                 count = _test_count(output)
                 status, reason = ('passed', 'exit 0') if proc.returncode == 0 else ('failed', 'nonzero exit')

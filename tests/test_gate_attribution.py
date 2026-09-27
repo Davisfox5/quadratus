@@ -110,25 +110,97 @@ def test_a_suite_is_product_only_when_every_failing_check_is(tmp_path):
     assert attribute(alone)["product"] and alone.receipts[0].report["counts"]["failed"] == 1
 
 
-def _written(tmp_path, data):
-    path = tmp_path / "r.json"
+EXPECTED = dict(nonce="n1", module_file="/owned/quadratus_gate_report_ab.py", module_sha256="d" * 64)
+
+
+def _report(**changes):
+    good = dict(producer="quadratus-pytest/3", nonce="n1", module_file=EXPECTED["module_file"],
+                module_sha256=EXPECTED["module_sha256"], exitstatus=1, collected=1, collect_errors=0,
+                counts=dict(passed=0, failed=1, errors=0, skipped=0),
+                failures=[dict(nodeid="t", when="call", exc_type="builtins.AssertionError", assertion=True)],
+                truncated=False)
+    good.update(changes)
+    return good
+
+
+def _written(tmp_path, data, name="r.json"):
+    path = tmp_path / name
     path.write_text(data if isinstance(data, str) else json.dumps(data))
     return str(path)
 
 
-def test_malformed_foreign_and_oversized_reports_are_refused(tmp_path):
-    good = dict(producer="quadratus-pytest/2", nonce="n1", exitstatus=1, collected=1, collect_errors=0,
-                counts=dict(passed=0, failed=1, errors=0, skipped=0),
-                failures=[dict(nodeid="t", when="call", exc_type="builtins.AssertionError", assertion=True)],
-                truncated=False)
-    assert read_report(_written(tmp_path, good), "n1")["state"] == "parsed"
-    assert read_report(_written(tmp_path, good), "other")["state"] == "foreign", "another invocation's report"
-    assert read_report(_written(tmp_path, {**good, "producer": "x"}), "n1")["state"] == "foreign"
-    assert read_report(_written(tmp_path, "{not json"), "n1")["state"] == "unparsable"
-    assert read_report(_written(tmp_path, {**good, "counts": {"failed": "1"}}), "n1")["state"] == "unparsable"
-    assert read_report(_written(tmp_path, "x" * (1024 * 1024 + 1)), "n1")["state"] == "unparsable"
-    assert read_report(str(tmp_path / "absent.json"), "n1") == {"state": "missing"}
+def test_a_sound_report_parses_and_foreign_identities_are_refused(tmp_path):
+    assert read_report(_written(tmp_path, _report()), EXPECTED)["state"] == "parsed"
+    for change in (dict(nonce="other"), dict(producer="x"), dict(module_sha256="e" * 64),
+                   dict(module_file="/project/quadratus_gate_report.py")):
+        assert read_report(_written(tmp_path, _report(**change)), EXPECTED)["state"] == "foreign", change
+    assert read_report(str(tmp_path / "absent.json"), EXPECTED) == {"state": "missing"}
     assert read_report(None, None) == {"state": "undeclared"}
+
+
+def test_impossible_or_mistyped_reports_are_malformed_never_product(tmp_path):
+    """Codex controls: collected=0, negative counts, booleans for integers."""
+    bad = [dict(collected=0), dict(counts=dict(passed=-99, failed=1, errors=0, skipped=0)),
+           dict(collected=True), dict(counts=dict(passed=0, failed=True, errors=0, skipped=0)),
+           dict(exitstatus=True), dict(exitstatus=9), dict(collect_errors=-1), dict(truncated=1),
+           dict(counts=dict(passed=0, failed=1, errors=0)),
+           dict(counts=dict(passed=5, failed=1, errors=0, skipped=0)),
+           dict(failures=[dict(nodeid="t", when="call", exc_type="builtins.AssertionError", assertion=1)]),
+           dict(failures=[dict(nodeid="t", when="later", exc_type="x", assertion=True)]),
+           dict(failures=[]), dict(truncated=True)]
+    for change in bad:
+        state = read_report(_written(tmp_path, _report(**change)), EXPECTED)
+        assert state["state"] == "unparsable", (change, state)
+
+
+def test_unreadable_report_files_are_refused_within_a_deadline(tmp_path):
+    """Codex controls: a FIFO, a symlink, a file replaced or grown after
+    stat, and deep nesting; each under an external deadline."""
+    import os
+    import threading
+
+    def bounded(path):
+        box = {}
+        worker = threading.Thread(target=lambda: box.update(r=read_report(path, EXPECTED)), daemon=True)
+        worker.start()
+        worker.join(5)
+        assert "r" in box, f"read_report blocked on {path}"
+        return box["r"]
+
+    fifo = tmp_path / "fifo.json"
+    os.mkfifo(fifo)
+    assert bounded(str(fifo)) == {"state": "unparsable", "detail": "not a regular file"}
+    target = _written(tmp_path, _report(), "target.json")
+    link = tmp_path / "link.json"
+    link.symlink_to(target)
+    assert bounded(str(link))["state"] == "unparsable"
+    assert bounded(_written(tmp_path, "[" * 200000 + "]" * 200000, "deep.json"))["state"] == "unparsable"
+    big = tmp_path / "big.json"
+    big.write_bytes(b" " * (1024 * 1024 + 1))
+    assert bounded(str(big)) == {"state": "unparsable", "detail": f"more than {1024 * 1024} bytes"}
+
+
+def test_a_file_replaced_or_grown_between_stat_and_read_is_bounded(tmp_path, monkeypatch):
+    import os
+
+    from quadratus import integration
+    path = _written(tmp_path, _report(), "swap.json")
+    real_open = os.open
+
+    def swap_then_open(p, flags, *a):
+        os.replace(_written(tmp_path, _report(), "other.json"), p)
+        return real_open(p, flags, *a)
+    monkeypatch.setattr(integration.os, "open", swap_then_open)
+    assert read_report(path, EXPECTED) == {"state": "unparsable", "detail": "replaced while being opened"}
+    monkeypatch.setattr(integration.os, "open", real_open)
+
+    def grow_then_open(p, flags, *a):
+        with open(p, "ab") as out:
+            out.write(b" " * (1024 * 1024 + 1))
+        return real_open(p, flags, *a)
+    grown = _written(tmp_path, _report(), "grow.json")
+    monkeypatch.setattr(integration.os, "open", grow_then_open)
+    assert read_report(grown, EXPECTED)["detail"] == f"more than {1024 * 1024} bytes"
 
 
 def test_an_inconsistent_record_is_not_product(tmp_path):
@@ -137,8 +209,58 @@ def test_an_inconsistent_record_is_not_product(tmp_path):
                   counts=dict(passed=0, failed=2, errors=0, skipped=0),
                   failures=[dict(nodeid="t", when="call", exc_type="builtins.AssertionError", assertion=True)],
                   truncated=False)
-    result = GateResult(False, "check", 1, "", report=report)
-    assert "inconsistent or empty failure record" in _reasons(result)
-    truncated = GateResult(False, "check", 1, "", report={**report, "truncated": True,
-                                                          "counts": dict(report["counts"], failed=1)})
-    assert "inconsistent" in _reasons(truncated)
+    assert "inconsistent" in _reasons(GateResult(False, "check", 1, "", report=report))
+    assert "inconsistent" in _reasons(GateResult(False, "check", 1, "", report={**report, "collected": 0}))
+    truncated = {**report, "truncated": True, "counts": dict(report["counts"], failed=1)}
+    assert "inconsistent" in _reasons(GateResult(False, "check", 1, "", report=truncated))
+
+
+# -- shadowing and partial runs (Codex review 5858490122) --------------------------------
+
+SHADOW = """import json, os
+import pytest
+
+
+def pytest_addoption(parser):
+    parser.addoption("--quadratus-report", action="store", default=None)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    path = session.config.getoption("--quadratus-report")
+    json.dump(dict(producer="quadratus-pytest/3", nonce=os.environ.get("QUADRATUS_GATE_NONCE", ""),
+                   module_file=os.path.realpath(__file__), module_sha256="0" * 64, exitstatus=1,
+                   collected=1, collect_errors=0, counts=dict(passed=0, failed=1, errors=0, skipped=0),
+                   failures=[dict(nodeid="x", when="call", exc_type="builtins.AssertionError",
+                                  assertion=True)], truncated=False), open(path, "w"))
+"""
+
+
+def test_a_project_local_producer_cannot_shadow_the_harness_one(tmp_path):
+    """Codex control: a project module named like the producer, writing an
+    assertion report with the nonce from its environment, while the real
+    test raises RuntimeError. It is never loaded as the producer, and a
+    report claiming another module is foreign."""
+    (tmp_path / "quadratus_gate_report.py").write_text(SHADOW)
+    result = _gate(tmp_path, "def test_a():\n    raise RuntimeError('browser runner could not launch')\n")
+    assert result.report["state"] == "parsed", "the harness producer, not the shadow, wrote the report"
+    assert "failures that are not assertions: builtins.RuntimeError" in _reasons(result)
+
+
+def test_a_conftest_that_registers_a_shadow_producer_is_foreign(tmp_path):
+    (tmp_path / "conftest.py").write_text("pytest_plugins = ['shadow_producer']\n")
+    (tmp_path / "shadow_producer.py").write_text(SHADOW.replace(
+        'def pytest_addoption(parser):\n    parser.addoption("--quadratus-report", action="store", default=None)\n',
+        "").replace("def pytest_sessionfinish(", "@pytest.hookimpl(trylast=True)\ndef pytest_sessionfinish("))
+    result = _gate(tmp_path, "def test_a():\n    raise RuntimeError('browser runner could not launch')\n")
+    assert result.report["state"] == "foreign" and "structured report foreign" in _reasons(result)
+
+
+def test_partial_runs_under_maxfail_stay_accurate(tmp_path):
+    body = "".join(f"def test_{n}():\n    assert {n} == 0\n\n" for n in range(1, 4))
+    stop_first = _gate(tmp_path, body, DECLARED + ["-x"])
+    assert stop_first.report["collected"] == 3 and stop_first.report["counts"]["failed"] == 1
+    assert attribute(stop_first)["product"] is True
+    two = _gate(tmp_path, body, DECLARED + ["--maxfail=2"])
+    assert two.report["counts"]["failed"] == 2 and attribute(two)["product"] is True
+    mixed = _gate(tmp_path, body.replace("assert 2 == 0", "raise OSError('display')"), DECLARED + ["--maxfail=2"])
+    assert "builtins.OSError" in _reasons(mixed)

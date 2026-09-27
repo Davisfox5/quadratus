@@ -1,9 +1,14 @@
 """Harness-owned pytest report producer (quadratus phase 3, #25).
 
 Loaded into a check's own pytest only when the check declares
-``--quadratus-report={report}``: the harness puts this directory on
-``PYTHONPATH`` and names the module in ``PYTEST_PLUGINS``. It imports nothing
-from quadratus, so it runs under whatever interpreter the project uses.
+``--quadratus-report={report}``. The harness copies this file into a
+directory it owns for that one invocation, under a module name derived from
+the invocation's nonce, and names that module in ``PYTEST_PLUGINS``: no
+project module can already carry the name, so import order cannot swap in
+another producer. The report states this module's own file and source
+digest, which the harness compares with the copy it placed. It imports
+nothing from quadratus, so it runs under whatever interpreter the project
+uses.
 
 It records facts pytest already has and never interprets prose: the session
 exit status, collection errors, per-phase counts, and for each failed phase
@@ -11,10 +16,11 @@ the exception's module-qualified type. The report carries the nonce the
 harness set for this one invocation, so a stale or foreign file is refused.
 """
 
+import hashlib
 import json
 import os
 
-PRODUCER = "quadratus-pytest/2"
+PRODUCER = "quadratus-pytest/3"
 MAX_FAILURES = 200
 
 import pytest  # noqa: E402 -- after the constants a reader of this file wants first
@@ -85,7 +91,10 @@ class _Recorder:
                                   assertion=getattr(report, "quadratus_assertion", False) is True))
 
     def pytest_sessionfinish(self, session, exitstatus):
+        with open(__file__, "rb") as source:
+            digest = hashlib.sha256(source.read()).hexdigest()
         data = dict(producer=PRODUCER, nonce=os.environ.get("QUADRATUS_GATE_NONCE", ""),
+                    module_file=os.path.realpath(__file__), module_sha256=digest,
                     exitstatus=int(exitstatus), collected=self.collected,
                     collect_errors=self.collect_errors, counts=self.counts,
                     failures=self.failures, truncated=self.truncated)
