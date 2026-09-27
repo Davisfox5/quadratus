@@ -78,7 +78,8 @@ def test_an_inherited_prefix_is_overridden_and_left_alone(tmp_path, monkeypatch)
     inherited.mkdir()
     monkeypatch.setenv("PYTHONPYCACHEPREFIX", str(inherited))
     import subprocess
-    subprocess.run(IMPORT, cwd=root, check=True, capture_output=True)   # warms the inherited prefix
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONDONTWRITEBYTECODE"}
+    subprocess.run(IMPORT, cwd=root, env=env, check=True, capture_output=True)   # warms the inherited prefix
     warmed = sorted(str(p) for p in inherited.rglob("*"))
     assert warmed
     _stale_edit(root, BAD)
