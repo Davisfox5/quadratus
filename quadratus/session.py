@@ -591,6 +591,20 @@ def _read_covers(spec):
     return ids, replace(spec, description=description or spec.description)
 
 
+_RESOLVES = re.compile(r"^\s*RESOLVES:(.*)$", re.MULTILINE)
+
+
+def _read_resolves(spec):
+    """Split a ``RESOLVES: F1, F2`` line off a task. None when absent; the
+    raw tokens otherwise, so an empty or malformed line can be refused."""
+    match = _RESOLVES.search(spec.description or "")
+    if not match:
+        return None, spec
+    tokens = [t for t in re.split(r"[\s,]+", match.group(1).strip()) if t]
+    description = _RESOLVES.sub("", spec.description).strip()
+    return tokens, replace(spec, description=description or spec.description)
+
+
 _PARALLEL_HEAD = re.compile(r"^\s*PARALLEL\s*$", re.MULTILINE)
 
 
@@ -881,6 +895,12 @@ class Session:
         #: ``(task id, problem)`` for each task whose design evidence was
         #: left unverified, so a stop it causes is named.
         self._design_unverified: List[tuple] = []
+        #: Audit findings: measured product faults a review-only task found
+        #: with otherwise valid evidence, kept as requirement debt rather than
+        #: ending the run (Codex, Run 17). See _record_audit_findings.
+        self.findings: List[dict] = []
+        self._current_covers: List[str] = []
+        self._current_resolves: List[str] = []
         #: Capped tasks not yet finished by a task that names them in a
         #: CONTINUES line. Any entry blocks completion.
         self._partial_tasks: set = set()
@@ -2148,6 +2168,7 @@ class Session:
                                   else _REQUIREMENTS_REQUEST) if self.config.requirements_ledger else "")
                     + ("\n\n" + _PARALLEL_REQUEST if self._parallel_enabled() else "")
                     + (self._done_refusal or "")
+                    + self._findings_prompt()
                     + ("\n\n" + _SCOPE_REQUEST if self.project and self.config.allow_writes else "")
                     + ("\n\n" + _ORIENT_REQUEST
                        if self.project and self.config.codebase_map is not None else "")
@@ -2360,6 +2381,19 @@ class Session:
                     break
                 continue
             if spec is None:
+                if self._findings_block_done():
+                    if self._requirement_reopens < self.config.max_requirement_reopens:
+                        self._requirement_reopens += 1
+                        continue
+                    open_ids = [f["id"] for f in self.findings if f["status"] == "open"]
+                    for finding in self.findings:
+                        if finding["status"] == "open":
+                            finding["unresolved_reason"] = "open when the reopen allowance ran out"
+                    self.stop_reason = (f"FindingsUnresolved: audit findings {', '.join(open_ids)} are still "
+                                        "open after the reopen allowance. Work preserved.")
+                    self._note("audit findings still open after the reopen allowance; stopping incomplete")
+                    self.completed = False
+                    break
                 if not self._requirements_satisfied():
                     if self._requirement_reopens < self.config.max_requirement_reopens:
                         self._requirement_reopens += 1
@@ -2368,6 +2402,7 @@ class Session:
                     self.completed = False
                     break
                 self.completed = (not self.open_findings and not self._unresolved_partial
+                                  and not self._open_findings_for(None)
                                   and not any(not c["passed"] for c in self.checks))
                 self._note("the orchestrator reports the goal met")
                 break
@@ -2395,6 +2430,17 @@ class Session:
                                       "with a COVERS line using the listed requirement ids.")
                 previous_description = None
                 continue
+            resolves, spec = _read_resolves(spec)
+            problem = self._resolves_problem(resolves, covers)
+            if problem:
+                # The same allowance as COVERS: refused before any lead call.
+                self._covers_corrections += 1
+                if self._covers_corrections > self.config.max_requirement_reopens:
+                    raise RunStalled(f"the orchestrator kept naming tasks with an invalid RESOLVES: {problem}")
+                self._done_refusal = (f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again.")
+                previous_description = None
+                continue
+            self._current_covers, self._current_resolves = list(covers), list(resolves or [])
             self._continues = continues
             try:
                 summary = self.run_task(spec)
@@ -2428,7 +2474,13 @@ class Session:
             status = self.memory.ledger.requirement_status
             for rid in covers:
                 if rid in self.memory.ledger.requirements:
-                    status[rid] = f"covered by {spec.task_id}"
+                    # A requirement with an open finding stays unmet whatever
+                    # this task covered; only resolving every finding naming
+                    # it lets a covering task mark it covered.
+                    owing = self._open_findings_for(rid)
+                    status[rid] = (f"NOT MET: open finding {', '.join(owing)}" if owing
+                                   else f"covered by {spec.task_id}")
+            self._current_covers, self._current_resolves = [], []
             self._note(f"task {len(self.history)} closed by {summary.author}")
             if self.open_findings or (self.checks and not self.checks[-1]['passed']):
                 self._name_findings_stop()
@@ -2443,6 +2495,7 @@ class Session:
             # question instead, whose reply is never executed.
             self.completed = (
                 not self._unresolved_partial
+                and not self._open_findings_for(None)
                 and self._confirm_goal_met()
                 and self._requirements_satisfied()
                 and not self.open_findings
@@ -2482,14 +2535,21 @@ class Session:
         """
         if not is_design_task(spec) or not (self.project and self.config.allow_writes):
             return
-        from .design_evidence import check
+        from .design_evidence import check_records
         record = dict(task=spec.task_id)
         if not self.config.design_self_verify:
             record.update(verified=None, problem="design self-verification disabled by the operator")
             self.design_checks.append(record)
             return
-        ok, problem, shots = check(self.project, spec.task_id, self._last_edit_started or 0,
-                              expected_source=self._trusted_source())
+        ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
+                                                    expected_source=self._trusted_source())
+        if self._audit_debt_applies(spec, ok, records):
+            # A recapture cannot change a measured fault on valid evidence, so
+            # no fix call is spent; the fault becomes debt for a repair task.
+            record.update(verified=False, problem=problem, findings=self._record_audit_findings(spec, records))
+            self.design_checks.append(record)
+            task.keep(json.dumps(record), kind="design-evidence")
+            return
         if not ok:
             record["first_problem"] = problem
             self._note(f"task {spec.task_id}: design evidence missing or broken; one fix call ({problem[:100]})")
@@ -2512,8 +2572,14 @@ class Session:
                 f"or shows a broken page: {problem}.\n" + action + self._revision_delivery()
                 + _design_fix_delivery(self._interim_edits_note())), role="design-fix")
             self._run_integration_gate(lead, spec, task)
-            ok, problem, shots = check(self.project, spec.task_id, self._last_edit_started or 0,
-                              expected_source=self._trusted_source())
+            ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
+                                                        expected_source=self._trusted_source())
+            if self._audit_debt_applies(spec, ok, records):
+                record.update(verified=False, problem=problem,
+                              findings=self._record_audit_findings(spec, records))
+                self.design_checks.append(record)
+                task.keep(json.dumps(record), kind="design-evidence")
+                return
         record.update(verified=ok, problem=problem, screenshots=shots)
         if not ok:
             self.open_findings.append(f"Task {spec.task_id} is design work without clean rendered evidence: {problem}.")
@@ -2532,6 +2598,8 @@ class Session:
                 if (verdict or "").strip() != "APPROVED" and not blocking:
                     blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
                 self.open_findings.extend(f"Task {spec.task_id} design: {b.strip()}" for b in blocking)
+                if not blocking and self._current_resolves:
+                    self._resolve_findings(spec, shots)
         self.design_checks.append(record)
         task.keep(json.dumps(record), kind="design-evidence")
 
@@ -2649,6 +2717,10 @@ class Session:
             continues, spec = _read_continues(spec)
             covers, spec = _read_covers(spec)
             problem = self._covers_problem(covers)
+            if _read_resolves(spec)[0] is not None:
+                # Findings are resolved by one serial task with its own
+                # verified renders; a forked child has no ledger to close them.
+                problem = "RESOLVES is not supported in a parallel batch; name that task alone."
             if problem:
                 self._done_refusal = (f"\n\n--- BATCH SENT BACK ---\n{spec.task_id}: {problem} Name the "
                                       "tasks again with COVERS lines using the listed requirement ids.")
@@ -3070,6 +3142,120 @@ class Session:
         if self.config.codebase_map is None:
             return ""
         return self.config.codebase_map.render()
+
+    # -- audit findings: measured product faults kept as requirement debt ------
+    def _open_findings_for(self, rid) -> List[str]:
+        """Open finding ids naming requirement ``rid`` (any requirement if None)."""
+        return [f["id"] for f in self.findings
+                if f["status"] == "open" and (rid is None or rid in f["requirements"])]
+
+    def _resolves_problem(self, resolves, covers) -> str:
+        """Why a RESOLVES line cannot stand, before any lead call; "" if it can."""
+        if resolves is None:
+            return ""
+        if not self.config.requirements_ledger:
+            return "RESOLVES needs the requirements ledger, which is off for this run."
+        if not resolves:
+            return "RESOLVES names no finding."
+        if len(set(resolves)) != len(resolves):
+            return f"RESOLVES names a finding twice: {', '.join(resolves)}."
+        by_id = {f["id"]: f for f in self.findings}
+        unknown = [r for r in resolves if r not in by_id]
+        if unknown:
+            return f"RESOLVES names findings that do not exist: {', '.join(unknown)}."
+        closed = [r for r in resolves if by_id[r]["status"] != "open"]
+        if closed:
+            return f"RESOLVES names findings that are already resolved: {', '.join(closed)}."
+        missing = sorted({rid for r in resolves for rid in by_id[r]["requirements"]} - set(covers))
+        if missing:
+            return (f"COVERS must include every requirement of the findings it resolves; missing: "
+                    f"{', '.join(missing)}.")
+        return ""
+
+    def _findings_prompt(self) -> str:
+        opened = [f for f in self.findings if f["status"] == "open"]
+        if not opened:
+            return ""
+        lines = [f"- {f['id']} (found by {f['task']}, requirements {', '.join(f['requirements'])}): the "
+                 f"{f['view']} render of {f['target']} is {f['width']}px wide at a {f['viewport']}px viewport"
+                 + (f" (reopened: {f['reopened']})" if f.get("reopened") else "")
+                 for f in opened]
+        return ("\n\n--- OPEN AUDIT FINDINGS ---\nThese measured faults were found by a review-only task "
+                "and keep their requirements NOT MET. Name a task that fixes one or more of them, with a "
+                "COVERS line including their requirements and a line 'RESOLVES: F<n>' naming them. It "
+                "resolves a finding only if its own fresh renders of the same page verify with no overflow "
+                "and are approved by the cross-vendor design review.\n" + "\n".join(lines))
+
+    def _findings_block_done(self) -> bool:
+        """Whether open findings refuse DONE, after re-checking resolved ones
+        against the current source; sets the refusal text when they do."""
+        if not self.findings:
+            return False
+        from .design_evidence import check
+        for finding in self.findings:
+            if finding["status"] != "resolved" or not self.project:
+                continue
+            ok, problem, _ = check(self.project, finding["resolved_by"], 0,
+                                   expected_source=self._trusted_source())
+            if not ok:
+                finding.update(status="open", reopened=f"its resolving evidence no longer holds: {problem[:160]}")
+                for rid in finding["requirements"]:
+                    self.memory.ledger.requirement_status[rid] = f"NOT MET: open finding {finding['id']}"
+        opened = self._open_findings_for(None)
+        if not opened:
+            return False
+        self._done_refusal = (f"\n\n--- DONE SENT BACK ---\nAudit findings are still open: {', '.join(opened)}.")
+        self._note(f"DONE sent back: open audit findings {', '.join(opened)}")
+        return True
+
+    def _record_audit_findings(self, spec, records) -> List[str]:
+        """Record each measured overflow of a review-only task as a finding
+        owned by that task and its COVERS ids (from the harness, never model
+        prose). Every COVERS id is marked unmet: the harness cannot attribute
+        an overflow to one requirement, so all of them block until resolved."""
+        from .design_evidence import evidence_dir
+        summary = evidence_dir(self.project, spec.task_id) / "summary.json"
+        digest = hashlib.sha256(summary.read_bytes()).hexdigest() if summary.is_file() else None
+        ids = []
+        for record in records:
+            fid = f"F{len(self.findings) + 1}"
+            self.findings.append(dict(
+                id=fid, task=spec.task_id, requirements=list(self._current_covers), kind=record["kind"],
+                target=record.get("target"), view=record.get("view"), width=record.get("width"),
+                viewport=record.get("viewport"), message=record["message"][:300],
+                evidence=dict(summary=summary.relative_to(Path(self.project)).as_posix(), sha256=digest),
+                status="open"))
+            ids.append(fid)
+        for rid in self._current_covers:
+            self.memory.ledger.requirement_status[rid] = f"NOT MET: open finding {', '.join(self._open_findings_for(rid))}"
+        self._note(f"task {spec.task_id}: audit findings {', '.join(ids)} recorded as requirement debt")
+        return ids
+
+    def _audit_debt_applies(self, spec, ok, records) -> bool:
+        """Whether this design check's failure becomes audit debt instead of a
+        stop: a declared review-only task, the ledger on, COVERS present, and
+        every problem a measured overflow on otherwise valid evidence. Any
+        integrity or page problem alongside keeps today's stop."""
+        return (not ok and is_review_only(spec) and self.config.requirements_ledger
+                and bool(self._current_covers) and bool(records)
+                and all(r.get("kind") == "product.overflow" for r in records))
+
+    def _resolve_findings(self, spec, shots) -> None:
+        """Close each finding this task names in RESOLVES whose acceptance its
+        own verified, approved renders establish: the same page, no overflow."""
+        target = next((s[len("target: "):] for s in shots if s.startswith("target: ")), None)
+        from .design_evidence import evidence_dir
+        summary = evidence_dir(self.project, spec.task_id) / "summary.json"
+        for finding in self.findings:
+            if finding["id"] not in self._current_resolves or finding["status"] != "open":
+                continue
+            if target != finding["target"]:
+                finding["last_attempt"] = f"{spec.task_id} rendered {target}, not {finding['target']}"
+                continue
+            finding.update(status="resolved", resolved_by=spec.task_id, reopened=None, resolution=dict(
+                summary=summary.relative_to(Path(self.project)).as_posix(),
+                sha256=hashlib.sha256(summary.read_bytes()).hexdigest()))
+            self._note(f"task {spec.task_id} resolved audit finding {finding['id']}")
 
     def _name_findings_stop(self) -> None:
         """Name a stop caused by unverified design evidence.

@@ -205,7 +205,8 @@ def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
     return replay
 
 
-def evidence(root: Path, task_id: str, *, age: float, target="http://127.0.0.1:5000/import") -> None:
+def evidence(root: Path, task_id: str, *, age: float, target="http://127.0.0.1:5000/import",
+             measured=None, clean=True) -> None:
     """Clean desktop and mobile renders, as ``quadratus.design_evidence`` writes them.
 
     ``age`` is the screenshots' mtime offset from now: ``STALE`` predates any
@@ -228,7 +229,11 @@ def evidence(root: Path, task_id: str, *, age: float, target="http://127.0.0.1:5
         (folder / "page.png").write_bytes(png(width))
         stamp = time.time() + age
         os.utime(folder / "page.png", (stamp, stamp))
-        views[name] = dict(clean=True, console_errors=[], failed_requests=[], document_width=width, overflow=[])
+        wide = (measured or {}).get(name, width)
+        views[name] = dict(clean=clean, console_errors=[] if clean else ["Uncaught TypeError: x"],
+                           failed_requests=[], document_width=wide,
+                           overflow=[dict(element="div.toolbar", side="right", left=0, right=wide, width=wide)]
+                           if wide > width + 1 else [])
     from quadratus.design_evidence import source_fingerprint
     # As a real capture records it: the tree these renders show is the tree now.
     (evidence_dir(root, task_id) / "summary.json").write_text(json.dumps(dict(
