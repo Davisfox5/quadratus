@@ -138,8 +138,10 @@ def test_j22_j34_a_continuation_gets_a_new_contract_inheriting_state_and_debt(tm
                    max_tasks=4, settings=CAPPED)
     t1, t2 = _task(replay, "t1")["contract"], _task(replay, "t2")["contract"]
     assert t2["continues"] == "t1" and t2["digest"] != t1["digest"], "a new contract, not an edited one"
-    assert t2["inherits"] == dict(task="t1", found=True, intended_state=None, open_at_close={},
+    assert t2["inherits"] == dict(task="t1", found=True, intended_state=None,
+                                  open_at_close={"findings": [], "requirements": []},
                                   changed=["app.py"], closed_as="turn_limited")
+    assert t1["owner"] == _task(replay, "t1")["lead"] and t2["owner"] == _task(replay, "t2")["lead"]
     assert replay.result.completed
 
 
@@ -257,3 +259,63 @@ def test_structured_security_verdicts_set_the_same_edge(tmp_path, monkeypatch, v
     t1 = _task(replay, "t1")
     assert t1["edges"]["verification"] is satisfied
     assert ("verification" in t1["unsatisfied"]) is (not satisfied)
+
+
+
+# -- J34 debt survives a cap or an interruption (Codex, 5857789275) ---------------------
+
+def _ledger_run(tmp_path, monkeypatch, plan, leads, **kw):
+    from tests.lifecycle.test_audit_findings import _run as audit_run
+    from quadratus.session import Session
+    monkeypatch.setattr(Session, "_pick_lead", lambda self, spec: "claude:opus")
+    return audit_run(tmp_path, monkeypatch, plan, leads, settings=CAPPED, **kw)
+
+
+def _capped(call, replay):
+    return H.claude_cap("Still reading.", num_turns=14)
+
+
+@pytest.mark.requirements_ledger
+def test_j34_capped_covers_debt_is_snapshotted_and_inherited(tmp_path, monkeypatch):
+    from tests.lifecycle.test_audit_findings import REPAIR, REQS
+    continuation = REPAIR.replace("Fix the mobile overflow.", "Finish the capped work.\nCONTINUES: t1")
+    replay = _ledger_run(tmp_path, monkeypatch, [REQS + REPAIR, continuation],
+                         {"t1": _capped, "t2": _capped}, max_tasks=2)
+    t1, t2 = _task(replay, "t1"), _task(replay, "t2")
+    assert t1["closed_as"] == "turn_limited" and t1["open_at_close"]["requirements"] == ["R1", "R2"]
+    inherited = t2["contract"]["inherits"]
+    assert inherited["open_at_close"] == t1["open_at_close"], "carried unchanged"
+    assert t1["contract"]["owner"] == "claude:opus" == t1["lead"]
+
+
+@pytest.mark.requirements_ledger
+def test_j34_capped_resolves_debt_is_snapshotted_and_inherited(tmp_path, monkeypatch):
+    from tests.lifecycle.test_audit_findings import AUDIT, REPAIR, REQS, WIDE, _capture
+    repair = REPAIR + "\nRESOLVES: F1"
+    continuation = repair.replace("Fix the mobile overflow.", "Finish the repair.\nCONTINUES: t2")
+    replay = _ledger_run(tmp_path, monkeypatch, [REQS + AUDIT, repair, continuation],
+                         {"t1": _capture(measured=WIDE), "t2": _capped, "t3": _capped}, max_tasks=3)
+    t2, t3 = _task(replay, "t2"), _task(replay, "t3")
+    assert t2["closed_as"] == "turn_limited" and t2["open_at_close"]["findings"] == ["F1"]
+    assert t3["contract"]["inherits"]["open_at_close"]["findings"] == ["F1"]
+    assert t3["contract"]["intended_state"]["findings"][0]["finding"] == "F1"
+
+
+@pytest.mark.requirements_ledger
+def test_j34_an_interrupted_task_keeps_its_debt_on_record(tmp_path, monkeypatch):
+    from tests.lifecycle.test_audit_findings import REPAIR, REQS
+    replay = _ledger_run(tmp_path, monkeypatch, [REQS + REPAIR],
+                         {"t1": lambda call, replay: H.claude_refusal("cyber")}, max_tasks=1)
+    t1 = _task(replay, "t1")
+    assert t1["closed_as"] == "stopped:ProviderRefusal"
+    assert t1["open_at_close"]["requirements"] == ["R1", "R2"]
+    assert t1["contract"]["owner"] == "claude:opus", "bound at selection, before the refused call"
+
+
+def test_a_task_stopped_before_selection_has_no_contract_and_says_so(tmp_path, monkeypatch):
+    from quadratus import session as session_module
+    monkeypatch.setattr(session_module.Session, "_pick_lead",
+                        lambda self, spec: (_ for _ in ()).throw(session_module.RunStalled("no seat")))
+    replay = H.run(tmp_path, monkeypatch, Script(), files=FILES)
+    t1 = _task(replay, "t1")
+    assert t1["contract"] is None and t1["stages"] == ["dispatch"] and t1["closed_as"] == "stopped:RunStalled"

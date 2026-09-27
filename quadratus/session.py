@@ -1834,8 +1834,9 @@ class Session:
             lead=spec.lead or "", covers=list(getattr(self, "_current_covers", []) or []),
             resolves=resolves, continues=getattr(self, "_continues", None) or "")
         outcome.stage("dispatch")
+        # Derived here, bound (frozen, with its owner) at the selection point
+        # in _run_task / _run_security_task, before the first model call.
         self._contract = self._build_contract(spec, outcome)
-        outcome.contract = self._contract.to_dict()
         outcome.source_before = self._source_identity()
         prior, self._outcome = self._outcome, outcome
         self.task_outcomes.append(outcome)
@@ -1845,10 +1846,14 @@ class Session:
             outcome.note(classify(exc), f"{type(exc).__name__}: {exc}")
             outcome.closed_as = f"stopped:{type(exc).__name__}"
             self._record_work(outcome, dict(getattr(self, "in_flight", {}) or {}) or None)
+            outcome.open_at_close = self._open_refs(outcome)
             raise
         else:
             outcome.closed_as = getattr(summary, "outcome", "closed")
             self._record_work(outcome, None)
+            # Every exit carries its outstanding references; an ordinary close
+            # is snapshotted again after its own settlement and coverage.
+            outcome.open_at_close = self._open_refs(outcome)
             return summary
         finally:
             self._outcome = prior
@@ -1932,6 +1937,25 @@ class Session:
             acceptance=tuple(getattr(scope, "acceptance", ()) or ()),
             required=required, allowed_next=stages_for(required, outcome.intent),
             inherits=canonical(inherits))
+
+    def _bind_contract(self, owner: str) -> None:
+        """Freeze the task's contract with the owner just selected. Called
+        once, at the selection point, before any model call for the task."""
+        outcome, draft = self._outcome, getattr(self, "_contract", None)
+        if outcome is None or draft is None or draft.task_id != outcome.task_id or outcome.contract:
+            return
+        self._contract = dataclasses.replace(draft, owner=owner)
+        outcome.contract = self._contract.to_dict()
+
+    def _open_refs(self, outcome) -> dict:
+        """Ledger references this task still owes, read without settling or
+        covering anything: RESOLVES findings not resolved, COVERS
+        requirements not covered or met."""
+        status = self.memory.ledger.requirement_status
+        return dict(
+            findings=[f["id"] for f in self.findings if f["id"] in outcome.resolves and f["status"] != "resolved"],
+            requirements=[rid for rid in outcome.covers
+                          if not str(status.get(rid, "")).startswith(("covered", "met"))])
 
     def _contract_agrees(self, requirement: str, legacy) -> None:
         """Record where a legacy applicability decision disagrees with the
@@ -2045,6 +2069,7 @@ class Session:
         lead = chosen[1] if chosen and chosen[0] == spec.task_id else self._pick_lead(spec)
         if self._outcome is not None:
             self._outcome.lead = lead
+        self._bind_contract(lead)
         collaborators = self.collaborators_for(spec, lead)
         # Selection is recorded separately from invocation. The 2026-09-13
         # feature task selected Grok as a collaborator and never reached it,
@@ -2355,6 +2380,7 @@ class Session:
             self._record_selection(spec, excursion.worker, "lead")
             if self._outcome is not None:
                 self._outcome.lead = excursion.worker
+            self._bind_contract(excursion.worker)
             task.record("user", spec.description)
 
             # Fetch and worker channels, no consult: the excursion stays a
@@ -3262,6 +3288,10 @@ class Session:
                 roots.append(root)
             started = time.monotonic()
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(children)) as pool:
+                # Record-only: a child's ledger is off, so its COVERS feed its
+                # contract and snapshot without any audit-debt decision.
+                for child, (_, covers, _) in zip(children, parsed, strict=True):
+                    child._current_covers = list(covers)
                 futures = [pool.submit(child.run_task, spec) for child, (spec, _, _) in zip(children, parsed, strict=True)]
                 outcomes = []
                 for future in futures:
@@ -3320,6 +3350,8 @@ class Session:
                     self._recover_continued(continues)
                     for rid in covers:
                         self._mark_covered(rid, spec.task_id)
+                if mine is not None:
+                    mine.open_at_close = self._open_refs(mine)
                 self._note(f"{spec.task_id} merged ({len(changed)} files) and closed by {summary.author}")
         self.parallel_batches.append(record)
         gate = self.config.integration_gate

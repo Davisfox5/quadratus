@@ -45,6 +45,10 @@ class Required:
 class TaskContract:
     task_id: str
     intent: str
+    #: The lead (or security worker) selected for this task, bound at the
+    #: selection point, before the first model call. Never a placeholder:
+    #: a task stopped before selection has no contract.
+    owner: str = ""
     covers: Tuple[str, ...] = ()
     resolves: Tuple[str, ...] = ()
     continues: str = ""

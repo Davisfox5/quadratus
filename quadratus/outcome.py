@@ -216,8 +216,15 @@ def missing_facts(task: TaskOutcome) -> List[str]:
     attempt must point at its kept output; a lost artifact is missing, and
     its ``output_artifact_error`` says why."""
     missing = [f"{task.task_id}.contract mismatch: {m}" for m in task.mismatches]
-    if task.contract is None and task.closed_as != "open":
+    # A task stopped before its lead was selected has no contract, by design:
+    # the contract is bound with its owner at selection.
+    before_selection = task.closed_as.startswith("stopped") and "draft" not in task.stages
+    if task.contract is None and task.closed_as != "open" and not before_selection:
         missing.append(f"{task.task_id}.contract")
+    if task.contract and task.lead and task.contract.get("owner") != task.lead \
+            and not task.attempts.get("lead_recovery"):
+        missing.append(f"{task.task_id}.contract owner {task.contract.get('owner')!r} is not the lead "
+                       f"{task.lead!r}")
     if task.closed_as in ("closed", "turn_limited"):
         for name in ("lead", "source_before", "source_after", "dependency"):
             if not getattr(task, name):

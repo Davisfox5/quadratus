@@ -65,7 +65,7 @@ def _closed(task_id="t1"):
     outcome = TaskOutcome(task_id, "implementation", lead="claude:opus", source_before="a" * 64,
                           source_after="b" * 64, dependency="unchanged",
                           partial=dict(changed=["app.py"], changed_lines=2, inspected=True),
-                          contract=dict(task_id=task_id, required={}))
+                          contract=dict(task_id=task_id, owner="claude:opus", required={}))
     outcome.closed_as = "closed"
     return outcome
 
