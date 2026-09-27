@@ -36,8 +36,10 @@ _TAIL_CHARS = 2_000
 
 @contextmanager
 def _fresh_bytecode_env():
-    """An environment whose Python never reads or writes a cached ``.pyc``
-    outside a private directory made for this one execution.
+    """An environment in which standard CPython source-module imports read
+    and write cached ``.pyc`` files only in a private directory made for this
+    one execution. Custom or sourceless loaders, and a child process that
+    resets its own environment, are outside what this controls.
 
     CPython trusts a cached module whose recorded source size and mtime
     match, so a same-size edit in the same second as the last import ran the
