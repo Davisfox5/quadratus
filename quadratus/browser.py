@@ -154,7 +154,10 @@ def render_page(
             launch_kwargs["timeout"] = budget.ms(30_000)
         browser = pw.chromium.launch(**launch_kwargs)
         try:
-            context = browser.new_context(viewport=viewport)
+            # A service worker is its own target, outside the page's request
+            # interception below, so a pinned capture allows none.
+            context = browser.new_context(viewport=viewport, **(
+                {"service_workers": "block"} if pin_requests else {}))
             page = context.new_page()
             page.on(
                 "console",
@@ -181,37 +184,39 @@ def render_page(
                 # loopback port and the capture still passed).
                 def guard(route):
                     request = route.request
-                    if pin_requests and allow_navigation is not None:
-                        # The harness's own capture (Codex review of
-                        # 7a8c432): no request may leave the origin at all,
-                        # and a navigation is fetched here without following
-                        # redirects, so an off-origin Location is refused
-                        # before the browser ever asks for it.
-                        url = request.url
-                        if not url.startswith(("data:", "blob:", "about:")) and not allow_navigation(url):
-                            (blocked if request.is_navigation_request() else failed_requests).append(
-                                ("" if request.is_navigation_request() else "blocked outside the preview: ") + url)
-                            route.abort()
-                            return
-                        if request.is_navigation_request():
-                            response = route.fetch(max_redirects=0)
-                            location = response.headers.get("location")
-                            if 300 <= response.status < 400 and location:
-                                from urllib.parse import urljoin
-                                target = urljoin(url, location)
-                                if not allow_navigation(target):
-                                    blocked.append("redirect to " + target)
-                                    route.abort()
-                                    return
-                            route.fulfill(response=response)
-                            return
                     if (request.is_navigation_request() and allow_navigation is not None
                             and not allow_navigation(request.url)):
                         blocked.append(request.url)
                         route.abort()
                     else:
                         route.continue_()
-                context.route("**/*", guard)
+                if pin_requests and allow_navigation is not None:
+                    # The harness's own capture (Codex reviews of 7a8c432,
+                    # d731499 and 06ad58c). Chromium's own request
+                    # interception pauses every request before it is sent,
+                    # including each hop of a redirect chain (which a
+                    # Playwright route never sees), and the browser still
+                    # does its own networking, so a single-threaded preview
+                    # keeps working. A request off the origin is failed
+                    # before it leaves: nothing reaches another service.
+                    cdp = context.new_cdp_session(page)
+
+                    def paused(event):
+                        request_id, url = event["requestId"], event["request"]["url"]
+                        if url.startswith(("data:", "blob:", "about:")) or allow_navigation(url):
+                            cdp.send("Fetch.continueRequest", {"requestId": request_id})
+                            return
+                        navigation = event.get("resourceType") == "Document"
+                        if event.get("redirectedRequestId"):
+                            note = "redirect to " + url + " refused"
+                        else:
+                            note = url if navigation else "blocked outside the preview: " + url
+                        (blocked if navigation else failed_requests).append(note)
+                        cdp.send("Fetch.failRequest", {"requestId": request_id, "errorReason": "BlockedByClient"})
+                    cdp.on("Fetch.requestPaused", paused)
+                    cdp.send("Fetch.enable", {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]})
+                else:
+                    context.route("**/*", guard)
 
                 def refuse_popup(new_page):
                     blocked.append("a new window or tab: " + (new_page.url or "about:blank"))

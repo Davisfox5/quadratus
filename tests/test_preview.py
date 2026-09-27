@@ -266,7 +266,8 @@ def test_a_zero_step_harness_capture_is_pinned_to_the_origin(tmp_path):
 def test_the_harness_captures_the_declared_page_with_a_real_browser(tmp_path):
     from quadratus.design_evidence import check, source_fingerprint
     port = _free_port()
-    (tmp_path / "index.html").write_text("<html><body><button id=go>Go</button><p id=done hidden>ok</p>"
+    (tmp_path / "index.html").write_text("<html><head><link rel=icon href='data:,'></head><body>"
+                                         "<button id=go>Go</button><p id=done hidden>ok</p>"
                                          "<script>go.onclick=()=>done.hidden=false</script></body></html>")
     profile = _profile(tmp_path, _server(port), port)
     capture = {"path": "/index.html", "steps": [{"action": "click", "selector": "#go"},
@@ -529,3 +530,89 @@ def test_the_generated_capture_command_is_recognised_exactly(tmp_path):
     for other in ("python -P -c 'import quadratus.design_evidence'", "python -X dev -m quadratus.design_evidence x",
                   "python -I -m quadratus.design_evidence x", "echo -m quadratus.design_evidence"):
         assert not _is_capture_invocation(other), other
+
+
+# -- Codex review of 06ad58c ------------------------------------------------------------
+
+def _chain(root, port, hops, *, threaded=True):
+    """A preview whose paths in ``hops`` redirect (302) to the given URL."""
+    server = "ThreadingHTTPServer" if threaded else "HTTPServer"
+    (root / "chain.py").write_text(
+        "import http.server\n"
+        f"HOPS = {hops!r}\n"
+        "class H(http.server.SimpleHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        if self.path in HOPS:\n"
+        "            self.send_response(302); self.send_header('Location', HOPS[self.path])\n"
+        "            self.send_header('Content-Length', '0'); self.end_headers(); return\n"
+        "        super().do_GET()\n"
+        f"http.server.{server}(('127.0.0.1', {port}), H).serve_forever()\n")
+    return [sys.executable, "chain.py"]
+
+
+@pytest.mark.skipif(not os.environ.get("QUADRATUS_CHROMIUM"), reason="needs a browser")
+def test_a_single_threaded_preview_still_captures(tmp_path):
+    """Codex review of 06ad58c: a single-threaded HTTPServer that passed at
+    7a8c432 timed out once navigations were fetched by the guard."""
+    from quadratus.design_evidence import check, source_fingerprint
+    port = _free_port()
+    (tmp_path / "style.css").write_text("body{margin:0}")
+    (tmp_path / "dot.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'/>")
+    (tmp_path / "index.html").write_text(
+        f"<html><head>{ICON}<link rel=stylesheet href='/style.css'></head>"
+        "<body><img src='/pic'><img src='/dot.svg'><button id=go>Go</button><p id=done hidden>ok</p>"
+        "<script>go.onclick=()=>done.hidden=false</script></body></html>")
+    profile = _profile(tmp_path, _chain(tmp_path, port, {"/go": "/index.html", "/pic": "/dot.svg"}, threaded=False),
+                       port, ready_path="/index.html")
+    capture = {"path": "/go", "steps": [{"action": "click", "selector": "#go"}, {"action": "wait", "selector": "#done"}]}
+    started = time.monotonic()
+    assert capture_task(profile, tmp_path, "t1", capture) == ""
+    assert time.monotonic() - started < 60
+    ok, problem, _ = check(tmp_path, "t1", 0, expected_source=source_fingerprint(tmp_path))
+    assert ok, problem
+
+
+@pytest.mark.skipif(not os.environ.get("QUADRATUS_CHROMIUM"), reason="needs a browser")
+@pytest.mark.parametrize("where", ["main", "iframe", "subresource"])
+def test_every_hop_of_a_redirect_chain_is_checked_by_the_guard(tmp_path, where):
+    """/a -> /b (same origin) -> another live service: the guard itself names
+    and refuses the last hop (not a browser network rule), and nothing
+    reaches the other service."""
+    from quadratus.design_evidence import check, source_fingerprint
+    port, other = _free_port(), _free_port()
+    (tmp_path / "index.html").write_text(
+        f"<html><head>{ICON}</head><body>ok"
+        + ("<iframe src='/a'></iframe>" if where == "iframe" else "")
+        + ("<img src='/a'>" if where == "subresource" else "") + "</body></html>")
+    unrelated, log = _other_service(tmp_path, other)
+    foreign = f"http://127.0.0.1:{other}/index.html"
+    try:
+        profile = _profile(tmp_path, _chain(tmp_path, port, {"/a": "/b", "/b": foreign}), port,
+                           ready_path="/index.html")
+        failure = capture_task(profile, tmp_path, "t1", {"path": "/a" if where == "main" else "/index.html",
+                                                          "steps": []})
+        ok, problem, _ = check(tmp_path, "t1", 0, expected_source=source_fingerprint(tmp_path))
+        assert not ok
+        evidence = failure + " " + problem + " " + " ".join(
+            json.loads((tmp_path / ".quadratus/design-evidence/t1/desktop/evidence.json").read_text())
+            .get("failed_requests", []) if (tmp_path / ".quadratus/design-evidence/t1/desktop/evidence.json").exists()
+            else [])
+        assert f"redirect to {foreign} refused" in evidence, evidence
+    finally:
+        unrelated.kill()
+        unrelated.wait()
+    assert "GET" not in log.read_text()
+
+
+@pytest.mark.skipif(not os.environ.get("QUADRATUS_CHROMIUM"), reason="needs a browser")
+def test_a_missing_favicon_is_visible_in_a_harness_capture(tmp_path):
+    """Chromium's own interception, unlike a Playwright route, lets the
+    browser's automatic /favicon.ico request happen, so a preview that 404s
+    it shows the 404. Recorded, never suppressed (Codex, 5852372403)."""
+    from quadratus.design_evidence import check, source_fingerprint
+    port = _free_port()
+    (tmp_path / "index.html").write_text("<html><body>ok</body></html>")
+    assert capture_task(_profile(tmp_path, _server(port), port), tmp_path, "t1",
+                        {"path": "/index.html", "steps": []}) == ""
+    ok, problem, _ = check(tmp_path, "t1", 0, expected_source=source_fingerprint(tmp_path))
+    assert not ok and "404" in problem
