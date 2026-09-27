@@ -141,8 +141,8 @@ def render_page(
     console_errors: List[str] = []
     failed_requests: List[str] = []
 
-    interactive = bool(steps)
-    budget = _Budget(deadline if interactive else None)
+    interactive = bool(steps) or allow_navigation is not None
+    budget = _Budget(deadline if bool(steps) else None)
     budget.require("before the browser started")
 
     with sync_playwright() as pw:
@@ -200,6 +200,11 @@ def render_page(
             page.goto(url, **({"timeout": budget.ms(30_000)} if budget.active else {}))
             page.wait_for_timeout(budget.ms(wait_ms) if budget.active else wait_ms)
             records = _run_steps(page, steps or [], blocked, step_timeout_ms, deadline)
+            if blocked and not records:
+                # A pinned capture with no steps (the harness's own, Codex
+                # review of contract v2): a navigation off the origin leaves
+                # the render unclean rather than silently showing its start.
+                failed_requests.append("navigation outside the preview was blocked: " + blocked[-1][:200])
             if records:
                 seen = len(blocked)
                 page.wait_for_timeout(budget.ms(min(wait_ms, 500)))

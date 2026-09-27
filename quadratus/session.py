@@ -3441,6 +3441,12 @@ class Session:
             if not capture:
                 return ('A UI task must declare what the harness captures: add "capture": '
                         '{"path": "/...", "steps": [...]} to its SCOPE.')
+            own = f".quadratus/capture-fixtures/{spec.task_id}/"
+            for step in capture["steps"]:
+                if step["action"] == "file" and not (step["path"].startswith(own)
+                                                     and "/" not in step["path"][len(own):]):
+                    return (f"A harness capture uploads only this task's own fixtures: put "
+                            f"{step['path']} at {own}<name>.")
             target = profile.origin + capture["path"]
             steps = [[s["action"], s["selector"]] for s in capture["steps"]]
             for finding in self.findings:
