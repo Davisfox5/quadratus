@@ -108,6 +108,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
                 goal, project, settings, allow_writes=args.allow_writes,
                 check=args.check or '', state_dir=args.state_dir,
                 extra_checks=getattr(args, "extra_check", None) or (),
+                capture_profile=getattr(args, "capture_profile", None),
                 forbid=args.forbid, declared_paths=args.declared_paths,
                 max_tasks=args.max_tasks, mode=args.mode,
                 security_verdict_json=getattr(args, "security_verdict_json", False),
@@ -327,6 +328,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             "The project's own check command, run after each task's work is "
             "final (e.g. --check 'pytest -q'). The deterministic half of "
             "'do the pieces fit together'."
+        ),
+    )
+    engine.add_argument(
+        "--capture-profile",
+        metavar="JSON",
+        help=(
+            "The operator's preview profile, so the harness starts the app and "
+            "captures UI tasks' renders itself: {\"preview\": [argv], \"origin\": "
+            "\"http://127.0.0.1:PORT\", \"ready_path\": \"/\", \"ready_timeout\": 30, "
+            "\"capture_timeout\": 120}. Validated before any model call."
         ),
     )
     engine.add_argument(

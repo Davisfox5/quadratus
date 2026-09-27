@@ -1097,6 +1097,12 @@ class CLISpec:
     #: and a space-joined list would reach it as one nonsense tool name that
     #: denies nothing (caught 2026-09-15 before the live check).
     disallowed_tools_separator: str = " "
+    #: What an editing call may execute without anyone approving it: "any"
+    #: (the vendor's sandbox runs commands) or "granted" (only commands named
+    #: in an allow rule; headless claude denies the rest, Codex, Run 18). The
+    #: session reads it before dispatch, so a UI task whose lead could never
+    #: run the capture stops before it is invoked instead of after its cap.
+    editing_commands: str = "any"
     #: Some CLIs only honour their tool-filtering flags when the prompt is an
     #: argument rather than a file (grok ignores them under --prompt-file, in
     #: silence). Where that is so, restricted mode must deliver the prompt in
@@ -1195,11 +1201,34 @@ class CLISpec:
             return []
 
 
+def _extract_claude_denials(stdout: str) -> List[Dict[str, object]]:
+    """Each Bash command the claude envelope's ``permission_denials`` names,
+    as a ``permission_denied`` tool failure, so it is kept in the ledger and
+    the Fleet can tell a denied required command from exploration."""
+    try:
+        payload = json.loads(stdout)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    out: List[Dict[str, object]] = []
+    for entry in payload.get("permission_denials") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("tool_name") or entry.get("toolName") or entry.get("name")
+        command = (entry.get("tool_input") or {}).get("command") if isinstance(entry.get("tool_input"), dict) else None
+        if name == "Bash" and isinstance(command, str) and command.strip():
+            out.append(dict(kind="permission_denied", command=command.strip(), status="denied"))
+    return out
+
+
 #: Verified against claude 2.1.228. ``--system-prompt`` fully replaces the
 #: default Claude Code system prompt (it does not merely append), which keeps
 #: an assigned collaboration role from competing with the coding-agent persona.
 CLAUDE_SPEC = CLISpec(
     vendor="claude",
+    editing_commands="granted",
+    extract_tool_failures=_extract_claude_denials,
     binary="claude",
     print_flag=["-p"],
     system_flag="--system-prompt",
