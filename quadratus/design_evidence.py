@@ -78,6 +78,15 @@ MAX_EXCLUDES_BYTES = 64_000
 MAX_EXCLUDES = 200
 
 
+class EvidenceTampered(RuntimeError):
+    """Evidence whose identity was positively observed not to hold: a
+    screenshot that is a symlink, a fixture whose bytes differ from the
+    digest recorded at capture, or a harness capture recorded against a
+    source the harness did not capture (map J9b). An integrity stop: never
+    recaptured and never repaired, and the evidence is left as found.
+    Missing, stale or malformed evidence is invalid proof, not this."""
+
+
 class ExcludesError(ValueError):
     """The recorded exclusions cannot be trusted as written; never replaced
     by a different source boundary."""
@@ -343,6 +352,9 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
     return out
 
 
+_FIXTURE_CHANGED = "changed after the capture"
+
+
 def _fixture_problem(root, step: dict, task_id: str) -> Optional[str]:
     """What stops a recorded fixture from standing as captured, if anything.
 
@@ -370,7 +382,7 @@ def _fixture_problem(root, step: dict, task_id: str) -> Optional[str]:
     now = _digest(path)
     if now is None:
         return "no longer exists or cannot be read, so the capture cannot be reproduced"
-    return "changed after the capture" if now != recorded else None
+    return _FIXTURE_CHANGED if now != recorded else None
 
 
 def _write_summary(folder: Path, summary: dict) -> None:
@@ -448,7 +460,11 @@ def check_records(root, task_id: str, since: float, *, expected_source: Optional
     data), ``page.unclean`` (console errors or failed requests), and
     ``product.overflow`` (a measured page wider than its viewport, with
     ``view``, ``width``, ``viewport`` and ``target``). Only the last is a
-    measured product fact; see Session's audit findings.
+    measured product fact; see Session's audit findings. An ``integrity``
+    record carrying ``tamper=True`` was positively observed (a symlinked
+    screenshot, a fixture whose bytes changed after capture); one carrying
+    ``identity="source"`` names a source mismatch, which is tampering only
+    when the harness took the capture itself (map J9b).
     """
     try:
         return _check(root, task_id, since, expected_source)
@@ -504,13 +520,17 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
         # An enforcing session passes the fingerprint of its own configured
         # source; the recorded exclusions file, which a solver can write,
         # never decides what that session counts as source.
-        add("integrity", "the renders were captured on a different source tree than the current one")
+        add("integrity", "the renders were captured on a different source tree than the current one",
+            identity="source")
     requested = summary.get("steps")
     for index, step in enumerate(requested if isinstance(requested, list) else [], 1):
         if isinstance(step, dict) and step.get("action") == "file":
             problem = _fixture_problem(root, step, task_id)
             if problem:
-                add("integrity", f"step {index}'s fixture {str(step.get('label'))[:80]} {problem}")
+                # Only a digest that disagrees with the bytes is observed
+                # tampering; a fixture gone or unreadable is invalid proof.
+                add("integrity", f"step {index}'s fixture {str(step.get('label'))[:80]} {problem}",
+                    **(dict(tamper=True) if problem == _FIXTURE_CHANGED else {}))
     for name, view in summary["views"].items():
         if requested is None:
             if "steps" in view:
@@ -522,7 +542,7 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
     for name, viewport in VIEWPORTS.items():
         shot = folder / name / "page.png"
         if shot.is_symlink():
-            add("integrity", f"the {name} screenshot is a symlink, not a capture")
+            add("integrity", f"the {name} screenshot is a symlink, not a capture", tamper=True)
             continue
         width = _png_width(shot)
         if width is None:

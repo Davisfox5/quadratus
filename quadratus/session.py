@@ -3141,6 +3141,7 @@ class Session:
                 return
         ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
                                                     expected_source=self._trusted_source())
+        self._refuse_tampered(spec, record, task, records, harness)
         problem, records = self._qualify_debt(spec, ok, problem, records)
         if self._audit_debt_applies(spec, ok, records):
             # A recapture cannot change a measured fault on valid evidence, so
@@ -3171,6 +3172,7 @@ class Session:
                 ok, problem, shots, records = check_records(
                     self.project, spec.task_id, self._last_edit_started or 0,
                     expected_source=self._trusted_source())
+                self._refuse_tampered(spec, record, task, records, harness)
         elif not ok:
             record["first_problem"] = problem
             self._note(f"task {spec.task_id}: design evidence missing or broken; one fix call ({problem[:100]})")
@@ -3196,6 +3198,7 @@ class Session:
             self._run_integration_gate(lead, spec, task)
             ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
                                                         expected_source=self._trusted_source())
+            self._refuse_tampered(spec, record, task, records, harness)
             problem, records = self._qualify_debt(spec, ok, problem, records)
             if self._audit_debt_applies(spec, ok, records):
                 record.update(verified=False, problem=problem,
@@ -3238,6 +3241,26 @@ class Session:
                     self._resolution_candidate = self._review_snapshot
         self.design_checks.append(record)
         task.keep(json.dumps(record), kind="design-evidence")
+
+    def _refuse_tampered(self, spec, record, task, records, harness) -> None:
+        """Stop on evidence positively observed not to hold (map J9b): a
+        symlinked screenshot, a fixture whose bytes changed after capture,
+        or a harness capture recorded against a source other than the
+        trusted one. An integrity stop, not invalid proof: no recapture, no
+        design-fix and no product repair, and the evidence stays as found.
+        A self-capture on another source is ordinary staleness and keeps
+        the bounded recapture (J8, J9a)."""
+        seen = [r["message"] for r in records if r.get("kind") == "integrity"
+                and (r.get("tamper") or (harness and r.get("identity") == "source"))]
+        if not seen:
+            return
+        from .design_evidence import EvidenceTampered
+        problem = "; ".join(seen)
+        record.update(verified=False, problem=problem, tampered=seen, harness_capture=bool(harness))
+        self.design_checks.append(record)
+        task.keep(json.dumps(record), kind="design-evidence")
+        self._note(f"task {spec.task_id}: design evidence did not hold; stopping ({problem[:120]})")
+        raise EvidenceTampered(f"task {spec.task_id}: {problem[:300]}. The evidence is preserved as found.")
 
     def _evidence_files(self, spec, shots) -> List[str]:
         """Project-relative evidence files behind ``shots``, for the Fleet to
