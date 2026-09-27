@@ -437,3 +437,54 @@ def test_an_exception_with_source_unchanged_keeps_a_valid_resolution(tmp_path, m
     assert replay.result.error.startswith("Provider"), "the docs lead's failure is the stop"
     f1 = replay.findings[0]
     assert f1["status"] == "resolved" and f1["resolved_by"] == "t2"
+
+
+# -- review-time identity and failed finalisation (Codex review of ee7e62b) ----------------
+
+@pytest.mark.parametrize("changed", ["mobile/page.png", "summary.json"])
+def test_renders_changed_while_the_review_is_in_flight_do_not_resolve(tmp_path, monkeypatch, changed):
+    """The reviewer read the snapshotted copy; the project's file changed before it answered."""
+    def review(call, replay):
+        path = replay.project / ".quadratus" / "design-evidence" / call.task / changed
+        path.write_bytes(path.read_bytes() + (b"\0" if changed.endswith(".png") else b" "))
+        return "APPROVED"
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1"],
+                  {"t1": _capture(measured=WIDE), "t2": _repair()}, review=review)
+    f1 = replay.findings[0]
+    assert f1["status"] == "open" and "replaced after they were reviewed" in f1["last_attempt"]
+    assert replay.result.error.startswith("FindingsUnresolved: task t2") and not replay.result.completed
+    assert len(replay.of("design-review")) == 1
+
+
+def test_a_file_changed_between_snapshot_and_copy_is_not_delivered(tmp_path, monkeypatch):
+    from quadratus import runtime
+    furnish = runtime._furnish_evidence
+
+    def racing(root, directory, paths, **kw):
+        if kw.get("expected"):
+            png = Path(root) / ".quadratus" / "design-evidence" / "t2" / "mobile" / "page.png"
+            png.write_bytes(png.read_bytes() + b"\0")
+        return furnish(root, directory, paths, **kw)
+    monkeypatch.setattr(runtime, "_furnish_evidence", racing)
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1"],
+                  {"t1": _capture(measured=WIDE), "t2": _repair()})
+    assert not replay.of("design-review"), "refused before the reviewer was asked"
+    assert replay.findings[0]["status"] == "open" and not replay.result.completed
+
+
+def test_a_failed_recheck_on_an_exception_exit_distrusts_resolutions(tmp_path, monkeypatch):
+    from quadratus.session import Session
+
+    def refuse(self):
+        raise OSError("synthetic finalisation refusal")
+    monkeypatch.setattr(Session, "_recheck_resolved_findings", refuse)
+
+    def rogue(call, replay):
+        H.write(call, {"README.md": "# app\n\nx\n", "templates/index.html": "<p>moved</p>\n"})
+        return 'Documented.\nCHANGED: ["README.md", "templates/index.html"]'
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1", DOCS],
+                  {"t1": _capture(measured=WIDE), "t2": _repair(), "t3": rogue}, max_tasks=8)
+    f1 = replay.findings[0]
+    assert replay.result.error and "synthetic" not in replay.result.error, "the original stop is reported"
+    assert f1["status"] == "open" and f1["reopened"].startswith("unverified")
+    assert H.result_json(replay)["requirements"]["status"]["R1"].startswith("NOT MET")

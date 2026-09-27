@@ -44,6 +44,7 @@ counterfactual rather than a bill.
 from __future__ import annotations
 
 import copy
+import hashlib
 import itertools
 import json
 import logging
@@ -392,7 +393,8 @@ class Fleet:
         with self.project.snapshot() as directory:
             context = invocation_context.get() or {}
             declared = tuple(itertools.islice(iter(context.get("evidence_files") or ()), _MAX_EVIDENCE_FILES + 1))
-            copied = _furnish_evidence(self.project.root, directory, declared, task=context.get("task"))
+            copied = _furnish_evidence(self.project.root, directory, declared, task=context.get("task"),
+                                       expected=context.get("evidence_sha256"))
             if declared and sorted(copied) != sorted(declared) and context.get("role") == "design-review":
                 # Checked on what actually landed, since files can change or
                 # fail between the session's preflight and this copy. The final
@@ -869,7 +871,7 @@ def _evidence_problem(root: Path, rel: str, task) -> str:
     return ""
 
 
-def _furnish_evidence(root, directory, paths, *, task=None) -> list:
+def _furnish_evidence(root, directory, paths, *, task=None, expected=None) -> list:
     """Copy declared design evidence into a review call's source copy.
 
     Codex, Run 16: the reviewer was pointed at renders under the project's
@@ -882,6 +884,11 @@ def _furnish_evidence(root, directory, paths, *, task=None) -> list:
     renders): regular, not symlinked at any component, of the type their
     name says, bounded in count and size. Anything else is skipped, and the
     caller states only what was copied. Returns the paths copied.
+
+    ``expected`` maps a path to the sha256 the session snapshotted before the
+    call; a file whose bytes now differ is not copied, so a review can only
+    be of the exact renders the session will commit (Codex review of
+    ee7e62b).
     """
     root = Path(root)
     copied, total = [], 0
@@ -896,6 +903,8 @@ def _furnish_evidence(root, directory, paths, *, task=None) -> list:
                 continue
             data = current.read_bytes()
             if len(data) != size or not _evidence_type_ok(rel, data):
+                continue
+            if expected is not None and hashlib.sha256(data).hexdigest() != expected.get(rel):
                 continue
             target = Path(directory) / rel
             target.parent.mkdir(parents=True, exist_ok=True)

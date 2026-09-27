@@ -1088,7 +1088,7 @@ def test_a_copy_that_fails_after_preflight_stops_the_review_before_the_model(tmp
     from quadratus import runtime
     real = runtime._furnish_evidence
     monkeypatch.setattr(runtime, "_furnish_evidence",
-                        lambda root, directory, paths, task=None: real(root, directory, list(paths)[:1], task=task))
+                        lambda root, directory, paths, **kw: real(root, directory, list(paths)[:1], **kw))
     replay = _design_run(tmp_path, monkeypatch, lead=_edits_and_captures,
                          revision=lambda call, replay: "Nothing to change after review.\nCHANGED: []")
     assert not replay.of("design-review"), "no model call for an incompletely delivered set"

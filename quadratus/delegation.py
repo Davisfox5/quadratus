@@ -115,7 +115,8 @@ def record_invocation(ledger, event):
 
 
 @contextmanager
-def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None, evidence_files=None):
+def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None, evidence_files=None,
+               evidence_sha256=None):
     context = dict(task=task, role=role, origin=origin)
     if prompt_artifact:
         context["prompt_artifact"] = prompt_artifact
@@ -127,6 +128,10 @@ def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None
         # Declared design evidence a read-only review call is handed; Fleet
         # copies exactly these into its source copy (runtime._furnish_evidence).
         context["evidence_files"] = tuple(evidence_files)
+    if evidence_sha256:
+        # The sha256 of each of those files, snapshotted before the call; a
+        # file whose bytes changed since is not copied (runtime._furnish_evidence).
+        context["evidence_sha256"] = dict(evidence_sha256)
     token = invocation_context.set(context)
     try:
         yield
