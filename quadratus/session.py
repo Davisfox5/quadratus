@@ -2896,7 +2896,7 @@ class Session:
                                          .strip()[:300])
                     continue
                 if self.open_findings or (self.checks and not self.checks[-1]['passed']):
-                    self._name_findings_stop()
+                    self._name_findings_stop({s.task_id for s in batch} | {f"{batch[-1].task_id}-merge"})
                     break
                 continue
             if spec is None:
@@ -3028,7 +3028,7 @@ class Session:
             self._current_covers, self._current_resolves = [], []
             self._note(f"task {len(self.history)} closed by {summary.author}")
             if self.open_findings or (self.checks and not self.checks[-1]['passed']):
-                self._name_findings_stop()
+                self._name_findings_stop({spec.task_id})
                 break
             if unresolved:
                 # An explicit attempt that did not establish its acceptance is
@@ -3201,6 +3201,10 @@ class Session:
                 task.keep(json.dumps(record), kind="design-evidence")
                 return
         record.update(verified=ok, problem=problem, screenshots=shots)
+        if ok:
+            # Verified renders for this task discharge its own earlier design
+            # debt, and nothing else's (map G8).
+            self._design_unverified = [d for d in self._design_unverified if d[0] != spec.task_id]
         if not ok:
             self._open_finding("invalid_proof",
                                f"Task {spec.task_id} is design work without clean rendered evidence: {problem}.")
@@ -3427,6 +3431,9 @@ class Session:
                 self.scope_reports.extend(child.scope_reports)
                 self.design_checks.extend(child.design_checks)
                 self.open_findings.extend(child.open_findings)
+                # The child's design debt comes back with its findings, so a
+                # stop names it rather than a generic open finding (map G8).
+                self._design_unverified.extend(child._design_unverified)
                 self.task_outcomes.extend(child.task_outcomes)
                 mine = next((o for o in child.task_outcomes if o.task_id == spec.task_id), None)
                 if outside or exc is not None:
@@ -4188,15 +4195,20 @@ class Session:
             finding.update(status="resolved", resolved_by=spec.task_id, reopened=None, resolution=evidence)
             self._note(f"task {spec.task_id} resolved audit finding {finding['id']}")
 
-    def _name_findings_stop(self) -> None:
+    def _name_findings_stop(self, stopping=None) -> None:
         """Name a stop caused by unverified design evidence.
 
         Codex, Run 15: the run stopped on unverified design evidence with
         ``completed`` false and ``result.error`` blank. Other open-finding and
         failed-check stops are left as they were.
+
+        Only the design debt of the task or tasks that just closed names the
+        stop (map G8): ``stopping`` is their ids. Another task's recorded
+        debt never names this stop.
         """
-        if self._design_unverified and not self.stop_reason:
-            task_id, problem = self._design_unverified[-1]
+        own = [d for d in self._design_unverified if stopping is None or d[0] in stopping]
+        if own and not self.stop_reason:
+            task_id, problem = own[-1]
             self._stop_with("unverified", (f"DesignUnverified: task {task_id} is design work without clean "
                                            f"rendered evidence: {str(problem)[:400]}. Work preserved."))
         elif not self.stop_reason:

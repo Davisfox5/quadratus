@@ -78,14 +78,6 @@ def test_the_merge_allowance_is_the_configured_one_and_exhausts(tmp_path):
     assert "the merge gate still fails" in session.stop_reason
 
 
-def test_an_unattributable_merge_failure_gets_no_repair(tmp_path):
-    import pytest
-
-    from quadratus.integration import CheckUnattributable
-    with pytest.raises(CheckUnattributable, match="structured report undeclared"):
-        _run(tmp_path, attributable=False)
-
-
 def test_an_unattributable_failure_at_the_serial_gate_stops_before_any_batch(tmp_path):
     """Renamed coverage (Codex 5859838257): with no declared report at any
     gate the run stops at the serial task's gate; the merge is never reached."""
