@@ -3951,8 +3951,9 @@ class Session:
         "" on success or why not. Only after the last gate passed, and the
         source must be the same before and after (the preview is not a
         writer)."""
-        if self.checks and self._task_checks_failed():
-            return "the harness did not capture because the task's last check failed"
+        ineligible = self._capture_ineligible()
+        if ineligible:
+            return f"the harness did not capture because {ineligible}"
         from .preview import capture_task
         self._verify_dependencies(f"before preview ({spec.task_id})")
         before = self._source_fingerprint()
@@ -3975,8 +3976,31 @@ class Session:
                 return True
         return any(f.active and f.kind == "product" for f in self.run_outcome.facts)
 
-    def _task_checks_failed(self) -> bool:
-        return bool(self.checks) and not self.checks[-1]["passed"]
+    def _capture_ineligible(self) -> str:
+        """Why this task's renders may not be captured yet; "" if they may.
+
+        Read from the current task's own record under its fixed contract
+        (phase 3, map G4), never from the run's last check: a task with no
+        required checks does not inherit an earlier task's failure, and a
+        task whose required checks never ran does not borrow an earlier
+        task's pass. Only an attempt of the task's full required gate counts;
+        a cheap subset or another gate never grants eligibility. The passing
+        attempt must have run against the source being captured."""
+        outcome = self._outcome
+        if outcome is None or not outcome.contract:
+            return "the task has no dispatch record"
+        if not (outcome.contract.get("required") or {}).get("checks"):
+            return ""
+        full = [c for c in outcome.checks if c.get("gate") == "full"]
+        if not full:
+            return "the task's required checks have not run"
+        last = full[-1]
+        if not last.get("passed"):
+            return "the task's last required check failed"
+        current = self._source_identity()
+        if current in ("n/a", "unavailable") or last.get("source") != current:
+            return "the source changed after the task's last passing required check"
+        return ""
 
     def _evidence_set_problem(self, task_id) -> str:
         """Why a task's renders are not a complete, deliverable evidence set
@@ -4414,9 +4438,12 @@ class Session:
         if max_fixes is not None:
             ceiling = min(ceiling, getattr(self, "_gate_fixes_used", 0) + max_fixes)
         latest_fix = ""
+        # Which gate an attempt ran: the run's full required gate, or a subset
+        # of it (a cheap view) or another gate (the merge gate).
+        kind = "full" if gate is self.config.integration_gate else "subset"
         result = self._check(gate)
         task.record("user", result.for_models())
-        attempt_facts = [self._record_check_attempt(result)]
+        attempt_facts = [self._record_check_attempt(result, gate_kind=kind)]
         self._handoff_unattributable(gate, result, task)
         while not result.passed and getattr(self, "_gate_fixes_used", 0) < ceiling:
             try:
@@ -4436,7 +4463,7 @@ class Session:
             self._gate_fixes_used = getattr(self, "_gate_fixes_used", 0) + 1
             result = self._check(gate)
             task.record("user", result.for_models())
-            attempt_facts.append(self._record_check_attempt(result))
+            attempt_facts.append(self._record_check_attempt(result, gate_kind=kind))
             self._handoff_unattributable(gate, result, task)
         self.checks.append({"passed": result.passed, "command": result.command,
                             "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
@@ -4492,7 +4519,7 @@ class Session:
             f"output artifact {attempt.get('output_artifact', 'unavailable')}. No repair call was made. "
             "Work preserved.")
 
-    def _record_check_attempt(self, result):
+    def _record_check_attempt(self, result, gate_kind="full"):
         """One executed check, as a typed record: receipts in full, the output
         kept as an artifact, the source it ran against. Returns the product
         fact a failed attempt adds (None when it passed)."""
@@ -4504,7 +4531,7 @@ class Session:
             # Kept explicit: a lost artifact makes the record incomplete
             # (outcome.missing_facts), it is never passed off as a receipt.
             lost = f"{type(exc).__name__}: {str(exc)[:160]}"
-        entry = dict(passed=result.passed, returncode=result.returncode, output_artifact=output,
+        entry = dict(passed=result.passed, returncode=result.returncode, gate=gate_kind, output_artifact=output,
                      output_artifact_error=lost,
                      source=self._source_identity(),
                      receipts=[dict(id=r.id, status=r.status, reason=r.reason, tests=r.tests,
