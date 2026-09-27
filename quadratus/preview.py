@@ -96,10 +96,16 @@ class _BoundedLog:
         return bytes(self._buffer).decode("utf-8", "replace")[-_LOG_TAIL:].strip() or "(no output)"
 
     def close(self):
+        """Never blocks on a pipe a surviving descendant still holds: the
+        reader is given a bounded wait, and the stream is closed only once
+        the reader has finished (closing under a blocked read would wait on
+        its lock). Otherwise the daemon reader is left to end at EOF."""
         self._thread.join(timeout=2)
+        if self._thread.is_alive():
+            return
         try:
             self._stream.close()
-        except OSError:
+        except (OSError, ValueError):
             pass
 
 
@@ -272,25 +278,36 @@ def _environment() -> dict:
         return {k: v for k, v in env.items() if k != "PYTHONPYCACHEPREFIX"}
 
 
+def _group_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+
+
 def _stop(proc: subprocess.Popen) -> None:
-    """SIGINT, SIGTERM, then SIGKILL to the preview's own process group, then
-    reap. SIGINT first so an app whose cleanup runs on interrupt gets to run
-    it; that is a chance, not proof, that the app removed what it made."""
-    for sig, wait in ((signal.SIGINT, SHUTDOWN_STEP_SECONDS), (signal.SIGTERM, SHUTDOWN_STEP_SECONDS),
-                      (signal.SIGKILL, SHUTDOWN_STEP_SECONDS)):
+    """SIGINT, SIGTERM, then SIGKILL to the process group this module
+    created, each followed by a wait until the whole group, not only its
+    leader, is gone, then reap. SIGINT first so an app whose cleanup runs
+    on interrupt gets to run it; that is a chance, not proof, that the app
+    removed what it made. Safe to call after the leader has already exited:
+    a descendant still in the group is stopped too (Codex review of d731499)."""
+    pgid = proc.pid
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
         try:
-            os.killpg(proc.pid, sig)
+            os.killpg(pgid, sig)
         except ProcessLookupError:
             break
         except OSError:
             break
-        try:
-            proc.wait(timeout=wait)
-            # The leader is gone; signal the group once more so a child that
-            # outlived it does not keep the port.
-            continue
-        except subprocess.TimeoutExpired:
-            continue
+        end = time.monotonic() + SHUTDOWN_STEP_SECONDS
+        while time.monotonic() < end and (proc.poll() is None or _group_alive(pgid)):
+            time.sleep(0.05)
+        if proc.poll() is not None and not _group_alive(pgid):
+            break
     try:
         proc.wait(timeout=1)
     except subprocess.TimeoutExpired:
@@ -386,15 +403,17 @@ def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict) -> 
                                        start_new_session=True)
             output = _BoundedLog(capture.stdout)
             try:
-                capture.wait(timeout=left)
-            except subprocess.TimeoutExpired:
-                # The capture and everything it started (the browser).
+                try:
+                    capture.wait(timeout=left)
+                except subprocess.TimeoutExpired:
+                    return f"the capture did not finish within {left:.0f}s of the {profile.total_timeout:g}s budget"
+                if capture.returncode != 0:
+                    return f"the capture exited with {capture.returncode}: " + output.tail()[-400:]
+            finally:
+                # Whatever happened, the capture and everything it started
+                # (the browser, a child holding its output) are stopped.
                 _stop(capture)
                 output.close()
-                return f"the capture did not finish within {left:.0f}s of the {profile.total_timeout:g}s budget"
-            output.close()
-            if capture.returncode != 0:
-                return f"the capture exited with {capture.returncode}: " + output.tail()[-400:]
     except PreviewFailed as exc:
         return str(exc)
     return ""

@@ -442,3 +442,90 @@ def test_a_malformed_denial_list_is_ignored_without_losing_accounting():
     from quadratus.cli_providers import _extract_claude_denials
     assert _extract_claude_denials(json.dumps({"permission_denials": 42})) == []
     assert _extract_claude_denials(json.dumps({"permission_denials": [42, {"tool_name": "Bash"}]})) == []
+
+
+# -- Codex review of d731499 ------------------------------------------------------------
+
+def _hopping(root, port, to, status=302):
+    (root / "hop.py").write_text(
+        "import http.server, socketserver\n"
+        "class H(http.server.SimpleHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        if self.path.startswith('/jump'):\n"
+        f"            self.send_response({status}); self.send_header('Location', {to!r}); self.end_headers(); return\n"
+        "        super().do_GET()\n"
+        f"socketserver.ThreadingTCPServer(('127.0.0.1', {port}), H).serve_forever()\n")
+    return [sys.executable, "hop.py"]
+
+
+ICON = "<link rel=icon href='data:,'>"
+
+
+@pytest.mark.skipif(not os.environ.get("QUADRATUS_CHROMIUM"), reason="needs a browser")
+def test_an_iframe_hop_to_another_live_service_never_reaches_it(tmp_path):
+    from quadratus.design_evidence import check, source_fingerprint
+    port, other = _free_port(), _free_port()
+    (tmp_path / "index.html").write_text(f"<html><head>{ICON}</head><body>ok<iframe src='/jump'></iframe></body></html>")
+    unrelated, log = _other_service(tmp_path, other)
+    try:
+        profile = _profile(tmp_path, _hopping(tmp_path, port, f"http://127.0.0.1:{other}/index.html"), port,
+                           ready_path="/index.html")
+        failure = capture_task(profile, tmp_path, "t1", {"path": "/index.html", "steps": []})
+        ok, problem, _ = check(tmp_path, "t1", 0, expected_source=source_fingerprint(tmp_path))
+        assert not ok and "outside the preview" in (failure + " " + problem), (failure, problem)
+    finally:
+        unrelated.kill()
+        unrelated.wait()
+    assert "GET" not in log.read_text(), "the iframe's redirect was refused before it was followed"
+
+
+@pytest.mark.skipif(not os.environ.get("QUADRATUS_CHROMIUM"), reason="needs a browser")
+@pytest.mark.parametrize("status, frame", [(307, False), (302, True), (307, True)])
+def test_same_origin_redirects_and_frames_pass(tmp_path, status, frame):
+    from quadratus.design_evidence import check, source_fingerprint
+    port = _free_port()
+    (tmp_path / "inner.html").write_text(f"<html><head>{ICON}</head><body>inner</body></html>")
+    (tmp_path / "index.html").write_text(
+        f"<html><head>{ICON}</head><body>ok" + ("<iframe src='/jump'></iframe>" if frame else "") + "</body></html>")
+    target = "/inner.html" if frame else "/index.html"
+    profile = _profile(tmp_path, _hopping(tmp_path, port, target, status), port, ready_path="/index.html")
+    path = "/index.html" if frame else "/jump"
+    assert capture_task(profile, tmp_path, "t1", {"path": path, "steps": []}) == ""
+    ok, problem, _ = check(tmp_path, "t1", 0, expected_source=source_fingerprint(tmp_path))
+    assert ok, problem
+
+
+@pytest.mark.parametrize("code", [0, 3])
+def test_a_child_holding_the_capture_output_is_stopped_whatever_the_exit(tmp_path, monkeypatch, code):
+    port = _free_port()
+    pid_file = tmp_path.parent / f"held-{code}.pid"
+    (tmp_path / "leave.py").write_text(
+        "import subprocess, sys\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        f"open({str(pid_file)!r}, 'w').write(str(child.pid))\n"
+        f"raise SystemExit({code})\n")
+    monkeypatch.setattr(preview, "capture_argv", lambda *a, **k: [sys.executable, str(tmp_path / "leave.py")])
+    started = time.monotonic()
+    message = capture_task(_profile(tmp_path, _server(port), port, total_timeout=30), tmp_path, "t1",
+                           {"path": "/", "steps": []})
+    assert time.monotonic() - started < 20, "teardown never blocks on the inherited pipe"
+    assert (message == "") if code == 0 else message.startswith("the capture exited with 3")
+    child = int(pid_file.read_text())
+    deadline = time.monotonic() + 5
+    while _alive(child) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not _alive(child)
+
+
+def test_the_generated_capture_command_is_recognised_exactly(tmp_path):
+    import shlex
+
+    from quadratus.runtime import _is_capture_invocation, _relevant_denials
+    argv = preview.capture_argv(_profile(tmp_path, ["python", "-m", "http.server"], 5000), "t1",
+                                {"path": "/", "steps": []})
+    command = shlex.join(a if a != "{root}" else "/project" for a in argv)
+    assert "-P" in argv and _is_capture_invocation(command)
+    assert _relevant_denials([dict(kind="permission_denied", command=command)], ()) == [command]
+    for other in ("python -P -c 'import quadratus.design_evidence'", "python -X dev -m quadratus.design_evidence x",
+                  "python -I -m quadratus.design_evidence x", "echo -m quadratus.design_evidence"):
+        assert not _is_capture_invocation(other), other

@@ -358,3 +358,20 @@ def test_a_malformed_denial_field_changes_nothing(tmp_path, monkeypatch):
     assert replay.result.completed, replay.result.error
     usage = (replay.result.run_dir / "usage.jsonl").read_text()
     assert usage.strip(), "the call's usage is still metered"
+
+
+def test_the_generated_capture_command_denied_at_the_cap_is_a_capability_stop(tmp_path, monkeypatch):
+    import shlex
+
+    from quadratus import preview
+    profile = preview.profile_from_dict(dict(preview=["python", "-m", "http.server"],
+                                             origin="http://127.0.0.1:5000"), tmp_path)
+    argv = preview.capture_argv(profile, "t1", {"path": "/", "steps": []})
+    command = shlex.join(a if a != "{root}" else "/project" for a in argv)
+    audit = AUDIT.replace(', "capture": ' + json.dumps(CAPTURE), "")
+    capped = json.loads(H.claude_cap("Kept trying to capture."))
+    capped["permission_denials"] = [dict(tool_name="Bash", tool_input={"command": command})]
+    replay = _run(tmp_path, monkeypatch, [REQS + audit, REQS + audit], {"t1": lambda call, replay: json.dumps(capped)},
+                  settings_kw={"lead_max_turns": 14})
+    assert replay.result.error.startswith("CapabilityUnavailable")
+    assert [c.task for c in replay.of("lead")] == ["t1"]

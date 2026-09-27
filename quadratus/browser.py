@@ -256,6 +256,13 @@ def render_page(
                     records[-1]["ok"] = False
                     records[-1]["error"] = ("navigation outside the preview was blocked after this step: "
                                             + blocked[-1][:200])
+            if pin_requests and allow_navigation is not None:
+                # Every rendered frame, not only the main one, must stand on
+                # the origin (Codex review of d731499: an iframe hopped away).
+                for frame in page.frames:
+                    where = frame.url or ""
+                    if where and not where.startswith(("about:", "data:", "blob:")) and not allow_navigation(where):
+                        failed_requests.append("frame outside the preview: " + where[:200])
             title = page.title()
             document_width, overflow = _measure_overflow(page, (viewport or {}).get("width"))
             shot = out / "page.png"
