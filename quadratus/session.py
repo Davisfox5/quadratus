@@ -837,6 +837,44 @@ def _check_for_models(check: dict) -> dict:
     }
 
 
+#: The marker as a verifier writes it: the uppercase word, not the English one.
+_FINDING_MARKER = re.compile(r"\b(?:BLOCKING|UNRESOLVED)\b")
+#: A marker directly after one of these is a note about findings, not one.
+_NEGATION_BEFORE = re.compile(r"(?:\bnon-|\bnon |\bnot |\bneither |\bno |\bnothing )$", re.IGNORECASE)
+_BLOCKING_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?BLOCKING\s*:\s*(.*)$", re.IGNORECASE)
+_EMPTY_FINDING = re.compile(r"(?:none|n/?a|nothing)\b[\s.!]*$", re.IGNORECASE)
+
+
+def _has_security_finding(text: str) -> bool:
+    """A finding is a marker as written, not the word in prose.
+
+    The old test upper-cased every line before looking for BLOCKING or
+    UNRESOLVED, so English prose became markers: in the Q9-v2 series
+    (2026-09-24) "## Two minor notes, neither blocking" and "One non-blocking
+    note for the record" each stopped a run whose verifier had accepted,
+    before the terminal question, costing two completions of five.
+
+    Now a line opening with "Blocking:" counts in any case unless what follows
+    is none, n/a or nothing (the verifier is told to write BLOCKING: lines, so
+    "Blocking: none" is the likeliest note it writes). Elsewhere the uppercase
+    marker counts ("This defect is BLOCKING.", "..., but UNRESOLVED: missing
+    evidence.") unless a negation sits directly before it: non-, not, neither,
+    no or nothing, in any case. Negations fail open only for those forms; any
+    other doubt still stops the run, which is the safe side for security.
+    """
+    for raw in text.splitlines():
+        line = raw.replace("**", "")
+        prefixed = _BLOCKING_LINE.match(line)
+        if prefixed:
+            if _EMPTY_FINDING.match(prefixed.group(1).strip()):
+                continue
+            return True
+        for marker in _FINDING_MARKER.finditer(line):
+            if not _NEGATION_BEFORE.search(line[:marker.start()]):
+                return True
+    return False
+
+
 def _has_blocking_finding(text: str) -> bool:
     """Only a finding's explicit prefix controls the recheck loop."""
     return any(re.match(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?BLOCKING\s*:",
@@ -2452,7 +2490,10 @@ class Session:
                     )
                 task.record("assistant", f"[{verifier}] {verdict}")
                 task.keep(verdict, kind=f"verify:{verifier}", author=verifier)
-                if 'BLOCKING' in verdict.upper() or 'UNRESOLVED' in verdict.upper():
+                # A finding is a marker as written, not the word in prose (map
+                # G7): the old substring test read "no BLOCKING findings" as
+                # one. Semantics taken from the reviewed helper on 90cc5d9.
+                if _has_security_finding(verdict):
                     self._open_finding("security", verdict)
                     self._edge("verification", False)
                 else:
