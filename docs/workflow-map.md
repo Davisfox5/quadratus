@@ -480,3 +480,51 @@ nothing about a run changes.
 - `tests/test_readiness.py`: 7 real-process cases, including a SIGTERM-ignoring descendant, a leak after a clean exit, continuous output and 20 MiB of output.
 - **Red on 3efac78:** 11 of the 19 fail because the features don't exist there. The other 8 are declaration-validation cases for the new module, which has no prior counterpart.
 - **Red on 0cd4dcb:** 5 of 5 owner/debt cases fail (empty snapshots on capped COVERS/RESOLVES and interrupted exits; a contract before selection with no owner).
+
+## 12. Phase 3 status
+
+P2 cleared by Codex at 9c6024b (5857957044). Each P3 commit changes one
+decision site and carries its own red control on the commit before it.
+
+**P3.1, completion guard (b2446c3).** Both DONE sites (the DONE reply and the
+cap's goal confirmation) now also ask the typed record, and only after the
+legacy inputs already said complete. `outcome.completion_blockers` lists:
+
+- a task that never closed;
+- any missing fact (record completeness);
+- a mandatory contract edge not satisfied;
+- an active terminal fact on any task;
+- a reference the ledger still owes, read live through `_open_refs`.
+
+A waiver covers a task's unmet *edges* only, never its missing facts, owed
+references or active facts. It holds for a task continued (CONTINUES) by a
+later task that closed clean or is itself waived, cycle-guarded, and for an
+audit whose unmet evidence became ledger findings. An unknown, later or
+cyclic CONTINUES reference is itself a blocker. Any blocker turns completion
+into `CompletionUnproven` (typed `unverified`) with no model call.
+
+**P3.2, gate attribution (5bb03a4).** Retires "generic gate-fix for any
+failure" (section 8) and closes J4, J5, J6 and J33 (G10).
+
+- The only supported report producer is harness-owned:
+  `quadratus/_gate_producer/quadratus_gate_report.py`, a pytest plugin that
+  imports nothing from quadratus. A check declares it with
+  `--quadratus-report={report}`; the harness then substitutes a path it owns
+  outside the project, loads the plugin for that one invocation
+  (`PYTHONPATH`, `PYTEST_PLUGINS`), sets a nonce, reads the JSON (at most
+  1 MiB) and removes the path.
+- The report records facts pytest already has: exit status, collection
+  errors, per-phase counts, and for each failed phase its `when`, its type
+  name (shown, never trusted) and whether its type *is* `AssertionError`.
+- `integration.attribute` allows product repair only when every failed
+  required check exited 1 with reason `nonzero exit`, its report is this
+  invocation's (nonce, producer), exit status 1, no collection or
+  setup/teardown error, a consistent and untruncated record, and every
+  failure is `when=call` with `assertion` true. Anything else raises
+  `CheckUnattributable` (operator) with the reasons, the returncode and the
+  output artifact, and makes no repair call.
+- A check with no declared report is never repaired. Other runners have no
+  producer yet, so their failures are always handoffs. The operator
+  profile's checks are P4 work.
+- `redact_command_paths` now also redacts relative spellings of a gate's
+  command files, which pytest prints for a grader outside the project.
