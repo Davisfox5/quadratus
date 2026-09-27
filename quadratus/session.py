@@ -2850,7 +2850,7 @@ class Session:
                 self.run_outcome.done_accepted = True
                 self.completed = (not self.open_findings and not self._unresolved_partial
                                   and not self._open_findings_for(None)
-                                  and not any(not c["passed"] for c in self.checks))
+                                  and not self._checks_standing_failed())
                 if not self.completed:
                     self.run_outcome.note("unverified", "DONE with open work", legacy="")
                 else:
@@ -2982,7 +2982,7 @@ class Session:
                 and self._confirm_goal_met()
                 and self._requirements_satisfied()
                 and not self.open_findings
-                and not any(not c["passed"] for c in self.checks)
+                and not self._checks_standing_failed()
             )
             self.run_outcome.done_accepted = self.completed
             if not self.completed:
@@ -3919,6 +3919,19 @@ class Session:
             return "the project source changed while the harness previewed and captured it"
         return failure
 
+    def _checks_standing_failed(self) -> bool:
+        """Whether any check failure still stands at DONE (phase 3, map G12).
+
+        Per task: its checks stand failed only when its last attempt failed.
+        A failure a later check in the same task repaired is history, not a
+        block; the legacy input, any failed entry anywhere, ended a repaired
+        run incomplete with a blank error. A gate outside any task (the merge
+        gate) stands failed while its product fact is active."""
+        for outcome in self.task_outcomes:
+            if outcome.checks and not outcome.checks[-1]["passed"]:
+                return True
+        return any(f.active and f.kind == "product" for f in self.run_outcome.facts)
+
     def _task_checks_failed(self) -> bool:
         return bool(self.checks) and not self.checks[-1]["passed"]
 
@@ -4385,15 +4398,18 @@ class Session:
         self.checks.append({"passed": result.passed, "command": result.command,
                             "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
-        # A failure this gate's own fix repaired is history (legacy agrees: the
-        # entry it appends passes). A failure still standing at the end stays
-        # active even if a later gate in the task passes, because today any
-        # failed entry blocks DONE (map G12). Classed as a product repair
-        # because that is today's route (map G10).
+        # A passing check makes every earlier check failure in the same task
+        # history: this invocation's attempts and an earlier invocation's, such
+        # as a gate a design-fix later repaired (map G12, J38). Only the
+        # task's own failures; another task's stay as they were.
         if result.passed:
             for fact in attempt_facts:
                 if fact is not None:
                     fact.recovered = True
+            if self._outcome is not None:
+                for fact in self._outcome.facts:
+                    if fact.stage == "checks" and fact.kind == "product" and fact.active:
+                        fact.recovered = True
         if self._outcome is not None:
             self._outcome.attempts["gate_fix"] = getattr(self, "_gate_fixes_used", 0)
             self._outcome.edge("checks", result.passed)

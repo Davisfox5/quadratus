@@ -275,9 +275,7 @@ def test_only_a_reply_that_is_exactly_done_confirms_at_the_cap(store, reply, com
     assert s.completed is completed
 
 
-def test_terminal_done_does_not_complete_a_run_with_a_failed_gate(store):
-    """DONE at the cap completes only when every gate passed, the same rule
-    as a DONE inside the loop."""
+def _cap_run_with_task_one_checks(store, attempts):
     rec = CapRecorder("DONE", next_tasks=["task one", "task two"])
     s = _session(store, rec)
     real = s.run_task
@@ -285,15 +283,30 @@ def test_terminal_done_does_not_complete_a_run_with_a_failed_gate(store):
     def run_task(spec):
         summary = real(spec)
         if spec.description == "task one":
-            # A gate that failed, then passed on the fix round: the loop goes
-            # on, but the failure is on the record.
-            s.checks += [{"passed": False}, {"passed": True}]
+            # Task one's recorded check attempts, as the gate funnel records
+            # them (phase 3, map G12: judged per task, last attempt decides).
+            s.task_outcomes[-1].checks += [dict(passed=p, output_artifact="a" * 12) for p in attempts]
         return summary
 
     s.run_task = run_task
     s.run(max_tasks=2)
+    return rec, s
+
+
+def test_terminal_done_does_not_complete_a_run_whose_gate_still_fails(store):
+    """DONE at the cap completes only when no task's check failure still
+    stands, the same rule as a DONE inside the loop."""
+    rec, s = _cap_run_with_task_one_checks(store, [True, False])
     assert rec.terminal_asks == 1
     assert s.completed is False
+
+
+def test_terminal_done_treats_a_failure_repaired_in_the_same_task_as_history(store):
+    """Changed in phase 3 (map G12, J38): a gate that failed and then passed
+    in the same task no longer blocks DONE; before, any failed entry did."""
+    rec, s = _cap_run_with_task_one_checks(store, [False, True])
+    assert rec.terminal_asks == 1
+    assert s._checks_standing_failed() is False and s.completed is True
 
 
 def test_a_run_stopped_early_is_not_asked_the_terminal_question(store):

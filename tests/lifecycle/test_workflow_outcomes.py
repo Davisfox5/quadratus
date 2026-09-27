@@ -336,30 +336,74 @@ def test_p3_j33_a_product_failure_beside_a_setup_failure_gets_no_gate_fix(tmp_pa
     _handed_off(replay, "extra-1: blocked: runner unavailable")
 
 
-@pytest.mark.xfail(strict=True, reason="P3 (G12, amendment 3): a failure a later check in the same task "
-                                       "repaired is history, not a block on DONE")
-def test_p3_g12_a_check_repaired_later_in_the_task_does_not_block_done(tmp_path, monkeypatch):
-    """The gate fails, the gate-fix changes nothing, the design-fix then makes
-    the gate pass: the task ends with a passing check, yet today DONE reads
-    the earlier failed entry and the run ends incomplete with a blank error."""
+# -- P3: a check repaired later in the same task is history (G12, J38) ------------------
+
+STYLE_TEST = ("import pathlib\n\n\ndef test_padding():\n"
+              "    assert '10px' in pathlib.Path('static/style.css').read_text()\n")
+
+
+def _repaired_by_design_fix(tmp_path, monkeypatch, *, design_fix_repairs=True, **kw):
+    """The gate fails on an attributable assertion, the gate-fix changes
+    nothing, then the design-fix makes the gate pass (or does not)."""
     from quadratus.session import Session
     monkeypatch.setattr(Session, "_pick_lead", lambda self, spec: "claude:opus")
-    check = shlex.join([sys.executable, "-c", "import pathlib, sys; "
-                        "sys.exit(0 if '10px' in pathlib.Path('static/style.css').read_text() else 1)"])
     script = _design_script("unused")
 
     def design_fix(call, replay):
-        H.write(call, {"static/style.css": "#import { padding: 10px; }\n"})
+        H.write(call, {"static/style.css": "#import { padding: %s; }\n" % ("10px" if design_fix_repairs else "9px")})
         H.evidence(Path(call.cwd), "t1", age=H.FRESH)
         return 'Padded the button and recaptured.\nCHANGED: ["static/style.css"]'
     script.overrides["design-fix"] = design_fix
     script.overrides["gate-fix"] = _looked
     first = script.overrides["orchestrator"]
-    script.overrides["orchestrator"] = lambda call, replay: (first(call, replay)
-                                                            if len(replay.of("orchestrator")) == 1 else "DONE")
-    replay = _run(tmp_path, monkeypatch, script, files=_design_files(), max_tasks=3, check=check)
-    assert H.gate_results(replay)[-1] == "PASSED" and len(replay.of("gate-fix")) == 1
-    assert replay.result.completed
+    script.overrides["orchestrator"] = kw.pop("orchestrator", None) or (
+        lambda call, replay: first(call, replay) if len(replay.of("orchestrator")) == 1 else "DONE")
+    files = {**_design_files(), "tests/test_style.py": STYLE_TEST}
+    return _run(tmp_path, monkeypatch, script, files=files, max_tasks=kw.pop("max_tasks", 3), **kw)
+
+
+def test_p3_g12_a_check_repaired_later_in_the_task_does_not_block_done(tmp_path, monkeypatch):
+    replay = _repaired_by_design_fix(tmp_path, monkeypatch)
+    t1 = _task(replay, "t1")
+    assert [c["passed"] for c in t1["checks"]][-1] is True and False in [c["passed"] for c in t1["checks"]]
+    assert len(replay.of("gate-fix")) == 1 and len(replay.of("design-fix")) == 1
+    product = [f for f in t1["facts"] if f["kind"] == "product"]
+    assert product and all(f["recovered"] for f in product), "the repaired failures are history"
+    assert replay.result.completed and replay.result.error == ""
+
+
+def test_p3_g12_a_last_check_still_failing_blocks_done(tmp_path, monkeypatch):
+    replay = _repaired_by_design_fix(tmp_path, monkeypatch, design_fix_repairs=False)
+    t1 = _task(replay, "t1")
+    assert t1["checks"][-1]["passed"] is False and not replay.result.completed
+
+
+def test_p3_g12_standing_failures_are_judged_per_task_and_for_the_merge_gate():
+    """The decision function itself: a later task passing never clears an
+    earlier task's last failed attempt, and an active merge-gate product fact
+    stands. (Whole-controller runs cannot reach the first case: the loop
+    stops after any task whose last check failed.)"""
+    from types import SimpleNamespace
+
+    from quadratus.outcome import RunOutcome, TaskOutcome
+    from quadratus.session import Session
+
+    def task(tid, *passed):
+        outcome = TaskOutcome(tid, "implementation")
+        outcome.checks = [dict(passed=p) for p in passed]
+        return outcome
+
+    def standing(tasks, run=None):
+        return Session._checks_standing_failed(SimpleNamespace(task_outcomes=tasks, run_outcome=run or RunOutcome()))
+    assert standing([task("t1", False, True)]) is False, "repaired later in the same task"
+    assert standing([task("t1", True, False)]) is True
+    assert standing([task("t1", False), task("t2", True)]) is True, "another task does not repair it"
+    assert standing([task("t1"), task("t2", True)]) is False
+    merge = RunOutcome()
+    merge.note("product", "a gate outside any task (the merge gate) failed")
+    assert standing([task("t1", True)], merge) is True
+    merge.facts[-1].recovered = True
+    assert standing([task("t1", True)], merge) is False
 
 
 # -- task-close snapshot of ledger references (Codex review of f09454b) ------------------
