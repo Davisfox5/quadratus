@@ -1845,6 +1845,10 @@ class Session:
         except BaseException as exc:
             outcome.note(classify(exc), f"{type(exc).__name__}: {exc}")
             outcome.closed_as = f"stopped:{type(exc).__name__}"
+            if outcome.dispatch is None:
+                # Stopped before the selection point: no owner, no contract,
+                # and the reason on record rather than a placeholder.
+                outcome.dispatch = dict(state="not_dispatched", reason=f"{type(exc).__name__}: {str(exc)[:200]}")
             self._record_work(outcome, dict(getattr(self, "in_flight", {}) or {}) or None)
             outcome.open_at_close = self._open_refs(outcome)
             raise
@@ -1946,6 +1950,7 @@ class Session:
             return
         self._contract = dataclasses.replace(draft, owner=owner)
         outcome.contract = self._contract.to_dict()
+        outcome.dispatch = dict(state="dispatched", owner=owner)
 
     def _open_refs(self, outcome) -> dict:
         """Ledger references this task still owes, read without settling or
@@ -2142,6 +2147,10 @@ class Session:
             task.keep(json.dumps(recovery), kind='lead-recovery', author=lead)
             task.record('user', f'Lead {lead} failed without changing source; retrying once on {fresh}.')
             self._note(f'{lead} failed without changing source; one recovery on {fresh}')
+            if self._outcome is not None:
+                # The contract keeps its dispatched owner; the switch is history.
+                self._outcome.owner_changes.append({"from": lead, "to": fresh, "reason": "lead_recovery",
+                                                     "failure": type(exc).__name__})
             lead = fresh
             if self._outcome is not None:
                 self._outcome.lead = lead

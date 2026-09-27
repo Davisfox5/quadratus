@@ -241,6 +241,11 @@ def test_j25_a_recovered_transport_failure_is_history_not_a_block(tmp_path, monk
     transport = [f for f in t1["facts"] if f["kind"] == "transport"]
     assert transport and transport[0]["recovered"] is True and t1["attempts"]["lead_recovery"] == 1
     assert t1["primary"] == "clean" and replay.result.completed
+    # The contract keeps the dispatched owner; the switch is history and the
+    # invoked owner is the recovery lead.
+    change, = t1["owner_changes"]
+    assert t1["contract"]["owner"] == t1["dispatch"]["owner"] == change["from"] != change["to"]
+    assert t1["invoked_owner"] == change["to"] == t1["lead"] and change["reason"] == "lead_recovery"
 
 
 def test_j26_an_operator_question_with_no_channel_is_an_operator_handoff(tmp_path, monkeypatch):

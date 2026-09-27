@@ -65,7 +65,8 @@ def _closed(task_id="t1"):
     outcome = TaskOutcome(task_id, "implementation", lead="claude:opus", source_before="a" * 64,
                           source_after="b" * 64, dependency="unchanged",
                           partial=dict(changed=["app.py"], changed_lines=2, inspected=True),
-                          contract=dict(task_id=task_id, owner="claude:opus", required={}))
+                          contract=dict(task_id=task_id, owner="claude:opus", required={}),
+                          dispatch=dict(state="dispatched", owner="claude:opus"))
     outcome.closed_as = "closed"
     return outcome
 
@@ -123,7 +124,7 @@ def test_open_ledger_findings_block_typed_completion_by_reference():
 def test_a_closed_task_without_its_owner_source_or_work_is_incomplete():
     bare = TaskOutcome("t1", "implementation")
     bare.closed_as = "closed"
-    assert missing_facts(bare) == ["t1.contract", "t1.lead", "t1.source_before", "t1.source_after",
+    assert missing_facts(bare) == ["t1.dispatch", "t1.lead", "t1.source_before", "t1.source_after",
                                    "t1.dependency", "t1.partial"]
     result = parity(RunOutcome(done_accepted=True), [bare], open_findings=[], legacy_completed=True,
                     legacy_error="", history=["t1:closed"])
@@ -147,7 +148,9 @@ def test_a_closed_task_that_reached_its_checks_must_carry_an_attempt():
 
 
 def test_a_stopped_task_whose_check_was_refused_needs_no_attempt():
-    task = TaskOutcome("t1", "implementation", contract=dict(task_id="t1", required={}))
+    task = TaskOutcome("t1", "implementation", lead="claude:opus",
+                       contract=dict(task_id="t1", owner="claude:opus", required={}),
+                       dispatch=dict(state="dispatched", owner="claude:opus"))
     task.stage("checks")
     task.closed_as = "stopped:DependencyTreeChanged"
     assert missing_facts(task) == []
@@ -161,3 +164,34 @@ def test_a_check_attempt_without_its_kept_output_is_incomplete():
     task.checks.append(dict(attempt=2, passed=False, receipts=[], output_artifact="unavailable",
                             output_artifact_error="OSError: disk full"))
     assert missing_facts(task) == ["t1.checks[2].output_artifact"]
+
+
+# -- dispatch and owner (Codex 5857796277) -----------------------------------------------
+
+def test_a_stop_before_dispatch_must_say_why_and_carry_no_contract():
+    task = TaskOutcome("t1", "implementation")
+    task.closed_as = "stopped:RunStalled"
+    assert missing_facts(task) == ["t1.dispatch"], "silence is not a pre-dispatch record"
+    task.dispatch = dict(state="not_dispatched", reason="")
+    assert missing_facts(task) == ["t1.dispatch.reason"]
+    task.dispatch["reason"] = "RunStalled: no seat"
+    assert missing_facts(task) == []
+    task.contract = dict(task_id="t1", owner="claude:opus", required={})
+    assert missing_facts(task) == ["t1.contract on a task that was not dispatched"]
+
+
+def test_the_contract_owner_is_the_dispatched_owner_and_never_follows_a_switch():
+    task = _closed()
+    task.contract = dict(task.contract, owner="openai:sol")
+    assert missing_facts(task) == ["t1.contract owner 'openai:sol' is not the dispatched owner 'claude:opus'"]
+
+
+def test_an_invoked_owner_follows_an_unbroken_chain_of_recorded_switches():
+    task = _closed()
+    task.lead = "openai:sol"
+    assert missing_facts(task) == ["t1.lead 'openai:sol' is not the invoked owner 'claude:opus'"]
+    task.owner_changes.append({"from": "xai:grok", "to": "openai:sol", "reason": "lead_recovery"})
+    assert missing_facts(task) == ["t1.owner_changes from 'xai:grok', expected 'claude:opus'"]
+    task.owner_changes[0]["from"] = "claude:opus"
+    assert missing_facts(task) == [] and task.to_dict()["invoked_owner"] == "openai:sol"
+    assert task.contract["owner"] == "claude:opus"

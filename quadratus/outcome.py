@@ -123,6 +123,14 @@ class TaskOutcome:
     facts: List[Fact] = field(default_factory=list)
     #: The dispatch contract (quadratus.contract), fixed for this invocation.
     contract: Optional[dict] = None
+    #: Whether the task was dispatched: {"state": "dispatched", "owner"} at
+    #: the selection point, or {"state": "not_dispatched", "reason"} for a
+    #: stop before it. A task with no contract says which of the two it is.
+    dispatch: Optional[dict] = None
+    #: Owner switches after dispatch (bounded lead recovery), in order:
+    #: {"from", "to", "reason", "failure"}. The contract's owner never changes;
+    #: the last "to" is the owner actually invoked.
+    owner_changes: List[dict] = field(default_factory=list)
     #: Places where a legacy applicability decision disagreed with the
     #: contract's derived requirement. Recorded, never acted on (phase 2).
     mismatches: List[str] = field(default_factory=list)
@@ -184,7 +192,14 @@ class TaskOutcome:
         data["primary"] = self.primary
         data["secondary"] = [f.kind for f in _ranked(self.active)[1:]]
         data["unsatisfied"] = self.unsatisfied()
+        data["invoked_owner"] = self.invoked_owner
         return data
+
+    @property
+    def invoked_owner(self) -> str:
+        if self.owner_changes:
+            return self.owner_changes[-1].get("to", "")
+        return (self.dispatch or {}).get("owner", "")
 
 
 @dataclass
@@ -216,15 +231,8 @@ def missing_facts(task: TaskOutcome) -> List[str]:
     attempt must point at its kept output; a lost artifact is missing, and
     its ``output_artifact_error`` says why."""
     missing = [f"{task.task_id}.contract mismatch: {m}" for m in task.mismatches]
-    # A task stopped before its lead was selected has no contract, by design:
-    # the contract is bound with its owner at selection.
-    before_selection = task.closed_as.startswith("stopped") and "draft" not in task.stages
-    if task.contract is None and task.closed_as != "open" and not before_selection:
-        missing.append(f"{task.task_id}.contract")
-    if task.contract and task.lead and task.contract.get("owner") != task.lead \
-            and not task.attempts.get("lead_recovery"):
-        missing.append(f"{task.task_id}.contract owner {task.contract.get('owner')!r} is not the lead "
-                       f"{task.lead!r}")
+    if task.closed_as != "open":
+        missing += _dispatch_missing(task)
     if task.closed_as in ("closed", "turn_limited"):
         for name in ("lead", "source_before", "source_after", "dependency"):
             if not getattr(task, name):
@@ -237,6 +245,35 @@ def missing_facts(task: TaskOutcome) -> List[str]:
         artifact = check.get("output_artifact")
         if not artifact or artifact == "unavailable":
             missing.append(f"{task.task_id}.checks[{check.get('attempt', '?')}].output_artifact")
+    return missing
+
+
+def _dispatch_missing(task: TaskOutcome) -> List[str]:
+    """A dispatched task carries a contract whose owner is the one selected,
+    and its invoked owner follows an unbroken chain of recorded switches
+    from there. A task stopped before dispatch carries no contract and says
+    why."""
+    tid, dispatch = task.task_id, task.dispatch
+    if not dispatch:
+        return [f"{tid}.dispatch"]
+    if dispatch.get("state") == "not_dispatched":
+        missing = [] if dispatch.get("reason") else [f"{tid}.dispatch.reason"]
+        if task.contract is not None:
+            missing.append(f"{tid}.contract on a task that was not dispatched")
+        return missing
+    missing, owner = [], dispatch.get("owner")
+    if not task.contract:
+        missing.append(f"{tid}.contract")
+    elif task.contract.get("owner") != owner:
+        missing.append(f"{tid}.contract owner {task.contract.get('owner')!r} is not the dispatched "
+                       f"owner {owner!r}")
+    expected = owner
+    for change in task.owner_changes:
+        if change.get("from") != expected:
+            missing.append(f"{tid}.owner_changes from {change.get('from')!r}, expected {expected!r}")
+        expected = change.get("to")
+    if task.lead != expected:
+        missing.append(f"{tid}.lead {task.lead!r} is not the invoked owner {expected!r}")
     return missing
 
 

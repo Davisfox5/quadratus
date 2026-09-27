@@ -319,3 +319,5 @@ def test_a_task_stopped_before_selection_has_no_contract_and_says_so(tmp_path, m
     replay = H.run(tmp_path, monkeypatch, Script(), files=FILES)
     t1 = _task(replay, "t1")
     assert t1["contract"] is None and t1["stages"] == ["dispatch"] and t1["closed_as"] == "stopped:RunStalled"
+    assert t1["dispatch"] == {"state": "not_dispatched", "reason": "RunStalled: no seat"}
+    assert t1["invoked_owner"] == "" and t1["owner_changes"] == []
