@@ -12,6 +12,7 @@ from quadratus.cli_providers import ClaudeCLIProvider, CodexCLIProvider, GrokCLI
 from quadratus.config import Settings
 from quadratus.delegation import invocation, invocation_context
 from quadratus.memory import TaskMemory
+from quadratus.providers import ProviderError
 from quadratus.runtime import Fleet
 from quadratus.session import RunStalled, Session, SessionConfig, TaskSpec
 from quadratus.worker_bridge import WorkerBridge, input_schema
@@ -228,7 +229,9 @@ def test_exhausted_workers_close_the_channel_and_the_lead_may_finish_itself(tmp_
     answers = []
 
     def fails(model, prompt, allow_writes=False):
-        raise RuntimeError("worker broke")
+        # A provider failure, as a failed worker call is in production (map J27:
+        # a bare RuntimeError is an unknown failure and would stop the run).
+        raise ProviderError("worker broke")
 
     def invoke(model, prompt, system=None, allow_writes=False):
         answers.append(_call_tool({"errand": "read", "instruction": "one"}))
@@ -247,7 +250,9 @@ def test_asking_again_after_the_channel_closed_stops_the_run(tmp_path):
     store = ArtifactStore(tmp_path / "artifacts")
 
     def fails(model, prompt, allow_writes=False):
-        raise RuntimeError("worker broke")
+        # A provider failure, as a failed worker call is in production (map J27:
+        # a bare RuntimeError is an unknown failure and would stop the run).
+        raise ProviderError("worker broke")
 
     def invoke(model, prompt, system=None, allow_writes=False):
         for i in range(3):
@@ -359,7 +364,8 @@ def test_every_re_ask_after_edits_tells_the_lead_what_it_changed(tmp_path, reque
 
     def run(*args, **kwargs):
         if worker == "fail":
-            raise RuntimeError("worker broke")
+            # A provider failure, as in production (map J27; see above).
+            raise ProviderError("worker broke")
         return "t.py looks right"
 
     session = Session("goal", store, invoke, config=SessionConfig(max_worker_failures=5))

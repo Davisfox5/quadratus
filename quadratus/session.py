@@ -54,7 +54,15 @@ from .deptree import (
     DependencyWatch,
 )
 from .memory import PersistentMemory, TaskMemory, TaskSummary
-from .outcome import PRECEDENCE, RunOutcome, TaskOutcome, classify, completion_blockers, primary
+from .outcome import (
+    PRECEDENCE,
+    RunOutcome,
+    TaskOutcome,
+    classify,
+    completion_blockers,
+    primary,
+    unclassified,
+)
 from .providers import PartialWorkSuspected, ProviderError, ProviderRefusal, TurnLimitReached
 from .registry import peers_for, resolve
 from .routing import (
@@ -1496,6 +1504,12 @@ class Session:
                                            answer_only=True)
         except BaseException as exc:  # noqa: BLE001 -- re-raised by the drafting loop
             state["closed"] = exc
+            if unclassified(exc):
+                # The open call cannot be interrupted; it is told to stop, and
+                # the drafting loop re-raises this as raised (map J27).
+                return (f"The worker channel closed on an unclassified failure "
+                        f"({type(exc).__name__}: {str(exc)[:300]}). Stop now: make no further "
+                        "changes and report what you did so far. The operator will decide."), True
             return (f"The worker channel closed: {str(exc)[:400]}. Finish with what you have, "
                     "or report exactly what blocks you."), True
         finally:
@@ -1639,10 +1653,15 @@ class Session:
         except (DependencyTreeChanged, DependencyIdentityUnavailable):
             raise       # a run stop, never an errand's failure
         except Exception as exc:  # noqa: BLE001 -- returned, not raised
-            state['failed_errands'].add(label)
-            state['failures'] += 1
             detail = str(exc)[:400]
             task.record("user", f"[worker {label}] FAILED: {detail}")
+            if unclassified(exc):
+                # An unknown failure is the operator's, as raised: the lead
+                # is not re-asked to work around it (map J27).
+                self._note(f"worker {label} failed with an unclassified {type(exc).__name__}; stopping")
+                raise
+            state['failed_errands'].add(label)
+            state['failures'] += 1
             out.append(
                 f"Worker errand {label!r} on {request['errand']} failed "
                 f"and produced nothing: {detail}\n{_WORKER_RECOVERY}"
@@ -1650,6 +1669,13 @@ class Session:
             if state['failures'] >= self.config.max_worker_failures:
                 out.append(self._close_workers(state, spec))
             return out
+        for result in results:
+            if result.failure is not None and unclassified(result.failure):
+                # Siblings ran to completion; the unknown failure is then the
+                # operator's, as raised, before the lead sees any result (J27).
+                self._note(f"worker {result.label} failed with an unclassified "
+                           f"{type(result.failure).__name__}; stopping")
+                raise result.failure
         for result in results:
             if result.error or result.needs_tool:
                 state['failed_errands'].add(result.label)

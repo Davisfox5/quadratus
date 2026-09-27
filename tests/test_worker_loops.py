@@ -108,7 +108,9 @@ def test_lead_retries_failure_with_two_siblings_and_receives_both(tmp_path):
         if context['origin'] == 'worker':
             seen.append(context['role'])
             if 'bad first request' in prompt:
-                raise ValueError('first failed')
+                # A provider failure, as a failed worker call is in production (map J27:
+                # a bare ValueError is an unknown failure and would stop the run).
+                raise ProviderError('first failed')
             return 'helper evidence' if 'helper' in context['role'] else 'retry evidence'
         lead_calls.append(prompt)
         if len(lead_calls) == 1:

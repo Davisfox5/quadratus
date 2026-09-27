@@ -416,6 +416,9 @@ class WorkerResult:
     #: Set instead of raising when the worker ran inside a parallel batch --
     #: one failed errand must not tear down its siblings.
     error: Optional[str] = None
+    #: The exception behind ``error``, kept so the session can tell a
+    #: declared errand failure from an unknown one (map J27).
+    failure: Optional[BaseException] = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -660,6 +663,7 @@ class WorkerPool:
                     parent=parent_key,
                     summary="",
                     error=str(exc)[:300],
+                    failure=exc,
                 )
 
         with ThreadPoolExecutor(max_workers=self.budget.max_concurrent) as pool:

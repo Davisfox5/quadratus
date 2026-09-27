@@ -67,6 +67,19 @@ def classify(exc: BaseException) -> str:
     return "operator"
 
 
+#: A worker's own declared outcomes, reported back to its lead as today;
+#: named here only so they are not mistaken for unknown failures.
+_ERRAND_OUTCOMES = frozenset({"FanOutExceeded", "RepeatedFailure", "ErrandToolMismatch"})
+
+
+def unclassified(exc: BaseException) -> bool:
+    """Whether nothing names ``exc``: no outcome row and no declared errand
+    outcome along its MRO (map J27). An unknown failure is handed to the
+    operator as it was raised and never turned into more model work."""
+    names = {klass.__name__ for klass in type(exc).__mro__}
+    return not (names & _EXCEPTION_CLASS.keys() or names & _ERRAND_OUTCOMES)
+
+
 def legacy_error_class(error: str) -> str:
     """The legacy ``result.json`` error string's leading name."""
     return (error or "").split(":", 1)[0].strip()
