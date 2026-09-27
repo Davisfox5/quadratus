@@ -316,7 +316,7 @@ parity assertion to those and fills the rest.
 | --- | --- | --- | --- |
 | `open_findings` as a decision input | `TaskOutcome.unresolved` / `primary` | P3; kept as report text | **still decides**; see P3.4 |
 | `_partial_tasks`, `turn_limited`, `_design_unverified` | derived from outcomes | P3 | **still decide**; see P3.4 |
-| `stop_reason` strings | typed terminal outcome (same names) | P3 | **still written** beside the typed stop; see P3.4 |
+| `stop_reason` strings | typed terminal outcome (same names) | P3 | **still decides**: written beside the typed stop, it gates whether `_name_findings_stop` names a stop and is read by `project_run` for the result error; see P3.4 |
 | Generic gate-fix for any failure | structured attribution routing | P3 | **retired** in P3.2 |
 | 11 `is_design_task` applicability checks | `TaskContract.required` computed at dispatch | P2 | **still decide** (11 call sites; the contract only records disagreement); see P3.4 |
 | DONE computed twice (2546, 2657) | one function reading outcomes and ledger | P3 | **still two sites**, both ending in `_guard_completion`; see P3.4 |
@@ -560,7 +560,7 @@ the commit before it and was cleared by Codex before the next began.
 **P3.4, retirement status (documentation only; nothing is removed).** A
 legacy input is removed only when the same journeys prove both parity and
 failure behaviour with it gone; green typed tests alone are not that proof.
-None of the six below has that proof yet, so each stays and says why.
+None of the seven below has that proof yet, so each stays and says why.
 
 What already holds on every whole-controller replay (`harness.run`):
 completion, the legacy error name and each closed task agree between the
@@ -578,12 +578,13 @@ That is agreement on outcomes, not proof that a legacy input can go.
 | `is_design_task` applicability | 11 call sites (design brief, evidence, review, capture eligibility, RESOLVES, prompts) | `TaskContract.required` | `_contract_agrees` mismatches are missing facts on every replay | each site switched alone with a red, starting with `design_evidence` and `design_review`, which `_contract_agrees` already watches |
 | DONE computed twice | the DONE reply and the cap's goal confirmation each compute their own legacy conjunction | `_guard_completion` / `completion_blockers` at both | `test_completion_guard.py` (17 cases), G9, G12 | one function for both, with the short-circuit order at the cap kept (the goal question only when no capped or audit debt) |
 
-**Known gap, recorded rather than fixed here.** An unmerged parallel child
-appends to `open_findings` directly and notes a typed fact only when the
-child has a `TaskOutcome`. `run_task` builds the contract before it appends
-the outcome, so an exception from `_build_contract` leaves that one finding
-untyped. The run still stops typed: such an exception is fatal to the batch
-and re-raised.
+**Known gap, recorded here and closed in the next package.** An unmerged
+parallel child appends to `open_findings` directly and notes a typed fact
+only when the child has a `TaskOutcome`. `run_task` built the contract
+before it appended the outcome, so an exception from `_build_contract` left
+that one finding untyped. The run still stopped typed: such an exception is
+fatal to the batch and re-raised. Closed by recording the outcome first
+(see "P3.4 packages" below).
 
 **Unproven limits (none is claimed as covered):**
 
@@ -624,4 +625,15 @@ and re-raised.
 6. No live call, profile activation or adoption into the 90cc5d9 execution
    tree before that review.
 
-Overall P3 is not complete: the six legacy inputs above still decide.
+Overall P3 is not complete: the seven legacy inputs above still decide.
+
+**P3.4 packages, one decision site each.**
+
+1. *Pre-contract failures are typed.* `run_task` puts the task's
+   `TaskOutcome` on the record, and clears the previous contract, before it
+   builds the contract. An exception there reaches the existing handler: a
+   fact of its class, `closed_as = stopped:<Exception>`, `dispatch =
+   not_dispatched` with the reason, then re-raised unchanged. An unmerged
+   parallel child's "not merged" finding now always has its typed fact. The
+   stop, the sibling's merge and dispatch authority are unchanged
+   (`tests/test_contract_failure_outcome.py`).

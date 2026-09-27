@@ -1921,13 +1921,17 @@ class Session:
             lead=spec.lead or "", covers=list(getattr(self, "_current_covers", []) or []),
             resolves=resolves, continues=getattr(self, "_continues", None) or "")
         outcome.stage("dispatch")
-        # Derived here, bound (frozen, with its owner) at the selection point
-        # in _run_task / _run_security_task, before the first model call.
-        self._contract = self._build_contract(spec, outcome)
-        outcome.source_before = self._source_identity()
+        # The outcome is on the record before anything that can raise, so a
+        # task that fails while its contract is built still has one (map
+        # P3.4: an unmerged parallel child's finding was otherwise untyped).
         prior, self._outcome = self._outcome, outcome
         self.task_outcomes.append(outcome)
+        self._contract = None
         try:
+            # Derived here, bound (frozen, with its owner) at the selection point
+            # in _run_task / _run_security_task, before the first model call.
+            self._contract = self._build_contract(spec, outcome)
+            outcome.source_before = self._source_identity()
             summary = self._run_task_recorded(spec)
         except BaseException as exc:
             outcome.note(classify(exc), f"{type(exc).__name__}: {exc}")
