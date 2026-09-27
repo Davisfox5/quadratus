@@ -616,3 +616,45 @@ def test_a_missing_favicon_is_visible_in_a_harness_capture(tmp_path):
                         {"path": "/index.html", "steps": []}) == ""
     ok, problem, _ = check(tmp_path, "t1", 0, expected_source=source_fingerprint(tmp_path))
     assert not ok and "404" in problem
+
+
+@pytest.mark.skipif(not os.environ.get("QUADRATUS_CHROMIUM"), reason="needs a browser")
+def test_a_websocket_off_the_origin_is_never_opened(tmp_path):
+    """Chromium's request interception does not see WebSockets (Codex review
+    of c1fbab0, WebSocket neighbour): an off-origin socket is refused before
+    its handshake, an on-origin one is left to the app."""
+    from quadratus.design_evidence import check, source_fingerprint
+    port, other = _free_port(), _free_port()
+    (tmp_path / "index.html").write_text(
+        f"<html><head>{ICON}</head><body>ok<script>"
+        f"try {{ new WebSocket('ws://127.0.0.1:{other}/socket'); }} catch (e) {{}}"
+        "</script></body></html>")
+    unrelated, log = _other_service(tmp_path, other)
+    try:
+        failure = capture_task(_profile(tmp_path, _server(port), port), tmp_path, "t1",
+                               {"path": "/index.html", "steps": []})
+        ok, problem, _ = check(tmp_path, "t1", 0, expected_source=source_fingerprint(tmp_path))
+        assert not ok and "outside the preview" in (failure + " " + problem), (failure, problem)
+    finally:
+        unrelated.kill()
+        unrelated.wait()
+    assert "GET" not in log.read_text(), "the handshake never reached the other service"
+
+
+@pytest.mark.skipif(not os.environ.get("QUADRATUS_CHROMIUM"), reason="needs a browser")
+def test_an_on_origin_websocket_still_reaches_the_app(tmp_path):
+    """The app's own socket is connected through: the preview sees the
+    handshake (it answers 404, as http.server has no WebSocket endpoint)."""
+    port = _free_port()
+    (tmp_path / "index.html").write_text(
+        f"<html><head>{ICON}</head><body>ok<script>"
+        f"try {{ new WebSocket('ws://127.0.0.1:{port}/socket'); }} catch (e) {{}}"
+        "</script></body></html>")
+    log = tmp_path.parent / "self.log"
+    (tmp_path / "logging_server.py").write_text(
+        "import http.server, sys\n"
+        f"sys.stderr = open({str(log)!r}, 'w', buffering=1)\n"
+        f"http.server.ThreadingHTTPServer(('127.0.0.1', {port}), http.server.SimpleHTTPRequestHandler).serve_forever()\n")
+    capture_task(_profile(tmp_path, [sys.executable, "logging_server.py"], port), tmp_path, "t1",
+                 {"path": "/index.html", "steps": []})
+    assert "GET /socket" in log.read_text(), "the on-origin handshake was passed through"

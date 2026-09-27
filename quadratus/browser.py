@@ -215,6 +215,20 @@ def render_page(
                         cdp.send("Fetch.failRequest", {"requestId": request_id, "errorReason": "BlockedByClient"})
                     cdp.on("Fetch.requestPaused", paused)
                     cdp.send("Fetch.enable", {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]})
+
+                    def socket_guard(socket):
+                        # WebSockets are outside that interception (Codex
+                        # review of c1fbab0): an off-origin socket is closed
+                        # before any handshake is sent; an on-origin one is
+                        # connected through to the app unchanged.
+                        target = socket.url.replace("ws://", "http://", 1).replace("wss://", "https://", 1)
+                        if allow_navigation(target):
+                            socket.connect_to_server()
+                            return
+                        # Never connected: nothing is sent to any server, and
+                        # the page's socket stays unanswered.
+                        failed_requests.append("blocked outside the preview: " + socket.url[:200])
+                    context.route_web_socket("**", socket_guard)
                 else:
                     context.route("**/*", guard)
 
