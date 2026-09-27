@@ -112,9 +112,11 @@ class TaskOutcome:
     source_after: Optional[str] = None
     #: The run's dependency identity status when the task ended.
     dependency: Optional[str] = None
-    #: Ledger references still open after settlement: finding and
-    #: requirement ids. The ledger stays authoritative; these are pointers.
-    unresolved: Dict[str, List[str]] = field(default_factory=dict)
+    #: Snapshot at task close, after the task's own settlement and coverage:
+    #: RESOLVES finding ids still open and COVERS requirement ids not covered
+    #: or met. References, not a ledger: a later DONE audit may update the
+    #: ledger, which stays the authority.
+    open_at_close: Dict[str, List[str]] = field(default_factory=dict)
     facts: List[Fact] = field(default_factory=list)
     #: Legacy mirror: "closed", "turn_limited" or "stopped:<Exception>".
     #: Temporary; removed in phase 3 when history reads outcomes.
@@ -180,7 +182,9 @@ def missing_facts(task: TaskOutcome) -> List[str]:
     "unavailable" counts, an absent value does not), what it changed, and
     the dependency status, and every check stage it reached left an attempt.
     A stopped task is exempt from the last rule: a check stopped by an
-    integrity failure has no receipt to accept, by design."""
+    integrity failure has no receipt to accept, by design. Every recorded
+    attempt must point at its kept output; a lost artifact is missing, and
+    its ``output_artifact_error`` says why."""
     missing = []
     if task.closed_as in ("closed", "turn_limited"):
         for name in ("lead", "source_before", "source_after", "dependency"):
@@ -190,6 +194,10 @@ def missing_facts(task: TaskOutcome) -> List[str]:
             missing.append(f"{task.task_id}.partial")
         if "checks" in task.stages and not task.checks:
             missing.append(f"{task.task_id}.checks")
+    for check in task.checks:
+        artifact = check.get("output_artifact")
+        if not artifact or artifact == "unavailable":
+            missing.append(f"{task.task_id}.checks[{check.get('attempt', '?')}].output_artifact")
     return missing
 
 

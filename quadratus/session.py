@@ -2768,16 +2768,19 @@ class Session:
             self._partial_tasks.discard(continues)
             self._recover_continued(continues)
             unresolved = self._settle_resolution(spec, checks_before, open_before)
+            for rid in covers:
+                self._mark_covered(rid, spec.task_id)
             if self.task_outcomes and self.task_outcomes[-1].task_id == spec.task_id:
+                # Taken after this task's own settlement and coverage: the
+                # ledger as the task left it. A later DONE audit may update the
+                # ledger, which stays the authority; this is a snapshot.
                 done = self.task_outcomes[-1]
                 if resolves:
                     done.edge("settlement", not unresolved)
                 status = self.memory.ledger.requirement_status
-                done.unresolved = dict(
+                done.open_at_close = dict(
                     findings=list(unresolved),
                     requirements=[rid for rid in covers if not str(status.get(rid, "")).startswith(("covered", "met"))])
-            for rid in covers:
-                self._mark_covered(rid, spec.task_id)
             self._current_covers, self._current_resolves = [], []
             self._note(f"task {len(self.history)} closed by {summary.author}")
             if self.open_findings or (self.checks and not self.checks[-1]['passed']):
@@ -4212,11 +4215,15 @@ class Session:
         kept as an artifact, the source it ran against. Returns the product
         fact a failed attempt adds (None when it passed)."""
         target = self._outcome
+        output, lost = "unavailable", None
         try:
-            output = self.store.put(result.output or "", kind="check-output").id
-        except Exception:  # noqa: BLE001 -- observation never fails a check
-            output = "unavailable"
+            output = self.store.put(result.output or "", kind="check-output", author="harness").id
+        except Exception as exc:  # noqa: BLE001 -- observation never fails a check
+            # Kept explicit: a lost artifact makes the record incomplete
+            # (outcome.missing_facts), it is never passed off as a receipt.
+            lost = f"{type(exc).__name__}: {str(exc)[:160]}"
         entry = dict(passed=result.passed, returncode=result.returncode, output_artifact=output,
+                     output_artifact_error=lost,
                      source=self._source_identity(),
                      receipts=[dict(id=r.id, status=r.status, reason=r.reason, tests=r.tests,
                                     returncode=r.returncode, cached=r.cached, source_hash=r.source_hash,

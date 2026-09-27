@@ -83,7 +83,9 @@ def test_j1_a_clean_task_and_done_is_clean_and_complete(tmp_path, monkeypatch):
     assert check["source"] == t1["source_after"], "the check ran against the source the task left"
     assert t1["lead"] and t1["source_before"] != t1["source_after"], "t1 changed app.py"
     assert t1["partial"]["changed"] == ["app.py"] and t1["partial"]["inspected"] is True
-    assert t1["dependency"] == "unchanged" and t1["unresolved"] == {"findings": [], "requirements": []}
+    assert t1["dependency"] == "unchanged" and t1["open_at_close"] == {"findings": [], "requirements": []}
+    kept = (replay.result.run_dir / "artifacts" / f"{check['output_artifact']}.txt").read_text()
+    assert kept == H.result_json(replay)["checks"][0]["output"] and check["output_artifact_error"] is None
     assert replay.workflow["run"]["done_accepted"] is True and _stop(replay) is None
     assert replay.workflow["parity"]["primary"] == "clean"
 
@@ -308,3 +310,25 @@ def test_p3_g12_a_check_repaired_later_in_the_task_does_not_block_done(tmp_path,
     replay = _run(tmp_path, monkeypatch, script, files=_design_files(), max_tasks=3, check=check)
     assert H.gate_results(replay)[-1] == "PASSED" and len(replay.of("gate-fix")) == 1
     assert replay.result.completed
+
+
+# -- task-close snapshot of ledger references (Codex review of f09454b) ------------------
+
+@pytest.mark.requirements_ledger
+def test_a_clean_audit_closes_with_its_covered_requirements_not_open(tmp_path, monkeypatch):
+    from tests.lifecycle.test_audit_findings import AUDIT, REQS, _capture
+    from tests.lifecycle.test_audit_findings import _run as audit_run
+    replay = audit_run(tmp_path, monkeypatch, [REQS + AUDIT], {"t1": _capture()})
+    t1 = _task(replay, "t1")
+    assert replay.result.completed and t1["covers"] == ["R1", "R2"]
+    assert t1["open_at_close"] == {"findings": [], "requirements": []}, "taken after coverage"
+
+
+@pytest.mark.requirements_ledger
+def test_audit_debt_leaves_its_requirements_open_at_close(tmp_path, monkeypatch):
+    from tests.lifecycle.test_audit_findings import AUDIT, REQS, WIDE, _capture
+    from tests.lifecycle.test_audit_findings import _run as audit_run
+    replay = audit_run(tmp_path, monkeypatch, [REQS + AUDIT], {"t1": _capture(measured=WIDE)}, max_tasks=1)
+    t1 = _task(replay, "t1")
+    assert t1["open_at_close"]["requirements"] == ["R1", "R2"], "owed to the open finding"
+    assert not replay.result.completed

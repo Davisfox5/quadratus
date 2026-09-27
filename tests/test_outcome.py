@@ -141,7 +141,7 @@ def test_a_closed_task_that_reached_its_checks_must_carry_an_attempt():
     task = _closed()
     task.stage("checks")
     assert missing_facts(task) == ["t1.checks"]
-    task.checks.append(dict(attempt=1, passed=True, receipts=[]))
+    task.checks.append(dict(attempt=1, passed=True, receipts=[], output_artifact="abc123"))
     assert missing_facts(task) == []
 
 
@@ -150,3 +150,13 @@ def test_a_stopped_task_whose_check_was_refused_needs_no_attempt():
     task.stage("checks")
     task.closed_as = "stopped:DependencyTreeChanged"
     assert missing_facts(task) == []
+
+
+def test_a_check_attempt_without_its_kept_output_is_incomplete():
+    task = _closed()
+    task.checks.append(dict(attempt=1, passed=True, receipts=[], output_artifact="abc123",
+                            output_artifact_error=None))
+    assert missing_facts(task) == []
+    task.checks.append(dict(attempt=2, passed=False, receipts=[], output_artifact="unavailable",
+                            output_artifact_error="OSError: disk full"))
+    assert missing_facts(task) == ["t1.checks[2].output_artifact"]
