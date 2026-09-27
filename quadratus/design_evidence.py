@@ -279,11 +279,13 @@ def validate_steps(steps: List[dict], target: str, root, task_id: Optional[str] 
     return checked, (_navigation_rule(target, root) if checked else None)
 
 
-def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = None) -> dict:
+def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = None, *,
+            pinned: bool = False) -> dict:
     """Render ``target`` at each width into the task's evidence folder.
 
     With ``steps``, each width runs them on a fresh page before its
-    screenshot. Refused steps are written into summary.json and raised, so the
+    screenshot. ``pinned`` holds navigation to the target's origin even with
+    no steps (the harness's own capture, quadratus.preview). Refused steps are written into summary.json and raised, so the
     design check reports why instead of accepting an earlier render.
     """
     from .browser import render_page
@@ -298,6 +300,8 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
             (folder / name / leftover).unlink(missing_ok=True)
     try:
         checked, allowed = validate_steps(list(steps or []), target, root, task_id)
+        if pinned and allowed is None:
+            allowed = _navigation_rule(target, Path(root))
     except ValueError as exc:
         _write_summary(folder, dict(target=target, views={}, steps_refused=str(exc)))
         raise
@@ -584,6 +588,8 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    pinned = "--pinned" in argv
+    argv = [a for a in argv if a != "--pinned"]
     try:
         positional, steps = parse_steps(argv)
     except ValueError as exc:
@@ -594,7 +600,8 @@ def main(argv=None) -> int:
               "[--click SEL] [--wait SEL] [--upload SEL path] [--file SEL=path]", file=sys.stderr)
         return 2
     try:
-        out = capture(positional[0], positional[1], positional[2] if len(positional) == 3 else ".", steps)
+        out = capture(positional[0], positional[1], positional[2] if len(positional) == 3 else ".", steps,
+                      pinned=pinned)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

@@ -264,3 +264,71 @@ def _listening(port):
             return True
     except OSError:
         return False
+
+
+# -- across preview restarts, with an interaction and task-owned fixtures -------------------
+
+UPLOAD_PAGE = ("<html>" + ICON + "<body><input type=file id=csv>"
+               "<table id=rows></table><style>#rows td{{{style}}}</style><script>"
+               "csv.onchange = async () => {{ const text = await csv.files[0].text();"
+               " rows.innerHTML = '<tr id=done><td>' + text.trim() + '</td></tr>'; }};"
+               "</script></body></html>\n")
+UPLOAD_STEPS = lambda task: [{"action": "file", "selector": "#csv",  # noqa: E731
+                              "path": f".quadratus/capture-fixtures/{task}/sample.csv"},
+                             {"action": "wait", "selector": "#done"}]
+
+
+def _with_fixture(task, then):
+    def lead(call, replay):
+        H.write(call, {f".quadratus/capture-fixtures/{task}/sample.csv": "a,b\n1,2\n"})
+        return then(call, replay)
+    return lead
+
+
+@browser
+def test_an_interaction_state_survives_preview_restarts_from_audit_to_repair(tmp_path, monkeypatch):
+    profile, port = _profile(tmp_path)
+    audit = _decl("KIND: frontend standard",
+                  dict(AUDIT_SCOPE, capture={"path": "/index.html", "steps": UPLOAD_STEPS("t1")}),
+                  "Audit the preview table.")
+    repair = _decl("KIND: frontend standard",
+                   dict(REPAIR_SCOPE, capture={"path": "/index.html", "steps": UPLOAD_STEPS("t2")}),
+                   "Let the preview table fit.")
+
+    def fix(call, replay):
+        H.write(call, {"templates/index.html": UPLOAD_PAGE.format(style="max-width:100%")})
+        return 'Let the rows wrap.\nCHANGED: ["templates/index.html"]'
+    replay = _run(tmp_path, monkeypatch, [REQS + audit, repair + "\nRESOLVES: F1"],
+                  {"t1": _with_fixture("t1", _no_edit), "t2": _with_fixture("t2", fix)}, profile=profile,
+                  files={**_design_files(), "templates/index.html": UPLOAD_PAGE.format(style="display:block;width:450px")})
+    (f1,) = replay.findings
+    assert [s[:2] for s in f1["steps"]] == [["file", "#csv"], ["wait", "#done"]] and f1["steps"][0][2]
+    assert f1["status"] == "resolved" and f1["resolved_by"] == "t2", replay.result.error
+    assert replay.result.completed
+
+
+def test_a_harness_capture_may_upload_only_its_own_fixture(tmp_path, monkeypatch):
+    profile, _ = _profile(tmp_path)
+    borrowed = _decl("KIND: frontend standard",
+                     dict(AUDIT_SCOPE, capture={"path": "/index.html", "steps": UPLOAD_STEPS("t9")}),
+                     "Audit the preview table.")
+    replay = _run(tmp_path, monkeypatch, [REQS + borrowed] * 5, {}, profile=profile)
+    assert any("uploads only this task's own fixtures" in c.prompt for c in replay.of("orchestrator"))
+    assert not replay.of("lead")
+
+
+@browser
+def test_a_preview_that_writes_source_as_it_shuts_down_is_caught(tmp_path, monkeypatch):
+    port = _free_port()
+    serve = ("import http.server, socketserver, pathlib\n"
+             f"server = socketserver.TCPServer(('127.0.0.1', {port}), http.server.SimpleHTTPRequestHandler)\n"
+             "try:\n    server.serve_forever()\n"
+             "finally:\n    pathlib.Path('templates/left-behind.html').write_text('x')\n")
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps(dict(preview=[sys.executable, "serve.py"], origin=f"http://127.0.0.1:{port}",
+                                    ready_path="/templates/index.html")))
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT.replace('"/index.html"', '"/templates/index.html"')],
+                  {"t1": _no_edit}, profile=path,
+                  files={**_design_files(), "templates/index.html": FITTING_PAGE, "serve.py": serve})
+    assert replay.result.error.startswith("DesignUnverified")
+    assert "source changed while the harness previewed" in replay.result.error

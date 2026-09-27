@@ -69,7 +69,19 @@ def _server(port, directory="."):
     (dict(ready_path="/../x"), "ready_path"),
     (dict(ready_timeout=0), "ready_timeout"),
     (dict(capture_timeout=float("inf")), "capture_timeout"),
-    (dict(env={"A": "1"}), "unknown fields"),
+    (dict(extra=1), "unknown fields"),
+    (dict(env={"PATH": "x"}), "may not be set"),
+    (dict(env={"LD_PRELOAD": "x"}), "may not be set"),
+    (dict(env={"OPENAI_API_KEY": "x"}), "may not be set"),
+    (dict(env={"PYTHONPATH": "x"}), "may not be set"),
+    (dict(env={"lower": "x"}), "may not be set"),
+    (dict(env={"APP_DIR": "/etc"}), "write a path as"),
+    (dict(env={"APP_DIR": "~/x"}), "write a path as"),
+    (dict(env={"APP_DIR": "{project}/../x"}), "outside the project"),
+    (dict(env={"APP_DIR": "{project}/linked"}), "symlink"),
+    (dict(env={"APP_X": "$(id)"}), "plain string"),
+    (dict(ready_status=404), "2xx"),
+    (dict(total_timeout=0), "total_timeout"),
 ])
 def test_an_unusable_profile_is_refused(tmp_path, data, message):
     (tmp_path / "app.py").write_text("")
@@ -79,6 +91,22 @@ def test_an_unusable_profile_is_refused(tmp_path, data, message):
     full = dict(dict(preview=["python", "app.py"], origin="http://127.0.0.1:5000"), **data)
     with pytest.raises(ValueError, match=message):
         profile_from_dict(full, tmp_path)
+
+
+def test_operator_env_is_resolved_and_reaches_only_the_preview(tmp_path):
+    port = _free_port()
+    (tmp_path / "app.py").write_text(
+        "import os, http.server, socketserver\n"
+        "open('seen.txt', 'w').write(os.environ['APP_PORT'] + ' ' + os.environ['APP_ROOT'])\n"
+        "socketserver.TCPServer(('127.0.0.1', int(os.environ['APP_PORT'])),"
+        " http.server.SimpleHTTPRequestHandler).serve_forever()\n")
+    profile = _profile(tmp_path, [sys.executable, "app.py"], port,
+                       env={"APP_PORT": str(port), "APP_ROOT": "{project}"})
+    assert dict(profile.env) == {"APP_PORT": str(port), "APP_ROOT": str(tmp_path.resolve())}
+    with running(profile, tmp_path):
+        pass
+    assert (tmp_path / "seen.txt").read_text() == f"{port} {tmp_path.resolve()}"
+    assert "APP_PORT" not in os.environ
 
 
 def test_a_usable_profile_is_accepted(tmp_path):
@@ -108,6 +136,44 @@ def test_the_preview_starts_answers_and_is_stopped(tmp_path):
         pid = proc.pid
     assert not _alive(pid)
     assert not preview._listening("127.0.0.1", port)
+
+
+def test_a_404_on_the_ready_path_is_not_ready(tmp_path):
+    port = _free_port()
+    profile = _profile(tmp_path, _server(port), port, ready_path="/missing.html", ready_timeout=2)
+    with pytest.raises(PreviewFailed, match="not ready"):
+        with running(profile, tmp_path):
+            pass
+    assert not preview._listening("127.0.0.1", port)
+
+
+def test_an_interrupt_lets_the_app_run_its_own_cleanup(tmp_path):
+    port = _free_port()
+    (tmp_path / "app.py").write_text(
+        "import http.server, socketserver\n"
+        f"server = socketserver.TCPServer(('127.0.0.1', {port}), http.server.SimpleHTTPRequestHandler)\n"
+        "try:\n    server.serve_forever()\nfinally:\n    open('cleaned.txt', 'w').write('yes')\n")
+    with running(_profile(tmp_path, [sys.executable, "app.py"], port), tmp_path):
+        pass
+    assert (tmp_path / "cleaned.txt").read_text() == "yes"
+
+
+def test_the_capture_gets_only_what_is_left_of_one_budget(tmp_path, monkeypatch):
+    port = _free_port()
+    (tmp_path / "slow.py").write_text(
+        "import time, http.server, socketserver\ntime.sleep(2)\n"
+        f"socketserver.TCPServer(('127.0.0.1', {port}), http.server.SimpleHTTPRequestHandler).serve_forever()\n")
+    seen = []
+    real = subprocess.run
+
+    def recording(argv, **kw):
+        seen.append(kw.get("timeout"))
+        return real([sys.executable, "-c", "pass"], **{k: v for k, v in kw.items() if k != "timeout"})
+    monkeypatch.setattr(preview.subprocess, "run", recording)
+    profile = _profile(tmp_path, [sys.executable, "slow.py"], port, ready_timeout=10, capture_timeout=100,
+                       total_timeout=4)
+    assert capture_task(profile, tmp_path, "t1", {"path": "/", "steps": []}) == ""
+    assert seen and seen[0] <= 2.5, f"the capture was given {seen[0]}s of a 4s budget after a 2s start"
 
 
 def test_a_preview_that_exits_early_is_named(tmp_path):
@@ -183,6 +249,19 @@ def test_a_capture_that_overruns_is_stopped_and_the_preview_reaped(tmp_path, mon
     assert "did not finish within 1s" in capture_task(profile, tmp_path, "t1", {"path": "/", "steps": []})
     assert time.monotonic() - started < 20
     assert not preview._listening("127.0.0.1", port)
+
+
+@pytest.mark.skipif(not os.environ.get("QUADRATUS_CHROMIUM"), reason="needs a browser")
+def test_a_zero_step_harness_capture_is_pinned_to_the_origin(tmp_path):
+    from quadratus.design_evidence import check, source_fingerprint
+    port, other = _free_port(), _free_port()
+    (tmp_path / "index.html").write_text(
+        f"<html><head><link rel=icon href='data:,'></head><body><p>x</p><script>"
+        f"setTimeout(() => location.href = 'http://127.0.0.1:{other}/elsewhere', 50)</script></body></html>")
+    profile = _profile(tmp_path, _server(port), port)
+    assert capture_task(profile, tmp_path, "t1", {"path": "/index.html", "steps": []}) == ""
+    ok, problem, _ = check(tmp_path, "t1", 0, expected_source=source_fingerprint(tmp_path))
+    assert not ok and "navigation outside the preview was blocked" in problem
 
 
 @pytest.mark.skipif(not os.environ.get("QUADRATUS_CHROMIUM"), reason="needs a browser")
