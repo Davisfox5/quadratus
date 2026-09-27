@@ -131,7 +131,7 @@ def test_no_change_delivery_and_control_requests(tmp_path, monkeypatch, reply):
         fleet.close()
 
 
-@pytest.mark.parametrize('role', ['lead', 'revision', 'gate-fix', 'security-fix'])
+@pytest.mark.parametrize('role', ['lead', 'revision', 'gate-fix', 'security-fix', 'design-fix'])
 def test_editing_roles_keep_lead_checklist_without_a_write_grant(packet_session, role):
     from quadratus.delegation import invocation
     session, spec, seen = packet_session
@@ -140,6 +140,7 @@ def test_editing_roles_keep_lead_checklist_without_a_write_grant(packet_session,
         session._invoke_model('claude:opus', 'Revise the proposal')
     assert 'Role: lead' in seen[-1]
     assert 'Stop with an ASK' in seen[-1]
+    assert 'Role: reviewer' not in seen[-1]
 
 
 def test_worker_gets_scope_without_parent_family_packet(packet_session):

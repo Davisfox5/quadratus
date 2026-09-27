@@ -1086,7 +1086,10 @@ class Session:
         spec = self._active_spec
         if (context.get("role") != "closeout" and context.get('origin') != 'worker'
                 and spec is not None and '## Role packet' not in prompt):
-            role = ('lead' if context.get('role') in ('lead', 'revision', 'gate-fix', 'security-fix') else 'verifier'
+            # design-fix is the task's own lead editing its work (map G11): it
+            # carries the lead's packet, like every other editing role.
+            role = ('lead' if context.get('role') in ('lead', 'revision', 'gate-fix', 'security-fix', 'design-fix')
+                    else 'verifier'
                     if context.get('role') == 'verifier' else 'reviewer')
             prompt += '\n\n' + self._role_packet(spec, role)
         if context.get("role") != "closeout" and spec is not None and spec.scope is not None:
