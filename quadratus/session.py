@@ -2884,7 +2884,17 @@ class Session:
             if batch:
                 used += len(batch) - 1
                 previous_description = None
-                self._run_batch(batch)
+                if not self._run_batch(batch):
+                    # Sent back before any lead call (map G6): the same as a
+                    # serial send-back, one slot spent, not one per task, and
+                    # it counts against the same correction allowance.
+                    used -= len(batch) - 1
+                    self._covers_corrections += 1
+                    if self._covers_corrections > self.config.max_requirement_reopens:
+                        raise RunStalled("the orchestrator kept naming parallel batches that were sent back: "
+                                         + (self._done_refusal or "").replace("--- BATCH SENT BACK ---", "")
+                                         .strip()[:300])
+                    continue
                 if self.open_findings or (self.checks and not self.checks[-1]['passed']):
                     self._name_findings_stop()
                     break
@@ -3338,7 +3348,7 @@ class Session:
             seen |= paths
         return specs
 
-    def _run_batch(self, specs) -> None:
+    def _run_batch(self, specs) -> bool:
         """Run independent tasks at once, each in its own copy, then merge.
 
         Every task keeps its own lead (spread across vendors), review, fix
@@ -3370,7 +3380,7 @@ class Session:
             if problem:
                 self._done_refusal = (f"\n\n--- BATCH SENT BACK ---\n{spec.task_id}: {problem} Name the "
                                       "tasks again with COVERS lines using the listed requirement ids.")
-                return
+                return False
             chosen, self._dispatch_lead = self._dispatch_lead, None
             lead = chosen[1] if chosen and chosen[0] == spec.task_id else self._pick_lead(spec)
             parsed.append((replace(spec, lead=lead), covers, continues))
@@ -3484,6 +3494,7 @@ class Session:
                                             passed=bool(self.checks) and bool(self.checks[-1]["passed"]))
         if fatal is not None:
             raise fatal
+        return True
 
     def _covers_problem(self, covers) -> str:
         ledger = self.memory.ledger

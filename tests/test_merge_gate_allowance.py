@@ -84,3 +84,83 @@ def test_an_unattributable_merge_failure_gets_no_repair(tmp_path):
     from quadratus.integration import CheckUnattributable
     with pytest.raises(CheckUnattributable, match="structured report undeclared"):
         _run(tmp_path, attributable=False)
+
+
+def test_an_unattributable_failure_at_the_serial_gate_stops_before_any_batch(tmp_path):
+    """Renamed coverage (Codex 5859838257): with no declared report at any
+    gate the run stops at the serial task's gate; the merge is never reached."""
+    import pytest
+
+    from quadratus.integration import CheckUnattributable
+    with pytest.raises(CheckUnattributable, match="structured report undeclared"):
+        _run(tmp_path, attributable=False)
+
+
+class SerialAttributableMergeNot(MergeGate):
+    def run(self):
+        result = super().run()
+        if self.runs[-1] == "merge":
+            return GateResult(False, "check", 1, "merge: runner crashed", report=None)
+        return result
+
+
+def test_an_unattributable_merged_tree_failure_gets_no_merge_repair(tmp_path):
+    import pytest
+
+    from quadratus.integration import CheckUnattributable
+    script = Orchestrated([SERIAL, BATCH, "DONE"], lead_delay=0)
+    project = tmp_path / "project"
+    project.mkdir()
+    gate = SerialAttributableMergeNot(project)
+    session, _ = parallel_session(tmp_path, script, integration_gate=gate, max_gate_fixes=1)
+    parent, fixes = script.invoke_for(project), []
+
+    def invoke(model, prompt, system=None, allow_writes=False):
+        if "integration check failed" in prompt:
+            fixes.append("merge" if (project / "a.py").exists() else "serial")
+            (project / "c.py").write_text("# c.py fixed\n")
+            return 'Fixed c.\nCHANGED: ["c.py"]'
+        if "You are leading" in prompt and " in c.py" in prompt:
+            (project / "c.py").write_text("# c.py\n")
+            return 'Wrote it\nCHANGED: ["c.py"]'
+        return parent(model, prompt, system, allow_writes)
+    session.invoke = invoke
+    with pytest.raises(CheckUnattributable, match="merge|structured report undeclared"):
+        session.run(max_tasks=6)
+    assert fixes == ["serial"], "the serial failure was repaired; the merged tree got no repair"
+    assert gate.runs[-1] == "merge"
+    assert session.parallel_batches[0]["merge_gate"] == dict(task="t3-merge", gate_fixes=0, passed=False)
+
+
+# -- G6: a sent-back batch spends one slot and counts as a correction --------------------
+
+BAD_BATCH = "PARALLEL\n" + _block("a.py") + "\nRESOLVES: F1\n---\n" + _block("b.py")
+
+
+def test_a_sent_back_batch_spends_one_slot_like_a_serial_send_back(tmp_path):
+    """Old: a sent-back batch of two spent two slots, so with two slots the
+    task named next never ran."""
+    script = Orchestrated([BAD_BATCH, SERIAL, "DONE"], lead_delay=0)
+    session, project = parallel_session(tmp_path, script)
+    parent = script.invoke_for(project)
+
+    def invoke(model, prompt, system=None, allow_writes=False):
+        if "You are leading" in prompt and " in c.py" in prompt:
+            (project / "c.py").write_text("# c.py\n")
+            return 'Wrote it\nCHANGED: ["c.py"]'
+        return parent(model, prompt, system, allow_writes)
+    session.invoke = invoke
+    session.run(max_tasks=2)
+    assert len(session.history) == 1, "the task named next ran in the second slot"
+    assert (project / "c.py").read_text() == "# c.py\n" and session._covers_corrections == 1
+
+
+def test_repeated_sent_back_batches_exhaust_the_correction_allowance(tmp_path):
+    import pytest
+
+    from quadratus.session import RunStalled
+    script = Orchestrated([BAD_BATCH] * 6, lead_delay=0)
+    session, _ = parallel_session(tmp_path, script, max_requirement_reopens=2)
+    with pytest.raises(RunStalled, match="parallel batches that were sent back"):
+        session.run(max_tasks=12)
+    assert session.history == [] and session._covers_corrections == 3
