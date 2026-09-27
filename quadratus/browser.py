@@ -199,7 +199,10 @@ def render_page(
                     # does its own networking, so a single-threaded preview
                     # keeps working. A request off the origin is failed
                     # before it leaves: nothing reaches another service.
-                    cdp = context.new_cdp_session(page)
+                    try:
+                        cdp = context.new_cdp_session(page)
+                    except Exception as exc:  # noqa: BLE001 -- fail closed, named
+                        raise RuntimeError(f"request pinning is unavailable in this browser: {exc}") from exc
 
                     def paused(event):
                         request_id, url = event["requestId"], event["request"]["url"]
@@ -214,7 +217,10 @@ def render_page(
                         (blocked if navigation else failed_requests).append(note)
                         cdp.send("Fetch.failRequest", {"requestId": request_id, "errorReason": "BlockedByClient"})
                     cdp.on("Fetch.requestPaused", paused)
-                    cdp.send("Fetch.enable", {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]})
+                    try:
+                        cdp.send("Fetch.enable", {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]})
+                    except Exception as exc:  # noqa: BLE001 -- fail closed, named
+                        raise RuntimeError(f"request pinning is unavailable in this browser: {exc}") from exc
 
                     def socket_guard(socket):
                         # WebSockets are outside that interception (Codex
@@ -228,7 +234,10 @@ def render_page(
                         # Never connected: nothing is sent to any server, and
                         # the page's socket stays unanswered.
                         failed_requests.append("blocked outside the preview: " + socket.url[:200])
-                    context.route_web_socket("**", socket_guard)
+                    try:
+                        context.route_web_socket("**", socket_guard)
+                    except Exception as exc:  # noqa: BLE001 -- fail closed, named
+                        raise RuntimeError(f"WebSocket pinning is unavailable in this browser: {exc}") from exc
                 else:
                     context.route("**/*", guard)
 

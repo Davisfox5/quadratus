@@ -658,3 +658,47 @@ def test_an_on_origin_websocket_still_reaches_the_app(tmp_path):
     capture_task(_profile(tmp_path, [sys.executable, "logging_server.py"], port), tmp_path, "t1",
                  {"path": "/index.html", "steps": []})
     assert "GET /socket" in log.read_text(), "the on-origin handshake was passed through"
+
+
+@pytest.mark.skipif(not os.environ.get("QUADRATUS_CHROMIUM"), reason="needs a browser")
+@pytest.mark.parametrize("script", [
+    "navigator.sendBeacon('http://127.0.0.1:{other}/beacon', 'x');",
+    "new EventSource('http://127.0.0.1:{other}/events');",
+    "fetch('http://127.0.0.1:{other}/api', {{keepalive: true}}).catch(() => {{}});",
+], ids=["beacon", "eventsource", "keepalive-fetch"])
+def test_other_http_transports_never_reach_another_service(tmp_path, script):
+    from quadratus.design_evidence import check, source_fingerprint
+    port, other = _free_port(), _free_port()
+    (tmp_path / "index.html").write_text(
+        f"<html><head>{ICON}</head><body>ok<script>" + script.format(other=other) + "</script></body></html>")
+    unrelated, log = _other_service(tmp_path, other)
+    try:
+        failure = capture_task(_profile(tmp_path, _server(port), port), tmp_path, "t1",
+                               {"path": "/index.html", "steps": []})
+        ok, problem, _ = check(tmp_path, "t1", 0, expected_source=source_fingerprint(tmp_path))
+        assert not ok and "outside the preview" in (failure + " " + problem), (failure, problem)
+    finally:
+        unrelated.kill()
+        unrelated.wait()
+    assert "GET" not in log.read_text() and "POST" not in log.read_text()
+
+
+def test_pinning_that_cannot_be_set_up_fails_the_capture(tmp_path, monkeypatch):
+    """Fail closed: a browser without request interception never yields a
+    render claimed as pinned."""
+    from playwright.sync_api import BrowserContext
+
+    from quadratus.browser import render_page
+    if not os.environ.get("QUADRATUS_CHROMIUM"):
+        pytest.skip("needs a browser")
+
+    def broken(self, *a, **k):
+        raise RuntimeError("no CDP here")
+    monkeypatch.setattr(BrowserContext, "new_cdp_session", broken)
+    port = _free_port()
+    (tmp_path / "index.html").write_text("<p>x</p>")
+    with running(_profile(tmp_path, _server(port), port), tmp_path):
+        with pytest.raises(RuntimeError, match="request pinning is unavailable"):
+            render_page(f"http://127.0.0.1:{port}/index.html", out_dir=tmp_path / "out",
+                        allow_navigation=lambda url: url.startswith(f"http://127.0.0.1:{port}/"),
+                        pin_requests=True)
