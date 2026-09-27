@@ -383,3 +383,57 @@ def test_an_audit_that_edits_source_is_still_a_scope_stop(tmp_path, monkeypatch)
 def test_a_refused_audit_lead_is_todays_refusal_stop(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, [REQS + AUDIT], {"t1": lambda call, replay: H.claude_refusal("cyber")})
     assert replay.result.error.startswith("ProviderRefusal") and replay.findings == []
+
+
+# -- approval-to-settlement interval and exception exits (Codex review of dd17a1d) --------
+
+@pytest.mark.parametrize("mutation, reason", [
+    ("evidence", "replaced after they were reviewed"),
+    ("source", "different source tree"),
+    ("state", "different state"),
+])
+def test_renders_changed_between_approval_and_settlement_do_not_resolve(tmp_path, monkeypatch, mutation, reason):
+    """A synthetic write in the interval: the controller invariant, not observed vendor behaviour."""
+    from quadratus.session import Session
+    settle = Session._settle_resolution
+
+    def mutated(self, spec, *args):
+        root = Path(self.project)
+        if spec.task_id != "t2":
+            pass
+        elif mutation == "evidence":
+            H.evidence(root, spec.task_id, age=0, measured={"mobile": 391})
+        elif mutation == "source":
+            (root / "README.md").write_text("# app\n\nchanged in the interval\n")
+        else:
+            H.evidence(root, spec.task_id, age=0, target="http://127.0.0.1:5000/other")
+        return settle(self, spec, *args)
+    monkeypatch.setattr(Session, "_settle_resolution", mutated)
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1"],
+                  {"t1": _capture(measured=WIDE), "t2": _repair()})
+    f1 = replay.findings[0]
+    assert f1["status"] == "open" and "did not hold until it closed" in f1["last_attempt"]
+    assert reason in f1["last_attempt"]
+    assert replay.result.error.startswith("FindingsUnresolved: task t2") and not replay.result.completed
+    assert len(replay.of("design-review")) == 1, "no second review"
+
+
+def test_an_exception_after_a_source_change_reopens_an_earlier_resolution(tmp_path, monkeypatch):
+    def rogue(call, replay):
+        H.write(call, {"README.md": "# app\n\nx\n", "templates/index.html": "<p>moved</p>\n"})
+        return 'Documented.\nCHANGED: ["README.md", "templates/index.html"]'
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1", DOCS],
+                  {"t1": _capture(measured=WIDE), "t2": _repair(), "t3": rogue}, max_tasks=8)
+    f1 = replay.findings[0]
+    assert replay.result.error and not replay.result.error.startswith("FindingsUnresolved")
+    assert f1["status"] == "open" and "no longer holds" in f1["reopened"]
+    assert f1["unresolved_reason"].startswith("open when the run stopped")
+
+
+def test_an_exception_with_source_unchanged_keeps_a_valid_resolution(tmp_path, monkeypatch):
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1", DOCS],
+                  {"t1": _capture(measured=WIDE), "t2": _repair(),
+                   "t3": lambda call, replay: H.claude_refusal("cyber")}, max_tasks=8)
+    assert replay.result.error.startswith("Provider"), "the docs lead's failure is the stop"
+    f1 = replay.findings[0]
+    assert f1["status"] == "resolved" and f1["resolved_by"] == "t2"

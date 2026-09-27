@@ -863,7 +863,9 @@ class Session:
         self.findings: List[dict] = []
         self._current_covers: List[str] = []
         self._current_resolves: List[str] = []
-        self._resolution_candidate: Optional[str] = None
+        #: ``(task_id, target, steps, evidence)`` of renders the design review
+        #: approved, snapshotted at approval and re-verified at settlement.
+        self._resolution_candidate: Optional[tuple] = None
         #: Capped tasks not yet finished by a task that names them in a
         #: CONTINUES line. Any entry blocks completion.
         self._partial_tasks: set = set()
@@ -2311,7 +2313,13 @@ class Session:
         try:
             history = self._run_tasks(max_tasks)
         except BaseException as exc:
-            self._annotate_open_findings(f"{type(exc).__name__}: {str(exc)[:200]}")
+            try:
+                # A resolution a later task's changes undid must not persist as
+                # resolved because the run ended on an exception.
+                self._recheck_resolved_findings()
+                self._annotate_open_findings(f"{type(exc).__name__}: {str(exc)[:200]}")
+            except Exception:  # noqa: BLE001 -- the original stop is the one reported
+                log.warning("could not finalise audit findings after %s", type(exc).__name__, exc_info=True)
             raise
         if not self.completed:
             # The record says what holds at the end, whatever stopped the run.
@@ -2583,8 +2591,9 @@ class Session:
                     blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
                 self.open_findings.extend(f"Task {spec.task_id} design: {b.strip()}" for b in blocking)
                 if not blocking and self._current_resolves:
-                    # Committed only once the whole task has passed; see _settle_resolution.
-                    self._resolution_candidate = spec.task_id
+                    # Committed only once the whole task has passed, and only
+                    # for these exact renders; see _settle_resolution.
+                    self._resolution_candidate = (spec.task_id, *self._capture_state(spec.task_id))
         self.design_checks.append(record)
         task.keep(json.dumps(record), kind="design-evidence")
 
@@ -3181,27 +3190,34 @@ class Session:
     def _recheck_resolved_findings(self) -> None:
         """Reopen each resolved finding whose resolving renders no longer
         verify against the trusted source (a later task changed it)."""
-        from .design_evidence import check
         for finding in self.findings:
             if finding["status"] != "resolved" or not self.project:
                 continue
-            task_id = finding["resolved_by"]
-            problem = self._evidence_set_problem(task_id)
-            if not problem:
-                ok, problem, _ = check(self.project, task_id, 0, expected_source=self._trusted_source())
-                problem = "" if ok else problem
-            if not problem:
-                # The renders that were reviewed, not merely renders that pass
-                # now (Codex review of e47c7ed: a later task replaced them).
-                target, steps, evidence = self._capture_state(task_id)
-                if (target, steps) != (finding["target"], finding["steps"]):
-                    problem = "the resolving renders now show a different state"
-                elif evidence != finding["resolution"]:
-                    problem = "the resolving renders were replaced after they were reviewed"
+            problem = self._identity_problem(finding["resolved_by"], finding["target"], finding["steps"],
+                                             finding["resolution"])
             if problem:
                 finding.update(status="open", reopened=f"its resolving evidence no longer holds: {problem[:160]}")
                 for rid in finding["requirements"]:
                     self.memory.ledger.requirement_status[rid] = f"NOT MET: open finding {finding['id']}"
+
+    def _identity_problem(self, task_id, target, steps, evidence) -> str:
+        """Why ``task_id``'s renders are no longer exactly the ones approved
+        (``target``, ``steps``, ``evidence`` hashes) or no longer verify
+        against the trusted source; "" if they still are and do. The renders
+        that were reviewed, not merely renders that pass now (Codex reviews
+        of e47c7ed and dd17a1d: a later write replaced them)."""
+        from .design_evidence import check
+        problem = self._evidence_set_problem(task_id)
+        if not problem:
+            ok, problem, _ = check(self.project, task_id, 0, expected_source=self._trusted_source())
+            problem = "" if ok else problem
+        if not problem:
+            now_target, now_steps, now_evidence = self._capture_state(task_id)
+            if (now_target, now_steps) != (target, steps):
+                problem = "the resolving renders now show a different state"
+            elif now_evidence != evidence:
+                problem = "the resolving renders were replaced after they were reviewed"
+        return problem
 
     def _stop_findings_unresolved(self, why: str) -> None:
         opened = self._open_findings_for(None)
@@ -3305,10 +3321,15 @@ class Session:
             reasons.append("its integration gate failed")
         if len(self.open_findings) > open_before:
             reasons.append("it closed with open findings")
-        if self._resolution_candidate != spec.task_id:
+        approved = self._resolution_candidate
+        if not approved or approved[0] != spec.task_id:
             reasons.append("its renders were not verified and approved")
+        else:
+            changed = self._identity_problem(*approved)
+            if changed:
+                reasons.append(f"its approved renders did not hold until it closed: {changed[:160]}")
         if not reasons:
-            self._resolve_findings(spec)
+            self._resolve_findings(spec, approved)
         still = [f for f in self.findings if f["id"] in self._current_resolves and f["status"] == "open"]
         for finding in still:
             if reasons:
@@ -3353,11 +3374,12 @@ class Session:
                 and bool(self._current_covers) and bool(records)
                 and all(r.get("kind") == "product.overflow" for r in records))
 
-    def _resolve_findings(self, spec) -> None:
+    def _resolve_findings(self, spec, approved) -> None:
         """Close each finding this task names in RESOLVES whose acceptance its
         own verified, approved renders establish: the same page reached by the
-        same interaction (fixture content included), with no overflow."""
-        target, steps, evidence = self._capture_state(spec.task_id)
+        same interaction (fixture content included), with no overflow. The
+        identity committed is the one approved, re-verified at settlement."""
+        _task, target, steps, evidence = approved
         for finding in self.findings:
             if finding["id"] not in self._current_resolves or finding["status"] != "open":
                 continue
