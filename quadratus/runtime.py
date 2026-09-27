@@ -270,6 +270,21 @@ class Fleet:
         return alias_for(key)
 
     # -- liveness ------------------------------------------------------------
+    def lead_can_run(self, key: str, command: str) -> bool:
+        """Whether an editing call on ``key`` could run ``command`` unaided:
+        always for a transport whose sandbox runs commands, and for a
+        "granted" one only when the command is among its exact granted
+        checks. A fact about the transport, read before dispatch."""
+        vendor = key.partition(":")[0]
+        try:
+            provider = self._vendor_provider(vendor)
+        except Exception:  # noqa: BLE001 -- unknown is not permission
+            return False
+        spec = getattr(provider, "spec", None)
+        if getattr(spec, "editing_commands", "any") != "granted":
+            return True
+        return command in tuple(getattr(self, "check_commands", ()) or ())
+
     def available(self, key: str) -> bool:
         """Is this model usable right now? The predicate seats and routing use.
 
@@ -385,6 +400,16 @@ class Fleet:
                                   'call added, changed or deleted. Use CHANGED: [] for no changes. '
                                   'A standalone FETCH, CONSULT or WORKER request may omit the line; '
                                   'any files you changed before it are kept.')
+            denied = _relevant_denials(getattr(view, "last_tool_failures", None),
+                                       getattr(self, "check_commands", ()) or ())
+            if denied:
+                # After the one invocation, never replayed or rerouted; the
+                # edits stay for inspection (Codex, Run 18).
+                from .session import CapabilityUnavailable
+                raise CapabilityUnavailable(
+                    f"{model_key} was denied a command the harness itself requires: "
+                    + "; ".join(c[:160] for c in denied[:3])
+                    + ". Declare it as a check or a capture profile. Work preserved.")
             after = self.project.contents()
             changed = sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
             from .taskmeta import lead_request
@@ -729,6 +754,8 @@ def new_session(goal, store, *, fleet=None, config=None, invariants=None, settin
         conf = replace(conf, project=active.project.root,
                        allow_writes=active.allow_writes)
 
+    if conf.lead_can_run is None and callable(getattr(active, "lead_can_run", None)):
+        conf = replace(conf, lead_can_run=active.lead_can_run)
     if active.usage_meter is not None and conf.usage_meter is active.usage_meter:
         conf = replace(conf, usage_meter=None)
     if conf.fork is None and getattr(active, "project", None) is not None and isinstance(active, Fleet):
@@ -756,6 +783,20 @@ def new_session(goal, store, *, fleet=None, config=None, invariants=None, settin
         invariants=invariants,
         available=active.available,
     )
+
+
+def _relevant_denials(failures, checks) -> List[str]:
+    """Denied commands the harness itself named: a configured check exactly,
+    or the harness's own capture command. Other denials (exploration) are
+    only recorded in the ledger."""
+    out = []
+    for entry in failures or ():
+        if not isinstance(entry, dict) or entry.get("kind") != "permission_denied":
+            continue
+        command = entry.get("command")
+        if isinstance(command, str) and (command in checks or "quadratus.design_evidence" in command):
+            out.append(command)
+    return out
 
 
 def _roster_for(vendor: str):

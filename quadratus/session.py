@@ -144,6 +144,18 @@ class PartialWorkStopped(RuntimeError):
         return "\n".join(lines)
 
 
+class CapabilityUnavailable(RuntimeError):
+    """The seat a task needs cannot perform a capability the harness requires.
+
+    Codex, Run 18: a UI lead was told to start a preview and capture, which
+    its transport would never let it run; both leads capped on denials.
+    Raised before the lead is invoked when that is known from the transport,
+    or after the invocation when it was denied a command the harness itself
+    declared. Nothing is granted, replayed or rerouted: the operator declares
+    a capture profile or a check. Distinct from a model's refusal.
+    """
+
+
 class RunStalled(RuntimeError):
     """The orchestrator named the same task twice in a row.
 
@@ -354,6 +366,13 @@ class SessionConfig:
     #: told to look at the rendered result at desktop and mobile widths and
     #: report what it saw. Davis's ruling, 2026-09-25.
     design_self_verify: bool = True
+    #: The operator's capture profile (quadratus.preview.CaptureProfile):
+    #: when set, the harness starts the preview and captures each UI task's
+    #: declared SCOPE capture itself, and no lead is asked to (Codex, Run 18).
+    capture_profile: Optional[object] = None
+    #: ``(key, command) -> bool``: whether an editing call on ``key`` could run
+    #: ``command`` unaided (runtime.Fleet.lead_can_run). None means yes.
+    lead_can_run: Optional[Callable[[str, str], bool]] = None
     #: Design and UI work also gets a reviewer from another vendor, briefed
     #: on design and aesthetic choices, even when the task is SIMPLE.
     design_cross_check: bool = True
@@ -492,6 +511,16 @@ _DESIGN_SELF_VERIFY = (
     "error and populated. Report in a few lines what you looked at and what you saw. "
     "Without both screenshots from this task, the task is recorded as unverified design work."
     + "\n" + "{shows}"
+)
+
+#: The design instruction when the harness captures (Codex, Run 18): the lead
+#: is never asked to start a server or run the capture its transport may deny.
+_HARNESS_CAPTURE = (
+    "This task changes or reviews what users see. The harness itself starts the preview and "
+    "captures {page} (after {steps} declared interaction steps) at a desktop and a mobile "
+    "width once your work and the checks are done, and the design review judges those "
+    "renders. Do not start servers or run capture commands. Make the declared page and "
+    "state show the change, and keep the declared selectors working."
 )
 
 #: What a design render must show to count as evidence. GameTape run 12
@@ -913,6 +942,8 @@ class Session:
         #: ``(task_id, target, steps, evidence)`` of renders the design review
         #: approved, snapshotted at approval and re-verified at settlement.
         self._resolution_candidate: Optional[tuple] = None
+        #: ``(task_id, lead)`` chosen by the pre-dispatch capability check.
+        self._dispatch_lead: Optional[tuple] = None
         #: Capped tasks not yet finished by a task that names them in a
         #: CONTINUES line. Any entry blocks completion.
         self._partial_tasks: set = set()
@@ -1761,7 +1792,10 @@ class Session:
         if spec.work_class == WorkClass.SECURITY:
             return self._run_security_task(spec)
 
-        lead = self._pick_lead(spec)
+        chosen, self._dispatch_lead = self._dispatch_lead, None
+        # Picked once: a pre-dispatch capability check already chose (and the
+        # rotation already advanced for) this task's lead.
+        lead = chosen[1] if chosen and chosen[0] == spec.task_id else self._pick_lead(spec)
         collaborators = self.collaborators_for(spec, lead)
         # Selection is recorded separately from invocation. The 2026-09-13
         # feature task selected Grok as a collaborator and never reached it,
@@ -2477,6 +2511,14 @@ class Session:
                 self._done_refusal = (f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again.")
                 previous_description = None
                 continue
+            problem = self._capture_problem(spec, resolves)
+            if problem:
+                self._covers_corrections += 1
+                if self._covers_corrections > self.config.max_requirement_reopens:
+                    raise RunStalled(f"the orchestrator kept naming UI tasks without a valid capture: {problem}")
+                self._done_refusal = f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again."
+                previous_description = None
+                continue
             self._current_covers, self._current_resolves = list(covers), list(resolves or [])
             self._resolution_candidate = None
             checks_before, open_before = len(self.checks), len(self.open_findings)
@@ -2559,6 +2601,10 @@ class Session:
         self._review_evidence_hashes, self._review_snapshot = {}, None
         if not (self.config.design_cross_check and is_design_task(spec) and self.project):
             return
+        if self._harness_captures(spec):
+            # Harness renders are taken after the final edit and a passing
+            # gate, so collaborators are promised none of the draft.
+            return
         from .design_evidence import check
         ok, _, shots = check(self.project, spec.task_id, self._last_edit_started or 0,
                               expected_source=self._trusted_source())
@@ -2588,6 +2634,17 @@ class Session:
             record.update(verified=None, problem="design self-verification disabled by the operator")
             self.design_checks.append(record)
             return
+        harness = self._harness_captures(spec)
+        if harness:
+            failure = self._harness_capture(spec)
+            if failure:
+                record.update(verified=False, problem=failure, harness_capture=True)
+                self.open_findings.append(f"Task {spec.task_id} is design work without clean rendered "
+                                          f"evidence: {failure}.")
+                self._design_unverified.append((spec.task_id, failure))
+                self.design_checks.append(record)
+                task.keep(json.dumps(record), kind="design-evidence")
+                return
         ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
                                                     expected_source=self._trusted_source())
         problem, records = self._qualify_debt(spec, ok, problem, records)
@@ -2598,7 +2655,28 @@ class Session:
             self.design_checks.append(record)
             task.keep(json.dumps(record), kind="design-evidence")
             return
-        if not ok:
+        if not ok and harness and is_review_only(spec):
+            # A harness recapture of an unchanged tree measures the same page;
+            # an audit's problem stands as found, with no fix call spent.
+            pass
+        elif not ok and harness:
+            record["first_problem"] = problem
+            self._note(f"task {spec.task_id}: design evidence shows a problem; one fix call ({problem[:100]})")
+            self._edit(lead, (
+                f"Task: {spec.description}\n\nThe harness rendered this design task and the render "
+                f"shows a problem: {problem}.\nFix it in source. Do not start servers or run capture "
+                "commands: the harness captures the declared page again after your fix and the checks. "
+                + self._revision_delivery() + _design_fix_delivery(self._interim_edits_note())),
+                role="design-fix")
+            self._run_integration_gate(lead, spec, task)
+            failure = self._harness_capture(spec)
+            if failure:
+                ok, problem, shots, records = False, failure, [], [dict(kind="integrity", message=failure)]
+            else:
+                ok, problem, shots, records = check_records(
+                    self.project, spec.task_id, self._last_edit_started or 0,
+                    expected_source=self._trusted_source())
+        elif not ok:
             record["first_problem"] = problem
             self._note(f"task {spec.task_id}: design evidence missing or broken; one fix call ({problem[:100]})")
             import sys as _sys
@@ -2788,11 +2866,17 @@ class Session:
                 # Findings are resolved by one serial task with its own
                 # verified renders; a forked child has no ledger to close them.
                 problem = "RESOLVES is not supported in a parallel batch; name that task alone."
+            elif self.config.capture_profile is not None and is_design_task(spec):
+                problem = "A UI task with harness capture is not supported in a parallel batch; name it alone."
+            else:
+                problem = problem or self._capture_problem(spec, None)
             if problem:
                 self._done_refusal = (f"\n\n--- BATCH SENT BACK ---\n{spec.task_id}: {problem} Name the "
                                       "tasks again with COVERS lines using the listed requirement ids.")
                 return
-            parsed.append((replace(spec, lead=self._pick_lead(spec)), covers, continues))
+            chosen, self._dispatch_lead = self._dispatch_lead, None
+            lead = chosen[1] if chosen and chosen[0] == spec.task_id else self._pick_lead(spec)
+            parsed.append((replace(spec, lead=lead), covers, continues))
         self._note("running in parallel: " + ", ".join(f"{s.task_id} led by {s.lead}" for s, _, _ in parsed))
         project = Project(self.project, exclude=self.config.project_excludes)
         base = project.contents()
@@ -3339,6 +3423,63 @@ class Session:
                         screenshots={name: digest(folder / name / "page.png") for name in VIEWPORTS})
         return (summary.get("target") if isinstance(summary, dict) else None), steps, evidence
 
+    def _harness_captures(self, spec) -> bool:
+        """Whether the harness, not the lead, captures this task's renders."""
+        return bool(self.config.capture_profile is not None and is_design_task(spec)
+                    and getattr(spec.scope, "capture", None))
+
+    def _capture_problem(self, spec, resolves) -> str:
+        """Why a UI task cannot be dispatched as declared, before any lead
+        call; "" if it can. Raises CapabilityUnavailable when the lead could
+        never produce the evidence the harness will require."""
+        if not (self.config.design_self_verify and self.project and self.config.allow_writes
+                and is_design_task(spec)):
+            return ""
+        profile = self.config.capture_profile
+        if profile is not None:
+            capture = getattr(spec.scope, "capture", None)
+            if not capture:
+                return ('A UI task must declare what the harness captures: add "capture": '
+                        '{"path": "/...", "steps": [...]} to its SCOPE.')
+            target = profile.origin + capture["path"]
+            steps = [[s["action"], s["selector"]] for s in capture["steps"]]
+            for finding in self.findings:
+                if finding["id"] in (resolves or ()) and (
+                        target != finding["target"] or steps != [s[:2] for s in finding["steps"]]):
+                    return (f"The declared capture ({target}, {len(steps)} steps) is not the state "
+                            f"{finding['id']} was measured in ({finding['target']}, "
+                            f"{len(finding['steps'])} steps); declare the same page and steps.")
+            return ""
+        can_run = self.config.lead_can_run
+        if can_run is None:
+            return ""
+        lead = self._pick_lead(spec)
+        self._dispatch_lead = (spec.task_id, lead)
+        if can_run is not None and not can_run(lead, "python -m quadratus.design_evidence"):
+            raise CapabilityUnavailable(
+                f"task {spec.task_id} is UI work whose renders the harness requires, and its lead "
+                f"{lead} cannot run the capture on its transport; declare a capture profile "
+                "(--capture-profile) so the harness captures, or run this task on a seat that can. "
+                "No call was made.")
+        return ""
+
+    def _harness_capture(self, spec) -> str:
+        """Run the operator's preview and capture this task's declared state;
+        "" on success or why not. Only after the last gate passed, and the
+        source must be the same before and after (the preview is not a
+        writer)."""
+        if self.checks and self._task_checks_failed():
+            return "the harness did not capture because the task's last check failed"
+        from .preview import capture_task
+        before = self._source_fingerprint()
+        failure = capture_task(self.config.capture_profile, self.project, spec.task_id, spec.scope.capture)
+        if before is None or self._source_fingerprint() != before:
+            return "the project source changed while the harness previewed and captured it"
+        return failure
+
+    def _task_checks_failed(self) -> bool:
+        return bool(self.checks) and not self.checks[-1]["passed"]
+
     def _evidence_set_problem(self, task_id) -> str:
         """Why a task's renders are not a complete, deliverable evidence set
         (both screenshots and the summary, within every copy bound); "" if
@@ -3555,7 +3696,11 @@ class Session:
         if map_block:
             parts.append(map_block)
         parts.append("You are leading this task. Produce the complete work.")
-        if self.config.design_self_verify and is_design_task(spec):
+        if self.config.design_self_verify and is_design_task(spec) and self._harness_captures(spec):
+            parts.append(_HARNESS_CAPTURE.format(page=self.config.capture_profile.origin
+                                                 + spec.scope.capture["path"],
+                                                 steps=len(spec.scope.capture["steps"])))
+        elif self.config.design_self_verify and is_design_task(spec):
             import sys as _sys
             package_root = Path(__file__).resolve().parent.parent
             command = (f"PYTHONPATH={package_root} {_sys.executable} -m quadratus.design_evidence "

@@ -147,6 +147,10 @@ class TaskScope:
     #: a one-line fix is still editing work (Codex review of 3d5c3f3), and
     #: enforced by :meth:`assess`: any source change is out of scope.
     review_only: bool = False
+    #: The page and interaction the harness captures for this task when the
+    #: operator declared a capture profile (SCOPE ``"capture"``): ``{"path",
+    #: "steps"}``, validated syntactically at parse; see quadratus.preview.
+    capture: Optional[Dict[str, object]] = None
 
     def permits(self, path: str) -> bool:
         """Whether ``path`` may be edited under this scope."""
@@ -232,6 +236,7 @@ class TaskScope:
             "acceptance": list(self.acceptance),
             "max_lines": self.max_lines,
             **({"edits": "none"} if self.review_only else {}),
+            **({"capture": self.capture} if self.capture else {}),
         }
 
 
@@ -441,7 +446,11 @@ def read_scope(description: str, *, max_lines: int):
     edits = data.get("edits", "allowed")
     if edits not in ("allowed", "none"):
         raise ValueError('SCOPE edits must be "none" (review only) or omitted')
+    capture = None
+    if "capture" in data:
+        from .preview import validate_capture
+        capture = validate_capture(data["capture"])
     body = (description[:matches[0].start()] + description[matches[0].end():]).strip()
-    scope = TaskScope(paths, result, acceptance, bound, review_only=edits == "none")
+    scope = TaskScope(paths, result, acceptance, bound, review_only=edits == "none", capture=capture)
     lint_declaration(body, scope)
     return scope, body
