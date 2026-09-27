@@ -4,7 +4,7 @@ Unit cases, including the negative controls that show parity can fail: a
 parity check that always agreed would prove nothing on the replays.
 """
 
-from quadratus.outcome import PRECEDENCE, RunOutcome, TaskOutcome, classify, parity
+from quadratus.outcome import PRECEDENCE, RunOutcome, TaskOutcome, classify, missing_facts, parity
 
 
 class ProviderError(RuntimeError):
@@ -62,7 +62,9 @@ def test_a_non_terminal_fact_is_history_only():
 
 
 def _closed(task_id="t1"):
-    outcome = TaskOutcome(task_id, "implementation")
+    outcome = TaskOutcome(task_id, "implementation", lead="claude:opus", source_before="a" * 64,
+                          source_after="b" * 64, dependency="unchanged",
+                          partial=dict(changed=["app.py"], changed_lines=2, inspected=True))
     outcome.closed_as = "closed"
     return outcome
 
@@ -71,7 +73,8 @@ def test_parity_agrees_on_a_clean_run():
     run = RunOutcome(done_accepted=True)
     result = parity(run, [_closed()], open_findings=[], legacy_completed=True, legacy_error="",
                     history=["t1:closed"])
-    assert result == dict(agree=True, problems=[], typed_completed=True, primary="clean")
+    assert result == dict(agree=True, problems=[], complete=True, missing=[], typed_completed=True,
+                          primary="clean")
 
 
 def test_parity_catches_a_legacy_stop_the_typed_record_missed():
@@ -114,3 +117,36 @@ def test_open_ledger_findings_block_typed_completion_by_reference():
                     legacy_error="FindingsUnresolved: audit findings F1 are still open",
                     history=["t1:closed"])
     assert result["agree"] and result["typed_completed"] is False
+
+
+def test_a_closed_task_without_its_owner_source_or_work_is_incomplete():
+    bare = TaskOutcome("t1", "implementation")
+    bare.closed_as = "closed"
+    assert missing_facts(bare) == ["t1.lead", "t1.source_before", "t1.source_after", "t1.dependency",
+                                   "t1.partial"]
+    result = parity(RunOutcome(done_accepted=True), [bare], open_findings=[], legacy_completed=True,
+                    legacy_error="", history=["t1:closed"])
+    assert result["agree"] and not result["complete"], "routing agreement alone is not a complete record"
+
+
+def test_an_explicit_unavailable_counts_and_an_absent_value_does_not():
+    task = _closed()
+    task.source_after = "unavailable"
+    assert missing_facts(task) == []
+    task.source_after = None
+    assert missing_facts(task) == ["t1.source_after"]
+
+
+def test_a_closed_task_that_reached_its_checks_must_carry_an_attempt():
+    task = _closed()
+    task.stage("checks")
+    assert missing_facts(task) == ["t1.checks"]
+    task.checks.append(dict(attempt=1, passed=True, receipts=[]))
+    assert missing_facts(task) == []
+
+
+def test_a_stopped_task_whose_check_was_refused_needs_no_attempt():
+    task = TaskOutcome("t1", "implementation")
+    task.stage("checks")
+    task.closed_as = "stopped:DependencyTreeChanged"
+    assert missing_facts(task) == []

@@ -376,3 +376,43 @@ Each temporary parity field added in P1 names its P3 removal step in code.
   batches where present) asserts parity.
 - J27, J29, J30, J33, J34 and J35 get dedicated cases in the phase that
   changes them.
+
+**Correction round after Codex's review of 7cbd35f (5857029459):**
+
+- **The owner and work facts are measured, not left as placeholders.**
+  - `lead` is the lead actually selected, including after recovery and the
+    security worker.
+  - `source_before` / `source_after` hold the fingerprint, or an explicit
+    `"n/a"` or `"unavailable"`.
+  - `partial` holds the changed paths and lines against the task's start, or
+    an explicit uninspected note; it never implies "no edits".
+  - `dependency` holds the run's dependency identity status.
+  - `unresolved` holds ledger references: finding ids still open after
+    settlement, and covered requirement ids not covered or met.
+- **Every executed check is an attempt record:**
+  - the receipts in full (id, status, reason, tests, returncode, cached,
+    source and runner hash);
+  - the output kept as a `check-output` artifact;
+  - the source it ran against.
+
+  A failed attempt adds a `legacy_route` product fact. A failure the same
+  gate's fix repaired is marked recovered, and a failure still standing at
+  the end stays active (legacy G12).
+- **A handled close-out refusal** is a historical, non-terminal `refusal` fact
+  with its stage, category and the `closeout-refused` artifact id.
+- **Completeness sits beside parity.** `parity(...)` returns `complete` and
+  `missing` from `missing_facts`:
+  - a closed task must carry its owner, source identity before and after,
+    work and dependency status;
+  - a closed task that reached its checks must carry an attempt.
+
+  The replay harness asserts both agreement and completeness, and unit
+  negative controls show routing agreement alone is not a complete record.
+- **Dedicated observations** (`tests/test_workflow_session.py`):
+  - security accept is clean, with the worker as owner;
+  - security reject is `security`;
+  - a merged parallel batch records each child with its owner;
+  - an unmerged child is `integrity`, and its debt stays open.
+
+  G7 ("no BLOCKING findings" read as a finding) is a strict xfail for P3.
+

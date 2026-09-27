@@ -1830,6 +1830,7 @@ class Session:
             lead=spec.lead or "", covers=list(getattr(self, "_current_covers", []) or []),
             resolves=resolves, continues=getattr(self, "_continues", None) or "")
         outcome.stage("dispatch")
+        outcome.source_before = self._source_identity()
         prior, self._outcome = self._outcome, outcome
         self.task_outcomes.append(outcome)
         try:
@@ -1837,13 +1838,39 @@ class Session:
         except BaseException as exc:
             outcome.note(classify(exc), f"{type(exc).__name__}: {exc}")
             outcome.closed_as = f"stopped:{type(exc).__name__}"
-            outcome.partial = dict(getattr(self, "in_flight", {}) or {}) or None
+            self._record_work(outcome, dict(getattr(self, "in_flight", {}) or {}) or None)
             raise
         else:
             outcome.closed_as = getattr(summary, "outcome", "closed")
+            self._record_work(outcome, None)
             return summary
         finally:
             self._outcome = prior
+
+    def _source_identity(self) -> str:
+        """The selected source's fingerprint, or an explicit reason there is
+        none: "n/a" with no project, "unavailable" when it cannot be read."""
+        if not self.project:
+            return "n/a"
+        return self._source_fingerprint() or "unavailable"
+
+    def _record_work(self, outcome: TaskOutcome, measured: Optional[dict]) -> None:
+        """What the task left: source identity after, changed paths and lines
+        against its start (an explicit uninspected note when that cannot be
+        measured, never an implied "no edits"), and the dependency status."""
+        try:
+            outcome.source_after = self._source_identity()
+            if outcome.partial is None:
+                if measured is None:
+                    measured = (self._inspect_partial_edits(self._task_before) if self.project
+                                else dict(changed=[], changed_lines=0, inspected=False,
+                                          note="no project: nothing to measure"))
+                outcome.partial = {k: measured.get(k) for k in ("changed", "changed_lines", "inspected", "note")
+                                   if k in measured}
+            watch = self.dependency_watch
+            outcome.dependency = watch.record.get("status") if watch is not None else "n/a"
+        except Exception as exc:  # noqa: BLE001 -- observation never fails a task
+            outcome.partial = outcome.partial or dict(inspected=False, note=f"unmeasured: {type(exc).__name__}")
 
     def _stage(self, name: str) -> None:
         if self._outcome is not None:
@@ -1918,6 +1945,8 @@ class Session:
         # Picked once: a pre-dispatch capability check already chose (and the
         # rotation already advanced for) this task's lead.
         lead = chosen[1] if chosen and chosen[0] == spec.task_id else self._pick_lead(spec)
+        if self._outcome is not None:
+            self._outcome.lead = lead
         collaborators = self.collaborators_for(spec, lead)
         # Selection is recorded separately from invocation. The 2026-09-13
         # feature task selected Grok as a collaborator and never reached it,
@@ -1991,6 +2020,8 @@ class Session:
             task.record('user', f'Lead {lead} failed without changing source; retrying once on {fresh}.')
             self._note(f'{lead} failed without changing source; one recovery on {fresh}')
             lead = fresh
+            if self._outcome is not None:
+                self._outcome.lead = lead
             task.author = lead
             self._record_selection(spec, lead, 'lead')
             collaborators = self.collaborators_for(spec, lead)
@@ -2224,6 +2255,8 @@ class Session:
             task = TaskMemory(spec.task_id, excursion.worker, self.store)
             self._task_memory = task
             self._record_selection(spec, excursion.worker, "lead")
+            if self._outcome is not None:
+                self._outcome.lead = excursion.worker
             task.record("user", spec.description)
 
             # Fetch and worker channels, no consult: the excursion stays a
@@ -2735,8 +2768,14 @@ class Session:
             self._partial_tasks.discard(continues)
             self._recover_continued(continues)
             unresolved = self._settle_resolution(spec, checks_before, open_before)
-            if resolves and self.task_outcomes:
-                self.task_outcomes[-1].edge("settlement", not unresolved)
+            if self.task_outcomes and self.task_outcomes[-1].task_id == spec.task_id:
+                done = self.task_outcomes[-1]
+                if resolves:
+                    done.edge("settlement", not unresolved)
+                status = self.memory.ledger.requirement_status
+                done.unresolved = dict(
+                    findings=list(unresolved),
+                    requirements=[rid for rid in covers if not str(status.get(rid, "")).startswith(("covered", "met"))])
             for rid in covers:
                 self._mark_covered(rid, spec.task_id)
             self._current_covers, self._current_resolves = [], []
@@ -4124,6 +4163,7 @@ class Session:
         latest_fix = ""
         result = self._check(gate)
         task.record("user", result.for_models())
+        attempt_facts = [self._record_check_attempt(result)]
         while not result.passed and getattr(self, "_gate_fixes_used", 0) < ceiling:
             try:
                 fix = self._edit(
@@ -4142,22 +4182,22 @@ class Session:
             self._gate_fixes_used = getattr(self, "_gate_fixes_used", 0) + 1
             result = self._check(gate)
             task.record("user", result.for_models())
+            attempt_facts.append(self._record_check_attempt(result))
         self.checks.append({"passed": result.passed, "command": result.command,
                             "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
-        # Today any failed check entry blocks DONE, even when a later check in
-        # the same task passed (map G12), so the fact is never recovered here.
-        # Classed as a product repair because that is today's route (map G10).
+        # A failure this gate's own fix repaired is history (legacy agrees: the
+        # entry it appends passes). A failure still standing at the end stays
+        # active even if a later gate in the task passes, because today any
+        # failed entry blocks DONE (map G12). Classed as a product repair
+        # because that is today's route (map G10).
+        if result.passed:
+            for fact in attempt_facts:
+                if fact is not None:
+                    fact.recovered = True
         if self._outcome is not None:
-            self._outcome.checks.append(dict(passed=result.passed,
-                                             receipts=[[r.id, r.status] for r in result.receipts]))
             self._outcome.attempts["gate_fix"] = getattr(self, "_gate_fixes_used", 0)
             self._outcome.edge("checks", result.passed)
-            if not result.passed:
-                self._outcome.note("product", "the integration gate was failing at close",
-                                   stage="checks", legacy_route=True)
-        elif not result.passed:
-            self.run_outcome.note("product", "a gate outside any task (the merge gate) was failing")
         if not result.passed:
             task.record(
                 "user",
@@ -4166,6 +4206,31 @@ class Session:
             )
 
         return latest_fix
+
+    def _record_check_attempt(self, result):
+        """One executed check, as a typed record: receipts in full, the output
+        kept as an artifact, the source it ran against. Returns the product
+        fact a failed attempt adds (None when it passed)."""
+        target = self._outcome
+        try:
+            output = self.store.put(result.output or "", kind="check-output").id
+        except Exception:  # noqa: BLE001 -- observation never fails a check
+            output = "unavailable"
+        entry = dict(passed=result.passed, returncode=result.returncode, output_artifact=output,
+                     source=self._source_identity(),
+                     receipts=[dict(id=r.id, status=r.status, reason=r.reason, tests=r.tests,
+                                    returncode=r.returncode, cached=r.cached, source_hash=r.source_hash,
+                                    runner_hash=r.runner_hash) for r in result.receipts])
+        if target is not None:
+            entry["attempt"] = len(target.checks) + 1
+            target.checks.append(entry)
+            if not result.passed:
+                return target.note("product", f"check attempt {entry['attempt']} failed", stage="checks",
+                                   legacy_route=True)
+            return None
+        if not result.passed:
+            return self.run_outcome.note("product", "a gate outside any task (the merge gate) failed")
+        return None
 
     def _check(self, gate):
         """Run the gate, and say *what* changed when the tree moved under it.
@@ -4292,7 +4357,12 @@ class Session:
         and says, in the record, that no model wrote it.
         """
         refusal = f"{type(exc).__name__}: {exc}"[:500]
-        task.keep(refusal, kind="closeout-refused", author=lead)
+        ref = task.keep(refusal, kind="closeout-refused", author=lead)
+        if self._outcome is not None:
+            # Historical, not a block: the handled route keeps the task closed.
+            self._outcome.note("refusal", f"close-out refused ({getattr(exc, 'category', None) or 'unspecified'}); "
+                               f"harness record kept as artifact {getattr(ref, 'id', 'unavailable')}",
+                               stage="closeout", terminal=False)
         if changed is None:
             files = "changed files unknown (no source snapshot)"
         elif changed:

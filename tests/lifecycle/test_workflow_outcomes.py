@@ -78,7 +78,12 @@ def test_j1_a_clean_task_and_done_is_clean_and_complete(tmp_path, monkeypatch):
     assert t1["primary"] == "clean" and t1["closed_as"] == "closed" and t1["intent"] == "implementation"
     assert t1["stages"][:3] == ["dispatch", "draft", "review"] and "checks" in t1["stages"]
     assert t1["edges"] == {"draft": True, "review": True, "checks": True, "closeout": True}
-    assert t1["checks"] == [{"passed": True, "receipts": []}]
+    (check,) = t1["checks"]
+    assert check["passed"] is True and check["attempt"] == 1 and check["output_artifact"]
+    assert check["source"] == t1["source_after"], "the check ran against the source the task left"
+    assert t1["lead"] and t1["source_before"] != t1["source_after"], "t1 changed app.py"
+    assert t1["partial"]["changed"] == ["app.py"] and t1["partial"]["inspected"] is True
+    assert t1["dependency"] == "unchanged" and t1["unresolved"] == {"findings": [], "requirements": []}
     assert replay.workflow["run"]["done_accepted"] is True and _stop(replay) is None
     assert replay.workflow["parity"]["primary"] == "clean"
 
@@ -93,6 +98,9 @@ def test_j2_a_gate_fix_that_works_leaves_the_task_clean_with_its_attempt_counted
                                                 **{"gate-fix": gate_fix}), max_tasks=3)
     t1 = _task(replay, "t1")
     assert len(replay.of("gate-fix")) == 1 and t1["attempts"]["gate_fix"] == 1
+    assert [c["passed"] for c in t1["checks"]] == [False, True], "every attempt is kept"
+    failed = [f for f in t1["facts"] if f["kind"] == "product"]
+    assert len(failed) == 1 and failed[0]["recovered"] is True, "the repaired failure is history"
     assert t1["primary"] == "clean" and replay.result.completed
 
 
@@ -104,6 +112,7 @@ def test_j3_a_gate_still_failing_is_a_legacy_routed_product_fact_and_a_silent_st
     assert t1["primary"] == "product" and t1["edges"]["checks"] is False
     assert replay.result.error == "" and not replay.result.completed
     assert _stop(replay)["legacy"] == "", "today's stop is silent (map G9)"
+    assert "still failing at close" in replay.of("closeout")[0].prompt, "the close-out is told the gate failed"
 
 
 # -- J15 / J16 / J17 / J18 stops that keep their precedence ------------------------------
@@ -140,7 +149,11 @@ def test_j17_a_refused_closeout_is_a_harness_record_not_a_stop(tmp_path, monkeyp
     replay = _run(tmp_path, monkeypatch, Script(orchestrator=_then_done(DECL_T1),
                                                 closeout=lambda call, replay: H.claude_refusal("cyber")),
                   max_tasks=3)
-    assert _task(replay, "t1")["closed_as"] == "closed"
+    t1 = _task(replay, "t1")
+    assert t1["closed_as"] == "closed" and t1["primary"] == "clean"
+    (refused,) = [f for f in t1["facts"] if f["kind"] == "refusal"]
+    assert refused["stage"] == "closeout" and refused["terminal"] is False and "cyber" in refused["detail"]
+    assert "artifact" in refused["detail"] and replay.result.completed
 
 
 def test_j18_a_denial_at_the_cap_is_a_denial_above_the_cap(tmp_path, monkeypatch):

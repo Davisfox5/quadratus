@@ -220,6 +220,7 @@ def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
         replay.workflow = json.loads(result.read_text()).get("workflow") or {}
         parity = replay.workflow.get("parity") or {}
         assert parity.get("agree"), f"typed outcome parity failed: {parity or replay.workflow}"
+        assert parity.get("complete"), f"typed outcome missing facts: {parity.get('missing')}"
     return replay
 
 

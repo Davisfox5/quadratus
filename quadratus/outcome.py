@@ -110,6 +110,11 @@ class TaskOutcome:
     partial: Optional[dict] = None
     source_before: Optional[str] = None
     source_after: Optional[str] = None
+    #: The run's dependency identity status when the task ended.
+    dependency: Optional[str] = None
+    #: Ledger references still open after settlement: finding and
+    #: requirement ids. The ledger stays authoritative; these are pointers.
+    unresolved: Dict[str, List[str]] = field(default_factory=dict)
     facts: List[Fact] = field(default_factory=list)
     #: Legacy mirror: "closed", "turn_limited" or "stopped:<Exception>".
     #: Temporary; removed in phase 3 when history reads outcomes.
@@ -169,6 +174,25 @@ class RunOutcome:
         return stops[-1] if stops else None
 
 
+def missing_facts(task: TaskOutcome) -> List[str]:
+    """Facts a task's record must carry and does not. A closed task names
+    its owner, its source identity before and after (an explicit "n/a" or
+    "unavailable" counts, an absent value does not), what it changed, and
+    the dependency status, and every check stage it reached left an attempt.
+    A stopped task is exempt from the last rule: a check stopped by an
+    integrity failure has no receipt to accept, by design."""
+    missing = []
+    if task.closed_as in ("closed", "turn_limited"):
+        for name in ("lead", "source_before", "source_after", "dependency"):
+            if not getattr(task, name):
+                missing.append(f"{task.task_id}.{name}")
+        if task.partial is None:
+            missing.append(f"{task.task_id}.partial")
+        if "checks" in task.stages and not task.checks:
+            missing.append(f"{task.task_id}.checks")
+    return missing
+
+
 def typed_completed(run: RunOutcome, tasks: List[TaskOutcome], open_findings: List[str]) -> bool:
     """Completion as the typed record would decide it. ``open_findings`` are
     the ledger's open audit-finding ids: the ledger stays authoritative."""
@@ -203,8 +227,9 @@ def parity(run: RunOutcome, tasks: List[TaskOutcome], *, open_findings: List[str
             problems.append(f"no typed stop fact for legacy error {want!r}")
         elif stop.legacy != want:
             problems.append(f"stop: typed {stop.legacy!r}, legacy {want!r}")
-    closed = [f"{t.task_id}:{t.closed_as}" for t in tasks if not t.closed_as.startswith(("stopped", "open"))]
+    closed = [f"{t.task_id}:{t.closed_as}" for t in tasks if t.closed_as in ("closed", "turn_limited")]
     if sorted(closed) != sorted(history):
         problems.append(f"tasks: typed {sorted(closed)}, legacy {sorted(history)}")
-    return dict(agree=not problems, problems=problems, typed_completed=typed,
-                primary=primary(run, tasks, legacy_completed))
+    missing = [m for t in tasks for m in missing_facts(t)]
+    return dict(agree=not problems, problems=problems, complete=not missing, missing=missing,
+                typed_completed=typed, primary=primary(run, tasks, legacy_completed))
