@@ -106,11 +106,12 @@ def test_j2_a_gate_fix_that_works_leaves_the_task_clean_with_its_attempt_counted
     assert t1["primary"] == "clean" and replay.result.completed
 
 
-def test_j3_a_gate_still_failing_is_a_legacy_routed_product_fact_and_a_silent_stop(tmp_path, monkeypatch):
+def test_j3_a_gate_still_failing_is_an_attributed_product_fact_and_a_silent_stop(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, Script(orchestrator=_then_done(DECL_T1), lead=_looked), max_tasks=3)
     t1 = _task(replay, "t1")
     product = [f for f in t1["facts"] if f["kind"] == "product"]
-    assert product and product[0]["legacy_route"] is True and product[0]["stage"] == "checks"
+    assert product and product[0]["legacy_route"] is False and product[0]["stage"] == "checks"
+    assert t1["checks"][-1]["attribution"] == {"product": True, "reasons": []}
     assert t1["primary"] == "product" and t1["edges"]["checks"] is False
     assert replay.result.error == "" and not replay.result.completed
     assert _stop(replay)["legacy"] == "", "today's stop is silent (map G9)"
@@ -282,13 +283,57 @@ def test_j10_a_blocking_design_review_is_unverified(tmp_path, monkeypatch):
 
 # -- prospective: routes the plan changes (strict xfail until their phase) -----------------
 
-@pytest.mark.xfail(strict=True, reason="P3 (J4/G10): a runner that never reached a test is an operator "
-                                       "handoff, never a product repair")
+# -- P3: gate attribution (J4, J5, J6, J33; map G10) -----------------------------------
+#
+# Only a structured, attributable assertion failure reaches a gate-fix. Each
+# case below was a gate-fix on 9c6024b.
+
+def _handed_off(replay, reason):
+    t1 = _task(replay, "t1")
+    assert not replay.of("gate-fix"), "no repair call on an unattributable failure"
+    assert t1["closed_as"] == "stopped:CheckUnattributable" and t1["primary"] == "operator"
+    assert replay.result.error.startswith("CheckUnattributable:") and reason in replay.result.error
+    assert "No repair call was made" in replay.result.error and not replay.result.completed
+    attempt = t1["checks"][-1]
+    assert attempt["attribution"]["product"] is False and attempt["output_artifact"] in replay.result.error
+    return t1
+
+
 def test_p3_j4_a_runner_crash_before_any_test_gets_no_gate_fix(tmp_path, monkeypatch):
-    crash = "python -c \"import sys; sys.stderr.write('uv_os_homedir ENOENT'); sys.exit(1)\""
+    crash = shlex.join([sys.executable, "-c", "import sys; sys.stderr.write('uv_os_homedir ENOENT'); "
+                        "sys.exit(1)", "--quadratus-report={report}"])
     replay = _run(tmp_path, monkeypatch, Script(lead=_looked), check=crash, files=FILES_OK)
-    assert not replay.of("gate-fix")
-    assert _task(replay, "t1")["primary"] == "operator"
+    _handed_off(replay, "check: structured report missing")
+
+
+def test_p3_j5_a_failure_with_no_declared_report_gets_no_gate_fix(tmp_path, monkeypatch):
+    undeclared = f"{shlex.quote(sys.executable)} -m pytest -q"
+    replay = _run(tmp_path, monkeypatch, Script(lead=_looked), check=undeclared)
+    _handed_off(replay, "check: structured report undeclared")
+    assert (replay.project / "app.py").read_text() == FILES["app.py"], "nothing was repaired"
+
+
+def test_p3_j6_a_setup_error_mid_suite_gets_no_gate_fix(tmp_path, monkeypatch):
+    files = {**FILES_OK, "tests/test_browser.py": (
+        "import pytest\n\n\n@pytest.fixture\ndef browser():\n    raise RuntimeError('browser died')\n\n\n"
+        "def test_page(browser):\n    assert browser\n")}
+    replay = _run(tmp_path, monkeypatch, Script(lead=_looked), files=files)
+    _handed_off(replay, "1 setup or teardown error(s)")
+
+
+def test_p3_j6_a_runtime_exception_in_a_test_body_gets_no_gate_fix(tmp_path, monkeypatch):
+    """Codex control: a runner exception raised in the test body is a
+    <failure> in JUnit, indistinguishable by counts; the producer's type is not."""
+    files = {**FILES_OK, "tests/test_browser.py": (
+        "def test_page():\n    raise RuntimeError('browser runner could not launch')\n")}
+    replay = _run(tmp_path, monkeypatch, Script(lead=_looked), files=files)
+    _handed_off(replay, "failures that are not assertions: builtins.RuntimeError")
+
+
+def test_p3_j33_a_product_failure_beside_a_setup_failure_gets_no_gate_fix(tmp_path, monkeypatch):
+    replay = _run(tmp_path, monkeypatch, Script(lead=_looked),
+                  extra_checks=["quadratus-no-such-runner --quadratus-report={report}"])
+    _handed_off(replay, "extra-1: blocked: runner unavailable")
 
 
 @pytest.mark.xfail(strict=True, reason="P3 (G12, amendment 3): a failure a later check in the same task "

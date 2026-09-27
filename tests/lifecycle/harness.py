@@ -37,7 +37,10 @@ USAGE = {"input_tokens": 100, "output_tokens": 10}
 #: The real integration gate, run with this test's own interpreter: a bare
 #: ``python`` is not on every host (Codex review: "command not found" on the
 #: Mac made four lifecycle cases stop after t1).
-GATE = f"{shlex.quote(sys.executable)} -m pytest -q"
+#: It declares the harness report, so a plain assertion failure is
+#: attributable and may be repaired (integration.attribute); a check without
+#: it is an operator handoff on failure, never a gate-fix.
+GATE = f"{shlex.quote(sys.executable)} -m pytest -q --quadratus-report={{report}}"
 
 #: Render timestamps are set, never left to the write clock. The design check
 #: compares a screenshot's mtime with the start of the last editing call; a

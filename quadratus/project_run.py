@@ -133,7 +133,14 @@ def _check_identity(argv):
         head = 'python'
     elif head == 'pytest':
         head, rest = 'python', ['-m', 'pytest', *rest]
-    return (head, *[a for a in rest if a not in _QUIET_FLAGS])
+    # The declared harness report only adds output (integration.REPORT_TOKEN),
+    # so a check that declares it is the same check as the scanned one.
+    return (head, *[a for a in rest if a not in _QUIET_FLAGS and not _report_only(a)])
+
+
+def _report_only(arg: str) -> bool:
+    from .integration import REPORT_TOKEN
+    return REPORT_TOKEN in arg
 
 
 def _is_test_suite(argv) -> bool:

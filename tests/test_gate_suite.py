@@ -14,6 +14,15 @@ def command(id='check', code='print("3 passed")', **kwargs):
     return GateCommand(id, (sys.executable, '-c', code), **kwargs)
 
 
+def asserting(tmp_path, id='check', **kwargs):
+    """A real pytest check, declaring the harness report, whose one test
+    fails on a plain assertion: an attributable failure that may be repaired."""
+    name = f'test_{id}_gate.py'
+    (tmp_path / name).write_text('def test_gate():\n    assert False\n')
+    return GateCommand(id, (sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', name,
+                            '--quadratus-report={report}'), **kwargs)
+
+
 def test_ordered_commands_and_typed_receipts(tmp_path):
     suite = GateSuite([command('first'), command('second', 'raise SystemExit(1)'),
                        GateCommand('unconfigured'), GateCommand('skip', skip_reason='operator disabled')],
@@ -117,12 +126,13 @@ def test_cheap_gates_precede_review_and_share_final_repair_allowance(tmp_path, m
     phases = []
     marker = tmp_path / 'source.py'
     marker.write_text('before')
+    failing_early, failing_late = asserting(tmp_path, 'early', cheap=True), asserting(tmp_path, 'late')
     suite = GateSuite([command('early', cheap=True), command('late')], cwd=tmp_path)
     original = suite.run
 
-    # Keep real command execution, but make one failure per phase.
+    # Keep real command execution, but make one attributable failure per phase.
     early = suite.cheap()
-    early.commands = (command('early', 'raise SystemExit(1)', cheap=True),)
+    early.commands = (failing_early,)
     monkeypatch.setattr(suite, 'cheap', lambda: early)
     monkeypatch.setattr(suite, 'run', lambda: phases.append('final gate') or original())
 
@@ -130,7 +140,7 @@ def test_cheap_gates_precede_review_and_share_final_repair_allowance(tmp_path, m
         if 'integration check failed' in prompt:
             phases.append('fix')
             early.commands = (command('early', cheap=True),)
-            suite.commands = (command('late', 'raise SystemExit(1)'),)
+            suite.commands = (failing_late,)
             return 'fixed early failure'
         elif 'contributing an independent' in prompt:
             phases.append('review')
@@ -146,11 +156,21 @@ def test_cheap_gates_precede_review_and_share_final_repair_allowance(tmp_path, m
 
 def test_failed_cheap_gate_stops_before_collaborators(tmp_path):
     calls = []
-    suite = GateSuite([command(code='raise SystemExit(1)', cheap=True)], cwd=tmp_path)
+    suite = GateSuite([asserting(tmp_path, cheap=True)], cwd=tmp_path)
     s = session_for(tmp_path, suite, lambda model, prompt, **kw: calls.append(prompt) or 'NO FINDINGS', 0)
     s.run_task(TaskSpec('t1', 'Review fixture', complexity='standard'))
     assert s.open_findings
     assert len(calls) == 2, 'Only draft and closeout, no paid review of a failed check'
+
+
+def test_an_unattributable_cheap_gate_failure_is_handed_off_before_collaborators(tmp_path):
+    from quadratus.integration import CheckUnattributable
+    calls = []
+    suite = GateSuite([command(code='raise SystemExit(1)', cheap=True)], cwd=tmp_path)
+    s = session_for(tmp_path, suite, lambda model, prompt, **kw: calls.append(prompt) or 'NO FINDINGS', 0)
+    with pytest.raises(CheckUnattributable, match='check: structured report undeclared'):
+        s.run_task(TaskSpec('t1', 'Review fixture', complexity='standard'))
+    assert len(calls) == 1, 'Only the draft: no review, no repair, no close-out call'
 
 
 def test_real_failed_pytest_counts_executions_without_hiding_failure(tmp_path):

@@ -27,11 +27,140 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Literal, Optional, Sequence
 
-__all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateSuite"]
+__all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateSuite", "REPORT_TOKEN",
+           "CheckUnattributable", "attribute", "read_report"]
+
+#: The argv token a check uses to declare the harness's structured report.
+#: The only supported producer is the harness-owned pytest plugin
+#: (``_gate_producer``), declared as ``--quadratus-report={report}``. The
+#: harness replaces the token with a path it owns, outside the project, loads
+#: the plugin for that one invocation, and removes the path after reading it
+#: (phase 3, #25). Other runners have no producer: their failures are never
+#: attributable, so never repaired.
+REPORT_TOKEN = "{report}"
+PRODUCER = "quadratus-pytest/2"
+_PRODUCER_DIR = str(Path(__file__).resolve().parent / "_gate_producer")
+_PRODUCER_MODULE = "quadratus_gate_report"
+_REPORT_MAX_BYTES = 1024 * 1024
+
 
 #: How much command output a failed gate carries back. The tail, because test
 #: runners put the summary and the first failures at the end.
 _TAIL_CHARS = 2_000
+
+
+class CheckUnattributable(RuntimeError):
+    """A check failed in a way no application repair may address: an
+    operator handoff with diagnostics, never a gate-fix call."""
+
+
+@contextmanager
+def _report_slot(argv, env):
+    """``argv`` and ``env`` for one invocation: with the report token
+    replaced by a harness-owned path and the producer loaded, when the check
+    declares it. Yields (argv, env, path, nonce); path is None otherwise."""
+    argv = list(argv)
+    if not any(REPORT_TOKEN in a for a in argv):
+        yield argv, env, None, None
+        return
+    import secrets
+    owned = tempfile.mkdtemp(prefix="quadratus-report-")
+    path, nonce = os.path.join(owned, "report.json"), secrets.token_hex(16)
+    plugins = [p for p in env.get("PYTEST_PLUGINS", "").split(",") if p.strip()]
+    env = dict(env, QUADRATUS_GATE_NONCE=nonce,
+               PYTEST_PLUGINS=",".join(plugins + [_PRODUCER_MODULE]),
+               PYTHONPATH=os.pathsep.join([_PRODUCER_DIR] + [p for p in [env.get("PYTHONPATH")] if p]))
+    try:
+        yield [a.replace(REPORT_TOKEN, path) for a in argv], env, path, nonce
+    finally:
+        shutil.rmtree(owned, ignore_errors=True)
+
+
+def read_report(path, nonce) -> dict:
+    """The producer's report, bounded. ``state``: undeclared, missing,
+    unparsable, foreign (another producer or invocation) or parsed."""
+    if path is None:
+        return dict(state="undeclared")
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return dict(state="missing")
+    if size > _REPORT_MAX_BYTES:
+        return dict(state="unparsable", detail=f"{size} bytes exceeds {_REPORT_MAX_BYTES}")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError) as exc:
+        return dict(state="unparsable", detail=f"{type(exc).__name__}: {str(exc)[:160]}")
+    if not isinstance(data, dict):
+        return dict(state="unparsable", detail="not an object")
+    if data.get("producer") != PRODUCER or data.get("nonce") != nonce:
+        return dict(state="foreign", detail=f"producer {str(data.get('producer'))[:40]!r}")
+    counts, failures = data.get("counts"), data.get("failures")
+    if (not isinstance(counts, dict) or not isinstance(failures, list)
+            or not all(isinstance(counts.get(k), int) for k in ("passed", "failed", "errors", "skipped"))
+            or not all(isinstance(data.get(k), int) for k in ("exitstatus", "collected", "collect_errors"))
+            or not all(isinstance(f, dict) for f in failures)):
+        return dict(state="unparsable", detail="missing or mistyped fields")
+    return dict(state="parsed", exitstatus=data["exitstatus"], collected=data["collected"],
+                collect_errors=data["collect_errors"], counts={k: counts[k] for k in
+                                                              ("passed", "failed", "errors", "skipped")},
+                failures=[dict(nodeid=str(f.get("nodeid", ""))[:300], when=f.get("when"),
+                               exc_type=str(f.get("exc_type"))[:120], assertion=f.get("assertion") is True)
+                          for f in failures[:200]],
+                truncated=bool(data.get("truncated")))
+
+
+def _report_reasons(gid, status, reason, returncode, report) -> list:
+    """Why one failing check is not an attributable assertion failure."""
+    report = report or dict(state="undeclared")
+    if status != "failed" or reason != "nonzero exit":
+        return [f"{gid}: {status}: {reason}"]
+    if report["state"] != "parsed":
+        return [f"{gid}: structured report {report['state']}"
+                + (f" ({report['detail']})" if report.get("detail") else "")]
+    counts, failures, found = report["counts"], report["failures"], []
+    if returncode != 1 or report["exitstatus"] != 1:
+        found.append(f"{gid}: exit {returncode}, reported exit status {report['exitstatus']}; "
+                     "only 1 (tests failed) is a test failure")
+    if report["collect_errors"]:
+        found.append(f"{gid}: {report['collect_errors']} collection error(s)")
+    if counts["errors"]:
+        found.append(f"{gid}: {counts['errors']} setup or teardown error(s)")
+    if report["truncated"] or counts["failed"] != len(failures) - counts["errors"] or not counts["failed"]:
+        found.append(f"{gid}: inconsistent or empty failure record "
+                     f"({counts['failed']} failed, {len(failures)} recorded)")
+    # The producer records whether the exception's type *is* AssertionError;
+    # a name is only shown, never trusted.
+    other = sorted({f["exc_type"] for f in failures if f["when"] != "call" or not f["assertion"]})
+    if other:
+        found.append(f"{gid}: failures that are not assertions: {', '.join(other)[:200]}")
+    return found
+
+
+def attribute(result) -> dict:
+    """Whether a failed gate is a product failure a repair may address.
+
+    Only facts decide, never prose, counts alone or message wording: every
+    failed required check exited 1 on its own, declared the harness report,
+    and that report (this invocation's, by nonce) shows only test-body
+    failures raised as a plain ``AssertionError``, with no collection, setup
+    or teardown error and a consistent record. Anything else is not the
+    application's to repair, and the reasons say why. A pass is not product.
+    """
+    if result.passed:
+        return dict(product=False, reasons=[])
+    if result.receipts:
+        failing = [(r.id, r.status, r.reason, r.returncode, r.report) for r in result.receipts
+                   if r.required and r.status != "passed"]
+    else:
+        status = "failed" if result.returncode not in (None, 0) else "error"
+        reason = "nonzero exit" if status == "failed" else (result.output or "no exit status")[:120]
+        failing = [("check", status, reason, result.returncode, result.report)]
+    reasons = [] if failing else ["the gate failed with no failing required check"]
+    for entry in failing:
+        reasons += _report_reasons(*entry)
+    return dict(product=not reasons, reasons=reasons)
 
 
 @contextmanager
@@ -68,6 +197,9 @@ class GateResult:
     #: The tail of combined stdout/stderr -- what a person would read first.
     output: str
     receipts: tuple[GateReceipt, ...] = ()
+    #: The single-command gate's structured report (read_report); a suite
+    #: carries one per receipt instead.
+    report: Optional[dict] = None
 
     def render(self) -> str:
         """The operator's view: the exact command, for the run record."""
@@ -122,9 +254,13 @@ class GateResult:
 
 
 def redact_command_paths(text: str, paths) -> str:
-    """Replace each absolute command path, and each folder holding one, with a marker."""
+    """Replace each absolute command path, and each folder holding one, with a
+    marker; and any relative spelling of a command file, which a test runner
+    prints relative to its cwd (pytest: ``../examiner/grader.py:6``)."""
     for path in paths:
         text = text.replace(path, "<gate-path>")
+    for name in {p.rsplit("/", 1)[-1] for p in paths if "." in p.rsplit("/", 1)[-1]}:
+        text = re.sub(r"[\w.\-/]*" + re.escape(name), "<gate-path>", text)
     return text
 
 
@@ -154,9 +290,9 @@ class IntegrationGate:
     def run(self) -> GateResult:
         shown = " ".join(self.command)
         try:
-            with _fresh_bytecode_env() as env:
+            with _fresh_bytecode_env() as fresh, _report_slot(self.command, fresh) as (argv, env, path, nonce):
                 proc = subprocess.run(
-                    self.command,
+                    argv,
                     capture_output=True,
                     text=True,
                     timeout=self.timeout,
@@ -164,6 +300,7 @@ class IntegrationGate:
                     check=False,
                     env=env,
                 )
+                report = read_report(path, nonce)
         except subprocess.TimeoutExpired:
             return GateResult(
                 passed=False, command=shown, returncode=None,
@@ -187,6 +324,7 @@ class IntegrationGate:
             command=shown,
             returncode=proc.returncode,
             output=combined[-_TAIL_CHARS:],
+            report=report,
         )
 
 
@@ -239,6 +377,8 @@ class GateReceipt:
     source_hash: str = ''
     config_hash: str = ''
     runner_hash: str = ''
+    #: The structured report (read_report), when the command declares one.
+    report: Optional[dict] = None
 
 
 def _test_count(output):
@@ -345,9 +485,10 @@ class GateSuite:
                 if command.cacheable and runner and key in self._cache:
                     receipts.append(replace(self._cache[key], cached=True))
                     continue
-                with _fresh_bytecode_env() as env:
-                    proc = subprocess.run(command.argv, cwd=cwd, capture_output=True, text=True,
+                with _fresh_bytecode_env() as fresh, _report_slot(command.argv, fresh) as (argv, env, path, nonce):
+                    proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
                                           timeout=command.timeout, check=False, env=env)
+                    report = read_report(path, nonce)
                 output = ((proc.stdout or '') + '\n' + (proc.stderr or '')).strip()
                 count = _test_count(output)
                 status, reason = ('passed', 'exit 0') if proc.returncode == 0 else ('failed', 'nonzero exit')
@@ -359,7 +500,8 @@ class GateSuite:
                     elif count < command.minimum_tests:
                         status, reason = 'failed', 'fewer tests than required'
                 receipt = GateReceipt(**base, status=status, reason=reason,
-                                      returncode=proc.returncode, output=output[-_TAIL_CHARS:], tests=count)
+                                      returncode=proc.returncode, output=output[-_TAIL_CHARS:], tests=count,
+                                      report=report)
             except subprocess.TimeoutExpired:
                 receipt = GateReceipt(**base, status='error', reason=f'timed out after {command.timeout}s')
             except OSError as exc:

@@ -46,6 +46,7 @@ _EXCEPTION_CLASS = {
     "RunStalled": "operator",
     "PolicyError": "operator",
     "CapabilityProbeFailed": "operator",
+    "CheckUnattributable": "operator",
     "RunBudgetExceeded": "budget",
     "TurnLimitReached": "cap",
     "WindowExhausted": "transport",

@@ -412,6 +412,7 @@ def test_worker_menu_names_every_errand_in_the_tree():
 # -- the integration gate -------------------------------------------------------
 
 from quadratus.integration import GateResult, IntegrationGate  # noqa: E402
+from tests.gate_facts import ASSERTION_FAILURE  # noqa: E402
 
 
 def test_a_passing_command_passes():
@@ -446,7 +447,8 @@ class StubGate:
         passed = self.outcomes.pop(0) if self.outcomes else True
         return GateResult(passed=passed, command="pytest -q",
                           returncode=0 if passed else 1,
-                          output="" if passed else "2 failed, 30 passed")
+                          output="" if passed else "2 failed, 30 passed",
+                          report=None if passed else ASSERTION_FAILURE)
 
 
 def test_a_passing_gate_costs_no_extra_invocation(store):
@@ -467,6 +469,21 @@ def test_a_failing_gate_feeds_the_output_back_for_one_fix(store):
     assert len(fixes) == 1
     assert "2 failed, 30 passed" in fixes[0]
     assert gate.runs == 2
+
+
+def test_a_failure_without_an_attributable_report_gets_no_fix(store):
+    from quadratus.integration import CheckUnattributable
+
+    class Undeclared(StubGate):
+        def run(self):
+            self.runs += 1
+            return GateResult(passed=False, command="pytest -q", returncode=1, output="2 failed, 30 passed")
+    rec = Recorder()
+    gate = Undeclared([])
+    s = _session(store, rec, config=SessionConfig(integration_gate=gate))
+    with pytest.raises(CheckUnattributable, match="structured report undeclared"):
+        s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert gate.runs == 1 and not any("integration check failed" in c["prompt"] for c in rec.calls)
 
 
 def test_a_persistent_failure_is_carried_loudly_to_the_closeout(store):

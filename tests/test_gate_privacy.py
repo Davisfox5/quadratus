@@ -37,10 +37,12 @@ def test_no_prompt_ever_carries_the_gate_command(tmp_path, monkeypatch):
     hidden = tmp_path / "hidden-examiner"
     hidden.mkdir()
     check = hidden / "check_heading.py"
-    check.write_text("import pathlib, sys\n"
-                     "ok = pathlib.Path('a.md').read_text() == '# Hello\\n'\n"
-                     "print('checked a.md with', __file__)\n"
-                     "sys.exit(0 if ok else 1)\n")
+    # A real pytest file declaring the harness report, so the failure is an
+    # attributable assertion that earns the fix round (phase 3, #25); its
+    # own traceback names the hidden path, which must still never reach a seat.
+    check.write_text("import pathlib\n\n\ndef test_heading():\n"
+                     "    print('checked a.md with', __file__)\n"
+                     "    assert pathlib.Path('a.md').read_text() == '# Hello\\n'\n")
     monkeypatch.setattr(CLIProvider, "available", lambda _: True)
     prompts, plan = [], ["KIND: docs simple\nSCOPE: " + json.dumps({
         "permitted_paths": ["a.md"], "intended_result": "Heading reads Hello",
@@ -63,10 +65,24 @@ def test_no_prompt_ever_carries_the_gate_command(tmp_path, monkeypatch):
 
     monkeypatch.setattr(CLIProvider, "_call", call)
     result = run_project("Correct heading", project, Settings(backend="cli"), allow_writes=True,
-                         check=f"{sys.executable} {check}", max_tasks=3)
+                         check=f"{sys.executable} -m pytest -q -p no:cacheprovider {check} "
+                               "--quadratus-report={report}", max_tasks=3)
     assert any("integration check failed" in p for p in prompts), "the fix round happened"
     leaked = [p[:160] for p in prompts if str(hidden) in p or "check_heading" in p]
     assert not leaked, leaked
     data = json.loads((result.run_dir / "result.json").read_text())
     assert any(str(check) in json.dumps(c) for c in data["checks"]), "the operator record keeps the command"
     assert (project / "a.md").read_text() == "# Hello\n"
+
+
+def test_a_relative_spelling_of_a_command_file_is_redacted():
+    """pytest prints a grader outside the project relative to its cwd."""
+    secret = "/private/tmp/examiner-7/grader.py"
+    receipt = GateReceipt(id="api-tests", status="failed", reason="nonzero exit", required=True,
+                          command=f"python -m pytest {secret}", returncode=1, tests=1)
+    result = GateResult(False, "gate suite", 1,
+                        "../../private/tmp/examiner-7/grader.py:6: AssertionError\n"
+                        "FAILED ../examiner-7/grader.py::test_x - assert 0", (receipt,))
+    view = result.for_models()
+    assert "grader.py" not in view and "examiner-7" not in view
+    assert "<gate-path>:6: AssertionError" in view and "assert 0" in view

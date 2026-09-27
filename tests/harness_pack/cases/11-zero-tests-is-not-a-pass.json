@@ -3,7 +3,7 @@
  "shape": "fake-done",
  "family": "test-author",
  "grader": false,
- "source": "Report, spine feature 5 and Q3: a green exit with zero tests executed is not evidence; 'A green CI does NOT mean the whole suite passes'.",
+ "source": "Report, spine feature 5 and Q3: a green exit with zero tests executed is not evidence; 'A green CI does NOT mean the whole suite passes'. Phase 3 (#25): a failure that is not an attributable test-body assertion is an operator handoff with no repair call and no close-out.",
  "session": {
   "project": true,
   "allow_writes": false,
@@ -32,14 +32,10 @@
   {
    "role": "lead",
    "reply": "Draft: the change as text."
-  },
-  {
-   "role": "closeout",
-   "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
   }
  ],
  "expect": {
-  "outcome": "completed",
+  "outcome": "CheckUnattributable",
   "checks": {
    "count": 1,
    "last_passed": false,
@@ -49,8 +45,9 @@
     "reason": "zero tests executed"
    }
   },
-  "store_contains": [
-   "still failing at close"
+  "error_contains": [
+   "tests: failed: zero tests executed",
+   "No repair call was made"
   ]
  }
 }

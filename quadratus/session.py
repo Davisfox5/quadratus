@@ -4361,6 +4361,7 @@ class Session:
         result = self._check(gate)
         task.record("user", result.for_models())
         attempt_facts = [self._record_check_attempt(result)]
+        self._handoff_unattributable(gate, result, task)
         while not result.passed and getattr(self, "_gate_fixes_used", 0) < ceiling:
             try:
                 fix = self._edit(
@@ -4380,6 +4381,7 @@ class Session:
             result = self._check(gate)
             task.record("user", result.for_models())
             attempt_facts.append(self._record_check_attempt(result))
+            self._handoff_unattributable(gate, result, task)
         self.checks.append({"passed": result.passed, "command": result.command,
                             "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
@@ -4404,6 +4406,33 @@ class Session:
 
         return latest_fix
 
+    def _handoff_unattributable(self, gate, result, task) -> None:
+        """Stop, with diagnostics and no repair call, on a failure that is not
+        an attributable assertion failure (integration.attribute). Only a
+        product failure may reach a gate-fix; a runner crash, a setup or
+        collection error, a runtime exception, a timeout, a missing runner or
+        an undeclared report is the operator's (phase 3, #25; map J4-J6, J33)."""
+        from .integration import CheckUnattributable
+        attempt = self._outcome.checks[-1] if self._outcome is not None and self._outcome.checks else {}
+        verdict = attempt.get("attribution") if attempt else None
+        if verdict is None:
+            from .integration import attribute
+            verdict = attribute(result)
+        if result.passed or verdict["product"]:
+            return
+        self.checks.append({"passed": False, "command": result.command, "output": result.output,
+                            "cwd": str(self.project or getattr(gate, 'cwd', '')),
+                            "receipts": [dataclasses.asdict(r) for r in result.receipts]})
+        if self._outcome is not None:
+            self._outcome.edge("checks", False)
+        task.record("user", "The check failure is not attributable to the application; handed to the "
+                            "operator without a repair call.")
+        raise CheckUnattributable(
+            f"the check failed without an attributable assertion failure "
+            f"({'; '.join(verdict['reasons'])[:400]}); returncode {result.returncode}; "
+            f"output artifact {attempt.get('output_artifact', 'unavailable')}. No repair call was made. "
+            "Work preserved.")
+
     def _record_check_attempt(self, result):
         """One executed check, as a typed record: receipts in full, the output
         kept as an artifact, the source it ran against. Returns the product
@@ -4421,13 +4450,20 @@ class Session:
                      source=self._source_identity(),
                      receipts=[dict(id=r.id, status=r.status, reason=r.reason, tests=r.tests,
                                     returncode=r.returncode, cached=r.cached, source_hash=r.source_hash,
-                                    runner_hash=r.runner_hash) for r in result.receipts])
+                                    runner_hash=r.runner_hash, report=r.report) for r in result.receipts],
+                     report=result.report)
+        from .integration import attribute
+        verdict = attribute(result)
+        if not result.passed:
+            entry["attribution"] = verdict
         if target is not None:
             entry["attempt"] = len(target.checks) + 1
             target.checks.append(entry)
             if not result.passed:
-                return target.note("product", f"check attempt {entry['attempt']} failed", stage="checks",
-                                   legacy_route=True)
+                # Classed by attribution: only an attributable assertion
+                # failure is a product failure; anything else is the operator's.
+                return target.note("product" if verdict["product"] else "operator",
+                                   f"check attempt {entry['attempt']} failed", stage="checks")
             return None
         if not result.passed:
             return self.run_outcome.note("product", "a gate outside any task (the merge gate) failed")
