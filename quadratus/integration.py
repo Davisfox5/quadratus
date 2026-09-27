@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Literal, Optional, Sequence
@@ -29,6 +32,28 @@ __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateS
 #: How much command output a failed gate carries back. The tail, because test
 #: runners put the summary and the first failures at the end.
 _TAIL_CHARS = 2_000
+
+
+@contextmanager
+def _fresh_bytecode_env():
+    """An environment whose Python never reads or writes a cached ``.pyc``
+    outside a private directory made for this one execution.
+
+    CPython trusts a cached module whose recorded source size and mtime
+    match, so a same-size edit in the same second as the last import ran the
+    old bytecode and a gate passed on broken source (Codex confirmation on
+    #25). ``-B`` and ``PYTHONDONTWRITEBYTECODE`` only stop writes; reads of
+    an existing cache go on. A fresh ``PYTHONPYCACHEPREFIX`` redirects every
+    cache lookup to an empty, owner-private directory that is removed
+    afterwards; only that directory is ever deleted, never a project's or a
+    dependency's own caches. An inherited prefix is overridden, not reused.
+    """
+    prefix = tempfile.mkdtemp(prefix="quadratus-gate-pyc-")
+    try:
+        env = dict(os.environ, PYTHONPYCACHEPREFIX=prefix, PYTHONDONTWRITEBYTECODE="1")
+        yield env
+    finally:
+        shutil.rmtree(prefix, ignore_errors=True)
 
 
 @dataclass(frozen=True)
@@ -121,14 +146,16 @@ class IntegrationGate:
     def run(self) -> GateResult:
         shown = " ".join(self.command)
         try:
-            proc = subprocess.run(
-                self.command,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-                cwd=self.cwd,
-                check=False,
-            )
+            with _fresh_bytecode_env() as env:
+                proc = subprocess.run(
+                    self.command,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout,
+                    cwd=self.cwd,
+                    check=False,
+                    env=env,
+                )
         except subprocess.TimeoutExpired:
             return GateResult(
                 passed=False, command=shown, returncode=None,
@@ -310,8 +337,9 @@ class GateSuite:
                 if command.cacheable and runner and key in self._cache:
                     receipts.append(replace(self._cache[key], cached=True))
                     continue
-                proc = subprocess.run(command.argv, cwd=cwd, capture_output=True, text=True,
-                                      timeout=command.timeout, check=False)
+                with _fresh_bytecode_env() as env:
+                    proc = subprocess.run(command.argv, cwd=cwd, capture_output=True, text=True,
+                                          timeout=command.timeout, check=False, env=env)
                 output = ((proc.stdout or '') + '\n' + (proc.stderr or '')).strip()
                 count = _test_count(output)
                 status, reason = ('passed', 'exit 0') if proc.returncode == 0 else ('failed', 'nonzero exit')

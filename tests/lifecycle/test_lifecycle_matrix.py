@@ -688,7 +688,7 @@ def real_runners(monkeypatch):
     import types
 
     from quadratus import integration
-    monkeypatch.setattr(integration, "shutil", types.SimpleNamespace(which=shutil.which))
+    monkeypatch.setattr(integration, "shutil", types.SimpleNamespace(which=shutil.which, rmtree=shutil.rmtree))
 
 
 def _node_project(ui_test):
