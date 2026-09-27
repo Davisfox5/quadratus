@@ -3141,7 +3141,7 @@ class Session:
                 return
         ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
                                                     expected_source=self._trusted_source())
-        self._refuse_tampered(spec, record, task, records, harness)
+        self._refuse_mismatched(spec, record, task, records, harness)
         problem, records = self._qualify_debt(spec, ok, problem, records)
         if self._audit_debt_applies(spec, ok, records):
             # A recapture cannot change a measured fault on valid evidence, so
@@ -3172,7 +3172,7 @@ class Session:
                 ok, problem, shots, records = check_records(
                     self.project, spec.task_id, self._last_edit_started or 0,
                     expected_source=self._trusted_source())
-                self._refuse_tampered(spec, record, task, records, harness)
+                self._refuse_mismatched(spec, record, task, records, harness)
         elif not ok:
             record["first_problem"] = problem
             self._note(f"task {spec.task_id}: design evidence missing or broken; one fix call ({problem[:100]})")
@@ -3198,7 +3198,7 @@ class Session:
             self._run_integration_gate(lead, spec, task)
             ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
                                                         expected_source=self._trusted_source())
-            self._refuse_tampered(spec, record, task, records, harness)
+            self._refuse_mismatched(spec, record, task, records, harness)
             problem, records = self._qualify_debt(spec, ok, problem, records)
             if self._audit_debt_applies(spec, ok, records):
                 record.update(verified=False, problem=problem,
@@ -3242,7 +3242,7 @@ class Session:
         self.design_checks.append(record)
         task.keep(json.dumps(record), kind="design-evidence")
 
-    def _refuse_tampered(self, spec, record, task, records, harness) -> None:
+    def _refuse_mismatched(self, spec, record, task, records, harness) -> None:
         """Stop on evidence positively observed not to hold (map J9b): a
         symlinked screenshot, a fixture whose bytes changed after capture,
         or a harness capture recorded against a source other than the
@@ -3251,16 +3251,16 @@ class Session:
         A self-capture on another source is ordinary staleness and keeps
         the bounded recapture (J8, J9a)."""
         seen = [r["message"] for r in records if r.get("kind") == "integrity"
-                and (r.get("tamper") or (harness and r.get("identity") == "source"))]
+                and (r.get("mismatch") or (harness and r.get("identity") == "source"))]
         if not seen:
             return
-        from .design_evidence import EvidenceTampered
+        from .design_evidence import EvidenceIdentityMismatch
         problem = "; ".join(seen)
-        record.update(verified=False, problem=problem, tampered=seen, harness_capture=bool(harness))
+        record.update(verified=False, problem=problem, identity_mismatch=seen, harness_capture=bool(harness))
         self.design_checks.append(record)
         task.keep(json.dumps(record), kind="design-evidence")
         self._note(f"task {spec.task_id}: design evidence did not hold; stopping ({problem[:120]})")
-        raise EvidenceTampered(f"task {spec.task_id}: {problem[:300]}. The evidence is preserved as found.")
+        raise EvidenceIdentityMismatch(f"task {spec.task_id}: {problem[:300]}. The evidence is preserved as found.")
 
     def _evidence_files(self, spec, shots) -> List[str]:
         """Project-relative evidence files behind ``shots``, for the Fleet to
@@ -3921,6 +3921,15 @@ class Session:
         against the trusted source; "" if they still are and do. The renders
         that were reviewed, not merely renders that pass now (Codex reviews
         of e47c7ed and dd17a1d: a later write replaced them)."""
+        return self._identity_check(task_id, target, steps, evidence)[0]
+
+    def _identity_check(self, task_id, target, steps, evidence):
+        """``(problem, observed)``: :meth:`_identity_problem`'s reason, and
+        the evidence digests now on disk when, and only when, the renders
+        still verify and show the approved state but their digests differ
+        from the approved snapshot's (map J9b). Otherwise ``observed`` is
+        None: a different state, a failed check or an incomplete set is not
+        an observed digest mismatch."""
         from .design_evidence import check
         problem = self._evidence_set_problem(task_id)
         if not problem:
@@ -3932,7 +3941,12 @@ class Session:
                 problem = "the resolving renders now show a different state"
             elif now_evidence != evidence:
                 problem = "the resolving renders were replaced after they were reviewed"
-        return problem
+                # Only a digest actually read from every named file is an
+                # observed comparison; an unreadable file is not (map J9b).
+                if all(isinstance(d, str) and re.fullmatch(r"[0-9a-f]{64}", d)
+                       for d in _snapshot_files((task_id, None, None, now_evidence)).values()):
+                    return problem, now_evidence
+        return problem, None
 
     def _stop_findings_unresolved(self, why: str) -> None:
         opened = self._open_findings_for(None)
@@ -4142,9 +4156,11 @@ class Session:
         if not approved or approved[0] != spec.task_id:
             reasons.append("its renders were not verified and approved")
         else:
-            changed = self._identity_problem(*approved)
+            changed, observed = self._identity_check(*approved)
             if changed:
                 reasons.append(f"its approved renders did not hold until it closed: {changed[:160]}")
+            if observed is not None:
+                self._refuse_settlement_mismatch(spec, approved, observed, reasons)
         if not reasons:
             self._resolve_findings(spec, approved)
         still = [f for f in self.findings if f["id"] in self._current_resolves and f["status"] == "open"]
@@ -4152,6 +4168,35 @@ class Session:
             if reasons:
                 finding["last_attempt"] = f"{spec.task_id}: " + "; ".join(reasons)
         return [f["id"] for f in still]
+
+    def _refuse_settlement_mismatch(self, spec, approved, observed, reasons) -> None:
+        """Stop when the renders a reviewer approved no longer have the
+        approved digests at settlement (map J9b): an integrity stop, with no
+        repair, recapture or second review. The findings this task named stay
+        open, the approved and observed digests are kept in the run record,
+        and the changed evidence is left on disk as found. A different state
+        or source is not this, and stays unverified."""
+        from .design_evidence import EvidenceIdentityMismatch
+        for finding in self.findings:
+            if finding["id"] in self._current_resolves and finding["status"] == "open":
+                finding["last_attempt"] = f"{spec.task_id}: " + "; ".join(reasons)
+        approved_files = _snapshot_files(approved)
+        observed_files = _snapshot_files((spec.task_id, None, None, observed))
+        record = dict(task=spec.task_id, comparison="settlement: the snapshot the design review approved "
+                      "against the evidence on disk when the task closed",
+                      approved=approved_files, observed=observed_files,
+                      differing=sorted(p for p, d in approved_files.items() if observed_files.get(p) != d),
+                      approved_bytes_retained=False,
+                      note="Only the approved digests were kept; the reviewer's copy was disposable, so "
+                           "the approved bytes cannot be reconstructed from this record. The observed "
+                           "evidence is left on disk as found. No intent is inferred.")
+        self.store.put(json.dumps(record), kind="evidence-identity", author="harness")
+        self._note(f"task {spec.task_id}: approved renders changed before settlement; stopping")
+        raise EvidenceIdentityMismatch(
+            f"task {spec.task_id}: the renders the design review approved were replaced before settlement "
+            f"({', '.join(record['differing'])[:240]} "
+            "differ from the approved digests). The findings it named stay open; the evidence is "
+            "preserved as found.")
 
     def _distrust_resolutions(self, reason: str) -> None:
         """Mark every resolved finding open and its requirements unmet,

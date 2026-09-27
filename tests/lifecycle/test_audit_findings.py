@@ -8,6 +8,7 @@ Everything that is not that keeps today's stop. Whole-controller replays,
 scripted replies; APPROVED here is routing proof, not image judgement.
 """
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -414,8 +415,35 @@ def test_renders_changed_between_approval_and_settlement_do_not_resolve(tmp_path
     f1 = replay.findings[0]
     assert f1["status"] == "open" and "did not hold until it closed" in f1["last_attempt"]
     assert reason in f1["last_attempt"]
-    assert replay.result.error.startswith("FindingsUnresolved: task t2") and not replay.result.completed
+    if mutation == "evidence":
+        # Map J9b: the approved digests no longer hold, an observed identity
+        # mismatch (was FindingsUnresolved before the J9b follow-up).
+        _settlement_mismatch(replay)
+    else:
+        assert replay.result.error.startswith("FindingsUnresolved: task t2") and not replay.result.completed
     assert len(replay.of("design-review")) == 1, "no second review"
+
+
+def _settlement_mismatch(replay):
+    """The named integrity stop for approved renders replaced before settlement."""
+    result = replay.result
+    assert result.error.startswith("EvidenceIdentityMismatch: task t2: the renders the design review "
+                                   "approved were replaced before settlement"), result.error
+    assert not result.completed
+    stop = replay.workflow["run"]["facts"][-1]
+    assert stop["kind"] == "integrity" and stop["legacy"] == "EvidenceIdentityMismatch", stop
+    assert not [c for c in replay.of("design-fix") if c.task == "t2"], "no repair or recapture"
+    (text,) = replay.artifact_texts("evidence-identity")
+    record = json.loads(text)
+    assert record["task"] == "t2" and record["comparison"].startswith("settlement")
+    assert set(record["approved"]) == set(record["observed"])
+    assert record["differing"] == sorted(p for p, d in record["approved"].items() if record["observed"][p] != d)
+    assert record["differing"], "a positive digest comparison"
+    assert record["approved_bytes_retained"] is False and "cannot be reconstructed" in record["note"]
+    folder = replay.project / ".quadratus" / "design-evidence" / "t2"
+    on_disk = {rel: hashlib.sha256((replay.project / rel).read_bytes()).hexdigest() for rel in record["observed"]}
+    assert on_disk == record["observed"], "the changed evidence is left as found"
+    assert folder.is_dir()
 
 
 def test_an_exception_after_a_source_change_reopens_an_earlier_resolution(tmp_path, monkeypatch):
@@ -452,8 +480,35 @@ def test_renders_changed_while_the_review_is_in_flight_do_not_resolve(tmp_path, 
                   {"t1": _capture(measured=WIDE), "t2": _repair()}, review=review)
     f1 = replay.findings[0]
     assert f1["status"] == "open" and "replaced after they were reviewed" in f1["last_attempt"]
-    assert replay.result.error.startswith("FindingsUnresolved: task t2") and not replay.result.completed
+    # Map J9b: was FindingsUnresolved before the J9b follow-up.
+    _settlement_mismatch(replay)
     assert len(replay.of("design-review")) == 1
+
+
+def test_an_unreadable_digest_at_settlement_is_not_an_observed_mismatch(tmp_path, monkeypatch):
+    """Map J9b: only digests actually read are compared. A file the settlement
+    read could not digest stays today's unverified stop, never integrity."""
+    from quadratus.session import Session
+    settle, state = Session._settle_resolution, Session._capture_state
+
+    def unreadable(self, task_id):
+        target, steps, evidence = state(self, task_id)
+        return target, steps, dict(evidence, screenshots=dict(evidence["screenshots"], mobile=None))
+
+    def settling(self, spec, *args):
+        if spec.task_id == "t2":
+            monkeypatch.setattr(Session, "_capture_state", unreadable)
+        try:
+            return settle(self, spec, *args)
+        finally:
+            monkeypatch.setattr(Session, "_capture_state", state)
+    monkeypatch.setattr(Session, "_settle_resolution", settling)
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1"],
+                  {"t1": _capture(measured=WIDE), "t2": _repair()})
+    f1 = replay.findings[0]
+    assert f1["status"] == "open" and "replaced after they were reviewed" in f1["last_attempt"]
+    assert replay.result.error.startswith("FindingsUnresolved: task t2") and not replay.result.completed
+    assert not replay.artifact_texts("evidence-identity")
 
 
 def test_a_file_changed_between_snapshot_and_copy_is_not_delivered(tmp_path, monkeypatch):

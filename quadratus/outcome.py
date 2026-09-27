@@ -41,7 +41,7 @@ _EXCEPTION_CLASS = {
     "PartialWorkSuspected": "integrity",
     "DependencyTreeChanged": "integrity",
     "DependencyIdentityUnavailable": "integrity",
-    "EvidenceTampered": "integrity",
+    "EvidenceIdentityMismatch": "integrity",
     "CapabilityUnavailable": "denial",
     "OperatorInputNeeded": "operator",
     "RunStalled": "operator",

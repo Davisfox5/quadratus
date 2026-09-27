@@ -78,13 +78,16 @@ MAX_EXCLUDES_BYTES = 64_000
 MAX_EXCLUDES = 200
 
 
-class EvidenceTampered(RuntimeError):
+class EvidenceIdentityMismatch(RuntimeError):
     """Evidence whose identity was positively observed not to hold: a
     screenshot that is a symlink, a fixture whose bytes differ from the
-    digest recorded at capture, or a harness capture recorded against a
-    source the harness did not capture (map J9b). An integrity stop: never
-    recaptured and never repaired, and the evidence is left as found.
-    Missing, stale or malformed evidence is invalid proof, not this."""
+    digest recorded at capture, a harness capture recorded against a source
+    the harness did not capture, or renders whose digests differ from the
+    snapshot a reviewer approved (map J9b). A factual observation only: no
+    intent is inferred, and nothing here says who or what changed the
+    evidence. An integrity stop: never recaptured and never repaired, and
+    the evidence is left as found. Missing, stale or malformed evidence is
+    invalid proof, not this."""
 
 
 class ExcludesError(ValueError):
@@ -461,10 +464,10 @@ def check_records(root, task_id: str, since: float, *, expected_source: Optional
     ``product.overflow`` (a measured page wider than its viewport, with
     ``view``, ``width``, ``viewport`` and ``target``). Only the last is a
     measured product fact; see Session's audit findings. An ``integrity``
-    record carrying ``tamper=True`` was positively observed (a symlinked
+    record carrying ``mismatch=True`` was positively observed (a symlinked
     screenshot, a fixture whose bytes changed after capture); one carrying
-    ``identity="source"`` names a source mismatch, which is tampering only
-    when the harness took the capture itself (map J9b).
+    ``identity="source"`` names a source mismatch, which counts as observed
+    only when the harness took the capture itself (map J9b).
     """
     try:
         return _check(root, task_id, since, expected_source)
@@ -527,10 +530,10 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
         if isinstance(step, dict) and step.get("action") == "file":
             problem = _fixture_problem(root, step, task_id)
             if problem:
-                # Only a digest that disagrees with the bytes is observed
-                # tampering; a fixture gone or unreadable is invalid proof.
+                # Only a digest that disagrees with the bytes is an observed
+                # mismatch; a fixture gone or unreadable is invalid proof.
                 add("integrity", f"step {index}'s fixture {str(step.get('label'))[:80]} {problem}",
-                    **(dict(tamper=True) if problem == _FIXTURE_CHANGED else {}))
+                    **(dict(mismatch=True) if problem == _FIXTURE_CHANGED else {}))
     for name, view in summary["views"].items():
         if requested is None:
             if "steps" in view:
@@ -542,7 +545,7 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
     for name, viewport in VIEWPORTS.items():
         shot = folder / name / "page.png"
         if shot.is_symlink():
-            add("integrity", f"the {name} screenshot is a symlink, not a capture", tamper=True)
+            add("integrity", f"the {name} screenshot is a symlink, not a capture", mismatch=True)
             continue
         width = _png_width(shot)
         if width is None:
