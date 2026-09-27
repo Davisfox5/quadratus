@@ -75,14 +75,48 @@ def test_no_prompt_ever_carries_the_gate_command(tmp_path, monkeypatch):
     assert (project / "a.md").read_text() == "# Hello\n"
 
 
-def test_a_relative_spelling_of_a_command_file_is_redacted():
-    """pytest prints a grader outside the project relative to its cwd."""
-    secret = "/private/tmp/examiner-7/grader.py"
+def _view(command, output):
     receipt = GateReceipt(id="api-tests", status="failed", reason="nonzero exit", required=True,
-                          command=f"python -m pytest {secret}", returncode=1, tests=1)
-    result = GateResult(False, "gate suite", 1,
-                        "../../private/tmp/examiner-7/grader.py:6: AssertionError\n"
-                        "FAILED ../examiner-7/grader.py::test_x - assert 0", (receipt,))
-    view = result.for_models()
+                          command=command, returncode=1, tests=1)
+    return GateResult(False, "gate suite", 1, output, (receipt,)).for_models()
+
+
+def test_relative_and_bare_spellings_of_a_private_grader_are_redacted():
+    """pytest prints a grader outside the project relative to its cwd, or bare
+    when the grader's folder is the rootdir."""
+    secret = "/private/tmp/examiner-7/grader.py"
+    view = _view(f"python -m pytest {secret}",
+                 "../../private/tmp/examiner-7/grader.py:6: AssertionError\n"
+                 "FAILED ../examiner-7/grader.py::test_x - assert 0\n"
+                 "FAILED grader.py::test_y - assert 1\n"
+                 f"{secret}:9: in test_z\n")
     assert "grader.py" not in view and "examiner-7" not in view
-    assert "<gate-path>:6: AssertionError" in view and "assert 0" in view
+    assert "<gate-path>:6: AssertionError" in view and "assert 0" in view and "assert 1" in view
+
+
+def test_a_quoted_path_with_spaces_is_redacted_in_every_spelling():
+    import shlex
+    secret = "/private/tmp/hidden examiner/check heading.py"
+    view = _view(shlex.join(["python", "-m", "pytest", secret]),
+                 f"'{secret}':3: AssertionError\n../hidden examiner/check heading.py:3: AssertionError\n"
+                 "FAILED check heading.py::test_h")
+    assert "hidden examiner" not in view and "check heading" not in view, view
+
+
+def test_a_public_file_sharing_the_basename_keeps_its_diagnostics():
+    secret = "/private/tmp/examiner-7/grader.py"
+    view = _view(f"python -m pytest {secret}",
+                 "tests/grader.py:12: AssertionError\nFAILED tests/grader.py::test_public - assert 2\n"
+                 "../examiner-7/grader.py:6: AssertionError")
+    assert "tests/grader.py:12: AssertionError" in view and "tests/grader.py::test_public" in view
+    assert "examiner-7" not in view and "<gate-path>:6: AssertionError" in view
+
+
+def test_the_operator_record_keeps_the_exact_private_path():
+    import shlex
+    secret = "/private/tmp/hidden examiner/check heading.py"
+    receipt = GateReceipt(id="t", status="failed", reason="nonzero exit", required=True,
+                          command=shlex.join(["python", secret]), returncode=1)
+    result = GateResult(False, "gate suite", 1, f"{secret}: failed", (receipt,))
+    assert secret in result.render() or shlex.quote(secret) in result.render() or secret in receipt.command
+    assert shlex.split(receipt.command)[1] == secret

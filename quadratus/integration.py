@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -255,12 +256,27 @@ class GateResult:
 
 def redact_command_paths(text: str, paths) -> str:
     """Replace each absolute command path, and each folder holding one, with a
-    marker; and any relative spelling of a command file, which a test runner
-    prints relative to its cwd (pytest: ``../examiner/grader.py:6``)."""
+    marker; and each relative spelling of a command *file*, which a test
+    runner prints relative to its cwd or rootdir (pytest:
+    ``../examiner/grader.py:6``, or a bare ``grader.py::test`` when the
+    grader's folder is the rootdir).
+
+    Only the private file's own spellings are matched: any ``../`` prefix
+    followed by a trailing run of its path components, or its bare name
+    standing alone. A public file that shares the basename but sits under a
+    different folder (``tests/grader.py``) keeps its diagnostics. A bare name
+    is ambiguous by construction and is redacted: privacy over diagnostics.
+    """
     for path in paths:
         text = text.replace(path, "<gate-path>")
-    for name in {p.rsplit("/", 1)[-1] for p in paths if "." in p.rsplit("/", 1)[-1]}:
-        text = re.sub(r"[\w.\-/]*" + re.escape(name), "<gate-path>", text)
+    for path in paths:
+        parts = [p for p in path.split("/") if p]
+        if not parts or "." not in parts[-1]:
+            continue
+        for depth in range(len(parts), 1, -1):
+            suffix = re.escape("/".join(parts[-depth:]))
+            text = re.sub(r"(?<![\w.\-/])(?:\.\./)*(?:\./)?" + suffix + r"(?![\w\-])", "<gate-path>", text)
+        text = re.sub(r"(?<![\w.\-/])" + re.escape(parts[-1]) + r"(?![\w\-])", "<gate-path>", text)
     return text
 
 
@@ -288,7 +304,8 @@ class IntegrationGate:
         self.minimum_tests = minimum_tests
 
     def run(self) -> GateResult:
-        shown = " ".join(self.command)
+        # Quoted, so a path with spaces survives command_paths (redaction).
+        shown = shlex.join(self.command)
         try:
             with _fresh_bytecode_env() as fresh, _report_slot(self.command, fresh) as (argv, env, path, nonce):
                 proc = subprocess.run(
@@ -464,7 +481,7 @@ class GateSuite:
         changed = False
         for command in self.commands:
             config = hashlib.sha256(json.dumps(asdict(command), sort_keys=True).encode()).hexdigest()
-            base = dict(id=command.id, required=command.required, command=' '.join(command.argv),
+            base = dict(id=command.id, required=command.required, command=shlex.join(command.argv),
                         source_hash=source, config_hash=config)
             if changed or command.skip_reason:
                 receipts.append(GateReceipt(**base, status='skipped',
