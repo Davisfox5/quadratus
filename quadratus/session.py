@@ -594,6 +594,15 @@ def _read_covers(spec):
 _RESOLVES = re.compile(r"^\s*RESOLVES:(.*)$", re.MULTILINE)
 
 
+def _snapshot_files(snapshot) -> Dict[str, str]:
+    """Project-relative path -> sha256 for the files a render identity names."""
+    _task, _target, _steps, evidence = snapshot
+    folder = evidence["summary"].rsplit("/", 1)[0]
+    files = {evidence["summary"]: evidence["sha256"]}
+    files.update({f"{folder}/{view}/page.png": digest for view, digest in evidence["screenshots"].items()})
+    return files
+
+
 def _read_resolves(spec):
     """Split a ``RESOLVES: F1, F2`` line off a task. None when absent; the
     raw tokens otherwise, so an empty or malformed line can be refused."""
@@ -916,6 +925,11 @@ class Session:
         self._design_note = ""
         #: Evidence files the current task's review calls are handed.
         self._review_evidence: List[str] = []
+        #: sha256 per delivered file for the final design review, snapshotted
+        #: before the call; the copy refuses any file that no longer matches.
+        self._review_evidence_hashes: Dict[str, str] = {}
+        #: ``(task_id, target, steps, evidence)`` taken before that review.
+        self._review_snapshot: Optional[tuple] = None
         self._task_started: Optional[float] = None
         #: When the most recent editing call that changed source began:
         #: renders older than this show a tree that has since changed.
@@ -953,6 +967,8 @@ class Session:
         if (not allow_writes and context.get("role") in ("collaborator", "recheck", "design-review")
                 and getattr(self, "_review_evidence", None)):
             context = dict(context, evidence_files=tuple(self._review_evidence))
+            if context.get("role") == "design-review" and self._review_evidence_hashes:
+                context = dict(context, evidence_sha256=dict(self._review_evidence_hashes))
         # Every prompt is kept, not only an interrupted one: without it there was
         # no proof of which packet or instructions a seat actually received.
         try:
@@ -2356,8 +2372,10 @@ class Session:
                 # resolved because the run ended on an exception.
                 self._recheck_resolved_findings()
                 self._annotate_open_findings(f"{type(exc).__name__}: {str(exc)[:200]}")
-            except Exception:  # noqa: BLE001 -- the original stop is the one reported
+            except Exception as failure:  # noqa: BLE001 -- the original stop is the one reported
                 log.warning("could not finalise audit findings after %s", type(exc).__name__, exc_info=True)
+                self._distrust_resolutions(f"the findings could not be re-checked after "
+                                           f"{type(exc).__name__} ({type(failure).__name__})")
             raise
         if not self.completed:
             # The record says what holds at the end, whatever stopped the run.
@@ -2538,6 +2556,7 @@ class Session:
         # Reset before any early return: a non-design task must never inherit
         # the previous task's renders (Codex review of 3d5c3f3).
         self._review_evidence = []
+        self._review_evidence_hashes, self._review_snapshot = {}, None
         if not (self.config.design_cross_check and is_design_task(spec) and self.project):
             return
         from .design_evidence import check
@@ -2630,8 +2649,9 @@ class Session:
                 self.open_findings.extend(f"Task {spec.task_id} design: {b.strip()}" for b in blocking)
                 if not blocking and self._current_resolves:
                     # Committed only once the whole task has passed, and only
-                    # for these exact renders; see _settle_resolution.
-                    self._resolution_candidate = (spec.task_id, *self._capture_state(spec.task_id))
+                    # for the renders snapshotted before the review and
+                    # delivered to it byte for byte; see _settle_resolution.
+                    self._resolution_candidate = self._review_snapshot
         self.design_checks.append(record)
         task.keep(json.dumps(record), kind="design-evidence")
 
@@ -2674,7 +2694,19 @@ class Session:
             self._review_evidence = []
             return ("BLOCKING: the renders could not be handed to the reviewer ("
                     + "; ".join(f"{p or 'set'}: {r}" for p, r in refused)[:300] + ")")
-        self._review_evidence = files
+        # The identity is taken before the call and the copy is bound to it,
+        # so what is approved is what was delivered and what is committed.
+        hashes = {}
+        for rel in files:
+            try:
+                hashes[rel] = hashlib.sha256((Path(self.project) / rel).read_bytes()).hexdigest()
+            except OSError:
+                hashes[rel] = ""
+        snapshot = (spec.task_id, *self._capture_state(spec.task_id))
+        if any(hashes.get(rel) != digest for rel, digest in _snapshot_files(snapshot).items()):
+            self._review_evidence = []
+            return "BLOCKING: the renders changed while they were being prepared for review"
+        self._review_evidence, self._review_evidence_hashes, self._review_snapshot = files, hashes, snapshot
         prompt = (
             f"Task: {spec.description}\n\nThese are the final renders of this design work, taken "
             "after its last source change, copied read-only into your working copy at these paths: "
@@ -3373,6 +3405,19 @@ class Session:
             if reasons:
                 finding["last_attempt"] = f"{spec.task_id}: " + "; ".join(reasons)
         return [f["id"] for f in still]
+
+    def _distrust_resolutions(self, reason: str) -> None:
+        """Mark every resolved finding open and its requirements unmet,
+        without reading anything: when the re-check itself failed, an
+        unverified resolution is not kept as resolved (Codex review of
+        ee7e62b). In-memory only, so it cannot fail the same way."""
+        for finding in self.findings:
+            if finding.get("status") == "resolved":
+                finding.update(status="open", reopened=f"unverified: {reason}")
+                for rid in finding.get("requirements", ()):
+                    self.memory.ledger.requirement_status[rid] = f"NOT MET: open finding {finding['id']}"
+            if finding.get("status") == "open":
+                finding.setdefault("unresolved_reason", f"open when the run stopped: {reason}")
 
     def _annotate_open_findings(self, reason: str) -> None:
         """Say in each open finding why it is still open when the run ends."""
