@@ -419,13 +419,16 @@ Each temporary parity field added in P1 names its P3 removal step in code.
 
 ## 11. Phase 2 status
 
-Cleared by Codex in 5857457064. No legacy decision changes route in P2. The
+Pending Codex review. The readiness correction was cleared in 5857729578;
+the security edge (0cd4dcb) and the owner/debt corrections (82c2287) are
+under review. No legacy decision changes route in P2. The
 one new route is operator-declared readiness probes: absent a declaration,
 nothing about a run changes.
 
 **`quadratus/contract.py`, the `TaskContract`:**
 
 - Built once in `run_task` at dispatch and frozen for that invocation.
+- `owner` is bound at the selection point (the lead in `_run_task`, the excursion worker in `_run_security_task`), before the first model call. A task that stops before selection has no contract, and that is recorded as complete.
 - Its intent is validated as audit / implementation / repair.
 - It references existing grants and never mints authority:
   - `authority.write_grant`: operator or none;
@@ -461,12 +464,19 @@ nothing about a run changes.
 - `reviewer` is true only for an APPROVED response with no BLOCKING line.
 - `unsatisfied` lists the contract's mandatory edges that were not satisfied. A missing delivery or response keeps the task incomplete; legacy already stops on it.
 
-**Completeness:** a task must carry its contract, and any contract/legacy mismatch is a missing fact. The replay harness asserts this on every run.
+**Security verification:** the excursion records draft, checks, verification and closeout stages. The `verification` edge is true on an accepted verdict and false on a structured-reply error or a final reject.
+
+**Owed references on every exit:** `open_at_close` is a snapshot of the ledger's open COVERS/RESOLVES references taken on every exit (normal close, cap, interruption, exception). The normal close takes it after `_mark_covered`. A merged batch child's snapshot is refreshed after coverage; an unmerged child is `stopped:unmerged` with an integrity fact. The ledger stays authoritative.
+
+**Check attempts:** each attempt keeps its receipts and an `output_artifact` stored with author "harness". A failed store is kept as `output_artifact_error` and counts as a missing fact.
+
+**Completeness:** a task must carry its contract, with an owner equal to the lead unless a lead recovery was recorded, and any contract/legacy mismatch is a missing fact. The replay harness asserts this on every run.
 
 **J30 (required errands):** nothing declares an errand required today. Every errand is optional, and its failure stays an errand result. A required-errand declaration would be a new contract field that no current source fills; it's noted, not invented.
 
 **Tests:**
 
-- `tests/lifecycle/test_workflow_contract.py`: 19 cases.
-- `tests/test_readiness.py`: 3 cases.
+- `tests/lifecycle/test_workflow_contract.py`: 28 cases.
+- `tests/test_readiness.py`: 7 real-process cases, including a SIGTERM-ignoring descendant, a leak after a clean exit, continuous output and 20 MiB of output.
 - **Red on 3efac78:** 11 of the 19 fail because the features don't exist there. The other 8 are declaration-validation cases for the new module, which has no prior counterpart.
+- **Red on 0cd4dcb:** 5 of 5 owner/debt cases fail (empty snapshots on capped COVERS/RESOLVES and interrupted exits; a contract before selection with no owner).

@@ -265,8 +265,8 @@ def test_structured_security_verdicts_set_the_same_edge(tmp_path, monkeypatch, v
 # -- J34 debt survives a cap or an interruption (Codex, 5857789275) ---------------------
 
 def _ledger_run(tmp_path, monkeypatch, plan, leads, **kw):
-    from tests.lifecycle.test_audit_findings import _run as audit_run
     from quadratus.session import Session
+    from tests.lifecycle.test_audit_findings import _run as audit_run
     monkeypatch.setattr(Session, "_pick_lead", lambda self, spec: "claude:opus")
     return audit_run(tmp_path, monkeypatch, plan, leads, settings=CAPPED, **kw)
 
