@@ -155,3 +155,27 @@ def test_missing_renders_keep_the_bounded_recapture(tmp_path, monkeypatch):
                          revision=lambda call, replay: "Nothing to change.\nCHANGED: []")
     assert len(replay.of("design-fix")) == 1
     assert "EvidenceTampered" not in replay.result.error
+
+
+# -- the record tags the controller branches on ----------------------------
+
+def test_only_positive_observations_are_tagged(tmp_path):
+    from quadratus.design_evidence import check_records
+    H.evidence(tmp_path, "t1", age=0)
+    _with_fixture_step(tmp_path)
+    assert check_records(tmp_path, "t1", 0)[0], "the untouched capture stands"
+
+    def tags(records):
+        return [(r.get("tamper", False), r.get("identity")) for r in records if r["kind"] == "integrity"]
+    (tmp_path / FIXTURE).write_text("name\nbeta\n")
+    assert tags(check_records(tmp_path, "t1", 0)[3]) == [(True, None)]
+    (tmp_path / FIXTURE).unlink()
+    assert tags(check_records(tmp_path, "t1", 0)[3]) == [(False, None)]
+    _with_fixture_step(tmp_path)
+    (tmp_path / "page.html").write_text("changed source")
+    assert tags(check_records(tmp_path, "t1", 0)[3]) == [(False, "source")]
+    (tmp_path / "page.html").unlink()
+    shot = evidence_dir(tmp_path, "t1") / "mobile" / "page.png"
+    shot.unlink()
+    shot.symlink_to(shot.parent.parent / "desktop" / "page.png")
+    assert tags(check_records(tmp_path, "t1", 0)[3]) == [(True, None)]
