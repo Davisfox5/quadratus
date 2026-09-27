@@ -414,3 +414,28 @@ def test_a_capped_revision_that_touched_a_tree_is_named_when_the_run_ends_at_its
     assert error.startswith("DependencyTreeChanged") and "at the end of the run" in error, error
     record = H.result_json(replay)["dependency_identity"]
     assert record["events"][0]["window"] == "during revision (t1)" and not replay.result.completed
+
+
+@pytest.mark.parametrize("turns", [CAP, 20], ids=["at", "above"])
+@pytest.mark.parametrize("edits", [False, True], ids=["unchanged", "changed"])
+def test_a_grok_gate_fix_cancelled_at_the_cap_is_the_cap(tmp_path, monkeypatch, turns, edits):
+    """Codex's 90cc5d9 baseline: without a cap on the fix role, a cancelled
+    Grok envelope at 14 or 20 turns was a ProviderError."""
+    def gate_fix(call, replay):
+        if edits:
+            H.write(call, {"app.py": FIXED})
+        return H.grok_ok("Fixing add next.", stop="cancelled", num_turns=turns)
+    replay = _run(tmp_path, monkeypatch, Script(lead=_looked, **{"gate-fix": gate_fix}), files=FILES,
+                  lead="grok:default")
+    (fix,) = replay.of("gate-fix")
+    assert _turns_flag(fix) == str(CAP)
+    assert replay.artifacts("capped-fix"), replay.result.error
+    assert H.gate_results(replay) == (["PASSED"] if edits else ["FAILED"])
+    assert replay.result.error == "" if edits else not replay.result.completed
+
+
+def test_a_grok_revision_cancelled_at_the_cap_takes_the_capped_task_path(tmp_path, monkeypatch):
+    def revision(call, replay):
+        return H.grok_ok("Still revising.", stop="cancelled", num_turns=CAP)
+    replay = _run(tmp_path, monkeypatch, Script(revision=revision), files=FILES, lead="grok:default")
+    assert H.result_json(replay)["turn_limited_tasks"] == ["t1"] and not replay.of("closeout")
