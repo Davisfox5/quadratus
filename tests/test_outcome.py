@@ -69,11 +69,15 @@ def test_a_non_terminal_fact_is_history_only():
     assert parity(run, [], open_findings=[], legacy_completed=True, legacy_error="", history=[])["agree"]
 
 
+REQUIRED = dict(checks=False, design_evidence="none", design_review=False, security_verification=False,
+                settlement=False)
+
+
 def _closed(task_id="t1"):
     outcome = TaskOutcome(task_id, "implementation", lead="claude:opus", source_before="a" * 64,
                           source_after="b" * 64, dependency="unchanged",
                           partial=dict(changed=["app.py"], changed_lines=2, inspected=True),
-                          contract=dict(task_id=task_id, owner="claude:opus", required={}),
+                          contract=dict(task_id=task_id, owner="claude:opus", required=dict(REQUIRED)),
                           dispatch=dict(state="dispatched", owner="claude:opus"))
     outcome.closed_as = "closed"
     return outcome
@@ -157,7 +161,7 @@ def test_a_closed_task_that_reached_its_checks_must_carry_an_attempt():
 
 def test_a_stopped_task_whose_check_was_refused_needs_no_attempt():
     task = TaskOutcome("t1", "implementation", lead="claude:opus",
-                       contract=dict(task_id="t1", owner="claude:opus", required={}),
+                       contract=dict(task_id="t1", owner="claude:opus", required=dict(REQUIRED)),
                        dispatch=dict(state="dispatched", owner="claude:opus"))
     task.stage("checks")
     task.closed_as = "stopped:DependencyTreeChanged"
@@ -184,7 +188,7 @@ def test_a_stop_before_dispatch_must_say_why_and_carry_no_contract():
     assert missing_facts(task) == ["t1.dispatch.reason"]
     task.dispatch["reason"] = "RunStalled: no seat"
     assert missing_facts(task) == []
-    task.contract = dict(task_id="t1", owner="claude:opus", required={})
+    task.contract = dict(task_id="t1", owner="claude:opus", required=dict(REQUIRED))
     assert missing_facts(task) == ["t1.contract on a task that was not dispatched"]
 
 
@@ -214,34 +218,59 @@ def test_completion_blockers_are_empty_only_for_a_complete_satisfied_record():
     assert completion_blockers([_closed(), never]) == ["t2 never closed"]
 
 
-def _capped(task_id="t1"):
+def _capped(task_id="t1", **required):
     capped = _closed(task_id)
-    capped.contract = dict(capped.contract, required={"checks": True})
+    capped.contract = dict(capped.contract, required=dict(REQUIRED, checks=True, **required))
     capped.closed_as = "turn_limited"
     capped.note("cap", "lead turn limit", stage="draft")
     return capped
 
 
-def _continuing(task_id, predecessor):
+def _continuing(task_id, predecessor, *, checked=True, **required):
+    """A successor that factually ran and passed the checks it required."""
     successor = _closed(task_id)
     successor.continues = predecessor
+    if checked:
+        successor.contract = dict(successor.contract, required=dict(REQUIRED, checks=True, **required))
+        successor.edge("checks", True)
     return successor
 
 
-def test_a_recovered_cap_continued_by_a_clean_successor_waives_only_the_edges():
+def test_a_recovered_cap_is_discharged_only_by_a_successor_that_did_the_work():
     capped = _capped()
     assert completion_blockers([capped]) == ["t1.cap: lead turn limit", "t1.checks unsatisfied"]
     capped.recover("cap")
     assert completion_blockers([capped, _continuing("t2", "t1")]) == []
+    unchecked = _continuing("t2", "t1", checked=False)
+    assert completion_blockers([capped, unchecked]) == ["t1.checks unsatisfied"], \
+        "a clean successor under a weaker contract discharges nothing it did not do"
     capped.source_after = None
     assert completion_blockers([capped, _continuing("t2", "t1")]) == ["record t1.source_after"]
+
+
+def test_a_design_edge_is_discharged_only_under_the_same_intended_state():
+    state = '{"page": "/", "steps": []}'
+    capped = _capped(design_review=True)
+    capped.contract = dict(capped.contract, intended_state=state)
+    capped.recover("cap")
+    other = _continuing("t2", "t1", design_review=True)
+    other.edge("delivered", True)
+    other.edge("reviewer", True)
+    assert completion_blockers([capped, other]) == ["t1.delivered unsatisfied", "t1.reviewer unsatisfied"]
+    other.contract = dict(other.contract, intended_state=state)
+    assert completion_blockers([capped, other]) == []
+    stateless = _capped(design_review=True)
+    stateless.recover("cap")
+    assert completion_blockers([stateless, other]) == ["t1.delivered unsatisfied", "t1.reviewer unsatisfied"], \
+        "no declared state, nothing to bind the successor's evidence to"
 
 
 def test_a_successor_that_fails_or_never_closes_cannot_hide_predecessor_debt():
     capped = _capped()
     capped.recover("cap")
-    failing = _continuing("t2", "t1")
-    failing.contract = dict(failing.contract, required={"checks": True})
+    failing = _continuing("t2", "t1", checked=False)
+    failing.contract = dict(failing.contract, required=dict(REQUIRED, checks=True))
+    failing.edge("checks", False)
     assert completion_blockers([capped, failing]) == ["t1.checks unsatisfied", "t2.checks unsatisfied"]
     stopped = _continuing("t2", "t1")
     stopped.closed_as = "stopped:ProviderRefusal"
@@ -260,7 +289,7 @@ def test_a_non_recoverable_predecessor_stop_is_never_waived():
         assert completion_blockers([predecessor, _continuing("t2", "t1")]) == [f"t1.{kind}: still standing"]
 
 
-def test_a_chain_is_waived_only_through_eligible_links_and_bad_references_block():
+def test_a_chain_discharges_only_through_eligible_links_and_bad_references_block():
     t1, t2 = _capped("t1"), _capped("t2")
     t2.continues = "t1"
     t1.recover("cap")
@@ -273,16 +302,59 @@ def test_a_chain_is_waived_only_through_eligible_links_and_bad_references_block(
     assert "t1 CONTINUES 't2', which is not an earlier task" in completion_blockers([first, second])
 
 
-def test_a_ledgered_audit_waives_its_edges_but_not_its_owed_debt_or_facts():
+def test_settled_audit_debt_discharges_only_the_design_edges():
     audit = _closed()
     audit.intent = "audit"
-    audit.contract = dict(audit.contract, required={"design_review": True})
-    assert completion_blockers([audit]) == ["t1.delivered unsatisfied", "t1.reviewer unsatisfied"]
-    assert completion_blockers([audit], ledgered={"t1"}) == []
-    assert completion_blockers([audit], ledgered={"t1"}, owed=["finding F1"]) == ["owed finding F1"]
+    audit.contract = dict(audit.contract, required=dict(REQUIRED, design_review=True, checks=True,
+                                                        security_verification=True, settlement=True))
+    everything = ["t1.checks unsatisfied", "t1.verification unsatisfied", "t1.delivered unsatisfied",
+                  "t1.reviewer unsatisfied", "t1.settlement unsatisfied"]
+    assert completion_blockers([audit]) == everything
+    assert completion_blockers([audit], audit_findings={"t1": ["resolved"]}) == [
+        "t1.checks unsatisfied", "t1.verification unsatisfied", "t1.settlement unsatisfied"]
+    assert completion_blockers([audit], audit_findings={"t1": ["resolved", "open"]}) == everything, \
+        "an unsettled finding discharges nothing"
+    assert completion_blockers([audit], audit_findings={"t2": ["resolved"]}) == everything, "provenance"
+    assert completion_blockers([audit], audit_findings={"t1": []}) == everything
+    audit.contract = dict(audit.contract, required=dict(REQUIRED, design_review=True))
+    assert completion_blockers([audit], audit_findings={"t1": ["resolved"]}, owed=["finding F1"]) == [
+        "owed finding F1"]
     audit.note("integrity", "evidence tampered")
-    assert completion_blockers([audit], ledgered={"t1"}) == ["t1.integrity: evidence tampered"]
+    assert completion_blockers([audit], audit_findings={"t1": ["resolved"]}) == ["t1.integrity: evidence tampered"]
     implementation = _closed()
-    implementation.contract = dict(implementation.contract, required={"design_review": True})
-    assert completion_blockers([implementation], ledgered={"t1"}) == ["t1.delivered unsatisfied",
-                                                                       "t1.reviewer unsatisfied"]
+    implementation.contract = dict(implementation.contract, required=dict(REQUIRED, design_review=True))
+    assert completion_blockers([implementation], audit_findings={"t1": ["resolved"]}) == [
+        "t1.delivered unsatisfied", "t1.reviewer unsatisfied"]
+
+
+# -- malformed records (Codex review 5858204394) -----------------------------------------
+
+def test_an_unsupported_dispatch_state_or_owner_is_malformed():
+    task = _closed()
+    task.dispatch = dict(state="invalid-state", owner="claude:opus")
+    assert missing_facts(task) == ["t1.dispatch.state 'invalid-state' is not a supported state"]
+    task.dispatch = dict(state="dispatched", owner="")
+    assert "t1.dispatch.owner" in missing_facts(task)
+    task.dispatch = dict(state="not_dispatched", reason="  ")
+    assert "t1.dispatch.reason" in missing_facts(task)
+
+
+def test_a_missing_or_malformed_requirement_declaration_blocks():
+    task = _closed()
+    del task.contract["required"]
+    assert missing_facts(task) == ["t1.contract.required"]
+    assert completion_blockers([task]) == ["record t1.contract.required"]
+    for key, bad in (("checks", None), ("checks", "yes"), ("settlement", 1), ("design_evidence", "maybe")):
+        task.contract["required"] = dict(REQUIRED, **{key: bad})
+        assert missing_facts(task) == [f"t1.contract.required.{key}"], key
+    task.contract["required"] = {k: v for k, v in REQUIRED.items() if k != "design_review"}
+    assert missing_facts(task) == ["t1.contract.required.design_review"]
+
+
+def test_a_contract_for_another_task_or_a_malformed_owner_change_is_missing():
+    task = _closed()
+    task.contract = dict(task.contract, task_id="t9")
+    assert missing_facts(task) == ["t1.contract names task 't9'"]
+    task = _closed()
+    task.owner_changes.append({"from": "claude:opus", "to": "", "reason": "lead_recovery"})
+    assert "t1.owner_changes[0] malformed" in missing_facts(task)

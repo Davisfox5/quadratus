@@ -990,8 +990,10 @@ class Session:
         incomplete under a named stop. Never a repair: nothing is called."""
         owed = sorted({f"{kind[:-1]} {ref}" for outcome in self.task_outcomes
                        for kind, refs in self._open_refs(outcome).items() for ref in refs})
-        blockers = completion_blockers(self.task_outcomes, owed=owed,
-                                       ledgered={f["task"] for f in self.findings})
+        audit_findings: dict = {}
+        for finding in self.findings:
+            audit_findings.setdefault(finding.get("task"), []).append(finding.get("status"))
+        blockers = completion_blockers(self.task_outcomes, owed=owed, audit_findings=audit_findings)
         if blockers:
             self.completed = False
             self._stop_with("unverified", f"CompletionUnproven: {where} was accepted but the record "

@@ -248,27 +248,71 @@ def missing_facts(task: TaskOutcome) -> List[str]:
     return missing
 
 
+_DISPATCH_STATES = ("dispatched", "not_dispatched")
+_REQUIRED_FLAGS = ("checks", "design_review", "security_verification", "settlement")
+_DESIGN_EVIDENCE = ("harness", "self", "disabled", "none")
+#: Edges an audit's ledger findings stand for: the design obligations whose
+#: failure the audit recorded as requirement debt.
+_AUDIT_EDGES = ("evidence", "delivered", "reviewer")
+#: Edges that bind to a declared intended state, not just to "a check ran".
+_STATE_EDGES = ("evidence", "delivered", "reviewer")
+
+
+def _nonempty(value) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _contract_missing(task: TaskOutcome) -> List[str]:
+    """A contract names this task and declares every requirement with its
+    type. A missing or malformed declaration is missing, never optional."""
+    tid, contract = task.task_id, task.contract
+    if not isinstance(contract, dict):
+        return [f"{tid}.contract is not a record"]
+    missing = []
+    if contract.get("task_id") != tid:
+        missing.append(f"{tid}.contract names task {contract.get('task_id')!r}")
+    required = contract.get("required")
+    if not isinstance(required, dict):
+        return missing + [f"{tid}.contract.required"]
+    for name in _REQUIRED_FLAGS:
+        if type(required.get(name)) is not bool:
+            missing.append(f"{tid}.contract.required.{name}")
+    if required.get("design_evidence") not in _DESIGN_EVIDENCE:
+        missing.append(f"{tid}.contract.required.design_evidence")
+    return missing
+
+
 def _dispatch_missing(task: TaskOutcome) -> List[str]:
-    """A dispatched task carries a contract whose owner is the one selected,
-    and its invoked owner follows an unbroken chain of recorded switches
-    from there. A task stopped before dispatch carries no contract and says
-    why."""
+    """A dispatched task carries a well-formed contract whose owner is the
+    one selected, and its invoked owner follows an unbroken chain of recorded
+    switches from there. A task stopped before dispatch carries no contract
+    and says why. Any other state is malformed."""
     tid, dispatch = task.task_id, task.dispatch
     if not dispatch:
         return [f"{tid}.dispatch"]
-    if dispatch.get("state") == "not_dispatched":
-        missing = [] if dispatch.get("reason") else [f"{tid}.dispatch.reason"]
+    if not isinstance(dispatch, dict) or dispatch.get("state") not in _DISPATCH_STATES:
+        state = dispatch.get("state") if isinstance(dispatch, dict) else dispatch
+        return [f"{tid}.dispatch.state {state!r} is not a supported state"]
+    if dispatch["state"] == "not_dispatched":
+        missing = [] if _nonempty(dispatch.get("reason")) else [f"{tid}.dispatch.reason"]
         if task.contract is not None:
             missing.append(f"{tid}.contract on a task that was not dispatched")
         return missing
     missing, owner = [], dispatch.get("owner")
+    if not _nonempty(owner):
+        missing.append(f"{tid}.dispatch.owner")
     if not task.contract:
         missing.append(f"{tid}.contract")
-    elif task.contract.get("owner") != owner:
-        missing.append(f"{tid}.contract owner {task.contract.get('owner')!r} is not the dispatched "
-                       f"owner {owner!r}")
+    else:
+        missing += _contract_missing(task)
+        if task.contract.get("owner") != owner:
+            missing.append(f"{tid}.contract owner {task.contract.get('owner')!r} is not the dispatched "
+                           f"owner {owner!r}")
     expected = owner
-    for change in task.owner_changes:
+    for index, change in enumerate(task.owner_changes):
+        if not isinstance(change, dict) or not all(_nonempty(change.get(k)) for k in ("from", "to", "reason")):
+            missing.append(f"{tid}.owner_changes[{index}] malformed")
+            continue
         if change.get("from") != expected:
             missing.append(f"{tid}.owner_changes from {change.get('from')!r}, expected {expected!r}")
         expected = change.get("to")
@@ -277,25 +321,43 @@ def _dispatch_missing(task: TaskOutcome) -> List[str]:
     return missing
 
 
+def _required_edges(task: TaskOutcome) -> List[str]:
+    required = (task.contract or {}).get("required") or {}
+    edges = []
+    if required.get("checks"):
+        edges.append("checks")
+    if required.get("security_verification"):
+        edges.append("verification")
+    if required.get("design_evidence") in ("harness", "self"):
+        edges.append("evidence")
+    if required.get("design_review"):
+        edges += ["delivered", "reviewer"]
+    if required.get("settlement"):
+        edges.append("settlement")
+    return edges
+
+
 def completion_blockers(tasks: List[TaskOutcome], *, owed: Optional[List[str]] = None,
-                        ledgered: Optional[set] = None) -> List[str]:
+                        audit_findings: Optional[dict] = None) -> List[str]:
     """Why the typed record cannot count as complete, whatever the legacy
-    inputs say. Empty only when every task closed with a complete record, no
-    task carries an active terminal fact, every task's mandatory edges were
-    satisfied or validly waived, and the ledger (``owed``, read by the
+    inputs say. Empty only when every task closed with a complete, well-formed
+    record, no task carries an active terminal fact, every mandatory edge was
+    satisfied or factually discharged, and the ledger (``owed``, read by the
     caller) holds nothing the tasks named.
 
-    A waiver covers a task's unmet *edges* and nothing else: its missing
-    facts, its owed references and every active fact still block. Only a cap
-    the existing CONTINUES rule already recovered stops blocking, because it
-    is no longer active. Two waivers exist:
+    Nothing but an unmet edge is ever discharged: missing facts, owed
+    references and active facts always block. An edge is discharged only by
+    fact, never by a label or a successor's own weaker contract:
 
-    - CONTINUES: the task is continued by a later task that closed clean
-      (closed, no unmet edges, no active facts), or that is itself validly
-      waived. A reference to an unknown or later task, or a cycle, blocks.
-    - Ledgered audit: an audit whose unmet evidence became ledger findings
-      (``ledgered``, task ids); the ledger carries that debt, and ``owed``
-      blocks while any of it is open.
+    - CONTINUES: a later task in the continuation chain, recorded complete
+      and with no active fact, satisfied that same edge under a contract that
+      required it; for a design edge (evidence, delivered, reviewer) its
+      contract also carries the predecessor's own declared intended state.
+      An unknown, later or cyclic reference blocks.
+    - Audit debt: an audit's design edges (evidence, delivered, reviewer)
+      only, when the ledger holds findings that task recorded
+      (``audit_findings``: task id to their statuses) and every one is
+      resolved. Checks, verification and settlement are never discharged.
     """
     order = {t.task_id: i for i, t in enumerate(tasks)}
     by_id = {t.task_id: t for t in tasks}
@@ -309,20 +371,30 @@ def completion_blockers(tasks: List[TaskOutcome], *, owed: Optional[List[str]] =
             continue
         successors.setdefault(task.continues, []).append(task.task_id)
 
-    def clean(task) -> bool:
-        return (task.closed_as == "closed" and not task.unsatisfied() and not task.active
-                and not missing_facts(task))
+    def chain(tid):
+        """Every later task continuing ``tid``, transitively, cycle-guarded."""
+        seen, stack, found = {tid}, list(successors.get(tid, [])), []
+        while stack:
+            nxt = stack.pop(0)
+            if nxt in seen:
+                continue
+            seen.add(nxt)
+            found.append(by_id[nxt])
+            stack += successors.get(nxt, [])
+        return found
 
-    def waived(tid, seen=()) -> bool:
-        """Continued by a later task that closed clean, or that is itself waived."""
-        if tid in seen:
-            return False
-        for nxt in successors.get(tid, []):
-            successor = by_id[nxt]
-            if clean(successor) or (not successor.active and not missing_facts(successor)
-                                    and successor.closed_as in ("closed", "turn_limited")
-                                    and waived(nxt, seen + (tid,))):
-                return True
+    def discharged_by_continuation(task, edge) -> bool:
+        state = (task.contract or {}).get("intended_state")
+        for successor in chain(task.task_id):
+            if (successor.closed_as not in ("closed", "turn_limited") or successor.active
+                    or missing_facts(successor)):
+                continue
+            if successor.edges.get(edge) is not True or edge not in _required_edges(successor):
+                continue
+            if edge in _STATE_EDGES and (state is None
+                                         or (successor.contract or {}).get("intended_state") != state):
+                continue
+            return True
         return False
 
     for task in tasks:
@@ -332,9 +404,15 @@ def completion_blockers(tasks: List[TaskOutcome], *, owed: Optional[List[str]] =
             continue
         blockers += [f"record {m}" for m in missing_facts(task)]
         blockers += [f"{tid}.{fact.kind}: {fact.detail[:120]}" for fact in task.active if fact.terminal]
-        audit_debt = task.intent == "audit" and tid in (ledgered or set())
-        if not (audit_debt or waived(tid)):
-            blockers += [f"{tid}.{edge} unsatisfied" for edge in task.unsatisfied()]
+        statuses = list((audit_findings or {}).get(tid) or [])
+        audit_settled = (task.intent == "audit" and bool(statuses)
+                         and all(status == "resolved" for status in statuses))
+        for edge in task.unsatisfied():
+            if audit_settled and edge in _AUDIT_EDGES:
+                continue
+            if discharged_by_continuation(task, edge):
+                continue
+            blockers.append(f"{tid}.{edge} unsatisfied")
     return blockers
 
 
