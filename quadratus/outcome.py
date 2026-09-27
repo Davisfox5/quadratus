@@ -54,7 +54,7 @@ _EXCEPTION_CLASS = {
 
 #: ``stop_reason`` prefixes the session writes, to outcome class.
 _STOP_PREFIX = {"TurnLimitBreaker": "cap", "FindingsUnresolved": "unverified",
-                "DesignUnverified": "unverified"}
+                "DesignUnverified": "unverified", "CompletionUnproven": "unverified"}
 
 
 def classify(exc: BaseException) -> str:
@@ -275,6 +275,67 @@ def _dispatch_missing(task: TaskOutcome) -> List[str]:
     if task.lead != expected:
         missing.append(f"{tid}.lead {task.lead!r} is not the invoked owner {expected!r}")
     return missing
+
+
+def completion_blockers(tasks: List[TaskOutcome], *, owed: Optional[List[str]] = None,
+                        ledgered: Optional[set] = None) -> List[str]:
+    """Why the typed record cannot count as complete, whatever the legacy
+    inputs say. Empty only when every task closed with a complete record, no
+    task carries an active terminal fact, every task's mandatory edges were
+    satisfied or validly waived, and the ledger (``owed``, read by the
+    caller) holds nothing the tasks named.
+
+    A waiver covers a task's unmet *edges* and nothing else: its missing
+    facts, its owed references and every active fact still block. Only a cap
+    the existing CONTINUES rule already recovered stops blocking, because it
+    is no longer active. Two waivers exist:
+
+    - CONTINUES: the task is continued by a later task that closed clean
+      (closed, no unmet edges, no active facts), or that is itself validly
+      waived. A reference to an unknown or later task, or a cycle, blocks.
+    - Ledgered audit: an audit whose unmet evidence became ledger findings
+      (``ledgered``, task ids); the ledger carries that debt, and ``owed``
+      blocks while any of it is open.
+    """
+    order = {t.task_id: i for i, t in enumerate(tasks)}
+    by_id = {t.task_id: t for t in tasks}
+    successors: dict = {}
+    blockers = [f"owed {ref}" for ref in (owed or [])]
+    for task in tasks:
+        if not task.continues:
+            continue
+        if task.continues not in order or order[task.continues] >= order[task.task_id]:
+            blockers.append(f"{task.task_id} CONTINUES {task.continues!r}, which is not an earlier task")
+            continue
+        successors.setdefault(task.continues, []).append(task.task_id)
+
+    def clean(task) -> bool:
+        return (task.closed_as == "closed" and not task.unsatisfied() and not task.active
+                and not missing_facts(task))
+
+    def waived(tid, seen=()) -> bool:
+        """Continued by a later task that closed clean, or that is itself waived."""
+        if tid in seen:
+            return False
+        for nxt in successors.get(tid, []):
+            successor = by_id[nxt]
+            if clean(successor) or (not successor.active and not missing_facts(successor)
+                                    and successor.closed_as in ("closed", "turn_limited")
+                                    and waived(nxt, seen + (tid,))):
+                return True
+        return False
+
+    for task in tasks:
+        tid = task.task_id
+        if task.closed_as == "open":
+            blockers.append(f"{tid} never closed")
+            continue
+        blockers += [f"record {m}" for m in missing_facts(task)]
+        blockers += [f"{tid}.{fact.kind}: {fact.detail[:120]}" for fact in task.active if fact.terminal]
+        audit_debt = task.intent == "audit" and tid in (ledgered or set())
+        if not (audit_debt or waived(tid)):
+            blockers += [f"{tid}.{edge} unsatisfied" for edge in task.unsatisfied()]
+    return blockers
 
 
 def typed_completed(run: RunOutcome, tasks: List[TaskOutcome], open_findings: List[str]) -> bool:

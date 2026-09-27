@@ -4,7 +4,15 @@ Unit cases, including the negative controls that show parity can fail: a
 parity check that always agreed would prove nothing on the replays.
 """
 
-from quadratus.outcome import PRECEDENCE, RunOutcome, TaskOutcome, classify, missing_facts, parity
+from quadratus.outcome import (
+    PRECEDENCE,
+    RunOutcome,
+    TaskOutcome,
+    classify,
+    completion_blockers,
+    missing_facts,
+    parity,
+)
 
 
 class ProviderError(RuntimeError):
@@ -195,3 +203,86 @@ def test_an_invoked_owner_follows_an_unbroken_chain_of_recorded_switches():
     task.owner_changes[0]["from"] = "claude:opus"
     assert missing_facts(task) == [] and task.to_dict()["invoked_owner"] == "openai:sol"
     assert task.contract["owner"] == "claude:opus"
+
+
+# -- completion guard (phase 3) ----------------------------------------------------------
+
+def test_completion_blockers_are_empty_only_for_a_complete_satisfied_record():
+    assert completion_blockers([_closed()]) == []
+    assert completion_blockers([_closed()], owed=["finding F1"]) == ["owed finding F1"]
+    never = TaskOutcome("t2", "implementation")
+    assert completion_blockers([_closed(), never]) == ["t2 never closed"]
+
+
+def _capped(task_id="t1"):
+    capped = _closed(task_id)
+    capped.contract = dict(capped.contract, required={"checks": True})
+    capped.closed_as = "turn_limited"
+    capped.note("cap", "lead turn limit", stage="draft")
+    return capped
+
+
+def _continuing(task_id, predecessor):
+    successor = _closed(task_id)
+    successor.continues = predecessor
+    return successor
+
+
+def test_a_recovered_cap_continued_by_a_clean_successor_waives_only_the_edges():
+    capped = _capped()
+    assert completion_blockers([capped]) == ["t1.cap: lead turn limit", "t1.checks unsatisfied"]
+    capped.recover("cap")
+    assert completion_blockers([capped, _continuing("t2", "t1")]) == []
+    capped.source_after = None
+    assert completion_blockers([capped, _continuing("t2", "t1")]) == ["record t1.source_after"]
+
+
+def test_a_successor_that_fails_or_never_closes_cannot_hide_predecessor_debt():
+    capped = _capped()
+    capped.recover("cap")
+    failing = _continuing("t2", "t1")
+    failing.contract = dict(failing.contract, required={"checks": True})
+    assert completion_blockers([capped, failing]) == ["t1.checks unsatisfied", "t2.checks unsatisfied"]
+    stopped = _continuing("t2", "t1")
+    stopped.closed_as = "stopped:ProviderRefusal"
+    stopped.note("refusal", "declined")
+    assert "t1.checks unsatisfied" in completion_blockers([capped, stopped])
+    unclosed = _continuing("t2", "t1")
+    unclosed.closed_as = "open"
+    assert completion_blockers([capped, unclosed]) == ["t1.checks unsatisfied", "t2 never closed"]
+
+
+def test_a_non_recoverable_predecessor_stop_is_never_waived():
+    for kind in ("refusal", "security", "integrity", "operator", "denial", "transport"):
+        predecessor = _capped()
+        predecessor.recover("cap")
+        predecessor.note(kind, "still standing")
+        assert completion_blockers([predecessor, _continuing("t2", "t1")]) == [f"t1.{kind}: still standing"]
+
+
+def test_a_chain_is_waived_only_through_eligible_links_and_bad_references_block():
+    t1, t2 = _capped("t1"), _capped("t2")
+    t2.continues = "t1"
+    t1.recover("cap")
+    t2.recover("cap")
+    assert completion_blockers([t1, t2, _continuing("t3", "t2")]) == []
+    assert completion_blockers([t1, t2]) == ["t1.checks unsatisfied", "t2.checks unsatisfied"]
+    unknown = _continuing("t2", "t9")
+    assert completion_blockers([_closed(), unknown]) == ["t2 CONTINUES 't9', which is not an earlier task"]
+    first, second = _continuing("t1", "t2"), _continuing("t2", "t1")
+    assert "t1 CONTINUES 't2', which is not an earlier task" in completion_blockers([first, second])
+
+
+def test_a_ledgered_audit_waives_its_edges_but_not_its_owed_debt_or_facts():
+    audit = _closed()
+    audit.intent = "audit"
+    audit.contract = dict(audit.contract, required={"design_review": True})
+    assert completion_blockers([audit]) == ["t1.delivered unsatisfied", "t1.reviewer unsatisfied"]
+    assert completion_blockers([audit], ledgered={"t1"}) == []
+    assert completion_blockers([audit], ledgered={"t1"}, owed=["finding F1"]) == ["owed finding F1"]
+    audit.note("integrity", "evidence tampered")
+    assert completion_blockers([audit], ledgered={"t1"}) == ["t1.integrity: evidence tampered"]
+    implementation = _closed()
+    implementation.contract = dict(implementation.contract, required={"design_review": True})
+    assert completion_blockers([implementation], ledgered={"t1"}) == ["t1.delivered unsatisfied",
+                                                                       "t1.reviewer unsatisfied"]

@@ -184,7 +184,7 @@ def write(call: Call, files: Dict[str, str]) -> None:
 
 def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
         limits=None, settings=None, extra_checks=(), lead_runs_commands=True,
-        capture_profile=None, readiness=None) -> Replay:
+        capture_profile=None, readiness=None, record_complete=True) -> Replay:
     """``lead_runs_commands``: the replayed leads write their renders
     directly, which models a lead whose transport can run the capture. Set
     False for the real claude fact ("granted": only exact allow rules run),
@@ -221,7 +221,10 @@ def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
         replay.workflow = json.loads(result.read_text()).get("workflow") or {}
         parity = replay.workflow.get("parity") or {}
         assert parity.get("agree"), f"typed outcome parity failed: {parity or replay.workflow}"
-        assert parity.get("complete"), f"typed outcome missing facts: {parity.get('missing')}"
+        # ``record_complete=False`` only for a case that breaks the record on
+        # purpose to prove the run refuses to count it as complete.
+        assert parity.get("complete") or not record_complete, \
+            f"typed outcome missing facts: {parity.get('missing')}"
     return replay
 
 

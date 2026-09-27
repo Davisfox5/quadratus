@@ -54,7 +54,7 @@ from .deptree import (
     DependencyWatch,
 )
 from .memory import PersistentMemory, TaskMemory, TaskSummary
-from .outcome import RunOutcome, TaskOutcome, classify
+from .outcome import RunOutcome, TaskOutcome, classify, completion_blockers
 from .providers import PartialWorkSuspected, ProviderError, ProviderRefusal, TurnLimitReached
 from .registry import peers_for, resolve
 from .routing import (
@@ -981,6 +981,22 @@ class Session:
             self._outcome.note(kind, text, legacy_route=legacy_route)
         else:
             self.run_outcome.note(kind, text)
+
+    def _guard_completion(self, where: str) -> None:
+        """The last word on completion (phase 3, #25): the legacy inputs said
+        complete, and the typed record must agree. A task that never closed,
+        an incomplete record, an unsatisfied mandatory edge, an active
+        terminal fact or a reference the ledger still owes keeps the run
+        incomplete under a named stop. Never a repair: nothing is called."""
+        owed = sorted({f"{kind[:-1]} {ref}" for outcome in self.task_outcomes
+                       for kind, refs in self._open_refs(outcome).items() for ref in refs})
+        blockers = completion_blockers(self.task_outcomes, owed=owed,
+                                       ledgered={f["task"] for f in self.findings})
+        if blockers:
+            self.completed = False
+            self._stop_with("unverified", f"CompletionUnproven: {where} was accepted but the record "
+                                          f"does not support it: {'; '.join(blockers)[:600]}. Work preserved.")
+            self._note(f"completion refused: {len(blockers)} blocker(s) on the record")
 
     def _stop_with(self, kind: str, reason: str) -> None:
         """Set the legacy ``stop_reason`` and record the run's typed stop."""
@@ -2835,6 +2851,8 @@ class Session:
                                   and not any(not c["passed"] for c in self.checks))
                 if not self.completed:
                     self.run_outcome.note("unverified", "DONE with open work", legacy="")
+                else:
+                    self._guard_completion("DONE")
                 self._note("the orchestrator reports the goal met")
                 break
             if spec.description == previous_description:
@@ -2968,6 +2986,8 @@ class Session:
             if not self.completed:
                 self.run_outcome.note("unverified", "the task cap was reached without a confirmed, "
                                       "satisfied goal", legacy="")
+            else:
+                self._guard_completion("the cap's goal confirmation")
         return list(self.history)
 
     def _brief_design_reviewers(self, spec) -> None:
