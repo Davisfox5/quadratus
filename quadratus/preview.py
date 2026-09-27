@@ -58,6 +58,51 @@ _ENV_RESERVED = re.compile(r"PATH|HOME|SHELL|USER|TMPDIR|.*(?:KEY|TOKEN|SECRET|P
 _LOG_TAIL = 2_000
 
 
+class _Refuse(urllib.request.HTTPRedirectHandler):
+    """Readiness is the declared status at the declared path: a redirect,
+    even to the same origin, is an answer, not readiness."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_NO_REDIRECTS = urllib.request.build_opener(_Refuse)
+
+
+class _BoundedLog:
+    """The preview's combined output, read as it is written and kept only
+    as a bounded tail, so a chatty preview cannot grow a file without limit
+    (Codex review of 3a55d82)."""
+
+    KEEP = 8_192
+
+    def __init__(self, stream):
+        import threading
+        self._stream, self._buffer = stream, bytearray()
+        self._thread = threading.Thread(target=self._pump, daemon=True)
+        self._thread.start()
+
+    def _pump(self):
+        try:
+            for chunk in iter(lambda: self._stream.read1(4096) if hasattr(self._stream, "read1")
+                              else self._stream.read(4096), b""):
+                self._buffer += chunk
+                if len(self._buffer) > self.KEEP:
+                    del self._buffer[:-self.KEEP]
+        except (OSError, ValueError):
+            pass
+
+    def tail(self) -> str:
+        return bytes(self._buffer).decode("utf-8", "replace")[-_LOG_TAIL:].strip() or "(no output)"
+
+    def close(self):
+        self._thread.join(timeout=2)
+        try:
+            self._stream.close()
+        except OSError:
+            pass
+
+
 class PreviewFailed(RuntimeError):
     """The preview or the capture did not complete; the message says which."""
 
@@ -143,8 +188,16 @@ def profile_from_dict(data, root) -> CaptureProfile:
         if problem or not (root / first).is_file():
             raise ValueError("capture profile preview must start with a known runner or a project file")
     for argument in argv[1:]:
+        # Conservative, since an argument's meaning cannot be inferred: any
+        # value that is absolute, climbs, or names something that exists in
+        # the project (a symlink included) must be a clean project path
+        # (Codex review of 3a55d82: --config=<symlink to outside> passed).
         value = argument.split("=", 1)[-1] if argument.startswith("-") else argument
-        if "/" in value or value.startswith("."):
+        if not value:
+            continue
+        raw = PurePosixPath(value)
+        if (raw.is_absolute() or ".." in raw.parts or "/" in value or value.startswith(".")
+                or os.path.lexists(root / value)):
             problem = _path_problem(value, root)
             if problem:
                 raise ValueError(f"capture profile preview argument {argument[:60]!r} is {problem}")
@@ -255,27 +308,26 @@ def running(profile: CaptureProfile, root, deadline: Optional[float] = None):
     root = Path(root)
     if _listening(profile.host, profile.port):
         raise PreviewFailed(f"something is already listening on {profile.origin}; the preview was not started")
-    log = tempfile.TemporaryFile()
     ready_url = profile.origin + profile.ready_path
     tempdir = tempfile.mkdtemp(prefix="quadratus-preview-pyc-")
     env = dict(_environment(), **dict(profile.env), PYTHONPYCACHEPREFIX=tempdir)
     deadline = deadline if deadline is not None else time.monotonic() + profile.total_timeout
     try:
         proc = subprocess.Popen(list(profile.preview), cwd=root, env=env, stdin=subprocess.DEVNULL,
-                                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
     except OSError as exc:
-        log.close()
         import shutil
         shutil.rmtree(tempdir, ignore_errors=True)
         raise PreviewFailed(f"the preview could not start: {exc}") from None
+    log = _BoundedLog(proc.stdout)
     try:
         ready_by = min(deadline, time.monotonic() + profile.ready_timeout)
         while True:
             if proc.poll() is not None:
                 raise PreviewFailed(f"the preview exited with {proc.returncode} before it was ready: "
-                                    + _tail(log))
+                                    + log.tail())
             try:
-                with urllib.request.urlopen(ready_url, timeout=2) as response:
+                with _NO_REDIRECTS.open(ready_url, timeout=2) as response:
                     if response.status == profile.ready_status:
                         break
             except urllib.error.HTTPError as exc:
@@ -285,7 +337,7 @@ def running(profile: CaptureProfile, root, deadline: Optional[float] = None):
                 pass
             if time.monotonic() > ready_by:
                 raise PreviewFailed(f"the preview was not ready at {ready_url} within "
-                                    f"{profile.ready_timeout:g}s: " + _tail(log))
+                                    f"{profile.ready_timeout:g}s: " + log.tail())
             time.sleep(0.2)
         if proc.poll() is not None:
             raise PreviewFailed(f"the preview exited with {proc.returncode} as it became ready")
@@ -297,18 +349,14 @@ def running(profile: CaptureProfile, root, deadline: Optional[float] = None):
         shutil.rmtree(tempdir, ignore_errors=True)
 
 
-def _tail(log) -> str:
-    try:
-        log.seek(0)
-        return log.read().decode("utf-8", "replace")[-_LOG_TAIL:].strip() or "(no output)"
-    except (OSError, ValueError):
-        return "(output unavailable)"
-
-
 def capture_argv(profile: CaptureProfile, task_id: str, capture: dict) -> List[str]:
     """The harness's own capture command for a task's declared capture."""
     target = profile.origin + _web_path(capture.get("path", "/"), "capture path")
-    argv = [sys.executable, "-m", "quadratus.design_evidence", target, task_id, ".", "--pinned"]
+    # -P and a working directory outside the project: a project folder named
+    # quadratus can never stand in for the harness's own capture module
+    # (Codex review of 3a55d82); the project is passed as an absolute root.
+    isolate = ["-P"] if sys.version_info >= (3, 11) else []
+    argv = [sys.executable, *isolate, "-m", "quadratus.design_evidence", target, task_id, "{root}", "--pinned"]
     for step in capture.get("steps") or []:
         if step.get("action") == "file":
             argv += ["--upload", step["selector"], step["path"]]
@@ -332,14 +380,21 @@ def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict) -> 
             left = min(profile.capture_timeout, deadline - time.monotonic())
             if left <= 0:
                 return f"the preview used the whole {profile.total_timeout:g}s budget before the capture"
+            argv = [str(root.resolve()) if a == "{root}" else a for a in argv]
+            capture = subprocess.Popen(argv, cwd=package, env=env, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                       start_new_session=True)
+            output = _BoundedLog(capture.stdout)
             try:
-                done = subprocess.run(argv, cwd=root, env=env, capture_output=True, text=True,
-                                      timeout=left, stdin=subprocess.DEVNULL)
+                capture.wait(timeout=left)
             except subprocess.TimeoutExpired:
+                # The capture and everything it started (the browser).
+                _stop(capture)
+                output.close()
                 return f"the capture did not finish within {left:.0f}s of the {profile.total_timeout:g}s budget"
-            if done.returncode != 0:
-                return (f"the capture exited with {done.returncode}: "
-                        + ((done.stderr or "") + (done.stdout or "")).strip()[-400:])
+            output.close()
+            if capture.returncode != 0:
+                return f"the capture exited with {capture.returncode}: " + output.tail()[-400:]
     except PreviewFailed as exc:
         return str(exc)
     return ""
@@ -363,5 +418,14 @@ def validate_capture(capture) -> dict:
                 or (step["action"] == "file") != isinstance(step.get("path"), str)):
             raise ValueError("SCOPE capture steps need action click, wait or file, a selector, "
                              "and a path for file steps only")
+        if step["action"] == "file":
+            # Syntax and containment now; which task owns it is checked at
+            # dispatch, existence and hash by the capture (a repair may write
+            # its fixture). Codex review of 3a55d82: an absolute path reached
+            # a started preview before it was refused.
+            parts = PurePosixPath(step["path"]).parts
+            if (PurePosixPath(step["path"]).is_absolute() or ".." in parts or len(parts) != 4
+                    or parts[:2] != (".quadratus", "capture-fixtures") or any(ord(c) < 32 for c in step["path"])):
+                raise ValueError("SCOPE capture file steps must name .quadratus/capture-fixtures/<task>/<name>")
         out.append({k: (v.strip() if k == "selector" else v) for k, v in step.items()})
     return dict(path=path, steps=out)

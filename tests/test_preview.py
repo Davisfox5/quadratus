@@ -159,22 +159,20 @@ def test_an_interrupt_lets_the_app_run_its_own_cleanup(tmp_path):
 
 
 def test_the_capture_gets_only_what_is_left_of_one_budget(tmp_path, monkeypatch):
+    import re
     port = _free_port()
     (tmp_path / "slow.py").write_text(
         "import time, http.server, socketserver\ntime.sleep(2)\n"
         f"socketserver.TCPServer(('127.0.0.1', {port}), http.server.SimpleHTTPRequestHandler).serve_forever()\n")
-    seen = []
-    real = subprocess.run
-
-    def recording(argv, **kw):
-        seen.append(kw.get("timeout"))
-        return real([sys.executable, "-c", "pass"], **{k: v for k, v in kw.items() if k != "timeout"})
-    monkeypatch.setattr(preview.subprocess, "run", recording)
+    monkeypatch.setattr(preview, "capture_argv",
+                        lambda *a, **k: [sys.executable, "-c", "import time; time.sleep(30)"])
     profile = _profile(tmp_path, [sys.executable, "slow.py"], port, ready_timeout=10, capture_timeout=100,
                        total_timeout=4)
-    assert capture_task(profile, tmp_path, "t1", {"path": "/", "steps": []}) == ""
-    assert seen and seen[0] <= 2.5, f"the capture was given {seen[0]}s of a 4s budget after a 2s start"
-
+    started = time.monotonic()
+    message = capture_task(profile, tmp_path, "t1", {"path": "/", "steps": []})
+    left = int(re.search(r"within (\d+)s of the 4s budget", message).group(1))
+    assert left <= 2, f"the capture was given {left}s of a 4s budget after a 2s start"
+    assert time.monotonic() - started < 20
 
 def test_a_preview_that_exits_early_is_named(tmp_path):
     port = _free_port()
@@ -278,3 +276,137 @@ def test_the_harness_captures_the_declared_page_with_a_real_browser(tmp_path):
     assert ok, problem
     assert f"target: http://127.0.0.1:{port}/index.html" in shots
     assert not preview._listening("127.0.0.1", port)
+
+
+# -- Codex review of 3a55d82 ------------------------------------------------------------
+
+def _redirecting(root, port, to):
+    (root / "redirect.py").write_text(
+        "import http.server, socketserver\n"
+        "class H(http.server.SimpleHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        if self.path.startswith('/go'):\n"
+        f"            self.send_response(302); self.send_header('Location', {to!r}); self.end_headers(); return\n"
+        "        super().do_GET()\n"
+        f"socketserver.TCPServer(('127.0.0.1', {port}), H).serve_forever()\n")
+    return [sys.executable, "redirect.py"]
+
+
+def test_a_redirecting_ready_path_is_not_ready(tmp_path):
+    port = _free_port()
+    (tmp_path / "index.html").write_text("ok")
+    profile = _profile(tmp_path, _redirecting(tmp_path, port, "/index.html"), port, ready_path="/go",
+                       ready_timeout=2)
+    with pytest.raises(PreviewFailed, match="not ready"):
+        with running(profile, tmp_path):
+            pass
+
+
+@pytest.mark.skipif(not os.environ.get("QUADRATUS_CHROMIUM"), reason="needs a browser")
+def test_a_zero_step_redirect_to_another_loopback_service_is_blocked(tmp_path):
+    from quadratus.design_evidence import check, source_fingerprint
+    port, other = _free_port(), _free_port()
+    (tmp_path / "index.html").write_text("<html><head><link rel=icon href='data:,'></head><body>ok</body></html>")
+    unrelated = subprocess.Popen(_server(other), cwd=tmp_path, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 10
+        while not preview._listening("127.0.0.1", other) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        profile = _profile(tmp_path, _redirecting(tmp_path, port, f"http://127.0.0.1:{other}/index.html"), port,
+                           ready_path="/index.html")
+        assert capture_task(profile, tmp_path, "t1", {"path": "/go", "steps": []}) == ""
+        ok, problem, _ = check(tmp_path, "t1", 0, expected_source=source_fingerprint(tmp_path))
+        assert not ok and "navigation outside the preview was blocked" in problem
+    finally:
+        unrelated.kill()
+        unrelated.wait()
+
+
+@pytest.mark.parametrize("path", ["/etc/DUMMY", "../x/y/z", ".quadratus/capture-fixtures/t1/a/b", "fixtures/a.csv"])
+def test_a_fixture_path_is_refused_at_parse(path):
+    with pytest.raises(ValueError, match="capture-fixtures"):
+        validate_capture({"path": "/", "steps": [{"action": "file", "selector": "#f", "path": path}]})
+
+
+@pytest.mark.parametrize("argument", ["--config=outside-config.txt", "outside-config.txt", "--config=/etc/x"])
+def test_an_argument_naming_a_link_or_an_outside_path_is_refused(tmp_path, argument):
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_text("DUMMY")
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "outside-config.txt").symlink_to(outside)
+    with pytest.raises(ValueError, match="symlink|outside the project"):
+        profile_from_dict(dict(preview=["python", "-m", "app", argument], origin="http://127.0.0.1:5000"), root)
+
+
+def test_the_preview_log_is_a_bounded_tail(tmp_path):
+    port = _free_port()
+    (tmp_path / "chatty.py").write_text(
+        "import sys, threading, http.server, socketserver\n"
+        "def talk():\n"
+        "    while True: sys.stdout.write('x' * 65536); sys.stdout.flush()\n"
+        "threading.Thread(target=talk, daemon=True).start()\n"
+        f"socketserver.TCPServer(('127.0.0.1', {port}), http.server.SimpleHTTPRequestHandler).serve_forever()\n")
+    captured = []
+    real = preview._BoundedLog
+
+    class Spy(real):
+        def __init__(self, stream):
+            super().__init__(stream)
+            captured.append(self)
+    import unittest.mock
+    with unittest.mock.patch.object(preview, "_BoundedLog", Spy):
+        with running(_profile(tmp_path, [sys.executable, "chatty.py"], port), tmp_path):
+            time.sleep(1)
+    assert captured and len(captured[0]._buffer) <= real.KEEP
+    assert len(captured[0].tail()) <= 2_000
+
+
+def test_a_capture_timeout_stops_what_the_capture_started(tmp_path, monkeypatch):
+    port = _free_port()
+    pid_file = tmp_path / "child.pid"
+    (tmp_path / "spawn.py").write_text(
+        "import subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        f"open({str(pid_file)!r}, 'w').write(str(child.pid))\n"
+        "time.sleep(60)\n")
+    monkeypatch.setattr(preview, "capture_argv", lambda *a, **k: [sys.executable, str(tmp_path / "spawn.py")])
+    message = capture_task(_profile(tmp_path, _server(port), port, capture_timeout=2), tmp_path, "t1",
+                           {"path": "/", "steps": []})
+    assert "did not finish" in message
+    deadline = time.monotonic() + 5
+    child = int(pid_file.read_text())
+    while _alive(child) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not _alive(child), "the capture's own descendants are stopped too"
+
+
+@pytest.mark.skipif(not os.environ.get("QUADRATUS_CHROMIUM"), reason="needs a browser")
+def test_a_project_module_named_quadratus_never_runs_as_the_capture(tmp_path):
+    port = _free_port()
+    marker = tmp_path.parent / "shadow-ran"
+    (tmp_path / "quadratus").mkdir()
+    (tmp_path / "quadratus" / "__init__.py").write_text("")
+    (tmp_path / "quadratus" / "design_evidence.py").write_text(f"open({str(marker)!r}, 'w').write('ran')\n")
+    (tmp_path / "index.html").write_text("<html><head><link rel=icon href='data:,'></head><body>ok</body></html>")
+    assert capture_task(_profile(tmp_path, _server(port), port), tmp_path, "t1",
+                        {"path": "/index.html", "steps": []}) == ""
+    assert not marker.exists()
+    assert (tmp_path / ".quadratus" / "design-evidence" / "t1" / "summary.json").is_file()
+
+
+def test_only_the_capture_invocation_itself_is_a_relevant_denial():
+    from quadratus.runtime import _is_capture_invocation, _relevant_denials
+    assert _is_capture_invocation("PYTHONPATH=/p python3 -m quadratus.design_evidence http://x t1 .")
+    assert not _is_capture_invocation("printf 'quadratus.design_evidence'")
+    assert not _is_capture_invocation("cat quadratus/design_evidence.py")
+    denied = [dict(kind="permission_denied", command="printf 'quadratus.design_evidence'"),
+              dict(kind="permission_denied", command="pytest -q")]
+    assert _relevant_denials(denied, ("pytest -q",)) == ["pytest -q"]
+    assert _relevant_denials(42, ()) == []
+
+
+def test_a_malformed_denial_list_is_ignored_without_losing_accounting():
+    from quadratus.cli_providers import _extract_claude_denials
+    assert _extract_claude_denials(json.dumps({"permission_denials": 42})) == []
+    assert _extract_claude_denials(json.dumps({"permission_denials": [42, {"tool_name": "Bash"}]})) == []

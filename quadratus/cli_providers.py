@@ -1212,7 +1212,8 @@ def _extract_claude_denials(stdout: str) -> List[Dict[str, object]]:
     if not isinstance(payload, dict):
         return []
     out: List[Dict[str, object]] = []
-    for entry in payload.get("permission_denials") or []:
+    denials = payload.get("permission_denials")
+    for entry in denials if isinstance(denials, list) else []:
         if not isinstance(entry, dict):
             continue
         name = entry.get("tool_name") or entry.get("toolName") or entry.get("name")
@@ -1990,7 +1991,8 @@ def _claude_denied_fanout(stdout: str, denied: List[str]) -> List[str]:
         return []
     wanted = {name.lower() for name in denied}
     found: List[str] = []
-    for entry in payload.get("permission_denials") or []:
+    denials = payload.get("permission_denials")
+    for entry in denials if isinstance(denials, list) else []:
         if not isinstance(entry, dict):
             continue
         name = entry.get("tool_name") or entry.get("toolName") or entry.get("name")
@@ -2463,9 +2465,14 @@ class CLIProvider(LLMProvider):
             self.last_diagnostics = (
                 self.spec.extract_diagnostics(stdout) if self.spec.extract_diagnostics else None
             )
-            self.last_tool_failures = (
-                self.spec.extract_tool_failures(stdout or "") if self.spec.extract_tool_failures else []
-            )
+            try:
+                # Isolated: a malformed denial list must not cost the rest of
+                # the call's accounting (Codex review of 3a55d82).
+                self.last_tool_failures = (
+                    self.spec.extract_tool_failures(stdout or "") if self.spec.extract_tool_failures else []
+                )
+            except Exception:  # noqa: BLE001 -- observational only
+                self.last_tool_failures = []
             self.native_children = _extract_native_children(stdout)
             denied = list(getattr(self, "_native_fanout_denied", []) or [])
             if denied:
