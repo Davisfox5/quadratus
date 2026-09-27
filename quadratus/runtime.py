@@ -804,8 +804,14 @@ def _is_capture_invocation(command: str) -> bool:
         return False
     while words and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[0]):
         words = words[1:]
-    return (len(words) >= 3 and re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", Path(words[0]).name) is not None
-            and words[1:3] == ["-m", "quadratus.design_evidence"])
+    if not words or re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", Path(words[0]).name) is None:
+        return False
+    # Exactly the flags the harness generates (quadratus.preview.capture_argv
+    # adds -P; Codex review of d731499), nothing broader.
+    rest = words[1:]
+    if rest[:1] == ["-P"]:
+        rest = rest[1:]
+    return rest[:2] == ["-m", "quadratus.design_evidence"]
 
 
 def _roster_for(vendor: str):
