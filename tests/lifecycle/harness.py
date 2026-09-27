@@ -185,6 +185,20 @@ def write(call: Call, files: Dict[str, str]) -> None:
         target.write_text(text)
 
 
+def _run_stop(replay):
+    return ((replay.workflow.get("run") or {}).get("facts") or [{}])[-1]
+
+
+def ended_at_cap(replay, cap: int) -> bool:
+    """Incomplete at the task cap, the orchestrator not confirming the goal
+    (map G9): exactly this named stop and its typed cap fact."""
+    stop = _run_stop(replay)
+    return (not replay.result.completed
+            and replay.result.error == (f"GoalUnconfirmedAtCap: the task cap ({cap}) was reached and the "
+                                        "orchestrator did not confirm the goal met. Work preserved.")
+            and stop.get("kind") == "cap" and stop.get("legacy") == "GoalUnconfirmedAtCap")
+
+
 def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
         limits=None, settings=None, extra_checks=(), lead_runs_commands=True,
         capture_profile=None, readiness=None, record_complete=True) -> Replay:

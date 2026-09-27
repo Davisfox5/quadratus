@@ -190,7 +190,8 @@ def test_project_task_cap_is_reported_incomplete(project_env):
     project, settings, trace, caller = project_env
     result = run_project('Fix addition', project, settings, allow_writes=True, max_tasks=1)
     assert not result.completed
-    assert 'task limit' in result.report
+    assert result.error.startswith('GoalUnconfirmedAtCap: the task cap (1) was reached'), result.error
+    assert f'Error: {result.error}' in result.report
 
 
 def test_project_lock_rejects_overlapping_runs(tmp_path):

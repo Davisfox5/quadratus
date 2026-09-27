@@ -54,7 +54,7 @@ from .deptree import (
     DependencyWatch,
 )
 from .memory import PersistentMemory, TaskMemory, TaskSummary
-from .outcome import RunOutcome, TaskOutcome, classify, completion_blockers
+from .outcome import PRECEDENCE, RunOutcome, TaskOutcome, classify, completion_blockers, primary
 from .providers import PartialWorkSuspected, ProviderError, ProviderRefusal, TurnLimitReached
 from .registry import peers_for, resolve
 from .routing import (
@@ -2813,7 +2813,12 @@ class Session:
             self._verify_dependencies("at the end of the run")
         except (DependencyTreeChanged, DependencyIdentityUnavailable) as exc:
             self.completed = False
-            if self.stop_reason:
+            # The named stop follows precedence (map G9): integrity outranks
+            # every stop but a refusal or a security finding, so a cap or an
+            # unverified ending already named stays on the record as a
+            # secondary fact and the dependency change is what the run says.
+            prior = self.run_outcome.stop()
+            if prior is not None and PRECEDENCE.index(prior.kind) < PRECEDENCE.index("integrity"):
                 self.run_outcome.note("integrity", f"{type(exc).__name__}: {exc}")
             else:
                 self._stop_with("integrity", f"{type(exc).__name__}: {exc}")
@@ -2844,7 +2849,8 @@ class Session:
         if self.config.plan_gate is not None:
             self._note("asking the orchestrator for the expected task list")
             if not self.config.plan_gate(self.plan()):
-                self.run_outcome.note("operator", "the plan gate declined the run", legacy="")
+                self._stop_with("operator", "PlanDeclined: the operator's plan gate declined the expected task "
+                                            "list; no task ran and nothing was changed.")
                 log.info("plan gate declined the run; nothing executed")
                 return []
         previous_description: Optional[str] = None
@@ -2885,9 +2891,12 @@ class Session:
                         continue
                     self._note("requirements still open after the reopen allowance; stopping incomplete")
                     self.completed = False
-                    # A silent legacy stop (map G9): recorded with legacy "".
-                    self.run_outcome.note("unverified", "requirements still open after the reopen allowance",
-                                          legacy="")
+                    # Named (map G9): the run used to end here with a blank error.
+                    why = (self._done_refusal or "").replace("--- DONE SENT BACK ---", "").strip()
+                    self._stop_with("unverified", (
+                        f"RequirementsUnmet: DONE was sent back {self._requirement_reopens} time(s) and the "
+                        f"requirements are still not met: {why[:400] or 'the requirements check did not pass'}. "
+                        "Work preserved."))
                     break
                 self._verify_dependencies("at DONE")
                 self.run_outcome.done_accepted = True
@@ -2895,7 +2904,7 @@ class Session:
                                   and not self._open_findings_for(None)
                                   and not self._checks_standing_failed())
                 if not self.completed:
-                    self.run_outcome.note("unverified", "DONE with open work", legacy="")
+                    self._stop_open_work("DoneWithOpenWork", "the orchestrator reported DONE")
                 else:
                     self._guard_completion("DONE")
                 self._note("the orchestrator reports the goal met")
@@ -3019,18 +3028,29 @@ class Session:
                 # No slot is left to repay them, so the goal question is not asked.
                 self._stop_findings_unresolved("the task cap was reached")
                 return list(self.history)
-            self.completed = (
-                not self._unresolved_partial
-                and not self._open_findings_for(None)
-                and self._confirm_goal_met()
-                and self._requirements_satisfied()
-                and not self.open_findings
-                and not self._checks_standing_failed()
-            )
+            # The same short-circuit order as before: the goal question is asked
+            # only with no capped or audit debt, and requirements only after a
+            # confirmed goal.
+            confirmed = satisfied = None
+            if not self._unresolved_partial and not self._open_findings_for(None):
+                confirmed = self._confirm_goal_met()
+                if confirmed:
+                    satisfied = self._requirements_satisfied()
+            self.completed = bool(confirmed and satisfied and not self.open_findings
+                                  and not self._checks_standing_failed())
             self.run_outcome.done_accepted = self.completed
             if not self.completed:
-                self.run_outcome.note("unverified", "the task cap was reached without a confirmed, "
-                                      "satisfied goal", legacy="")
+                if confirmed is False:
+                    self._stop_with("cap", (f"GoalUnconfirmedAtCap: the task cap ({max_tasks}) was reached and "
+                                            "the orchestrator did not confirm the goal met. Work preserved."))
+                elif confirmed and satisfied is False:
+                    why = (self._done_refusal or "").replace("--- DONE SENT BACK ---", "").strip()
+                    self._stop_with("unverified", (
+                        f"RequirementsUnmet: the task cap ({max_tasks}) was reached with the goal confirmed "
+                        f"but the requirements not met: {why[:400] or 'the requirements check did not pass'}. "
+                        "Work preserved."))
+                else:
+                    self._stop_open_work("GoalUnconfirmedAtCap", f"the task cap ({max_tasks}) was reached")
             else:
                 self._guard_completion("the cap's goal confirmation")
         return list(self.history)
@@ -4150,8 +4170,38 @@ class Session:
             self._stop_with("unverified", (f"DesignUnverified: task {task_id} is design work without clean "
                                            f"rendered evidence: {str(problem)[:400]}. Work preserved."))
         elif not self.stop_reason:
-            # A silent legacy stop (map G9): open findings or a failed check.
-            self.run_outcome.note("unverified", "stopped on open findings or a failed check", legacy="")
+            # Named (map G9): open findings or a failed check used to end the
+            # run with a blank error (J3).
+            failing = [o.task_id for o in self.task_outcomes if o.checks and not o.checks[-1]["passed"]]
+            self._stop_open_work("CheckFailing" if failing else "FindingsOpen", "a task closed with open work")
+
+    def _open_work(self) -> List[str]:
+        """What is still open, as facts from the record; each is one reason."""
+        reasons = []
+        for outcome in self.task_outcomes:
+            if outcome.checks and not outcome.checks[-1]["passed"]:
+                last = outcome.checks[-1]
+                reasons.append(f"task {outcome.task_id}'s last check still fails (attempt {last.get('attempt', '?')}, "
+                               f"output artifact {last.get('output_artifact', 'unavailable')})")
+        if any(f.active and f.kind == "product" for f in self.run_outcome.facts):
+            reasons.append("the merge gate still fails")
+        if self._partial_tasks:
+            reasons.append(f"capped task(s) {', '.join(sorted(self._partial_tasks))} not continued to completion")
+        ledger = self._open_findings_for(None)
+        if ledger:
+            reasons.append(f"audit findings {', '.join(ledger)} are open")
+        if self.open_findings:
+            reasons.append(f"{len(self.open_findings)} open finding(s), first: {self.open_findings[0][:160]}")
+        return reasons
+
+    def _stop_open_work(self, name: str, where: str) -> None:
+        """A named, typed stop for a run that ends with open work (map G9):
+        the kind is the record's own primary, and the reasons are facts."""
+        kind = primary(self.run_outcome, self.task_outcomes, False)
+        if kind in ("clean", "unverified"):
+            kind = "unverified"
+        reasons = self._open_work() or ["the record shows no single open item; see the task outcomes"]
+        self._stop_with(kind, f"{name}: {where}, but {'; '.join(reasons)[:600]}. Work preserved.")
 
     def _lead_context(self, spec: TaskSpec) -> List[str]:
         """The capped predecessor's handoff and the task's files, for a lead.

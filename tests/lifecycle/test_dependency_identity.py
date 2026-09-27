@@ -81,7 +81,7 @@ def test_a_revision_below_the_cap_is_unchanged(tmp_path, monkeypatch):
         return H.claude_ok("Nothing to change after review.\nCHANGED: []", num_turns=5)
     replay = _run(tmp_path, monkeypatch, Script(revision=revision), files=FILES)
     assert _turns_flag(replay.of("revision")[0]) == str(CAP)
-    assert H.gate_results(replay) == ["PASSED"] and replay.result.error == ""
+    assert H.gate_results(replay) == ["PASSED"] and H.ended_at_cap(replay, 1)
     assert H.result_json(replay)["turn_limited_tasks"] == []
 
 
@@ -98,7 +98,7 @@ def test_a_capped_gate_fix_that_fixed_the_code_is_gated_again_and_passes(tmp_pat
     (fix,) = replay.of("gate-fix")
     assert _turns_flag(fix) == str(CAP)
     assert H.gate_results(replay) == ["PASSED"], "the required check decides, after the capped fix"
-    assert replay.result.error == "" and replay.of("closeout")
+    assert H.ended_at_cap(replay, 1) and replay.of("closeout")
     assert H.result_json(replay)["turn_limited_tasks"] == []
     assert replay.artifacts("capped-fix")
 
@@ -121,7 +121,7 @@ def test_a_gate_fix_below_the_cap_is_unchanged(tmp_path, monkeypatch):
         return H.claude_ok('Fixed add.\nCHANGED: ["app.py"]', num_turns=6)
     replay = _run(tmp_path, monkeypatch, Script(lead=_looked, **{"gate-fix": gate_fix}), files=FILES)
     assert _turns_flag(replay.of("gate-fix")[0]) == str(CAP)
-    assert H.gate_results(replay) == ["PASSED"] and replay.result.error == ""
+    assert H.gate_results(replay) == ["PASSED"] and H.ended_at_cap(replay, 1)
     assert not replay.artifacts("capped-fix")
 
 
@@ -146,7 +146,7 @@ def test_a_capped_design_fix_with_fresh_renders_is_checked_and_reviewed(tmp_path
     replay = _run(tmp_path, monkeypatch, script, files=_design_files())
     (fix,) = replay.of("design-fix")
     assert _turns_flag(fix) == str(CAP)
-    assert replay.result.error == "" and len(replay.of("design-review")) == 1
+    assert H.ended_at_cap(replay, 1) and len(replay.of("design-review")) == 1
     assert H.gate_results(replay)[-1] == "PASSED", "the gate re-ran after the capped fix"
 
 
@@ -179,7 +179,7 @@ def test_a_gate_fix_denied_the_harness_command_at_the_cap_is_a_capability_stop(t
 
 def test_reviewers_closeout_and_the_orchestrator_are_not_capped(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, Script(), files=FILES)
-    assert replay.result.error == ""
+    assert H.ended_at_cap(replay, 1)
     for role in ("orchestrator", "collaborator", "recheck"):
         assert all(_turns_flag(c) is None for c in replay.of(role)), role
     # The close-out keeps its own one-turn, tool-less summary form.
@@ -290,7 +290,7 @@ def test_a_check_writing_an_operator_declared_cache_proceeds_and_is_recorded(tmp
                         lambda **kw: real(**kw, dependency_cache_exemptions=("node_modules/.cache",)))
     replay = _run(tmp_path, monkeypatch, Script(), files={**FILES, "node_modules/pkg/index.js": SHIM},
                   check=_writing_check("node_modules/.cache/babel.json"))
-    assert replay.result.error == "", replay.result.error
+    assert H.ended_at_cap(replay, 1), replay.result.error
     record = H.result_json(replay)["dependency_identity"]
     assert record["status"] == "unchanged" and record["exemptions"] == ["node_modules/.cache"]
     assert record["events"][0]["exempt_changed"] == ["node_modules/.cache", "node_modules/.cache/babel.json"]
@@ -362,20 +362,20 @@ def test_the_same_check_resolves_the_frozen_module_when_no_shim_is_placed(tmp_pa
                 "process.exit(require('probe') === 'real' ? 0 : 1);\n")
     replay = _run(tmp_path, monkeypatch, Script(), files={**FILES, "check.js": check_js},
                   check=shlex.join([node, "check.js"]))
-    assert replay.result.error == "" and H.gate_results(replay) == ["PASSED"]
+    assert H.ended_at_cap(replay, 1) and H.gate_results(replay) == ["PASSED"]
     assert marker.read_text() == str(frozen / "index.js")
 
 
 def test_a_source_only_change_with_an_unchanged_tree_proceeds(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, Script(), files={**FILES, "node_modules/pkg/index.js": SHIM})
-    assert replay.result.error == "" and H.gate_results(replay) == ["PASSED"]
+    assert H.ended_at_cap(replay, 1) and H.gate_results(replay) == ["PASSED"]
     record = H.result_json(replay)["dependency_identity"]
     assert record["status"] == "unchanged" and record["roots"] == ["node_modules"] and record["events"] == []
 
 
 def test_a_project_with_no_trees_proceeds_and_absence_is_its_identity(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, Script(), files=FILES)
-    assert replay.result.error == ""
+    assert H.ended_at_cap(replay, 1)
     record = H.result_json(replay)["dependency_identity"]
     assert record["status"] == "unchanged" and record["roots"] == [] and record["entries"] == 0
 
@@ -431,7 +431,7 @@ def test_a_grok_gate_fix_cancelled_at_the_cap_is_the_cap(tmp_path, monkeypatch, 
     assert _turns_flag(fix) == str(CAP)
     assert replay.artifacts("capped-fix"), replay.result.error
     assert H.gate_results(replay) == (["PASSED"] if edits else ["FAILED"])
-    assert replay.result.error == "" if edits else not replay.result.completed
+    assert H.ended_at_cap(replay, 1) if edits else not replay.result.completed
 
 
 def test_a_grok_revision_cancelled_at_the_cap_takes_the_capped_task_path(tmp_path, monkeypatch):

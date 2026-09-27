@@ -140,7 +140,7 @@ def test_the_whole_task_lifecycle_in_every_request_layout(tmp_path, monkeypatch,
 
     replay = _run(tmp_path, monkeypatch, Script(lead=lead, collaborator=collaborator, revision=revision),
                   max_tasks=2)
-    assert replay.result.error == "" and _gate_passed(replay)
+    assert H.ended_at_cap(replay, 2) and _gate_passed(replay)
     assert _read(replay, "app.py") == FIXED and "test_negative" in _read(replay, "tests/test_app.py")
     assert "returns the sum" in _read(replay, "README.md")
     assert len(replay.of("worker")) == 1
@@ -158,7 +158,7 @@ def test_a_quoted_request_example_in_a_delivery_is_a_draft(tmp_path, monkeypatch
                 'CHANGED: ["app.py"]')
 
     replay = _run(tmp_path, monkeypatch, Script(lead=lead))
-    assert replay.result.error == "" and _gate_passed(replay) and _read(replay, "app.py") == FIXED
+    assert H.ended_at_cap(replay, 1) and _gate_passed(replay) and _read(replay, "app.py") == FIXED
     assert len([c for c in replay.of("lead") if c.task == "t1"]) == 1
 
 
@@ -174,7 +174,7 @@ def test_a_revision_that_repeats_earlier_files_is_rejected(tmp_path, monkeypatch
 
 def test_a_revision_with_no_edits_and_an_empty_declaration_proceeds(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, Script())
-    assert replay.result.error == "" and _gate_passed(replay)
+    assert H.ended_at_cap(replay, 1) and _gate_passed(replay)
     assert [c.task for c in replay.of("closeout")] == ["t1"]
 
 
@@ -216,7 +216,7 @@ def _design_files():
 def test_stale_renders_are_recaptured_without_source_edits(tmp_path, monkeypatch):
     replay = H.run(tmp_path, monkeypatch, _design_script("Renders refreshed.\nCHANGED: []"),
                    files=_design_files())
-    assert replay.result.error == "" and _gate_passed(replay)
+    assert H.ended_at_cap(replay, 1) and _gate_passed(replay)
     assert len(replay.of("design-fix")) == 1 and len(replay.of("design-review")) == 1
     record = json.loads(replay.artifact_texts("design-evidence")[0])
     assert record["verified"] is True and record["final_review"]["verdict"] == "APPROVED"
@@ -235,7 +235,7 @@ def test_renders_of_an_unrelated_page_are_an_open_finding(tmp_path, monkeypatch)
                    _design_script("Renders refreshed.\nCHANGED: []",
                                   review="BLOCKING: the renders do not show the changed interface"),
                    files=_design_files())
-    assert replay.result.error == "" and _gate_passed(replay) and not replay.result.completed
+    assert replay.result.error.startswith("FindingsOpen: a task closed with open work, but 1 open finding(s), first: Task t1 design: BLOCKING: ") and _gate_passed(replay) and not replay.result.completed
     record = json.loads(replay.artifact_texts("design-evidence")[0])
     # The verdict is scripted: this proves a BLOCKING verdict becomes a finding
     # and the prompt asks for the feature's state, not that a model can tell
@@ -270,7 +270,7 @@ def test_a_claude_lead_at_its_cap_hands_back_partial_work(tmp_path, monkeypatch)
 
     replay = _run(tmp_path, monkeypatch, Script(orchestrator=_continuing(DECL_T1), lead=lead), max_tasks=2,
                   settings=Settings(backend="cli", lead_max_turns=14))
-    assert replay.result.error == "" and _gate_passed(replay)
+    assert H.ended_at_cap(replay, 2) and _gate_passed(replay)
     assert _read(replay, "app.py") == FIXED, "the capped lead's edit is kept"
     assert "--max-turns" in replay.of("lead")[0].argv
     assert "CONTINUES: t1" in replay.of("orchestrator")[1].prompt or "t1" in replay.of("orchestrator")[1].prompt
@@ -301,7 +301,7 @@ def test_a_grok_lead_cancelled_at_the_cap_is_the_cap(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, Script(orchestrator=_continuing(DECL_T2), lead=lead), max_tasks=2,
                   files=FILES_OK, settings=Settings(backend="cli", lead_max_turns=14))
     assert replay.of("lead")[0].vendor == "grok"
-    assert replay.result.error == "" and _gate_passed(replay)
+    assert H.ended_at_cap(replay, 2) and _gate_passed(replay)
     assert "finished" in _read(replay, "README.md")
     assert [c.task for c in replay.of("lead")] == ["t1", "t2"]
 
@@ -356,7 +356,7 @@ def test_a_grok_cancel_before_the_cap_is_a_failure_recovered_once_on_an_unchange
                   files=FILES_OK, settings=Settings(backend="cli", lead_max_turns=14))
     leads = replay.of("lead")
     assert leads[0].vendor == "grok" and len(leads) == 2 and leads[1].vendor != "grok"
-    assert replay.result.error == "" and _gate_passed(replay) and "returns the sum" in _read(replay, "README.md")
+    assert H.ended_at_cap(replay, 1) and _gate_passed(replay) and "returns the sum" in _read(replay, "README.md")
     assert any("lead-recovery" in k for k in replay._kinds_all())
 
 
@@ -367,7 +367,7 @@ def test_a_refused_closeout_keeps_a_harness_record_and_the_run_continues(tmp_pat
         return H.claude_refusal() if call.task == "t1" else CLOSEOUT
 
     replay = _run(tmp_path, monkeypatch, Script(closeout=closeout), max_tasks=2)
-    assert replay.result.error == "" and _gate_passed(replay)
+    assert H.ended_at_cap(replay, 2) and _gate_passed(replay)
     assert [c.task for c in replay.of("closeout")] == ["t1", "t2"], "one close-out call per task, no retry"
     refused = replay.artifact_texts("closeout-refused")
     assert len(refused) == 1 and "declined" in refused[0]
@@ -469,7 +469,7 @@ def test_the_planner_is_told_to_count_test_setup_and_split_heavy_setup(tmp_path,
 
 def test_a_continuation_sized_for_its_tests_and_setup_proceeds(tmp_path, monkeypatch):
     replay = _continuation_run(tmp_path, monkeypatch, cases=6)       # ~55 lines against ~60
-    assert replay.result.error == "" and _gate_passed(replay)
+    assert H.ended_at_cap(replay, 2) and _gate_passed(replay)
     assert "test_case_5" in _read(replay, "tests/test_clock.py")
 
 
@@ -581,7 +581,7 @@ def test_a_cap_with_no_detected_change_hands_over_the_files_and_claims_nothing_m
 
     replay = _run(tmp_path, monkeypatch, Script(orchestrator=_continuing(DECL_T2), lead=lead), max_tasks=2,
                   files=FILES_OK, settings=Settings(backend="cli", lead_max_turns=14))
-    assert replay.result.error == "" and _gate_passed(replay)
+    assert H.ended_at_cap(replay, 2) and _gate_passed(replay)
     assert "No change to project files was detected after it stopped" in replay.of("orchestrator")[1].prompt
     second = [c for c in replay.of("lead") if c.task == "t2"][0].prompt
     handoff = _section(second, "## Handoff from t1")
@@ -608,7 +608,7 @@ def test_capped_edits_reach_the_continuation_as_the_tree_now_has_them(tmp_path, 
     pack = _section(second, "## Project files, read by the harness")
     assert pack.index("### README.md") < pack.index("### app.py"), "the capped call's files come first"
     assert "partial draft" in pack
-    assert replay.result.error == "" and "finished" in _read(replay, "README.md")
+    assert H.ended_at_cap(replay, 2) and "finished" in _read(replay, "README.md")
 
 
 def test_a_continuation_is_handed_its_existing_test_setup(tmp_path, monkeypatch):
@@ -619,7 +619,7 @@ def test_a_continuation_is_handed_its_existing_test_setup(tmp_path, monkeypatch)
     pack = _section(second, "## Project files, read by the harness")
     assert "tests/test_clock.py (does not exist yet)" in pack, "a file to create is named, not guessed at"
     assert "### app.py" in pack and "return a + b" in pack
-    assert replay.result.error == "" and _gate_passed(replay)
+    assert H.ended_at_cap(replay, 2) and _gate_passed(replay)
 
 
 def test_secret_hidden_and_linked_files_in_a_scope_never_reach_a_prompt(tmp_path, monkeypatch):
@@ -702,7 +702,7 @@ def _gate_output(replay):
 def test_a_declared_node_suite_runs_beside_the_operator_check(tmp_path, monkeypatch, real_runners):
     replay = _run(tmp_path, monkeypatch, Script(), files=_node_project(NODE_PASS))
     checks = H.result_json(replay)["checks"]
-    assert checks and all(c["passed"] for c in checks) and replay.result.error == ""
+    assert checks and all(c["passed"] for c in checks) and H.ended_at_cap(replay, 1)
     output = _gate_output(replay)
     assert "check: passed" in output and "declared-npm: passed" in output, output
 
@@ -747,7 +747,7 @@ def test_an_operator_extra_check_runs_beside_the_check_and_stays_out_of_prompts(
     replay = _run(tmp_path, monkeypatch, Script(), files=_examiner_project(NODE_PASS),
                   extra_checks=[["node", "--test", EXAMINER]])
     checks = H.result_json(replay)["checks"]
-    assert checks and all(c["passed"] for c in checks) and replay.result.error == ""
+    assert checks and all(c["passed"] for c in checks) and H.ended_at_cap(replay, 1)
     assert "check: passed" in _gate_output(replay) and "extra-1: passed" in _gate_output(replay)
     plan = json.loads((replay.result.run_dir / "gate-plan.json").read_text())
     assert [(g["id"], g["argv"]) for g in plan] == [("check", plan[0]["argv"]),

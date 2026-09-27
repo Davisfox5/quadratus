@@ -106,15 +106,18 @@ def test_j2_a_gate_fix_that_works_leaves_the_task_clean_with_its_attempt_counted
     assert t1["primary"] == "clean" and replay.result.completed
 
 
-def test_j3_a_gate_still_failing_is_an_attributed_product_fact_and_a_silent_stop(tmp_path, monkeypatch):
+def test_j3_a_gate_still_failing_is_an_attributed_product_fact_and_a_named_stop(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, Script(orchestrator=_then_done(DECL_T1), lead=_looked), max_tasks=3)
     t1 = _task(replay, "t1")
     product = [f for f in t1["facts"] if f["kind"] == "product"]
     assert product and product[0]["legacy_route"] is False and product[0]["stage"] == "checks"
     assert t1["checks"][-1]["attribution"] == {"product": True, "reasons": []}
     assert t1["primary"] == "product" and t1["edges"]["checks"] is False
-    assert replay.result.error == "" and not replay.result.completed
-    assert _stop(replay)["legacy"] == "", "today's stop is silent (map G9)"
+    assert replay.result.error.startswith("CheckFailing: a task closed with open work, but task t1's last "
+                                          "check still fails (attempt 2, output artifact ")
+    assert not replay.result.completed
+    stop = _stop(replay)
+    assert stop["legacy"] == "CheckFailing" and stop["kind"] == "product", "named since G9"
     assert "still failing at close" in replay.of("closeout")[0].prompt, "the close-out is told the gate failed"
 
 

@@ -252,7 +252,8 @@ def test_an_unrelated_clean_task_does_not_resolve_a_capped_one(tmp_path, monkeyp
     result, rows, data, seen = _run(
         tmp_path, monkeypatch, [_capped_after_writing("half done"), _finishes],
         tasks=[TASK_1, UNRELATED])
-    assert not result.completed and not result.error
+    assert not result.completed
+    assert "capped task(s) t1 not continued to completion" in result.error, result.error
     assert data["turn_limited_tasks"] == ["t1"]
     assert "CONTINUES: t1" in seen["orchestrator"][1], "the orchestrator is told how to link the follow-up"
 
