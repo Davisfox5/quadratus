@@ -47,7 +47,7 @@ def _repair(css=".toolbar { flex-wrap: wrap; }\n", **kw):
 
 
 def _run(tmp_path, monkeypatch, plan, leads, *, review="APPROVED", fix=None, max_tasks=6, audits=None,
-         settings=None):
+         settings=None, roles=None):
     """``plan``: orchestrator replies in order (then DONE); ``leads``: lead handler per task id."""
     plan = list(plan)
     audits = list(audits or [MET] * 8)
@@ -65,6 +65,7 @@ def _run(tmp_path, monkeypatch, plan, leads, *, review="APPROVED", fix=None, max
         "requirements-review": lambda call, replay: "COMPLETE",
         "auditor": lambda call, replay: audits.pop(0) if audits else MET,
         "design-fix": fix or (lambda call, replay: "Captured again.\nCHANGED: []"),
+        **(roles or {}),
     }
     replay = H.run(tmp_path, monkeypatch, Script(**overrides), files=_design_files(), max_tasks=max_tasks,
                    settings=settings or Settings(backend="cli"))
@@ -144,11 +145,82 @@ def test_two_editing_repairs_reopen_the_first_until_its_state_is_rechecked(tmp_p
 
 def test_a_recapture_of_the_same_address_in_another_state_does_not_resolve(tmp_path, monkeypatch):
     """Codex worker review: one URL shows the list, an empty dialog and the preview."""
-    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, RECAPTURE + "\nRESOLVES: F1"],
-                  {"t1": _capture(measured=WIDE, steps=STATE), "t2": _capture()})
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, RECAPTURE + "\nRESOLVES: F1", REPAIR + "\nRESOLVES: F1"],
+                  {"t1": _capture(measured=WIDE, steps=STATE), "t2": _capture(), "t3": _repair(steps=STATE)})
     f1 = replay.findings[0]
     assert f1["status"] == "open" and "different state" in f1["last_attempt"]
-    assert not replay.result.completed
+    assert replay.result.error.startswith("FindingsUnresolved: task t2") and not replay.result.completed
+    assert [c.task for c in replay.of("lead")] == ["t1", "t2"], "no automatic second repair"
+
+
+@pytest.mark.parametrize("replacement, reason", [
+    (dict(target="http://127.0.0.1:5000/other"), "different state"),
+    (dict(steps=STATE, measured={"mobile": 391}), "replaced after they were reviewed"),
+])
+def test_resolving_renders_replaced_after_review_reopen_at_done(tmp_path, monkeypatch, replacement, reason):
+    """Codex review of e47c7ed: a later no-source task swapped t2's renders and DONE completed."""
+    def swap(call, replay):
+        H.evidence(Path(call.cwd), call.task, age=0)
+        H.evidence(Path(call.cwd), "t2", age=0, **replacement)
+        return "Captured the page.\nCHANGED: []"
+    later = RECAPTURE.replace("Re-check the import page.", "Look over the page once more.")
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1", later],
+                  {"t1": _capture(measured=WIDE, steps=STATE), "t2": _repair(steps=STATE), "t3": swap},
+                  max_tasks=8)
+    f1 = replay.findings[0]
+    assert f1["status"] == "open" and reason in f1["reopened"]
+    assert replay.result.error.startswith("FindingsUnresolved") and not replay.result.completed
+
+
+def test_a_failed_gate_keeps_the_finding_open_and_stays_the_primary_stop(tmp_path, monkeypatch):
+    """Codex review of e47c7ed: checks [pass, fail] and F1 resolved by t2."""
+    def breaking(call, replay):
+        H.write(call, {"static/style.css": ".toolbar { flex-wrap: wrap; }\n",
+                       "app.py": "def add(a, b):\n    return a - b - 1\n"})
+        H.evidence(Path(call.cwd), call.task, age=0)
+        return 'Wrapped the toolbar and re-captured.\nCHANGED: ["static/style.css", "app.py"]'
+    scope = dict(REPAIR_SCOPE, permitted_paths=REPAIR_SCOPE["permitted_paths"] + ["app.py"])
+    repair = REPAIR.replace(json.dumps(REPAIR_SCOPE), json.dumps(scope))
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, repair + "\nRESOLVES: F1"],
+                  {"t1": _capture(measured=WIDE), "t2": breaking},
+                  roles={"gate-fix": lambda call, replay: "Could not see why.\nCHANGED: []"})
+    f1 = replay.findings[0]
+    assert H.gate_results(replay)[-1] == "FAILED"
+    assert f1["status"] == "open" and "integration gate failed" in f1["last_attempt"]
+    assert not replay.result.error.startswith("FindingsUnresolved") and not replay.result.completed
+
+
+def test_an_audit_whose_evidence_cannot_be_delivered_creates_no_debt(tmp_path, monkeypatch):
+    from quadratus import runtime
+    monkeypatch.setattr(runtime, "_MAX_EVIDENCE_TOTAL", 1)
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT], {"t1": _capture(measured=WIDE)})
+    assert replay.findings == []
+    assert replay.result.error.startswith("DesignUnverified") and "could not be delivered" in replay.result.error
+
+
+@pytest.mark.parametrize("png, measured, debt", [
+    (1280, 450, False),  # a desktop-width image filed as mobile
+    (520, 520, True),    # a genuine full-page capture of an overflowing page
+])
+def test_screenshot_and_measured_width_must_agree_for_debt(tmp_path, monkeypatch, png, measured, debt):
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT],
+                  {"t1": _capture(measured={"mobile": measured}, png={"mobile": png})})
+    assert bool(replay.findings) is debt
+    if not debt:
+        assert "does not match the 450px page width" in replay.result.error
+
+
+def test_a_scope_stop_in_a_resolving_task_is_written_into_the_finding(tmp_path, monkeypatch):
+    def rogue(call, replay):
+        H.write(call, {"static/style.css": ".toolbar { flex-wrap: wrap; }\n", "README.md": "# app\n\nx\n"})
+        H.evidence(Path(call.cwd), call.task, age=0)
+        return 'Done.\nCHANGED: ["static/style.css", "README.md"]'
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1"],
+                  {"t1": _capture(measured=WIDE), "t2": rogue})
+    f1 = replay.findings[0]
+    assert replay.result.error and not replay.result.error.startswith("FindingsUnresolved")
+    assert f1["status"] == "open" and f1["unresolved_reason"].startswith("open when the run stopped")
+    assert f1["last_attempt"]
 
 
 def test_the_task_cap_with_an_open_finding_is_a_named_stop(tmp_path, monkeypatch):
@@ -233,14 +305,12 @@ def test_a_resolves_without_its_requirements_in_covers_is_sent_back(tmp_path, mo
     assert "missing: R2" in _orchestrator_prompts(replay)[2]
 
 
-def test_a_non_ui_task_cannot_resolve_an_overflow(tmp_path, monkeypatch):
-    def docs(call, replay):
-        H.write(call, {"README.md": "# app\n\ndocumented\n"})
-        return 'Documented.\nCHANGED: ["README.md"]'
-    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, DOCS + "\nRESOLVES: F1"],
-                  {"t1": _capture(measured=WIDE), "t2": docs})
-    assert replay.findings[0]["status"] == "open"
-    assert replay.result.error.startswith("FindingsUnresolved: audit findings F1") and not replay.result.completed
+def test_a_non_ui_task_naming_resolves_is_sent_back_before_its_lead(tmp_path, monkeypatch):
+    """Codex review of e47c7ed: it used to run, leave F1 open, and let another repair run."""
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, DOCS + "\nRESOLVES: F1"], {"t1": _capture(measured=WIDE)})
+    assert "RESOLVES needs a UI task" in _orchestrator_prompts(replay)[2]
+    assert [c.task for c in replay.of("lead")] == ["t1"]
+    assert replay.findings[0]["status"] == "open" and not replay.result.completed
 
 
 def test_clean_renders_of_another_page_do_not_resolve(tmp_path, monkeypatch):
@@ -248,16 +318,21 @@ def test_clean_renders_of_another_page_do_not_resolve(tmp_path, monkeypatch):
                   {"t1": _capture(measured=WIDE), "t2": _repair(target="http://127.0.0.1:5000/other")})
     assert replay.findings[0]["status"] == "open"
     assert "different state: http://127.0.0.1:5000/other" in replay.findings[0]["last_attempt"]
-    assert replay.result.error.startswith("FindingsUnresolved")
+    assert replay.result.error.startswith("FindingsUnresolved: task t2 named RESOLVES F1")
 
 
 def test_approval_without_delivered_evidence_resolves_nothing(tmp_path, monkeypatch):
     from quadratus import runtime
-    monkeypatch.setattr(runtime, "_MAX_EVIDENCE_TOTAL", 1)
-    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1"],
-                  {"t1": _capture(measured=WIDE), "t2": _repair()})
+    repair = _repair()
+
+    def starved(call, replay):
+        monkeypatch.setattr(runtime, "_MAX_EVIDENCE_TOTAL", 1)
+        return repair(call, replay)
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1", REPAIR + "\nRESOLVES: F1"],
+                  {"t1": _capture(measured=WIDE), "t2": starved})
     assert not replay.of("design-review")
     assert replay.findings[0]["status"] == "open" and not replay.result.completed
+    assert [c.task for c in replay.of("lead")] == ["t1", "t2"], "no second repair after a failed attempt"
 
 
 def test_a_repair_that_leaves_the_overflow_stops_as_today(tmp_path, monkeypatch):

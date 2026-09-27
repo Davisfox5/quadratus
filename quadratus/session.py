@@ -863,6 +863,7 @@ class Session:
         self.findings: List[dict] = []
         self._current_covers: List[str] = []
         self._current_resolves: List[str] = []
+        self._resolution_candidate: Optional[str] = None
         #: Capped tasks not yet finished by a task that names them in a
         #: CONTINUES line. Any entry blocks completion.
         self._partial_tasks: set = set()
@@ -2293,6 +2294,9 @@ class Session:
     def run(self, *, max_tasks: int = 20) -> List[TaskSummary]:
         """Drive tasks until the orchestrator says DONE or the cap is hit.
 
+        Whatever ends the run, every audit finding still open says why in its
+        own record (Codex review of e47c7ed), beside the run's error.
+
         The cap is a runaway backstop, not a quality gate: a loop that has not
         converged by then has a problem the cap will not fix, and the caller
         should look at why.
@@ -2304,6 +2308,18 @@ class Session:
         """
         if max_tasks < 1:
             raise ValueError("max_tasks must be at least 1")
+        try:
+            history = self._run_tasks(max_tasks)
+        except BaseException as exc:
+            self._annotate_open_findings(f"{type(exc).__name__}: {str(exc)[:200]}")
+            raise
+        if not self.completed:
+            # The record says what holds at the end, whatever stopped the run.
+            self._recheck_resolved_findings()
+            self._annotate_open_findings(self.stop_reason[:240] or "the run ended incomplete")
+        return history
+
+    def _run_tasks(self, max_tasks: int) -> List[TaskSummary]:
         self.completed = False
         self.stop_reason = ""
         if self.project:
@@ -2387,7 +2403,7 @@ class Session:
                 continue
             lines = len(_RESOLVES.findall(spec.description or ""))
             resolves, spec = _read_resolves(spec)
-            problem = (self._resolves_problem(resolves, covers) if lines <= 1 else
+            problem = (self._resolves_problem(resolves, covers, spec) if lines <= 1 else
                        "RESOLVES appears on more than one line; name every finding on one line.")
             if problem:
                 # The same allowance as COVERS: refused before any lead call.
@@ -2398,6 +2414,8 @@ class Session:
                 previous_description = None
                 continue
             self._current_covers, self._current_resolves = list(covers), list(resolves or [])
+            self._resolution_candidate = None
+            checks_before, open_before = len(self.checks), len(self.open_findings)
             self._continues = continues
             try:
                 summary = self.run_task(spec)
@@ -2428,19 +2446,21 @@ class Session:
             # an unrelated clean task must not make the run complete (Codex
             # review of #25, 2026-09-25).
             self._partial_tasks.discard(continues)
-            status = self.memory.ledger.requirement_status
+            unresolved = self._settle_resolution(spec, checks_before, open_before)
             for rid in covers:
-                if rid in self.memory.ledger.requirements:
-                    # A requirement with an open finding stays unmet whatever
-                    # this task covered; only resolving every finding naming
-                    # it lets a covering task mark it covered.
-                    owing = self._open_findings_for(rid)
-                    status[rid] = (f"NOT MET: open finding {', '.join(owing)}" if owing
-                                   else f"covered by {spec.task_id}")
+                self._mark_covered(rid, spec.task_id)
             self._current_covers, self._current_resolves = [], []
             self._note(f"task {len(self.history)} closed by {summary.author}")
             if self.open_findings or (self.checks and not self.checks[-1]['passed']):
                 self._name_findings_stop()
+                break
+            if unresolved:
+                # An explicit attempt that did not establish its acceptance is
+                # a stop, never an automatic second repair (contract v3).
+                self.stop_reason = (f"FindingsUnresolved: task {spec.task_id} named RESOLVES "
+                                    f"{', '.join(unresolved)} but did not establish their acceptance. "
+                                    "Work preserved.")
+                self._note(f"task {spec.task_id} did not resolve {', '.join(unresolved)}; stopping incomplete")
                 break
         else:
             # Every slot went to a task and none of them stopped the loop, so
@@ -2505,6 +2525,7 @@ class Session:
             return
         ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
                                                     expected_source=self._trusted_source())
+        problem, records = self._qualify_debt(spec, ok, problem, records)
         if self._audit_debt_applies(spec, ok, records):
             # A recapture cannot change a measured fault on valid evidence, so
             # no fix call is spent; the fault becomes debt for a repair task.
@@ -2536,6 +2557,7 @@ class Session:
             self._run_integration_gate(lead, spec, task)
             ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
                                                         expected_source=self._trusted_source())
+            problem, records = self._qualify_debt(spec, ok, problem, records)
             if self._audit_debt_applies(spec, ok, records):
                 record.update(verified=False, problem=problem,
                               findings=self._record_audit_findings(spec, records))
@@ -2561,15 +2583,19 @@ class Session:
                     blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
                 self.open_findings.extend(f"Task {spec.task_id} design: {b.strip()}" for b in blocking)
                 if not blocking and self._current_resolves:
-                    self._resolve_findings(spec)
+                    # Committed only once the whole task has passed; see _settle_resolution.
+                    self._resolution_candidate = spec.task_id
         self.design_checks.append(record)
         task.keep(json.dumps(record), kind="design-evidence")
 
     def _evidence_files(self, spec, shots) -> List[str]:
         """Project-relative evidence files behind ``shots``, for the Fleet to
         copy into a review call's source copy (see runtime._furnish_evidence)."""
+        return self._evidence_files_for(spec.task_id)
+
+    def _evidence_files_for(self, task_id) -> List[str]:
         from .design_evidence import evidence_dir
-        folder = evidence_dir(self.project, spec.task_id)
+        folder = evidence_dir(self.project, task_id)
         files = [folder / "summary.json"]
         for view in ("desktop", "mobile"):
             files += [folder / view / "page.png", folder / view / "evidence.json"]
@@ -2758,8 +2784,7 @@ class Session:
                 else:
                     self._partial_tasks.discard(continues)
                     for rid in covers:
-                        if rid in self.memory.ledger.requirements:
-                            self.memory.ledger.requirement_status[rid] = f"covered by {spec.task_id}"
+                        self._mark_covered(rid, spec.task_id)
                 self._note(f"{spec.task_id} merged ({len(changed)} files) and closed by {summary.author}")
         self.parallel_batches.append(record)
         gate = self.config.integration_gate
@@ -3111,7 +3136,7 @@ class Session:
         return [f["id"] for f in self.findings
                 if f["status"] == "open" and (rid is None or rid in f["requirements"])]
 
-    def _resolves_problem(self, resolves, covers) -> str:
+    def _resolves_problem(self, resolves, covers, spec) -> str:
         """Why a RESOLVES line cannot stand, before any lead call; "" if it can."""
         if resolves is None:
             return ""
@@ -3119,6 +3144,10 @@ class Session:
             return "RESOLVES needs the requirements ledger, which is off for this run."
         if not resolves:
             return "RESOLVES names no finding."
+        if not is_design_task(spec):
+            # Only a UI task's own renders can show a measured fault gone.
+            return ("RESOLVES needs a UI task whose own renders can show the fault gone; this task "
+                    "is not one.")
         if len(set(resolves)) != len(resolves):
             return f"RESOLVES names a finding twice: {', '.join(resolves)}."
         by_id = {f["id"]: f for f in self.findings}
@@ -3156,9 +3185,20 @@ class Session:
         for finding in self.findings:
             if finding["status"] != "resolved" or not self.project:
                 continue
-            ok, problem, _ = check(self.project, finding["resolved_by"], 0,
-                                   expected_source=self._trusted_source())
-            if not ok:
+            task_id = finding["resolved_by"]
+            problem = self._evidence_set_problem(task_id)
+            if not problem:
+                ok, problem, _ = check(self.project, task_id, 0, expected_source=self._trusted_source())
+                problem = "" if ok else problem
+            if not problem:
+                # The renders that were reviewed, not merely renders that pass
+                # now (Codex review of e47c7ed: a later task replaced them).
+                target, steps, evidence = self._capture_state(task_id)
+                if (target, steps) != (finding["target"], finding["steps"]):
+                    problem = "the resolving renders now show a different state"
+                elif evidence != finding["resolution"]:
+                    problem = "the resolving renders were replaced after they were reviewed"
+            if problem:
                 finding.update(status="open", reopened=f"its resolving evidence no longer holds: {problem[:160]}")
                 for rid in finding["requirements"]:
                     self.memory.ledger.requirement_status[rid] = f"NOT MET: open finding {finding['id']}"
@@ -3212,6 +3252,77 @@ class Session:
                         sha256=digest(folder / "summary.json"),
                         screenshots={name: digest(folder / name / "page.png") for name in VIEWPORTS})
         return (summary.get("target") if isinstance(summary, dict) else None), steps, evidence
+
+    def _evidence_set_problem(self, task_id) -> str:
+        """Why a task's renders are not a complete, deliverable evidence set
+        (both screenshots and the summary, within every copy bound); "" if
+        they are. Checked before any file is hashed or a finding is made."""
+        files = self._evidence_files_for(task_id)
+        from .design_evidence import VIEWPORTS, evidence_dir
+        folder = evidence_dir(self.project, task_id).relative_to(Path(self.project)).as_posix()
+        need = [f"{folder}/summary.json"] + [f"{folder}/{name}/page.png" for name in VIEWPORTS]
+        missing = [n for n in need if n not in files]
+        if missing:
+            return f"the evidence set is incomplete (missing {', '.join(missing)})"
+        from .runtime import evidence_refusals
+        refused = evidence_refusals(self.project, files, task_id)
+        if refused:
+            return "the evidence set could not be delivered (" + "; ".join(
+                f"{p or 'set'}: {r}" for p, r in refused)[:240] + ")"
+        return ""
+
+    def _qualify_debt(self, spec, ok, problem, records):
+        """An overflow-only audit whose evidence set is not complete and
+        deliverable becomes an integrity stop, not debt: debt is created only
+        from evidence a reviewer could be handed (Codex review of e47c7ed)."""
+        if ok or not records or not all(r.get("kind") == "product.overflow" for r in records):
+            return problem, records
+        refusal = self._evidence_set_problem(spec.task_id)
+        if not refusal:
+            return problem, records
+        return f"{problem}; {refusal}", records + [dict(kind="integrity", message=refusal)]
+
+    def _mark_covered(self, rid, task_id) -> None:
+        """A requirement with an open finding stays unmet whatever a task
+        covered; only resolving every finding naming it lets a covering task
+        mark it covered. Serial tasks and parallel merges both come here."""
+        if rid not in self.memory.ledger.requirements:
+            return
+        owing = self._open_findings_for(rid)
+        self.memory.ledger.requirement_status[rid] = (f"NOT MET: open finding {', '.join(owing)}" if owing
+                                                      else f"covered by {task_id}")
+
+    def _settle_resolution(self, spec, checks_before, open_before) -> List[str]:
+        """Commit this task's RESOLVES only after the whole task passed: its
+        last gate, no new open finding, and verified, approved renders of the
+        measured state (Codex review of e47c7ed: a failed gate closed debt).
+        Returns the named findings still open."""
+        if not self._current_resolves:
+            return []
+        reasons = []
+        gates = self.checks[checks_before:]
+        if gates and not gates[-1]["passed"]:
+            reasons.append("its integration gate failed")
+        if len(self.open_findings) > open_before:
+            reasons.append("it closed with open findings")
+        if self._resolution_candidate != spec.task_id:
+            reasons.append("its renders were not verified and approved")
+        if not reasons:
+            self._resolve_findings(spec)
+        still = [f for f in self.findings if f["id"] in self._current_resolves and f["status"] == "open"]
+        for finding in still:
+            if reasons:
+                finding["last_attempt"] = f"{spec.task_id}: " + "; ".join(reasons)
+        return [f["id"] for f in still]
+
+    def _annotate_open_findings(self, reason: str) -> None:
+        """Say in each open finding why it is still open when the run ends."""
+        for finding in self.findings:
+            if finding["status"] != "open":
+                continue
+            finding.setdefault("unresolved_reason", f"open when the run stopped: {reason}")
+            if finding["id"] in self._current_resolves and "last_attempt" not in finding:
+                finding["last_attempt"] = f"the resolving task stopped before it closed: {reason}"
 
     def _record_audit_findings(self, spec, records) -> List[str]:
         """Record each measured overflow of a review-only task as a finding
