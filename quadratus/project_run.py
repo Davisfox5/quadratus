@@ -351,6 +351,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'personal_preferences': _preferences_record(settings),
         'requirements': _requirements_record(session),
         'design_checks': list(getattr(session, 'design_checks', []) or []) if session else [],
+        'findings': list(getattr(session, 'findings', []) or []) if session else [],
         'parallel_batches': list(getattr(session, 'parallel_batches', []) or []) if session else [],
         'trace': {'calls': len(traces),
                   'transcripts_found': sum(1 for t in traces if t.get('tool_calls') is not None),
@@ -370,6 +371,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         ],
     }, indent=2), encoding='utf-8')
     (run_dir / 'delegation.md').write_text(delegation.render_report(), encoding='utf-8')
+    (run_dir / 'findings.json').write_text(
+        json.dumps(list(getattr(session, 'findings', []) or []) if session else [], indent=2), encoding='utf-8')
     return ProjectResult(completed, report, run_dir, diff, error)
 
 

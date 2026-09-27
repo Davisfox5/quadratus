@@ -432,76 +432,99 @@ def check(root, task_id: str, since: float, *, expected_source: Optional[str] = 
     review of #25 rendered a page with a console.error and a missing image,
     and the first version of this check passed it).
     """
+    return check_records(root, task_id, since, expected_source=expected_source)[:3]
+
+
+def check_records(root, task_id: str, since: float, *, expected_source: Optional[str] = None):
+    """:func:`check` plus typed problem records. Never raises.
+
+    Kinds: ``integrity`` (the evidence itself cannot be trusted: missing,
+    stale, identity, fixture, steps, capture or transfer failures, malformed
+    data), ``page.unclean`` (console errors or failed requests), and
+    ``product.overflow`` (a measured page wider than its viewport, with
+    ``view``, ``width``, ``viewport`` and ``target``). Only the last is a
+    measured product fact; see Session's audit findings.
+    """
     try:
         return _check(root, task_id, since, expected_source)
     except Exception as exc:  # noqa: BLE001 -- evidence is data; malformed data is a finding
-        return False, f"the evidence could not be read ({type(exc).__name__}: {str(exc)[:160]})", []
+        message = f"the evidence could not be read ({type(exc).__name__}: {str(exc)[:160]})"
+        return False, message, [], [dict(kind="integrity", message=message)]
 
 
-def _check(root, task_id: str, since: float, expected_source: Optional[str] = None) -> Tuple[bool, str, list]:
+def _check(root, task_id: str, since: float, expected_source: Optional[str] = None):
+    """``(ok, message, shots, records)``; each record is a typed problem,
+    ``{"kind", "message", ...}``, so callers branch on kinds, never text."""
     folder = evidence_dir(root, task_id)
-    problems, shots = [], []
+    problems, shots, records = [], [], []
+
+    def add(kind, message, **detail):
+        problems.append(message)
+        records.append(dict(kind=kind, message=message, **detail))
+
+    def fail(message):
+        return False, message, [], [dict(kind="integrity", message=message)]
     try:
         summary = json.loads((folder / "summary.json").read_text())
     except (OSError, ValueError):
         summary = None
     if isinstance(summary, dict) and summary.get("capture_failed"):
-        return False, f"the last capture failed: {str(summary['capture_failed'])[:200]}", []
+        return fail(f"the last capture failed: {str(summary['capture_failed'])[:200]}")
     if isinstance(summary, dict) and summary.get("capture_in_progress"):
-        return False, "the last capture did not finish", []
+        return fail("the last capture did not finish")
     if isinstance(summary, dict) and summary.get("steps_refused"):
-        return False, f"the capture's interaction steps were refused: {str(summary['steps_refused'])[:200]}", []
+        return fail(f"the capture's interaction steps were refused: {str(summary['steps_refused'])[:200]}")
     if (not isinstance(summary, dict) or not isinstance(summary.get("target"), str) or not summary["target"]
             or not isinstance(summary.get("views"), dict)
             or set(summary["views"]) != set(VIEWPORTS)
             or not all(isinstance(v, dict) for v in summary["views"].values())):
-        return False, "no well-formed summary.json naming the rendered page (use python -m quadratus.design_evidence)", []
+        return fail("no well-formed summary.json naming the rendered page (use python -m quadratus.design_evidence)")
     for name, view in summary["views"].items():
         if not view.get("clean"):
             errors = "; ".join(str(e)[:120] for e in (view.get("console_errors") or [])[:3])
             failed = "; ".join(str(f)[:120] for f in (view.get("failed_requests") or [])[:3])
-            problems.append(f"the {name} render is not clean"
+            add("page.unclean", f"the {name} render is not clean"
                             + (f" (console: {errors})" if errors else "")
-                            + (f" (failed requests: {failed})" if failed else ""))
+                            + (f" (failed requests: {failed})" if failed else ""), view=name)
     # Required, not optional: a render with no record of the source it shows
     # is not evidence for any particular tree (Codex review of 9a31aac).
     recorded = summary.get("source_fingerprint", "missing")
     if recorded == "missing":
-        problems.append("the renders carry no record of the source they show")
+        add("integrity", "the renders carry no record of the source they show")
     elif isinstance(summary.get("source_identity_error"), str):
-        problems.append(f"the source could not be identified at capture: {summary['source_identity_error'][:160]}")
+        add("integrity", f"the source could not be identified at capture: {summary['source_identity_error'][:160]}")
     elif not isinstance(recorded, str) or not re.fullmatch(r"[0-9a-f]{64}", recorded):
-        problems.append("the source changed while the renders were being captured")
+        add("integrity", "the source changed while the renders were being captured")
     elif recorded != (expected_source if expected_source is not None else source_fingerprint(root)):
         # An enforcing session passes the fingerprint of its own configured
         # source; the recorded exclusions file, which a solver can write,
         # never decides what that session counts as source.
-        problems.append("the renders were captured on a different source tree than the current one")
+        add("integrity", "the renders were captured on a different source tree than the current one")
     requested = summary.get("steps")
     for index, step in enumerate(requested if isinstance(requested, list) else [], 1):
         if isinstance(step, dict) and step.get("action") == "file":
             problem = _fixture_problem(root, step, task_id)
             if problem:
-                problems.append(f"step {index}'s fixture {str(step.get('label'))[:80]} {problem}")
+                add("integrity", f"step {index}'s fixture {str(step.get('label'))[:80]} {problem}")
     for name, view in summary["views"].items():
         if requested is None:
             if "steps" in view:
-                problems.append(f"the {name} render records steps that were never requested")
+                add("integrity", f"the {name} render records steps that were never requested")
             continue
         problem = _step_problem(name, requested, view.get("steps"))
         if problem:
-            problems.append(problem)
+            add("integrity", problem)
     for name, viewport in VIEWPORTS.items():
         shot = folder / name / "page.png"
         if shot.is_symlink():
-            problems.append(f"the {name} screenshot is a symlink, not a capture")
+            add("integrity", f"the {name} screenshot is a symlink, not a capture")
             continue
         width = _png_width(shot)
         if width is None:
-            problems.append(f"no {name} screenshot at {shot.relative_to(root) if shot.is_absolute() else shot}")
+            add("integrity", f"no {name} screenshot at {shot.relative_to(root) if shot.is_absolute() else shot}")
             continue
         if shot.stat().st_mtime < since:
-            problems.append(f"the {name} screenshot predates this task")
+            add("integrity", f"the {name} screenshot predates this task")
             continue
         if abs(width - viewport["width"]) > 64:
             view = summary["views"].get(name) or {}
@@ -509,9 +532,15 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
             named = ", ".join(f"{str(o.get('element'))[:80]} (past the {o.get('side', 'right')} edge: "
                               f"left {o.get('left')}px, right {o.get('right')}px, {o.get('width')}px wide)"
                               for o in offenders)
-            problems.append(f"the {name} screenshot is {width}px wide, not ~{viewport['width']}px"
-                            + (f"; the page overflows its {viewport['width']}px viewport; elements past its "
-                               f"edges: {named}" if named else ""))
+            measured = view.get("document_width")
+            overflowing = (isinstance(measured, int) and not isinstance(measured, bool)
+                           and measured > viewport["width"] + 1)
+            add("product.overflow" if overflowing else "integrity",
+                f"the {name} screenshot is {width}px wide, not ~{viewport['width']}px"
+                + (f"; the page overflows its {viewport['width']}px viewport; elements past its "
+                   f"edges: {named}" if named else ""),
+                **(dict(view=name, width=measured, viewport=viewport["width"], target=summary["target"])
+                   if overflowing else {}))
             continue
         # The measured document width as well as the screenshot's: a page
         # 60px wider than the viewport fits the 64px screenshot tolerance
@@ -522,17 +551,18 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
         # Unknown is not "no overflow" (Codex review of 3d5c3f3): a missing,
         # null or non-integer measurement leaves the render unverified.
         if measured is None:
-            problems.append(f"the {name} render's page width was not measured")
+            add("integrity", f"the {name} render's page width was not measured")
             continue
         if not isinstance(measured, int) or isinstance(measured, bool) or measured <= 0:
-            problems.append(f"the {name} render's measured page width is malformed ({str(measured)[:40]})")
+            add("integrity", f"the {name} render's measured page width is malformed ({str(measured)[:40]})")
             continue
         if measured > viewport["width"] + 1:
             offenders = [o for o in (view.get("overflow") or []) if isinstance(o, dict)][:5]
             named = ", ".join(f"{str(o.get('element'))[:80]} (past the {o.get('side', 'right')} edge: "
                               f"left {o.get('left')}px, right {o.get('right')}px)" for o in offenders)
-            problems.append(f"the {name} page is {measured}px wide at a {viewport['width']}px viewport, so it "
-                            "overflows" + (f"; elements past its edges: {named}" if named else ""))
+            add("product.overflow", f"the {name} page is {measured}px wide at a {viewport['width']}px viewport, "
+                "so it overflows" + (f"; elements past its edges: {named}" if named else ""),
+                view=name, width=measured, viewport=viewport["width"], target=summary["target"])
             continue
         shots.append(str(shot))
     if not problems and summary is not None:
@@ -543,7 +573,7 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
                 + (f" = {s.get('label')}" + (f" (sha256 {str(s['sha256'])[:12]}, {s.get('bytes')} bytes)"
                                             if s.get("sha256") else "") if s["action"] == "file" else "")
                 for s in requested))
-    return not problems, "; ".join(problems), shots
+    return not problems, "; ".join(problems), shots, records
 
 
 def main(argv=None) -> int:
