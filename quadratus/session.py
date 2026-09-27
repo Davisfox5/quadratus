@@ -841,7 +841,9 @@ def _check_for_models(check: dict) -> dict:
 _FINDING_MARKER = re.compile(r"\b(?:BLOCKING|UNRESOLVED)\b")
 #: A marker directly after one of these is a note about findings, not one.
 _NEGATION_BEFORE = re.compile(r"(?:\bnon-|\bnon |\bnot |\bneither |\bno |\bnothing )$", re.IGNORECASE)
-_BLOCKING_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?BLOCKING\s*:\s*(.*)$", re.IGNORECASE)
+#: A line opening with either marker, in any case: before, UNRESOLVED stopped
+#: in any case too (Codex review 5859031079), and must keep doing so.
+_BLOCKING_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:BLOCKING|UNRESOLVED)\s*:\s*(.*)$", re.IGNORECASE)
 _EMPTY_FINDING = re.compile(r"(?:none|n/?a|nothing)\b[\s.!]*$", re.IGNORECASE)
 
 
@@ -854,7 +856,7 @@ def _has_security_finding(text: str) -> bool:
     note for the record" each stopped a run whose verifier had accepted,
     before the terminal question, costing two completions of five.
 
-    Now a line opening with "Blocking:" counts in any case unless what follows
+    Now a line opening with "Blocking:" or "Unresolved:" counts in any case unless what follows
     is none, n/a or nothing (the verifier is told to write BLOCKING: lines, so
     "Blocking: none" is the likeliest note it writes). Elsewhere the uppercase
     marker counts ("This defect is BLOCKING.", "..., but UNRESOLVED: missing

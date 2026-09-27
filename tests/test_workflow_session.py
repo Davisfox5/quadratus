@@ -62,6 +62,8 @@ def test_a_rejected_security_task_is_a_security_fact_and_the_run_stops(tmp_path)
     "BLOCKING: none",
     "- **Blocking:** n/a",
     "Nothing BLOCKING here; the check is constant-time.",
+    "Unresolved: none",
+    "Accepted; nothing unresolved remains.",
 ])
 def test_p3_g7_prose_about_findings_is_not_a_security_finding(tmp_path, verdict):
     """Map G7: the substring test read these as findings. Only a marker as
@@ -81,6 +83,10 @@ def test_p3_g7_prose_about_findings_is_not_a_security_finding(tmp_path, verdict)
     "This defect is BLOCKING.",
     "Mostly fine, but UNRESOLVED: missing evidence for the rate limit.",
     "Accepted; no BLOCKING findings.\nBLOCKING: except the token is logged.",
+    "Unresolved: the token is logged in plain text.",
+    "- **unresolved:** the token is logged in plain text.",
+    "Review follows.\n\n2. UNRESOLVED: the token is logged in plain text.",
+    "BLOCKING: none\nunresolved: the token is logged in plain text.",
 ])
 def test_p3_g7_a_marker_as_written_still_stops_the_run(tmp_path, verdict):
     session = _security_session(tmp_path, verdict)
