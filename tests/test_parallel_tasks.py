@@ -127,3 +127,21 @@ def test_a_batch_spends_one_task_slot_per_task(tmp_path):
     session, project = _session(tmp_path / "second", script)
     session.run(max_tasks=2)
     assert len(session.history) == 2 and session.parallel_batches
+
+
+def test_a_parallel_batch_does_not_cover_a_requirement_owed_to_an_open_finding(tmp_path):
+    """Codex review of e47c7ed: a disjoint batch marked R1 covered while F1 was open."""
+    import pytest
+    reqs = "REQUIREMENTS:\nR1: a works\nR2: b works\n"
+    batch = ("PARALLEL\n" + _block("a.py") + "\nCOVERS: R1\n---\n" + _block("b.py") + "\nCOVERS: R2")
+    script = Orchestrated([reqs + batch, "DONE"])
+    session, project = _session(tmp_path, script, requirements_ledger=True, max_requirement_reopens=0)
+    session.findings.append(dict(id="F1", task="t0", requirements=["R1"], status="open", view="mobile",
+                                 target="http://127.0.0.1:5000/", width=450, viewport=390))
+    try:
+        session.run(max_tasks=4)
+    except Exception as exc:  # noqa: BLE001 -- only the ledger state is asserted
+        pytest.fail(f"run raised {exc!r}")
+    status = session.memory.ledger.requirement_status
+    assert status["R1"].startswith("NOT MET: open finding F1") and status["R2"].startswith("covered")
+    assert not session.completed

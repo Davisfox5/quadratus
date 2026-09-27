@@ -533,10 +533,16 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
                               f"left {o.get('left')}px, right {o.get('right')}px, {o.get('width')}px wide)"
                               for o in offenders)
             measured = view.get("document_width")
+            # A full-page capture of an overflowing page is as wide as the
+            # page it measured; a screenshot of another width (a desktop
+            # image filed as mobile) is not evidence for this viewport
+            # (Codex review of e47c7ed), so only a consistent pair is product.
             overflowing = (isinstance(measured, int) and not isinstance(measured, bool)
-                           and measured > viewport["width"] + 1)
+                           and measured > viewport["width"] + 1 and abs(width - measured) <= 64)
             add("product.overflow" if overflowing else "integrity",
                 f"the {name} screenshot is {width}px wide, not ~{viewport['width']}px"
+                + ("" if overflowing or not isinstance(measured, int) or isinstance(measured, bool)
+                   else f", and does not match the {measured}px page width measured with it")
                 + (f"; the page overflows its {viewport['width']}px viewport; elements past its "
                    f"edges: {named}" if named else ""),
                 **(dict(view=name, width=measured, viewport=viewport["width"], target=summary["target"])

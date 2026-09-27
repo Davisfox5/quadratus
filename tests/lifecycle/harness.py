@@ -206,7 +206,7 @@ def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
 
 
 def evidence(root: Path, task_id: str, *, age: float, target="http://127.0.0.1:5000/import",
-             measured=None, clean=True, steps=None) -> None:
+             measured=None, clean=True, steps=None, png=None) -> None:
     """Clean desktop and mobile renders, as ``quadratus.design_evidence`` writes them.
 
     ``age`` is the screenshots' mtime offset from now: ``STALE`` predates any
@@ -218,7 +218,7 @@ def evidence(root: Path, task_id: str, *, age: float, target="http://127.0.0.1:5
 
     from quadratus.design_evidence import evidence_dir
 
-    def png(width):
+    def png_bytes(width):
         def chunk(kind, data):
             return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
         return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, 1, 8, 0, 0, 0, 0))
@@ -227,7 +227,7 @@ def evidence(root: Path, task_id: str, *, age: float, target="http://127.0.0.1:5
     for name, width in (("desktop", 1280), ("mobile", 390)):
         folder = evidence_dir(root, task_id) / name
         folder.mkdir(parents=True, exist_ok=True)
-        (folder / "page.png").write_bytes(png(width))
+        (folder / "page.png").write_bytes(png_bytes((png or {}).get(name, width)))
         stamp = time.time() + age
         os.utime(folder / "page.png", (stamp, stamp))
         wide = (measured or {}).get(name, width)
