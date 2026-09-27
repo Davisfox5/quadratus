@@ -3472,10 +3472,16 @@ class Session:
             task = TaskMemory(merge.task_id, first.lead, self.store)
             saved = (self._active_spec, self._task_before, self._task_memory)
             self._active_spec, self._task_before, self._task_memory = merge, self._capture_source(), task
+            # The merge gate has its own allowance under the same configured
+            # max_gate_fixes, not what the last serial task left of its own
+            # (map G5): that task's counter is its history, not the merge's.
+            self._gate_fixes_used = 0
             try:
                 self._run_integration_gate(first.lead, merge, task)
             finally:
                 self._active_spec, self._task_before, self._task_memory = saved
+                record["merge_gate"] = dict(task=merge.task_id, gate_fixes=self._gate_fixes_used,
+                                            passed=bool(self.checks) and bool(self.checks[-1]["passed"]))
         if fatal is not None:
             raise fatal
 
