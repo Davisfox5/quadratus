@@ -2191,7 +2191,11 @@ class Session:
             return
         want = getattr(contract.required, requirement)
         if want != legacy:
-            outcome.mismatches.append(f"{requirement}: contract {want!r}, legacy {legacy!r}")
+            # Once per distinct note (O-NEXT-11; Sol, 5865650035): the same
+            # drift read again adds nothing, a different value does.
+            note = f"{requirement}: contract {want!r}, legacy {legacy!r}"
+            if note not in outcome.mismatches:
+                outcome.mismatches.append(note)
 
     def _collaboration_applicable(self, spec) -> bool:
         """Whether design collaboration applies to this task, from its
@@ -2208,8 +2212,9 @@ class Session:
         self._contract_agrees(requirement, legacy)
         outcome, contract = self._outcome, getattr(self, "_contract", None)
         if outcome is None or contract is None or contract.task_id != outcome.task_id:
-            if outcome is not None:
-                outcome.mismatches.append(f"{requirement}: contract missing, legacy {legacy!r}")
+            note = f"{requirement}: contract missing, legacy {legacy!r}"
+            if outcome is not None and note not in outcome.mismatches:
+                outcome.mismatches.append(note)
             return legacy
         return getattr(contract.required, requirement)
 
@@ -4341,8 +4346,9 @@ class Session:
         if outcome is None or contract is None or contract.task_id != outcome.task_id:
             return instruction, self._live_capture_page(spec)
         live = self._live_capture_page(spec)
-        if live != contract.capture_page:
-            outcome.mismatches.append(f"capture_page: contract {contract.capture_page!r}, legacy {live!r}")
+        note = f"capture_page: contract {contract.capture_page!r}, legacy {live!r}"
+        if live != contract.capture_page and note not in outcome.mismatches:
+            outcome.mismatches.append(note)
         return instruction, contract.capture_page
 
     def _capture_problem(self, spec, resolves) -> str:
