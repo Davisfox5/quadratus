@@ -498,12 +498,14 @@ def validate_capture(capture) -> dict:
             # non-hidden project sample is as valid as a capture-only fixture
             # (design_evidence._fixture holds the same rule); the phase-4
             # rerun on a6c9576 stalled here on tests/fixtures/<sample>.csv.
-            path = step["path"]
-            parts = PurePosixPath(path).parts
+            # A separate name: ``path`` is the page route this function returns
+            # (Codex review of 0115f0c caught it being overwritten here).
+            upload = step["path"]
+            parts = PurePosixPath(upload).parts
             fixture = len(parts) == 4 and parts[:2] == (".quadratus", "capture-fixtures")
             hidden = any(part.startswith(".") for part in (parts[3:] if fixture else parts))
-            if (not parts or PurePosixPath(path).is_absolute() or ".." in parts or hidden
-                    or any(ord(c) < 32 for c in path)):
+            if (not parts or PurePosixPath(upload).is_absolute() or ".." in parts or hidden
+                    or any(ord(c) < 32 for c in upload)):
                 raise ValueError("SCOPE capture file steps must name a non-hidden project file or "
                                  ".quadratus/capture-fixtures/<task>/<name>")
         out.append({k: (v.strip() if k == "selector" else v) for k, v in step.items()})

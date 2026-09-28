@@ -362,13 +362,23 @@ def test_a_fixture_path_is_refused_at_parse(path):
         validate_capture({"path": "/", "steps": [{"action": "file", "selector": "#f", "path": path}]})
 
 
-@pytest.mark.parametrize("path", ["fixtures/a.csv", "tests/fixtures/import_preview_sample.csv",
-                                  ".quadratus/capture-fixtures/t1/a.csv"])
-def test_a_committed_sample_or_own_fixture_passes_parse(path):
+@pytest.mark.parametrize("upload", ["fixtures/a.csv", "tests/fixtures/import_preview_sample.csv",
+                                    ".quadratus/capture-fixtures/t1/a.csv"])
+@pytest.mark.parametrize("page", ["/", "/import"])
+def test_a_committed_sample_or_own_fixture_passes_parse_and_keeps_the_page(upload, page):
     """The phase-4 rerun on a6c9576 stalled on tests/fixtures/<sample>.csv, the
-    file the previous task had just committed; the capture itself accepts it."""
-    out = validate_capture({"path": "/", "steps": [{"action": "file", "selector": "#f", "path": path}]})
-    assert out["steps"][0]["path"] == path
+    file the previous task had just committed; the capture itself accepts it.
+    The whole normalised block is pinned: Codex's review of 0115f0c found the
+    upload path overwriting the page route."""
+    steps = [{"action": "click", "selector": " #open "},
+             {"action": "file", "selector": "#f", "path": upload},
+             {"action": "wait", "selector": "#rows tr"}]
+    out = validate_capture({"path": page, "steps": steps})
+    assert out == {"path": page, "steps": [
+        {"action": "click", "selector": "#open"},
+        {"action": "file", "selector": "#f", "path": upload},
+        {"action": "wait", "selector": "#rows tr"},
+    ]}
 
 
 @pytest.mark.parametrize("argument", ["--config=outside-config.txt", "outside-config.txt", "--config=/etc/x"])
