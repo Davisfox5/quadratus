@@ -70,13 +70,14 @@ def test_a_same_length_rewrite_with_mtime_restored_is_rehashed_and_caught(tmp_pa
     assert caught.value.changed == ["node_modules/pkg/index.js"]
 
 
-def test_the_cache_skips_rereading_an_identical_file(tmp_path):
+def test_every_pass_reads_the_content_again(tmp_path):
+    """No hash is carried across passes (Codex, 5864084741): unchanged
+    metadata is not proof of unchanged content."""
     root = _project(tmp_path)
-    # Files written well before they are read: not racily clean.
-    guard = DependencyGuard(root, wall=lambda: time.time_ns() + 10_000_000_000)
+    guard = DependencyGuard(root)
     first = guard.identity()
     second = guard.identity()
-    assert first.read_bytes > 0 and second.read_bytes == 0 and first.digest == second.digest
+    assert first.read_bytes > 0 and second.read_bytes == first.read_bytes and first.digest == second.digest
 
 
 @pytest.mark.parametrize("change", ["added", "retargeted"])

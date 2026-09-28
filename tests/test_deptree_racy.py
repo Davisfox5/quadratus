@@ -4,10 +4,11 @@ The guard caches a file's hash keyed by its lstat. On a filesystem whose
 timestamps are coarser than a rewrite (a container mount with whole-second
 times), a same-size rewrite in the same tick keeps that lstat, and the
 cached hash hid the change: ``test_an_edited_venv_file_is_a_change`` failed
-intermittently in the pinned container (Codex, 5863853232). A hash is now
-cached only once the file's times are older than its read by more than
-``_RACY_NS`` (git's "racily clean" rule). Coarse timestamps are emulated
-inside the guard only; the rewrite is real.
+intermittently in the pinned container (Codex, 5863853232). An age rule on
+the wall clock was not enough either: a skewed clock let a fresh file be
+cached (5864022673). No hash is carried across passes now, so every
+verification reads the content. Coarse timestamps and a skewed wall clock
+are emulated; the rewrite is real.
 """
 
 import time
@@ -59,15 +60,43 @@ def test_a_same_size_rewrite_within_one_tick_is_a_change(tmp_path, coarse):
         watch.verify("during lead (t1)")
 
 
-def test_a_racily_clean_file_is_read_again(tmp_path, coarse):
-    root, _ = _venv_file(tmp_path)
-    guard = DependencyGuard(root)
-    first, second = guard.identity(), guard.identity()
-    assert first.read_bytes > 0 and second.read_bytes == first.read_bytes, "not cached while racy"
+def _wall(monkeypatch, clock):
+    """Make ``clock`` the guard's wall clock: the module's, and any the guard
+    itself holds (the age rule at f9573e8 read ``self.wall``)."""
+    monkeypatch.setattr(deptree.time, "time_ns", clock)
+    init = DependencyGuard.__init__
+
+    def skewed(self, *args, **kw):
+        init(self, *args, **kw)
+        if hasattr(self, "wall"):
+            self.wall = clock
+    monkeypatch.setattr(DependencyGuard, "__init__", skewed)
 
 
-def test_an_old_enough_file_is_still_cached(tmp_path, coarse):
+@pytest.mark.parametrize("skew_ns", [10 * TICK, -10 * TICK])
+def test_a_skewed_wall_clock_does_not_hide_a_rewrite(tmp_path, coarse, monkeypatch, skew_ns):
+    """The wall clock ahead of, or behind, the file clock (5864022673)."""
+    real = time.time_ns
+    _wall(monkeypatch, lambda: real() + skew_ns)
+    root, path = _venv_file(tmp_path)
+    watch = _watch(root)
+    path.write_text("VALUE = 2\n")
+    with pytest.raises(DependencyTreeChanged):
+        watch.verify("during lead (t1)")
+
+
+def test_a_clock_stepped_back_between_passes_does_not_hide_a_rewrite(tmp_path, coarse, monkeypatch):
+    now = [time.time_ns() + 10 * TICK]
+    _wall(monkeypatch, lambda: now[0])
+    root, path = _venv_file(tmp_path)
+    watch = _watch(root)
+    now[0] -= 20 * TICK
+    path.write_text("VALUE = 2\n")
+    with pytest.raises(DependencyTreeChanged):
+        watch.verify("during lead (t1)")
+
+
+def test_an_unchanged_file_verifies_on_a_coarse_filesystem(tmp_path, coarse):
     root, _ = _venv_file(tmp_path)
-    guard = DependencyGuard(root, wall=lambda: time.time_ns() + 10 * TICK)
-    first, second = guard.identity(), guard.identity()
-    assert first.read_bytes > 0 and second.read_bytes == 0 and first.digest == second.digest
+    watch = _watch(root)
+    watch.verify("during lead (t1)")

@@ -17,18 +17,14 @@ would otherwise be invisible.
 
 The identity is a manifest of ``(path, type, mode, size, sha256)`` for files,
 ``(path, type, mode, target)`` for symlinks and ``(path, type, mode)`` for
-directories. Content is really hashed. A per-guard cache keyed by the full
-lstat, ``ctime_ns`` included, skips re-reading a file whose metadata is
-identical; ``ctime`` changes on every write and on ``utime`` and cannot be set
-back by an ordinary process, so a same-length rewrite with its mtime restored
-is re-read. A hash is cached only once the file's times are older than the
-moment it was read by more than a timestamp tick could hide (``_RACY_NS``,
-git's "racily clean" rule): on a filesystem with coarse timestamps a
-same-length rewrite within one tick keeps the same lstat, and a cached hash
-would miss it (#25, an intermittent ``test_an_edited_venv_file_is_a_change``).
-That cache is an optimisation resting on the filesystem keeping ``ctime``
-honestly; a process able to change the system clock could defeat it. It is
-not a defence against a concurrent attacker.
+directories. Content is really hashed, on every pass: no hash is carried
+from one pass to the next (Codex, 5864084741). A cache keyed by lstat was
+dropped because unchanged metadata is not proof of unchanged content: on a
+filesystem with coarse timestamps a same-length rewrite within one tick
+keeps the same lstat, and any age rule on top of it rests on the wall clock
+and the file clock agreeing (#25, ``test_an_edited_venv_file_is_a_change``).
+Every verification boundary therefore reads every file, inside the same
+entry, byte and time bounds.
 
 Bounds are finite and fail closed: entries seen, bytes read and wall time,
 all counted while walking and reading, never after listing everything. Any
@@ -130,13 +126,11 @@ class DependencyGuard:
 
     def __init__(self, root, *, exempt: Iterable[str] = (), max_entries: int = MAX_ENTRIES,
                  max_bytes: int = MAX_BYTES, deadline: float = DEADLINE_SECONDS,
-                 clock: Callable[[], float] = time.monotonic, wall: Callable[[], int] = time.time_ns):
+                 clock: Callable[[], float] = time.monotonic):
         self.root = Path(root)
         self.exempt = check_exemptions(self.root, exempt)
         self.max_entries, self.max_bytes, self.deadline = max_entries, max_bytes, deadline
-        #: ``clock`` bounds the pass; ``wall`` is compared with file times.
-        self.clock, self.wall = clock, wall
-        self._cache: Dict[tuple, str] = {}
+        self.clock = clock
         self.lock = threading.Lock()
 
     # -- one identity pass ------------------------------------------------------
@@ -263,12 +257,7 @@ class DependencyGuard:
                     entries[child] = ("other", st.st_mode)
 
     def _hash(self, parent_fd, name, rel, st, state) -> str:
-        key = (rel, st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
-        cached = self._cache.get(key)
-        if cached is not None:
-            return cached
-        read_at = self.wall()
-        ident = key[1:]
+        ident = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
         try:
             fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
                          dir_fd=parent_fd)
@@ -300,12 +289,7 @@ class DependencyGuard:
                 raise DependencyIdentityUnavailable(f"{rel} changed while being identified")
         finally:
             os.close(fd)
-        value = digest.hexdigest()
-        if max(st.st_mtime_ns, st.st_ctime_ns) < read_at - _RACY_NS:
-            # Racily clean otherwise: a rewrite in the same timestamp tick
-            # would keep this key, so the file is read again next time.
-            self._cache[key] = value
-        return value
+        return digest.hexdigest()
 
 
 def _points_at_directory(parent_fd, name) -> bool:
@@ -314,11 +298,6 @@ def _points_at_directory(parent_fd, name) -> bool:
         return stat.S_ISDIR(os.stat(name, dir_fd=parent_fd).st_mode)
     except OSError:
         return False
-
-
-#: A file changed this recently when it was read is never cached: coarser
-#: timestamps than this (2 s, FAT's) could hide a same-size rewrite.
-_RACY_NS = 2_000_000_000
 
 
 def _ident(st) -> tuple:
