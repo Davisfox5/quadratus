@@ -5,7 +5,8 @@
   "limitations": [
     "Scripted controller tests prove deterministic routing only, not model behavior or live GameTape acceptance.",
     "Proof claims were reviewed conservatively; unmapped obligations remain UNPROVEN.",
-    "J30 required errands have no production declaration.",
+    "J30 required errands have no production declaration. The mapped J30 test proves only the optional half; outcome and report stay UNPROVEN because the required route (required fails its edge) has no contract to exercise.",
+    "The J30, J31 and E2 (J10) selectors added by docs/review/acceptance-map-refresh.md exist only in the offline assembly a9d0a933eb877cfa5878ffb9343bee12264b67f5 (source 7d294ce91920adcf31bed204ae865fd93e34815c, which includes bbb4956f2f567a3db70f4c1768692698ce44bab6); the E2 route requires bbb4956 and does not hold at the baseline_commit.",
     "J37 has Session-level partial-write timeout evidence in tests/test_run_budget.py::test_partial_write_timeout_keeps_file_and_never_replays and harness-pack case 07, but no mapped whole-controller replay."
   ],
   "journeys": [
@@ -229,7 +230,10 @@
       "id": "J10",
       "tests": [
         "tests/lifecycle/test_workflow_contract.py::test_a_blocking_response_leaves_the_reviewer_edge_unsatisfied",
-        "tests/lifecycle/test_completion_guard.py::test_a_missing_delivery_edge_cannot_count_as_complete"
+        "tests/lifecycle/test_completion_guard.py::test_a_missing_delivery_edge_cannot_count_as_complete",
+        "tests/lifecycle/test_replaced_evidence.py::test_approved_renders_replaced_by_a_later_task_do_not_complete",
+        "tests/lifecycle/test_replaced_evidence.py::test_a_replacement_at_the_cap_is_refused_the_same_way",
+        "tests/lifecycle/test_replaced_evidence.py::test_the_same_run_without_the_rewrite_completes"
       ],
       "required_obligations": [
         "calls",
@@ -241,7 +245,9 @@
       "coverage": {
         "outcome": [
           "tests/lifecycle/test_workflow_contract.py::test_a_blocking_response_leaves_the_reviewer_edge_unsatisfied",
-          "tests/lifecycle/test_completion_guard.py::test_a_missing_delivery_edge_cannot_count_as_complete"
+          "tests/lifecycle/test_completion_guard.py::test_a_missing_delivery_edge_cannot_count_as_complete",
+          "tests/lifecycle/test_replaced_evidence.py::test_approved_renders_replaced_by_a_later_task_do_not_complete",
+          "tests/lifecycle/test_replaced_evidence.py::test_a_replacement_at_the_cap_is_refused_the_same_way"
         ]
       }
     },
@@ -597,25 +603,46 @@
     },
     {
       "id": "J30",
-      "tests": [],
+      "tests": [
+        "tests/test_workflow_worker_failure_journey.py::test_optional_worker_failure_is_recorded_and_the_task_can_complete"
+      ],
       "required_obligations": [
         "calls",
         "outcome",
         "report",
         "partial_work"
       ],
-      "coverage": {}
+      "coverage": {
+        "calls": [
+          "tests/test_workflow_worker_failure_journey.py::test_optional_worker_failure_is_recorded_and_the_task_can_complete"
+        ],
+        "partial_work": [
+          "tests/test_workflow_worker_failure_journey.py::test_optional_worker_failure_is_recorded_and_the_task_can_complete"
+        ]
+      }
     },
     {
       "id": "J31",
-      "tests": [],
+      "tests": [
+        "tests/test_workflow_design_fix_role_journey.py::test_design_fix_gets_the_lead_packet_in_a_bounded_session_journey"
+      ],
       "required_obligations": [
         "calls",
         "outcome",
         "report",
         "partial_work"
       ],
-      "coverage": {}
+      "coverage": {
+        "calls": [
+          "tests/test_workflow_design_fix_role_journey.py::test_design_fix_gets_the_lead_packet_in_a_bounded_session_journey"
+        ],
+        "outcome": [
+          "tests/test_workflow_design_fix_role_journey.py::test_design_fix_gets_the_lead_packet_in_a_bounded_session_journey"
+        ],
+        "partial_work": [
+          "tests/test_workflow_design_fix_role_journey.py::test_design_fix_gets_the_lead_packet_in_a_bounded_session_journey"
+        ]
+      }
     },
     {
       "id": "J32",
