@@ -835,15 +835,6 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     uses the same check (`tests/test_batch_findings_trigger.py`, with an
     unmerged child).
 
-20. *Settlement reads the resolving task's own typed findings (Sol
-    inventory 5863608874).* A RESOLVES task settles only if it closed with
-    no finding of its own; that was read from the legacy list's growth
-    alone. `_closed_with_findings` now also reads the active findings the
-    projection files under the task, failing closed, and records
-    `new findings: typed X, legacy Y` on the task where they disagree
-    (`tests/lifecycle/test_settlement_findings.py`, a real blocking
-    collaborator review).
-
 19. *The dependency guard reads content at every verification (Codex,
     5863853232, 5864022673, ruling 5864084741).* Its per-file hash cache
     was keyed by lstat; on a filesystem with coarse timestamps a same-size
@@ -865,16 +856,6 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     `new findings: typed X, legacy Y` on the task where they disagree
     (`tests/lifecycle/test_settlement_findings.py`, a real blocking
     collaborator review).
-
-19. *The dependency guard sees a rewrite inside one timestamp tick (Codex,
-    5863853232).* Its per-file hash cache is keyed by lstat; on a
-    filesystem with coarse timestamps a same-size rewrite within one tick
-    keeps that key, so `test_an_edited_venv_file_is_a_change` failed
-    intermittently in the pinned container and a real edit could be
-    missed. A hash is cached only once the file's times are older than the
-    read by more than `_RACY_NS` (2 s, git's "racily clean" rule); a recent
-    file is read again each pass. Bounds, identity fields and stop names
-    are unchanged (`tests/test_deptree_racy.py`).
 
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
