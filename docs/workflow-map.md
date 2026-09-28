@@ -726,6 +726,12 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     (`RunStalled`, `DependencyTreeChanged`) leave `stop_reason` empty; their
     text is in the typed fact and `result.error`.
 
+11. *Full stop text on the typed fact.* `Fact.detail` stays cut at 400
+    characters (300 for an exception's message); `Fact.full` carries the
+    whole text only when it was cut, so a long `stop_reason` or exception
+    `result.error` is on the typed record intact. Additive report field;
+    names, kinds and routes unchanged (`tests/test_stop_full_text.py`).
+
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
 the live `design_cross_check` / `is_design_task`, and can drift from the

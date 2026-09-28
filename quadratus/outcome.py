@@ -97,10 +97,18 @@ class Fact:
     legacy_route: bool = False
     #: For a run stop: the legacy error name it produced ("" for a silent stop).
     legacy: Optional[str] = None
+    #: The whole text, only when ``detail`` was cut to its bound (map P3.4).
+    full: Optional[str] = None
 
     @property
     def active(self) -> bool:
         return self.terminal and not self.recovered
+
+
+def _cut(detail, bound: int) -> Optional[str]:
+    """The whole text when ``detail`` is longer than ``bound``, else None."""
+    text = str(detail)
+    return text if len(text) > bound else None
 
 
 def _ranked(facts):
@@ -162,7 +170,7 @@ class TaskOutcome:
     def note(self, kind: str, detail: str, *, stage: str = "", terminal: bool = True,
              legacy_route: bool = False) -> Fact:
         fact = Fact(kind, str(detail)[:400], stage or (self.stages[-1] if self.stages else ""),
-                    terminal=terminal, legacy_route=legacy_route)
+                    terminal=terminal, legacy_route=legacy_route, full=_cut(detail, 400))
         self.facts.append(fact)
         return fact
 
@@ -225,8 +233,10 @@ class RunOutcome:
     readiness: List[dict] = field(default_factory=list)
 
     def note(self, kind: str, detail: str, *, terminal: bool = True, legacy: Optional[str] = None,
-             stage: str = "run") -> Fact:
-        fact = Fact(kind, str(detail)[:400], stage, terminal=terminal, legacy=legacy)
+             stage: str = "run", full: Optional[str] = None) -> Fact:
+        """``full``: the whole text when the caller already cut ``detail``."""
+        fact = Fact(kind, str(detail)[:400], stage, terminal=terminal, legacy=legacy,
+                    full=full if full is not None and full != str(detail)[:400] else _cut(detail, 400))
         self.facts.append(fact)
         return fact
 

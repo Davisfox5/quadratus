@@ -2928,7 +2928,7 @@ class Session:
             history = self._run_tasks(max_tasks)
         except BaseException as exc:
             self.run_outcome.note(classify(exc), f"{type(exc).__name__}: {str(exc)[:300]}",
-                                  legacy=type(exc).__name__)
+                                  legacy=type(exc).__name__, full=f"{type(exc).__name__}: {exc}")
             try:
                 # A resolution a later task's changes undid must not persist as
                 # resolved because the run ended on an exception.
