@@ -1388,7 +1388,7 @@ class Session:
         # beats failing the task mid-flight when its invocation errors.
         others = [p for p in self.brain_trust if p != lead and self._available(p)]
         chosen = others[: Complexity.collaborator_count(spec.complexity, len(others))]
-        if self.config.design_cross_check and is_design_task(spec):
+        if self._collaboration_applicable(spec):
             vendor = lead.partition(":")[0]
             if not any(p.partition(":")[0] != vendor for p in chosen):
                 other = next((p for p in others if p.partition(":")[0] != vendor), None)
@@ -2076,7 +2076,8 @@ class Session:
             design_evidence=evidence,
             design_review=bool(self.config.design_cross_check and evidence in ("harness", "self")),
             security_verification=security,
-            settlement=bool(outcome.resolves))
+            settlement=bool(outcome.resolves),
+            design_collaboration_applicable=bool(self.config.design_cross_check and is_design_task(spec)))
         commands = getattr(gate, "commands", None)
         checks = tuple(c.id for c in commands) if commands is not None else (("check",) if gate else ())
         intended = None
@@ -2143,6 +2144,12 @@ class Session:
         want = getattr(contract.required, requirement)
         if want != legacy:
             outcome.mismatches.append(f"{requirement}: contract {want!r}, legacy {legacy!r}")
+
+    def _collaboration_applicable(self, spec) -> bool:
+        """Whether design collaboration applies to this task, from its
+        contract (map P3.4), the live reading recorded beside it."""
+        return self._required("design_collaboration_applicable",
+                              bool(self.config.design_cross_check and is_design_task(spec)))
 
     def _required(self, requirement: str, legacy):
         """The current task's own requirement, from the contract fixed at
@@ -3295,7 +3302,7 @@ class Session:
         # the previous task's renders (Codex review of 3d5c3f3).
         self._review_evidence = []
         self._review_evidence_hashes, self._review_snapshot = {}, None
-        if not (self.config.design_cross_check and is_design_task(spec) and self.project):
+        if not (self._collaboration_applicable(spec) and self.project):
             return
         if self._harness_captures(spec):
             # Harness renders are taken after the final edit and a passing
@@ -4766,7 +4773,7 @@ class Session:
             "reply exactly 'NO FINDINGS' and nothing else; do not write 'BLOCKING: none'."
             + _review_subject_note(spec)
             + (_DESIGN_REVIEW_LENS + (self._design_note or "")
-               if self.config.design_cross_check and is_design_task(spec) else "")
+               if self._collaboration_applicable(spec) else "")
         )
 
     def _revision_prompt(self, spec: TaskSpec, draft: str, notes: List[str]) -> str:

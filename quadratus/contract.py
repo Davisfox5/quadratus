@@ -39,6 +39,11 @@ class Required:
     design_review: bool = False
     security_verification: bool = False
     settlement: bool = False
+    #: Design collaboration applies (``design_cross_check`` and a design
+    #: task), fixed at dispatch: a cross-vendor collaborator, the render set
+    #: collaborators see and the review prompt's design lens. Not the same as
+    #: ``design_review``, which needs evidence (Codex, 5864370275).
+    design_collaboration_applicable: bool = False
 
 
 @dataclass(frozen=True)

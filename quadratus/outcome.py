@@ -277,6 +277,7 @@ def missing_facts(task: TaskOutcome) -> List[str]:
 _DISPATCH_STATES = ("dispatched", "not_dispatched")
 _REQUIRED_FLAGS = ("checks", "design_review", "security_verification", "settlement")
 _DESIGN_EVIDENCE = ("harness", "self", "disabled", "none")
+_COLLABORATION = "design_collaboration_applicable"
 #: Edges an audit's ledger findings stand for: the design obligations whose
 #: failure the audit recorded as requirement debt.
 _AUDIT_EDGES = ("evidence", "delivered", "reviewer")
@@ -305,6 +306,12 @@ def _contract_missing(task: TaskOutcome) -> List[str]:
             missing.append(f"{tid}.contract.required.{name}")
     if required.get("design_evidence") not in _DESIGN_EVIDENCE:
         missing.append(f"{tid}.contract.required.design_evidence")
+    # Added later (map P3.4): a record written before the field existed says
+    # so, and is never read as False.
+    if _COLLABORATION not in required:
+        missing.append(f"{tid}.contract.required.{_COLLABORATION} (absent: recorded before this field existed)")
+    elif type(required.get(_COLLABORATION)) is not bool:
+        missing.append(f"{tid}.contract.required.{_COLLABORATION}")
     return missing
 
 

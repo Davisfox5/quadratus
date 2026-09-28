@@ -867,6 +867,17 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     legacy entry (`tests/test_partial_reason.py`; the two seam
     characterisations and one candidate unit test updated accordingly).
 
+22. *Design collaboration applicability is fixed at dispatch (Codex,
+    5864370275).* The cross-vendor collaborator, the render set
+    collaborators see and the review prompt's design lens read live
+    `design_cross_check and is_design_task`. They now read the contract's
+    `design_collaboration_applicable`, the same predicate fixed at
+    dispatch, with the live reading recorded beside it. It is not
+    `design_review` (which needs evidence): no-project and
+    verification-disabled design tasks keep all three. A saved record
+    without the field is reported as absent, never read as False
+    (`tests/lifecycle/test_collaboration_applicability.py`).
+
 **Legacy readers retained, with why (not a claim of total retirement):**
 - `open_findings`, `_partial_tasks` and `_design_unverified` stay as the
   legacy side of each typed ∪ legacy check and as report mirrors; every
@@ -879,8 +890,8 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
   recheck rule is settled.
 - `stop_reason` names the run's stop and feeds `result.error`; the typed
   stop and `Fact.full` carry the same text.
-- `collaborators_for` and the design prompt's applicability still read
-  live settings (see below).
+- Design collaboration applicability reads the contract since item 22;
+  the live reading is kept only to record a disagreement.
 
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
