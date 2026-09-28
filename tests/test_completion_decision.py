@@ -44,7 +44,7 @@ def task(tid="t1", *, required=None, edges=None, checks=(True,), facts=(), cover
     """A well-formed closed task: every fact present, every required edge
     satisfied unless ``edges`` says otherwise."""
     req = dict(checks=True, design_review=False, security_verification=False, settlement=False,
-               design_evidence="none", design_collaboration_applicable=False, design_instruction="none", security_verdict="none")
+               design_evidence="none", design_collaboration_applicable=False, design_instruction="none", security_verdict="none", operator_limits="none")
     req.update(required or {})
     contract = dict(task_id=tid, owner=LEAD, required=req)
     if intended_state is not None:

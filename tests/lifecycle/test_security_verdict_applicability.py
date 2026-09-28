@@ -112,7 +112,8 @@ def test_a_non_security_task_has_no_verdict_protocol(tmp_path, monkeypatch):
 # -- the record ---------------------------------------------------------------------
 
 BASE = dict(checks=False, design_evidence="none", design_review=False, security_verification=False,
-            settlement=False, design_collaboration_applicable=False, design_instruction="none")
+            settlement=False, design_collaboration_applicable=False, design_instruction="none",
+            operator_limits="none")
 
 
 def _record(required):

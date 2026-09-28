@@ -1131,8 +1131,8 @@ class Session:
         if context.get("role") != "closeout" and spec is not None and spec.scope is not None:
             if spec.scope.render() not in prompt:
                 prompt += "\n\n" + spec.scope.render()
-            if self.config.default_scope is not None and spec.scope is not self.config.default_scope:
-                prompt += "\nOperator limits (also binding):\n" + self.config.default_scope.render()
+            for limit in self._outer_limits(spec):
+                prompt += "\nOperator limits (also binding):\n" + limit.render()
         if context.get("role") == "lead" and getattr(self, "_worker_tool", None):
             context = dict(context, worker_tool=self._worker_tool)
         if (not allow_writes and context.get("role") in ("collaborator", "recheck", "design-review")
@@ -1892,14 +1892,43 @@ class Session:
             log.debug("could not diff for the scope check", exc_info=True)
             return None
         report = spec.scope.assess(diff)
-        if self.config.default_scope is not None and spec.scope is not self.config.default_scope:
-            outer = self.config.default_scope.assess(diff)
+        for limit in self._outer_limits(spec):
+            outer = limit.assess(diff)
             out = sorted(set(report.out_of_scope + outer.out_of_scope))
             limits = [v for v in (report.max_lines, outer.max_lines) if v is not None]
             report = replace(report, out_of_scope=out, within_scope=not out,
                              max_lines=min(limits) if limits else None,
                              overrun_ratio=min(report.overrun_ratio, outer.overrun_ratio))
         return report
+
+    @staticmethod
+    def _limits_identity(spec, limit) -> str:
+        """``operator_limits`` for ``limit`` over this task: "none" when there
+        is none or it is the task's own scope, else its canonical hash."""
+        if limit is None or limit is spec.scope:
+            return "none"
+        return "sha256:" + hashlib.sha256(canonical(limit.to_dict()).encode()).hexdigest()
+
+    def _outer_limits(self, spec) -> list:
+        """The operator limits binding this task over its own scope (map
+        P3.4; O-NEXT-10 E, Codex 5865344590). The limit bound at dispatch is a
+        ceiling; a live limit that differs applies as well, so it can tighten
+        the task and never loosen it, and the difference is recorded. With no
+        contract for the current task the live limit decides, as before."""
+        live = self.config.default_scope
+        outcome, contract = self._outcome, getattr(self, "_contract", None)
+        if outcome is None or contract is None or contract.task_id != outcome.task_id:
+            candidates = [live]
+        else:
+            self._contract_agrees("operator_limits", self._limits_identity(spec, live))
+            candidates = [getattr(self, "_task_outer", None), live]
+        limits = []
+        for limit in candidates:
+            if (limit is not None and limit is not spec.scope
+                    and all(self._limits_identity(spec, limit) != self._limits_identity(spec, seen)
+                            for seen in limits)):
+                limits.append(limit)
+        return limits
 
     def _scope_headroom(self, spec: TaskSpec) -> str:
         """What a revision may still add before the task's hard stop.
@@ -2002,6 +2031,7 @@ class Session:
         self.task_outcomes.append(outcome)
         self._contract = None
         self._task_gate = None
+        self._task_outer = None
         try:
             # The source record comes first, as it always did, so a task refused
             # at dispatch still carries it (Codex, 5861147842).
@@ -2009,6 +2039,8 @@ class Session:
             self._prepare_dispatch(spec)
             # The gate the contract describes, held with it (map P3.4, checks).
             self._task_gate = self.config.integration_gate
+            # The operator's outer limit, a ceiling for this task (O-NEXT-10 E).
+            self._task_outer = self.config.default_scope
             # Derived here, bound (frozen, with its owner) at the selection point
             # in _run_task / _run_security_task, before the first model call.
             self._contract = self._build_contract(spec, outcome)
@@ -2079,7 +2111,8 @@ class Session:
             settlement=bool(outcome.resolves),
             design_collaboration_applicable=bool(self.config.design_cross_check and is_design_task(spec)),
             design_instruction=self._live_design_instruction(spec),
-            security_verdict=self._live_security_verdict() if security else "none")
+            security_verdict=self._live_security_verdict() if security else "none",
+            operator_limits=self._limits_identity(spec, self.config.default_scope))
         commands = getattr(gate, "commands", None)
         checks = tuple(c.id for c in commands) if commands is not None else (("check",) if gate else ())
         intended = None

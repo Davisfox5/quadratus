@@ -55,6 +55,11 @@ class Required:
     #: ``security_verification`` fixes that verification happens, this fixes
     #: how it is asked and parsed (O-NEXT-10 D; Codex, 5865344590).
     security_verdict: str = "none"
+    #: The operator's outer path limit applied over the task's own scope,
+    #: fixed at dispatch: "none" or "sha256:<hex>" of its canonical form. It
+    #: is a ceiling: a live limit may tighten a task further, never loosen it
+    #: (O-NEXT-10 E; Codex, 5865344590).
+    operator_limits: str = "none"
 
 
 @dataclass(frozen=True)

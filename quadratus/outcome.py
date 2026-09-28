@@ -282,6 +282,7 @@ _INSTRUCTION = "design_instruction"
 _INSTRUCTIONS = ("harness", "self", "none")
 _VERDICT = "security_verdict"
 _VERDICTS = ("json", "prose", "none")
+_LIMITS = "operator_limits"
 #: Edges an audit's ledger findings stand for: the design obligations whose
 #: failure the audit recorded as requirement debt.
 _AUDIT_EDGES = ("evidence", "delivered", "reviewer")
@@ -326,6 +327,11 @@ def _contract_missing(task: TaskOutcome) -> List[str]:
         missing.append(f"{tid}.contract.required.{_VERDICT} (absent: recorded before this field existed)")
     elif required.get(_VERDICT) not in _VERDICTS:
         missing.append(f"{tid}.contract.required.{_VERDICT}")
+    if _LIMITS not in required:
+        missing.append(f"{tid}.contract.required.{_LIMITS} (absent: recorded before this field existed)")
+    elif not (required.get(_LIMITS) == "none" or (isinstance(required.get(_LIMITS), str)
+                                                 and required[_LIMITS].startswith("sha256:"))):
+        missing.append(f"{tid}.contract.required.{_LIMITS}")
     return missing
 
 
