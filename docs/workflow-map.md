@@ -916,3 +916,12 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
   contract's `design_instruction` and `capture_page` since item 23,
   including during lead recovery; the live readings are kept only to
   record a disagreement.
+- Open, applicability is not retired while any of these holds:
+  - reviewer briefing (`_brief_design_reviewers`) reads live
+    `_harness_captures` (O-NEXT-08 finding 1, 5865273760; O-NEXT-12);
+  - harness capture passes the live `capture_profile`, so the captured
+    page can differ from `capture_page` (O-NEXT-08 finding 2; O-NEXT-13);
+  - post-dispatch live readers of `allow_writes`, the cheap gate subset,
+    `requirements_ledger`, `security_verdict_json` and `default_scope`
+    (O-NEXT-10 A to E, 5865288738, reproductions at 548da3d), pending
+    Sol's independent review.
