@@ -155,7 +155,10 @@ def test_a_ledger_disabled_before_settlement_cannot_complete_clean(tmp_path, mon
     (f1,) = replay.findings
     assert f1["status"] == "resolved" and f1["resolved_by"] == "t2" and f1["resolution"], \
         "the verified resolution and its evidence are kept"
-    assert sorted(H.result_json(replay)["requirements"]["listed"]) == ["R1", "R2"]
+    result = H.result_json(replay)
+    assert sorted(result["requirements"]["listed"]) == ["R1", "R2"]
+    assert sorted(result["requirements"]["status"]) == ["R1", "R2"], "every requirement status is kept"
+    assert replay.workflow["parity"]["primary"] == "unverified", "the exact final classification (Sol 5866229326)"
 
 
 @pytest.mark.parametrize("kind", ["repair", "recapture"])
