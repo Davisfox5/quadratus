@@ -1,8 +1,9 @@
 """J37: a timed-out editing transport preserves and reports its partial writes.
 
-Only the vendor CLI launch is scripted. The real provider translates the
-transport timeout, and the whole controller inspects the edited tree and
-stops without replaying the writing prompt.
+The harness scripts the vendor CLI launch and stubs provider availability,
+executable discovery, and lead command capability. The real provider
+translates the transport timeout, and the whole controller inspects the
+edited tree and stops without replaying the writing prompt.
 """
 
 import subprocess
@@ -31,6 +32,11 @@ def test_j37_timeout_after_writes_is_inspected_and_never_replayed(tmp_path, monk
     assert (replay.project / "app.py").read_text() == FIXED
     assert (replay.project / "tests/test_app.py").read_text() == "unfinished\n"
     assert H.gate_results(replay) == [], "no check receipt for an interrupted draft"
+    report = replay.result.report
+    assert "## In-flight work when the run stopped" in report
+    assert "Already written and preserved (2 file(s)" in report
+    assert "- app.py" in report and "- tests/test_app.py" in report
+    assert (replay.result.run_dir / "report.md").read_text() == report
 
     (task,) = replay.workflow["tasks"]
     assert task["task_id"] == "t1"
