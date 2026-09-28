@@ -70,7 +70,7 @@ nothing, and the loop breaks at `_name_findings_stop`.
 | `in_loop_exception_at_the_same_point…` | synthetic `OSError` in `_name_findings_stop` | false | OSError | **open**, same reopen | `NOT MET` |
 | `in_loop_reachable_exception…` | reachable scope stop (t3 writes `templates/index.html`) | false | the scope exception | **open**, same reopen | `NOT MET` |
 | `post_loop_…over_a_valid_resolution…` | synthetic `OSError` at end, no t3 | false | OSError | resolved/t2, **still verifies** | — |
-| **`post_loop_exception_leaves_the_undone_resolution_resolved[OSError]`** | synthetic `OSError` at `"at the end of the run"` | **false** | **OSError** | **resolved/t2, `reopened=""`, `unresolved_reason=""`** | **not NOT MET** |
+| **`post_loop_exception_leaves_the_undone_resolution_resolved[OSError]`** | synthetic `OSError` at `"at the end of the run"` | **false** | **OSError** | **resolved/t2, `reopened=None`, `unresolved_reason=""`** | **not NOT MET** |
 | **`…[KeyboardInterrupt]`** | same, `KeyboardInterrupt` | **false** | **KeyboardInterrupt** | same | same |
 | **`post_loop_failing_recheck_is_not_distrusted`** | synthetic `OSError` from `_recheck_resolved_findings` | **false** | **OSError** | **resolved/t2, no distrust note** | **not NOT MET** |
 
@@ -105,6 +105,19 @@ even though its resolving renders no longer match the source.
   to mirror 2956-2964 in the post-loop except. That belongs to the
   incumbent's separate change. If that change lands, the three bold rows
   above should flip to `open`/`NOT MET` and the tests should be inverted.
+
+## Correction after the frozen run
+
+Root ran the eight tests in the frozen image. Five passed and three failed,
+all on one fixture expectation. The saved F1 row has a `reopened` key with
+the value `None`, not a missing key, so `f1.get("reopened", "")` returned
+`None` and the expected `""` did not match. The actual row was
+`("resolved", "t2", None, "")`. The expectation in the three reproduction
+cases is now `None`. Nothing else changed: F1 still has to be `resolved`
+by t2 with no reopen note and no reason, R1/R2 still must not be
+`NOT MET`, and the main case still requires that the evidence check fails
+on the persisted row. The stale-ledger claim is unchanged, and this
+correction has not yet been re-run.
 
 ## What was not done
 

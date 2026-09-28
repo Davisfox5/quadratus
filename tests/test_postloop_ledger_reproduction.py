@@ -24,14 +24,23 @@ docs/review/postloop-ledger-reproduction.md.
 """
 
 import json
-from pathlib import Path
 
 import pytest
 
 from quadratus.config import Settings
 from quadratus.session import Session
 from tests.lifecycle import harness as H
-from tests.lifecycle.test_audit_findings import AUDIT, DOCS, MET, NO_EDIT, REPAIR, REQS, WIDE, _capture, _repair
+from tests.lifecycle.test_audit_findings import (
+    AUDIT,
+    DOCS,
+    MET,
+    NO_EDIT,
+    REPAIR,
+    REQS,
+    WIDE,
+    _capture,
+    _repair,
+)
 from tests.lifecycle.test_lifecycle_matrix import T2, Script, _design_files
 
 pytestmark = pytest.mark.requirements_ledger
@@ -188,7 +197,8 @@ def test_post_loop_exception_leaves_the_undone_resolution_resolved(tmp_path, mon
     assert rec["completed"] is False
     assert rec["error"].startswith(type(exc).__name__) and rec["stop"] == type(exc).__name__
     # Ledger: F1 still resolved by t2 -- no reopening, no distrust note, no reason.
-    assert rec["f1"] == ("resolved", "t2", "", "")
+    # ``reopened`` is present as None (never set by a re-check), not absent.
+    assert rec["f1"] == ("resolved", "t2", None, "")
     assert not any(v.startswith("NOT MET") for v in rec["ledger"].values()), rec["ledger"]
     # And the row is wrong, not just unannotated: the skipped re-check would reopen it.
     assert not _still_verifies(held["session"])
@@ -204,5 +214,5 @@ def test_post_loop_failing_recheck_is_not_distrusted(tmp_path, monkeypatch):
     rec = _record(replay)
     assert fired == ["_recheck_resolved_findings"], "only _finish_run's call site is on this path"
     assert rec["completed"] is False and rec["error"].startswith("OSError")
-    assert rec["f1"] == ("resolved", "t2", "", "")
+    assert rec["f1"] == ("resolved", "t2", None, "")
     assert not any(v.startswith("NOT MET") for v in rec["ledger"].values()), rec["ledger"]
