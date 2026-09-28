@@ -3185,7 +3185,7 @@ class Session:
                     requirements=[rid for rid in covers if not str(status.get(rid, "")).startswith(("covered", "met"))])
             self._current_covers, self._current_resolves = [], []
             self._note(f"task {len(self.history)} closed by {summary.author}")
-            if self.open_findings or (self.checks and not self.checks[-1]['passed']):
+            if self._findings_stop_due() or (self.checks and not self.checks[-1]['passed']):
                 self._name_findings_stop({spec.task_id})
                 break
             if unresolved:
@@ -3211,6 +3211,21 @@ class Session:
             self._recheck_resolved_findings()
             self._apply_completion(self._completion_decision(CAP, max_tasks))
         return list(self.history)
+
+    def _findings_stop_due(self) -> bool:
+        """Whether open findings stop the run after a serial task (map P3.4):
+        the projected active findings (quadratus.finding_state) or the
+        legacy list, either one. A malformed record fails closed. Where the
+        two disagree the closing task records it, so the run cannot count
+        as complete."""
+        from .finding_state import from_session
+        state = from_session(self)
+        typed, legacy = bool(state.findings() or state.problems), bool(self.open_findings)
+        if typed != legacy and self.task_outcomes:
+            note = f"open findings: typed {typed}, legacy {legacy}"
+            if note not in self.task_outcomes[-1].mismatches:
+                self.task_outcomes[-1].mismatches.append(note)
+        return typed or legacy
 
     def _completion_decision(self, site: str, max_tasks: int):
         """The completion decision at ``site`` (quadratus.completion_decision),

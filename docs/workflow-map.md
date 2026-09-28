@@ -823,6 +823,16 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     and the task's `stages` list gains the second `design` entry
     (`tests/lifecycle/test_design_recheck_stage.py`).
 
+18. *The serial open-findings stop reads the typed record (Sol inventory
+    5863608874).* After a serial task the run stopped on the legacy
+    `open_findings` list alone; `_findings_stop_due` now stops on the
+    projected active findings (`finding_state.from_session`) or the legacy
+    list, a malformed record failing closed, and records
+    `open findings: typed X, legacy Y` on the closing task where they
+    disagree. The batch trigger, settlement, DONE/cap, partiality, design
+    debt, stop text and applicability are separate packages
+    (`tests/lifecycle/test_findings_stop_trigger.py`).
+
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
 the live `design_cross_check` / `is_design_task`, and can drift from the
