@@ -1805,6 +1805,14 @@ class Session:
             log.debug("could not capture project source", exc_info=True)
             return None
 
+    def _breaker_mixed(self) -> bool:
+        """Whether other work (a parallel batch) ran between the serial
+        tasks the breaker counter counted, read from the typed record."""
+        names = {o.task_id for o in self._breaker_counted}
+        positions = [i for i, o in enumerate(self.task_outcomes) if o in self._breaker_counted]
+        return bool(positions) and any(self.task_outcomes[i].task_id not in names
+                                       for i in range(positions[0], positions[-1] + 1))
+
     def _breaker_reason(self) -> str:
         """The TurnLimitBreaker stop, naming the serial tasks the counter
         counted (map P3.4). When other work (a parallel batch) ran between
@@ -1817,12 +1825,8 @@ class Session:
                 note = "breaker: counted, but missing from turn_limited"
                 if note not in outcome.mismatches:
                     outcome.mismatches.append(note)
-        ids = [o.task_id for o in self.task_outcomes]
-        positions = [i for i, o in enumerate(self.task_outcomes) if o in self._breaker_counted]
-        between = bool(positions) and any(ids[i] not in names
-                                          for i in range(positions[0], positions[-1] + 1))
         n = self._turn_limited_in_a_row
-        if between:
+        if self._breaker_mixed():
             return (f"TurnLimitBreaker: the lead turn limit was reached on {n} serial tasks with no serial "
                     f"task completing in between ({', '.join(names)}; a parallel batch ran between them); "
                     "stopped instead of re-planning again. Work preserved.")
@@ -3118,8 +3122,11 @@ class Session:
                     # and every capped task's edits stay in place. But it is
                     # named, so the run's error is never blank (Codex, Run 14).
                     self._stop_with("cap", self._breaker_reason())
-                    self._note(f"the lead turn limit was reached {self._turn_limited_in_a_row} "
-                               f"times in a row; stopping instead of re-planning again")
+                    self._note((f"the lead turn limit was reached on {self._turn_limited_in_a_row} serial "
+                                "tasks with a parallel batch between them; stopping instead of "
+                                "re-planning again") if self._breaker_mixed() else
+                               (f"the lead turn limit was reached {self._turn_limited_in_a_row} "
+                                "times in a row; stopping instead of re-planning again"))
                     break
                 continue
             self._turn_limited_in_a_row = 0

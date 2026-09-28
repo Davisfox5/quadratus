@@ -28,7 +28,9 @@ def _run(tmp_path, plan, capped):
             return base(model, prompt, system, allow_writes)
         return invoke
     script.invoke_for = invoke_for
-    session, project = parallel_session(tmp_path, script, requirements_ledger=False)
+    notes = []
+    session, project = parallel_session(tmp_path, script, requirements_ledger=False, progress=notes.append)
+    session.notes = notes
     session.invoke = invoke_for(project)
     session.run(max_tasks=len(plan) + 1)
     return session, script
@@ -44,12 +46,17 @@ def test_a_batch_between_counted_caps_names_what_was_counted(tmp_path):
     stop = session.run_outcome.facts[-1]
     assert (stop.kind, stop.legacy) == ("cap", "TurnLimitBreaker")
     assert not [m for o in session.task_outcomes for m in o.mismatches]
+    assert session.notes[-1] == ("the lead turn limit was reached on 2 serial tasks with a parallel batch "
+                                 "between them; stopping instead of re-planning again")
+    assert not any("times in a row" in n for n in session.notes), "the progress log says the same"
 
 
 def test_serial_caps_keep_the_in_a_row_wording(tmp_path):
     session, _ = _run(tmp_path, [_block("c.py"), _block("d.py"), "DONE"], {"c.py", "d.py"})
     assert session.stop_reason == ("TurnLimitBreaker: the lead turn limit was reached 2 times in a row "
                                    "(t1, t2); stopped instead of re-planning again. Work preserved.")
+    assert session.notes[-1] == ("the lead turn limit was reached 2 times in a row; stopping instead of "
+                                 "re-planning again")
 
 
 def test_the_breaker_fires_at_the_same_point(tmp_path):
