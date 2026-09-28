@@ -1803,9 +1803,27 @@ class Session:
             log.debug("could not capture project source", exc_info=True)
             return None
 
+    def _partial_from_outcomes(self) -> set:
+        """Tasks whose work was left partial, from the typed record (map
+        P3.4): an active cap (a CONTINUES that completed recovers it) or an
+        active not-merged fact on a parallel child."""
+        return {o.task_id for o in self.task_outcomes
+                if any(f.active and (f.kind == "cap" or f.stage == "merge") for f in o.facts)}
+
     @property
     def _unresolved_partial(self) -> bool:
-        return bool(self._partial_tasks)
+        """Whether capped or unmerged work is still unresolved. Decided from
+        the typed record and the legacy set together: either one blocks, and
+        a disagreement is a recorded mismatch on the task, so the run cannot
+        count as complete. The legacy set stays the report mirror."""
+        typed, legacy = self._partial_from_outcomes(), set(self._partial_tasks)
+        for outcome in self.task_outcomes:
+            if outcome.task_id in typed ^ legacy:
+                note = (f"partial: typed {outcome.task_id in typed}, "
+                        f"legacy {outcome.task_id in legacy}")
+                if note not in outcome.mismatches:
+                    outcome.mismatches.append(note)
+        return bool(typed | legacy)
 
     def _measure_scope(self, spec: TaskSpec, before) -> Optional[ScopeReport]:
         """The task's current diff against its scope, with no side effects."""

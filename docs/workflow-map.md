@@ -688,6 +688,15 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
    not a claim that no call changes. Ordinary routes with no drift are
    identical (`tests/lifecycle/test_security_applicability.py`).
 
+7. *`_partial_tasks` read from the typed record.* `_unresolved_partial`
+   (both DONE sites and the cap's goal-question short-circuit) derives the
+   partial set from the outcomes (an active `cap` fact, recovered by a
+   completed CONTINUES, or an active not-merged fact on a parallel child)
+   and blocks if either that set or the legacy one does; a disagreement is
+   recorded on the task. The legacy set stays the report mirror. DONE
+   unification stays deferred until its typed inputs are ready (Codex,
+   5861527374) (`tests/lifecycle/test_partial_from_outcomes.py`).
+
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
 the live `design_cross_check` / `is_design_task`, and can drift from the
