@@ -491,13 +491,22 @@ def validate_capture(capture) -> dict:
             raise ValueError("SCOPE capture steps need action click, wait or file, a selector, "
                              "and a path for file steps only")
         if step["action"] == "file":
-            # Syntax and containment now; which task owns it is checked at
-            # dispatch, existence and hash by the capture (a repair may write
-            # its fixture). Codex review of 3a55d82: an absolute path reached
-            # a started preview before it was refused.
-            parts = PurePosixPath(step["path"]).parts
-            if (PurePosixPath(step["path"]).is_absolute() or ".." in parts or len(parts) != 4
-                    or parts[:2] != (".quadratus", "capture-fixtures") or any(ord(c) < 32 for c in step["path"])):
-                raise ValueError("SCOPE capture file steps must name .quadratus/capture-fixtures/<task>/<name>")
+            # Syntax and containment now; which task owns a fixture is checked
+            # at dispatch, existence and hash by the capture (a repair may
+            # write its fixture). Codex review of 3a55d82: an absolute path
+            # reached a started preview before it was refused. A committed,
+            # non-hidden project sample is as valid as a capture-only fixture
+            # (design_evidence._fixture holds the same rule); the phase-4
+            # rerun on a6c9576 stalled here on tests/fixtures/<sample>.csv.
+            # A separate name: ``path`` is the page route this function returns
+            # (Codex review of 0115f0c caught it being overwritten here).
+            upload = step["path"]
+            parts = PurePosixPath(upload).parts
+            fixture = len(parts) == 4 and parts[:2] == (".quadratus", "capture-fixtures")
+            hidden = any(part.startswith(".") for part in (parts[3:] if fixture else parts))
+            if (not parts or PurePosixPath(upload).is_absolute() or ".." in parts or hidden
+                    or any(ord(c) < 32 for c in upload)):
+                raise ValueError("SCOPE capture file steps must name a non-hidden project file or "
+                                 ".quadratus/capture-fixtures/<task>/<name>")
         out.append({k: (v.strip() if k == "selector" else v) for k, v in step.items()})
     return dict(path=path, steps=out)

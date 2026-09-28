@@ -313,8 +313,26 @@ def test_a_harness_capture_may_upload_only_its_own_fixture(tmp_path, monkeypatch
                      dict(AUDIT_SCOPE, capture={"path": "/index.html", "steps": UPLOAD_STEPS("t9")}),
                      "Audit the preview table.")
     replay = _run(tmp_path, monkeypatch, [REQS + borrowed] * 5, {}, profile=profile)
-    assert any("uploads only this task's own fixtures" in c.prompt for c in replay.of("orchestrator"))
+    assert any("committed project file or this task's own fixture" in c.prompt
+               for c in replay.of("orchestrator"))
     assert not replay.of("lead")
+
+
+def test_a_harness_capture_may_upload_a_committed_project_sample(tmp_path, monkeypatch):
+    """Phase-4 rerun on a6c9576: task 2 committed tests/fixtures/<sample>.csv and the
+    next task's capture named it; dispatch refused it and the run stalled."""
+    profile, _ = _profile(tmp_path)
+    steps = [{"action": "file", "selector": "#csv", "path": "tests/fixtures/sample.csv"},
+             {"action": "wait", "selector": "#done"}]
+    audit = _decl("KIND: frontend standard",
+                  dict(AUDIT_SCOPE, capture={"path": "/index.html", "steps": steps}),
+                  "Audit the preview table.")
+    replay = _run(tmp_path, monkeypatch, [REQS + audit], {"t1": _no_edit}, profile=profile,
+                  files={**_design_files(), "templates/index.html": UPLOAD_PAGE.format(style="max-width:100%"),
+                         "tests/fixtures/sample.csv": "a,b\n1,2\n"},
+                  record_complete=False)
+    assert not any("this task's own fixture" in c.prompt for c in replay.of("orchestrator"))
+    assert len(replay.of("lead")) == 1, "the task was dispatched with the committed sample"
 
 
 @browser

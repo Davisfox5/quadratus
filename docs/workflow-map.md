@@ -84,6 +84,7 @@ from `6382cf2`.
 | Provider refusal | `ProviderRefusal` | preserved and stops; close-out refusal gets a harness record | never retried or rerouted (Fleet disables the fallback) |
 | Relevant permission denial | `CapabilityUnavailable` from runtime | stop after the one call, even at the cap | above the cap |
 | Scope overrun or unmeasurable scope | `PartialWorkStopped` | stop, work preserved | above everything but refusal |
+| Task scope invalid twice (orchestrator) | `RunStalled` after one correction | stop; the correction now carries the scope and capture rules in full (a6c9576 rerun stalled on a rule it was never shown) | operator |
 | Dependency tree changed or unavailable | `DependencyTreeChanged` / `…Unavailable` | stop at the next edge; latched | integrity |
 | CHANGED mismatch | non-terminal `unverified` fact on the task (`runtime.changed_report`) | recorded, run continues; the measured diff is what every check reads. A request line that fails to parse with no CHANGED line still stops (`PartialWorkStopped`) | none: not a stop since 2026-09-28 (phase-4 run on ea464cc) |
 | Timeout after writes | `PartialWorkSuspected` becomes `PartialWorkStopped` | stop, tree inspected | integrity |
