@@ -8,8 +8,12 @@
       "stop_fact": {
         "kind": "product",
         "legacy": "CheckFailing",
-        "detail": "CheckFailing: a task closed with open work, but task t1's last check still fails (attempt 2, output artifact <artifact>). Work preserved."
+        "detail": "CheckFailing: a task closed with open work, but task t1's last check still fails (attempt 2, output artifact <artifact>). Work preserved.",
+        "full": null
       },
+      "stops": [
+        "CheckFailing"
+      ],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [],
@@ -32,8 +36,12 @@
       "stop_fact": {
         "kind": "unverified",
         "legacy": "CompletionUnproven",
-        "detail": "CompletionUnproven: the cap's goal confirmation was accepted but the record does not support it: t1.checks unsatisfied. Work preserved."
+        "detail": "CompletionUnproven: the cap's goal confirmation was accepted but the record does not support it: t1.checks unsatisfied. Work preserved.",
+        "full": null
       },
+      "stops": [
+        "CompletionUnproven"
+      ],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [],
@@ -54,6 +62,7 @@
       "stop_reason": "",
       "result_error": "",
       "stop_fact": null,
+      "stops": [],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [],
@@ -74,8 +83,12 @@
       "stop_fact": {
         "kind": "unverified",
         "legacy": "CompletionUnproven",
-        "detail": "CompletionUnproven: DONE was accepted but the record does not support it: t1.checks unsatisfied. Work preserved."
+        "detail": "CompletionUnproven: DONE was accepted but the record does not support it: t1.checks unsatisfied. Work preserved.",
+        "full": null
       },
+      "stops": [
+        "CompletionUnproven"
+      ],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [],
@@ -98,8 +111,12 @@
       "stop_fact": {
         "kind": "integrity",
         "legacy": "DependencyTreeChanged",
-        "detail": "DependencyTreeChanged: a runtime-dependency tree changed during lead (t1): node_modules, node_modules/playwright, node_modules/playwright/index.js. Edits are preserved; nothing was reverted or replayed."
+        "detail": "DependencyTreeChanged: a runtime-dependency tree changed during lead (t1): node_modules, node_modules/playwright, node_modules/playwright/index.js. Edits are preserved; nothing was reverted or replayed.",
+        "full": null
       },
+      "stops": [
+        "DependencyTreeChanged"
+      ],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [],
@@ -122,8 +139,12 @@
       "stop_fact": {
         "kind": "unverified",
         "legacy": "DesignUnverified",
-        "detail": "DesignUnverified: task t2 is design work without clean rendered evidence: no well-formed summary.json naming the rendered page (use python -m quadratus.design_evidence). Work preserved."
+        "detail": "DesignUnverified: task t2 is design work without clean rendered evidence: no well-formed summary.json naming the rendered page (use python -m quadratus.design_evidence). Work preserved.",
+        "full": null
       },
+      "stops": [
+        "DesignUnverified"
+      ],
       "open_findings": [
         "Task t1 is design work without clean rendered evidence: no well-formed summary.json naming the rendered page (use python -m quadratus.design_evidence).",
         "Task t2 is design work without clean rendered evidence: no well-formed summary.json naming the rendered page (use python -m quadratus.design_evidence)."
@@ -163,8 +184,12 @@
       "stop_fact": {
         "kind": "unverified",
         "legacy": "DesignUnverified",
-        "detail": "DesignUnverified: task t1 is design work without clean rendered evidence: the desktop render's step 2 (wait dialog[open]) failed: Timeout 5000ms exceeded.; the mobile render's step 2 (wait dialog[open]) failed: Timeout 5000ms exceeded.. Work preserved."
+        "detail": "DesignUnverified: task t1 is design work without clean rendered evidence: the desktop render's step 2 (wait dialog[open]) failed: Timeout 5000ms exceeded.; the mobile render's step 2 (wait dialog[open]) failed: Timeout 5000ms exceeded.. Work preserved.",
+        "full": null
       },
+      "stops": [
+        "DesignUnverified"
+      ],
       "open_findings": [
         "Task t1 is design work without clean rendered evidence: the desktop render's step 2 (wait dialog[open]) failed: Timeout 5000ms exceeded.; the mobile render's step 2 (wait dialog[open]) failed: Timeout 5000ms exceeded.."
       ],
@@ -194,8 +219,12 @@
       "stop_fact": {
         "kind": "cap",
         "legacy": "DoneWithOpenWork",
-        "detail": "DoneWithOpenWork: the orchestrator reported DONE, but capped task(s) t1 not continued to completion. Work preserved."
+        "detail": "DoneWithOpenWork: the orchestrator reported DONE, but capped task(s) t1 not continued to completion. Work preserved.",
+        "full": null
       },
+      "stops": [
+        "DoneWithOpenWork"
+      ],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [],
@@ -220,8 +249,12 @@
       "stop_fact": {
         "kind": "unverified",
         "legacy": "FindingsOpen",
-        "detail": "FindingsOpen: a task closed with open work, but 1 open finding(s), first: Task t1 design: BLOCKING: the renders do not show the changed interface. Work preserved."
+        "detail": "FindingsOpen: a task closed with open work, but 1 open finding(s), first: Task t1 design: BLOCKING: the renders do not show the changed interface. Work preserved.",
+        "full": null
       },
+      "stops": [
+        "FindingsOpen"
+      ],
       "open_findings": [
         "Task t1 design: BLOCKING: the renders do not show the changed interface"
       ],
@@ -246,8 +279,12 @@
       "stop_fact": {
         "kind": "unverified",
         "legacy": "FindingsUnresolved",
-        "detail": "FindingsUnresolved: audit findings F1 are still open; the task cap was reached. Work preserved."
+        "detail": "FindingsUnresolved: audit findings F1 are still open; the task cap was reached. Work preserved.",
+        "full": null
       },
+      "stops": [
+        "FindingsUnresolved"
+      ],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [
@@ -276,8 +313,12 @@
       "stop_fact": {
         "kind": "unverified",
         "legacy": "FindingsUnresolved",
-        "detail": "FindingsUnresolved: task t2 named RESOLVES F1 but did not establish their acceptance. Work preserved."
+        "detail": "FindingsUnresolved: task t2 named RESOLVES F1 but did not establish their acceptance. Work preserved.",
+        "full": null
       },
+      "stops": [
+        "FindingsUnresolved"
+      ],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [
@@ -311,8 +352,12 @@
       "stop_fact": {
         "kind": "cap",
         "legacy": "GoalUnconfirmedAtCap",
-        "detail": "GoalUnconfirmedAtCap: the task cap (1) was reached, but capped task(s) t1 not continued to completion. Work preserved."
+        "detail": "GoalUnconfirmedAtCap: the task cap (1) was reached, but capped task(s) t1 not continued to completion. Work preserved.",
+        "full": null
       },
+      "stops": [
+        "GoalUnconfirmedAtCap"
+      ],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [],
@@ -337,8 +382,91 @@
       "stop_fact": {
         "kind": "cap",
         "legacy": "GoalUnconfirmedAtCap",
-        "detail": "GoalUnconfirmedAtCap: the task cap (1) was reached and the orchestrator did not confirm the goal met. Work preserved."
+        "detail": "GoalUnconfirmedAtCap: the task cap (1) was reached and the orchestrator did not confirm the goal met. Work preserved.",
+        "full": null
       },
+      "stops": [
+        "GoalUnconfirmedAtCap"
+      ],
+      "open_findings": [],
+      "design_unverified": [],
+      "audit_findings": [],
+      "turn_limited": [],
+      "tasks": [
+        {
+          "task_id": "t1",
+          "closed_as": "closed",
+          "primary": "clean"
+        }
+      ]
+    }
+  ],
+  "KeyError:post-loop-after-named": [
+    {
+      "completed": false,
+      "done_accepted": false,
+      "stop_reason": "GoalUnconfirmedAtCap: the task cap (1) was reached and the orchestrator did not confirm the goal met. Work preserved.",
+      "result_error": null,
+      "stop_fact": {
+        "kind": "operator",
+        "legacy": "KeyError",
+        "detail": "KeyError: 'status'",
+        "full": null
+      },
+      "stops": [
+        "GoalUnconfirmedAtCap",
+        "KeyError"
+      ],
+      "open_findings": [],
+      "design_unverified": [],
+      "audit_findings": [],
+      "turn_limited": [],
+      "tasks": [
+        {
+          "task_id": "t1",
+          "closed_as": "closed",
+          "primary": "clean"
+        }
+      ]
+    }
+  ],
+  "LookupError:long": [
+    {
+      "completed": false,
+      "done_accepted": false,
+      "stop_reason": "",
+      "result_error": "LookupError: the orchestrator seat record is gone: yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+      "stop_fact": {
+        "kind": "operator",
+        "legacy": "LookupError",
+        "detail": "LookupError: the orchestrator seat record is gone: yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+        "full": "LookupError: the orchestrator seat record is gone: yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+      },
+      "stops": [
+        "LookupError"
+      ],
+      "open_findings": [],
+      "design_unverified": [],
+      "audit_findings": [],
+      "turn_limited": [],
+      "tasks": []
+    }
+  ],
+  "OSError:post-loop": [
+    {
+      "completed": false,
+      "done_accepted": true,
+      "stop_reason": "",
+      "result_error": "OSError: the dependency tree could not be read",
+      "stop_fact": {
+        "kind": "operator",
+        "legacy": "OSError",
+        "detail": "OSError: the dependency tree could not be read",
+        "full": null
+      },
+      "stops": [
+        "OSError"
+      ],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [],
@@ -361,8 +489,12 @@
       "stop_fact": {
         "kind": "operator",
         "legacy": "PlanDeclined",
-        "detail": "PlanDeclined: the operator's plan gate declined the expected task list; no task ran and nothing was changed."
+        "detail": "PlanDeclined: the operator's plan gate declined the expected task list; no task ran and nothing was changed.",
+        "full": null
       },
+      "stops": [
+        "PlanDeclined"
+      ],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [],
@@ -379,8 +511,40 @@
       "stop_fact": {
         "kind": "unverified",
         "legacy": "RequirementsUnmet",
-        "detail": "RequirementsUnmet: DONE was sent back 2 time(s) and the requirements are still not met: These requirements are not covered by any finished task: R2 (never covered, or found not met by the audit and not covered again since). Name a task for them (with COVERS), or explain in the task why one cannot be done.. Work preserved."
+        "detail": "RequirementsUnmet: DONE was sent back 2 time(s) and the requirements are still not met: These requirements are not covered by any finished task: R2 (never covered, or found not met by the audit and not covered again since). Name a task for them (with COVERS), or explain in the task why one cannot be done.. Work preserved.",
+        "full": null
       },
+      "stops": [
+        "RequirementsUnmet"
+      ],
+      "open_findings": [],
+      "design_unverified": [],
+      "audit_findings": [],
+      "turn_limited": [],
+      "tasks": [
+        {
+          "task_id": "t1",
+          "closed_as": "closed",
+          "primary": "clean"
+        }
+      ]
+    }
+  ],
+  "RequirementsUnmet:long": [
+    {
+      "completed": false,
+      "done_accepted": false,
+      "stop_reason": "RequirementsUnmet: DONE was sent back 2 time(s) and the requirements are still not met: These requirements are not covered by any finished task: R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13, R14, R15, R16, R17, R18, R19, R20, R21, R22, R23, R24, R25, R26, R27, R28, R29, R30, R31, R32, R33, R34, R35, R36, R37, R38, R39, R40 (never covered, or found not met by the audit and not covered again since). Name a task for them (with COVERS), or explain in the task why one cannot be done. Work preserved.",
+      "result_error": null,
+      "stop_fact": {
+        "kind": "unverified",
+        "legacy": "RequirementsUnmet",
+        "detail": "RequirementsUnmet: DONE was sent back 2 time(s) and the requirements are still not met: These requirements are not covered by any finished task: R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13, R14, R15, R16, R17, R18, R19, R20, R21, R22, R23, R24, R25, R26, R27, R28, R29, R30, R31, R32, R33, R34, R35, R36, R37, R38, R39, R40 (never covered, or found not met by the audit and not covered again s",
+        "full": "RequirementsUnmet: DONE was sent back 2 time(s) and the requirements are still not met: These requirements are not covered by any finished task: R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13, R14, R15, R16, R17, R18, R19, R20, R21, R22, R23, R24, R25, R26, R27, R28, R29, R30, R31, R32, R33, R34, R35, R36, R37, R38, R39, R40 (never covered, or found not met by the audit and not covered again since). Name a task for them (with COVERS), or explain in the task why one cannot be done. Work preserved."
+      },
+      "stops": [
+        "RequirementsUnmet"
+      ],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [],
@@ -403,8 +567,12 @@
       "stop_fact": {
         "kind": "operator",
         "legacy": "RunStalled",
-        "detail": "RunStalled: the orchestrator kept naming tasks without valid COVERS: No requirements are listed yet. Start the reply with a 'REQUIREMENTS:' block numbering the goal's requirements (R1: ...), then the task."
+        "detail": "RunStalled: the orchestrator kept naming tasks without valid COVERS: No requirements are listed yet. Start the reply with a 'REQUIREMENTS:' block numbering the goal's requirements (R1: ...), then the task.",
+        "full": null
       },
+      "stops": [
+        "RunStalled"
+      ],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [],
@@ -419,8 +587,12 @@
       "stop_fact": {
         "kind": "unverified",
         "legacy": "RequirementsUnmet",
-        "detail": "RequirementsUnmet: DONE was sent back 2 time(s) and the requirements are still not met: No requirements were listed. Before DONE can stand, reply with a 'REQUIREMENTS:' block numbering the goal's requirements (R1: ...), then name the next task or reply DONE.. Work preserved."
+        "detail": "RequirementsUnmet: DONE was sent back 2 time(s) and the requirements are still not met: No requirements were listed. Before DONE can stand, reply with a 'REQUIREMENTS:' block numbering the goal's requirements (R1: ...), then name the next task or reply DONE.. Work preserved.",
+        "full": null
       },
+      "stops": [
+        "RequirementsUnmet"
+      ],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [],
@@ -437,8 +609,12 @@
       "stop_fact": {
         "kind": "cap",
         "legacy": "TurnLimitBreaker",
-        "detail": "TurnLimitBreaker: the lead turn limit was reached on 2 serial tasks with no serial task completing in between (t1, t4; a parallel batch ran between them); stopped instead of re-planning again. Work preserved."
+        "detail": "TurnLimitBreaker: the lead turn limit was reached on 2 serial tasks with no serial task completing in between (t1, t4; a parallel batch ran between them); stopped instead of re-planning again. Work preserved.",
+        "full": null
       },
+      "stops": [
+        "TurnLimitBreaker"
+      ],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [],
@@ -480,8 +656,12 @@
       "stop_fact": {
         "kind": "cap",
         "legacy": "TurnLimitBreaker",
-        "detail": "TurnLimitBreaker: the lead turn limit was reached 2 times in a row (t1, t2); stopped instead of re-planning again. Work preserved."
+        "detail": "TurnLimitBreaker: the lead turn limit was reached 2 times in a row (t1, t2); stopped instead of re-planning again. Work preserved.",
+        "full": null
       },
+      "stops": [
+        "TurnLimitBreaker"
+      ],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [],
@@ -510,6 +690,7 @@
       "stop_reason": "",
       "result_error": "",
       "stop_fact": null,
+      "stops": [],
       "open_findings": [],
       "design_unverified": [],
       "audit_findings": [],

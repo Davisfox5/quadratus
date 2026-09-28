@@ -727,7 +727,11 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     (`RunStalled`, `DependencyTreeChanged`) leave `stop_reason` empty; their
     text is in the typed fact, and in `result.error` only when the run went
     through `project_run` (a direct-`Session` journey records
-    `result_error: null`).
+    `result_error: null`). An exception after the loop leaves `stop_reason`
+    as it was, which may name an earlier stop; the typed stop is the
+    exception (`KeyError:post-loop-after-named`). Upgraded per Opus review
+    5e2fb31: 22 journeys, `stop_fact.full` and `stops` recorded, and
+    derived consistency checks on every record.
 
 11. *Full stop text on the typed fact.* `Fact.detail` stays cut at 400
     characters (300 for an exception's message); `Fact.full` carries the
