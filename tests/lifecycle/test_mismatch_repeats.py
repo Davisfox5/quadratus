@@ -142,3 +142,30 @@ def test_repeated_lines_would_push_a_later_blocker_out_of_the_stop_text():
 
     task.mismatches = list(dict.fromkeys(task.mismatches))
     assert "t1.integrity" in "; ".join(completion_blockers([task]))[:600]
+
+
+def test_a_capture_page_drift_is_recorded_once_across_prompt_builds(tmp_path):
+    """O-NEXT-16 (5865910166): the capture_page note is one of the three
+    deduplicated sites; each lead prompt build reads it again."""
+    import dataclasses as dc
+
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.outcome import TaskOutcome
+    from quadratus.preview import CaptureProfile
+    from quadratus.scope import TaskScope
+    from quadratus.session import SessionConfig, TaskSpec
+    profile = CaptureProfile(preview=("true",), origin="http://127.0.0.1:5000")
+    root = tmp_path / "project"
+    root.mkdir()
+    session = Session("goal", ArtifactStore(tmp_path / "a"), lambda *a, **k: "DONE",
+                      config=SessionConfig(project=root, allow_writes=True, capture_profile=profile))
+    spec = TaskSpec("t1", "Add an Import button to the page.", kind="frontend",
+                    scope=TaskScope(permitted_paths=["templates/index.html"],
+                                    capture={"path": "/index.html", "steps": []}))
+    session._outcome = TaskOutcome("t1", "implementation")
+    session._contract = session._build_contract(spec, session._outcome)
+    session.config = dc.replace(session.config, capture_profile=dc.replace(profile, origin="http://127.0.0.1:6000"))
+    for _ in range(3):
+        session._lead_prompt(spec)
+    assert session._outcome.mismatches == [
+        "capture_page: contract 'http://127.0.0.1:5000/index.html', legacy 'http://127.0.0.1:6000/index.html'"]
