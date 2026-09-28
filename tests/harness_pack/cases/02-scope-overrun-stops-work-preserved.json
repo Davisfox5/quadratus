@@ -3,7 +3,7 @@
  "shape": "scope-trap",
  "family": "pure-logic",
  "grader": false,
- "source": "Report, Quadratus, GameTape finding 2: a two-line fixture task implemented the rest of the feature; a 50 percent overrun stops the task and preserves the work.",
+ "source": "Report, Quadratus, GameTape finding 2: a two-line fixture task implemented the rest of the feature; a 50 percent overrun stops the task and preserves the work. Contract change 2026-09-28 (docs/DIRECTION.md, session.TaskFailed): the overrun fails the task, not the run; the work is still preserved and the task is handed back.",
  "session": {
   "project": true,
   "allow_writes": true
@@ -39,26 +39,30 @@
   }
  ],
  "expect": {
-  "outcome": "PartialWorkStopped",
-  "error_contains": [
-   "exceeded its declared scope"
+  "outcome": "task_failed",
+  "failed_tasks": [
+   "t1"
   ],
+  "task_failed": {
+   "task": "t1",
+   "cause": "scope",
+   "changed_contains": [
+    "app.py"
+   ]
+  },
   "files": {
    "app.py": {
     "exists": true,
     "contains": "print(39)"
    }
   },
-  "in_flight": {
-   "changed_contains": [
-    "app.py"
-   ],
-   "inspected": true
-  },
   "scope_reports": {
    "count": 1,
    "oversized": true
   },
+  "store_kinds_contain": [
+   "task-failed"
+  ],
   "calls": {
    "role:collaborator": 0,
    "role:closeout": 0

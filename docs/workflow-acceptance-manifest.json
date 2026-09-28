@@ -325,7 +325,7 @@
     {
       "id": "J15",
       "tests": [
-        "tests/lifecycle/test_workflow_outcomes.py::test_j15_a_scope_overrun_is_integrity_with_the_work_kept"
+        "tests/lifecycle/test_workflow_outcomes.py::test_j15_a_scope_overrun_fails_the_task_with_the_work_kept"
       ],
       "required_obligations": [
         "calls",
@@ -335,13 +335,13 @@
       ],
       "coverage": {
         "outcome": [
-          "tests/lifecycle/test_workflow_outcomes.py::test_j15_a_scope_overrun_is_integrity_with_the_work_kept"
+          "tests/lifecycle/test_workflow_outcomes.py::test_j15_a_scope_overrun_fails_the_task_with_the_work_kept"
         ],
         "report": [
-          "tests/lifecycle/test_workflow_outcomes.py::test_j15_a_scope_overrun_is_integrity_with_the_work_kept"
+          "tests/lifecycle/test_workflow_outcomes.py::test_j15_a_scope_overrun_fails_the_task_with_the_work_kept"
         ],
         "partial_work": [
-          "tests/lifecycle/test_workflow_outcomes.py::test_j15_a_scope_overrun_is_integrity_with_the_work_kept"
+          "tests/lifecycle/test_workflow_outcomes.py::test_j15_a_scope_overrun_fails_the_task_with_the_work_kept"
         ]
       }
     },
@@ -785,6 +785,48 @@
       "coverage": {
         "outcome": [
           "tests/lifecycle/test_workflow_outcomes.py::test_p3_g12_a_check_repaired_later_in_the_task_does_not_block_done"
+        ]
+      }
+    },
+    {
+      "id": "J39",
+      "tests": [
+        "tests/lifecycle/test_j39_task_failures.py::test_a_scope_overrun_fails_the_task_keeps_the_work_and_the_run_goes_on",
+        "tests/lifecycle/test_j39_task_failures.py::test_the_orchestrator_and_the_continuation_are_told_what_failed",
+        "tests/lifecycle/test_j39_task_failures.py::test_a_failed_task_never_continued_blocks_completion",
+        "tests/lifecycle/test_j39_task_failures.py::test_an_unparsed_request_fails_the_task_and_keeps_the_reply",
+        "tests/lifecycle/test_j39_task_failures.py::test_a_lead_that_never_stops_asking_fails_its_task_only",
+        "tests/lifecycle/test_j39_task_failures.py::test_two_failed_tasks_in_a_row_trip_the_breaker_with_a_named_stop",
+        "tests/lifecycle/test_j39_task_failures.py::test_a_cap_then_a_failure_is_the_same_breaker",
+        "tests/lifecycle/test_j39_task_failures.py::test_what_the_harness_cannot_inspect_still_stops_the_run"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "calls": [
+          "tests/lifecycle/test_j39_task_failures.py::test_a_scope_overrun_fails_the_task_keeps_the_work_and_the_run_goes_on",
+          "tests/lifecycle/test_j39_task_failures.py::test_the_orchestrator_and_the_continuation_are_told_what_failed",
+          "tests/lifecycle/test_j39_task_failures.py::test_two_failed_tasks_in_a_row_trip_the_breaker_with_a_named_stop"
+        ],
+        "outcome": [
+          "tests/lifecycle/test_j39_task_failures.py::test_a_scope_overrun_fails_the_task_keeps_the_work_and_the_run_goes_on",
+          "tests/lifecycle/test_j39_task_failures.py::test_a_failed_task_never_continued_blocks_completion",
+          "tests/lifecycle/test_j39_task_failures.py::test_an_unparsed_request_fails_the_task_and_keeps_the_reply",
+          "tests/lifecycle/test_j39_task_failures.py::test_a_lead_that_never_stops_asking_fails_its_task_only",
+          "tests/lifecycle/test_j39_task_failures.py::test_two_failed_tasks_in_a_row_trip_the_breaker_with_a_named_stop",
+          "tests/lifecycle/test_j39_task_failures.py::test_a_cap_then_a_failure_is_the_same_breaker"
+        ],
+        "report": [
+          "tests/lifecycle/test_j39_task_failures.py::test_two_failed_tasks_in_a_row_trip_the_breaker_with_a_named_stop",
+          "tests/lifecycle/test_j39_task_failures.py::test_the_orchestrator_and_the_continuation_are_told_what_failed"
+        ],
+        "partial_work": [
+          "tests/lifecycle/test_j39_task_failures.py::test_a_scope_overrun_fails_the_task_keeps_the_work_and_the_run_goes_on",
+          "tests/lifecycle/test_j39_task_failures.py::test_two_failed_tasks_in_a_row_trip_the_breaker_with_a_named_stop"
         ]
       }
     }

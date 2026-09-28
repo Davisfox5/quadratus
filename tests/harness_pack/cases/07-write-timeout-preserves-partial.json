@@ -3,7 +3,7 @@
  "shape": "resume",
  "family": "pure-logic",
  "grader": false,
- "source": "Report, Quadratus, GameTape finding 4: a 900-second timeout replayed the same writing prompt against a tree it had already changed; partial work is inspected and preserved, never replayed.",
+ "source": "Report, Quadratus, GameTape finding 4: a 900-second timeout replayed the same writing prompt against a tree it had already changed; partial work is inspected and preserved, never replayed. Contract change 2026-09-28 (session.TaskFailed): with the tree inspected, the timeout fails the task, not the run; still never replayed.",
  "session": {
   "project": true,
   "allow_writes": true
@@ -44,10 +44,19 @@
   }
  ],
  "expect": {
-  "outcome": "PartialWorkStopped",
-  "error_contains": [
-   "timed out after 900s"
+  "outcome": "task_failed",
+  "error_contains": [],
+  "failed_tasks": [
+   "t1"
   ],
+  "task_failed": {
+   "task": "t1",
+   "cause": "transport",
+   "changed_contains": [
+    "a.py",
+    "new.py"
+   ]
+  },
   "files": {
    "a.py": {
     "equals": "half rewritten\n"
@@ -56,15 +65,8 @@
     "exists": true
    }
   },
-  "in_flight": {
-   "changed_contains": [
-    "a.py",
-    "new.py"
-   ],
-   "inspected": true
-  },
   "store_kinds_contain": [
-   "interrupted-task",
+   "task-failed",
    "interrupted-prompt"
   ],
   "calls": {

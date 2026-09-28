@@ -219,8 +219,10 @@ def test_a_scope_stop_in_a_resolving_task_is_written_into_the_finding(tmp_path, 
     replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1"],
                   {"t1": _capture(measured=WIDE), "t2": rogue})
     f1 = replay.findings[0]
-    assert replay.result.error and not replay.result.error.startswith("FindingsUnresolved")
-    assert f1["status"] == "open" and f1["unresolved_reason"].startswith("open when the run stopped")
+    t2 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t2")
+    assert t2["closed_as"] == "failed", "the repair fails on its scope; the run goes on"
+    assert replay.result.error and not replay.result.completed
+    assert f1["status"] == "open" and f1["unresolved_reason"].startswith("open when")
     assert f1["last_attempt"]
 
 
@@ -372,13 +374,16 @@ def test_with_the_ledger_off_an_overflow_audit_is_todays_stop(tmp_path, monkeypa
     assert replay.findings == [] and replay.result.error.startswith("DesignUnverified")
 
 
-def test_an_audit_that_edits_source_is_still_a_scope_stop(tmp_path, monkeypatch):
+def test_an_audit_that_edits_source_fails_the_task_and_records_no_finding(tmp_path, monkeypatch):
     def lead(call, replay):
         H.write(call, {"static/style.css": "edited by an audit\n"})
         H.evidence(Path(call.cwd), call.task, age=0, measured=WIDE)
         return 'Audited.\nCHANGED: ["static/style.css"]'
     replay = _run(tmp_path, monkeypatch, [REQS + AUDIT], {"t1": lead})
-    assert "exceeded its declared scope" in replay.result.error and replay.findings == []
+    t1 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t1")
+    assert t1["closed_as"] == "failed"
+    assert any(f["kind"] == "failed" and "exceeded its declared scope" in f["detail"] for f in t1["facts"])
+    assert not replay.result.completed and replay.findings == []
 
 
 def test_a_refused_audit_lead_is_todays_refusal_stop(tmp_path, monkeypatch):
@@ -446,16 +451,42 @@ def _settlement_mismatch(replay):
     assert folder.is_dir()
 
 
+def _unmeasurable_scope_on(monkeypatch, task_id):
+    """A run-level stop after a source change: the task's edits cannot be
+    measured (since J39 an ordinary scope overrun fails only the task)."""
+    from quadratus.session import Session
+    original = Session._assess_scope
+    monkeypatch.setattr(Session, "_assess_scope",
+                        lambda self, spec, task, before: (None if spec.task_id == task_id
+                                                          else original(self, spec, task, before)))
+
+
 def test_an_exception_after_a_source_change_reopens_an_earlier_resolution(tmp_path, monkeypatch):
+    def rogue(call, replay):
+        H.write(call, {"README.md": "# app\n\nx\n", "templates/index.html": "<p>moved</p>\n"})
+        return 'Documented.\nCHANGED: ["README.md", "templates/index.html"]'
+    _unmeasurable_scope_on(monkeypatch, "t3")
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1", DOCS],
+                  {"t1": _capture(measured=WIDE), "t2": _repair(), "t3": rogue}, max_tasks=8)
+    f1 = replay.findings[0]
+    assert replay.result.error.startswith("PartialWorkStopped: Scope could not be measured")
+    assert f1["status"] == "open" and "no longer holds" in f1["reopened"]
+    assert f1["unresolved_reason"].startswith("open when the run stopped")
+
+
+def test_a_scope_overrun_after_a_resolution_is_rechecked_at_done(tmp_path, monkeypatch):
+    """J39: the rogue task fails, the run goes on, and DONE finds the
+    resolved finding's target changed underneath it."""
     def rogue(call, replay):
         H.write(call, {"README.md": "# app\n\nx\n", "templates/index.html": "<p>moved</p>\n"})
         return 'Documented.\nCHANGED: ["README.md", "templates/index.html"]'
     replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1", DOCS],
                   {"t1": _capture(measured=WIDE), "t2": _repair(), "t3": rogue}, max_tasks=8)
+    t3 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t3")
+    assert t3["closed_as"] == "failed"
     f1 = replay.findings[0]
-    assert replay.result.error and not replay.result.error.startswith("FindingsUnresolved")
     assert f1["status"] == "open" and "no longer holds" in f1["reopened"]
-    assert f1["unresolved_reason"].startswith("open when the run stopped")
+    assert not replay.result.completed
 
 
 def test_an_exception_with_source_unchanged_keeps_a_valid_resolution(tmp_path, monkeypatch):
@@ -537,6 +568,7 @@ def test_a_failed_recheck_on_an_exception_exit_distrusts_resolutions(tmp_path, m
     def rogue(call, replay):
         H.write(call, {"README.md": "# app\n\nx\n", "templates/index.html": "<p>moved</p>\n"})
         return 'Documented.\nCHANGED: ["README.md", "templates/index.html"]'
+    _unmeasurable_scope_on(monkeypatch, "t3")
     replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1", DOCS],
                   {"t1": _capture(measured=WIDE), "t2": _repair(), "t3": rogue}, max_tasks=8)
     f1 = replay.findings[0]

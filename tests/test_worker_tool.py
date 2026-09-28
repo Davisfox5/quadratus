@@ -14,7 +14,7 @@ from quadratus.delegation import invocation, invocation_context
 from quadratus.memory import TaskMemory
 from quadratus.providers import ProviderError
 from quadratus.runtime import Fleet
-from quadratus.session import RunStalled, Session, SessionConfig, TaskSpec
+from quadratus.session import Session, SessionConfig, TaskFailed, TaskSpec
 from quadratus.worker_bridge import WorkerBridge, input_schema
 from quadratus.workers import WORKER_TREE, WorkerPool
 
@@ -261,7 +261,7 @@ def test_asking_again_after_the_channel_closed_stops_the_run(tmp_path):
 
     session = Session("goal", store, invoke, config=SessionConfig(max_worker_failures=1))
     session.workers = WorkerPool(store=store, run=fails)
-    with invocation("t1", "lead"), pytest.raises(RunStalled, match="not converging"):
+    with invocation("t1", "lead"), pytest.raises(TaskFailed, match="not converging"):
         session._draft_with_channels(OPUS, TaskSpec("t1", "do it"), _memory(store))
 
 def test_the_tool_is_offered_only_when_enabled(tmp_path):
@@ -332,7 +332,7 @@ def test_repeated_refused_tool_calls_close_the_channel(tmp_path):
 
     session = Session("goal", store, invoke, config=SessionConfig(max_worker_failures=3))
     session.workers = WorkerPool(store=store, run=lambda *a, **k: pytest.fail("no worker should run"))
-    with invocation("t1", "lead"), pytest.raises(RunStalled, match="not converging"):
+    with invocation("t1", "lead"), pytest.raises(TaskFailed, match="not converging"):
         session._draft_with_channels(OPUS, TaskSpec("t1", "do it"), _memory(store))
     assert "now closed" in answers[2][0] and "channel is closed" in answers[3][0]
 

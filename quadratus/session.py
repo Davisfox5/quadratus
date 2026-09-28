@@ -128,6 +128,7 @@ __all__ = [
     "SessionConfig",
     "RunStalled",
     "OperatorInputNeeded",
+    "TaskFailed",
 ]
 
 
@@ -167,6 +168,34 @@ class PartialWorkStopped(RuntimeError):
         if note:
             lines.append(note)
         return "\n".join(lines)
+
+
+#: What a task can fail on by itself (``TaskFailed.cause``).
+TASK_FAILURE_CAUSES = ("scope", "reply", "channel", "transport")
+
+
+class TaskFailed(PartialWorkStopped):
+    """One task broke its own rules; the task fails, the run goes on.
+
+    Raised where a lead's work or reply broke the task it was doing (the
+    measured edits exceed the declared scope, a reply that is neither a
+    request nor a delivery, a request channel that did not converge, a
+    transport stop after writes) and caught by the task runner, which keeps
+    the edits, records the cause on the task and hands the remaining work
+    back to the orchestrator exactly as a capped task is. Two live runs
+    (2026-09-28) ended on the first such failure, so every later task's
+    faults stayed unseen; a task-level failure lets one run show several.
+
+    Never raised for what the harness cannot inspect, for a dependency or
+    evidence integrity stop, a refusal, a denied capability, a spent budget,
+    an operator question or the orchestrator's own stalls: those still stop
+    the run, because no re-plan repairs them.
+    """
+
+    def __init__(self, cause: str, message: str, *, partial: Optional[dict] = None) -> None:
+        assert cause in TASK_FAILURE_CAUSES, cause
+        super().__init__(message, partial=partial)
+        self.cause = cause
 
 
 class PreviewUnavailable(RuntimeError):
@@ -750,8 +779,12 @@ def _handoff_note(record: dict) -> str:
     task, lead, turns = record.get("task"), record.get("lead"), record.get("turns")
     changed = record.get("changed") or []
     rounds = f" after {turns} rounds" if turns else ""
-    lines = [f"## Handoff from {task}",
-             f"{task}'s lead ({lead}) stopped at its round limit{rounds}, before finishing."]
+    lines = [f"## Handoff from {task}"]
+    if record.get("cause"):
+        lines.append(f"{task}'s lead ({lead}) failed before finishing ({record['cause']}): "
+                     f"{(record.get('error') or '')[:300]}")
+    else:
+        lines.append(f"{task}'s lead ({lead}) stopped at its round limit{rounds}, before finishing.")
     if changed:
         lines.append(f"It changed {', '.join(changed)} ({record.get('changed_lines') or 0} lines), "
                      "unreviewed and unchecked. Those files are below as they are now: build on "
@@ -988,6 +1021,10 @@ class Session:
         #: What each capped call left, by task id: the evidence a continuation
         #: is handed and the breaker's stop names.
         self.turn_limited_records: Dict[str, dict] = {}
+        #: Tasks that failed on their own rules (TaskFailed), in order, and
+        #: what each left: the same handoff a capped task gets.
+        self.failed: List[str] = []
+        self.failed_records: Dict[str, dict] = {}
         #: The capped task the task now running continues, if any.
         self._continues: Optional[str] = None
         #: Each capped task's starting content for the files it changed, so
@@ -1173,8 +1210,8 @@ class Session:
                     if spec.scope is not None and report is None:
                         raise PartialWorkStopped("Scope could not be measured; edits preserved for inspection.")
                     if report and (report.blocking or report.oversized):
-                        raise PartialWorkStopped("Task exceeded its declared scope; work preserved. " + report.render(),
-                                                 partial=self._inspect_partial_edits(self._task_before))
+                        raise TaskFailed("scope", "Task exceeded its declared scope; work preserved. "
+                                         + report.render(), partial=self._inspect_partial_edits(self._task_before))
         except BaseException:
             if self._task_memory is not None:
                 try:
@@ -1238,13 +1275,20 @@ class Session:
             if capped is None:
                 raise
             return self._capped_fix(key, capped[0], capped[1], exc, role)
+        except TaskFailed:
+            raise
         except PartialWorkStopped as exc:
             if exc.partial.get('reply'):
+                # Neither a request nor a delivery (run 9): the reply is kept
+                # and the task fails; the run does not.
                 self.store.put(exc.partial['reply'], kind='unparsed-request', author=key)
+                raise TaskFailed("reply", str(exc), partial=exc.partial) from exc
             raise
         except PartialWorkSuspected as exc:
             state = self._inspect_partial_edits(before)
-            raise PartialWorkStopped(str(exc), partial=state) from exc
+            if not state.get("inspected"):
+                raise PartialWorkStopped(str(exc), partial=state) from exc
+            raise TaskFailed("transport", str(exc), partial=state) from exc
 
     def _record_changed_report(self, key: str, role: str, reply: str, report: dict) -> None:
         """A CHANGED line that disagreed with the measured diff, kept as history.
@@ -1284,9 +1328,9 @@ class Session:
                                          "scope; work preserved.",
                                          partial=self._inspect_partial_edits(self._task_before)) from exc
             if report and (report.blocking or report.oversized):
-                raise PartialWorkStopped(f"A capped {role} exceeded the declared scope; work preserved. "
-                                         + report.render(),
-                                         partial=self._inspect_partial_edits(self._task_before)) from exc
+                raise TaskFailed("scope", f"A capped {role} exceeded the declared scope; work preserved. "
+                                 + report.render(),
+                                 partial=self._inspect_partial_edits(self._task_before)) from exc
         said = (exc.partial_text or "").strip()
         text = (f"[{role} stopped at the lead turn limit"
                 + (f" ({exc.turns} turns)" if exc.turns else "")
@@ -1500,7 +1544,10 @@ class Session:
                 task.record("assistant", f"[fetched artifact {artifact_id}]")
             reply = call(model_key, build_prompt(fetched))
         if _parse_fetch(reply) is not None:
-            raise RunStalled("Artifact fetch budget exhausted before an answer was produced.")
+            message = "Artifact fetch budget exhausted before an answer was produced."
+            if task is not None:
+                raise TaskFailed("channel", message)
+            raise RunStalled(message)
         return reply
 
     def _resolve_consultant(self, name: str, lead: str) -> Optional[str]:
@@ -1538,7 +1585,7 @@ class Session:
         if state.get("workers_closed"):
             try:
                 return self._request_after_close(state, spec), True
-            except RunStalled as exc:
+            except TaskFailed as exc:
                 state["closed"] = exc
                 return str(exc), True
 
@@ -1614,16 +1661,17 @@ class Session:
         self._note(f"task {spec.task_id}: worker channel closed after {state['failures']} failed errands")
         return ("The worker channel is now closed for this task after "
                 f"{state['failures']} failed errands. Do the remaining work yourself in this "
-                "session, or report exactly what blocks you. Another worker request stops the run.")
+                "session, or report exactly what blocks you. Another worker request fails this task.")
 
     def _request_after_close(self, state: dict, spec) -> str:
         state["closed_requests"] = state.get("closed_requests", 0) + 1
         if state["closed_requests"] >= 2:
-            raise RunStalled(
+            raise TaskFailed(
+                "channel",
                 f"the lead is not converging: it kept requesting workers for task {spec.task_id!r} "
                 "after the worker channel closed")
         return ("The worker channel is closed for this task. Do the work yourself, or report "
-                "exactly what blocks you. Another worker request stops the run.")
+                "exactly what blocks you. Another worker request fails this task.")
 
     def _serve_worker(self, body: str, lead: str, spec: TaskSpec, task: TaskMemory, state: dict,
                       *, answer_only: bool = False) -> List[str]:
@@ -1648,7 +1696,7 @@ class Session:
                     or any(not isinstance(n, str) for n in needs or ())):
                 raise ValueError('invalid worker request')
         except (ValueError, TypeError) as exc:
-            raise RunStalled("Expected WORKER JSON with errand and instruction.") from exc
+            raise TaskFailed("channel", "Expected WORKER JSON with errand and instruction.") from exc
         helper = request.get('helper')
         if helper is not None:
             if (request.get('retry_of') not in state['failed_errands'] or not isinstance(helper, dict)
@@ -1657,10 +1705,10 @@ class Session:
                     or not helper['instruction'].strip() or helper.get('write', False) is not False
                     or type(helper.get('demanding', False)) is not bool
                     or helper.get('helper') is not None):
-                raise RunStalled('A sibling helper requires a failed retry_of label and a read-only errand')
+                raise TaskFailed("channel", 'A sibling helper requires a failed retry_of label and a read-only errand')
         writes = request.get('write', False)
         if writes and not self._writes():
-            raise RunStalled("Worker requested edits without an operator write grant.")
+            raise TaskFailed("channel", "Worker requested edits without an operator write grant.")
         label = f"{request['errand']}-{self.workers.spawned(spec.task_id) + 1}"
         # A worker failure is an outcome, not the end of the run. The
         # single-worker path used to let the exception escape: on
@@ -1814,7 +1862,7 @@ class Session:
             requests = _parse_consults(body)
             if not requests:
                 if body.startswith(('ASK:', 'CONSULT', 'WORKER', 'FETCH:')):
-                    raise RunStalled("An unresolved request cannot be accepted as a draft.")
+                    raise TaskFailed("channel", "An unresolved request cannot be accepted as a draft.")
                 return draft
             if not consults:
                 # A refusal is charged against the same allowance a served
@@ -1823,7 +1871,8 @@ class Session:
                 # review of #25: seven identical replies before a sentinel).
                 consults_used += len(requests)
                 if consults_used > self.config.max_consults:
-                    raise RunStalled(
+                    raise TaskFailed(
+                        "channel",
                         "The lead kept requesting consults inside a security "
                         "excursion, where none are served; it is not converging.")
                 task.record("user", "[consult refused] not available inside a security excursion")
@@ -1833,7 +1882,7 @@ class Session:
                     "what blocks you.")
                 continue
             if consults_used + len(requests) > self.config.max_consults:
-                raise RunStalled("Consult budget exhausted before a draft was produced.")
+                raise TaskFailed("channel", "Consult budget exhausted before a draft was produced.")
             for name, question in requests:
                 consults_used += 1
                 peer = self._resolve_consultant(name, lead)
@@ -1887,11 +1936,21 @@ class Session:
         task missing from it is a recorded mismatch."""
         names = [o.task_id for o in self._breaker_counted]
         for outcome in self._breaker_counted:
-            if outcome.task_id not in self.turn_limited:
-                note = "breaker: counted, but missing from turn_limited"
+            listed = self.failed if outcome.closed_as == "failed" else self.turn_limited
+            if outcome.task_id not in listed:
+                note = "breaker: counted, but missing from " + (
+                    "failed" if outcome.closed_as == "failed" else "turn_limited")
                 if note not in outcome.mismatches:
                     outcome.mismatches.append(note)
         n = self._turn_limited_in_a_row
+        if any(o.closed_as == "failed" for o in self._breaker_counted):
+            # A failed task in the count: the stop says what each task did.
+            what = ", ".join(f"{o.task_id} " + ("failed: " + self.failed_records.get(o.task_id, {}).get("cause", "?")
+                                                if o.closed_as == "failed" else "capped")
+                             for o in self._breaker_counted)
+            between = " with a parallel batch between them" if self._breaker_mixed() else " in a row"
+            return (f"TaskFailureBreaker: {n} serial tasks were left unfinished{between} ({what}); "
+                    "stopped instead of re-planning again. Work preserved.")
         if self._breaker_mixed():
             return (f"TurnLimitBreaker: the lead turn limit was reached on {n} serial tasks with no serial "
                     f"task completing in between ({', '.join(names)}; a parallel batch ran between them); "
@@ -1904,7 +1963,7 @@ class Session:
         P3.4): an active cap (a CONTINUES that completed recovers it) or an
         active not-merged fact on a parallel child."""
         return {o.task_id for o in self.task_outcomes
-                if any(f.active and (f.kind == "cap" or f.stage == "merge") for f in o.facts)}
+                if any(f.active and (f.kind in ("cap", "failed") or f.stage == "merge") for f in o.facts)}
 
     @property
     def _unresolved_partial(self) -> bool:
@@ -2370,6 +2429,7 @@ class Session:
         for outcome in self.task_outcomes:
             if continues and outcome.task_id == continues:
                 outcome.recover("cap")
+                outcome.recover("failed")
 
     def _prepare_dispatch(self, spec: TaskSpec) -> None:
         """This task's own scope and gate, settled before its contract is
@@ -2403,7 +2463,12 @@ class Session:
             raise RunStalled("Cannot capture source to measure this editing task.")
         self.in_flight = {}
         try:
-            result = self._run_task(spec)
+            try:
+                result = self._run_task(spec)
+            except TaskFailed as exc:
+                if self._task_memory is None:
+                    raise
+                result = self._close_failed(spec, exc)
         except BaseException:
             self.in_flight = self._inspect_partial_edits(self._task_before)
             self.in_flight.update(task=spec.task_id, description=spec.description,
@@ -2488,12 +2553,20 @@ class Session:
                     or self._active_call.get('role') != 'lead'):
                 raise
             state = self._inspect_partial_edits(before)
-            if not state['inspected'] or state['changed']:
+            if not state['inspected']:
                 raise PartialWorkStopped(
-                    # The cause is named: "overloaded" was dropped from a
-                    # capped-looking Grok error (Grok review of #33).
                     f'Lead failed ({type(exc).__name__}: {str(exc)[:200]}); '
-                    'source is changed or unverified. Work preserved.',
+                    'source could not be inspected. Work preserved.',
+                    partial=state,
+                ) from exc
+            if state['changed']:
+                # The cause is named: "overloaded" was dropped from a
+                # capped-looking Grok error (Grok review of #33). The tree
+                # changed, so this is the task's failure, never a replay.
+                raise TaskFailed(
+                    "transport",
+                    f'Lead failed ({type(exc).__name__}: {str(exc)[:200]}) after changing '
+                    'source. Work preserved.',
                     partial=state,
                 ) from exc
             excluded = policy_for(spec.kind).exclude
@@ -2692,8 +2765,8 @@ class Session:
                     raise PartialWorkStopped("Turn-limited edits could not be measured against the "
                                              "task scope; work preserved.", partial=state) from exc
                 if report and (report.blocking or report.oversized):
-                    raise PartialWorkStopped("Turn-limited edits exceed the declared scope; work "
-                                             "preserved. " + report.render(), partial=state) from exc
+                    raise TaskFailed("scope", "Turn-limited edits exceed the declared scope; work "
+                                     "preserved. " + report.render(), partial=state) from exc
         said = (exc.partial_text or "").strip()
         record = dict(task=spec.task_id, lead=lead, turns=exc.turns,
                       changed=state["changed"], changed_lines=state["changed_lines"],
@@ -2732,6 +2805,77 @@ class Session:
         self.memory.absorb(summary)
         self.history.append(summary)
         self.turn_limited.append(spec.task_id)
+        return summary
+
+    def _close_failed(self, spec, exc: TaskFailed) -> TaskSummary:
+        """A task failed on its own rules: keep the work, record it, re-plan.
+
+        The capped-task path, applied to a failure (docs/DIRECTION.md;
+        operator ruling 2026-09-28). The edits stay where they are. No
+        review, gate or close-out call is made for it: the harness writes
+        the record from the evidence, the cause is a terminal ``failed``
+        fact on the task, and the orchestrator is told to name the remaining
+        work with CONTINUES. A continuation that closes clean recovers the
+        fact; two unfinished tasks in a row trip the same breaker a cap does.
+        """
+        task = self._task_memory
+        lead = task.author
+        partial = dict(exc.partial or {})
+        state = partial if "inspected" in partial else self._inspect_partial_edits(self._task_before)
+        changed = list(state.get("changed") or [])
+        if exc.cause == "scope":
+            # The scope check opened an out-of-path finding for the same
+            # edits; the failed fact below carries the same list and is what
+            # the continuation recovers, so the finding is history from here.
+            marker = f"Task {spec.task_id} changed paths outside its declared scope: "
+            self.open_findings = [text for text in self.open_findings if not text.startswith(marker)]
+            if self._outcome is not None:
+                for fact in self._outcome.facts:
+                    if fact.kind == "integrity" and fact.detail.startswith(marker):
+                        fact.recovered = True
+        if self._outcome is not None:
+            self._outcome.note("failed", f"{exc.cause}: {exc}")
+            self._outcome.partial = dict(changed=changed, changed_lines=state.get("changed_lines", 0),
+                                         inspected=state.get("inspected"), note=state.get("note"))
+        record = dict(task=spec.task_id, lead=lead, cause=exc.cause, error=str(exc)[:2000],
+                      changed=changed, changed_lines=state.get("changed_lines", 0), note=state.get("note"),
+                      role=str(self._active_call.get("role") or ""))
+        task.keep(json.dumps(record), kind="task-failed", author=lead)
+        self.failed_records[spec.task_id] = record
+        from .project_files import MAX_INSPECT_BYTES
+        before = self._task_before or {}
+        self._cap_baselines[spec.task_id] = {
+            path: before.get(path, b"") for path in changed
+            if len(before.get(path, b"")) <= MAX_INSPECT_BYTES}
+        listed = ", ".join(changed) or "no files"
+        what = {
+            "scope": "its edits exceeded the declared scope",
+            "reply": "its lead's reply was neither a request nor a delivery",
+            "channel": "its lead's requests did not converge on a draft",
+            "transport": "its lead's call stopped after changing source",
+        }[exc.cause]
+        summary_text = (
+            f"FAILED before finishing: {what}. {str(exc)[:600]}"
+            f" Changed, unreviewed and ungated: {listed}"
+            + (f" ({state.get('changed_lines', 0)} lines)" if changed else "")
+            + ". This task is not done: name the remaining work as a new, smaller task "
+              f"whose description includes the line 'CONTINUES: {spec.task_id}', and do not "
+              "assume any of it is finished. Size max_lines for the remaining work only"
+            + (", and split it if the declared scope was too small for it" if exc.cause == "scope" else "")
+            + ". If the failure shows the plan was wrong, name a different task instead."
+        )
+        summary = task.close(
+            summary=summary_text,
+            reasoning=("Recorded by the harness from the failed call's evidence. No close-out "
+                       "model call is made for an unfinished task."),
+            dead_ends=[],
+        )
+        from dataclasses import replace
+        summary = replace(summary, outcome="failed")
+        self.memory.absorb(summary)
+        self.history.append(summary)
+        self.failed.append(spec.task_id)
+        self._note(f"task {spec.task_id} failed ({exc.cause}): {str(exc)[:160]}; work kept, the orchestrator re-plans")
         return summary
 
     def _run_security_task(self, spec: TaskSpec) -> TaskSummary:
@@ -3299,8 +3443,10 @@ class Session:
                 summary = self.run_task(spec)
             finally:
                 self._continues = None
-            if getattr(summary, "outcome", "closed") == "turn_limited":
-                # A capped continuation carries its predecessor's debt forward.
+            unfinished = getattr(summary, "outcome", "closed")
+            if unfinished in ("turn_limited", "failed"):
+                # A capped or failed continuation carries its predecessor's
+                # debt forward.
                 self._partial_tasks.discard(continues)
                 self._recover_continued(continues)
                 self._partial_tasks.add(spec.task_id)
@@ -3311,18 +3457,24 @@ class Session:
                 counted = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
                 if counted is not None:
                     self._breaker_counted.append(counted)
-                self._note(f"task {len(self.history)} stopped at the lead's turn limit; its "
-                           f"work is kept and the orchestrator re-plans")
+                self._note(f"task {len(self.history)} "
+                           + ("stopped at the lead's turn limit" if unfinished == "turn_limited"
+                              else "failed on its own rules")
+                           + "; its work is kept and the orchestrator re-plans")
                 if self._turn_limited_in_a_row > self.config.max_turn_limited_in_a_row:
                     # Recorded, not raised: the stop is the breaker working,
                     # and every capped task's edits stay in place. But it is
                     # named, so the run's error is never blank (Codex, Run 14).
-                    self._stop_with("cap", self._breaker_reason())
-                    self._note((f"the lead turn limit was reached on {self._turn_limited_in_a_row} serial "
-                                "tasks with a parallel batch between them; stopping instead of "
-                                "re-planning again") if self._breaker_mixed() else
-                               (f"the lead turn limit was reached {self._turn_limited_in_a_row} "
-                                "times in a row; stopping instead of re-planning again"))
+                    reason = self._breaker_reason()
+                    failed = reason.startswith("TaskFailureBreaker")
+                    self._stop_with("failed" if failed else "cap", reason)
+                    n = self._turn_limited_in_a_row
+                    between = ("on {n} serial tasks with a parallel batch between them" if self._breaker_mixed()
+                               else "{n} times in a row").format(n=n)
+                    self._note((f"{n} serial tasks were left unfinished"
+                                + (" with a parallel batch between them" if self._breaker_mixed() else " in a row")
+                                if failed else f"the lead turn limit was reached {between}")
+                               + "; stopping instead of re-planning again")
                     break
                 continue
             self._turn_limited_in_a_row = 0
@@ -3874,8 +4026,8 @@ class Session:
                         target.unlink()
                 self.history.append(summary)
                 self.memory.absorb(summary)
-                if getattr(summary, "outcome", "closed") == "turn_limited":
-                    self.turn_limited.append(spec.task_id)
+                if getattr(summary, "outcome", "closed") in ("turn_limited", "failed"):
+                    (self.turn_limited if summary.outcome == "turn_limited" else self.failed).append(spec.task_id)
                     self._partial_tasks.discard(continues)
                     self._recover_continued(continues)
                     self._partial_tasks.add(spec.task_id)
@@ -4861,7 +5013,7 @@ class Session:
         # decides (map P3.4, Codex 5864252244); the same text when they agree.
         partial = sorted(self._partial_from_outcomes() | set(self._partial_tasks))
         if partial:
-            reasons.append(f"capped task(s) {', '.join(partial)} not continued to completion")
+            reasons.append(f"capped or failed task(s) {', '.join(partial)} not continued to completion")
         ledger = self._open_findings_for(None)
         if ledger:
             reasons.append(f"audit findings {', '.join(ledger)} are open")
@@ -4893,7 +5045,8 @@ class Session:
         from .project_files import context_pack, render_pack
         blocks: List[str] = []
         paths: List[str] = []
-        record = self.turn_limited_records.get(self._continues or "")
+        record = (self.turn_limited_records.get(self._continues or "")
+                  or self.failed_records.get(self._continues or ""))
         if record:
             blocks.append(_handoff_note(record))
             paths.extend(record.get("changed") or [])

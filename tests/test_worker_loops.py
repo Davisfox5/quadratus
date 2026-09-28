@@ -11,7 +11,7 @@ from quadratus.memory import TaskMemory
 from quadratus.providers import ProviderError
 from quadratus.run_budget import RunBudget, RunBudgetExceeded, RunLimits
 from quadratus.runtime import Fleet
-from quadratus.session import RunStalled, Session, TaskSpec
+from quadratus.session import Session, TaskFailed, TaskSpec
 from quadratus.workers import FanOutExceeded, WorkerBudget, WorkerPool
 
 
@@ -132,7 +132,7 @@ def test_helper_without_failure_is_refused_before_dispatch(tmp_path):
     request = {'errand': 'read', 'instruction': 'read', 'retry_of': 'unknown',
                'helper': {'errand': 'read', 'instruction': 'helper'}}
     session = Session('goal', ArtifactStore(tmp_path), lambda *a, **kw: 'WORKER ' + json.dumps(request))
-    with pytest.raises(RunStalled, match='failed retry_of'):
+    with pytest.raises(TaskFailed, match='failed retry_of'):
         session._draft_with_channels('claude:opus', TaskSpec('t1', 'task'), TaskMemory('task', 'lead', session.store))
     assert session.workers.spawned('t1') == 0
 
