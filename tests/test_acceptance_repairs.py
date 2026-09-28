@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from tests._process_liveness import process_stopped
 from quadratus.artifacts import ArtifactStore
 from quadratus.cli_providers import CLIProvider, _extract_native_children
 from quadratus.config import Settings
@@ -20,6 +19,7 @@ from quadratus.providers import LLMProvider, ProviderError
 from quadratus.runtime import Fleet
 from quadratus.scope import TaskScope, read_scope
 from quadratus.session import PartialWorkStopped, RunStalled, Session, SessionConfig, TaskSpec
+from tests._process_liveness import process_stopped
 
 FABLE = 'claude:fable'
 OPUS = 'claude:opus'

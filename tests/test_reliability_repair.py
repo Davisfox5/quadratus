@@ -21,7 +21,6 @@ from pathlib import Path
 
 import pytest
 
-from tests._process_liveness import process_starttime, process_stopped
 from quadratus.artifacts import ArtifactStore
 from quadratus.cli_providers import _extract_native_children, _launch
 from quadratus.delegation import (
@@ -46,6 +45,7 @@ from quadratus.session import (
 from quadratus.task_kinds import TaskKind
 from quadratus.taskmeta import AmbiguousMetadata, parse_control, parse_metadata
 from quadratus.workers import RepeatedFailure, WorkerBudget, WorkerPool
+from tests._process_liveness import process_starttime, process_stopped
 
 EVIDENCE = (
     Path(__file__).resolve().parent.parent
