@@ -3405,7 +3405,10 @@ class Session:
         self._review_evidence_hashes, self._review_snapshot = {}, None
         if not (self._collaboration_applicable(spec) and self.project):
             return
-        if self._harness_captures(spec):
+        # Who renders is the lead's instruction fixed at dispatch, the same
+        # bound mode the lead prompt and the harness capture use (map P3.4;
+        # O-NEXT-12, Codex 5865903915); the live reading is recorded beside it.
+        if self._required("design_instruction", self._live_design_instruction(spec)) == "harness":
             # Harness renders are taken after the final edit and a passing
             # gate, so collaborators are promised none of the draft.
             return
