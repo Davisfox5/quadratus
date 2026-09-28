@@ -1,0 +1,748 @@
+{
+  "version": 1,
+  "source_map": "docs/workflow-map.md",
+  "baseline_commit": "9eabf69c0627bd605f72ff1bcd8d9c700d216583",
+  "limitations": [
+    "Scripted controller tests prove deterministic routing only, not model behavior or live GameTape acceptance.",
+    "Proof claims were reviewed conservatively; unmapped obligations remain UNPROVEN.",
+    "J30 required errands have no production declaration.",
+    "J37 has Session-level partial-write timeout evidence in tests/test_run_budget.py::test_partial_write_timeout_keeps_file_and_never_replays and harness-pack case 07, but no mapped whole-controller replay."
+  ],
+  "journeys": [
+    {
+      "id": "J1",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_j1_a_clean_task_and_done_is_clean_and_complete"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "calls": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j1_a_clean_task_and_done_is_clean_and_complete"
+        ],
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j1_a_clean_task_and_done_is_clean_and_complete"
+        ],
+        "report": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j1_a_clean_task_and_done_is_clean_and_complete"
+        ],
+        "partial_work": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j1_a_clean_task_and_done_is_clean_and_complete"
+        ]
+      }
+    },
+    {
+      "id": "J2",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_j2_a_gate_fix_that_works_leaves_the_task_clean_with_its_attempt_counted"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "calls": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j2_a_gate_fix_that_works_leaves_the_task_clean_with_its_attempt_counted"
+        ],
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j2_a_gate_fix_that_works_leaves_the_task_clean_with_its_attempt_counted"
+        ],
+        "report": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j2_a_gate_fix_that_works_leaves_the_task_clean_with_its_attempt_counted"
+        ]
+      }
+    },
+    {
+      "id": "J3",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_j3_a_gate_still_failing_is_an_attributed_product_fact_and_a_named_stop"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j3_a_gate_still_failing_is_an_attributed_product_fact_and_a_named_stop"
+        ],
+        "report": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j3_a_gate_still_failing_is_an_attributed_product_fact_and_a_named_stop"
+        ]
+      }
+    },
+    {
+      "id": "J4",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j4_a_runner_crash_before_any_test_gets_no_gate_fix"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j4_a_runner_crash_before_any_test_gets_no_gate_fix"
+        ]
+      }
+    },
+    {
+      "id": "J5",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j5_a_failure_with_no_declared_report_gets_no_gate_fix"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j5_a_failure_with_no_declared_report_gets_no_gate_fix"
+        ]
+      }
+    },
+    {
+      "id": "J6",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_setup_error_mid_suite_gets_no_gate_fix",
+        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_runtime_exception_in_a_test_body_gets_no_gate_fix"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_setup_error_mid_suite_gets_no_gate_fix",
+          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j6_a_runtime_exception_in_a_test_body_gets_no_gate_fix"
+        ]
+      }
+    },
+    {
+      "id": "J7",
+      "tests": [
+        "tests/lifecycle/test_workflow_contract.py::test_j7_a_failing_probe_stops_the_run_before_any_model_call"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "calls": [
+          "tests/lifecycle/test_workflow_contract.py::test_j7_a_failing_probe_stops_the_run_before_any_model_call"
+        ],
+        "outcome": [
+          "tests/lifecycle/test_workflow_contract.py::test_j7_a_failing_probe_stops_the_run_before_any_model_call"
+        ]
+      }
+    },
+    {
+      "id": "J8",
+      "tests": [
+        "tests/lifecycle/test_evidence_identity.py::test_missing_renders_keep_the_bounded_recapture"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work",
+        "evidence_identity"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_evidence_identity.py::test_missing_renders_keep_the_bounded_recapture"
+        ]
+      }
+    },
+    {
+      "id": "J9a",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_j9_unverified_design_evidence_is_invalid_proof_and_a_named_stop",
+        "tests/lifecycle/test_evidence_identity.py::test_a_self_capture_of_a_tree_edited_afterwards_is_stale_not_a_mismatch"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work",
+        "evidence_identity"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j9_unverified_design_evidence_is_invalid_proof_and_a_named_stop",
+          "tests/lifecycle/test_evidence_identity.py::test_a_self_capture_of_a_tree_edited_afterwards_is_stale_not_a_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "J9b",
+      "tests": [
+        "tests/lifecycle/test_evidence_identity.py::test_a_symlinked_screenshot_stops_as_integrity",
+        "tests/lifecycle/test_evidence_identity.py::test_a_fixture_changed_after_capture_stops_as_integrity"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work",
+        "evidence_identity"
+      ],
+      "coverage": {
+        "calls": [
+          "tests/lifecycle/test_evidence_identity.py::test_a_symlinked_screenshot_stops_as_integrity",
+          "tests/lifecycle/test_evidence_identity.py::test_a_fixture_changed_after_capture_stops_as_integrity"
+        ],
+        "outcome": [
+          "tests/lifecycle/test_evidence_identity.py::test_a_symlinked_screenshot_stops_as_integrity",
+          "tests/lifecycle/test_evidence_identity.py::test_a_fixture_changed_after_capture_stops_as_integrity"
+        ],
+        "report": [
+          "tests/lifecycle/test_evidence_identity.py::test_a_symlinked_screenshot_stops_as_integrity",
+          "tests/lifecycle/test_evidence_identity.py::test_a_fixture_changed_after_capture_stops_as_integrity"
+        ],
+        "evidence_identity": [
+          "tests/lifecycle/test_evidence_identity.py::test_a_symlinked_screenshot_stops_as_integrity",
+          "tests/lifecycle/test_evidence_identity.py::test_a_fixture_changed_after_capture_stops_as_integrity"
+        ],
+        "partial_work": [
+          "tests/lifecycle/test_evidence_identity.py::test_a_symlinked_screenshot_stops_as_integrity",
+          "tests/lifecycle/test_evidence_identity.py::test_a_fixture_changed_after_capture_stops_as_integrity"
+        ]
+      }
+    },
+    {
+      "id": "J10",
+      "tests": [
+        "tests/lifecycle/test_workflow_contract.py::test_a_blocking_response_leaves_the_reviewer_edge_unsatisfied",
+        "tests/lifecycle/test_completion_guard.py::test_a_missing_delivery_edge_cannot_count_as_complete"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work",
+        "evidence_identity"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_contract.py::test_a_blocking_response_leaves_the_reviewer_edge_unsatisfied",
+          "tests/lifecycle/test_completion_guard.py::test_a_missing_delivery_edge_cannot_count_as_complete"
+        ]
+      }
+    },
+    {
+      "id": "J11",
+      "tests": [
+        "tests/lifecycle/test_capture_eligibility.py::test_an_earlier_unrelated_failure_in_the_run_record_does_not_block_this_tasks_capture"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work",
+        "evidence_identity"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_capture_eligibility.py::test_an_earlier_unrelated_failure_in_the_run_record_does_not_block_this_tasks_capture"
+        ]
+      }
+    },
+    {
+      "id": "J12",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_audit_debt_leaves_its_requirements_open_at_close"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work",
+        "evidence_identity"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_audit_debt_leaves_its_requirements_open_at_close"
+        ]
+      }
+    },
+    {
+      "id": "J13",
+      "tests": [
+        "tests/lifecycle/test_audit_findings.py::test_an_overflow_audit_becomes_debt_and_a_repair_resolves_it"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work",
+        "evidence_identity"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_audit_findings.py::test_an_overflow_audit_becomes_debt_and_a_repair_resolves_it"
+        ]
+      }
+    },
+    {
+      "id": "J14",
+      "tests": [
+        "tests/lifecycle/test_audit_findings.py::test_a_repair_that_leaves_the_overflow_stops_as_today"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work",
+        "evidence_identity"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_audit_findings.py::test_a_repair_that_leaves_the_overflow_stops_as_today"
+        ]
+      }
+    },
+    {
+      "id": "J15",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_j15_a_scope_overrun_is_integrity_with_the_work_kept"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j15_a_scope_overrun_is_integrity_with_the_work_kept"
+        ],
+        "report": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j15_a_scope_overrun_is_integrity_with_the_work_kept"
+        ],
+        "partial_work": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j15_a_scope_overrun_is_integrity_with_the_work_kept"
+        ]
+      }
+    },
+    {
+      "id": "J16",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_j16_a_dependency_tree_change_is_integrity"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j16_a_dependency_tree_change_is_integrity"
+        ]
+      }
+    },
+    {
+      "id": "J17",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_lead_is_a_refusal_never_rerouted",
+        "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_closeout_is_a_harness_record_not_a_stop"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "calls": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_lead_is_a_refusal_never_rerouted",
+          "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_closeout_is_a_harness_record_not_a_stop"
+        ],
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_lead_is_a_refusal_never_rerouted",
+          "tests/lifecycle/test_workflow_outcomes.py::test_j17_a_refused_closeout_is_a_harness_record_not_a_stop"
+        ]
+      }
+    },
+    {
+      "id": "J18",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_j18_a_denial_at_the_cap_is_a_denial_above_the_cap"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j18_a_denial_at_the_cap_is_a_denial_above_the_cap"
+        ]
+      }
+    },
+    {
+      "id": "J19",
+      "tests": [
+        "tests/test_workflow_session.py::test_an_accepted_security_task_is_clean_and_names_its_worker",
+        "tests/test_workflow_session.py::test_a_rejected_security_task_is_a_security_fact_and_the_run_stops"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work",
+        "evidence_identity"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/test_workflow_session.py::test_an_accepted_security_task_is_clean_and_names_its_worker",
+          "tests/test_workflow_session.py::test_a_rejected_security_task_is_a_security_fact_and_the_run_stops"
+        ]
+      }
+    },
+    {
+      "id": "J20",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_j20_a_capped_lead_is_a_cap_that_blocks_completion"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j20_a_capped_lead_is_a_cap_that_blocks_completion"
+        ]
+      }
+    },
+    {
+      "id": "J21",
+      "tests": [
+        "tests/lifecycle/test_capped_drafts.py::test_g1_a_capped_redraft_is_a_capped_task_with_its_work_kept",
+        "tests/lifecycle/test_capped_drafts.py::test_g2_a_capped_security_draft_is_a_capped_task_and_nothing_is_verified"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_capped_drafts.py::test_g1_a_capped_redraft_is_a_capped_task_with_its_work_kept",
+          "tests/lifecycle/test_capped_drafts.py::test_g2_a_capped_security_draft_is_a_capped_task_and_nothing_is_verified"
+        ]
+      }
+    },
+    {
+      "id": "J22",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_j22_a_continuation_that_finishes_recovers_the_cap_and_keeps_its_record"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work",
+        "evidence_identity"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j22_a_continuation_that_finishes_recovers_the_cap_and_keeps_its_record"
+        ]
+      }
+    },
+    {
+      "id": "J23",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_j23_two_caps_in_a_row_are_the_breaker"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j23_two_caps_in_a_row_are_the_breaker"
+        ]
+      }
+    },
+    {
+      "id": "J24",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_j24_budget_exhaustion_is_a_budget_stop_with_the_task_stopped"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j24_budget_exhaustion_is_a_budget_stop_with_the_task_stopped"
+        ]
+      }
+    },
+    {
+      "id": "J25",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_j25_a_recovered_transport_failure_is_history_not_a_block"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j25_a_recovered_transport_failure_is_history_not_a_block"
+        ]
+      }
+    },
+    {
+      "id": "J26",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_j26_an_operator_question_with_no_channel_is_an_operator_handoff"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j26_an_operator_question_with_no_channel_is_an_operator_handoff"
+        ]
+      }
+    },
+    {
+      "id": "J27",
+      "tests": [
+        "tests/lifecycle/test_unknown_failures.py::test_an_unknown_failure_in_the_lead_draft_is_not_redrafted",
+        "tests/lifecycle/test_unknown_failures.py::test_an_unknown_worker_failure_stops_without_re_asking_the_lead"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_unknown_failures.py::test_an_unknown_failure_in_the_lead_draft_is_not_redrafted",
+          "tests/lifecycle/test_unknown_failures.py::test_an_unknown_worker_failure_stops_without_re_asking_the_lead"
+        ]
+      }
+    },
+    {
+      "id": "J28",
+      "tests": [
+        "tests/lifecycle/test_named_stops.py::test_requirements_still_unmet_after_the_reopen_allowance_are_named"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_named_stops.py::test_requirements_still_unmet_after_the_reopen_allowance_are_named"
+        ]
+      }
+    },
+    {
+      "id": "J29",
+      "tests": [
+        "tests/test_workflow_session.py::test_a_merged_parallel_batch_records_each_child_with_its_owner",
+        "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_integrity_and_its_debt_stays_open"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work",
+        "evidence_identity"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/test_workflow_session.py::test_a_merged_parallel_batch_records_each_child_with_its_owner",
+          "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_integrity_and_its_debt_stays_open"
+        ]
+      }
+    },
+    {
+      "id": "J30",
+      "tests": [],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {}
+    },
+    {
+      "id": "J31",
+      "tests": [],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {}
+    },
+    {
+      "id": "J32",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_j16_a_dependency_tree_change_is_integrity"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work",
+        "evidence_identity"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_j16_a_dependency_tree_change_is_integrity"
+        ]
+      }
+    },
+    {
+      "id": "J33",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_p3_j33_a_product_failure_beside_a_setup_failure_gets_no_gate_fix"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_p3_j33_a_product_failure_beside_a_setup_failure_gets_no_gate_fix"
+        ]
+      }
+    },
+    {
+      "id": "J34",
+      "tests": [
+        "tests/lifecycle/test_workflow_contract.py::test_j34_capped_covers_debt_is_snapshotted_and_inherited",
+        "tests/lifecycle/test_workflow_contract.py::test_j34_capped_resolves_debt_is_snapshotted_and_inherited"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work",
+        "evidence_identity"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_contract.py::test_j34_capped_covers_debt_is_snapshotted_and_inherited",
+          "tests/lifecycle/test_workflow_contract.py::test_j34_capped_resolves_debt_is_snapshotted_and_inherited"
+        ]
+      }
+    },
+    {
+      "id": "J35",
+      "tests": [
+        "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_integrity_and_its_debt_stays_open"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work",
+        "evidence_identity"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_integrity_and_its_debt_stays_open"
+        ]
+      }
+    },
+    {
+      "id": "J36",
+      "tests": [
+        "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_rejected",
+        "tests/lifecycle/test_lifecycle_matrix.py::test_a_design_fix_that_repeats_the_tasks_files_is_rejected"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "calls": [
+          "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_rejected",
+          "tests/lifecycle/test_lifecycle_matrix.py::test_a_design_fix_that_repeats_the_tasks_files_is_rejected"
+        ],
+        "report": [
+          "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_rejected",
+          "tests/lifecycle/test_lifecycle_matrix.py::test_a_design_fix_that_repeats_the_tasks_files_is_rejected"
+        ],
+        "partial_work": [
+          "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_rejected"
+        ]
+      }
+    },
+    {
+      "id": "J37",
+      "tests": [],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {}
+    },
+    {
+      "id": "J38",
+      "tests": [
+        "tests/lifecycle/test_workflow_outcomes.py::test_p3_g12_a_check_repaired_later_in_the_task_does_not_block_done"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "outcome": [
+          "tests/lifecycle/test_workflow_outcomes.py::test_p3_g12_a_check_repaired_later_in_the_task_does_not_block_done"
+        ]
+      }
+    }
+  ]
+}
