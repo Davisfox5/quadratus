@@ -454,6 +454,18 @@ Key design decisions already settled:
   committed non-hidden project sample exactly as the capture itself
   (`design_evidence._fixture`) and the lead's instructions already did. Three
   gates with three rules was the defect; there is one rule now.
+- **Prompt parity is audited, not assumed** (2026-09-28). An inventory of
+  every site that rejects or stops on how a reply is written, checked
+  against the prompt each seat receives, found 15 rules never stated, 24
+  stated in part and 3 stated backwards (the bounded editor was offered
+  lead channels the worker pool refuses; the verifier was told prose is a
+  note while capitalised BLOCKING in prose counts). All are stated now, the
+  bounds are quoted from the constants the parsers enforce
+  (`MAX_PREFACE_LINES`, `MAX_REQUEST_PREFACE_LINES`, `MAX_STEPS`,
+  `MAX_SELECTOR_CHARS`, `_MAX_ASKS_PER_DECISION`, the parallel limit from
+  config), and `tests/test_prompt_rule_parity.py` pins each statement to its
+  parser. A new enforcement site gets its prompt sentence and its guard test
+  in the same change.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
