@@ -718,13 +718,16 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
    earlier legacy entry for a rechecked task is not a disagreement.
 
 10. *Stop fixtures for the findings and completion candidates* (Codex,
-    5862193380). `tests/lifecycle/test_stop_fixtures.py` runs 19 existing
-    journey tests as written and records each Session's legacy stop inputs
+    5862193380). `tests/lifecycle/test_stop_fixtures.py` runs 18 existing
+    journey tests as written (plus one check that every fixture key has a
+    journey) and records each Session's legacy stop inputs
     (`stop_reason`, `result.error`, `open_findings`, `_design_unverified`,
     audit findings) beside the typed stop fact in
     `tests/lifecycle/stop_fixtures.json`. No route changes. Exception stops
     (`RunStalled`, `DependencyTreeChanged`) leave `stop_reason` empty; their
-    text is in the typed fact and `result.error`.
+    text is in the typed fact, and in `result.error` only when the run went
+    through `project_run` (a direct-`Session` journey records
+    `result_error: null`).
 
 11. *Full stop text on the typed fact.* `Fact.detail` stays cut at 400
     characters (300 for an exception's message); `Fact.full` carries the
