@@ -1093,7 +1093,7 @@ class Session:
         and after it returns. A failed call is re-checked without masking
         its own outcome."""
         watch = self.dependency_watch
-        if watch is None or not (allow_writes and self.project and self.config.allow_writes):
+        if watch is None or not (allow_writes and self._writes()):
             return self._invoke_model_call(key, prompt, allow_writes=allow_writes)
         context = invocation_context.get() or {}
         window = f"{context.get('role', 'editing')} ({context.get('task', 'run')})"
@@ -1151,7 +1151,7 @@ class Session:
         try:
             with capture_invocations(), invocation(**context):
                 if self.project:
-                    reply = self.invoke(key, prompt, allow_writes=bool(allow_writes and self.config.allow_writes))
+                    reply = self.invoke(key, prompt, allow_writes=bool(allow_writes and self._writes()))
                 elif allow_writes:
                     reply = self.invoke(key, prompt, allow_writes=True)
                 else:
@@ -1212,7 +1212,7 @@ class Session:
         may be in the same tree; discarding either to reach a clean retry would
         destroy more than it recovers.
         """
-        allow_writes = bool(self.project and self.config.allow_writes)
+        allow_writes = self._writes()
         before = self._capture_source() if allow_writes else None
         try:
             with invocation(getattr(self._active_spec, "task_id", "run"), role):
@@ -1238,7 +1238,7 @@ class Session:
         required checks still decide. Returns the text recorded for it.
         """
         report = self._assess_scope(spec, task, self._task_before) if self.project else None
-        if self.project and self.config.allow_writes:
+        if self._writes():
             if spec.scope is not None and report is None:
                 raise PartialWorkStopped(f"A capped {role} could not be measured against the task "
                                          "scope; work preserved.",
@@ -1553,7 +1553,7 @@ class Session:
         (Codex review of #25). Taken from the harness's own diff, never from
         the lead's account.
         """
-        if not (self.project and self.config.allow_writes and self._task_before is not None):
+        if not (self._writes() and self._task_before is not None):
             return ""
         state = self._inspect_partial_edits(self._task_before)
         if not state.get("changed"):
@@ -1619,7 +1619,7 @@ class Session:
                     or helper.get('helper') is not None):
                 raise RunStalled('A sibling helper requires a failed retry_of label and a read-only errand')
         writes = request.get('write', False)
-        if writes and not (self.project and self.config.allow_writes):
+        if writes and not self._writes():
             raise RunStalled("Worker requested edits without an operator write grant.")
         label = f"{request['errand']}-{self.workers.spawned(spec.task_id) + 1}"
         # A worker failure is an outcome, not the end of the run. The
@@ -2209,6 +2209,26 @@ class Session:
             return None
         return getattr(self, "_task_gate", None)
 
+    def _writes(self) -> bool:
+        """Whether this call may write (map P3.4; O-NEXT-10 A, Codex 5865444019):
+        a project, the live operator grant and, for a task with a contract,
+        its dispatch grant. Dispatch is a ceiling, not an irrevocable grant: a
+        later live grant never widens a task, and a live removal is honoured.
+        A difference is recorded once. The Fleet's run-level grant still
+        applies beneath this. With no contract for the current task the live
+        grant decides, as before."""
+        live = bool(self.project and self.config.allow_writes)
+        outcome, contract = self._outcome, getattr(self, "_contract", None)
+        if outcome is None or contract is None or contract.task_id != outcome.task_id:
+            return live
+        bound = dict(contract.authority).get("write_grant") == "operator"
+        if bound != live:
+            note = (f"write_grant: contract {'operator' if bound else 'none'!r}, "
+                    f"legacy {'operator' if live else 'none'!r}")
+            if note not in outcome.mismatches:
+                outcome.mismatches.append(note)
+        return bound and live
+
     def _cheap_gate(self):
         """The cheap view of the task's own gate, bound at dispatch (map P3.4;
         O-NEXT-10 B, Sol 5865330461), or None when it has no cheap commands.
@@ -2227,8 +2247,12 @@ class Session:
             cheap = live
         else:
             cheap = view(getattr(self, "_task_gate", None))
-            if ids(cheap) != ids(live):
-                outcome.mismatches.append(f"cheap_checks: contract {ids(cheap)!r}, legacy {ids(live)!r}")
+            # Whole commands, not ids: a same-id command whose argv or minimum
+            # changed is drift too (Sol, 5865462168). The bound one still runs.
+            commands = [tuple(g.commands) if g is not None else () for g in (cheap, live)]
+            if commands[0] != commands[1]:
+                same = " (same ids, configuration differs)" if ids(cheap) == ids(live) else ""
+                outcome.mismatches.append(f"cheap_checks: contract {ids(cheap)!r}, legacy {ids(live)!r}{same}")
         return cheap if cheap is not None and cheap.commands else None
 
     def _source_identity(self) -> str:
@@ -2587,7 +2611,7 @@ class Session:
         if self._outcome is not None:
             self._outcome.note("cap", f"stopped at the lead turn limit ({exc.turns or '?'} turns)")
             self._outcome.partial = dict(changed=state["changed"], changed_lines=state["changed_lines"])
-        if self.project and self.config.allow_writes:
+        if self._writes():
             if not state["inspected"]:
                 raise PartialWorkStopped("Lead stopped at its turn limit and the source could not "
                                          "be inspected; work preserved.", partial=state) from exc
@@ -4723,7 +4747,7 @@ class Session:
         nothing here changes it.
         """
         limit = self.config.lead_max_turns
-        if not limit or not (self.project and self.config.allow_writes):
+        if not limit or not self._writes():
             return ""
         from .cli_providers import CLI_SPECS
         spec = CLI_SPECS.get(lead.partition(":")[0])
@@ -4797,7 +4821,7 @@ class Session:
             # asked it not to, and attempt 10 shows which of the two won.
             parts.append("The project source is in your working directory. "
                          + ("Implement this task using the edit method in your role instructions; prose alone is not implementation."
-                            if self.config.allow_writes else
+                            if self._writes() else
                             "This run has no edit grant. Return analysis and proposed changes only."))
             parts.append(_BLOCKED_REPORT_RULE)
         parts.append(
@@ -4877,7 +4901,7 @@ class Session:
             "you cannot decide goes to the record as an open question, not "
             "into the void. "
             + self._revision_delivery()
-            + (self._scope_headroom(spec) if self.project and self.config.allow_writes else "")
+            + (self._scope_headroom(spec) if self._writes() else "")
         )
 
     def _revision_delivery(self) -> str:
@@ -4890,7 +4914,7 @@ class Session:
         correctly-completed review look like a thwarted implementation. The
         grant, not the selection, decides.
         """
-        if self.project and self.config.allow_writes:
+        if self._writes():
             return "Update the project using the edit method in your role instructions."
         if self.project:
             return (

@@ -19,6 +19,8 @@ def _gates(project):
     return {"plain": lambda: IntegrationGate(["true"], cwd=project),
             "suite": lambda: GateSuite([GateCommand(id="fast", argv=("true",), cheap=True),
                                         GateCommand(id="full", argv=("true",))], cwd=project),
+            "same_id": lambda: GateSuite([GateCommand(id="fast", argv=("false",), cheap=True, minimum_tests=9),
+                                          GateCommand(id="full", argv=("true",))], cwd=project),
             "failing_cheap": lambda: GateSuite([GateCommand(id="lint", argv=("false",), cheap=True),
                                                 GateCommand(id="full", argv=("true",))], cwd=project)}
 
@@ -63,6 +65,16 @@ def test_a_cheap_gate_that_vanishes_after_dispatch_still_runs(tmp_path):
     assert [a["gate"] for a in outcome.checks] == ["subset", "full"]
     assert _ran(session) == [["fast"], ["fast", "full"]], "the bound suite ran, cheap view first"
     assert "cheap_checks: contract ('fast',), legacy ()" in _mismatches(session)
+    assert not session.completed
+
+
+def test_a_same_id_cheap_command_that_changes_is_recorded_and_not_run(tmp_path):
+    """Sol, 5865462168: ids alone miss a changed argv or minimum."""
+    session = _run(tmp_path, gate="suite", drift="same_id")
+    assert _ran(session) == [["fast"], ["fast", "full"]] and session.checks[0]["passed"], \
+        "the bound command ran, not the changed one"
+    assert "cheap_checks: contract ('fast',), legacy ('fast',) (same ids, configuration differs)" \
+        in _mismatches(session)
     assert not session.completed
 
 
