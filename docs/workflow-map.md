@@ -806,7 +806,13 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     fixtures (byte-identical stop fields), the named-stop, completion-guard,
     requirements and E2 suites, and the candidate's 74 shadow and seam
     tests against the wired path. `open_findings` and `_partial_tasks` stay
-    legacy inputs until their own rows clear.
+    legacy inputs until their own rows clear. The application is pinned in
+    `tests/lifecycle/test_done_wiring.py`: callback order and count at
+    both paths, mutations made inside a callback read by the decision, the
+    E2 re-read making no callback twice, one send-back moving the counter,
+    refusal and fact once. One callback differs from legacy on purpose:
+    with the requirements ledger off, the no-op `_requirements_satisfied`
+    call is skipped (its first statement returns True; pinned).
 
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
