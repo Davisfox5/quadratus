@@ -92,6 +92,11 @@ class TaskContract:
     #: The full page URL (origin + path) a "harness" design instruction names,
     #: fixed at dispatch so the prompt never reads the live capture profile.
     capture_page: Optional[str] = None
+    #: The capture profile a "harness" capture runs under, fixed at dispatch,
+    #: as "sha256:<hex>" of its canonical form. Only the digest is recorded:
+    #: the profile's env values never reach the record. The session holds the
+    #: profile itself in memory (O-NEXT-13; Codex, 5865903915).
+    capture_profile: Optional[str] = None
 
     def __post_init__(self):
         if self.intent not in INTENTS:

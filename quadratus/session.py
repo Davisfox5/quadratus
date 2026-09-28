@@ -2043,6 +2043,7 @@ class Session:
         self._contract = None
         self._task_gate = None
         self._task_outer = None
+        self._capture_snapshot = None
         try:
             # The source record comes first, as it always did, so a task refused
             # at dispatch still carries it (Codex, 5861147842).
@@ -2160,7 +2161,8 @@ class Session:
             acceptance=tuple(getattr(scope, "acceptance", ()) or ()),
             required=required, allowed_next=stages_for(required, outcome.intent),
             inherits=canonical(inherits),
-            capture_page=self._live_capture_page(spec) if required.design_instruction == "harness" else None)
+            capture_page=self._live_capture_page(spec) if required.design_instruction == "harness" else None,
+            capture_profile=self._bind_capture_profile(spec) if evidence == "harness" else None)
 
     def _bind_contract(self, owner: str) -> None:
         """Freeze the task's contract with the owner just selected. Called
@@ -4328,6 +4330,44 @@ class Session:
         """The security verifier's protocol read from live config."""
         return "json" if self.config.security_verdict_json else "prose"
 
+    @staticmethod
+    def _profile_digest(profile) -> str:
+        return "sha256:" + hashlib.sha256(json.dumps(dataclasses.asdict(profile), sort_keys=True)
+                                          .encode()).hexdigest()
+
+    def _bind_capture_profile(self, spec) -> str:
+        """Hold an independent copy of the live capture profile for this task
+        and return its digest for the contract (O-NEXT-13; Codex 5865903915)."""
+        import copy
+        profile = copy.deepcopy(self.config.capture_profile)
+        self._capture_snapshot = (spec.task_id, profile)
+        return self._profile_digest(profile)
+
+    def _dispatch_capture_profile(self, spec):
+        """The capture profile bound at dispatch, and "" or why the capture
+        must not start. It fails closed: no contract or snapshot for this
+        task, or a snapshot that is not the one the contract records, is a
+        refusal, never a reconstruction from live config. A live profile that
+        was removed or differs is recorded by field name only (no values) and
+        the capture stops before the preview starts, rather than run a
+        profile the operator changed or fall back to a self-capture."""
+        outcome, contract = self._outcome, getattr(self, "_contract", None)
+        held = getattr(self, "_capture_snapshot", None)
+        if (outcome is None or contract is None or contract.task_id != outcome.task_id
+                or contract.task_id != spec.task_id or not contract.capture_profile
+                or held is None or held[0] != spec.task_id
+                or self._profile_digest(held[1]) != contract.capture_profile):
+            return None, "the task's contract holds no capture profile"
+        profile, live = held[1], self.config.capture_profile
+        if live == profile:
+            return profile, ""
+        moved = (["profile (removed)"] if live is None else
+                 [f.name for f in dataclasses.fields(profile) if getattr(profile, f.name) != getattr(live, f.name)])
+        note = f"capture_profile: live differs from contract in {', '.join(moved)}"
+        if note not in outcome.mismatches:
+            outcome.mismatches.append(note)
+        return None, f"the capture profile changed after dispatch ({', '.join(moved)})"
+
     def _live_capture_page(self, spec) -> Optional[str]:
         """The page a harness instruction names, from the live profile."""
         profile = self.config.capture_profile
@@ -4399,10 +4439,13 @@ class Session:
         ineligible = self._capture_ineligible()
         if ineligible:
             return f"the harness did not capture because {ineligible}"
+        profile, problem = self._dispatch_capture_profile(spec)
+        if problem:
+            return f"the harness did not capture because {problem}"
         from .preview import capture_task
         self._verify_dependencies(f"before preview ({spec.task_id})")
         before = self._source_fingerprint()
-        failure = capture_task(self.config.capture_profile, self.project, spec.task_id, spec.scope.capture)
+        failure = capture_task(profile, self.project, spec.task_id, spec.scope.capture)
         self._verify_dependencies(f"during preview ({spec.task_id})")
         if before is None or self._source_fingerprint() != before:
             return "the project source changed while the harness previewed and captured it"

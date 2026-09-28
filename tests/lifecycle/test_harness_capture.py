@@ -62,7 +62,7 @@ def _profile(tmp_path, preview=None):
 
 
 def _run(tmp_path, monkeypatch, plan, leads, *, profile=None, runs_commands=True, max_tasks=6,
-         files=None, roles=None, lead="claude:opus", settings_kw=None):
+         files=None, roles=None, lead="claude:opus", settings_kw=None, record_complete=True):
     """Leads are pinned to ``lead`` (claude by default: the transport whose
     editing calls run only granted commands, as in Run 18)."""
     from quadratus.session import Session
@@ -81,7 +81,7 @@ def _run(tmp_path, monkeypatch, plan, leads, *, profile=None, runs_commands=True
     replay = H.run(tmp_path, monkeypatch, Script(**overrides), files=files or {
         **_design_files(), "templates/index.html": WIDE_PAGE}, max_tasks=max_tasks,
         settings=Settings(backend="cli", **(settings_kw or {})), lead_runs_commands=runs_commands,
-        capture_profile=str(profile) if profile else None)
+        capture_profile=str(profile) if profile else None, record_complete=record_complete)
     replay.findings = H.result_json(replay).get("findings", [])
     return replay
 

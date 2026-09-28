@@ -325,6 +325,12 @@ def _contract_missing(task: TaskOutcome) -> List[str]:
         missing.append(f"{tid}.contract.required.{_INSTRUCTION}")
     elif required[_INSTRUCTION] == "harness" and not _nonempty(contract.get("capture_page")):
         missing.append(f"{tid}.contract.capture_page")
+    if required.get("design_evidence") == "harness":
+        if "capture_profile" not in contract:
+            missing.append(f"{tid}.contract.capture_profile (absent: recorded before this field existed)")
+        elif not (isinstance(contract.get("capture_profile"), str)
+                  and re.fullmatch(r"sha256:[0-9a-f]{64}", contract["capture_profile"])):
+            missing.append(f"{tid}.contract.capture_profile")
     if _VERDICT not in required:
         missing.append(f"{tid}.contract.required.{_VERDICT} (absent: recorded before this field existed)")
     elif required.get(_VERDICT) not in _VERDICTS:
