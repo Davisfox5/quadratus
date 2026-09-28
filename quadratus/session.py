@@ -3854,8 +3854,14 @@ class Session:
                              description="Make the merged parallel changes pass the project checks.",
                              scope=TaskScope(permitted_paths=union))
             task = TaskMemory(merge.task_id, first.lead, self.store)
-            saved = (self._active_spec, self._task_before, self._task_memory)
+            # Run-level work: no task's outcome, contract or bound gate is the
+            # merge gate's, so none is left in place for it to be attributed to
+            # (Codex, 5866389948). The live grant, gate and allowance decide.
+            saved = (self._active_spec, self._task_before, self._task_memory,
+                     self._outcome, getattr(self, "_contract", None), getattr(self, "_task_gate", None))
             self._active_spec, self._task_before, self._task_memory = merge, self._capture_source(), task
+            self._outcome, self._contract, self._task_gate = None, None, None
+            self._merge_attempts = []
             # The merge gate has its own allowance under the same configured
             # max_gate_fixes, not what the last serial task left of its own
             # (map G5): that task's counter is its history, not the merge's.
@@ -3863,9 +3869,12 @@ class Session:
             try:
                 self._run_integration_gate(first.lead, merge, task)
             finally:
-                self._active_spec, self._task_before, self._task_memory = saved
+                (self._active_spec, self._task_before, self._task_memory,
+                 self._outcome, self._contract, self._task_gate) = saved
                 record["merge_gate"] = dict(task=merge.task_id, gate_fixes=self._gate_fixes_used,
-                                            passed=bool(self.checks) and bool(self.checks[-1]["passed"]))
+                                            passed=bool(self.checks) and bool(self.checks[-1]["passed"]),
+                                            attempts=self._merge_attempts)
+                self._merge_attempts = None
         if fatal is not None:
             raise fatal
         return True
@@ -5225,8 +5234,19 @@ class Session:
                 return target.note("product" if verdict["product"] else "operator",
                                    f"check attempt {entry['attempt']} failed", stage="checks")
             return None
+        # Outside any task: bound to the run-level work that ran it (the merge
+        # gate's synthetic id) and classed by the same attribution, so a
+        # setup failure is not also a product failure (Codex, 5866389948).
+        entry["task"] = getattr(self._active_spec, "task_id", None)
+        merge_attempts = getattr(self, "_merge_attempts", None)
+        if merge_attempts is not None:
+            entry["attempt"] = len(merge_attempts) + 1
+            merge_attempts.append(entry)
         if not result.passed:
-            return self.run_outcome.note("product", "a gate outside any task (the merge gate) failed")
+            if verdict["product"]:
+                return self.run_outcome.note("product", "a gate outside any task (the merge gate) failed")
+            return self.run_outcome.note("operator", "a gate outside any task (the merge gate) failed "
+                                                     "without an attributable assertion failure")
         return None
 
     def _check(self, gate):
