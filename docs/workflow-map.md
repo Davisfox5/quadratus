@@ -740,6 +740,18 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     unchanged. The integrity route for a changed dependency tree at the
     end is untouched (`tests/test_post_loop_exception.py`).
 
+13. *Approved evidence replaced later (E2; Codex, 5862294492).* A later
+    task could rewrite an approved design task's renders, which its CHANGED
+    line cannot name, and the run completed over bytes no reviewer saw. The
+    completion guard, at both DONE sites, compares each approved delivery
+    with the project; a difference is an active `unverified` fact
+    (stage `delivery`) on the approved task, so the run stops
+    `CompletionUnproven`. Not integrity: the J9b settlement boundary is
+    unchanged, and nothing is recaptured or re-reviewed
+    (`tests/lifecycle/test_replaced_evidence.py`). Integrating the Opus
+    evidence controls needs their E2 pair flipped: the prospective xfail
+    now passes and the current-behaviour pin no longer holds.
+
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
 the live `design_cross_check` / `is_design_task`, and can drift from the

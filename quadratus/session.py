@@ -1038,6 +1038,7 @@ class Session:
         an incomplete record, an unsatisfied mandatory edge, an active
         terminal fact or a reference the ledger still owes keeps the run
         incomplete under a named stop. Never a repair: nothing is called."""
+        self._note_replaced_evidence()
         owed = sorted({f"{kind[:-1]} {ref}" for outcome in self.task_outcomes
                        for kind, refs in self._open_refs(outcome).items() for ref in refs})
         audit_findings: dict = {}
@@ -1049,6 +1050,30 @@ class Session:
             self._stop_with("unverified", f"CompletionUnproven: {where} was accepted but the record "
                                           f"does not support it: {'; '.join(blockers)[:600]}. Work preserved.")
             self._note(f"completion refused: {len(blockers)} blocker(s) on the record")
+
+    def _note_replaced_evidence(self) -> None:
+        """An approved delivery whose files no longer hold the approved bytes
+        (map E2, Codex 5862294492): a later task can rewrite an earlier
+        task's renders, which CHANGED cannot see. The task gets an active
+        ``unverified`` fact, so the record cannot count as complete; it is
+        not integrity, and nothing is recaptured or re-reviewed."""
+        if not self.project:
+            return
+        for outcome in self.task_outcomes:
+            files = (outcome.delivery or {}).get("files") or {}
+            if outcome.edges.get("reviewer") is not True or not files:
+                continue
+            changed = []
+            for rel, digest in sorted(files.items()):
+                try:
+                    now = hashlib.sha256((Path(self.project) / rel).read_bytes()).hexdigest()
+                except OSError:
+                    now = ""
+                if now != digest:
+                    changed.append(rel)
+            detail = f"approved evidence changed after its review: {', '.join(changed)}"
+            if changed and not any(f.detail == detail[:400] for f in outcome.facts):
+                outcome.note("unverified", detail, stage="delivery")
 
     def _stop_with(self, kind: str, reason: str) -> None:
         """Set the legacy ``stop_reason`` and record the run's typed stop."""
