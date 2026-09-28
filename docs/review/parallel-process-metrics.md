@@ -6,7 +6,7 @@
 - **What it is not.** It is not a speedup claim and not a product efficiency claim. There is no matched baseline, meaning the same scope built serially and measured the same way. Nothing here says the parallel run was faster or cheaper than an alternative.
 - **Where things stood at 03:57:28Z.** All six lanes had a cleared candidate. Three of them (acceptance, packaging, evidence) were in the offline assembly `a9d0a93`, which root cleared within composition/test scope (5863060753). The other three were assigned to a second assembly that had not been posted yet. None of the six is wired into `Session`, and nothing was adopted or run live.
 - **Wall clock.** 108:46 from launch (5862035398, 02:08:42Z) to assembly clearance.
-- **Review queue.** The first review started 1–10 minutes after a candidate was ready, and a first clearance took 11–40 minutes. The exception is the scorecard, which took 106:33 and five correction rounds.
+- **Review queue.** The first review was claimed 1:04–9:27 after readiness where a claim was posted; completion has no observed review-start claim. Packaging remained unfetchable for another 3:22 after its claim. First clearance took 10:35–39:17 excluding the scorecard. The exception is the scorecard, which took 106:33 and five correction rounds.
 - **The largest single wait was integration.** Cleared candidates sat 31–71 minutes before the assembly picked them up. Completion was cleared at 02:38:30 and was still not in an assembly at 03:57:28 (79 minutes).
 - **Re-review routing was the second largest.** After findings and evidence posted their corrections, 15 minutes passed before a re-reviewer was assigned. Both waits exceeded the two-window trigger in 5862103165.
 - **Most first-round corrections were preventable.** Three of the five non-scorecard first reviews asked for a ruff I001 import-order fix. The frozen test image has no ruff.
@@ -14,7 +14,7 @@
 
 ## Source and method
 
-- **Data.** The local export `work/pr25-current.jsonl` (647 comments, 2026-09-22T22:59:34Z to 2026-09-28T03:49:48Z), plus a live `gh api …/issues/25/comments?since=…` read for everything after 03:49:48Z. The live read supplies only 5863060753 (03:57:28Z, assembly clearance) and 5863064745 (03:57:58Z, outside the window).
+- **Data.** The author used an earlier 647-comment snapshot of the mutable local export `work/pr25-current.jsonl`, ending at 2026-09-28T03:49:48Z, plus a live read of assembly-clearance comment 5863060753. That export is refreshed and is not an immutable artifact. Reproduce the fixed measurement window from the comment IDs and server timestamps below, ending inclusively at 5863060753 (03:57:28Z); exclude later comments regardless of the current export length. Independent review 5863260069 recalculated the 131-comment window and all reported intervals.
 - **Clock.** GitHub `created_at`, to the second, UTC. Host clocks written inside comment bodies are ignored. They disagree with the server: Grok readiness progress 5862306715 says "02:45Z" and was posted at 02:40:28Z, and Claude's 5861822104 says "01:42" and self-corrects to 01:41 in 5861852007.
 - **Event definitions.**
   - **Start** is the lane's first own post (claim or acknowledgment).
@@ -175,7 +175,7 @@ Every ready → clearance interval above breaks into three kinds of time:
 | Kind | What it covers | Observed range |
 |---|---|---|
 | **Authoring** | Start → first ready, and verdict → correction when the same author corrects | First ready 3:34–18:58 (Sol 3:34–5:25, Opus 16:11–18:58). Corrections 2:16–9:24 |
-| **Review queue** | Ready → review start, and correction → re-reviewer assigned | 1:04–9:26 first time. 15:10 and 15:41 for the two re-reviews that waited for rolling assignment |
+| **Review queue** | Ready → review start, and correction → re-reviewer assigned | 1:04–9:27 to first posted claim. 15:10 and 15:41 for the two re-reviews that waited for rolling assignment |
 | **Review** | Review start → verdict | 1:31–5:15 where both ends were posted |
 | **Integration** | Clearance → the candidate appears in an assembly → assembly clearance | Clearance → assembly ready: acceptance 71:25, packaging 59:36, evidence 30:46. Assembly ready → clearance: 17:46. Completion not assembled after 79:00 |
 
@@ -215,9 +215,9 @@ Every ready → clearance interval above breaks into three kinds of time:
 
 ## Actionable bottlenecks
 
-1. **Assemble continuously, not at a checkpoint.** Cleared candidates waited 31–79 minutes for an assembly that took 7:12 to build and 17:46 to clear. Rebasing each cleared candidate onto a standing assembly branch when it clears would remove most of the largest wait.
+1. **Assemble continuously, not at a checkpoint.** Cleared candidates waited 31–79 minutes for an assembly that took 7:12 to build and 17:46 to clear. Trial: place each cleared candidate onto a standing isolated assembly branch promptly, then measure whether clearance-to-assembly time falls without increasing rework. The time saving is not yet measured.
 2. **The first reviewer owns the recheck by default.** The findings and evidence corrections waited 15:10 and 15:41 for a re-reviewer, and both passed the two-window trigger of 5862103165 with no reassessment posted before 02:56:29. Rechecks that stayed with the same reviewer (packaging, acceptance) cleared 1:09–1:49 after the correction.
-3. **Freeze the scorecard's acceptance criteria.** Each round drew a different reviewer (Sol packaging twice, Codex Sol, Grok, then three fresh Sol or root reviewers), and each found new adversarial holes. After round 2, a fixed list of negative controls agreed in PR #25 would bound the remaining rounds. Root's consolidation assignment (5862453854) was the right move, just late.
+3. **Freeze the scorecard's acceptance criteria.** Each round drew a different reviewer (Sol packaging twice, Codex Sol, Grok, then three fresh Sol or root reviewers), and each found new adversarial holes. Hypothesis for a future trial: agreeing a fixed list of negative controls earlier may reduce correction rounds. It cannot guarantee that independent reviewers will find no new defects. Root's consolidation assignment (5862453854) was the right move, just late.
 4. **Put ruff in the frozen image, or require host ruff before handoff.** An I001 appeared in the first verdict for packaging, acceptance and evidence, and again for completion seams 91f90d7 (5862605364). Several authors reported ruff as unavailable (5862309978, 5862461217, 5862594124).
 5. **A handoff must be a pushed SHA.** Local-only SHAs blocked reviewers: packaging 8a83795 (3:22), scorecard b5d6054 (root pushed it), seams 05840ea (5862804114 → root push 5862821110), and c868bf2 for the E1 audit (5862840133).
 6. **Reviewers post their own results.** Two withheld results left the review boundaries unobservable. Root's clarification (5862570855) that PR #25's older head does not block posting addresses one cause.
