@@ -2175,6 +2175,28 @@ class Session:
             return None
         return getattr(self, "_task_gate", None)
 
+    def _cheap_gate(self):
+        """The cheap view of the task's own gate, bound at dispatch (map P3.4;
+        O-NEXT-10 B, Sol 5865330461), or None when it has no cheap commands.
+        A live gate whose cheap view differs is recorded. With no contract for
+        the current task the configured gate decides, as before."""
+        from .integration import GateSuite
+
+        def view(gate):
+            return gate.cheap() if isinstance(gate, GateSuite) else None
+
+        def ids(cheap):
+            return tuple(c.id for c in cheap.commands) if cheap is not None else ()
+        live = view(self.config.integration_gate)
+        outcome, contract = self._outcome, getattr(self, "_contract", None)
+        if outcome is None or contract is None or contract.task_id != outcome.task_id:
+            cheap = live
+        else:
+            cheap = view(getattr(self, "_task_gate", None))
+            if ids(cheap) != ids(live):
+                outcome.mismatches.append(f"cheap_checks: contract {ids(cheap)!r}, legacy {ids(live)!r}")
+        return cheap if cheap is not None and cheap.commands else None
+
     def _source_identity(self) -> str:
         """The selected source's fingerprint, or an explicit reason there is
         none: "n/a" with no project, "unavailable" when it cannot be read."""
@@ -2386,18 +2408,16 @@ class Session:
 
         self._assess_scope(spec, task, before)
         self._brief_design_reviewers(spec)
-        from .integration import GateSuite
-        if isinstance(self.config.integration_gate, GateSuite):
-            cheap = self.config.integration_gate.cheap()
-            if cheap.commands:
-                draft = self._run_integration_gate(lead, spec, task, gate=cheap) or draft
-                if not self.checks[-1]['passed']:
-                    self._open_finding('product', 'Cheap gates failed before review', legacy_route=True)
-                    summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
-                    summary = task.close(summary=summary_text, reasoning=reasoning, dead_ends=dead_ends)
-                    self.memory.absorb(summary)
-                    self.history.append(summary)
-                    return summary
+        cheap = self._cheap_gate()
+        if cheap is not None:
+            draft = self._run_integration_gate(lead, spec, task, gate=cheap) or draft
+            if not self.checks[-1]['passed']:
+                self._open_finding('product', 'Cheap gates failed before review', legacy_route=True)
+                summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
+                summary = task.close(summary=summary_text, reasoning=reasoning, dead_ends=dead_ends)
+                self.memory.absorb(summary)
+                self.history.append(summary)
+                return summary
 
         # Collaborators contribute into the lead's working memory. They see the
         # task and the draft, not the whole session: their value is an
