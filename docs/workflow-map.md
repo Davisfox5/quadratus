@@ -765,15 +765,15 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     Only two failures are proven environment: the port was already
     listening, so the preview was never launched; or a conventional runner
     outside the project (a bare name, or an absolute path outside it, as
-    profile validation accepts one) could not be launched. A project file
-    named like a runner (`./python3`) is a project file (Sol review,
-    5862984388), and a path that cannot be resolved (a symlink loop) is not
-    proven outside, so it stays unattributed (5863184501). Those stop as
-    `PreviewUnavailable` (operator), with no repair call and the text kept
-    byte-identical. Everything else is unattributed and keeps the existing
-    `invalid_proof` / `DesignUnverified` route: an app that exits before or
-    as it becomes ready, a preview never ready, a project-file preview that
-    cannot launch, budget and capture timeouts, and a failed capture
+    profile validation accepts one) could not be launched. Only those two
+    stop as `PreviewUnavailable` (operator), with no repair call and the
+    text kept byte-identical. Everything else is unattributed and keeps the
+    existing `invalid_proof` / `DesignUnverified` route: a project file
+    named like a runner (`./python3`, Sol review 5862984388), a runner path
+    that cannot be resolved (a symlink loop, 5863184501), an app that exits
+    before or as it becomes ready, a preview never ready, a project-file
+    preview that cannot launch, budget and capture timeouts, and a failed
+    capture
     (`tests/lifecycle/test_preview_provenance.py`, with the table). The
     Opus E1 control's scenario (exit 1 before ready) is an application exit
     and stays unverified, so its strict xfail should be recast rather than
