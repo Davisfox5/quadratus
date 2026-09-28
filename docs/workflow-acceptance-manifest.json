@@ -639,6 +639,9 @@
         "outcome": [
           "tests/test_workflow_design_fix_role_journey.py::test_design_fix_gets_the_lead_packet_in_a_bounded_session_journey"
         ],
+        "report": [
+          "tests/test_workflow_design_fix_role_journey.py::test_design_fix_gets_the_lead_packet_in_a_bounded_session_journey"
+        ],
         "partial_work": [
           "tests/test_workflow_design_fix_role_journey.py::test_design_fix_gets_the_lead_packet_in_a_bounded_session_journey"
         ]
