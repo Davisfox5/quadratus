@@ -3361,6 +3361,9 @@ class Session:
                 + self._revision_delivery() + _design_fix_delivery(self._interim_edits_note())),
                 role="design-fix", capped=(spec, task))
             self._run_integration_gate(lead, spec, task)
+            # The gate set the stage to checks; the recheck is design work again
+            # (Codex, 5863678556), so its facts carry the design stage.
+            self._stage("design")
             failure = self._harness_capture(spec)
             if failure:
                 self._hand_off_preview(spec, task, record, failure)
@@ -3393,6 +3396,7 @@ class Session:
                 f"or shows a broken page: {problem}.\n" + action + self._revision_delivery()
                 + _design_fix_delivery(self._interim_edits_note())), role="design-fix", capped=(spec, task))
             self._run_integration_gate(lead, spec, task)
+            self._stage("design")  # the recheck is design work again, as above
             ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
                                                         expected_source=self._trusted_source())
             self._refuse_mismatched(spec, record, task, records, harness)

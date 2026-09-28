@@ -814,6 +814,15 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     with the requirements ledger off, the no-op `_requirements_satisfied`
     call is skipped (its first statement returns True; pinned).
 
+17. *A design recheck records under the design stage (Codex, 5863678556).*
+    `_check_design`'s fix paths run the integration gate, which sets stage
+    `checks`, and the recheck's `invalid_proof` finding was recorded there,
+    so the findings projection (imported unwired, 2e39495) missed it on a
+    reachable journey. The session re-enters `design` after both gate
+    calls; kinds, stop text, authority and recovery counts are unchanged,
+    and the task's `stages` list gains the second `design` entry
+    (`tests/lifecycle/test_design_recheck_stage.py`).
+
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
 the live `design_cross_check` / `is_design_task`, and can drift from the
