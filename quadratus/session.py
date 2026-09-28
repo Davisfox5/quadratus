@@ -1927,11 +1927,14 @@ class Session:
         prior, self._outcome = self._outcome, outcome
         self.task_outcomes.append(outcome)
         self._contract = None
+        self._task_gate = None
         try:
             # The source record comes first, as it always did, so a task refused
             # at dispatch still carries it (Codex, 5861147842).
             outcome.source_before = self._source_identity()
             self._prepare_dispatch(spec)
+            # The gate the contract describes, held with it (map P3.4, checks).
+            self._task_gate = self.config.integration_gate
             # Derived here, bound (frozen, with its owner) at the selection point
             # in _run_task / _run_security_task, before the first model call.
             self._contract = self._build_contract(spec, outcome)
@@ -2080,6 +2083,14 @@ class Session:
                 outcome.mismatches.append(f"{requirement}: contract missing, legacy {legacy!r}")
             return legacy
         return getattr(contract.required, requirement)
+
+    def _bound_gate(self):
+        """The gate the current task's contract was built with, or None when
+        there is no contract for the current task."""
+        outcome, contract = self._outcome, getattr(self, "_contract", None)
+        if outcome is None or contract is None or contract.task_id != outcome.task_id:
+            return None
+        return getattr(self, "_task_gate", None)
 
     def _source_identity(self) -> str:
         """The selected source's fingerprint, or an explicit reason there is
@@ -4651,9 +4662,16 @@ class Session:
         into the task memory so the close-out and the ledger carry it as an
         open problem instead of a silent one.
         """
-        if gate is None:
-            self._contract_agrees("checks", self.config.integration_gate is not None)
-        gate = gate if gate is not None else self.config.integration_gate
+        full = gate is None
+        if full:
+            # The task's mandatory gate is its contract's, fixed at dispatch
+            # with the gate it describes (map P3.4, checks). The live setting
+            # is still compared. With no contract for the current task (the
+            # parallel merge gate) the configured gate decides, as before.
+            live = self.config.integration_gate
+            if not self._required("checks", live is not None):
+                return ""
+            gate = self._bound_gate() or live
         if gate is None:
             return ""
         self._stage("checks")
@@ -4663,7 +4681,7 @@ class Session:
         latest_fix = ""
         # Which gate an attempt ran: the run's full required gate, or a subset
         # of it (a cheap view) or another gate (the merge gate).
-        kind = "full" if gate is self.config.integration_gate else "subset"
+        kind = "full" if full or gate is self.config.integration_gate else "subset"
         result = self._check(gate)
         task.record("user", result.for_models())
         attempt_facts = [self._record_check_attempt(result, gate_kind=kind)]

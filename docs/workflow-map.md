@@ -666,6 +666,14 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
    contract building and preparation would both raise, preparation's error
    is now the one reported (`tests/test_dispatch_preparation.py`).
 
+5. *`checks` applicability from the contract.* A task's mandatory gate is
+   its own `required.checks`, fixed at dispatch, and runs the gate that
+   contract was built with (held beside it as `_task_gate`); the live
+   setting is still compared and a disagreement recorded. With no contract
+   for the current task (the parallel merge gate) the configured gate
+   decides and runs as before, with the same allowance. Explicit subset gates
+   (the cheap view) are unchanged (`tests/test_checks_applicability.py`).
+
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
 the live `design_cross_check` / `is_design_task`, and can drift from the
