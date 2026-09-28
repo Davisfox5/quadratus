@@ -4567,8 +4567,11 @@ class Session:
                                f"output artifact {last.get('output_artifact', 'unavailable')})")
         if any(f.active and f.kind == "product" for f in self.run_outcome.facts):
             reasons.append("the merge gate still fails")
-        if self._partial_tasks:
-            reasons.append(f"capped task(s) {', '.join(sorted(self._partial_tasks))} not continued to completion")
+        # Named from typed and legacy together, as the blocking predicate
+        # decides (map P3.4, Codex 5864252244); the same text when they agree.
+        partial = sorted(self._partial_from_outcomes() | set(self._partial_tasks))
+        if partial:
+            reasons.append(f"capped task(s) {', '.join(partial)} not continued to completion")
         ledger = self._open_findings_for(None)
         if ledger:
             reasons.append(f"audit findings {', '.join(ledger)} are open")

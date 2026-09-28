@@ -394,8 +394,10 @@ def _open_work(inputs: CompletionInputs, debt: Debt) -> List[str]:
                            f"output artifact {last.get('output_artifact', 'unavailable')})")
     if debt.merge_gate_failing:
         reasons.append("the merge gate still fails")
-    if debt.partial_legacy:
-        reasons.append(f"capped task(s) {', '.join(debt.partial_legacy)} not continued to completion")
+    if debt.partial:
+        # Typed and legacy together, as the blocking predicate reads them
+        # (Codex, 5864252244); the same text when they agree.
+        reasons.append(f"capped task(s) {', '.join(debt.partial)} not continued to completion")
     if debt.ledger_findings_open:
         reasons.append(f"audit findings {', '.join(debt.ledger_findings_open)} are open")
     if debt.legacy_open_findings:

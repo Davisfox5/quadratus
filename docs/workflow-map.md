@@ -857,6 +857,31 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     (`tests/lifecycle/test_settlement_findings.py`, a real blocking
     collaborator review).
 
+21. *Partial work is named from typed and legacy together (Codex,
+    5864252244).* The blocking predicate read typed ∪ legacy partiality;
+    the reason text read the legacy set alone, so typed-only partial work
+    blocked a run whose stop said "the record shows no single open item".
+    `Session._open_work` and `completion_decision._open_work` now name the
+    union, sorted and once each; the text is unchanged whenever the two
+    agree. The typed-only case is synthetic: no natural journey loses the
+    legacy entry (`tests/test_partial_reason.py`; the two seam
+    characterisations and one candidate unit test updated accordingly).
+
+**Legacy readers retained, with why (not a claim of total retirement):**
+- `open_findings`, `_partial_tasks` and `_design_unverified` stay as the
+  legacy side of each typed ∪ legacy check and as report mirrors; every
+  check records a disagreement.
+- The DONE/cap decision's `legacy_open_findings` input: a typed-only
+  finding cannot reach DONE (the stop triggers read typed findings first),
+  and in the injected state the guard already refuses; relabelling it is
+  deferred until a concrete need (Codex, 5864252244).
+- Design-debt naming keeps its legacy fallback until the same-task G8
+  recheck rule is settled.
+- `stop_reason` names the run's stop and feeds `result.error`; the typed
+  stop and `Fact.full` carry the same text.
+- `collaborators_for` and the design prompt's applicability still read
+  live settings (see below).
+
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
 the live `design_cross_check` / `is_design_task`, and can drift from the

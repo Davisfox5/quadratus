@@ -291,9 +291,9 @@ def test_typed_and_legacy_partial_disagreement_is_reported_for_the_session_to_re
     decision = decide(answered(tasks=[_capped()]))
     assert decision.partial_mismatches == (("t1", "partial: typed True, legacy False"),)
     assert not decision.ready
-    assert decision.divergences, "the typed-only partial is not in the stop's reasons today"
-    assert decision.stop.reason.endswith("the record shows no single open item; see the task outcomes. "
-                                         "Work preserved.")
+    # Named since Codex 5864252244: the reason reads typed and legacy together.
+    assert decision.divergences == ()
+    assert decision.stop.reason.endswith("capped task(s) t1 not continued to completion. Work preserved.")
 
 
 def test_partiality_is_not_evaluated_at_done_when_legacy_open_findings_short_circuit():

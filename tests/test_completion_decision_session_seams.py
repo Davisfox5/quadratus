@@ -302,20 +302,19 @@ def _capped_done(tmp_path, monkeypatch, inject):
                  max_tasks=4, settings=_settings(), record_complete=False)
 
 
-def test_synthetic_typed_only_partial_blocks_without_being_named(tmp_path, monkeypatch, rounds):
-    """Characterisation: the legacy set loses t1 before the DONE site. The
-    engine still refuses, but its reasons read the legacy set and name
-    nothing. The candidate reproduces the text and the mismatch note the
-    session records, and reports the omission."""
+def test_synthetic_typed_only_partial_blocks_and_is_named(tmp_path, monkeypatch, rounds):
+    """Synthetic: the legacy set loses t1 before the DONE site. The engine
+    refuses, and since Codex 5864252244 its reasons name the typed and
+    legacy partial work together, so t1 is named. The candidate reproduces
+    the text and the mismatch note the session records."""
     _capped_done(tmp_path, monkeypatch, lambda s: s._partial_tasks.clear())
     decisions, session = _replay_all(rounds)
     final = decisions[-1]
-    assert session.stop_reason == ("DoneWithOpenWork: the orchestrator reported DONE, but the record shows no "
-                                   "single open item; see the task outcomes. Work preserved.")
+    assert session.stop_reason == ("DoneWithOpenWork: the orchestrator reported DONE, but capped task(s) t1 not "
+                                   "continued to completion. Work preserved.")
     assert final.stop.kind == "cap" and final.status == INCOMPLETE
     assert final.partial_mismatches == (("t1", "partial: typed True, legacy False"),)
-    assert final.divergences == ("typed-only partial work (t1) blocks completion but is not named among the "
-                                 "stop's reasons, which read the legacy set",)
+    assert final.divergences == ()
 
 
 def test_synthetic_legacy_open_findings_short_circuit_partiality_at_done(tmp_path, monkeypatch, rounds):
@@ -330,5 +329,8 @@ def test_synthetic_legacy_open_findings_short_circuit_partiality_at_done(tmp_pat
     final = decisions[-1]
     assert final.partial_mismatches == () and _partial_notes(session) == set()
     assert final.divergences == ()
-    assert session.stop_reason == ("DoneWithOpenWork: the orchestrator reported DONE, but 1 open finding(s), "
-                                   "first: an injected legacy finding. Work preserved.")
+    # The mismatch is not recorded (the short circuit), but the reason names
+    # the typed partial work (Codex 5864252244).
+    assert session.stop_reason == ("DoneWithOpenWork: the orchestrator reported DONE, but capped task(s) t1 not "
+                                   "continued to completion; 1 open finding(s), first: an injected legacy "
+                                   "finding. Work preserved.")
