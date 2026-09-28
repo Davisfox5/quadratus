@@ -12,7 +12,7 @@ from quadratus.policy import PolicyError, load_policy
 from quadratus.project import Project
 from quadratus.runtime import Fleet
 from quadratus.scope import TaskScope
-from quadratus.session import PartialWorkStopped, Session, SessionConfig, TaskSpec
+from quadratus.session import Session, SessionConfig, TaskSpec
 
 
 @pytest.fixture
@@ -77,16 +77,21 @@ def test_instruction_symlink_escape_is_refused(packet_session, tmp_path):
         session._lead_prompt(spec)
 
 
-@pytest.mark.parametrize('reply,success', [
-    ('Updated\nCHANGED: ["a.py", "new.bin", "old.py"]', True),
-    ('Updated\nCHANGED: ["a.py"]', False),
-    ('Updated', False),
-    ('CHANGED: ["../a.py"]', False),
-    ('CHANGED: ["a.py", "a.py", "new.bin", "old.py"]', False),
-    ('CHANGED: []\nCHANGED: ["a.py", "new.bin", "old.py"]', False),
-    ('FETCH: anything', False),
+@pytest.mark.parametrize('reply,status', [
+    ('Updated\nCHANGED: ["a.py", "new.bin", "old.py"]', "match"),
+    ('Updated\nCHANGED: ["a.py"]', "undeclared"),
+    ('Updated', "missing"),
+    ('CHANGED: ["../a.py"]', "undeclared"),
+    ('CHANGED: ["a.py", "a.py", "new.bin", "old.py"]', "malformed"),
+    ('CHANGED: []\nCHANGED: ["a.py", "new.bin", "old.py"]', "malformed"),
+    # A request mid-work after edits is kept, not refused (GameTape run 5,
+    # 2026-09-25); the task-level scope check still measures the edits.
+    ('FETCH: anything', None),
 ])
-def test_unrestricted_delivery_compares_added_modified_deleted_bytes(tmp_path, monkeypatch, reply, success):
+def test_unrestricted_delivery_compares_added_modified_deleted_bytes(tmp_path, monkeypatch, reply, status):
+    """The diff is measured over added, modified and deleted bytes; the
+    declaration is classified against it and never refused (docs/DIRECTION.md)."""
+    from quadratus.delegation import invocation, invocation_context
     root = tmp_path / 'project'
     root.mkdir()
     (root / 'a.py').write_text('before')
@@ -104,14 +109,15 @@ def test_unrestricted_delivery_compares_added_modified_deleted_bytes(tmp_path, m
 
     monkeypatch.setattr(fleet, '_generate', generate)
     try:
-        if success:
+        with invocation("t1", "lead"):
             assert fleet.invoke('claude:opus', 'edit', allow_writes=True) == reply
-        else:
-            with pytest.raises(PartialWorkStopped) as caught:
-                fleet.invoke('claude:opus', 'edit', allow_writes=True)
-            assert caught.value.partial['changed'] == ['a.py', 'new.bin', 'old.py']
-            assert caught.value.partial['reply'] == reply
+            report = invocation_context.get().get("changed_report")
         assert (root / 'a.py').read_text() == 'after'
+        if status is None:
+            assert report is None, "a request is served before any classification"
+        else:
+            assert report["status"] == status
+            assert report["measured"] == ['a.py', 'new.bin', 'old.py']
     finally:
         fleet.close()
 
@@ -129,7 +135,7 @@ def test_no_change_delivery_and_control_requests(tmp_path, monkeypatch, reply):
         fleet.close()
 
 
-@pytest.mark.parametrize('role', ['lead', 'revision', 'gate-fix', 'security-fix'])
+@pytest.mark.parametrize('role', ['lead', 'revision', 'gate-fix', 'security-fix', 'design-fix'])
 def test_editing_roles_keep_lead_checklist_without_a_write_grant(packet_session, role):
     from quadratus.delegation import invocation
     session, spec, seen = packet_session
@@ -138,6 +144,7 @@ def test_editing_roles_keep_lead_checklist_without_a_write_grant(packet_session,
         session._invoke_model('claude:opus', 'Revise the proposal')
     assert 'Role: lead' in seen[-1]
     assert 'Stop with an ASK' in seen[-1]
+    assert 'Role: reviewer' not in seen[-1]
 
 
 def test_worker_gets_scope_without_parent_family_packet(packet_session):

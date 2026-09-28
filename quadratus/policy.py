@@ -223,8 +223,12 @@ class RepositoryPolicy:
                     parts.append(f"- {check['rule']} Because: {check['because']}")
             parts.append('Required inputs: ' + json.dumps(card['required_inputs']))
             parts.append('Stop conditions: ' + json.dumps(card['output_contract']['stop_conditions']))
+        # Gates by name and requirement only. A command can name a file seats
+        # must not open (the Q9-v2 grader path reached every lead here).
+        visible_gates = [{k: g[k] for k in ('id', 'runner', 'required', 'minimum_tests') if k in g}
+                         for g in plan['gates']]
         parts.append('Check configuration: ' + json.dumps({
-            'gates': plan['gates'], 'absent': plan['absent_gates'],
+            'gates': visible_gates, 'absent': plan['absent_gates'],
             'skipped': plan['skipped_gates'], 'adapters': plan['adapters']}, sort_keys=True))
         parts.append('Repository decisions: ' + json.dumps(self.document.get('decisions', [])))
         contract = '\n'.join(parts)
@@ -251,8 +255,12 @@ class RepositoryPolicy:
         rules = [r for r in doc['path_rules']
                  if any(_applies(p, pattern, self.root) for p in paths for pattern in r['paths'])]
         families = list(dict.fromkeys(f for r in rules for f in r['families']))
+        family_source = ('path rules matched: ' + ', '.join(sorted({p for r in rules for p in r['paths']}))
+                         if families else None)
         if not families:
             families = [doc['defaults']['family']]
+            family_source = ('policy default: no path rule matched' if self.explicit else
+                             'built-in default: the project has no .quadratus/policy.json')
         overlays = list(dict.fromkeys(o for r in rules for o in r.get('overlays', [])))
         blocked = []
         for rule in rules:
@@ -306,7 +314,8 @@ class RepositoryPolicy:
                       policy_source='.quadratus/policy.json' if self.explicit else 'built-in',
                       policy_hash=_hash(doc), library_version=self.library['version'],
                       library_digest=self.library['digest'], declared_paths=paths,
-                      primary_family=families[0], families=families, overlays=overlays,
+                      primary_family=families[0], families=families, family_source=family_source,
+                      overlays=overlays,
                       gates=selected, absent_gates=absent, skipped_gates=skipped, adapters=adapters,
                       deny_write=deny, sensitive=sensitive, defaults=doc['defaults'],
                       capability_policy=capability, blocked=list(dict.fromkeys(blocked)))
@@ -412,15 +421,25 @@ def task_gate(policy, plan, existing, *, exclude=()):
         # Matching argv is concrete command identity, not guessed gate-name equivalence.
         matches = [g for g in commands if tuple(existing.command) == g.argv
                    and (policy.root / g.cwd).resolve() == Path(existing.cwd).resolve()]
+        # The operator gate's test-count minimum travels with it: dropping it
+        # let an all-skipped or count-free test run pass once a policy was
+        # present (Codex review of 19a0a75). Where both set one, the stricter
+        # stands.
+        operator_minimum = getattr(existing, 'minimum_tests', None)
+
+        def stricter(policy_minimum):
+            known = [m for m in (policy_minimum, operator_minimum) if m is not None]
+            return max(known) if known else None
         if matches:
             from dataclasses import replace
-            commands = [replace(g, timeout=min(g.timeout, existing.timeout), required=True)
+            commands = [replace(g, timeout=min(g.timeout, existing.timeout), required=True,
+                                minimum_tests=stricter(g.minimum_tests))
                         if g in matches else g for g in commands]
             extra = []
         else:
             extra = [integration.GateCommand('operator-check', tuple(existing.command),
                      cwd=Path(existing.cwd).resolve().relative_to(policy.root).as_posix(),
-                     timeout=existing.timeout)]
+                     timeout=existing.timeout, minimum_tests=operator_minimum)]
     elif existing is None:
         extra = []
     else:

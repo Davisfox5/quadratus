@@ -81,6 +81,9 @@ class TaskSummary:
     reasoning: str
     dead_ends: List[str] = field(default_factory=list)
     refs: List[ArtifactRef] = field(default_factory=list)
+    #: ``closed``, or ``turn_limited`` when the lead stopped at its turn
+    #: limit and the harness recorded the unfinished task itself.
+    outcome: str = "closed"
 
 
 class TaskMemory:

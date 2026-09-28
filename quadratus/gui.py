@@ -96,10 +96,52 @@ def _format_response(result) -> str:
     return "".join(parts)
 
 
+class OperatorChannel:
+    """The planner's ASK, answered from the Project UI while the run waits.
+
+    Before this, the UI passed no callback: an ASK raised OperatorInputNeeded
+    and surfaced as a bare "Run failed" with no way to answer (Codex review of
+    #25). The requirements ledger makes ASK routine -- an ambiguous
+    requirement needs an operator ruling -- so the UI now shows the question
+    in the progress stream and hands the typed answer back to the waiting run.
+    """
+
+    def __init__(self, timeout: float = 3600.0):
+        self.questions: "queue.Queue[str]" = queue.Queue()
+        self.answers: "queue.Queue[str]" = queue.Queue()
+        self.timeout = timeout
+        self.waiting = False
+
+    def ask(self, question: str) -> str:
+        from .session import OperatorInputNeeded
+        self.waiting = True
+        self.questions.put(question)
+        try:
+            return self.answers.get(timeout=self.timeout)
+        except queue.Empty as exc:
+            raise OperatorInputNeeded(question) from exc
+        finally:
+            self.waiting = False
+
+    def answer(self, text: str) -> str:
+        text = (text or "").strip()
+        if not self.waiting:
+            return "No question is waiting for an answer."
+        if not text:
+            return "Type an answer first."
+        self.answers.put(text)
+        return "Answer sent; the run continues."
+
+
 def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
-                   *, forbid=(), declared_paths=()):
+                   *, forbid=(), declared_paths=(), channel: Optional[OperatorChannel] = None,
+                   neutral: bool = False):
     """Stream progress while the shared project runner performs model calls."""
+    import dataclasses
+
     from .project_run import run_project
+    if neutral:
+        settings = dataclasses.replace(settings, neutral_preferences=True)
     events = queue.Queue()
     notes = []
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -107,13 +149,23 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
                              allow_writes=allow_writes, check=check,
                              mode=mode, max_tasks=int(max_tasks),
                              forbid=forbid, declared_paths=declared_paths,
-                             progress=events.put)
+                             progress=events.put,
+                             ask_operator=channel.ask if channel is not None else None)
         while not future.done():
             try:
                 notes.append(events.get(timeout=0.25))
                 yield "\n\n".join(notes), '', []
             except queue.Empty:
                 pass
+            if channel is not None:
+                try:
+                    question = channel.questions.get_nowait()
+                except queue.Empty:
+                    continue
+                notes.append(f"**The planner asks:** {question}\n\n"
+                             "_Type your answer under 'Answer the planner' and press Send answer. "
+                             "It is recorded as a standing ruling for this run._")
+                yield "\n\n".join(notes), '', []
         try:
             result = future.result()
         except Exception as exc:
@@ -175,7 +227,16 @@ def build_interface(settings: Optional[Settings] = None):
                 preview_button.click(policy_preview_ui,
                                      inputs=[selected, declared_paths, forbid_paths, edits],
                                      outputs=[policy_info])
+                neutral = gr.Checkbox(label='Run without my personal CLI settings '
+                                            '(plugins, hooks, user config; account rules are only recorded)',
+                                      value=False)
                 run_button = gr.Button('Run project task', variant='primary', interactive=False)
+                channel = OperatorChannel()
+                with gr.Row():
+                    answer = gr.Textbox(label='Answer the planner', lines=2)
+                    answer_button = gr.Button('Send answer')
+                answer_status = gr.Markdown()
+                answer_button.click(channel.answer, inputs=[answer], outputs=[answer_status])
                 report = gr.Markdown()
                 diff = gr.Code(label='Source changes', language=None, interactive=False)
                 downloads = gr.File(label='Saved run files', file_count='multiple', interactive=False)
@@ -197,14 +258,15 @@ def build_interface(settings: Optional[Settings] = None):
                 open_button.click(open_project, inputs=[project_path, clone_url, branch],
                                   outputs=[selected, project_info, source_files, clone_url, branch, run_button])
 
-                def run_selected(goal, folder, writes, command, mode, limit, paths, forbid):
+                def run_selected(goal, folder, writes, command, mode, limit, paths, forbid, no_personal):
                     if not folder:
                         raise gr.Error('Open a project first.')
                     yield from run_project_ui(goal, folder, writes, command, mode, limit, settings,
                                               declared_paths=[p.strip() for p in paths.splitlines() if p.strip()],
-                                              forbid=[p.strip() for p in forbid.splitlines() if p.strip()])
+                                              forbid=[p.strip() for p in forbid.splitlines() if p.strip()],
+                                              channel=channel, neutral=bool(no_personal))
 
-                run_button.click(run_selected, inputs=[goal, selected, edits, check, mode, max_tasks, declared_paths, forbid_paths],
+                run_button.click(run_selected, inputs=[goal, selected, edits, check, mode, max_tasks, declared_paths, forbid_paths, neutral],
                                  outputs=[report, diff, downloads], concurrency_limit=1)
             with gr.Tab('Code discussion'):
                 gr.Markdown('Discuss snippets without opening a project. Answers here do not create source files.')

@@ -2,7 +2,7 @@
   "kind": "family",
   "schema_version": 1,
   "id": "scoped-endpoint",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "summary": "An API endpoint or data-access change that can never return or write another tenant's or user's data.",
   "kinds": ["backend", "glue"],
   "required_inputs": [
@@ -15,6 +15,8 @@
     { "id": "order-of-guards", "rule": "Auth dependency first, then scope resolution, then feature gate, then body validation, in that order", "because": "Flex admin services route is the accepted pattern; a 307 from the page-oriented guard on an API route was a live defect", "applies_to": ["lead", "reviewer"] },
     { "id": "predicate-on-every-query", "rule": "Every query on a scoped model carries the scope predicate on the same statement, including secondary lookups by id", "because": "r3cruit3r has 61 raw id lookups in routers and recruit_merges.py fetches by id without a user predicate; Flex tenant content leaked through hardcoded fallbacks six times in two days", "applies_to": ["lead", "reviewer", "verifier"], "gate_id": "scope-predicate-grep" },
     { "id": "cross-tenant-test", "rule": "A test proves a second tenant or user gets 404 or 403, using the repo's override mechanism", "because": "A static grep is a review cue, not proof; r3cruit3r IDOR holes were closed in PR #12 only after cross-tenant tests existed", "applies_to": ["lead", "reviewer"], "gate_id": "cross-tenant-test" },
+    { "id": "missing-owner-denied", "rule": "A record whose ownership field is missing or null is denied exactly like another tenant's record: never matched, never an error, and a test proves it", "because": "Quadratus Q9-v2 series, 2026-09-24: two of five baseline leads compared record[\"tenant_id\"] directly, so an unowned record raised KeyError, a 500 rather than a 404", "applies_to": ["lead", "reviewer", "verifier"], "gate_id": "cross-tenant-test" },
+    { "id": "ownership-test-evidence", "rule": "Accept only when the report quotes the cross-tenant and missing-owner tests' command and output; reading the source is not evidence that they pass", "because": "In the same series both baseline verifiers read the KeyError code and accepted it", "applies_to": ["reviewer", "verifier"] },
     { "id": "override-mechanism", "rule": "Tests override dependencies through the framework's mechanism, never by patching the module", "because": "r3cruit3r mocker.patch of a FastAPI dependency never took effect, so tests passed while calling the real API (commit 063bbcb)", "applies_to": ["lead", "reviewer"] },
     { "id": "typed-envelope", "rule": "Declare the response model and use the repo's error envelope; no bare 500", "because": "r3cruit3r has 137 response_model uses and the reviewer prompt requires it; Flex uses { error: { code, message } }", "applies_to": ["lead", "reviewer"] },
     { "id": "no-shared-write-for-one-tenant", "rule": "Never write shared or global data on behalf of one tenant or user", "because": "r3cruit3r CONTEXT.md: never write to a TransferPortalPlayer on behalf of one coach", "applies_to": ["lead", "reviewer", "verifier"] },
@@ -25,7 +27,7 @@
   "overlays_compatible": ["sensitive-path", "tenant-isolation", "privacy", "test-quality", "performance"],
   "gate_ids": ["scope", "scope-predicate-grep", "cross-tenant-test", "import-smoke", "unit-tests", "lint"],
   "output_contract": {
-    "done_output": ["route list from the app, showing the new path", "a line per query with its scope predicate quoted", "the cross-tenant test name and its output", "feature key or none with the reason"],
+    "done_output": ["route list from the app, showing the new path", "a line per query with its scope predicate quoted", "the cross-tenant test name and its output", "the missing-owner test name and its output", "feature key or none with the reason"],
     "stop_conditions": ["scope owner unknown", "the resource is global and the task asks for a per-tenant write", "no override mechanism exists to write the cross-tenant test", "the route touches a sensitive path without a grant"]
   },
   "adapter_fields": [

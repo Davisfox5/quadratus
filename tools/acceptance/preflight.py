@@ -90,6 +90,12 @@ def _sandbox_check(vendor: str, spec, probe_file: str) -> dict:
             "detail": (speaking or lines or [""])[0][:300]}
 
 
+# CLIs whose sign-in readout refreshes an expired token on the call that
+# reports it expired. Kept here, not on the CLI spec, because the spec lives
+# in a protected engine file and this is a preflight concern only.
+REFRESH_ON_READ = frozenset({"grok"})
+
+
 def _auth_check(spec) -> dict:
     """Is this CLI signed in? No model is invoked.
 
@@ -112,6 +118,16 @@ def _auth_check(spec) -> dict:
                 "detail": "this vendor offers no model-free readout of its session, so "
                           "nothing here establishes that it is signed in"}
     argv = [binary, *spec.auth_check_args]
+    # The grok CLI refreshes an expired token on the call that reports it
+    # expired: the first readout says "not authenticated" and rewrites its
+    # auth file in the same second (Q9-v2, 2026-09-23). The readout is
+    # model-free, so one discarded warm-up call costs nothing and keeps a
+    # refreshable session from refusing a claimed slot.
+    if spec.binary in REFRESH_ON_READ:
+        try:
+            subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT)
+        except (OSError, subprocess.SubprocessError):
+            pass
     try:
         done = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -134,21 +150,31 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", default="/work", help="the mounted application tree")
     parser.add_argument("--output", help="write the report here as JSON")
+    parser.add_argument("--host", action="store_true",
+                        help="the run itself will execute on this host, natively, so "
+                             "this host is the environment to test. Without it a host "
+                             "preflight is refused, because it proves nothing about a "
+                             "container the run would use instead.")
     args = parser.parse_args()
 
-    if not Path("/.dockerenv").exists():
-        raise SystemExit("Run only inside run_isolated: a host preflight proves nothing "
-                         "about the container the run will use")
+    in_container = Path("/.dockerenv").exists()
+    if not in_container and not args.host:
+        raise SystemExit("Run only inside run_isolated, or pass --host when the run will "
+                         "execute natively here: a preflight proves something only about "
+                         "the environment the run will actually use")
 
-    # Imported after the refusal, not before it: the engine lives at a path
-    # that only exists inside the container, so importing first would fail on
-    # a host for the wrong reason and hide the real message.
-    sys.path.insert(0, "/opt/quadratus")
+    # Imported after the refusal, not before it: inside the container the
+    # engine lives at a path that only exists there, so importing first would
+    # fail on a host for the wrong reason and hide the real message. On a
+    # native host the installed package is the engine under test.
+    if in_container:
+        sys.path.insert(0, "/opt/quadratus")
     from quadratus.cli_providers import CLI_SPECS, contained
 
     work = Path(args.work)
     tree = _read_check(work)
-    report = {"contained": contained(), "work_tree": tree, "vendors": {}}
+    report = {"contained": contained(), "host": not in_container,
+              "work_tree": tree, "vendors": {}}
     blockers = []
     report["auth"] = {vendor: _auth_check(spec) for vendor, spec in CLI_SPECS.items()}
     for vendor, result in report["auth"].items():

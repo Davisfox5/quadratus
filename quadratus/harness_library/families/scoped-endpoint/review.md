@@ -11,6 +11,9 @@ Check, and cite file and line for each finding
   the scope predicate. Read each one; the grep receipt only lists candidates.
 - The cross-tenant test exists, uses the framework override mechanism, and its
   receipt shows the denial.
+- A record with a missing or null ownership field is denied like another
+  tenant's, not matched and not a 500, and the test's output is quoted. Reading
+  the source is not evidence that it passes.
 - Response model declared; error envelope matches the repo's.
 - The router appears in the route registry and the import-smoke receipt passed.
 - No write to shared or global data on behalf of one tenant.

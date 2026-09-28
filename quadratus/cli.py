@@ -38,6 +38,8 @@ def _c(text: str, color: str = "", bold: bool = False) -> str:
 
 def _build_settings(args: argparse.Namespace) -> Settings:
     settings = Settings.from_env()
+    if getattr(args, "neutral_preferences", False):
+        settings.neutral_preferences = True
     if args.rounds is not None:
         settings.rounds = max(1, args.rounds)
     for vendor in ("claude", "openai", "grok"):
@@ -105,11 +107,14 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
             result = run_project(
                 goal, project, settings, allow_writes=args.allow_writes,
                 check=args.check or '', state_dir=args.state_dir,
+                extra_checks=getattr(args, "extra_check", None) or (),
+                capture_profile=getattr(args, "capture_profile", None),
+                readiness=getattr(args, "readiness", None),
                 forbid=args.forbid, declared_paths=args.declared_paths,
                 max_tasks=args.max_tasks, mode=args.mode,
                 security_verdict_json=getattr(args, "security_verdict_json", False),
                 progress=lambda message: print(f">> {message}", flush=True),
-                ask_operator=lambda question: input(f"\n{question}\n> ").strip(),
+                ask_operator=_operator(args),
                 plan_gate=(lambda plan: print(plan) is None and
                            input("Run this plan? [y/N] ").lower() in ('y', 'yes')) if args.plan_gate else None,
             )
@@ -217,6 +222,17 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
     return 0
 
 
+def _operator(args):
+    """Interactive answers, preceded by any rulings the operator gave in advance."""
+    def interactive(question):
+        return input(f"\n{question}\n> ").strip()
+    path = getattr(args, "rulings", None)
+    if not path:
+        return interactive
+    from .project_run import standing_rulings
+    return standing_rulings(path, fallback=interactive)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -316,12 +332,52 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     engine.add_argument(
+        "--readiness",
+        metavar="JSON",
+        help=(
+            "The operator's capability readiness probes, run once before any model "
+            "call under this environment: [{\"id\": \"browser\", \"argv\": [...], "
+            "\"timeout\": 30}]. A failing probe stops the run as an operator handoff; "
+            "passing proves readiness only, never acceptance."
+        ),
+    )
+    engine.add_argument(
+        "--capture-profile",
+        metavar="JSON",
+        help=(
+            "The operator's preview profile, so the harness starts the app and "
+            "captures UI tasks' renders itself: {\"preview\": [argv], \"origin\": "
+            "\"http://127.0.0.1:PORT\", \"ready_path\": \"/\", \"ready_timeout\": 30, "
+            "\"capture_timeout\": 120}. Validated before any model call."
+        ),
+    )
+    engine.add_argument(
+        "--extra-check",
+        metavar="CMD",
+        action="append",
+        help=(
+            "A further required check run beside --check, split without a "
+            "shell (repeatable; e.g. --extra-check 'node --test tests/ui/a.test.js'). "
+            "Patterns are refused: name the files."
+        ),
+    )
+    engine.add_argument(
         "--allow-writes",
         action="store_true",
         help=(
             "Let the agents write files. Off by default: several models in one "
             "tree is write-thrash, and a reviewer asked to critique will edit."
         ),
+    )
+    engine.add_argument(
+        "--rulings", metavar="FILE",
+        help=("JSON list of {\"about\": regex, \"answer\": text}: answers you give in advance to "
+              "questions the planner may ask. Anything else is asked interactively."),
+    )
+    engine.add_argument(
+        "--neutral-preferences", action="store_true",
+        help=("Run without the operator's personal CLI configuration (plugins, hooks, rules) "
+              "where each CLI allows it. Account-side rules that cannot be removed are recorded."),
     )
     engine.add_argument("--policy-preview", action="store_true",
                         help="Show the resolved policy without running models or checks.")

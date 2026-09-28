@@ -88,6 +88,8 @@ def test_recovery_is_bounded_and_preserves_work(tmp_path, monkeypatch, failure):
             return 'Heading corrected\nCHANGED: ["a.md"]'
         if 'The task is finished' in prompt:
             return 'SUMMARY: heading corrected\nREASONING: inspected'
+        if 'The task cap for this run has been reached' in prompt:
+            return 'DONE'
         pytest.fail('Unexpected model call')
 
     monkeypatch.setattr(CLIProvider, '_call', call)

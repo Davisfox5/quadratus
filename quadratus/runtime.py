@@ -44,6 +44,8 @@ counterfactual rather than a bill.
 from __future__ import annotations
 
 import copy
+import hashlib
+import itertools
 import json
 import logging
 import os
@@ -61,6 +63,8 @@ from .delegation import (
     DelegationLedger,
     InvocationEvent,
     Origin,
+    bounded_stderr,
+    bounded_tool_failures,
     capture_invocations,
     invocation_context,
     record_invocation,
@@ -68,7 +72,7 @@ from .delegation import (
 )
 from .latest import alias_for, resolution_source
 from .project import Project
-from .providers import LLMProvider, ProviderError, build_provider
+from .providers import LLMProvider, ProviderError, TurnLimitReached, build_provider
 from .registry import VENDORS, resolve
 from .usage import UsageMeter
 
@@ -122,6 +126,10 @@ _EXHAUSTION_MARKERS = (
     "limit reached",
     "upgrade to continue",
 )
+
+
+#: The editing roles the lead owns, each bound by ``Settings.lead_max_turns``.
+LEAD_CAPPED_ROLES = frozenset({"lead", "revision", "gate-fix", "design-fix"})
 
 
 class Fleet:
@@ -210,6 +218,9 @@ class Fleet:
             effort=spec.effort if spec else "",
             restricted=spec.restricted if spec else False,
         )
+        if getattr(self.settings, "neutral_preferences", False) and hasattr(bound, "neutral"):
+            bound = copy.copy(bound)
+            bound.neutral = True
         if self.run_budget is not None:
             if any(getattr(type(bound), method) is not getattr(LLMProvider, method)
                    for method in ('generate', '_generate_once', '_observed_call')):
@@ -248,6 +259,21 @@ class Fleet:
         return alias_for(key)
 
     # -- liveness ------------------------------------------------------------
+    def lead_can_run(self, key: str, command: str) -> bool:
+        """Whether an editing call on ``key`` could run ``command`` unaided:
+        always for a transport whose sandbox runs commands, and for a
+        "granted" one only when the command is among its exact granted
+        checks. A fact about the transport, read before dispatch."""
+        vendor = key.partition(":")[0]
+        try:
+            provider = self._vendor_provider(vendor)
+        except Exception:  # noqa: BLE001 -- unknown is not permission
+            return False
+        spec = getattr(provider, "spec", None)
+        if getattr(spec, "editing_commands", "any") != "granted":
+            return True
+        return command in tuple(getattr(self, "check_commands", ()) or ())
+
     def available(self, key: str) -> bool:
         """Is this model usable right now? The predicate seats and routing use.
 
@@ -312,42 +338,135 @@ class Fleet:
             if self.project and self.settings.backend_for(model_key.partition(':')[0]) != 'cli':
                 raise ProviderError("Project sessions require CLI transport with filesystem access.")
             return self._closeout(model_key, provider, prompt)
+        # A verifier checks work it did not author; it has no need to hand the
+        # check on. Preventive: the Q9-v2 rerun baseline's Opus verifier call
+        # reported 1,076,547 input tokens, with usage beyond the seat on its
+        # Haiku and Opus rows that the envelope left unattributed (920,656;
+        # evidence/q9v2-rerun2-1m). Delegation is a plausible cause, not an
+        # established one. The verifier keeps every read tool and loses only
+        # native delegation, on a copy so no other seat inherits it.
+        verifying = (invocation_context.get() or {}).get("role") == "verifier"
+        # A lead's agentic turn limit, when the operator set one. Applied per
+        # call on a view, never on the shared provider. A capped lead raises
+        # TurnLimitReached with its edits still in place; the session keeps
+        # them and re-plans rather than treating the call as failed. It binds
+        # every editing role the lead owns (Run 19: an uncapped gate-fix and
+        # design-fix ran past the operator's 14 rounds); reviewers, closeout,
+        # workers and the orchestrator stay uncapped.
+        lead_turns = (self.settings.lead_max_turns
+                      if (invocation_context.get() or {}).get("role") in LEAD_CAPPED_ROLES else None)
+        # The in-session worker tool, served by the session's WorkerBridge for
+        # this lead call only. Set on a per-call view, never on the provider.
+        lead_tool = ((invocation_context.get() or {}).get("worker_tool")
+                     if (invocation_context.get() or {}).get("role") == "lead"
+                     and hasattr(provider, "worker_tool") else None)
         if self.project is None:
+            if verifying or lead_turns or lead_tool:
+                provider = copy.copy(provider)
+                if verifying:
+                    provider.native_fanout_off = True
+                if lead_turns:
+                    provider.max_turns = lead_turns
+                if lead_tool:
+                    provider.worker_tool = lead_tool
             return self._generate(model_key, provider, prompt, role)
         if self.settings.backend_for(model_key.partition(':')[0]) != 'cli':
             raise ProviderError("Project sessions require CLI transport with filesystem access.")
         if allow_writes and not provider.restricted:
             view = provider.in_directory(self.project.root, allow_writes=True)
+            if lead_turns:
+                view.max_turns = lead_turns
+            if lead_tool:
+                view.worker_tool = lead_tool
             before = self.project.contents()
-            reply = self._generate(model_key, view, prompt, role +
+            try:
+                reply = self._generate(model_key, view, prompt, role +
                                   "\nYour working directory is the persistent project. "
                                   "Implement the requested changes in files. Do not commit, push, "
                                   "or change branches. Return a concise account and exactly one "
                                   'closing line CHANGED: ["relative/path"] listing every file this '
                                   'call added, changed or deleted. Use CHANGED: [] for no changes. '
-                                  'A standalone FETCH, CONSULT or WORKER request may omit the line '
-                                  'only if this call changed no files.')
+                                  'A standalone FETCH, CONSULT or WORKER request may omit the line; '
+                                  'any files you changed before it are kept.')
+            except TurnLimitReached as exc:
+                # A capped call may have spent its rounds on exactly the
+                # denied command; that is the capability stop, not an
+                # ordinary continuation (Codex review of 3a55d82). A refusal
+                # never reaches here, so it keeps its precedence.
+                denied = _relevant_denials(getattr(view, "last_tool_failures", None),
+                                           getattr(self, "check_commands", ()) or ())
+                if denied:
+                    from .session import CapabilityUnavailable
+                    raise CapabilityUnavailable(
+                        f"{model_key} reached its turn limit after being denied a command the harness "
+                        "itself requires: " + "; ".join(c[:160] for c in denied[:3])
+                        + ". Declare it as a check or a capture profile. Work preserved.") from exc
+                raise
+            denied = _relevant_denials(getattr(view, "last_tool_failures", None),
+                                       getattr(self, "check_commands", ()) or ())
+            if denied:
+                # After the one invocation, never replayed or rerouted; the
+                # edits stay for inspection (Codex, Run 18).
+                from .session import CapabilityUnavailable
+                raise CapabilityUnavailable(
+                    f"{model_key} was denied a command the harness itself requires: "
+                    + "; ".join(c[:160] for c in denied[:3])
+                    + ". Declare it as a check or a capture profile. Work preserved.")
             after = self.project.contents()
             changed = sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
-            control = re.fullmatch(r'\s*(?:FETCH:|CONSULT |WORKER )[^\n]+\s*', reply)
-            if control and not changed:
+            from .taskmeta import lead_request
+            if lead_request(reply) is not None:
+                # A request mid-work is legitimate even after edits: GameTape
+                # run 5 (2026-09-25) had a lead fix one test line, then ask a
+                # worker to check the endpoint, and this refusal ended the run.
+                # The edits stay in place, the task-level scope check still
+                # measures them, and the session tells the lead what it has
+                # changed so far when it asks again.
                 return reply
-            rows = re.findall(r'^CHANGED: (.*)$', reply, re.MULTILINE)
-            try:
-                declared = json.loads(rows[0]) if len(rows) == 1 else None
-                valid = (isinstance(declared, list) and all(isinstance(p, str) for p in declared)
-                         and len(declared) == len(set(declared)) and sorted(declared) == changed
-                         and reply.rstrip().splitlines()[-1].startswith('CHANGED: '))
-            except (ValueError, TypeError, IndexError):
-                valid = False
-            if not valid:
+            report = changed_report(reply, changed)
+            if report["status"] == "missing" and _looks_like_request(reply):
+                # Neither a request the dispatchers can serve nor a delivery:
+                # a WORKER, FETCH or CONSULT line that failed to parse (GameTape
+                # run 9). Filing it as a draft would send a dispatch to review.
                 from .session import PartialWorkStopped
-                raise PartialWorkStopped('CHANGED report does not match the captured source changes; '
+                raise PartialWorkStopped('The reply is neither a request nor a delivery: it carries a '
+                                         'request line that could not be parsed and no CHANGED line; '
                                          'work preserved for inspection.',
                                          partial=dict(changed=changed, inspected=True, reply=reply))
+            context = invocation_context.get()
+            if context is not None:
+                # The session records a disagreement as a typed fact; the
+                # measured diff, not the declaration, is what every check
+                # reads (docs/DIRECTION.md, phase-4 run on ea464cc).
+                context["changed_report"] = report
             return reply
         with self.project.snapshot() as directory:
+            context = invocation_context.get() or {}
+            declared = tuple(itertools.islice(iter(context.get("evidence_files") or ()), _MAX_EVIDENCE_FILES + 1))
+            copied = _furnish_evidence(self.project.root, directory, declared, task=context.get("task"),
+                                       expected=context.get("evidence_sha256"))
+            if declared and sorted(copied) != sorted(declared) and context.get("role") == "design-review":
+                # Checked on what actually landed, since files can change or
+                # fail between the session's preflight and this copy. The final
+                # design review is the verification gate, so it is refused;
+                # other review calls are told below exactly what they received.
+                raise EvidenceNotDelivered(
+                    "design evidence was not all delivered to the review copy: "
+                    + ", ".join(str(p) for p in declared if p not in copied))
             view = provider.in_directory(directory, allow_writes=False)
+            if verifying:
+                view.native_fanout_off = True
+            if lead_turns:
+                view.max_turns = lead_turns
+            if lead_tool:
+                view.worker_tool = lead_tool
+            if declared:
+                # Stated from what was actually copied, never from the request.
+                role += ("\nDesign evidence copied read-only into this copy: "
+                         + (", ".join(copied) if copied else "none")
+                         + (". Not copied (refused or unreadable): "
+                            + ", ".join(str(p) for p in declared if p not in copied)
+                            if len(copied) < len(tuple(declared)) else "") + ".")
             role += ("\nYour working directory is a fresh source copy. Read it to ground your "
                      "answer. Do not change files, commit, push, or use paths outside this copy. "
                      "Cite files by their path relative to the project root, not by the absolute "
@@ -372,10 +491,12 @@ class Fleet:
         if allow_writes:
             match = re.fullmatch(r"\s*PATCH:\s*```(?:diff)?\n(.*?)```\s*", reply, re.DOTALL)
             if match:
-                self.project.apply_patch(match.group(1))
+                self.project.apply_patch(_add_missing_headers(match.group(1), prompt, self.project.root))
                 return reply + "\nPatch applied to the project."
             continuation = (worker_loop_control.get() is not None and reply.startswith('CONTINUE:'))
-            if not continuation and not re.match(r"\s*(?:NO CHANGES:|FETCH:|CONSULT |WORKER )", reply):
+            from .taskmeta import lead_request
+            if (not continuation and not re.match(r"\s*(?:NO CHANGES:|FETCH:|CONSULT |WORKER )", reply)
+                    and lead_request(reply) is None):
                 raise ProviderError("Bounded editor returned no PATCH or explicit NO CHANGES result.")
         return reply
 
@@ -428,7 +549,10 @@ class Fleet:
                 post_return_failure=getattr(failure, 'post_return_failure', False),
                 detail=str(failure)[:200] if failure else "",
                 usage=getattr(view, "last_usage", None),
+                prompt_artifact=context.get("prompt_artifact"),
             )
+            self._report_call(key, view, role, task, seconds, invoked,
+                              type(failure).__name__ if failure else "ok")
             self._observe_native(key, view)
             if not failure or getattr(view, "last_usage", None):
                 self._meter(key, view, prompt, reply)
@@ -438,6 +562,8 @@ class Fleet:
         # A custom provider may implement generate directly; cover it too.
         provider.last_usage = None
         provider.last_diagnostics = None
+        provider.last_stderr = ""
+        provider.last_tool_failures = []
         provider.native_children = []
         try:
             reply = provider.generate(prompt, system=system)
@@ -446,6 +572,13 @@ class Fleet:
                 from .run_budget import RunBudgetExceeded
                 observe(provider, 1, time.monotonic() - started, exc,
                         invoked=not isinstance(exc, RunBudgetExceeded))
+            if isinstance(exc, Exception) and getattr(exc, "auth_invalid", False):
+                # A rejected sign-in takes the whole vendor out, not one model.
+                vendor = key.partition(":")[0]
+                for spec in _roster_for(vendor):
+                    self.mark_exhausted(spec.key, str(exc))
+                self.mark_exhausted(key, str(exc))
+                raise WindowExhausted(f"{key}: {exc}") from exc
             if isinstance(exc, Exception) and _looks_exhausted(exc):
                 self.mark_exhausted(key, str(exc))
                 raise WindowExhausted(f"{key}: subscription window exhausted ({exc})") from exc
@@ -459,12 +592,20 @@ class Fleet:
 
     def _record_invocation(self, key, provider, *, role, task, origin,
                            seconds, invoked, outcome, usage=None, detail="",
-                           post_return_failure=False, attempt=1, provider_outcome=None):
+                           post_return_failure=False, attempt=1, provider_outcome=None,
+                           prompt_artifact=None):
         """Append one invocation to the delegation ledger. Never raises."""
         if self.delegation_ledger is None:
             return
         try:
             usage = usage or {}
+            raw = getattr(provider, "last_diagnostics", None) or {}
+            # One cache figure per row: the usage dict's when the extractor
+            # gives one (codex), else the envelope's re-read count (claude,
+            # grok), which is the same subset of input_tokens.
+            cached = usage.get("cached_input_tokens")
+            if cached is None and isinstance(raw.get("cached_input_tokens"), int):
+                cached = raw["cached_input_tokens"]
             event = InvocationEvent(
                 task=task or "-",
                 role=role or "-",
@@ -484,14 +625,41 @@ class Fleet:
                 # Absent stays absent: None is unknown, and unknown is not zero.
                 input_tokens=usage.get("input_tokens"),
                 output_tokens=usage.get("output_tokens"),
-                cached_input_tokens=usage.get("cached_input_tokens"),
+                cached_input_tokens=cached,
+                fresh_input_tokens=(usage["input_tokens"] - cached
+                                    if isinstance(usage.get("input_tokens"), int) and isinstance(cached, int)
+                                    and usage["input_tokens"] >= cached else None),
+                model_turns=raw.get("model_calls") if isinstance(raw.get("model_calls"), int) else None,
+                max_turns=getattr(provider, "max_turns", None),
+                turn_limited=outcome == "TurnLimitReached",
+                prompt_artifact=prompt_artifact,
                 session_id=getattr(provider, "last_session_id", None),
                 post_return_failure=post_return_failure,
                 detail=detail,
+                stderr_tail=bounded_stderr(getattr(provider, "last_stderr", "")),
+                tool_failures=bounded_tool_failures(getattr(provider, "last_tool_failures", None)),
             )
             record_invocation(self.delegation_ledger, event)
         except Exception:  # noqa: BLE001 -- accounting never fails a run
             log.debug("could not record invocation for %s", key, exc_info=True)
+
+    def _report_call(self, key, provider, role, task, seconds, invoked, outcome) -> None:
+        """One live progress line as each call ends. Never raises.
+
+        Before this, progress named task boundaries only, so a 9-minute,
+        1.9M-token lead call was invisible until the run stopped.
+        """
+        report = getattr(self, "progress", None)
+        if report is None or not invoked:
+            return
+        try:
+            usage = getattr(provider, "last_usage", None) or {}
+            turns = (getattr(provider, "last_diagnostics", None) or {}).get("model_calls")
+            report(f"call ended: {task} {role} {key}: {outcome}, {round(seconds or 0)} s, "
+                   f"{usage.get('input_tokens', '?')} in / {usage.get('output_tokens', '?')} out tokens"
+                   + (f", {turns} turns" if isinstance(turns, int) else ""))
+        except Exception:  # noqa: BLE001 -- reporting never fails a run
+            log.debug("progress line failed", exc_info=True)
 
     def _observe_native(self, key, provider) -> None:
         """Fold any vendor-native children the provider reported into the record.
@@ -591,8 +759,26 @@ def new_session(goal, store, *, fleet=None, config=None, invariants=None, settin
         conf = replace(conf, project=active.project.root,
                        allow_writes=active.allow_writes)
 
+    if conf.lead_can_run is None and callable(getattr(active, "lead_can_run", None)):
+        conf = replace(conf, lead_can_run=active.lead_can_run)
     if active.usage_meter is not None and conf.usage_meter is active.usage_meter:
         conf = replace(conf, usage_meter=None)
+    if conf.fork is None and getattr(active, "project", None) is not None and isinstance(active, Fleet):
+        def fork(root):
+            """A Fleet for one parallel task's copy of the project, sharing
+            this run's budget, meter and invocation ledger."""
+            from .project import Project
+            child = type(active)(active.settings,
+                                 project=Project(root, exclude=active.project.exclude),
+                                 allow_writes=active.allow_writes, usage_meter=active.usage_meter,
+                                 delegation_ledger=active.delegation_ledger,
+                                 **({"run_budget": active.run_budget} if active.run_budget else {}))
+            try:
+                child.progress = getattr(active, "progress", None)
+            except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
+                pass
+            return child.invoke, child.close
+        conf = replace(conf, fork=fork)
     return Session(
         goal,
         store,
@@ -601,6 +787,107 @@ def new_session(goal, store, *, fleet=None, config=None, invariants=None, settin
         invariants=invariants,
         available=active.available,
     )
+
+
+#: What the declaration said against what the harness measured. ``match`` is
+#: the only status that says nothing; every other one is recorded by the
+#: session as a fact on the task and never stops the run.
+CHANGED_STATUSES = ("match", "missing", "malformed", "undeclared", "overdeclared", "misplaced")
+
+
+def changed_report(reply: str, measured: List[str]) -> dict:
+    """Classify a call's CHANGED line against the files the call changed.
+
+    The harness diffs the project before and after every editing call, so it
+    already knows what changed. The declaration was once required to equal
+    that diff exactly or the run stopped (``PartialWorkStopped``); four live
+    runs ended on the declaration's shape alone (runs 5, 9, 11 and the
+    phase-4 run of 2026-09-28, where a revision re-listed a file its own
+    draft had changed). A transcription that disagrees with the measurement
+    is now a recorded disagreement, and the measurement is what every scope,
+    gate and design check reads. Nothing the model writes on that line can
+    widen what was measured or bypass the scope stop on it.
+
+    Statuses: ``missing`` (no line), ``malformed`` (more than one line, or
+    not a JSON list of distinct strings), ``undeclared`` (the call changed
+    files it did not list), ``overdeclared`` (it listed files it did not
+    change), ``misplaced`` (correct, but prose follows it), ``match``.
+    ``undeclared`` outranks ``overdeclared`` when both apply: the omission is
+    the one a reviewer needs to know about.
+    """
+    report = dict(status="match", declared=None, measured=list(measured), detail="")
+    rows = re.findall(r'^CHANGED: (.*)$', reply or "", re.MULTILINE)
+    if not rows:
+        report.update(status="missing", detail=f"no CHANGED line; measured {list(measured)}")
+        return report
+    if len(rows) > 1:
+        report.update(status="malformed", detail=f"{len(rows)} CHANGED lines; measured {list(measured)}")
+        return report
+    try:
+        declared = json.loads(rows[0])
+    except ValueError:
+        declared = None
+    if not (isinstance(declared, list) and all(isinstance(p, str) for p in declared)
+            and len(declared) == len(set(declared))):
+        report.update(status="malformed",
+                      detail=f"CHANGED is not a JSON list of distinct paths: {rows[0][:120]!r}; "
+                             f"measured {list(measured)}")
+        return report
+    report["declared"] = declared
+    undeclared = sorted(set(measured) - set(declared))
+    extra = sorted(set(declared) - set(measured))
+    if undeclared:
+        report.update(status="undeclared",
+                      detail=f"changed but not declared {undeclared}; declared {sorted(declared)}; "
+                             f"measured {list(measured)}")
+    elif extra:
+        report.update(status="overdeclared",
+                      detail=f"declared but not changed by this call {extra}; measured {list(measured)}")
+    elif not reply.rstrip().splitlines()[-1].startswith('CHANGED: '):
+        report.update(status="misplaced", detail="the CHANGED line is not the last line of the reply")
+    return report
+
+
+def _looks_like_request(reply: str) -> bool:
+    """A line that opens a FETCH, CONSULT or WORKER request, whether or not
+    it parsed. :func:`taskmeta.lead_request` already said it did not."""
+    from .taskmeta import _is_request_line
+    return any(_is_request_line(line.strip()) for line in (reply or "").splitlines())
+
+
+def _relevant_denials(failures, checks) -> List[str]:
+    """Denied commands the harness itself named: a configured check exactly,
+    or the harness's own capture command. Other denials (exploration) are
+    only recorded in the ledger."""
+    out = []
+    for entry in failures if isinstance(failures, list) else ():
+        if not isinstance(entry, dict) or entry.get("kind") != "permission_denied":
+            continue
+        command = entry.get("command")
+        if isinstance(command, str) and (command in checks or _is_capture_invocation(command)):
+            out.append(command)
+    return out
+
+
+def _is_capture_invocation(command: str) -> bool:
+    """Whether ``command`` is the harness's capture invocation itself (an
+    interpreter running ``-m quadratus.design_evidence``, after any leading
+    VAR=value assignments), not a command that merely mentions it."""
+    import shlex
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    while words and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[0]):
+        words = words[1:]
+    if not words or re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", Path(words[0]).name) is None:
+        return False
+    # Exactly the flags the harness generates (quadratus.preview.capture_argv
+    # adds -P; Codex review of d731499), nothing broader.
+    rest = words[1:]
+    if rest[:1] == ["-P"]:
+        rest = rest[1:]
+    return rest[:2] == ["-m", "quadratus.design_evidence"]
 
 
 def _roster_for(vendor: str):
@@ -637,6 +924,147 @@ def _relativise_snapshot_paths(reply: str, directory) -> str:
     return reply
 
 
+def _add_missing_headers(patch: str, prompt: str, root) -> str:
+    """Give a header-less patch its file headers, only when unambiguous.
+
+    A worker that returns bare '@@' hunks cannot be applied. When the errand
+    names exactly one existing project file, that is the only file the hunks
+    can mean; anything else is left alone to fail as before.
+    """
+    if re.search(r"^(---|\+\+\+) ", patch, re.MULTILINE) or not re.search(r"^@@ ", patch, re.MULTILINE):
+        return patch
+    base = Path(root)
+    named = {p.lstrip("./") for p in re.findall(r"[\w./-]+\.[A-Za-z]\w*", prompt or "")}
+    existing = sorted(p for p in named if p and not p.startswith("/") and (base / p).is_file())
+    if len(existing) != 1:
+        return patch
+    return f"--- a/{existing[0]}\n+++ b/{existing[0]}\n" + patch
+
+
 def _looks_exhausted(exc: Exception) -> bool:
     text = str(exc).lower()
     return any(marker in text for marker in _EXHAUSTION_MARKERS)
+
+
+#: Rendered design evidence a review call may be handed: exactly these file
+#: names under a task's evidence folder, and no more than this many or this big.
+_EVIDENCE_PATH = re.compile(
+    r"\.quadratus/design-evidence/[A-Za-z0-9][A-Za-z0-9_.-]*/"
+    r"(?:summary\.json|(?:desktop|mobile)/(?:page\.png|evidence\.json))")
+_MAX_EVIDENCE_FILES = 8
+_MAX_EVIDENCE_BYTES = 10_000_000
+_MAX_EVIDENCE_TOTAL = 30_000_000
+
+
+def _evidence_type_ok(rel, data) -> bool:
+    """A .png is a PNG and a .json parses, so nothing else rides in under the name."""
+    if rel.endswith(".png"):
+        return data[:8] == b"\x89PNG\r\n\x1a\n"
+    try:
+        json.loads(data.decode("utf-8"))
+        return True
+    except (UnicodeDecodeError, ValueError):
+        return False
+
+
+def evidence_refusals(root, paths, task) -> list:
+    """``(path, reason)`` for each declared evidence file that would not be
+    copied for ``task``; empty when every one would be. Never raises."""
+    items = list(itertools.islice(iter(paths), _MAX_EVIDENCE_FILES + 1))
+    refusals, total = [], 0
+    for rel in items[:_MAX_EVIDENCE_FILES]:
+        reason = _evidence_problem(Path(root), str(rel), task)
+        if not reason:
+            try:
+                total += (Path(root) / str(rel)).stat().st_size
+            except OSError:
+                reason = "unreadable"
+            else:
+                # The same aggregate the copy enforces (Codex review of
+                # d0cf78d: a set over it passed preflight and was not copied).
+                if total > _MAX_EVIDENCE_TOTAL:
+                    reason = "over the aggregate evidence budget"
+        if reason:
+            refusals.append((str(rel), reason))
+    if len(items) > _MAX_EVIDENCE_FILES:
+        refusals.append(("", f"more than {_MAX_EVIDENCE_FILES} evidence files"))
+    return refusals
+
+
+class EvidenceNotDelivered(ProviderError):
+    """Declared design evidence did not all reach a review call's copy.
+
+    Raised before the model is asked, so no review is made of, and no
+    verdict accepted for, a set the reviewer did not receive."""
+
+
+def _evidence_problem(root: Path, rel: str, task) -> str:
+    if not _EVIDENCE_PATH.fullmatch(rel):
+        return "not a design evidence file name"
+    if not task or Path(rel).parts[2] != str(task):
+        return "another task's evidence"
+    current = root
+    for part in Path(rel).parts:
+        current = current / part
+        try:
+            if current.is_symlink():
+                return "a symlink"
+        except OSError:
+            return "unreadable"
+    try:
+        if not current.is_file():
+            return "missing"
+        size = current.stat().st_size
+        if size > _MAX_EVIDENCE_BYTES:
+            return "too large"
+        if not _evidence_type_ok(rel, current.read_bytes()):
+            return "not the file type its name says"
+    except OSError:
+        return "unreadable"
+    return ""
+
+
+def _furnish_evidence(root, directory, paths, *, task=None, expected=None) -> list:
+    """Copy declared design evidence into a review call's source copy.
+
+    Codex, Run 16: the reviewer was pointed at renders under the project's
+    .quadratus folder, which the source copy excludes, and its reads outside
+    the copy were denied, so it judged no image. The exact files a session
+    names are copied in read-only at the same relative paths instead; there
+    is no new read grant. Only the calling task's own evidence files qualify
+    (``task``, from the harness's invocation context; Codex review of
+    3d5c3f3: a later task's reviewers were handed an earlier task's
+    renders): regular, not symlinked at any component, of the type their
+    name says, bounded in count and size. Anything else is skipped, and the
+    caller states only what was copied. Returns the paths copied.
+
+    ``expected`` maps a path to the sha256 the session snapshotted before the
+    call; a file whose bytes now differ is not copied, so a review can only
+    be of the exact renders the session will commit (Codex review of
+    ee7e62b).
+    """
+    root = Path(root)
+    copied, total = [], 0
+    for rel in itertools.islice(iter(paths), _MAX_EVIDENCE_FILES):
+        rel = str(rel)
+        if _evidence_problem(root, rel, task):
+            continue
+        current = root / rel
+        try:
+            size = current.stat().st_size
+            if total + size > _MAX_EVIDENCE_TOTAL:
+                continue
+            data = current.read_bytes()
+            if len(data) != size or not _evidence_type_ok(rel, data):
+                continue
+            if expected is not None and hashlib.sha256(data).hexdigest() != expected.get(rel):
+                continue
+            target = Path(directory) / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            target.chmod(0o444)
+        except OSError:
+            continue
+        total += size
+        copied.append(rel)
+    return copied

@@ -190,7 +190,8 @@ def test_project_task_cap_is_reported_incomplete(project_env):
     project, settings, trace, caller = project_env
     result = run_project('Fix addition', project, settings, allow_writes=True, max_tasks=1)
     assert not result.completed
-    assert 'task limit' in result.report
+    assert result.error.startswith('GoalUnconfirmedAtCap: the task cap (1) was reached'), result.error
+    assert f'Error: {result.error}' in result.report
 
 
 def test_project_lock_rejects_overlapping_runs(tmp_path):
@@ -286,6 +287,8 @@ def test_text_diff_roundtrips_files_without_final_newline(tmp_path):
 def test_autodetected_python_check_uses_project_environment(tmp_path):
     from quadratus.repo_scan import scan_repo
     (tmp_path / 'tests').mkdir()
+    # A Python test file, not the folder alone, is the Python signal.
+    (tmp_path / 'tests' / 'test_x.py').write_text('def test_x():\n    pass\n')
     assert scan_repo(tmp_path).check_command[0] == sys.executable
     python = tmp_path / '.venv' / 'bin' / 'python'
     python.parent.mkdir(parents=True)

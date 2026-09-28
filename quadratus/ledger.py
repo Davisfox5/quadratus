@@ -35,7 +35,7 @@ eventually be summarised out of existence.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from .artifacts import ArtifactRef
 
@@ -108,6 +108,35 @@ class Ledger:
         #: the operator the same question twice is the failure the ASK channel
         #: exists to prevent.
         self.rulings: List[str] = []
+        #: The goal's requirements as the orchestrator numbered them on its
+        #: first decision, and each one's standing. Re-emitted on every
+        #: render like the invariants: a requirement that can scroll out of
+        #: view is one nobody checks before DONE (GameTape, 2026-09-25: the
+        #: UI the brief asked for was never planned).
+        self.requirements: Dict[str, str] = {}
+        self.requirement_status: Dict[str, str] = {}
+        #: Requirements the review found open to more than one reading. Held
+        #: apart from the status, so COVERS cannot overwrite them; only an
+        #: operator ruling naming the id settles one.
+        self.ambiguous: Dict[str, str] = {}
+        #: How many rulings existed when each ambiguity was flagged, so a
+        #: later answer can be attributed to it.
+        self.ambiguous_since: Dict[str, int] = {}
+        #: Ambiguities the orchestrator settled itself (DECIDE: Rn - ...),
+        #: labelled as its decisions, not the operator's.
+        self.decisions: Dict[str, str] = {}
+
+    def settled(self, rid: str) -> bool:
+        """An ambiguity is settled by the orchestrator's DECIDE, or by an
+        operator ruling given after it was flagged that names it -- or, when
+        it is the only open ambiguity, any such ruling."""
+        if rid in self.decisions:
+            return True
+        later = self.rulings[self.ambiguous_since.get(rid, 0):]
+        if any(rid in r for r in later):
+            return True
+        open_ids = [r for r in self.ambiguous if r not in self.decisions]
+        return bool(later) and open_ids == [rid]
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -191,6 +220,16 @@ class Ledger:
             blocks.append(
                 "## Operator rulings (asked and answered; do not re-ask)\n\n"
                 + "\n".join(f"- {r}" for r in self.rulings)
+            )
+
+        if self.requirements:
+            blocks.append(
+                "## Requirements (numbered from the goal; the run is done only when every one is met)\n\n"
+                + "\n".join(f"- {rid}: {text} [{self.requirement_status.get(rid, 'open')}]"
+                             + (f" [DECIDED by the orchestrator: {self.decisions[rid]}]" if rid in self.decisions else
+                                f" [AMBIGUOUS -- settle it: {self.ambiguous[rid]}]"
+                                if rid in self.ambiguous and not self.settled(rid) else "")
+                             for rid, text in self.requirements.items())
             )
 
         shown = self._entries if recent is None else self._entries[-recent:]

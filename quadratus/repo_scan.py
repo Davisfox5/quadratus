@@ -26,6 +26,7 @@ seeds with real provenance.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -122,6 +123,10 @@ class ScanReport:
     #: the integration gate runs; None means the operator must supply one for
     #: the gate to exist.
     check_command: Optional[List[str]] = None
+    #: Every test entry point the repository itself declares, in the order
+    #: they are recognised. A project with both a ``package.json`` test script
+    #: and a Python suite declares both, and both are run by the gate.
+    declared_checks: List[List[str]] = field(default_factory=list)
 
     @property
     def has_code(self) -> bool:
@@ -187,27 +192,86 @@ def _detect_check_command(root: Path, manifests: List[str]) -> Optional[List[str
     command that happens to pass proves nothing, and one that happens to fail
     would charge the lead a fix round for the scanner's mistake.
     """
+    declared = _declared_checks(root, manifests)
+    return declared[0] if declared else None
+
+
+def _declared_checks(root: Path, manifests: List[str]) -> List[List[str]]:
+    """Every test entry point the repository declares, first one first.
+
+    Codex, Run 15: a project with a ``package.json`` test script and a
+    Python suite had only pytest run in-run, so its Node UI tests never
+    counted toward completion.
+    """
+    found: List[List[str]] = []
     if "package.json" in manifests:
         try:
             pkg = json.loads((root / "package.json").read_text(encoding="utf-8"))
-            if (pkg.get("scripts") or {}).get("test"):
-                return ["npm", "test", "--silent"]
+            if isinstance(pkg, dict) and isinstance(pkg.get("scripts"), dict) and pkg["scripts"].get("test"):
+                found.append(["npm", "test", "--silent"])
         except (ValueError, OSError):
             pass
+    python = _python_check(root, manifests)
+    if python:
+        found.append(python)
+    if not found and "go.mod" in manifests:
+        found.append(["go", "test", "./..."])
+    if not found and "Cargo.toml" in manifests:
+        found.append(["cargo", "test", "--quiet"])
+    return found
+
+
+def _has_python_tests(tests: Path, limit: int = 2000) -> bool:
+    """Whether ``tests`` holds a Python file, consuming at most ``limit`` + 1
+    directory entries in all: the one past the limit is read only to learn
+    the budget is spent (Codex review of 8a71d25: the listing was
+    materialised whole before the budget applied).
+
+    Hidden, cache and vendored directories and symlinks are skipped, as in
+    the main scan. Running out of budget answers False: no Python file was
+    shown to exist, so no Python gate is declared from it.
+    """
+    seen = 0
+    stack = [tests]
+    while stack:
+        try:
+            listing = os.scandir(stack.pop())
+        except OSError:
+            continue
+        with listing:
+            for entry in listing:
+                seen += 1
+                if seen > limit:
+                    return False
+                try:
+                    if entry.is_symlink():
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        if not entry.name.startswith(".") and entry.name not in _SKIP_DIRS:
+                            stack.append(Path(entry.path))
+                    elif entry.name.endswith(".py"):
+                        return True
+                except OSError:
+                    continue
+    return False
+
+
+def _python_check(root: Path, manifests: List[str]) -> Optional[List[str]]:
+    # A tests/ directory alone is not a Python signal: a JS-only project with
+    # tests/ui.test.js gained a pytest gate that failed on zero tests (Codex
+    # review of 3ef9962). A manifest, pytest.ini or a Python file under
+    # tests/ is.
+    tests = root / "tests"
     python_signals = (
         "pyproject.toml" in manifests
         or "setup.py" in manifests
         or (root / "pytest.ini").exists()
-        or (root / "tests").is_dir()
+        or (tests.is_dir() and _has_python_tests(tests))
     )
-    if python_signals and (root / "tests").is_dir():
+    if python_signals and tests.is_dir():
         local_python = root / '.venv' / 'bin' / 'python'
         interpreter = str(local_python) if local_python.is_file() else sys.executable
         return [interpreter, "-m", "pytest", "-q"]
-    if "go.mod" in manifests:
-        return ["go", "test", "./..."]
-    if "Cargo.toml" in manifests:
-        return ["cargo", "test", "--quiet"]
     return None
 
 
@@ -276,7 +340,8 @@ def scan_repo(root) -> ScanReport:
     report.test_dirs = [d for d, _ in sorted(directories.items(),
                                              key=lambda kv: (-kv[1], kv[0]))][:_MAX_TEST_DIRS]
 
-    report.check_command = _detect_check_command(root, report.manifests)
+    report.declared_checks = _declared_checks(root, report.manifests)
+    report.check_command = report.declared_checks[0] if report.declared_checks else None
     return report
 
 

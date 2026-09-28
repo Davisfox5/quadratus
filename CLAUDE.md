@@ -396,6 +396,15 @@ Key design decisions already settled:
   (`max_consults`, default 2 — a consult is a question, not a conversation).
   Consults never happen inside security excursions, and peers still never
   chat.
+- **A channel the prompt offers is a channel the harness serves** (Q9
+  canary, 2026-09-22). The security excursion advertised WORKER and then
+  bypassed the channel loop; the baseline lead answered as instructed and its
+  request was filed as the draft. `_run_security_task` now drafts through
+  `_draft_with_channels(consults=False)`: FETCH and WORKER served, CONSULT
+  refused in words. And **a blocked report is evidence or it is nothing**:
+  the lead must quote the command, exit status and verbatim error
+  (`_BLOCKED_REPORT_RULE`), and the ledger keeps the CLI's own `stderr_tail`
+  and failed `tool_failures` per attempt so the claim can be checked later.
 - **Questions only the operator can answer go through ASK** — the
   orchestrator emits `ASK: <question>`; the answer becomes a standing ruling
   re-emitted on every render (never re-asked). No channel configured means
@@ -408,6 +417,43 @@ Key design decisions already settled:
   survivor is carried loudly into the close-out. Sequencing + the map keep
   pieces consistent; only execution proves them, and no model is in this
   loop.
+- **A runtime-dependency tree is part of what a check proves**
+  (`deptree.py`, contract v2 on #25). Run 19: a lead wrote a
+  `node_modules` shim the source checks could not see, and the project's
+  check resolved it. Every `node_modules`, `.venv`, `venv` and `env` in the
+  project is content-hashed at run start and must hold before and after
+  every editing call, check and preview, at settlement and at DONE; any
+  difference is `DependencyTreeChanged`. Bounds fail closed (250,000
+  entries, 2 GiB read, 120 s per pass). No allow flag; only an operator's
+  hidden cache path inside a tree may be exempt, and none is by default.
+  Nothing outside the project is guarded. The lead's cap
+  (`lead_max_turns`) binds revision, gate-fix and design-fix as well as the
+  draft; a capped fix is one attempt spent and the checks still decide.
+- **The measured diff is the truth; the CHANGED line is the lead's account of
+  it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
+  project around every editing call, so it already knows what changed. The
+  declaration was required to equal that diff exactly or the run stopped,
+  and four live runs ended on the declaration's shape alone (runs 5, 9, 11
+  and the phase-4 run, where a revision re-listed a file its own draft had
+  changed). `runtime.changed_report` now classifies the line (missing,
+  malformed, undeclared, overdeclared, misplaced) and the session records a
+  disagreement as a non-terminal `unverified` fact with the reply kept; the
+  scope, gate and design checks read the diff, so nothing on that line can
+  widen what was measured. The one stop that survives is a request line that
+  failed to parse with no CHANGED line: neither a request nor a delivery
+  (run 9), never filed as a draft.
+- **A rule the orchestrator is held to is a rule its prompt states, and the
+  one correction states all of them** (phase-4 rerun on a6c9576,
+  2026-09-28). The rerun closed two tasks, then the orchestrator declared
+  capture steps as `{"click": ...}` objects, spent its single correction on
+  the schema, and named the sample its previous task had just committed
+  under `tests/fixtures/`; the fixture-path rule appeared only in the
+  validator's error, and the run stalled. `_CAPTURE_SCOPE_REQUEST` now
+  spells out the step shape and both valid upload paths, the scope
+  correction appends it, and the scope and dispatch gates accept a
+  committed non-hidden project sample exactly as the capture itself
+  (`design_evidence._fixture`) and the lead's instructions already did. Three
+  gates with three rules was the defect; there is one rule now.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

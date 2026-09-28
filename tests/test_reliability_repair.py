@@ -45,6 +45,7 @@ from quadratus.session import (
 from quadratus.task_kinds import TaskKind
 from quadratus.taskmeta import AmbiguousMetadata, parse_control, parse_metadata
 from quadratus.workers import RepeatedFailure, WorkerBudget, WorkerPool
+from tests._process_liveness import process_starttime, process_stopped
 
 EVIDENCE = (
     Path(__file__).resolve().parent.parent
@@ -476,22 +477,42 @@ def test_a_timed_out_cli_takes_its_grandchildren_with_it(tmp_path):
     and accumulating over a long run.
     """
     marker = tmp_path / "child-alive"
+    grandchild = (
+        "import json,os,pathlib,sys,time\n"
+        "proc=pathlib.Path('/proc/self/stat')\n"
+        "start=proc.read_text().rpartition(')')[2].split()[19] if sys.platform.startswith('linux') else None\n"
+        f"pathlib.Path({str(marker)!r}).write_text(json.dumps([os.getpid(),start]))\n"
+        "time.sleep(30)\n"
+    )
     script = (
         "import subprocess, sys, time\n"
-        f"subprocess.Popen([sys.executable, '-c', "
-        f"\"import time,pathlib; pathlib.Path(r'{marker}').write_text('x'); time.sleep(30)\"])\n"
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}])\n"
         "time.sleep(30)\n"
     )
     with pytest.raises(subprocess.TimeoutExpired):
         _launch([sys.executable, "-c", script], timeout=3, cwd=str(tmp_path), env=None)
 
     assert marker.exists(), "the grandchild must actually have started"
-    # Give the group kill a moment, then confirm nothing is left holding on.
-    leftover = subprocess.run(
-        ["pgrep", "-f", "pathlib.Path"], capture_output=True, text=True, check=False
-    )
-    assert marker.read_text() == "x"
-    assert "time.sleep(30)" not in leftover.stdout
+    pid, starttime = json.loads(marker.read_text())
+    assert process_stopped(pid, starttime), "recorded grandchild survived timeout"
+
+
+def test_recorded_process_check_rejects_a_survivor():
+    """A live recorded process must fail the predicate used for children and grandchildren."""
+    proc = subprocess.Popen([sys.executable, "-c",
+                             "import sys; print('ready', flush=True); sys.stdin.read()"],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        assert proc.stdout.readline().strip() == "ready"
+        starttime = process_starttime(proc.pid)
+        assert not process_stopped(proc.pid, starttime)
+    finally:
+        proc.stdin.close()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
 
 
 # -- 5. native delegation and usage ------------------------------------------

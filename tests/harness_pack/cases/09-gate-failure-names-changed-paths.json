@@ -3,7 +3,7 @@
  "shape": "noisy-tool",
  "family": "test-author",
  "grader": false,
- "source": "Report, Quadratus, GameTape finding 6: gate failures omitted changed paths; the test suite wrote into data/recordings and the message said only that something changed.",
+ "source": "Report, Quadratus, GameTape finding 6: gate failures omitted changed paths; the test suite wrote into data/recordings and the message said only that something changed. Phase 3 (#25): a failure that is not an attributable test-body assertion is an operator handoff with no repair call and no close-out.",
  "session": {
   "project": true,
   "allow_writes": false,
@@ -32,14 +32,10 @@
   {
    "role": "lead",
    "reply": "Draft: the change as text."
-  },
-  {
-   "role": "closeout",
-   "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
   }
  ],
  "expect": {
-  "outcome": "completed",
+  "outcome": "CheckUnattributable",
   "checks": {
    "count": 1,
    "last_passed": false,
@@ -52,8 +48,11 @@
    }
   },
   "store_contains": [
-   "still failing at close",
    "clip1.webm"
+  ],
+  "error_contains": [
+   "tests: error: source changed during gate",
+   "No repair call was made"
   ]
  }
 }

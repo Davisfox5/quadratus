@@ -39,9 +39,10 @@ packages = ["quadratus"]
 py-modules = ["multi_model_workflow", "chat_gui"]
 
 [tool.setuptools.package-data]
-quadratus = ["harness_library/origin.json", "harness_library/schema/*.json", "harness_library/families/*/*.json", "harness_library/families/*/*.md"]
+quadratus = ["_gate_producer/*.py", "harness_library/origin.json", "harness_library/schema/*.json", "harness_library/families/*/*.json", "harness_library/families/*/*.md"]
 
 [tool.pytest.ini_options]
+markers = ["requirements_ledger: run with the requirements ledger on"]
 testpaths = ["tests"]
 
 [tool.ruff]

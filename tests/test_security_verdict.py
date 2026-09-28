@@ -10,6 +10,7 @@ from quadratus.integration import GateResult
 from quadratus.scope import TaskScope
 from quadratus.session import Session, SessionConfig, TaskSpec
 from quadratus.structured import StructuredError, parse_security_verdict
+from tests.gate_facts import ASSERTION_FAILURE
 
 
 def verdict(snapshot='a' * 64, decision='accept'):
@@ -110,7 +111,8 @@ def test_gate_repair_spends_the_shared_allowance(tmp_path):
 
         def run(self):
             self.calls += 1
-            return GateResult(self.calls > 1, 'fixture', 0 if self.calls > 1 else 1, 'check')
+            return GateResult(self.calls > 1, 'fixture', 0 if self.calls > 1 else 1, 'check',
+                              report=None if self.calls > 1 else ASSERTION_FAILURE)
 
     gate = Gate()
     session, calls = exercise(tmp_path, ['reject'], gate=gate)
@@ -155,7 +157,8 @@ def test_gate_and_security_repairs_use_one_counter_after_base_merge(tmp_path):
 
         def run(self):
             self.calls += 1
-            return GateResult(self.calls > 1, 'fixture', int(self.calls == 1), 'check')
+            return GateResult(self.calls > 1, 'fixture', int(self.calls == 1), 'check',
+                              report=None if self.calls > 1 else ASSERTION_FAILURE)
 
     gate = Gate()
     session, calls = exercise(tmp_path, ['reject', 'accept'], budget=2, gate=gate)
@@ -171,7 +174,8 @@ def test_failed_post_verdict_gate_cannot_buy_an_extra_repair(tmp_path):
 
         def run(self):
             self.calls += 1
-            return GateResult(self.calls == 1, 'fixture', int(self.calls != 1), 'check')
+            return GateResult(self.calls == 1, 'fixture', int(self.calls != 1), 'check',
+                              report=None if self.calls == 1 else ASSERTION_FAILURE)
 
     gate = Gate()
     session, calls = exercise(tmp_path, ['reject', 'accept'], budget=5, gate=gate)

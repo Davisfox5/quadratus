@@ -98,7 +98,19 @@ def test_a_failure_that_might_have_spent_still_stops_the_run(tmp_path):
 
 def test_every_vendor_that_can_report_its_session_declares_the_check():
     declared = {v: bool(s.auth_check_args) for v, s in CLI_SPECS.items()}
-    assert declared == {'claude': False, 'openai': True, 'grok': True}
+    assert declared == {'claude': True, 'openai': True, 'grok': True}
+
+
+def test_the_claude_readout_is_recognised_both_ways():
+    """``claude auth status`` reports loggedIn; observed true on 2026-09-22.
+    Before it was declared, the preflight called claude's sign-in not
+    applicable, which reads as untested rather than untestable."""
+    import re
+    spec = CLI_SPECS['claude']
+    assert spec.auth_check_args == ['auth', 'status']
+    assert re.search(spec.auth_ok_pattern, '{"loggedIn": true, "subscriptionType": "max"}')
+    assert re.search(spec.auth_failure_pattern, '{"loggedIn": false}')
+    assert not re.search(spec.auth_ok_pattern, '{"loggedIn": false}')
 
 
 def test_the_grok_readout_is_recognised_by_its_failure_wording():
