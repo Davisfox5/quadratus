@@ -3,6 +3,8 @@ import hashlib
 import json
 from copy import deepcopy
 
+import pytest
+
 from quadratus.outcome import TaskOutcome
 from tools.workflow_scorecard import score
 
@@ -229,6 +231,56 @@ def test_valid_continuation_discharges_predecessor_edge(tmp_path):
     second["contract"]["intended_state"] = "other-state"
     path.write_text(json.dumps(record))
     assert score([run], _attest(run))["runs"][0]["verification"] == "unknown"
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda r: r["checks"][-1].update(receipts=[{"required": True, "status": "passed",
+                                                "source_hash": "other-source"}]),
+    lambda r: r["checks"][-1].update(receipts=[{"required": True, "status": "passed",
+                                                "source_hash": []}]),
+    lambda r: r["workflow"]["tasks"][0]["checks"][-1].update(source="other-source"),
+    lambda r: r["workflow"]["tasks"][0]["checks"][-1].update(source=[]),
+    lambda r: r["workflow"]["tasks"][0]["checks"][-1].update(
+        source="source-1", receipts=[{"status": "passed", "source_hash": "other-source"}]),
+    lambda r: r["workflow"]["tasks"][0].update(source_after=[]),
+    lambda r: r["findings"].append({"id": "F1", "status": "resolved", "task": []}),
+    lambda r: r["findings"].append({"id": "F1", "status": "resolved", "task": ["t1"]}),
+    lambda r: r["findings"].append({"id": "F1", "status": "resolved", "task": ""}),
+    lambda r: r["findings"].append({"id": "F1", "status": "resolved", "task": "unknown"}),
+    lambda r: r["findings"].append({"id": [], "status": "resolved", "task": "t1"}),
+    lambda r: r["findings"].append({"status": "resolved", "task": "t1"}),
+    lambda r: r["findings"].append({"id": "F1", "status": "resolved", "task": "t1",
+                                     "resolved_by": []}),
+    lambda r: r["findings"].extend([{"id": "F1", "status": "resolved", "task": "t1"},
+                                     {"id": "F1", "status": "resolved", "task": "t1"}]),
+])
+def test_source_and_finding_schema_rejects_reattested_bad_records(tmp_path, mutate):
+    run = _write(tmp_path / "a", completed=True, events=[])
+    path = run / "result.json"
+    record = json.loads(path.read_text())
+    mutate(record)
+    path.write_text(json.dumps(record))
+    assert score([run], _attest(run))["runs"][0]["verification"] == "unknown"
+
+
+def test_source_receipts_bind_to_their_own_task_state(tmp_path):
+    run = _write(tmp_path / "a", completed=True, events=[])
+    path = run / "result.json"
+    record = json.loads(path.read_text())
+    earlier = record["workflow"]["tasks"][0]
+    earlier["source_after"] = "source-before-later-task"
+    earlier["checks"][-1].update(source="source-before-later-task", receipts=[
+        {"status": "passed", "source_hash": "source-before-later-task"}])
+    later = deepcopy(earlier)
+    later["task_id"] = later["contract"]["task_id"] = "t2"
+    later["source_after"] = "source-1"
+    later["checks"][-1].update(source="source-1", receipts=[
+        {"status": "passed", "source_hash": "source-1"}])
+    record["workflow"]["tasks"].append(later)
+    record["checks"][-1]["receipts"] = [
+        {"required": True, "status": "passed", "source_hash": "source-1"}]
+    path.write_text(json.dumps(record))
+    assert score([run], _attest(run))["runs"][0]["verification"] == "verified"
 
 
 def test_budget_snapshots_and_zero_vendor_cost(tmp_path):

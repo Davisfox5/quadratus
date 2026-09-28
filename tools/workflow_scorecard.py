@@ -88,6 +88,8 @@ def _saved_outcomes(workflow):
                 return None
             if record["closed_as"] not in ("closed", "turn_limited"):
                 return None
+            if not isinstance(record["source_after"], str) or not record["source_after"]:
+                return None
             required = contract.get("required")
             if (not isinstance(required, dict) or
                     any(type(required.get(key)) is not bool for key in
@@ -107,7 +109,7 @@ def _saved_outcomes(workflow):
         return None
 
 
-def _final_check_problem(checks, *, required, run_level=False):
+def _final_check_problem(checks, *, required, source, run_level=False):
     if not isinstance(checks, list) or (required and not checks):
         return "check receipts unavailable"
     if not checks:
@@ -115,9 +117,20 @@ def _final_check_problem(checks, *, required, run_level=False):
     final = checks[-1]
     if not isinstance(final, dict) or final.get("passed") is not True:
         return "final check failed"
+    # Task attempts carry their own source identity. A task can legitimately
+    # precede later edits, so its check is compared to its task-close state.
+    if not run_level and "source" in final and (
+            not isinstance(final["source"], str) or not final["source"] or
+            final["source"] != source):
+        return "check source mismatch"
     receipts = final.get("receipts", [])
     if not isinstance(receipts, list):
         return "check receipts malformed"
+    expected = source if run_level else final.get("source", source)
+    if any(isinstance(receipt, dict) and "source_hash" in receipt and (
+            not isinstance(receipt["source_hash"], str) or not receipt["source_hash"] or
+            receipt["source_hash"] != expected) for receipt in receipts):
+        return "check receipt source mismatch"
     # Run gate receipts carry `required`; task receipts omit it. A task's
     # passed wrapper is authoritative for optional task gate failures.
     if run_level and any(not isinstance(receipt, dict) or
@@ -162,11 +175,21 @@ def _workflow_problem(result):
     if not isinstance(findings, list):
         return "findings record unavailable"
     audit_findings = {}
+    task_ids = {task.task_id for task in tasks}
+    finding_ids = set()
     for finding in findings:
         if not isinstance(finding, dict) or finding.get("status") != "resolved":
             return "unresolved finding"
-        if finding.get("task"):
-            audit_findings.setdefault(finding["task"], []).append(finding["status"])
+        if (not isinstance(finding.get("id"), str) or not finding["id"].strip() or
+                finding["id"] in finding_ids or
+                not isinstance(finding.get("task"), str) or
+                finding["task"] not in task_ids or
+                ("resolved_by" in finding and (
+                    not isinstance(finding["resolved_by"], str) or
+                    finding["resolved_by"] not in task_ids))):
+            return "finding identity malformed"
+        finding_ids.add(finding["id"])
+        audit_findings.setdefault(finding["task"], []).append(finding["status"])
     try:
         blockers = completion_blockers(tasks, audit_findings=audit_findings)
     except (TypeError, ValueError, KeyError, AttributeError):
@@ -174,7 +197,8 @@ def _workflow_problem(result):
     if blockers:
         return "task workflow debt"
     for task in tasks:
-        problem = _final_check_problem(task.checks, required=task.contract["required"]["checks"])
+        problem = _final_check_problem(task.checks, required=task.contract["required"]["checks"],
+                                       source=task.source_after)
         if problem:
             return "task " + problem
     requirements = result.get("requirements")
@@ -184,8 +208,12 @@ def _workflow_problem(result):
            for rid in requirements["listed"]):
         return "unmet requirement"
     checks = result.get("checks")
+    source = result.get("source_fingerprint")
+    if not isinstance(source, str) or not source:
+        return "run source unavailable"
     problem = _final_check_problem(checks, required=any(
-        task.contract["required"]["checks"] for task in tasks), run_level=True)
+        task.contract["required"]["checks"] for task in tasks), source=source,
+        run_level=True)
     if problem:
         return "run " + problem
     return None
