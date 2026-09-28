@@ -829,9 +829,11 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     projected active findings (`finding_state.from_session`) or the legacy
     list, a malformed record failing closed, and records
     `open findings: typed X, legacy Y` on the closing task where they
-    disagree. The batch trigger, settlement, DONE/cap, partiality, design
-    debt, stop text and applicability are separate packages
-    (`tests/lifecycle/test_findings_stop_trigger.py`).
+    disagree. Settlement, DONE/cap, partiality, design debt, stop text and
+    applicability are separate packages
+    (`tests/lifecycle/test_findings_stop_trigger.py`). The batch trigger
+    uses the same check (`tests/test_batch_findings_trigger.py`, with an
+    unmerged child).
 
 19. *The dependency guard sees a rewrite inside one timestamp tick (Codex,
     5863853232).* Its per-file hash cache is keyed by lstat; on a

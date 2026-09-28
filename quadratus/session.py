@@ -3062,7 +3062,7 @@ class Session:
                                          + (self._done_refusal or "").replace("--- BATCH SENT BACK ---", "")
                                          .strip()[:300])
                     continue
-                if self.open_findings or (self.checks and not self.checks[-1]['passed']):
+                if self._findings_stop_due() or (self.checks and not self.checks[-1]['passed']):
                     self._name_findings_stop({s.task_id for s in batch} | {f"{batch[-1].task_id}-merge"})
                     break
                 continue
@@ -3213,7 +3213,7 @@ class Session:
         return list(self.history)
 
     def _findings_stop_due(self) -> bool:
-        """Whether open findings stop the run after a serial task (map P3.4):
+        """Whether open findings stop the run after a task or batch (map P3.4):
         the projected active findings (quadratus.finding_state) or the
         legacy list, either one. A malformed record fails closed. Where the
         two disagree the closing task records it, so the run cannot count
