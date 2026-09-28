@@ -202,14 +202,13 @@ def test_the_recorded_delivery_is_the_bytes_the_reviewer_read_and_the_bytes_kept
     assert {rel: _sha(replay.project / rel) for rel in EVIDENCE} == seen, "and what the project keeps"
 
 
-def test_an_approved_tasks_renders_changed_by_a_later_task_diverge_from_the_record(tmp_path, monkeypatch):
-    """Observation, not a contract: after t1 is approved, t2's lead
-    rewrites t1's screenshot (evidence is excluded from source, so CHANGED
-    cannot see it). The record keeps the approved digest, so the change is
-    detectable offline; whether DONE must refuse it is an open question
-    posted on #25 (docs/workflow-evidence-boundary.md, gap E2)."""
-    shot = ".quadratus/design-evidence/t1/desktop/page.png"
+E2_SHOT = ".quadratus/design-evidence/t1/desktop/page.png"
 
+
+def _later_task_replaces_approved_renders(tmp_path, monkeypatch):
+    """t1 (design, no RESOLVES) is approved; t2, an ordinary docs task,
+    rewrites t1's screenshot (evidence is excluded from source, so CHANGED
+    cannot see it); the orchestrator then says DONE."""
     def orchestrator(call, replay):
         return {1: DECL_DESIGN, 2: DECL_T2}.get(len(replay.of("orchestrator")), "DONE")
 
@@ -220,10 +219,30 @@ def test_an_approved_tasks_renders_changed_by_a_later_task_diverge_from_the_reco
         return Script()._lead(call, replay)
     replay = _design_run(tmp_path, monkeypatch, orchestrator=orchestrator, lead=lead)
     t1 = _task(replay, "t1")
-    assert t1["edges"]["reviewer"] is True and shot in t1["delivery"]["files"]
-    assert _sha(replay.project / shot) != t1["delivery"]["files"][shot], "the record still names the approved bytes"
-    # Today's route, pinned so a change to it is deliberate:
+    assert t1["edges"]["reviewer"] is True and E2_SHOT in t1["delivery"]["files"]
+    assert _sha(replay.project / E2_SHOT) != t1["delivery"]["files"][E2_SHOT], \
+        "the record still names the approved bytes"
+    return replay
+
+
+def test_an_approved_tasks_renders_changed_by_a_later_task_still_complete_today(tmp_path, monkeypatch):
+    """Current behaviour (gap E2), pinned so a change to it is deliberate:
+    the record keeps the approved digest, so the change is detectable
+    offline, and the run completes anyway."""
+    replay = _later_task_replaces_approved_renders(tmp_path, monkeypatch)
     assert replay.result.completed, replay.result.error
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="gap E2 (#25, Codex 5862294492): final required evidence of a non-RESOLVES task "
+                          "that differs from the reviewer-approved delivery must not complete the run; "
+                          "later replaced evidence is unverified, not assumed integrity (engine remedy "
+                          "owned by incumbent Claude)")
+def test_an_approved_tasks_renders_changed_by_a_later_task_do_not_complete(tmp_path, monkeypatch):
+    """Prospective: non-completion only. The class is deliberately not
+    asserted; the settlement-time J9b integrity boundary is unchanged."""
+    replay = _later_task_replaces_approved_renders(tmp_path, monkeypatch)
+    assert not replay.result.completed, "completed over evidence the reviewer never approved"
 
 
 # -- 4. operator failures on every re-check path: no repair call -------------------
@@ -303,7 +322,15 @@ def test_a_runner_lost_after_a_security_fix_gets_no_further_repair_or_verdict(tm
 def _dead_preview_run(tmp_path, monkeypatch):
     """A harness-captured build task whose preview dies before it serves
     anything (argv without shell syntax: the profile refuses that)."""
-    from tests.lifecycle.test_harness_capture import CAPTURE, REPAIR_SCOPE, REQS, _decl, _fix, _free_port, _run
+    from tests.lifecycle.test_harness_capture import (
+        CAPTURE,
+        REPAIR_SCOPE,
+        REQS,
+        _decl,
+        _fix,
+        _free_port,
+        _run,
+    )
     profile = tmp_path / "profile.json"
     profile.write_text(json.dumps(dict(
         preview=[sys.executable, "-c", "raise SystemExit('Xvfb: cannot open display')"],

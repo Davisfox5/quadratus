@@ -5,8 +5,8 @@ engine change, no runtime wiring, no live or vendor call.
 
 ## TL;DR
 
-- **19 whole-controller controls.** 18 pass on the base, and 1 is a strict
-  xfail for a real gap.
+- **20 whole-controller controls.** 18 pass on the base, and 2 are strict
+  xfails for real gaps (E1, E2).
 - **Covered and holding:**
   - A render set the reviewer didn't fully receive is never reviewed and
     never approved. That holds whether a file was dropped, its bytes were
@@ -22,12 +22,15 @@ engine change, no runtime wiring, no live or vendor call.
   `invalid_proof`. The plan routes lost capability to an operator handoff.
   No repair call is made today, so this is a classification gap, not a
   repair leak.
-- **Gap E2 (question, not an xfail):** a later task can overwrite an
-  approved task's renders, and the run still completes. The record keeps the
-  approved digest, so the change can be detected offline. Whether DONE must
-  refuse it is a contract decision for the incumbent and Codex.
-- **Not validated:** Ruff isn't installed on the host or in the frozen
-  image. The tests were run in the frozen image with no network access.
+- **Gap E2 (strict xfail, Codex ruling 5862294492):** a later task can
+  overwrite an approved non-RESOLVES task's renders, and the run still
+  completes.
+  - The current behaviour is pinned by its own passing control.
+  - A separate strict prospective control requires non-completion.
+  - It does not require an integrity class: later replaced evidence is
+    unverified, as the audit recheck treats it.
+- **Not validated:** Ruff can't be run here (see Validation boundary). The
+  tests were run in the frozen image with no network access.
 
 ## Method
 
@@ -53,7 +56,8 @@ No decision is patched. Scripted replies prove routing, not model judgement.
 | Acknowledgment: only an exact `APPROVED` | `test_anything_but_an_exact_approval_...` (8 replies) | pass: one review call, never re-asked; `delivered` True, `reviewer` False, incomplete |
 | Acknowledgment: positive boundary | `test_an_exact_approval_with_surrounding_whitespace_is_an_approval` | pass: `reviewer` True, `unsatisfied` empty, completed |
 | Identity: approved = delivered = kept | `test_the_recorded_delivery_is_the_bytes_the_reviewer_read_and_the_bytes_kept` | pass: `delivery.files` sha256 equals the reviewer copy and the project, for all 3 mandatory files; the reviewer is another vendor |
-| Tampered after approval (E2) | `test_an_approved_tasks_renders_changed_by_a_later_task_diverge_from_the_record` | pass, **pins today's route**: the digests diverge from the record, and the run **completes** |
+| Replaced after approval, today (E2) | `test_an_approved_tasks_renders_changed_by_a_later_task_still_complete_today` | pass, **pins today's route**: the digests diverge from the record, and the run **completes** |
+| Replaced after approval, required (E2) | `test_an_approved_tasks_renders_changed_by_a_later_task_do_not_complete` | **strict xfail**, `raises=AssertionError`; observed `completed=True`, `error ''`, typed primary `clean` |
 | Operator: runner lost after the design-fix | `test_a_runner_lost_after_the_design_fix_gets_no_gate_fix_and_no_review` | pass: `CheckUnattributable` (operator), 0 gate-fix, 1 design-fix, no design review, work kept |
 | Operator: runner lost after an attributable failure's gate-fix | `test_a_runner_lost_after_a_gate_fix_is_the_operators_not_a_product_failure` | pass: 1 gate-fix; first attempt `product` True, last False; primary `operator`; app unchanged |
 | Operator: runner lost after a security-fix | `test_a_runner_lost_after_a_security_fix_gets_no_further_repair_or_verdict` | pass: 1 security-fix, 1 verifier call, 0 gate-fix, `CheckUnattributable` |
@@ -96,20 +100,31 @@ No decision is patched. Scripted replies prove routing, not model judgement.
   tasks. For other design tasks, nothing after the review compares disk
   against `TaskOutcome.delivery.files`, and evidence is excluded from
   CHANGED.
-  - Proposed contract, not asserted: at DONE, an approved delivery whose
-    digests no longer match disk is an `integrity` fact
-    (`EvidenceIdentityMismatch`).
-  - The control pins today's completion so a change is deliberate.
+  - Contract (Codex, 5862294492): final required evidence that differs from
+    the reviewer-approved delivery must not complete the run.
+  - A later mismatch is unverified pending fresh qualified evidence and
+    review, consistent with the later-audit behaviour. It is not assumed to
+    be integrity; the settlement-time J9b integrity boundary is unchanged.
+  - No new retry authority and no automatic edits.
+  - The strict xfail asserts non-completion only.
+  - The current-behaviour control stays separate.
 
 ## Validation boundary
 
 - **Run:** frozen image `sha256:707363c1…dc0d9`, `--network none`, source
   mounted read-only at `/pkg`:
   `python -m pytest tests/test_workflow_evidence_boundary.py -q -p no:cacheprovider`
-  gives 18 passed and 1 xfailed.
-- **E1 detail:** the `--runxfail` run shows
-  `AssertionError: ('invalid_proof', ['invalid_proof'])`.
-- **Blocked:** Ruff isn't installed in the image (`No module named ruff`) or
-  on the host (`command not found`).
+  gives 18 passed and 2 xfailed.
+- **`--runxfail` detail:**
+  - E1 fails with `AssertionError: ('invalid_proof', ['invalid_proof'])`;
+  - E2 fails with `AssertionError: completed over evidence the reviewer never approved`.
+- **Blocked:** Ruff isn't available here:
+  - not installed in the image (`No module named ruff`);
+  - not on the host (`command not found`);
+  - `uvx ruff` was denied: this session has no permission surface.
+
+  Sol acceptance's Ruff run reported I001 at the local import in
+  `_dead_preview_run`. It is now wrapped one name per line, as the file's
+  top-level imports are. That fix has not been re-linted.
 - **Not run:** the full suite, and old-base reds. These are new controls on
   existing routes, and none claims a changed route.
