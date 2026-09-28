@@ -117,3 +117,82 @@ def test_a_malformed_ledger_field_is_missing():
     from quadratus.outcome import missing_facts
     assert missing_facts(_record(dict(BASE, requirements_ledger="on"))) == [
         "t1.contract.required.requirements_ledger"]
+
+
+# -- settlement of a RESOLVES task (O-NEXT-16 residual; Sol 5866094506) --------------------
+
+def _disabled_at_t2s_check(monkeypatch):
+    check = Session._check_design
+
+    def drifted(self, spec, *args, **kw):
+        if spec.task_id == "t2":
+            self.config = dataclasses.replace(self.config, requirements_ledger=False)
+        return check(self, spec, *args, **kw)
+    monkeypatch.setattr(Session, "_check_design", drifted)
+
+
+def _t2(replay):
+    return next(t for t in replay.workflow["tasks"] if t["task_id"] == "t2")
+
+
+def _resolving(kind):
+    from tests.lifecycle.test_audit_findings import RECAPTURE, REPAIR, _repair
+    if kind == "repair":
+        return REPAIR + "\nRESOLVES: F1", _repair()
+    return RECAPTURE + "\nRESOLVES: F1", _capture()
+
+
+@pytest.mark.parametrize("kind", ["repair", "recapture"])
+def test_a_ledger_disabled_before_settlement_cannot_complete_clean(tmp_path, monkeypatch, kind):
+    _disabled_at_t2s_check(monkeypatch)
+    decl, lead = _resolving(kind)
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, decl], {"t1": _capture(measured=WIDE), "t2": lead},
+                  record_complete=False)
+    t2 = _t2(replay)
+    assert t2["mismatches"] == ["requirements_ledger: contract True, legacy False"], "recorded once, on t2"
+    assert not replay.result.completed
+    assert replay.result.error.startswith("CompletionUnproven"), replay.result.error
+    (f1,) = replay.findings
+    assert f1["status"] == "resolved" and f1["resolved_by"] == "t2" and f1["resolution"], \
+        "the verified resolution and its evidence are kept"
+    assert sorted(H.result_json(replay)["requirements"]["listed"]) == ["R1", "R2"]
+
+
+@pytest.mark.parametrize("kind", ["repair", "recapture"])
+def test_a_resolving_task_without_drift_completes_clean(tmp_path, monkeypatch, kind):
+    decl, lead = _resolving(kind)
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, decl], {"t1": _capture(measured=WIDE), "t2": lead})
+    assert replay.result.completed and replay.result.error == ""
+    assert _t2(replay)["mismatches"] == []
+    assert replay.findings[0]["status"] == "resolved"
+
+
+def _settling(tmp_path, contract):
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.outcome import TaskOutcome
+    from quadratus.session import SessionConfig, TaskSpec
+    session = Session("goal", ArtifactStore(tmp_path / "a"), lambda *a, **k: "DONE",
+                      config=SessionConfig(requirements_ledger=True))
+    outcome = TaskOutcome("t2", "repair", contract=contract)
+    session.task_outcomes.append(outcome)
+    reasons = []
+    session._ledger_at_settlement(TaskSpec("t2", "Fix it."), reasons)
+    return outcome.mismatches, reasons
+
+
+def test_a_missing_or_malformed_dispatch_record_fails_closed_at_settlement(tmp_path):
+    assert _settling(tmp_path, None)[0] == ["requirements_ledger: contract missing, legacy True"]
+    assert _settling(tmp_path, dict(task_id="t1", required=dict(requirements_ledger=True)))[0] == [
+        "requirements_ledger: contract missing, legacy True"], "another task's contract is not this one's"
+    assert _settling(tmp_path, dict(task_id="t2", required=dict(requirements_ledger="on")))[0] == [
+        "requirements_ledger: contract malformed, legacy True"]
+    assert _settling(tmp_path, dict(task_id="t2", required=dict(requirements_ledger=True))) == ([], [])
+
+
+def test_a_task_with_no_outcome_settles_nothing(tmp_path):
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.session import SessionConfig, TaskSpec
+    session = Session("goal", ArtifactStore(tmp_path / "a"), lambda *a, **k: "DONE", config=SessionConfig())
+    reasons = []
+    session._ledger_at_settlement(TaskSpec("t9", "x"), reasons)
+    assert reasons == ["its dispatch record is missing"]

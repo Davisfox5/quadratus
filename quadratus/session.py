@@ -4573,6 +4573,7 @@ class Session:
             return []
         self._verify_dependencies(f"at settlement of {spec.task_id}")
         reasons = []
+        self._ledger_at_settlement(spec, reasons)
         gates = self.checks[checks_before:]
         if gates and not gates[-1]["passed"]:
             reasons.append("its integration gate failed")
@@ -4594,6 +4595,33 @@ class Session:
             if reasons:
                 finding["last_attempt"] = f"{spec.task_id}: " + "; ".join(reasons)
         return [f["id"] for f in still]
+
+    def _ledger_at_settlement(self, spec, reasons) -> None:
+        """Compare the ledger this task was dispatched under with the live one
+        at settlement, on the task's own outcome by task id (map P3.4;
+        O-NEXT-16 residual, Sol 5866094506). The task has already left
+        ``run_task``, so ``_required`` would have no current task to record
+        on. A disagreement is recorded once on that outcome, so the run
+        cannot count as complete; a verified resolution may still be recorded.
+        A missing or malformed dispatch record is recorded the same way, and
+        never read as the live value. With no outcome for the task at all,
+        nothing is settled."""
+        outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
+        if outcome is None:
+            reasons.append("its dispatch record is missing")
+            return
+        live = bool(self.config.requirements_ledger)
+        contract = outcome.contract if isinstance(outcome.contract, dict) else None
+        required = contract.get("required") if contract and contract.get("task_id") == spec.task_id else None
+        want = required.get("requirements_ledger") if isinstance(required, dict) else None
+        if type(want) is not bool:
+            note = f"requirements_ledger: contract {'malformed' if required else 'missing'}, legacy {live!r}"
+        elif want != live:
+            note = f"requirements_ledger: contract {want!r}, legacy {live!r}"
+        else:
+            return
+        if note not in outcome.mismatches:
+            outcome.mismatches.append(note)
 
     def _refuse_settlement_mismatch(self, spec, approved, observed, reasons) -> None:
         """Stop when the renders a reviewer approved no longer have the
