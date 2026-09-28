@@ -1,0 +1,1300 @@
+diff --git a/app.py b/app.py
+index 589bb6d..cebe412 100644
+--- a/app.py
++++ b/app.py
+@@ -9,6 +9,7 @@ import io
+ import csv
+ import copy
+ import json
++import math
+ import uuid
+ import subprocess
+ import tempfile
+@@ -1330,6 +1331,234 @@ def export_csv(project_id):
+     )
+ 
+ 
++def _preview_cell(fields, columns, name):
++    index = columns.get(name)
++    if index is None or index < 0 or index >= len(fields):
++        return ""
++    return fields[index]
++
++
++def _preview_number(raw):
++    """Parse a finite float, or None when the cell is not a finite number."""
++    try:
++        value = float(str(raw).strip())
++    except (TypeError, ValueError):
++        return None
++    if not math.isfinite(value):
++        return None
++    return value
++
++
++def _preview_players(project, raw):
++    """Resolve a Players cell. Returns (ids, reasons).
++
++    Tokens are split on `;` and stripped; empty tokens are dropped. A token
++    starting with `#` matches `number` using the text after `#` up to the first
++    whitespace (export form `#7 Alice` or bare `#7`). Any other token matches
++    `name` case-insensitively. One match appends that id; zero or several
++    matches append a reason and no id. A missing or empty cell yields `([], [])`.
++    """
++    ids = []
++    reasons = []
++    players = project.get("players") or []
++    for token in str(raw).split(";"):
++        token = token.strip()
++        if not token:
++            continue
++        if token.startswith("#"):
++            rest = token[1:]
++            number = rest[:next((i for i, ch in enumerate(rest) if ch.isspace()), len(rest))]
++            matches = [p for p in players if p.get("number") == number]
++        else:
++            needle = token.lower()
++            matches = [p for p in players if str(p.get("name", "")).lower() == needle]
++        if len(matches) == 1:
++            ids.append(matches[0]["id"])
++        elif not matches:
++            reasons.append(f"unknown player: {token}")
++        else:
++            reasons.append(f"ambiguous player: {token}")
++    return ids, reasons
++
++
++def _preview_row_clip(project, columns, fields):
++    """Validate one manifest row. Returns (clip, reasons); clip is None if reasons is non-empty.
++
++    `columns` maps a header name (stripped, lowercased) to its field index.
++    Clip ID checks are intentionally not applied here. A missing Players
++    column yields an empty player list.
++    """
++    header_width = max(columns.values(), default=-1) + 1
++    if len(fields) != header_width:
++        return None, ["wrong number of columns"]
++
++    reasons = []
++    tag_type = _preview_cell(fields, columns, "tag type").strip()
++    known = {t.get("name") for t in project.get("tag_types", [])}
++    if "tag type" not in columns or tag_type not in known:
++        reasons.append("unknown tag type")
++
++    start = _preview_number(_preview_cell(fields, columns, "start (s)"))
++    if "start (s)" not in columns or start is None or start < 0:
++        reasons.append("start must be a finite number >= 0")
++        start = None
++
++    end = _preview_number(_preview_cell(fields, columns, "end (s)"))
++    if "end (s)" not in columns or end is None:
++        reasons.append("end must be a finite number")
++    elif start is not None and not end > start:
++        reasons.append("end must be greater than start")
++
++    player_ids, player_reasons = _preview_players(
++        project, _preview_cell(fields, columns, "players")
++    )
++    reasons.extend(player_reasons)
++
++    if reasons:
++        return None, reasons
++
++    return {
++        "tag_type": tag_type,
++        "start": start,
++        "end": end,
++        "label": _preview_cell(fields, columns, "label"),
++        "notes": _preview_cell(fields, columns, "notes"),
++        "players": player_ids,
++    }, []
++
++
++def _preview_row_key(columns, fields):
++    """Comparable key (tag_type, start, end, label) for duplicate history, or None.
++
++    None when the column count is wrong or Start (s)/End (s) is not a finite
++    number: such rows are never comparable and must not be remembered.
++    """
++    header_width = max(columns.values(), default=-1) + 1
++    if len(fields) != header_width:
++        return None
++    start = _preview_number(_preview_cell(fields, columns, "start (s)"))
++    end = _preview_number(_preview_cell(fields, columns, "end (s)"))
++    if start is None or end is None:
++        return None
++    return (
++        _preview_cell(fields, columns, "tag type").strip(),
++        start,
++        end,
++        _preview_cell(fields, columns, "label"),
++    )
++
++
++def _preview_duplicate(project, seen_keys, seen_ids, columns, fields, clip):
++    """Return a duplicate reason, or None when the row is new.
++
++    `seen_keys` maps (tag_type, start, end, label) to the first physical line
++    that key appeared on. `seen_ids` maps a Clip ID to the first physical line
++    that id appeared on. Both dicts hold that line regardless of the earlier
++    row's status. The caller records an id or key only after this check.
++    """
++    clip_id = _preview_cell(fields, columns, "clip id").strip()
++    if clip_id:
++        if any(c["id"] == clip_id for c in project.get("clips", [])):
++            return "clip id already exists"
++        if clip_id in seen_ids:
++            return f"same clip id as line {seen_ids[clip_id]}"
++    key = (clip["tag_type"], clip["start"], clip["end"], clip["label"])
++    if key in seen_keys:
++        return f"same as line {seen_keys[key]}"
++    return None
++
++
++@app.route("/api/projects/<project_id>/clips/import_preview", methods=["POST"])
++def import_preview(project_id):
++    """Read-only CSV clip-manifest preview. Never writes the project store."""
++    projects = _load_projects()
++    project = projects.get(project_id)
++    if not project:
++        return jsonify({"error": "Project not found"}), 404
++
++    upload = request.files.get("file")
++    if upload is None:
++        return jsonify({"error": "No file provided", "code": "bad_request"}), 400
++
++    try:
++        text = upload.read().decode("utf-8-sig")
++    except UnicodeDecodeError:
++        return jsonify({"error": "File could not be decoded as UTF-8", "code": "bad_request"}), 400
++
++    reader = csv.reader(io.StringIO(text))
++    try:
++        header = next(reader)
++    except StopIteration:
++        header = []
++
++    columns = {name.strip().lower(): index for index, name in enumerate(header)}
++    for required in ("tag type", "start (s)", "end (s)"):
++        if required not in columns:
++            return jsonify({"error": "Missing required header", "code": "bad_request"}), 400
++
++    rows = []
++    valid = 0
++    malformed = 0
++    duplicate = 0
++    seen_keys = {}
++    seen_ids = {}
++    while True:
++        # line_num is the last physical line already consumed, so the next
++        # record starts on the following line — including a quoted field that
++        # spans several physical lines (csv.reader reports the last of those).
++        start_line = reader.line_num + 1
++        try:
++            fields = next(reader)
++        except StopIteration:
++            break
++        if not fields or all(cell == "" for cell in fields):
++            continue
++        if valid + malformed + duplicate >= 5000:
++            return jsonify({"error": "Too many rows", "code": "too_many_rows"}), 400
++
++        clip, reasons = _preview_row_clip(project, columns, fields)
++        key = _preview_row_key(columns, fields)
++        if reasons:
++            status = "malformed"
++            malformed += 1
++        else:
++            reason = _preview_duplicate(project, seen_keys, seen_ids, columns, fields, clip)
++            if reason:
++                status = "duplicate"
++                reasons = [reason]
++                clip = None
++                duplicate += 1
++            else:
++                status = "valid"
++                valid += 1
++        # Record after the status check so this row is not a duplicate of itself.
++        # A Clip ID counts from any earlier physical row, including malformed ones.
++        # A comparable key counts from any earlier row whose times parse.
++        cid = _preview_cell(fields, columns, "clip id").strip()
++        if cid:
++            seen_ids.setdefault(cid, start_line)
++        if key is not None:
++            seen_keys.setdefault(key, start_line)
++        rows.append({
++            "line": start_line,
++            "status": status,
++            "reasons": reasons,
++            "clip": clip,
++        })
++
++    total = valid + malformed + duplicate
++    return jsonify({
++        "preview_only": True,
++        "summary": {
++            "total": total,
++            "valid": valid,
++            "malformed": malformed,
++            "duplicate": duplicate,
++        },
++        "rows": rows,
++    })
++
++
+ @app.route("/api/projects/<project_id>/export/json")
+ def export_json(project_id):
+     projects = _load_projects()
+diff --git a/docs/CSV_IMPORT.md b/docs/CSV_IMPORT.md
+new file mode 100644
+index 0000000..0d1a9e5
+--- /dev/null
++++ b/docs/CSV_IMPORT.md
+@@ -0,0 +1,92 @@
++# CSV clip-manifest preview
++
++A coach validates an exported clip manifest before importing it elsewhere. The preview is read-only: it never saves clips, never changes project data, and never reads or processes video. There is no import or save action.
++
++## File format
++
++The file is UTF-8. A leading BOM is optional and is stripped. Line endings may be LF or CRLF. A header row is required. Column names are matched case-insensitively after trimming, so `Tag Type` and `tag type` are the same column.
++
++Quoting follows [RFC 4180](https://www.rfc-editor.org/rfc/rfc4180). A field that contains a comma, a double quote, or a newline is wrapped in double quotes, and an embedded double quote is written twice (`""`).
++
++Columns that are not in the table below are ignored: their values are not validated and do not appear on the clip. They still count toward the header width. A data row whose field count differs from the header is malformed (`wrong number of columns`).
++
++A blank line — no fields, or every field empty — is ignored. It is not listed in `rows` and it is not counted in `summary.total`. Line numbers still count physical lines. The header is line 1, and a data row's `line` is the physical line where that record starts. A quoted field that spans several lines is one row, numbered at its first line.
++
++## Columns
++
++| Column | Required | Rule |
++| --- | --- | --- |
++| `Tag Type` | yes | must name an existing project tag type (exact, after trim) |
++| `Start (s)` | yes | finite number, `>= 0` |
++| `End (s)` | yes | finite number, `> Start (s)` |
++| `Label` | no | free text, displayed escaped |
++| `Notes` | no | free text |
++| `Players` | no | `;`-separated names or `#number`; each must match exactly one project player |
++| `Clip ID` | no | if present, must not equal an existing clip id or an earlier row's id |
++| `Duration (s)` | no | ignored (the app's own export writes it) |
++
++`Tag Type`, `Start (s)`, and `End (s)` must appear in the header. Missing one of those is a request error, not a row error. The other five columns may be absent.
++
++Player tokens are split on `;` and trimmed; an empty token is dropped. A name matches one project player case-insensitively. A token that starts with `#` matches that player's number, including the export form `#7 Alice` (the text after `#` up to the first space) and a bare `#7`. No match is `unknown player: <token>`. More than one match is `ambiguous player: <token>`. A missing or empty Players cell means no players.
++
++## Row statuses
++
++Each counted row has one status: `valid`, `malformed`, or `duplicate`. `malformed` wins over `duplicate`.
++
++`malformed` means a column rule failed, the row has the wrong number of columns, or a cell is undecodable. A file that is not UTF-8 never reaches row status; that is the request error below. `duplicate` means the row itself is well formed, but it repeats the Tag Type, Start (s), End (s), and Label of an earlier comparable row, or its Clip ID is already used by a clip on the project or by an earlier row.
++
++Clip ID is reserved from any earlier physical row regardless of that row's status. A later well-formed row that repeats it is `duplicate`. The (Tag Type, Start, End, Label) key is reserved from earlier well-formed rows, including rows already flagged duplicate, and from a malformed row whose start and end are still finite numbers. An unknown tag, a player error, or an end that is not after the start does not drop the key. The key is not reserved when the column count is wrong or either time is not a finite number, so two such rows are not duplicates of each other.
++
++Reason strings, as emitted:
++
++- `unknown tag type`
++- `start must be a finite number >= 0`
++- `end must be a finite number`
++- `end must be greater than start`
++- `wrong number of columns`
++- `unknown player: <token>`
++- `ambiguous player: <token>`
++- `clip id already exists`
++- `same clip id as line N`
++- `same as line N`
++
++A malformed row may list more than one column reason. A duplicate row lists exactly one, checked in this order: an id already on a project clip, then an id used on an earlier line, then the matching key. `N` is that earlier row's physical line.
++
++## Contract
++
++`POST /api/projects/<project_id>/clips/import_preview`
++
++Multipart form with one field, `file`, holding the CSV. The handler loads the project and returns JSON. It never writes `projects.json`, never creates a clip, and never reads a video file.
++
++Success is `200`:
++
++```json
++{"preview_only": true,
++ "summary": {"total": 3, "valid": 1, "malformed": 1, "duplicate": 1},
++ "rows": [
++   {"line": 2, "status": "valid", "reasons": [],
++    "clip": {"tag_type": "Pass", "start": 1.5, "end": 4.0, "label": "x",
++             "notes": "", "players": ["<player id>"]}},
++   {"line": 3, "status": "malformed", "reasons": ["end must be greater than start"], "clip": null},
++   {"line": 4, "status": "duplicate", "reasons": ["same as line 2"], "clip": null}]}
++```
++
++`preview_only` is always true. `summary.total` counts data rows only (`valid` + `malformed` + `duplicate`), not physical lines and not blank lines. `clip.players` holds project player ids. `clip` is null when the status is `malformed` or `duplicate`.
++
++A missing project is `404 {"error": "Project not found"}` with no `code`.
++
++`400 {"error": "...", "code": "bad_request"}` covers three cases:
++
++- missing `file`: `{"error": "No file provided", "code": "bad_request"}`
++- bytes that are not UTF-8: `{"error": "File could not be decoded as UTF-8", "code": "bad_request"}`
++- header missing `Tag Type`, `Start (s)`, or `End (s)`: `{"error": "Missing required header", "code": "bad_request"}`
++
++Above 5000 data rows the response is `400 {"error": "Too many rows", "code": "too_many_rows"}`. Blank lines do not count toward that limit. The body is the error, not a truncated preview.
++
++## Using it in the tagging screen
++
++Press `M`, or activate the **Import preview** button (`#btn-import-preview`, accessible name "Import preview"), to open the file picker (`#import-preview-file`). The hint beside the button reads `M import preview`, and the button title is `Preview a CSV clip manifest (M)`. `M` does nothing while a modal is open or while focus is in a text field. The same file can be selected again: the input is cleared after each choice so the change event fires.
++
++While the file is checked, the `role="status"` region shows `Checking…`, and the previous summary and table rows are cleared. `#import-preview-table` then has one `tr[data-status]` per counted CSV row, with columns for Line, Status, Tag type, Start, End, Label, Players, and Reasons. Displayed text, including Label, is escaped so markup in the file stays text. Notes are not shown in the table; they remain available only as `clip.notes` in the JSON response. `#import-preview-summary` reads `Total N · valid N · malformed N · duplicate N`. An empty manifest sets the status to `No rows found`. A network failure sets it to `Preview failed`. Any other failure shows the server's `error` text, such as `Too many rows` or `Missing required header`.
++
++**Close**, or Escape while focus is inside the results, dismisses them and returns focus to the Import preview button. Switching projects discards the panel and drops a response that is still in flight. The row scroller and Close are reachable and operable from the keyboard. Nothing here writes the manifest back to the project.
+diff --git a/static/css/style.css b/static/css/style.css
+index 42cb251..079f9f9 100644
+--- a/static/css/style.css
++++ b/static/css/style.css
+@@ -763,6 +763,101 @@ input, select, button { font-family: inherit; font-size: 0.9rem; }
+   color: #fff;
+ }
+ 
++/* ── Import Preview ───────────────────────────────────────────────── */
++.import-preview-bar {
++  display: flex;
++  align-items: center;
++  gap: 6px;
++  padding-top: 8px;
++  border-top: 1px solid #2a2d3a;
++  margin-top: 6px;
++  position: relative;
++}
++
++/* Keeps the file input in the DOM and programmatically clickable. */
++.visually-hidden-input {
++  position: absolute;
++  width: 1px;
++  height: 1px;
++  padding: 0;
++  margin: -1px;
++  overflow: hidden;
++  clip: rect(0, 0, 0, 0);
++  white-space: nowrap;
++  border: 0;
++  opacity: 0;
++}
++
++#import-preview {
++  display: block;
++  margin-top: 8px;
++  font-size: 0.8rem;
++}
++
++#import-preview[hidden] {
++  display: none;
++}
++
++#import-preview h3 {
++  font-size: 0.9rem;
++  color: #fff;
++  margin: 0 0 6px;
++}
++
++#import-preview-summary {
++  display: block;
++  font-size: 0.82rem;
++  color: #888;
++  margin-bottom: 4px;
++}
++
++.import-preview-wrap {
++  max-height: 40vh;
++  overflow-y: auto;
++  margin-bottom: 8px;
++  border: 1px solid #333;
++  border-radius: 5px;
++}
++
++.import-preview-wrap:focus-visible {
++  outline: 2px solid #5b8def;
++  outline-offset: -2px;
++}
++
++#import-preview-table {
++  width: 100%;
++  font-size: 0.8rem;
++  border-collapse: collapse;
++}
++
++#import-preview-table th,
++#import-preview-table td {
++  padding: 6px 8px;
++  text-align: left;
++  border-bottom: 1px solid #333;
++}
++
++#import-preview-table th {
++  color: #888;
++  font-weight: 600;
++}
++
++#import-preview-table tbody tr:last-child td {
++  border-bottom: none;
++}
++
++#import-preview-table tr[data-status="malformed"] td:nth-child(2) {
++  color: #e74c3c;
++}
++
++#import-preview-table tr[data-status="duplicate"] td:nth-child(2) {
++  color: #f39c12;
++}
++
++#import-preview-table tr[data-status="valid"] td:nth-child(2) {
++  color: #2ecc71;
++}
++
+ /* ── Annotation Canvas ────────────────────────────────────────────── */
+ #annotation-canvas {
+   position: absolute;
+diff --git a/static/js/app.js b/static/js/app.js
+index d85a431..a06f346 100644
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -146,6 +146,7 @@ async function openProject(id) {
+   const project = await api(`/api/projects/${id}`);
+   if (version !== projectViewVersion) return;
+   currentProject = project;
++  closeImportPreview();
+   $projectTitle.textContent = currentProject.name;
+   $projectListScreen.classList.remove("active");
+   $taggingScreen.classList.add("active");
+@@ -193,6 +194,7 @@ function closeProject() {
+   $taggingScreen.inert = false;
+   invalidateBulkPreview();
+   exitAnnotationMode();
++  closeImportPreview();
+   currentProject = null;
+   filterPresets = [];
+   selectedPresetId = "";
+@@ -1261,6 +1263,95 @@ document.getElementById("btn-export-video").addEventListener("click", async () =
+   }
+ });
+ 
++let importPreviewGeneration = 0;
++
++async function runImportPreview(file) {
++  if (!file || !currentProject) return;
++  const generation = ++importPreviewGeneration;
++  const projectId = currentProject.id;
++  const section = document.getElementById("import-preview");
++  const status = document.getElementById("import-preview-status");
++  section.hidden = false;
++  document.getElementById("import-preview-summary").textContent = "";
++  document.getElementById("import-preview-table").querySelector("tbody").innerHTML = "";
++  status.classList.remove("error");
++  status.textContent = "Checking…";
++
++  const fd = new FormData();
++  fd.append("file", file);
++  try {
++    const res = await fetch(`/api/projects/${projectId}/clips/import_preview`, {
++      method: "POST",
++      body: fd,
++    });
++    if (generation !== importPreviewGeneration || !currentProject || currentProject.id !== projectId) return;
++    const body = await res.json();
++    if (generation !== importPreviewGeneration || !currentProject || currentProject.id !== projectId) return;
++    if (!res.ok) {
++      status.classList.add("error");
++      status.textContent = body.error || "Preview failed";
++      return;
++    }
++    renderImportPreview(body);
++  } catch (err) {
++    if (generation === importPreviewGeneration && currentProject && currentProject.id === projectId) {
++      status.classList.add("error");
++      status.textContent = "Preview failed";
++    }
++  }
++}
++
++function renderImportPreview(data) {
++  const summary = data.summary;
++  document.getElementById("import-preview-summary").textContent =
++    `Total ${summary.total} · valid ${summary.valid} · malformed ${summary.malformed} · duplicate ${summary.duplicate}`;
++  const status = document.getElementById("import-preview-status");
++  status.classList.remove("error");
++  status.textContent = summary.total === 0 ? "No rows found" : "";
++  document.getElementById("import-preview-table").querySelector("tbody").innerHTML = data.rows.map(row => {
++    const clip = row.clip || {};
++    const players = (clip.players || []).map(playerId => getPlayerDisplay(playerId)).join(", ");
++    return `<tr data-status="${esc(row.status ?? "")}">
++      <td>${esc(row.line ?? "")}</td>
++      <td>${esc(row.status ?? "")}</td>
++      <td>${esc(clip.tag_type ?? "")}</td>
++      <td>${esc(clip.start ?? "")}</td>
++      <td>${esc(clip.end ?? "")}</td>
++      <td>${esc(clip.label ?? "")}</td>
++      <td>${esc(players)}</td>
++      <td>${esc((row.reasons || []).join("; "))}</td>
++    </tr>`;
++  }).join("");
++}
++
++function closeImportPreview() {
++  importPreviewGeneration++;
++  document.getElementById("import-preview").hidden = true;
++  document.getElementById("import-preview-summary").textContent = "";
++  const status = document.getElementById("import-preview-status");
++  status.classList.remove("error");
++  status.textContent = "";
++  document.getElementById("import-preview-table").querySelector("tbody").innerHTML = "";
++  document.getElementById("import-preview-file").value = "";
++  document.getElementById("btn-import-preview").focus();
++}
++
++document.getElementById("btn-import-preview").addEventListener("click", () => {
++  document.getElementById("import-preview-file").click();
++});
++
++document.getElementById("import-preview-file").addEventListener("change", (e) => {
++  const file = e.target.files && e.target.files[0];
++  e.target.value = "";
++  if (!file || !currentProject) return;
++  runImportPreview(file);
++});
++
++document.getElementById("btn-import-preview-close").addEventListener("click", closeImportPreview);
++document.getElementById("import-preview").addEventListener("keydown", (e) => {
++  if (e.key === "Escape") closeImportPreview();
++});
++
+ /* ── Annotations: Toolbar Wiring ──────────────────────────────────── */
+ 
+ // Tool selection
+@@ -1573,6 +1664,12 @@ document.addEventListener("keydown", (e) => {
+         openBulkModal();
+       }
+       break;
++    case "m":
++      if (!document.querySelector(".modal-overlay.active")) {
++        e.preventDefault();
++        document.getElementById("btn-import-preview").click();
++      }
++      break;
+     case " ":
+       e.preventDefault();
+       $video.paused ? $video.play() : $video.pause();
+diff --git a/templates/index.html b/templates/index.html
+index f3778fe..f4c1cde 100644
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -147,6 +147,34 @@
+         <button id="btn-export-json" class="export-btn">JSON</button>
+         <button id="btn-export-video" class="export-btn">Video</button>
+       </div>
++      <div class="import-preview-bar">
++        <button type="button" id="btn-import-preview" class="export-btn" title="Preview a CSV clip manifest (M)">Import preview</button>
++        <input type="file" id="import-preview-file" accept=".csv,text/csv" class="visually-hidden-input" tabindex="-1" aria-label="CSV clip manifest">
++        <span class="preset-keys">M import preview</span>
++      </div>
++      <section id="import-preview" hidden aria-labelledby="import-preview-heading">
++        <h3 id="import-preview-heading">Import preview</h3>
++        <span id="import-preview-summary"></span>
++        <div id="import-preview-status" class="preset-status" role="status" aria-live="polite"></div>
++        <div class="import-preview-wrap" tabindex="0" aria-label="Import preview rows">
++          <table id="import-preview-table">
++            <thead>
++              <tr>
++                <th>Line</th>
++                <th>Status</th>
++                <th>Tag type</th>
++                <th>Start</th>
++                <th>End</th>
++                <th>Label</th>
++                <th>Players</th>
++                <th>Reasons</th>
++              </tr>
++            </thead>
++            <tbody></tbody>
++          </table>
++        </div>
++        <button id="btn-import-preview-close" class="export-btn">Close</button>
++      </section>
+     </div>
+   </div>
+ </div>
+diff --git a/tests/test_import_preview.py b/tests/test_import_preview.py
+new file mode 100644
+index 0000000..0e8f480
+--- /dev/null
++++ b/tests/test_import_preview.py
+@@ -0,0 +1,477 @@
++import io
++import os
++import sys
++
++import pytest
++
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
++
++import app as application
++
++
++@pytest.fixture
++def client(tmp_path, monkeypatch):
++    """Create a test client with a temp data directory."""
++    monkeypatch.setattr(application, "DATA_DIR", str(tmp_path))
++    monkeypatch.setattr(application, "VIDEOS_DIR", str(tmp_path / "videos"))
++    monkeypatch.setattr(application, "RECORDINGS_DIR", str(tmp_path / "recordings"))
++    monkeypatch.setattr(application, "PROJECTS_FILE", str(tmp_path / "projects.json"))
++    os.makedirs(tmp_path / "videos", exist_ok=True)
++    os.makedirs(tmp_path / "recordings", exist_ok=True)
++    application._BULK_PREVIEWS.clear()
++    application.app.config["TESTING"] = True
++    with application.app.test_client() as c:
++        yield c
++    application._BULK_PREVIEWS.clear()
++
++
++def _create_project(client):
++    rv = client.post("/api/projects", json={"name": "Preview"})
++    assert rv.status_code == 201
++    return rv.get_json()["id"]
++
++
++def _post_csv(client, project_id, raw):
++    return client.post(
++        f"/api/projects/{project_id}/clips/import_preview",
++        data={"file": (io.BytesIO(raw), "clips.csv")},
++        content_type="multipart/form-data",
++    )
++
++
++def test_preview_bom_crlf_rows_and_does_not_save(client, tmp_path):
++    pid = _create_project(client)
++    before = (tmp_path / "projects.json").read_bytes()
++    raw = (
++        b"\xef\xbb\xbfTag Type,Start (s),End (s),Label,Notes\r\n"
++        b"Pass,1.5,4.0,x,\r\n"
++        b"Pass,5,3,late,\r\n"
++        b"\r\n"
++        b"Nope,1,2,z,\r\n"
++    )
++    rv = _post_csv(client, pid, raw)
++    assert rv.status_code == 200
++    body = rv.get_json()
++    assert body["preview_only"] is True
++    assert body["summary"] == {"total": 3, "valid": 1, "malformed": 2, "duplicate": 0}
++    assert [row["line"] for row in body["rows"]] == [2, 3, 5]
++
++    valid, bad_end, bad_tag = body["rows"]
++    assert valid["status"] == "valid"
++    assert valid["reasons"] == []
++    assert valid["clip"] == {
++        "tag_type": "Pass",
++        "start": 1.5,
++        "end": 4.0,
++        "label": "x",
++        "notes": "",
++        "players": [],
++    }
++    assert bad_end["status"] == "malformed"
++    assert bad_end["clip"] is None
++    assert bad_end["reasons"] == ["end must be greater than start"]
++    assert bad_tag["status"] == "malformed"
++    assert bad_tag["clip"] is None
++    assert bad_tag["reasons"]
++
++    project = client.get(f"/api/projects/{pid}").get_json()
++    assert project["clips"] == []
++    assert (tmp_path / "projects.json").read_bytes() == before
++
++
++def test_preview_ignores_only_rows_whose_fields_are_empty(client):
++    pid = _create_project(client)
++    raw = (
++        "Tag Type,Start (s),End (s)\n"
++        ",,\n"
++        "   ,,\n"
++    ).encode("utf-8")
++
++    rv = _post_csv(client, pid, raw)
++
++    assert rv.status_code == 200
++    body = rv.get_json()
++    assert body["summary"] == {"total": 1, "valid": 0, "malformed": 1, "duplicate": 0}
++    assert body["rows"][0]["line"] == 3
++
++
++def test_preview_missing_file(client):
++    pid = _create_project(client)
++    rv = client.post(
++        f"/api/projects/{pid}/clips/import_preview",
++        data={},
++        content_type="multipart/form-data",
++    )
++    assert rv.status_code == 400
++    body = rv.get_json()
++    assert body["code"] == "bad_request"
++    assert body["error"]
++
++
++def test_preview_missing_required_header(client):
++    pid = _create_project(client)
++    rv = _post_csv(client, pid, b"Tag Type,Start (s),Label\nPass,1.5,x\n")
++    assert rv.status_code == 400
++    body = rv.get_json()
++    assert body["code"] == "bad_request"
++    assert body["error"]
++
++
++def test_preview_unknown_project(client):
++    rv = _post_csv(client, "missing-project", b"Tag Type,Start (s),End (s)\nPass,1,2\n")
++    assert rv.status_code == 404
++    assert rv.get_json()["error"] == "Project not found"
++
++
++def test_preview_too_many_rows(client):
++    pid = _create_project(client)
++    lines = ["Tag Type,Start (s),End (s)"]
++    lines.extend(f"Pass,{i},{i + 1}" for i in range(5001))
++    raw = ("\n".join(lines) + "\n").encode("utf-8")
++    rv = _post_csv(client, pid, raw)
++    assert rv.status_code == 400
++    body = rv.get_json()
++    assert body["code"] == "too_many_rows"
++    assert body["error"]
++    assert client.get(f"/api/projects/{pid}").get_json()["clips"] == []
++
++
++def test_preview_row_clip_number_and_column_rules():
++    project = {"tag_types": [{"name": "Pass", "color": "#2ecc71"}]}
++    columns = {"tag type": 0, "start (s)": 1, "end (s)": 2, "label": 3, "notes": 4}
++
++    clip, reasons = application._preview_row_clip(
++        project, columns, ["  Pass  ", "0", "1.25", "ok", "n"]
++    )
++    assert reasons == []
++    assert clip == {
++        "tag_type": "Pass",
++        "start": 0.0,
++        "end": 1.25,
++        "label": "ok",
++        "notes": "n",
++        "players": [],
++    }
++
++    clip, reasons = application._preview_row_clip(
++        project, columns, ["Pass", "-0.1", "2", "", ""]
++    )
++    assert clip is None
++    assert "start must be a finite number >= 0" in reasons
++
++    for bad_start in ("nan", "inf", "-inf", "nope", ""):
++        clip, reasons = application._preview_row_clip(
++            project, columns, ["Pass", bad_start, "2", "", ""]
++        )
++        assert clip is None
++        assert "start must be a finite number >= 0" in reasons
++
++    clip, reasons = application._preview_row_clip(
++        project, columns, ["Pass", "1", "nan", "", ""]
++    )
++    assert clip is None
++    assert reasons == ["end must be a finite number"]
++
++    clip, reasons = application._preview_row_clip(project, columns, ["Pass", "1", "2"])
++    assert clip is None
++    assert reasons == ["wrong number of columns"]
++
++    minimal = {"tag type": 0, "start (s)": 1, "end (s)": 2}
++    clip, reasons = application._preview_row_clip(project, minimal, ["Pass", "1.5", "4"])
++    assert reasons == []
++    assert clip["label"] == ""
++    assert clip["notes"] == ""
++    assert clip["players"] == []
++
++
++def test_preview_repeated_ignored_headers_keep_physical_header_width(client):
++    pid = _create_project(client)
++    raw = (
++        "Tag Type,Start (s),End (s),Ignored, ignored \n"
++        "Pass,1,2,first,second\n"
++    ).encode("utf-8")
++
++    rv = _post_csv(client, pid, raw)
++
++    assert rv.status_code == 200
++    body = rv.get_json()
++    assert body["summary"] == {"total": 1, "valid": 1, "malformed": 0, "duplicate": 0}
++    assert body["rows"][0]["status"] == "valid"
++
++
++def test_preview_multiline_label_uses_starting_line(client, tmp_path):
++    pid = _create_project(client)
++    before = (tmp_path / "projects.json").read_bytes()
++    # Physical lines: 1 header, 2 first row, 3-4 quoted label, 5 third row.
++    raw = (
++        "Tag Type,Start (s),End (s),Label\n"
++        "Pass,1,2,first\n"
++        "Pass,3,4,\"line one\nline two\"\n"
++        "Pass,5,6,third\n"
++    ).encode("utf-8")
++    rv = _post_csv(client, pid, raw)
++    assert rv.status_code == 200
++    rows = rv.get_json()["rows"]
++    assert [r["line"] for r in rows] == [2, 3, 5]
++    assert rows[1]["status"] == "valid"
++    assert rows[1]["clip"]["label"] == "line one\nline two"
++    assert "\n" in rows[1]["clip"]["label"]
++
++    # Blank physical line 3 is ignored, so the quoted label starts on line 4
++    # and the following data row keeps its own starting physical line.
++    raw_from_4 = (
++        "Tag Type,Start (s),End (s),Label\n"
++        "Pass,1,2,first\n"
++        "\n"
++        "Pass,3,4,\"starts here\nends next\"\n"
++        "Pass,5,6,after\n"
++    ).encode("utf-8")
++    rv = _post_csv(client, pid, raw_from_4)
++    assert rv.status_code == 200
++    rows = rv.get_json()["rows"]
++    assert [r["line"] for r in rows] == [2, 4, 6]
++    assert rows[1]["clip"]["label"] == "starts here\nends next"
++    assert (tmp_path / "projects.json").read_bytes() == before
++
++
++def test_preview_players_resolution(client, tmp_path):
++    pid = _create_project(client)
++    alice = client.post(
++        f"/api/projects/{pid}/players",
++        json={"name": "Alice", "number": "7"},
++    )
++    assert alice.status_code == 201
++    alice_id = alice.get_json()["id"]
++    before_bob = (tmp_path / "projects.json").read_bytes()
++    unknown = _post_csv(
++        client,
++        pid,
++        b"Tag Type,Start (s),End (s),Players\nPass,1,2,Bob\n",
++    )
++    assert unknown.status_code == 200
++    unknown_row = unknown.get_json()["rows"][0]
++    assert unknown_row["status"] == "malformed"
++    assert unknown_row["clip"] is None
++    assert any("Bob" in reason for reason in unknown_row["reasons"])
++    assert (tmp_path / "projects.json").read_bytes() == before_bob
++
++    bob = client.post(
++        f"/api/projects/{pid}/players",
++        json={"name": "Bob", "number": ""},
++    )
++    assert bob.status_code == 201
++    bob_id = bob.get_json()["id"]
++
++    before = (tmp_path / "projects.json").read_bytes()
++    raw = (
++        "Tag Type,Start (s),End (s),Players\n"
++        "Pass,1,2,alice; Bob\n"
++        "Pass,3,4,#7\n"
++        "Pass,5,6,#7 Alice\n"
++        "Pass,7,8,Alice; #7\n"
++        "Pass,9,10,Carol\n"
++        "Pass,11,12,\n"
++        "Pass,13,14,Bob\n"
++    ).encode("utf-8")
++    rv = _post_csv(client, pid, raw)
++    assert rv.status_code == 200
++    body = rv.get_json()
++    rows = body["rows"]
++    assert [r["line"] for r in rows] == [2, 3, 4, 5, 6, 7, 8]
++    assert rows[0]["status"] == "valid"
++    assert rows[0]["clip"]["players"] == [alice_id, bob_id]
++    assert rows[1]["status"] == "valid"
++    assert rows[1]["clip"]["players"] == [alice_id]
++    assert rows[2]["status"] == "valid"
++    assert rows[2]["clip"]["players"] == [alice_id]
++    assert rows[3]["status"] == "valid"
++    assert rows[3]["clip"]["players"] == [alice_id, alice_id]
++    carol = rows[4]
++    assert carol["status"] == "malformed"
++    assert carol["clip"] is None
++    assert any("Carol" in reason for reason in carol["reasons"])
++    assert rows[5]["status"] == "valid"
++    assert rows[5]["clip"]["players"] == []
++    assert rows[6]["status"] == "valid"
++    assert rows[6]["clip"]["players"] == [bob_id]
++    assert body["summary"]["malformed"] == 1
++    assert (tmp_path / "projects.json").read_bytes() == before
++
++
++def _seed_clip(client, pid):
++    rv = client.post(
++        f"/api/projects/{pid}/clips",
++        json={"tag_type": "Pass", "start": 1, "end": 2},
++    )
++    assert rv.status_code == 201
++    return rv.get_json()["id"]
++
++
++def test_preview_duplicate_same_fields(client):
++    pid = _create_project(client)
++    header = "Tag Type,Start (s),End (s),Label\n"
++    rv = _post_csv(client, pid, (header + "Pass,1.5,4.0,x\nPass,1.5,4.0,x\n").encode())
++    assert rv.status_code == 200
++    body = rv.get_json()
++    assert body["summary"] == {"total": 2, "valid": 1, "malformed": 0, "duplicate": 1}
++    dup = body["rows"][1]
++    assert dup["line"] == 3
++    assert dup["status"] == "duplicate"
++    assert dup["reasons"] == ["same as line 2"]
++    assert dup["clip"] is None
++
++    rv = _post_csv(
++        client, pid,
++        (header + "Pass,1.5,4.0,x\nPass,1.5,4.0,x\nPass,1.5,4.0,y\n").encode(),
++    )
++    body = rv.get_json()
++    assert body["rows"][2]["status"] == "valid"
++    assert body["rows"][2]["clip"]["label"] == "y"
++    assert body["summary"] == {"total": 3, "valid": 2, "malformed": 0, "duplicate": 1}
++
++
++def test_preview_duplicate_clip_id_existing_and_repeated(client, tmp_path):
++    pid = _create_project(client)
++    existing_id = _seed_clip(client, pid)
++    before = (tmp_path / "projects.json").read_bytes()
++    raw = (
++        "Tag Type,Start (s),End (s),Label,Clip ID\n"
++        f"Pass,1.5,4.0,a,{existing_id}\n"
++        "Pass,2.0,5.0,b,abc\n"
++        "Pass,3.0,6.0,c,abc\n"
++        "Pass,4.0,7.0,d,\n"
++    ).encode("utf-8")
++    rv = _post_csv(client, pid, raw)
++    assert rv.status_code == 200
++    body = rv.get_json()
++    rows = body["rows"]
++    assert rows[0]["status"] == "duplicate"
++    assert rows[0]["reasons"] == ["clip id already exists"]
++    assert rows[0]["clip"] is None
++    assert rows[1]["status"] == "valid"
++    assert rows[2]["status"] == "duplicate"
++    assert rows[2]["reasons"] == ["same clip id as line 3"]
++    assert rows[2]["clip"] is None
++    assert rows[3]["status"] == "valid"
++    assert rows[3]["clip"]["label"] == "d"
++    assert (tmp_path / "projects.json").read_bytes() == before
++
++
++def test_preview_malformed_wins_over_duplicate(client):
++    pid = _create_project(client)
++    existing_id = _seed_clip(client, pid)
++    raw = (
++        "Tag Type,Start (s),End (s),Clip ID\n"
++        f"Pass,4.0,1.5,{existing_id}\n"
++    ).encode("utf-8")
++    rv = _post_csv(client, pid, raw)
++    assert rv.status_code == 200
++    body = rv.get_json()
++    assert body["rows"][0]["status"] == "malformed"
++    assert body["rows"][0]["clip"] is None
++    assert "end must be greater than start" in body["rows"][0]["reasons"]
++    assert body["summary"]["duplicate"] == 0
++    assert body["summary"]["malformed"] == 1
++
++
++def test_preview_malformed_row_clip_id_still_reserved(client):
++    pid = _create_project(client)
++    raw = (
++        "Tag Type,Start (s),End (s),Label,Notes,Players,Clip ID\n"
++        "Unknown,1,3,bad,,,used\n"
++        "Pass,4,5,ok,,,used\n"
++    ).encode("utf-8")
++    rv = _post_csv(client, pid, raw)
++    assert rv.status_code == 200
++    body = rv.get_json()
++    rows = body["rows"]
++    assert [row["status"] for row in rows] == ["malformed", "duplicate"]
++    assert rows[1]["reasons"] == ["same clip id as line 2"]
++    assert rows[1]["clip"] is None
++    assert body["summary"] == {"total": 2, "valid": 0, "malformed": 1, "duplicate": 1}
++
++
++def test_preview_duplicate_row_still_reserves_key_and_id(client):
++    pid = _create_project(client)
++    existing_id = _seed_clip(client, pid)
++    raw = (
++        "Tag Type,Start (s),End (s),Label,Notes,Players,Clip ID\n"
++        f"Pass,1,3,x,,,{existing_id}\n"
++        "Pass,1,3,x,,,new-id\n"
++        "Pass,4,5,y,,,new-id\n"
++    ).encode("utf-8")
++    rv = _post_csv(client, pid, raw)
++    assert rv.status_code == 200
++    body = rv.get_json()
++    rows = body["rows"]
++    assert [row["status"] for row in rows] == ["duplicate", "duplicate", "duplicate"]
++    assert rows[0]["reasons"] == ["clip id already exists"]
++    assert rows[1]["reasons"] == ["same as line 2"]
++    assert rows[2]["reasons"] == ["same clip id as line 3"]
++    assert body["summary"] == {"total": 3, "valid": 0, "malformed": 0, "duplicate": 3}
++
++
++def test_preview_malformed_player_still_reserves_comparable_key(client, tmp_path):
++    """An invalid player makes the row malformed, but its times still count."""
++    pid = _create_project(client)
++    before = (tmp_path / "projects.json").read_bytes()
++    raw = (
++        "Tag Type,Start (s),End (s),Label,Notes,Players,Clip ID\n"
++        "Pass,1,3,x,,Nobody,\n"
++        "Pass,1,3,x,,,\n"
++    ).encode("utf-8")
++    rv = _post_csv(client, pid, raw)
++    assert rv.status_code == 200
++    body = rv.get_json()
++    rows = body["rows"]
++    assert rows[0]["line"] == 2
++    assert rows[0]["status"] == "malformed"
++    assert rows[0]["reasons"] == ["unknown player: Nobody"]
++    assert rows[0]["clip"] is None
++    assert rows[1]["line"] == 3
++    assert rows[1]["status"] == "duplicate"
++    assert rows[1]["reasons"] == ["same as line 2"]
++    assert rows[1]["clip"] is None
++    assert body["summary"] == {"total": 2, "valid": 0, "malformed": 1, "duplicate": 1}
++    assert (tmp_path / "projects.json").read_bytes() == before
++
++
++def test_preview_nonfinite_times_are_not_remembered(client):
++    """Rows whose Start (s) does not parse must not reserve a duplicate key."""
++    pid = _create_project(client)
++    raw = (
++        "Tag Type,Start (s),End (s),Label,Notes,Players,Clip ID\n"
++        "Pass,abc,3,x,,,\n"
++        "Pass,abc,3,x,,,\n"
++    ).encode("utf-8")
++    rv = _post_csv(client, pid, raw)
++    assert rv.status_code == 200
++    body = rv.get_json()
++    rows = body["rows"]
++    assert [row["status"] for row in rows] == ["malformed", "malformed"]
++    assert all(row["clip"] is None for row in rows)
++    assert body["summary"] == {"total": 2, "valid": 0, "malformed": 2, "duplicate": 0}
++
++
++def test_preview_malformed_still_wins_when_key_already_seen(client):
++    """A later malformed row stays malformed even if its key matches an earlier row."""
++    pid = _create_project(client)
++    raw = (
++        "Tag Type,Start (s),End (s),Label,Notes,Players,Clip ID\n"
++        "Pass,1,3,x,,,\n"
++        "Pass,1,3,x,,,\n"
++        "Pass,1,3,x,,Nobody,\n"
++    ).encode("utf-8")
++    rv = _post_csv(client, pid, raw)
++    assert rv.status_code == 200
++    body = rv.get_json()
++    rows = body["rows"]
++    assert [row["status"] for row in rows] == ["valid", "duplicate", "malformed"]
++    assert rows[0]["line"] == 2
++    assert rows[0]["clip"]["label"] == "x"
++    assert rows[1]["reasons"] == ["same as line 2"]
++    assert rows[1]["clip"] is None
++    assert rows[2]["status"] == "malformed"
++    assert rows[2]["reasons"] == ["unknown player: Nobody"]
++    assert rows[2]["clip"] is None
++    assert body["summary"] == {"total": 3, "valid": 1, "malformed": 1, "duplicate": 1}
+diff --git a/tests/ui/import_preview.test.js b/tests/ui/import_preview.test.js
+new file mode 100644
+index 0000000..9edb4de
+--- /dev/null
++++ b/tests/ui/import_preview.test.js
+@@ -0,0 +1,192 @@
++const assert = require("node:assert/strict");
++const test = require("node:test");
++const { loadApp } = require("./load_app");
++
++function deferred() {
++  let resolve;
++  const promise = new Promise(done => { resolve = done; });
++  return { promise, resolve };
++}
++
++const project = {
++  id: "A", name: "Project A", clips: [],
++  tag_types: [{ name: "Pass" }],
++  players: [{ id: "p1", name: "Alex", number: "7" }],
++};
++const result = {
++  preview_only: true,
++  summary: { total: 3, valid: 1, malformed: 1, duplicate: 1 },
++  rows: [
++    { line: 2, status: "valid", reasons: [], clip: {
++      tag_type: "Pass", start: 1.5, end: 4, label: "<b>bench</b> & ready", players: ["p1"],
++    } },
++    { line: 3, status: "malformed", reasons: ["bad row"], clip: null },
++    { line: 4, status: "duplicate", reasons: ["same as line 2"], clip: null },
++  ],
++};
++
++function setup(previewRoute = result) {
++  return loadApp({ routes: {
++    "GET /api/projects/A": project,
++    "GET /api/projects/A/filter_presets": [],
++    "POST /api/projects/A/clips/import_preview": previewRoute,
++  } });
++}
++async function open(app) { await app.evalInApp("openProject('A')"); }
++function file() { return new Blob(["Tag Type,Start (s),End (s)\nPass,1,2"]); }
++function key(app, value) {
++  const event = app.document.createEvent("keydown", { key: value });
++  app.document.activeElement.dispatchEvent(event);
++  return event;
++}
++
++test("renders row statuses, summary, player, and escaped cell text", async () => {
++  const app = setup(); await open(app);
++  app.context.testFile = file();
++  await app.evalInApp("runImportPreview(testFile)");
++
++  const table = app.document.getElementById("import-preview-table");
++  const rows = table.querySelectorAll("tr[data-status]");
++  assert.deepEqual(rows.map(row => row.dataset.status), ["valid", "malformed", "duplicate"]);
++  assert.equal(app.document.getElementById("import-preview-summary").textContent,
++    "Total 3 · valid 1 · malformed 1 · duplicate 1");
++  const html = table.querySelector("tbody")._html;
++  assert.match(html, /&lt;b&gt;bench&lt;\/b&gt; &amp; ready/);
++  assert.match(html, /#7 Alex/);
++  assert.equal(table.querySelector("b"), null);
++});
++
++test("shows the empty state", async () => {
++  const empty = { preview_only: true,
++    summary: { total: 0, valid: 0, malformed: 0, duplicate: 0 }, rows: [] };
++  const app = setup(empty); await open(app); app.context.testFile = file();
++  await app.evalInApp("runImportPreview(testFile)");
++  assert.equal(app.document.getElementById("import-preview-status").textContent, "No rows found");
++  assert.equal(app.document.querySelectorAll("tr[data-status]").length, 0);
++});
++
++test("shows server and network errors", async () => {
++  const server = setup({ status: 400, body: { error: "Nope" } });
++  await open(server); server.context.testFile = file();
++  await server.evalInApp("runImportPreview(testFile)");
++  const serverStatus = server.document.getElementById("import-preview-status");
++  assert.equal(serverStatus.textContent, "Nope");
++  assert.equal(serverStatus.classList.contains("error"), true);
++
++  const network = setup(() => { throw new Error("offline"); });
++  await open(network); network.context.testFile = file();
++  await network.evalInApp("runImportPreview(testFile)");
++  const networkStatus = network.document.getElementById("import-preview-status");
++  assert.equal(networkStatus.textContent, "Preview failed");
++  assert.equal(networkStatus.classList.contains("error"), true);
++});
++
++test("clears stale results and announces loading before fetch resolves", async () => {
++  const gate = deferred(), app = setup(() => gate.promise); await open(app);
++  const summary = app.document.getElementById("import-preview-summary");
++  const tbody = app.document.getElementById("import-preview-table").querySelector("tbody");
++  const status = app.document.getElementById("import-preview-status");
++  summary.textContent = "stale"; tbody.innerHTML = '<tr data-status="valid"><td>stale</td></tr>';
++  status.textContent = "stale"; status.classList.add("error");
++  app.context.testFile = file();
++  const pending = app.evalInApp("runImportPreview(testFile)");
++  assert.equal(summary.textContent, "");
++  assert.equal(tbody.querySelectorAll("tr[data-status]").length, 0);
++  assert.equal(status.textContent, "Checking…");
++  assert.equal(status.classList.contains("error"), false);
++  gate.resolve(result); await pending;
++});
++
++test("resets the file input so the same file can be selected twice", async () => {
++  const app = setup(); await open(app);
++  const input = app.document.getElementById("import-preview-file"), selected = file();
++  input.files = [selected]; input.value = "manifest.csv";
++  input.dispatchEvent(app.document.createEvent("change"));
++  assert.equal(input.value, "");
++  input.files = [selected]; input.value = "manifest.csv";
++  input.dispatchEvent(app.document.createEvent("change"));
++  assert.equal(input.value, "");
++  assert.equal(app.calls.fetch.filter(call => call.path.endsWith("/import_preview")).length, 2);
++});
++
++test("M opens preview unless a modal is active; I/O/P/B remain intact", async () => {
++  const app = setup(); await open(app); const body = app.document.body;
++  const input = app.document.getElementById("import-preview-file");
++  let pickerClicks = 0; input.addEventListener("click", () => { pickerClicks++; });
++  body.focus(); assert.equal(key(app, "m").defaultPrevented, true); assert.equal(pickerClicks, 1);
++  const modal = app.document.getElementById("bulk-modal"); modal.classList.add("active");
++  body.focus(); key(app, "m"); assert.equal(pickerClicks, 1); modal.classList.remove("active");
++
++  app.evalInApp("document.getElementById('game-video').currentTime = 7");
++  body.focus(); key(app, "i"); assert.equal(app.evalInApp("markIn"), 7);
++  app.evalInApp("document.getElementById('game-video').currentTime = 9");
++  body.focus(); key(app, "o"); assert.equal(app.evalInApp("markOut"), 9);
++  body.focus(); assert.equal(key(app, "p").defaultPrevented, true);
++  assert.equal(app.document.activeElement.id, "filter-preset-select");
++  body.focus(); assert.equal(key(app, "b").defaultPrevented, true);
++  assert.equal(modal.classList.contains("active"), true);
++});
++
++test("newer upload invalidates older", async () => {
++  const firstGate = deferred(), secondGate = deferred();
++  const gates = [firstGate, secondGate];
++  const app = setup(() => gates.shift().promise); await open(app);
++  const tbody = app.document.getElementById("import-preview-table").querySelector("tbody");
++  const summary = app.document.getElementById("import-preview-summary");
++  const fiveRows = {
++    ...result,
++    summary: { total: 5, valid: 5, malformed: 0, duplicate: 0 },
++    rows: Array.from({ length: 5 }, (_, index) => ({
++      line: index + 2, status: "valid", reasons: [], clip: result.rows[0].clip,
++    })),
++  };
++  app.context.testFile = file();
++  const first = app.evalInApp("runImportPreview(testFile)");
++  const second = app.evalInApp("runImportPreview(testFile)");
++
++  firstGate.resolve(fiveRows); await first;
++  assert.equal(tbody.querySelectorAll("tr[data-status]").length, 0);
++  assert.equal(summary.textContent, "");
++  secondGate.resolve(result); await second;
++  assert.equal(tbody.querySelectorAll("tr[data-status]").length, 3);
++  assert.equal(summary.textContent, "Total 3 · valid 1 · malformed 1 · duplicate 1");
++});
++
++test("close while pending leaves no rows or status and restores focus", async () => {
++  const gate = deferred(), app = setup(() => gate.promise); await open(app);
++  app.context.testFile = file();
++  const pending = app.evalInApp("runImportPreview(testFile)");
++  app.evalInApp("closeImportPreview()");
++  gate.resolve(result); await pending;
++
++  const status = app.document.getElementById("import-preview-status");
++  const tbody = app.document.getElementById("import-preview-table").querySelector("tbody");
++  assert.equal(app.document.getElementById("import-preview").hidden, true);
++  assert.equal(tbody.querySelectorAll("tr[data-status]").length, 0);
++  assert.equal(status.textContent, "");
++  assert.equal(status.classList.contains("error"), false);
++  assert.equal(app.document.activeElement.id, "btn-import-preview");
++});
++
++test("project switch while pending ignores old success and failure", async () => {
++  const successGate = deferred(), failureGate = deferred();
++  const gates = [successGate, failureGate];
++  const app = setup(() => gates.shift().promise); await open(app);
++  const status = app.document.getElementById("import-preview-status");
++  const tbody = app.document.getElementById("import-preview-table").querySelector("tbody");
++  const rows = () => tbody.querySelectorAll("tr[data-status]").length;
++
++  app.context.testFile = file();
++  const success = app.evalInApp("runImportPreview(testFile)");
++  app.document.getElementById("btn-back").click(); await open(app);
++  successGate.resolve(result); await success;
++  assert.equal(rows(), 0);
++  assert.equal(status.textContent, "");
++
++  const failure = app.evalInApp("runImportPreview(testFile)");
++  app.document.getElementById("btn-back").click(); await open(app);
++  failureGate.resolve({ status: 500, body: { error: "late" } }); await failure;
++  assert.equal(rows(), 0);
++  assert.equal(status.textContent, "");
++  assert.equal(status.classList.contains("error"), false);
++});

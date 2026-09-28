@@ -34,6 +34,29 @@ IMPLEMENT = ("Add the core CSV-parsing helper `def _import_preview_rows(project,
 RUN_TESTS = "Add the helper to app.py. Run `/usr/local/bin/python -m pytest -q` and confirm it passes."
 EXPLAIN = "Explain what _filter_clips does and which columns the CSV export writes."
 
+# The read-only request rejected during the 2026-09-22 native GameTape run.
+REVIEW = (
+    "Perform a read-only cumulative review of the CSV import-preview feature against "
+    "the full stated contract. Inspect app.py preview helpers/route, static/js/app.js "
+    "preview handlers and keyboard/Escape behavior, templates/index.html preview UI, "
+    "static/css/style.css preview styles, tests/test_import_preview.py, "
+    "tests/ui/import_preview.test.js, and docs/CSV_IMPORT.md. Verify preserved "
+    "saved-filter, bulk-edit, focus/keyboard, export, and closeProject teardown behavior. "
+    "Report every finding with severity and confidence, include file:line evidence for "
+    "every contract clause, explicitly verify the two known documentation defects, and "
+    "identify any minimal focused test needed for a confirmed code defect. "
+    "Do not edit files or run commands."
+)
+
+
+def test_recorded_readonly_review_needs_no_write_grant():
+    assert check_errand_fit(REVIEW, needs=[], write=False) is None
+
+
+def test_readonly_wording_never_overrides_explicit_required_capabilities():
+    assert check_errand_fit(REVIEW, needs=[Need.PATCH], write=False) is not None
+    assert check_errand_fit(REVIEW, needs=[Need.EXECUTE], write=False) is not None
+
 
 def _pool(tmp_path, run):
     return WorkerPool(store=ArtifactStore(tmp_path / '.quadratus'), run=run)

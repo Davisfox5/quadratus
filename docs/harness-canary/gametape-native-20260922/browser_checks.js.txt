@@ -1,0 +1,54 @@
+async (page) => {
+  const check = (ok, message) => { if (!ok) throw new Error(message); };
+  const result = {preview_only:true,summary:{total:1,valid:1,malformed:0,duplicate:0},rows:[{line:2,status:'valid',reasons:[],clip:{tag_type:'Pass',start:1,end:3,label:'delayed',players:[]}}]};
+  await page.getByText('Quadratus CSV trial',{exact:true}).click();
+  await page.locator('#btn-import-preview').waitFor({state:'visible'});
+  const input=page.locator('#import-preview-file');
+  const file='/Users/davisfox/Documents/Codex/2026-09-21/referenced-chatgpt-conversation-this-is-an/work/quadratus-full-20260922/browser.csv';
+  await input.setInputFiles(file);
+  await page.waitForFunction(()=>document.querySelectorAll('#import-preview-table tr[data-status]').length===3);
+  check(await page.locator('#import-preview-table img').count()===0,'HTML injection');
+  check(await page.locator('#import-preview-summary').textContent()==='Total 3 · valid 1 · malformed 1 · duplicate 1','normal counts');
+  let requests=0;
+  const onRequest=req=>{if(req.url().endsWith('/clips/import_preview'))requests++;};
+  page.on('request',onRequest);
+  const invalid='/Users/davisfox/Documents/Codex/2026-09-21/referenced-chatgpt-conversation-this-is-an/work/quadratus-full-20260922/invalid.csv';
+  for(let i=0;i<2;i++){
+    const response=page.waitForResponse(r=>r.url().endsWith('/clips/import_preview'));
+    await input.setInputFiles(invalid);
+    check((await response).status()===400,'bad file response');
+    await page.waitForFunction(()=>document.getElementById('import-preview-status').classList.contains('error'));
+    check(await input.inputValue()==='','input was not reset');
+  }
+  check(requests===2,'same file was not uploaded twice');
+  page.off('request',onRequest);
+  await input.setInputFiles('/Users/davisfox/Documents/Codex/2026-09-21/referenced-chatgpt-conversation-this-is-an/work/quadratus-full-20260922/empty.csv');
+  await page.waitForFunction(()=>document.getElementById('import-preview-status').textContent==='No rows found');
+  const queue=[];
+  let notify;
+  await page.route('**/clips/import_preview',route=>{queue.push(route);if(notify){notify();notify=null;}});
+  const upload=async()=>{const n=queue.length;await input.setInputFiles(file);if(queue.length===n)await new Promise(r=>notify=r);return queue[queue.length-1];};
+  const finish=async(route,body)=>{const response=page.waitForResponse(r=>r.url().endsWith('/clips/import_preview'));await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});await response;await page.evaluate(()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done))));};
+  let route=await upload();
+  check(await page.locator('#import-preview-status').textContent()==='Checking…','loading message');
+  check(await page.locator('#import-preview-summary').textContent()==='','stale summary');
+  check(await page.locator('#import-preview-table tr[data-status]').count()===0,'stale rows');
+  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await finish(route,result);
+  check(await page.locator('#import-preview').isHidden(),'late response reopened closed preview');
+  check(await page.locator('#import-preview-table tr[data-status]').count()===0,'late close rendered rows');
+  check(await page.evaluate(()=>document.activeElement.id)==='btn-import-preview','close focus');
+  const old=await upload(), newer=await upload();
+  const newerResult=JSON.parse(JSON.stringify(result));newerResult.rows[0].clip.label='newer';
+  await finish(newer,newerResult);
+  await page.waitForFunction(()=>document.querySelector('#import-preview-table tbody').textContent.includes('newer'));
+  await finish(old,result);
+  check((await page.locator('#import-preview-table tbody').textContent()).includes('newer'),'old response replaced newer');
+  route=await upload();
+  await page.getByRole('button',{name:'← Projects'}).click();
+  await finish(route,result);
+  check(await page.locator('#import-preview').isHidden(),'project switch reopened preview');
+  check(await page.locator('#import-preview-table tr[data-status]').count()===0,'project switch kept rows');
+  await page.unroute('**/clips/import_preview');
+  return {normal:true,escaped:true,empty:true,error:true,sameFileReselection:true,loadingClearsOld:true,closeRace:true,newerFileRace:true,projectSwitchRace:true,closeFocus:true};
+}

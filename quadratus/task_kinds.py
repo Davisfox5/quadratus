@@ -390,6 +390,30 @@ _EDIT_VERB_RE = re.compile(
     r"adjust(?:s|ed|ing)?|amend(?:s|ed|ing)?|patch(?:es|ed|ing)?)\b",
     re.IGNORECASE,
 )
+_NEGATED_EDIT_PREFIX_RE = re.compile(
+    r"\b(?:do\s+not|don't|must\s+not|mustn't|should\s+not|shouldn't|never)\s+(?:bulk-)?$",
+    re.IGNORECASE,
+)
+_BULK_EDIT_TOPIC_SUFFIX_RE = re.compile(
+    r"^(?:\s*[,;:]|\s+(?:behaviou?r|flow|feature|functionality)\b)", re.IGNORECASE,
+)
+
+
+def _has_edit_request(text: str) -> bool:
+    # Recognize the narrow forms observed in a rejected read-only review.
+    # Keep other verbs, including "Bulk-edit app.py", conservative: a later
+    # positive instruction or an explicit declared need must still count.
+    for match in _EDIT_VERB_RE.finditer(text):
+        prefix = text[:match.start()]
+        if _NEGATED_EDIT_PREFIX_RE.search(prefix):
+            continue
+        if (prefix.lower().endswith('bulk-')
+                and _BULK_EDIT_TOPIC_SUFFIX_RE.match(text[match.end():])):
+            continue
+        return True
+    return False
+
+
 _SOURCE_PATH_RE = re.compile(
     r"(?<![\w/])[\w./-]+\.(?:py|js|mjs|cjs|ts|tsx|jsx|md|rst|txt|html|css|scss|json|ya?ml|toml|"
     r"ini|cfg|sh|sql|go|rs|java|kt|swift|c|h|cpp|hpp|cs|rb|php|svg)\b",
@@ -417,7 +441,7 @@ def needs_from_text(description: str, acceptance: Iterable[str] = ()) -> FrozenS
     Reads the description and acceptance criteria together. EXECUTE needs a
     run verb before a known runner, a backticked command literal, or an
     outcome only a run produces (exit code, tests passed). PATCH needs an
-    edit verb *and* a source path. DIRECT_WRITE needs a binary, generated or
+    non-negated edit verb *and* a source path. DIRECT_WRITE needs a binary, generated or
     lock-file target *and* a verb that writes or produces it; SVG is text and
     counts as source. Prose that merely mentions a file, or asks for an
     explanation, infers nothing: an under-inferred need costs one failed
@@ -425,11 +449,12 @@ def needs_from_text(description: str, acceptance: Iterable[str] = ()) -> FrozenS
     """
     text = "\n".join([description or "", *[str(a) for a in acceptance or ()]])
     needs = set()
+    edit_requested = _has_edit_request(text)
     if _RUN_VERB_RE.search(text) or _BACKTICK_COMMAND_RE.search(text) or _RUN_OUTCOME_RE.search(text):
         needs.add(Need.EXECUTE)
-    if _EDIT_VERB_RE.search(text) and _SOURCE_PATH_RE.search(text):
+    if edit_requested and _SOURCE_PATH_RE.search(text):
         needs.add(Need.PATCH)
-    if _DIRECT_WRITE_TARGET_RE.search(text) and (_EDIT_VERB_RE.search(text) or _GENERATE_VERB_RE.search(text)):
+    if _DIRECT_WRITE_TARGET_RE.search(text) and (edit_requested or _GENERATE_VERB_RE.search(text)):
         needs.add(Need.DIRECT_WRITE)
     return frozenset(needs)
 

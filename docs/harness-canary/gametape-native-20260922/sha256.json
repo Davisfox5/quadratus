@@ -1,0 +1,14 @@
+{
+  "regression-targeted.txt": "5ea85efcdab70596906242a90289a5f71d643f644015a076a5d44a38488c11ed",
+  "independent-checks.txt": "ac32a86ac518bd40c0a367b0c3d0b243ad6f87d4cc82f6881290cd771d564dfa",
+  "regression-full.txt": "724f7617fe22b4c647d366324d183e59b04c66488941b884dd3cd627b12972eb",
+  "independent_contract.py.txt": "9d13df14b3523acd59a51e0525d0d8efeb9af1dff3cff0e5dba1fbbe27afcb95",
+  "regression-before.txt": "27cd9eba81ecaff9d77e62e9dc63f40b95f315079bc2978b09681c1777d27002",
+  "attempts.json": "820e09d16df0c426cc28ba680b7448e5b90e0df2c087d8cd370b9a934ebe1a9c",
+  "browser-immutability.json": "9658047de854df0360b64c834c0e3248e32baf8f5302b8d244b77879936dafc0",
+  "application-checks.txt": "d4d2d244d7b5b910ff503b40820665252536207b444e85c30630dbdde5e17751",
+  "README.md": "1552bcda425251dfbe21a37aafa290a9062e78c35d88d6c4db8ffd0d2bd6cf84",
+  "browser-result.json": "be7bd0ef1bc392c26bbf289e14815665994e224c59c680990eca83a369822b06",
+  "browser_checks.js.txt": "bdfb7076c22a472d3307b8dc930f05b312b44f5a75b64a73db30ede415ea21b9",
+  "application.patch": "8b5c36f5b7baf48c0d844a2ee386980005efcee76eb39b9cc8c3b6148251127c"
+}
