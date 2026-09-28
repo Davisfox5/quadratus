@@ -196,7 +196,7 @@ def test_with_no_task_contract_the_live_limit_decides(tmp_path):
 
 BASE = dict(checks=False, design_evidence="none", design_review=False, security_verification=False,
             settlement=False, design_collaboration_applicable=False, design_instruction="none",
-            security_verdict="none")
+            security_verdict="none", requirements_ledger=False)
 
 
 def _record(required):

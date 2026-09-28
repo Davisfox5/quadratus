@@ -48,7 +48,7 @@ def _repair(css=".toolbar { flex-wrap: wrap; }\n", **kw):
 
 
 def _run(tmp_path, monkeypatch, plan, leads, *, review="APPROVED", fix=None, max_tasks=6, audits=None,
-         settings=None, roles=None):
+         settings=None, roles=None, record_complete=True):
     """``plan``: orchestrator replies in order (then DONE); ``leads``: lead handler per task id."""
     plan = list(plan)
     audits = list(audits or [MET] * 8)
@@ -69,7 +69,7 @@ def _run(tmp_path, monkeypatch, plan, leads, *, review="APPROVED", fix=None, max
         **(roles or {}),
     }
     replay = H.run(tmp_path, monkeypatch, Script(**overrides), files=_design_files(), max_tasks=max_tasks,
-                   settings=settings or Settings(backend="cli"))
+                   settings=settings or Settings(backend="cli"), record_complete=record_complete)
     replay.findings = H.result_json(replay).get("findings", [])
     return replay
 

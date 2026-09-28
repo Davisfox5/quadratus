@@ -60,6 +60,11 @@ class Required:
     #: is a ceiling: a live limit may tighten a task further, never loosen it
     #: (O-NEXT-10 E; Codex, 5865344590).
     operator_limits: str = "none"
+    #: Whether the requirements ledger governs this task, fixed at dispatch.
+    #: A live enable adds no route; a live disable erases nothing; a
+    #: disagreement is recorded and fails closed (O-NEXT-10 C; Codex,
+    #: 5865627034).
+    requirements_ledger: bool = False
 
 
 @dataclass(frozen=True)

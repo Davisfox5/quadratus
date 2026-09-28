@@ -2123,7 +2123,8 @@ class Session:
             design_collaboration_applicable=bool(self.config.design_cross_check and is_design_task(spec)),
             design_instruction=self._live_design_instruction(spec),
             security_verdict=self._live_security_verdict() if security else "none",
-            operator_limits=self._limits_identity(spec, getattr(self, "_task_outer", None)))
+            operator_limits=self._limits_identity(spec, getattr(self, "_task_outer", None)),
+            requirements_ledger=bool(self.config.requirements_ledger))
         commands = getattr(gate, "commands", None)
         checks = tuple(c.id for c in commands) if commands is not None else (("check",) if gate else ())
         intended = None
@@ -4618,8 +4619,15 @@ class Session:
         stop: a declared review-only task, the ledger on, COVERS present, and
         every problem a measured overflow on otherwise valid evidence. Any
         integrity or page problem alongside keeps today's stop."""
-        return (not ok and is_review_only(spec) and self.config.requirements_ledger
-                and bool(self._current_covers) and bool(records)
+        if ok or not is_review_only(spec):
+            return False
+        # The ledger as dispatched AND as it is now (map P3.4; O-NEXT-10 C,
+        # Codex 5865627034): a live enable adds no debt route, a live disable
+        # is not ignored, and a disagreement is recorded and takes today's
+        # stop. Nothing recorded in the ledger is erased either way.
+        live = bool(self.config.requirements_ledger)
+        ledger = self._required("requirements_ledger", live) and live
+        return (ledger and bool(self._current_covers) and bool(records)
                 and all(r.get("kind") == "product.overflow" for r in records))
 
     def _resolve_findings(self, spec, approved) -> None:

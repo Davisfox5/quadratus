@@ -247,7 +247,7 @@ def _record(required, **contract):
 
 
 BASE = dict(checks=False, design_evidence="none", design_review=False, security_verification=False,
-            settlement=False, design_collaboration_applicable=False, security_verdict="none", operator_limits="none")
+            settlement=False, design_collaboration_applicable=False, security_verdict="none", operator_limits="none", requirements_ledger=False)
 
 
 def test_an_older_record_without_the_instruction_says_so():

@@ -115,6 +115,7 @@ def test_the_contract_is_frozen_and_references_grants(tmp_path, monkeypatch):
     required = dict(contract["required"])
     # The repository policy's outer limit always applies over a declared scope.
     assert required.pop("operator_limits").startswith("sha256:")
+    assert type(required.pop("requirements_ledger")) is bool
     assert required == dict(checks=True, design_evidence="none", design_review=False,
                             security_verification=False, settlement=False,
                             design_collaboration_applicable=False, design_instruction="none",

@@ -277,6 +277,7 @@ def missing_facts(task: TaskOutcome) -> List[str]:
 
 _DISPATCH_STATES = ("dispatched", "not_dispatched")
 _REQUIRED_FLAGS = ("checks", "design_review", "security_verification", "settlement")
+_LEDGER = "requirements_ledger"
 _DESIGN_EVIDENCE = ("harness", "self", "disabled", "none")
 _COLLABORATION = "design_collaboration_applicable"
 _INSTRUCTION = "design_instruction"
@@ -328,6 +329,10 @@ def _contract_missing(task: TaskOutcome) -> List[str]:
         missing.append(f"{tid}.contract.required.{_VERDICT} (absent: recorded before this field existed)")
     elif required.get(_VERDICT) not in _VERDICTS:
         missing.append(f"{tid}.contract.required.{_VERDICT}")
+    if _LEDGER not in required:
+        missing.append(f"{tid}.contract.required.{_LEDGER} (absent: recorded before this field existed)")
+    elif type(required.get(_LEDGER)) is not bool:
+        missing.append(f"{tid}.contract.required.{_LEDGER}")
     if _LIMITS not in required:
         missing.append(f"{tid}.contract.required.{_LIMITS} (absent: recorded before this field existed)")
     elif not (required.get(_LIMITS) == "none" or (isinstance(required.get(_LIMITS), str)
