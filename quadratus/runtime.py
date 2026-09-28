@@ -423,19 +423,22 @@ class Fleet:
                 # measures them, and the session tells the lead what it has
                 # changed so far when it asks again.
                 return reply
-            rows = re.findall(r'^CHANGED: (.*)$', reply, re.MULTILINE)
-            try:
-                declared = json.loads(rows[0]) if len(rows) == 1 else None
-                valid = (isinstance(declared, list) and all(isinstance(p, str) for p in declared)
-                         and len(declared) == len(set(declared)) and sorted(declared) == changed
-                         and reply.rstrip().splitlines()[-1].startswith('CHANGED: '))
-            except (ValueError, TypeError, IndexError):
-                valid = False
-            if not valid:
+            report = changed_report(reply, changed)
+            if report["status"] == "missing" and _looks_like_request(reply):
+                # Neither a request the dispatchers can serve nor a delivery:
+                # a WORKER, FETCH or CONSULT line that failed to parse (GameTape
+                # run 9). Filing it as a draft would send a dispatch to review.
                 from .session import PartialWorkStopped
-                raise PartialWorkStopped('CHANGED report does not match the captured source changes; '
+                raise PartialWorkStopped('The reply is neither a request nor a delivery: it carries a '
+                                         'request line that could not be parsed and no CHANGED line; '
                                          'work preserved for inspection.',
                                          partial=dict(changed=changed, inspected=True, reply=reply))
+            context = invocation_context.get()
+            if context is not None:
+                # The session records a disagreement as a typed fact; the
+                # measured diff, not the declaration, is what every check
+                # reads (docs/DIRECTION.md, phase-4 run on ea464cc).
+                context["changed_report"] = report
             return reply
         with self.project.snapshot() as directory:
             context = invocation_context.get() or {}
@@ -784,6 +787,72 @@ def new_session(goal, store, *, fleet=None, config=None, invariants=None, settin
         invariants=invariants,
         available=active.available,
     )
+
+
+#: What the declaration said against what the harness measured. ``match`` is
+#: the only status that says nothing; every other one is recorded by the
+#: session as a fact on the task and never stops the run.
+CHANGED_STATUSES = ("match", "missing", "malformed", "undeclared", "overdeclared", "misplaced")
+
+
+def changed_report(reply: str, measured: List[str]) -> dict:
+    """Classify a call's CHANGED line against the files the call changed.
+
+    The harness diffs the project before and after every editing call, so it
+    already knows what changed. The declaration was once required to equal
+    that diff exactly or the run stopped (``PartialWorkStopped``); four live
+    runs ended on the declaration's shape alone (runs 5, 9, 11 and the
+    phase-4 run of 2026-09-28, where a revision re-listed a file its own
+    draft had changed). A transcription that disagrees with the measurement
+    is now a recorded disagreement, and the measurement is what every scope,
+    gate and design check reads. Nothing the model writes on that line can
+    widen what was measured or bypass the scope stop on it.
+
+    Statuses: ``missing`` (no line), ``malformed`` (more than one line, or
+    not a JSON list of distinct strings), ``undeclared`` (the call changed
+    files it did not list), ``overdeclared`` (it listed files it did not
+    change), ``misplaced`` (correct, but prose follows it), ``match``.
+    ``undeclared`` outranks ``overdeclared`` when both apply: the omission is
+    the one a reviewer needs to know about.
+    """
+    report = dict(status="match", declared=None, measured=list(measured), detail="")
+    rows = re.findall(r'^CHANGED: (.*)$', reply or "", re.MULTILINE)
+    if not rows:
+        report.update(status="missing", detail=f"no CHANGED line; measured {list(measured)}")
+        return report
+    if len(rows) > 1:
+        report.update(status="malformed", detail=f"{len(rows)} CHANGED lines; measured {list(measured)}")
+        return report
+    try:
+        declared = json.loads(rows[0])
+    except ValueError:
+        declared = None
+    if not (isinstance(declared, list) and all(isinstance(p, str) for p in declared)
+            and len(declared) == len(set(declared))):
+        report.update(status="malformed",
+                      detail=f"CHANGED is not a JSON list of distinct paths: {rows[0][:120]!r}; "
+                             f"measured {list(measured)}")
+        return report
+    report["declared"] = declared
+    undeclared = sorted(set(measured) - set(declared))
+    extra = sorted(set(declared) - set(measured))
+    if undeclared:
+        report.update(status="undeclared",
+                      detail=f"changed but not declared {undeclared}; declared {sorted(declared)}; "
+                             f"measured {list(measured)}")
+    elif extra:
+        report.update(status="overdeclared",
+                      detail=f"declared but not changed by this call {extra}; measured {list(measured)}")
+    elif not reply.rstrip().splitlines()[-1].startswith('CHANGED: '):
+        report.update(status="misplaced", detail="the CHANGED line is not the last line of the reply")
+    return report
+
+
+def _looks_like_request(reply: str) -> bool:
+    """A line that opens a FETCH, CONSULT or WORKER request, whether or not
+    it parsed. :func:`taskmeta.lead_request` already said it did not."""
+    from .taskmeta import _is_request_line
+    return any(_is_request_line(line.strip()) for line in (reply or "").splitlines())
 
 
 def _relevant_denials(failures, checks) -> List[str]:

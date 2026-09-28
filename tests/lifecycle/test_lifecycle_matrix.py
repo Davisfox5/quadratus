@@ -164,12 +164,41 @@ def test_a_quoted_request_example_in_a_delivery_is_a_draft(tmp_path, monkeypatch
 
 # -- 2. inherited task changes versus this call's changes ----------------------------
 
-def test_a_revision_that_repeats_earlier_files_is_rejected(tmp_path, monkeypatch):
+def _changed_report_facts(replay, task_id="t1"):
+    task = next(t for t in replay.workflow["tasks"] if t["task_id"] == task_id)
+    return [f for f in task["facts"] if f["kind"] == "unverified" and " CHANGED line " in f["detail"]]
+
+
+def test_a_revision_that_repeats_earlier_files_is_recorded_and_the_run_continues(tmp_path, monkeypatch):
+    """Phase-4 run on ea464cc (2026-09-28): the Sol revision re-listed the file its
+    draft had changed and the run ended at its first task. The harness diff is
+    the truth every check reads; the declaration is history (docs/DIRECTION.md)."""
     replay = _run(tmp_path, monkeypatch, Script(
+        collaborator=_blocking_from_codex,
         revision=lambda call, replay: 'Reviewed; nothing new.\nCHANGED: ["app.py"]'))
-    assert "CHANGED report does not match" in replay.result.error
-    assert _read(replay, "app.py") == FIXED, "the lead's work is preserved"
-    assert H.gate_results(replay) == [], "stopped before the gate"
+    assert "CHANGED report" not in replay.result.error
+    assert H.ended_at_cap(replay, 1) and _gate_passed(replay), "the run went on to the gate"
+    assert _read(replay, "app.py") == FIXED
+    facts = _changed_report_facts(replay)
+    assert len(facts) == 1 and "overdeclared" in facts[0]["detail"] and "app.py" in facts[0]["detail"]
+    assert not facts[0]["terminal"], "a disagreement is history, never a completion blocker"
+    assert len(replay.artifacts("changed-report-mismatch")) == 1, "the reply is kept for inspection"
+
+
+def test_an_undeclared_edit_is_recorded_and_still_measured(tmp_path, monkeypatch):
+    """The declaration cannot hide an edit: the scope and the gate read the diff."""
+    def revision(call, replay):
+        old = Path(call.cwd, "tests/test_app.py").read_text()
+        H.write(call, {"tests/test_app.py": old + "\n\ndef test_negative():\n    assert add(-1, -2) == -3\n"})
+        return "Nothing to change after review.\nCHANGED: []"
+
+    replay = _run(tmp_path, monkeypatch, Script(collaborator=_blocking_from_codex, revision=revision))
+    assert H.ended_at_cap(replay, 1) and _gate_passed(replay)
+    assert "test_negative" in _read(replay, "tests/test_app.py")
+    facts = _changed_report_facts(replay)
+    assert len(facts) == 1 and "undeclared" in facts[0]["detail"] and "tests/test_app.py" in facts[0]["detail"]
+    task = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t1")
+    assert "tests/test_app.py" in task["partial"]["changed"], "the measured diff is what the record carries"
 
 
 def _blocking_from_codex(call, replay):
@@ -259,12 +288,14 @@ def test_stale_renders_are_recaptured_without_source_edits(tmp_path, monkeypatch
     assert record["verified"] is True and record["final_review"]["verdict"] == "APPROVED"
 
 
-def test_a_design_fix_that_repeats_the_tasks_files_is_rejected(tmp_path, monkeypatch):
+def test_a_design_fix_that_repeats_the_tasks_files_is_recorded_and_reviewed(tmp_path, monkeypatch):
     replay = H.run(tmp_path, monkeypatch,
                    _design_script('Scaffold already present.\nCHANGED: ["templates/index.html", "static/style.css"]'),
                    files=_design_files())
-    assert "CHANGED report does not match" in replay.result.error
-    assert not replay.of("design-review")
+    assert "CHANGED report" not in replay.result.error
+    assert len(replay.of("design-review")) == 1, "the fix's renders still reach the final review"
+    facts = _changed_report_facts(replay)
+    assert len(facts) == 1 and facts[0]["detail"].startswith("design-fix CHANGED line overdeclared")
 
 
 def test_renders_of_an_unrelated_page_are_an_open_finding(tmp_path, monkeypatch):

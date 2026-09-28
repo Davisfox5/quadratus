@@ -85,7 +85,7 @@ from `6382cf2`.
 | Relevant permission denial | `CapabilityUnavailable` from runtime | stop after the one call, even at the cap | above the cap |
 | Scope overrun or unmeasurable scope | `PartialWorkStopped` | stop, work preserved | above everything but refusal |
 | Dependency tree changed or unavailable | `DependencyTreeChanged` / `…Unavailable` | stop at the next edge; latched | integrity |
-| CHANGED mismatch | `PartialWorkStopped` | stop, reply kept | integrity |
+| CHANGED mismatch | non-terminal `unverified` fact on the task (`runtime.changed_report`) | recorded, run continues; the measured diff is what every check reads. A request line that fails to parse with no CHANGED line still stops (`PartialWorkStopped`) | none: not a stop since 2026-09-28 (phase-4 run on ea464cc) |
 | Timeout after writes | `PartialWorkSuspected` becomes `PartialWorkStopped` | stop, tree inspected | integrity |
 | Turn cap | `TurnLimitReached` | lead or revision: capped-task path; gate-fix or design-fix: attempt spent | below denial |
 | Transport error | retried by `_retryable` (at most 4, backoff), then `ProviderError` | lead gets one recovery on a fresh lead if the tree is unchanged | below cap |
@@ -301,7 +301,7 @@ review.
 | J33 | Compound: product assertion failure plus a setup failure, denial or latched budget | gate-fix, or the stop | the dominating stop; **no repair call** | P3 |
 | J34 | CONTINUES carries unresolved requirement and finding ids | ids re-listed | carried once, never double-counted or settled early | P2 |
 | J35 | Parallel child debt | child finding kept open | the merge gate cannot close unresolved child debt | P1, then P3 |
-| J36 | CHANGED report mismatch | PartialWorkStopped | `integrity`, reply kept | P1 |
+| J36 | CHANGED report mismatch | PartialWorkStopped | recorded as a non-terminal `unverified` fact, reply kept, run continues on the measured diff; an unparsed request line with no CHANGED line still stops | P1, revised after the phase-4 run |
 | J37 | Transport timeout after writes | PartialWorkSuspected, then Stopped | `integrity`, tree inspected | P1 |
 | J38 | A check fails, then passes later in the same task (G12) | incomplete, blank error | the recovered failure is history; DONE can stand | P3 |
 
