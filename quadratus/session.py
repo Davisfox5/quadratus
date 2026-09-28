@@ -1928,10 +1928,13 @@ class Session:
         self.task_outcomes.append(outcome)
         self._contract = None
         try:
+            # The source record comes first, as it always did, so a task refused
+            # at dispatch still carries it (Codex, 5861147842).
+            outcome.source_before = self._source_identity()
+            self._prepare_dispatch(spec)
             # Derived here, bound (frozen, with its owner) at the selection point
             # in _run_task / _run_security_task, before the first model call.
             self._contract = self._build_contract(spec, outcome)
-            outcome.source_before = self._source_identity()
             summary = self._run_task_recorded(spec)
         except BaseException as exc:
             outcome.note(classify(exc), f"{type(exc).__name__}: {exc}")
@@ -2123,7 +2126,12 @@ class Session:
             if continues and outcome.task_id == continues:
                 outcome.recover("cap")
 
-    def _run_task_recorded(self, spec: TaskSpec) -> TaskSummary:
+    def _prepare_dispatch(self, spec: TaskSpec) -> None:
+        """This task's own scope and gate, settled before its contract is
+        built (map P3.4): the contract then describes the gate and scope the
+        task runs under, not the previous task's. Declaration and policy
+        refusals raise here exactly as before; nothing is run and no model is
+        called."""
         if self.project and self.config.allow_writes and spec.scope is None:
             raise RunStalled("Editing tasks must declare a scope before dispatch.")
         policy = self.config.repository_policy
@@ -2141,6 +2149,8 @@ class Session:
             spec.scope = policy.scope(spec.scope)
             self.config.integration_gate = task_gate(policy, plan, self._original_gate,
                                                      exclude=self.config.project_excludes)
+
+    def _run_task_recorded(self, spec: TaskSpec) -> TaskSummary:
         self._gate_fixes_used = 0
         self._active_spec = spec
         self._task_before = self._capture_source()

@@ -654,3 +654,20 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
    Collaborator selection and the prompt text still read the live setting
    and are unchanged. Drift between dispatch and the check can no longer
    drop or add the review (`tests/lifecycle/test_contract_applicability.py`).
+4. *Dispatch preparation before the contract (prerequisite for `checks`).*
+   With a repository policy, `_run_task_recorded` chose the task's gate and
+   narrowed its scope after `run_task` had built the contract, so the
+   contract named the previous task's gate (Codex confirmed, 5861089949).
+   The declaration check, policy resolution and refusals, the operator path
+   bound, scope narrowing and `task_gate` now run in `_prepare_dispatch`,
+   after the outcome and its `source_before` are recorded and before
+   `_build_contract`, so a task refused at dispatch keeps its source record
+   (Codex, 5861147842). Nothing is run and no model is called there. The only observable difference: if
+   contract building and preparation would both raise, preparation's error
+   is now the one reported (`tests/test_dispatch_preparation.py`).
+
+**Retirement list additions (Codex, 5861036424):** collaborator selection
+(`collaborators_for`) and the design prompt's applicability text still read
+the live `design_cross_check` / `is_design_task`, and can drift from the
+contract, including during lead recovery. Design applicability is not
+retired while they do.
