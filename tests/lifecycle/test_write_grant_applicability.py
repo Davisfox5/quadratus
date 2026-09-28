@@ -118,3 +118,37 @@ def test_with_no_task_contract_the_live_grant_decides(tmp_path):
     assert session._writes() is True
     _drift(session, False)
     assert session._writes() is False
+
+
+# -- edits made under the grant stay held to scope after a revocation ---------------------
+
+@pytest.mark.parametrize("revoke", [False, True], ids=["granted", "revoked-during-call"])
+def test_a_capped_close_holds_edits_made_under_the_grant_to_scope(tmp_path, revoke):
+    """O-NEXT-15 F1 (5865760320): the scope stop keyed on the grant at close,
+    so a revocation during a turn-limited call switched it off for the files
+    that call had already written. It now keys on the dispatch grant."""
+    from quadratus.memory import TaskMemory
+    from quadratus.providers import TurnLimitReached
+    from quadratus.session import PartialWorkStopped
+    session = _session(tmp_path, [], allow_writes=True)
+    spec = _spec()
+    _dispatch(session, spec)
+    (session.project / "evil.py").write_text("x = 1\n")
+    if revoke:
+        _drift(session, False)
+    exc = TurnLimitReached("turn limit", partial_text="Still working.", turns=14)
+    with pytest.raises(PartialWorkStopped, match="exceed the declared scope"):
+        session._close_turn_limited(LEAD, spec, TaskMemory("t1", LEAD), exc, session._task_before)
+    assert (session.project / "evil.py").exists(), "the work is preserved"
+
+
+def test_a_read_only_task_is_not_held_to_a_scope_it_never_wrote_under(tmp_path):
+    from quadratus.memory import TaskMemory
+    from quadratus.providers import TurnLimitReached
+    session = _session(tmp_path, [], allow_writes=False)
+    spec = _spec()
+    _dispatch(session, spec)
+    _drift(session, True)
+    exc = TurnLimitReached("turn limit", partial_text="Still reading.", turns=14)
+    summary = session._close_turn_limited(LEAD, spec, TaskMemory("t1", LEAD), exc, session._task_before)
+    assert summary is not None and session._write_ceiling() is False

@@ -1238,7 +1238,7 @@ class Session:
         required checks still decide. Returns the text recorded for it.
         """
         report = self._assess_scope(spec, task, self._task_before) if self.project else None
-        if self._writes():
+        if self._write_ceiling():
             if spec.scope is not None and report is None:
                 raise PartialWorkStopped(f"A capped {role} could not be measured against the task "
                                          "scope; work preserved.",
@@ -2248,6 +2248,18 @@ class Session:
                 outcome.mismatches.append(note)
         return bound and live
 
+    def _write_ceiling(self) -> bool:
+        """Whether this task could have written: its dispatch grant, or the
+        live grant with no contract. Edits already made are held to scope
+        against this, not against the grant at close, so a revocation during
+        a call does not switch off the scope stop for what that call wrote
+        under the grant (O-NEXT-15 F1, 5865760320). No live reading records
+        anything here; ``_writes`` does."""
+        outcome, contract = self._outcome, getattr(self, "_contract", None)
+        if outcome is None or contract is None or contract.task_id != outcome.task_id:
+            return bool(self.project and self.config.allow_writes)
+        return bool(self.project) and dict(contract.authority).get("write_grant") == "operator"
+
     def _cheap_gate(self):
         """The cheap view of the task's own gate, bound at dispatch (map P3.4;
         O-NEXT-10 B, Sol 5865330461), or None when it has no cheap commands.
@@ -2630,7 +2642,7 @@ class Session:
         if self._outcome is not None:
             self._outcome.note("cap", f"stopped at the lead turn limit ({exc.turns or '?'} turns)")
             self._outcome.partial = dict(changed=state["changed"], changed_lines=state["changed_lines"])
-        if self._writes():
+        if self._write_ceiling():
             if not state["inspected"]:
                 raise PartialWorkStopped("Lead stopped at its turn limit and the source could not "
                                          "be inspected; work preserved.", partial=state) from exc
