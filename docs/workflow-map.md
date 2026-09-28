@@ -893,8 +893,14 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
 - Design collaboration applicability reads the contract since item 22;
   the live reading is kept only to record a disagreement.
 
-**Retirement list additions (Codex, 5861036424):** collaborator selection
-(`collaborators_for`) and the design prompt's applicability text still read
-the live `design_cross_check` / `is_design_task`, and can drift from the
-contract, including during lead recovery. Design applicability is not
-retired while they do.
+**Retirement list additions (Codex, 5861036424), status:**
+- Completed: collaborator selection (`collaborators_for`), the render set
+  collaborators see and the review design lens read the contract's
+  `design_collaboration_applicable` since item 22 (31aa595).
+- Deliberate mirrors: the live `design_cross_check and is_design_task`
+  reading is kept beside the contract only to record a disagreement.
+- Open seam: the lead prompt's design/capture instruction
+  (`_lead_prompt`) still reads live config after dispatch, including
+  during lead recovery. Reproduced by O-NEXT-01 (8ab7333); the proposed
+  `Required.design_instruction` waits on a Codex ruling. Design
+  applicability is not retired while this seam is open.
