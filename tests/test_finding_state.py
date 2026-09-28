@@ -216,14 +216,14 @@ def test_a_prefix_one_short_of_the_bound_is_a_disagreement():
 
 
 def test_an_exception_message_cut_at_its_own_bound_is_a_gap():
-    # session.py:2930 keeps 300 characters of the message.
+    # A saved record from before Fact.full kept 300 characters of the message.
     message = "m" * 500
-    run = RunOutcome()
-    run.note("operator", f"RunStalled: {message[:300]}", legacy="RunStalled")
+    run = dict(facts=[dict(kind="operator", detail=f"RunStalled: {message[:300]}",
+                           legacy="RunStalled")])
     report = FS.legacy_parity(FS.project([], run), error=f"RunStalled: {message}")
     assert report["agree"] and len(report["gaps"]) == 1
-    short = RunOutcome()
-    short.note("operator", f"RunStalled: {message[:299]}", legacy="RunStalled")
+    short = dict(facts=[dict(kind="operator", detail=f"RunStalled: {message[:299]}",
+                             legacy="RunStalled")])
     assert not FS.legacy_parity(FS.project([], short), error=f"RunStalled: {message}")["agree"]
 
 
@@ -279,20 +279,108 @@ def test_a_later_named_stop_replaces_an_earlier_one_which_stays_a_fact():
 
 
 def test_a_truncated_stop_detail_is_a_gap_not_a_disagreement():
+    # A saved fact from before 8529b2a has no full field.
     reason = "FindingsOpen: a task closed with open work, but " + "x" * 600 + ". Work preserved."
-    run = RunOutcome()
-    run.note("unverified", reason, legacy="FindingsOpen")
+    run = dict(facts=[dict(kind="unverified", detail=reason[:400], legacy="FindingsOpen")])
     report = FS.legacy_parity(FS.project([], run), stop_reason=reason, error=reason)
     assert report["agree"] and report["gaps"] == [
         f"stop FindingsOpen: typed detail is a 400-character prefix of the {len(reason)}-character legacy text"]
 
 
-def test_an_untyped_exception_after_the_loop_is_a_stop_disagreement():
-    # run() lines 2957-2960: _recheck_resolved_findings raising after a named stop.
+def test_a_legacy_record_with_an_untyped_post_loop_exception_disagrees():
+    # A saved record made before a07e7bf can lack a post-loop exception fact.
     run = RunOutcome()
     run.note("cap", "GoalUnconfirmedAtCap: cap. Work preserved.", legacy="GoalUnconfirmedAtCap")
     report = FS.legacy_parity(FS.project([], run), error="OSError: disk", stop_reason="GoalUnconfirmedAtCap: cap.")
     assert report["problems"] == ["stop: typed 'GoalUnconfirmedAtCap', legacy 'OSError'"]
+
+
+def _modern_fact(kind, detail, *, stage="", full=None, legacy=None):
+    return dict(kind=kind, detail=detail, stage=stage, terminal=True,
+                recovered=False, full=full, legacy=legacy)
+
+
+def test_full_stop_text_agrees_exactly_without_a_gap():
+    reason = "RequirementsUnmet: " + "x" * 500
+    run = dict(facts=[_modern_fact("unverified", reason[:400], full=reason,
+                                   legacy="RequirementsUnmet")])
+    state = FS.project([], run)
+    assert state.stop.full == reason
+    assert FS.legacy_parity(state, error=reason) == dict(
+        agree=True, problems=[], gaps=[], stop="RequirementsUnmet", findings=[], audit_debt=[])
+
+
+def test_full_exception_text_from_result_agrees_exactly():
+    error = "LookupError: " + "x" * 500
+    stored = dict(workflow=dict(tasks=[], run=dict(facts=[_modern_fact(
+        "operator", error[:313], full=error, legacy="LookupError")])), findings=[])
+    state = FS.from_result(stored)
+    assert state.stop.whole == error
+    assert FS.legacy_parity(state, error=error)["gaps"] == []
+    assert FS.legacy_parity(state, error=error)["agree"]
+
+
+def test_full_stop_divergence_after_the_detail_bound_is_a_problem():
+    reason = "FindingsOpen: " + "x" * 500
+    run = dict(facts=[_modern_fact("unverified", reason[:400], full=reason,
+                                   legacy="FindingsOpen")])
+    report = FS.legacy_parity(FS.project([], run), error=reason[:400] + "different")
+    assert not report["agree"] and report["gaps"] == []
+    assert report["problems"] == ["stop FindingsOpen: typed detail differs from the legacy text"]
+
+
+def test_a_present_null_full_field_never_claims_a_legacy_gap():
+    detail = "FindingsOpen: " + "x" * (400 - len("FindingsOpen: "))
+    run = dict(facts=[_modern_fact("unverified", detail, legacy="FindingsOpen")])
+    report = FS.legacy_parity(FS.project([], run), error=detail + "different")
+    assert not report["agree"] and report["gaps"] == []
+
+
+def test_modern_and_older_findings_match_their_respective_text_bounds():
+    modern = "BLOCKING: " + "m" * 500
+    old = "BLOCKING: " + "o" * 500
+    tasks = [dict(task_id="modern", facts=[_modern_fact("unverified", modern[:400],
+                                                        full=modern, stage="review")]),
+             dict(task_id="old", facts=[dict(kind="unverified", detail=old[:400], stage="review")])]
+    state = FS.project(tasks, dict(facts=[]))
+    assert FS.legacy_parity(state, open_findings=[modern, old])["agree"]
+    changed = modern[:400] + "changed"
+    report = FS.legacy_parity(state, open_findings=[changed, old])
+    assert not report["agree"]
+    assert len(report["problems"]) == 2
+
+
+def test_full_unmerged_reason_is_compared_beyond_the_bound():
+    reason = "r" * 500
+    task = dict(task_id="t1", facts=[_modern_fact("operator", ("not merged: " + reason)[:400],
+                                                   full="not merged: " + reason, stage="merge")])
+    good = f"Parallel task t1 was not merged ({reason}); its files are kept in artifact a1."
+    bad = f"Parallel task t1 was not merged ({reason[:400]}different); its files are kept in artifact a1."
+    state = FS.project([task], dict(facts=[]))
+    assert FS.legacy_parity(state, open_findings=[good])["agree"]
+    assert not FS.legacy_parity(state, open_findings=[bad])["agree"]
+
+
+def test_full_design_problem_is_compared_beyond_the_bound():
+    problem = "p" * 500
+    detail = f"Task t1 is design work without clean rendered evidence: {problem}."
+    task = dict(task_id="t1", facts=[_modern_fact("invalid_proof", detail[:400],
+                                                   full=detail, stage="design")])
+    state = FS.project([task], dict(facts=[]))
+    assert FS.legacy_parity(state, open_findings=[detail],
+                            design_unverified=[("t1", problem)])["agree"]
+    report = FS.legacy_parity(state, open_findings=[detail],
+                              design_unverified=[("t1", problem[:400] + "different")])
+    assert not report["agree"] and len(report["problems"]) == 2
+
+
+def test_a_typed_post_loop_exception_supersedes_an_earlier_named_stop():
+    prior = _modern_fact("cap", "GoalUnconfirmedAtCap: cap.", legacy="GoalUnconfirmedAtCap")
+    error = _modern_fact("operator", "OSError: disk", legacy="OSError")
+    state = FS.from_result(dict(workflow=dict(tasks=[], run=dict(facts=[prior, error])), findings=[]))
+    assert state.stop.name == "OSError"
+    assert [i.category for i in state.active] == ["stop"]
+    assert FS.legacy_parity(state, error="OSError: disk")["agree"]
 
 
 def test_no_stop_and_no_error_agree():

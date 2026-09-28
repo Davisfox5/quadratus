@@ -46,7 +46,7 @@ _UNMERGED_LEGACY = re.compile(r"Parallel task (?P<task>\S+) was not merged \((?P
                               r"its files are kept in artifact \S+\.\Z", re.S)
 _DEPENDENCY = ("DependencyTreeChanged:", "DependencyIdentityUnavailable:")
 _FACT_LIMIT = 400
-#: session.py:2930 keeps this much of an exception's message in its run fact.
+#: Session._note_exception keeps this much of an exception's message in detail.
 _EXCEPTION_MESSAGE_LIMIT = 300
 
 
@@ -55,6 +55,10 @@ def _get(obj, name, default=None):
     if isinstance(obj, dict):
         return obj.get(name, default)
     return getattr(obj, name, default)
+
+
+def _has(obj, name):
+    return name in obj if isinstance(obj, dict) else hasattr(obj, name)
 
 
 def _rank(kind: str) -> int:
@@ -79,6 +83,8 @@ class Item:
     task: str = ""
     stage: str = ""
     detail: str = ""
+    full: Optional[str] = None
+    has_full: bool = False
     refs: Tuple[str, ...] = ()
     legacy_route: bool = False
     notes: Tuple[str, ...] = ()
@@ -86,6 +92,10 @@ class Item:
     @property
     def active(self) -> bool:
         return self.state == "active"
+
+    @property
+    def whole(self) -> str:
+        return self.full or self.detail
 
     @property
     def debt(self) -> str:
@@ -105,6 +115,12 @@ class Stop:
     detail: str
     index: int
     id: str = ""
+    full: Optional[str] = None
+    has_full: bool = False
+
+    @property
+    def whole(self) -> str:
+        return self.full or self.detail
 
 
 @dataclass(frozen=True)
@@ -243,7 +259,8 @@ def project(task_outcomes: Sequence, run_outcome, ledger: Sequence = ()) -> Find
             items.append(Item(
                 id=f"task:{label}:{stage or '-'}:{kind}:{ordinals[(stage, kind)]}", source="task",
                 category=_task_category(outcome, fact), kind=kind, state=_state(fact), task=tid, stage=stage,
-                detail=str(_get(fact, "detail", "") or ""), legacy_route=bool(_get(fact, "legacy_route", False))))
+                detail=str(_get(fact, "detail", "") or ""), full=_get(fact, "full"),
+                has_full=_has(fact, "full"), legacy_route=bool(_get(fact, "legacy_route", False))))
         for fid in ((_get(outcome, "open_at_close") or {}).get("findings") or []):
             snapshot_ids.setdefault(fid, []).append(tid)
     for fid, tasks in snapshot_ids.items():
@@ -272,10 +289,11 @@ def project(task_outcomes: Sequence, run_outcome, ledger: Sequence = ()) -> Find
         state = _state(fact)
         if state == "active" and _get(fact, "legacy") is not None:
             stop = Stop(name=str(_get(fact, "legacy")), kind=kind, detail=str(_get(fact, "detail", "") or ""),
-                        index=index)
+                        index=index, full=_get(fact, "full"), has_full=_has(fact, "full"))
         items.append(Item(id=f"run:{stage}:{kind}:{ordinals[(stage, kind)]}", source="run",
                           category=_run_category(fact), kind=kind, state=state, stage=stage,
-                          detail=str(_get(fact, "detail", "") or "")))
+                          detail=str(_get(fact, "detail", "") or ""), full=_get(fact, "full"),
+                          has_full=_has(fact, "full")))
     if stop is not None:
         stop = replace(stop, id=[i for i in items if i.source == "run"][stop.index].id)
     # The stop is reported as the stop, not again as an item. An earlier named
@@ -306,23 +324,40 @@ def from_result(result: dict) -> FindingState:
     return project(workflow.get("tasks"), workflow.get("run"), result.get("findings"))
 
 
-def _legacy_key(text: str):
+def _legacy_key(text: str, *, bounded: bool = False):
     """What a legacy open-finding text is recorded as in the typed record."""
     match = _UNMERGED_LEGACY.match(text)
     if match:
-        return ("unmerged", match["task"], f"not merged: {match['reason']}"[:_FACT_LIMIT])
-    return ("text", "", text[:_FACT_LIMIT])
+        detail = f"not merged: {match['reason']}"
+        return ("unmerged", match["task"], detail[:_FACT_LIMIT] if bounded else detail)
+    return ("text", "", text[:_FACT_LIMIT] if bounded else text)
 
 
-def _design_detail(task_id, problem) -> str:
+def _design_detail(task_id, problem, *, bounded: bool = False) -> str:
     """The fact detail _check_design records for a ``_design_unverified`` entry."""
-    return f"Task {task_id} is design work without clean rendered evidence: {problem}."[:_FACT_LIMIT]
+    detail = f"Task {task_id} is design work without clean rendered evidence: {problem}."
+    return detail[:_FACT_LIMIT] if bounded else detail
 
 
 def _item_key(item: Item):
     if item.category == "unmerged":
-        return ("unmerged", item.task, item.detail)
-    return ("text", "", item.detail)
+        return ("unmerged", item.task, item.whole)
+    return ("text", "", item.whole)
+
+
+def _unmatched(typed_items, legacy_texts, typed_key, legacy_key):
+    """Match whole modern records first, then bounded older records."""
+    remaining = list(legacy_texts)
+    missing_typed = []
+    for item in sorted(typed_items, key=lambda i: not i.has_full):
+        key = typed_key(item)
+        match = next((n for n, value in enumerate(remaining)
+                      if legacy_key(value, bounded=not item.has_full) == key), None)
+        if match is None:
+            missing_typed.append(key)
+        else:
+            remaining.pop(match)
+    return Counter(missing_typed), Counter(legacy_key(value) for value in remaining)
 
 
 def legacy_parity(state: FindingState, *, open_findings: Sequence[str] = (), error: str = "",
@@ -331,16 +366,14 @@ def legacy_parity(state: FindingState, *, open_findings: Sequence[str] = (), err
 
     ``error`` is the ``result.json`` error (an exception's text, else
     ``stop_reason``); ``stop_reason`` is the session's own. Observational: a
-    disagreement is reported and never raised. ``gaps`` are known limits of
-    the typed record rather than disagreements: a stop detail that is a
-    truncated prefix of the legacy text.
+    disagreement is reported and never raised. ``gaps`` apply only to older
+    facts without a ``full`` field whose stop detail ends at a writer bound.
     """
     problems, gaps = list(state.problems), []
-    legacy = Counter(_legacy_key(t) for t in open_findings)
-    typed = Counter(_item_key(i) for i in state.findings())
-    for key, n in (legacy - typed).items():
+    typed_only, legacy_only = _unmatched(state.findings(), open_findings, _item_key, _legacy_key)
+    for key, n in legacy_only.items():
         problems.append(f"legacy open finding without a typed fact (x{n}): {key[2][:160]}")
-    for key, n in (typed - legacy).items():
+    for key, n in typed_only.items():
         problems.append(f"typed finding absent from the legacy list (x{n}): {key[2][:160]}")
     want = legacy_error_class(error or stop_reason)
     have = state.stop.name if state.stop is not None else ""
@@ -353,9 +386,9 @@ def legacy_parity(state: FindingState, *, open_findings: Sequence[str] = (), err
         # fact's "<Class>: " plus 300 characters of message (session.py:2930).
         # A shorter detail was never cut, so it must equal the legacy text.
         bounds = {_FACT_LIMIT, len(have) + 2 + _EXCEPTION_MESSAGE_LIMIT}
-        if text == detail:
+        if text == state.stop.whole:
             pass
-        elif text.startswith(detail) and len(detail) in bounds:
+        elif not state.stop.has_full and text.startswith(detail) and len(detail) in bounds:
             gaps.append(f"stop {have}: typed detail is a {len(detail)}-character prefix of the "
                         f"{len(text)}-character legacy text")
         else:
@@ -363,11 +396,13 @@ def legacy_parity(state: FindingState, *, open_findings: Sequence[str] = (), err
     if design_unverified is not None:
         # Task and problem, as _check_design writes both (3262, 3341): the
         # same task with a different problem is a different debt.
-        legacy_debt = Counter((str(d[0]), _design_detail(d[0], d[1])) for d in design_unverified)
-        typed_debt = Counter((i.task, i.detail) for i in state.active if i.category == "design_evidence")
-        for (task, detail), n in (legacy_debt - typed_debt).items():
+        typed_debt, legacy_debt = _unmatched(
+            [i for i in state.active if i.category == "design_evidence"], design_unverified,
+            lambda i: (i.task, i.whole),
+            lambda d, bounded=False: (str(d[0]), _design_detail(d[0], d[1], bounded=bounded)))
+        for (task, detail), n in legacy_debt.items():
             problems.append(f"design debt only in the legacy list (x{n}): {task}: {detail[:160]}")
-        for (task, detail), n in (typed_debt - legacy_debt).items():
+        for (task, detail), n in typed_debt.items():
             problems.append(f"design debt only in the typed record (x{n}): {task}: {detail[:160]}")
     return dict(agree=not problems, problems=problems, gaps=gaps,
                 stop=have, findings=[i.id for i in state.findings()], audit_debt=state.audit_debt())

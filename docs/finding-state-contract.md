@@ -17,10 +17,10 @@ and `stop_reason`. Module: `quadratus/finding_state.py`. Tests:
   `result.json` error. It agrees on every offline replay tested: seven named
   stops or exceptions, a clean run, a parallel child's design debt and an
   unmerged parallel child.
-- **Two gaps block "byte-identical from the typed stop."** The incumbent
-  accepted both as integration items (5862083969):
-  - stop text is truncated in the typed fact;
-  - exceptions raised in `run()` after the task loop get no typed fact.
+- **Full text is available on current typed facts.** Projection compares
+  `full or detail` exactly. Only saved records made before `Fact.full` can
+  report a bounded truncation gap. The post-loop exception gap applies only
+  before engine commit a07e7bf.
 - **Failure precedence is unchanged.** An exception is the stop. Open findings
   never replace a named stop. A dependency change at the end of the run
   replaces the stop unless that stop is a refusal or a security stop.
@@ -119,7 +119,8 @@ different fields, so they are out of scope.
 | 3599 | unmerged parallel child (direct append, not `_open_finding`) | `mine.note(..., stage="merge")` 3602, only if the child has an outcome | `unmerged` |
 
 All writers except 3599 go through `_open_finding` (1023). That function
-appends the text and records the fact with `detail = text[:400]`. The
+appends the text and records the fact with `detail = text[:400]` and, since
+8529b2a, `full = text` when cut. The
 unmerged text differs from its fact (`Parallel task X was not merged (R); …`
 against `not merged: R`). Parity matches them by task id and reason.
 
@@ -220,12 +221,13 @@ lists only 4 of the 12 stop names.
    security). In that case the change is kept only as an unnamed integrity
    fact. The projection reports it as `dependency` in `active`, and the
    earlier stop it replaced stays an active `stop` item.
-5. **Post-loop exceptions are untyped (gap 2).** These are exceptions from
-   `_recheck_resolved_findings` or `_annotate_open_findings` (2959-2960), or
-   any non-dependency exception from `_verify_dependencies` (2945). They
-   reach `project_run` as the error with no run fact. The projection's
-   parity reports `stop: typed X, legacy Y`
-   (`test_an_untyped_exception_after_the_loop_is_a_stop_disagreement`).
+5. **Post-loop exceptions are typed since a07e7bf.** They are recorded like
+   loop exceptions and become the named stop; an earlier named stop stays as
+   an active `stop` item. Older saved records can still have a post-loop
+   exception error without a matching fact, which parity reports as a
+   disagreement. The post-loop exception path at a07e7bf does not run the
+   resolved-finding ledger recheck; projection follows the ledger status it
+   receives and cannot infer an omitted distrust note.
 6. **`project_run`:** an exception's error beats `stop_reason`, and
    `stop_reason` beats a blank.
 
@@ -236,15 +238,16 @@ The same applies to any stop recorded as `unverified` while a higher fact is
 active. Whether the stop should carry its cause's class is the incumbent's
 decision.
 
-## Gaps (accepted by the incumbent as integration items, 5862083969)
+## Legacy record gaps and integration conditions
 
-1. **Stop text is truncated.** `Fact.detail` keeps 400 characters
-   (`outcome.py:164`, `:229`), and exception facts keep 300 characters of the
-   message (2930). `_stop_open_work` reasons can run past 600 characters,
-   and `DesignUnverified` to over 400.
+1. **Only older stop facts can lose text.** Before 8529b2a, `Fact.detail`
+   kept 400 characters and exception facts kept 300 characters of the
+   message. Current facts carry `full` when cut. The projection compares
+   `full or detail` exactly whenever the field is present, including when
+   its value is null. Finding and design text also compare in full.
 
-   Parity reports a prefix as a truncation `gap` only when the typed detail
-   sits exactly at one of those two bounds:
+   For a saved fact without the `full` field, parity reports a stop prefix
+   as a truncation `gap` only when detail sits at one of these bounds:
    - 400 characters, for a `_stop_with` stop;
    - `<Class>: ` plus 300 characters, for an exception stop.
 
@@ -253,10 +256,10 @@ decision.
    - `test_a_truncated_stop_detail_is_a_gap_not_a_disagreement`;
    - `test_a_short_divergent_stop_text_is_a_disagreement_not_a_gap`;
    - `test_a_prefix_one_short_of_the_bound_is_a_disagreement`;
-   - `test_an_exception_message_cut_at_its_own_bound_is_a_gap`. The map's
-   removal condition for `stop_reason` needs the full text on the terminal
-   fact.
-2. **Post-loop exceptions are untyped**, as in precedence item 5.
+   - `test_an_exception_message_cut_at_its_own_bound_is_a_gap`.
+2. **Post-loop exception typing depends on engine version.** a07e7bf
+   records these exceptions. The synthetic older-record control remains
+   `test_a_legacy_record_with_an_untyped_post_loop_exception_disagrees`.
 
 ## Integration seam (for the incumbent; nothing is wired here)
 
@@ -265,7 +268,10 @@ cheap and pure; never cache it across a write. Switch each reader alone, with
 a red that fails on the previous commit:
 
 1. **`_name_findings_stop` (4408-4417):**
-   - `own` becomes `state.design_debt(stopping)`.
+   - On the pre-ea7c9a2 engine, `own` could become
+     `state.design_debt(stopping)`. Since ea7c9a2 the engine reads task
+     evidence instead. Prove both typed readers agree after resolving the
+     G8 recheck rule before switching this reader.
    - `not self.stop_reason` becomes `state.stop is None`.
    - Controls: `test_design_debt_binding.py`, `test_named_stops.py`.
    - Before this switch, decide the G8 clear at 3339: the fact needs a
@@ -281,9 +287,12 @@ a red that fails on the previous commit:
 5. **DONE and cap conjunctions (3045, 3187):** these belong to the completion
    lane. This module supplies only `state.findings()` and
    `state.audit_debt()`; it does not decide.
-6. **`project_run.py:308-313` and `run()` 2960:** these read the stop from
-   `state.stop`. They are blocked until gaps 1 and 2 close, and then need a
-   byte-identical control on every replay.
+6. **`project_run.py:308-313` and `run()` 2960:** these may read
+   `state.stop` only on an engine that records post-loop exceptions and
+   full stop text (a07e7bf plus 8529b2a). The byte-identical control must
+   compare the error with `state.stop.full or state.stop.detail` on every
+   replay. Ledger recheck behavior after a post-loop exception still needs
+   its own engine control.
 7. **Then retire:**
    - `open_findings` as a decision input; it stays as report text.
    - `_design_unverified`.
