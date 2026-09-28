@@ -4405,13 +4405,22 @@ class Session:
                  if (stopping is None or o.task_id in stopping) and isinstance(o.evidence, dict)
                  and o.evidence.get("verified") is False and "findings" not in o.evidence]
         legacy = [d for d in self._design_unverified if stopping is None or d[0] in stopping]
-        typed_ids, legacy_ids = {t for t, _ in typed}, {t for t, _ in legacy}
+        # Each task's latest problem on both sides, and the fact that names
+        # the stop, are compared (Codex, 5862205507), not only the task ids.
+        typed_last, legacy_last = dict(typed), dict(legacy)
         for outcome in self.task_outcomes:
-            if outcome.task_id in typed_ids ^ legacy_ids:
-                note = (f"design debt: typed {outcome.task_id in typed_ids}, "
-                        f"legacy {outcome.task_id in legacy_ids}")
-                if note not in outcome.mismatches:
-                    outcome.mismatches.append(note)
+            tid = outcome.task_id
+            if (tid in typed_last) != (tid in legacy_last):
+                note = f"design debt: typed {tid in typed_last}, legacy {tid in legacy_last}"
+            elif tid in typed_last and typed_last[tid] != legacy_last[tid]:
+                note = (f"design debt: typed problem {str(typed_last[tid])[:120]!r}, "
+                        f"legacy problem {str(legacy_last[tid])[:120]!r}")
+            elif typed and legacy and typed[-1] != legacy[-1] and tid == typed[-1][0]:
+                note = f"design debt: typed names task {typed[-1][0]}, legacy names task {legacy[-1][0]}"
+            else:
+                continue
+            if note not in outcome.mismatches:
+                outcome.mismatches.append(note)
         return typed or legacy
 
     def _name_findings_stop(self, stopping=None) -> None:

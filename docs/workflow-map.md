@@ -713,6 +713,9 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
    record with `findings`), and compares the legacy `_design_unverified`
    list; a disagreement is recorded on the task and either one names the
    stop. The message text is unchanged (`tests/test_design_debt_typed.py`).
+   Parity compares facts, not only task ids (Codex, 5862205507): each
+   task's latest problem on both sides, and which task names the stop. An
+   earlier legacy entry for a rechecked task is not a disagreement.
 
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read

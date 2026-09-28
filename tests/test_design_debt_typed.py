@@ -65,3 +65,42 @@ def test_a_disabled_or_verified_check_is_not_design_debt(tmp_path):
     for verified in (True, None):
         session = _session_with(tmp_path / str(verified), dict(task="t1", verified=verified, problem="x"))
         assert session._design_debt({"t1"}) == []
+
+
+# -- parity compares the facts, not only the task ids (Codex, 5862205507) ------
+
+def _with_legacy(tmp_path, legacy):
+    session = _session_with(tmp_path, dict(task="t1", verified=False, problem="typed cause"))
+    session._design_unverified = legacy
+    return session
+
+
+def test_same_task_with_a_different_problem_is_a_recorded_mismatch(tmp_path):
+    session = _with_legacy(tmp_path, [("t1", "different legacy cause")])
+    assert session._design_debt({"t1"}) == [("t1", "typed cause")], "the typed fact still names the stop"
+    assert session.task_outcomes[0].mismatches == [
+        "design debt: typed problem 'typed cause', legacy problem 'different legacy cause'"]
+
+
+def test_same_task_with_the_same_problem_records_nothing(tmp_path):
+    session = _with_legacy(tmp_path, [("t1", "typed cause")])
+    assert session._design_debt({"t1"}) == [("t1", "typed cause")]
+    assert session.task_outcomes[0].mismatches == []
+
+
+def test_an_earlier_legacy_entry_for_the_task_is_not_a_mismatch(tmp_path):
+    """The legacy list can hold a task's first failure and its recheck; the latest is compared."""
+    session = _with_legacy(tmp_path, [("t1", "first capture"), ("t1", "typed cause")])
+    session._design_debt({"t1"})
+    assert session.task_outcomes[0].mismatches == []
+
+
+def test_a_disagreement_about_which_task_names_the_stop_is_recorded(tmp_path):
+    session = _with_legacy(tmp_path, [])
+    second = TaskOutcome("t2", "design")
+    second.evidence = dict(task="t2", verified=False, problem="t2 cause")
+    session.task_outcomes.append(second)
+    session._design_unverified = [("t2", "t2 cause"), ("t1", "typed cause")]
+    assert session._design_debt()[-1] == ("t2", "t2 cause")
+    assert second.mismatches == ["design debt: typed names task t2, legacy names task t1"]
+    assert session.task_outcomes[0].mismatches == []
