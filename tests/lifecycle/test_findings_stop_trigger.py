@@ -74,3 +74,32 @@ def test_a_task_with_no_findings_does_not_stop(tmp_path, monkeypatch):
         matrix.DECL_T1 if len(replay.of("orchestrator")) == 1 else "DONE")), files=FILES, max_tasks=3)
     assert replay.result.completed, replay.result.error
     assert not [m for t in replay.workflow["tasks"] for m in t["mismatches"] if m.startswith("open findings:")]
+
+
+# -- the check itself (Sol review 5863933972) --------------------------------------
+
+def _session(tmp_path):
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.outcome import TaskOutcome
+    session = Session("goal", ArtifactStore(tmp_path / "a"), lambda *a, **k: "DONE")
+    session.task_outcomes.append(TaskOutcome("t1", "build"))
+    return session
+
+
+def test_a_legacy_finding_with_no_typed_fact_still_stops_and_is_recorded(tmp_path):
+    session = _session(tmp_path)
+    session.open_findings.append("Task t1: a legacy-only finding")
+    assert session._findings_stop_due() is True
+    assert session.task_outcomes[-1].mismatches == ["open findings: typed False, legacy True"]
+
+
+def test_a_malformed_record_fails_closed(tmp_path):
+    session = _session(tmp_path)
+    session.task_outcomes = None
+    assert session._findings_stop_due() is True
+
+
+def test_no_findings_on_either_side_does_not_stop(tmp_path):
+    session = _session(tmp_path)
+    assert session._findings_stop_due() is False
+    assert session.task_outcomes[-1].mismatches == []
