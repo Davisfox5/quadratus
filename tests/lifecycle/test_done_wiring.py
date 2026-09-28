@@ -152,9 +152,7 @@ def test_the_e2_re_read_makes_no_callback_twice_and_names_the_stop_once(tmp_path
     from tests.lifecycle.test_replaced_evidence import _run
     replay = _run(tmp_path, monkeypatch, rewrite=True)
     assert replay.result.error.startswith("CompletionUnproven: DONE was accepted"), replay.result.error
-    done = _callbacks(calls)[-2:]
-    assert done == ["_verify_dependencies", "_note_replaced_evidence"], _callbacks(calls)
-    assert _callbacks(calls).count("_note_replaced_evidence") == 1
+    assert _callbacks(calls) == ["_verify_dependencies", "_note_replaced_evidence"], _callbacks(calls)
     assert len(_notes(calls, "completion refused")) == 1
     assert len(_notes(calls, "the orchestrator reports the goal met")) == 1
     stops = [f for f in replay.workflow["run"]["facts"] if f.get("legacy") == "CompletionUnproven"]
