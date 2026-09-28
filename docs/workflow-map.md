@@ -760,7 +760,10 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     `origin`, set where the failure is raised and never read from prose.
     Only two failures are proven environment: the port was already
     listening, so the preview was never launched; or a conventional runner
-    (python, node, ...) could not be launched. Those stop as
+    outside the project (a bare name, or an absolute path outside it, as
+    profile validation accepts one) could not be launched. A project file
+    named like a runner (`./python3`) is a project file (Sol review,
+    5862984388). Those stop as
     `PreviewUnavailable` (operator), with no repair call and the text kept
     byte-identical. Everything else is unattributed and keeps the existing
     `invalid_proof` / `DesignUnverified` route: an app that exits before or

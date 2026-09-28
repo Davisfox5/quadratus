@@ -8,8 +8,8 @@ structured origin set where the failure is raised, never read from prose:
 | failure (preview.py)                               | origin        | route                       |
 |----------------------------------------------------|---------------|-----------------------------|
 | port already listening, preview never launched     | environment   | PreviewUnavailable (operator) |
-| a conventional runner could not be launched        | environment   | PreviewUnavailable (operator) |
-| a project-file preview could not be launched       | unattributed  | unchanged: DesignUnverified |
+| a runner outside the project could not be launched | environment   | PreviewUnavailable (operator) |
+| a project file (even ./python3) could not launch   | unattributed  | unchanged: DesignUnverified |
 | the preview exited before it was ready             | unattributed  | unchanged: DesignUnverified |
 | the preview was not ready within its timeout       | unattributed  | unchanged: DesignUnverified |
 | the preview exited as it became ready              | unattributed  | unchanged: DesignUnverified |
@@ -131,15 +131,31 @@ def test_a_project_file_preview_that_cannot_launch_stays_unverified(tmp_path, mo
 
 # -- the returned value: same text, structured origin -------------------------------
 
-@pytest.mark.parametrize("preview, origin", [
-    (["{missing}/python3", "-m", "http.server"], "environment"),
-    ([sys.executable, "-c", "raise SystemExit(3)"], None),
+@pytest.mark.parametrize("preview, origin, detail", [
+    # A conventional runner outside the project that cannot launch: the environment.
+    (["{outside}/python3", "-m", "http.server"], "environment",
+     "the preview could not start: [Errno 2] No such file or directory: '{outside}/python3'"),
+    # A project file named like a runner (Sol review, 5862984388): unattributed.
+    (["./python3"], None, "the preview could not start: [Errno 13] Permission denied: './python3'"),
+    (["{root}/python3"], None, "the preview could not start: [Errno 13] Permission denied: '{root}/python3'"),
+    # A launched preview that exits: an application exit, unattributed.
+    ([sys.executable, "-c", "raise SystemExit(3)"], None, "the preview exited with 3 before it was ready: "),
 ])
-def test_capture_task_keeps_the_text_and_carries_the_origin(tmp_path, preview, origin):
+def test_capture_task_keeps_the_text_and_carries_the_origin(tmp_path, preview, origin, detail):
     from quadratus.preview import CaptureFailure, capture_task, profile_from_dict
-    preview = [a.replace("{missing}", str(tmp_path / "no-such-runtime")) for a in preview]
-    profile = profile_from_dict(dict(preview=preview, origin=f"http://127.0.0.1:{_free_port()}",
-                                     ready_timeout=2, capture_timeout=5), tmp_path)
-    failure = capture_task(profile, tmp_path, "t1", CAPTURE)
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "python3").write_text("#!/bin/sh\nexit 0\n")
+    (root / "python3").chmod(0o644)
+    names = {"{outside}": str(tmp_path / "no-such-runtime"), "{root}": str(root)}
+
+    def fill(text):
+        for key, value in names.items():
+            text = text.replace(key, value)
+        return text
+    profile = profile_from_dict(dict(preview=[fill(a) for a in preview], origin=f"http://127.0.0.1:{_free_port()}",
+                                     ready_timeout=2, capture_timeout=5), root)
+    failure = capture_task(profile, root, "t1", CAPTURE)
     assert isinstance(failure, CaptureFailure) and failure.origin == origin
+    assert str(failure).startswith(fill(detail)) and (detail.endswith(": ") or str(failure) == fill(detail))
     assert type(str(failure)) is str and json.loads(json.dumps(failure)) == str(failure)

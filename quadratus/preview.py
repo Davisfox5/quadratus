@@ -338,6 +338,20 @@ def _stop(proc: subprocess.Popen) -> None:
         pass
 
 
+def _outside_runner(first: str, root: Path) -> bool:
+    """Whether ``first`` names a conventional runner outside the project."""
+    if _RUNNERS.fullmatch(first):
+        return True
+    path = Path(first)
+    if not (path.is_absolute() and _RUNNERS.fullmatch(path.name)):
+        return False
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return True
+    return False
+
+
 @contextmanager
 def running(profile: CaptureProfile, root, deadline: Optional[float] = None):
     """Start the preview, wait until it answers, yield, and always stop it.
@@ -362,11 +376,13 @@ def running(profile: CaptureProfile, root, deadline: Optional[float] = None):
         shutil.rmtree(tempdir, ignore_errors=True)
         # A conventional runner that cannot launch is the environment; a
         # project file that cannot (missing, not executable) may be the
-        # project's own doing, so it is left unattributed.
+        # project's own doing, so it is left unattributed. A runner is what
+        # profile validation accepts as one: a bare name, or an absolute
+        # path outside the project (Sol review, 5862984388: ./python3 is a
+        # project file).
         first = profile.preview[0]
-        runner = bool(_RUNNERS.fullmatch(first) or _RUNNERS.fullmatch(Path(first).name))
         raise PreviewFailed(f"the preview could not start: {exc}",
-                            origin=ENVIRONMENT if runner else None) from None
+                            origin=ENVIRONMENT if _outside_runner(first, root) else None) from None
     log = _BoundedLog(proc.stdout)
     try:
         ready_by = min(deadline, time.monotonic() + profile.ready_timeout)
