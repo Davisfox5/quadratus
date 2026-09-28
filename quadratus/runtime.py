@@ -476,8 +476,9 @@ class Fleet:
                 role += ("\nYou are a bounded editor. Return exactly PATCH: followed by a fenced "
                          "diff containing a standard unified diff with a/ and b/ paths. "
                          "The harness applies it to the persistent project. For no required edits, "
-                         "return NO CHANGES: with a reason. FETCH, CONSULT and WORKER requests "
-                         "may be returned alone before the patch. You have no write tools.")
+                         "return NO CHANGES: with a reason. You cannot hire, consult or fetch: a "
+                         "reply beginning FETCH, CONSULT or WORKER is refused as a failed errand. "
+                         "You have no write tools.")
                 from .workers import worker_loop_control
                 if worker_loop_control.get() is not None:
                     role += '\nDuring this bounded errand only, CONTINUE: may request another read step.'
