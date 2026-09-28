@@ -279,4 +279,4 @@ projection must still be checked on the live journeys (`from_session`).
   approval surface). Root should relay this file's TL;DR to #25.
 - Next owner: the candidate author for §1–§3 (the candidate side), and
   Sol/root for the two engine-side items (the §2 post-loop re-check and the
-  §3 `_design_unverified` latest-evidence filter).
+  §3 `Session._design_debt` latest-evidence filter).
