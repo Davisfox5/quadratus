@@ -2190,8 +2190,11 @@ class Session:
 
     def _run_task(self, spec: TaskSpec) -> TaskSummary:
         """Work one task to completion and fold it into the ledger."""
-        self._contract_agrees("security_verification", spec.work_class == WorkClass.SECURITY)
-        if spec.work_class == WorkClass.SECURITY:
+        # The contract fixed at dispatch is a floor, never a way round the
+        # security route (map P3.4): security if either the contract or the
+        # live classification says so, and a disagreement is recorded.
+        live = spec.work_class == WorkClass.SECURITY
+        if self._required("security_verification", live) or live:
             return self._run_security_task(spec)
 
         chosen, self._dispatch_lead = self._dispatch_lead, None

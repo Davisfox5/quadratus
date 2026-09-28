@@ -674,6 +674,20 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
    decides and runs as before, with the same allowance. Explicit subset gates
    (the cheap view) are unchanged (`tests/test_checks_applicability.py`).
 
+6. *`security_verification` as a floor.* `_run_task` takes the security
+   route when the task's contract (fixed at dispatch) **or** its live
+   classification says security, and records a disagreement. A security
+   classification fixed at dispatch cannot be dropped by drift, and a live
+   one can never be routed round. This **retains a live
+   security-classification guard**; it is not retirement to a contract-only
+   input, because following the contract alone would route a task now
+   classified as security down the standard route (Codex, 5861415325). The
+   dispatch-security/live-general drift case now takes the security
+   excursion instead of the standard route and may make its security worker
+   and verifier calls: intended enforcement of the original classification,
+   not a claim that no call changes. Ordinary routes with no drift are
+   identical (`tests/lifecycle/test_security_applicability.py`).
+
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
 the live `design_cross_check` / `is_design_task`, and can drift from the
