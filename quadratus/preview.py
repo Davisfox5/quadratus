@@ -339,14 +339,20 @@ def _stop(proc: subprocess.Popen) -> None:
 
 
 def _outside_runner(first: str, root: Path) -> bool:
-    """Whether ``first`` names a conventional runner outside the project."""
+    """Whether ``first`` names a conventional runner outside the project.
+    Total: a path that cannot be resolved (a symlink loop) is not proven
+    outside, so it stays unattributed (Sol review, 5863184501)."""
     if _RUNNERS.fullmatch(first):
         return True
     path = Path(first)
     if not (path.is_absolute() and _RUNNERS.fullmatch(path.name)):
         return False
     try:
-        path.resolve().relative_to(root.resolve())
+        resolved, project = path.resolve(), root.resolve()
+    except (OSError, RuntimeError):
+        return False
+    try:
+        resolved.relative_to(project)
     except ValueError:
         return True
     return False

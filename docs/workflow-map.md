@@ -767,7 +767,8 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     outside the project (a bare name, or an absolute path outside it, as
     profile validation accepts one) could not be launched. A project file
     named like a runner (`./python3`) is a project file (Sol review,
-    5862984388). Those stop as
+    5862984388), and a path that cannot be resolved (a symlink loop) is not
+    proven outside, so it stays unattributed (5863184501). Those stop as
     `PreviewUnavailable` (operator), with no repair call and the text kept
     byte-identical. Everything else is unattributed and keeps the existing
     `invalid_proof` / `DesignUnverified` route: an app that exits before or

@@ -138,6 +138,9 @@ def test_a_project_file_preview_that_cannot_launch_stays_unverified(tmp_path, mo
     # A project file named like a runner (Sol review, 5862984388): unattributed.
     (["./python3"], None, "the preview could not start: [Errno 13] Permission denied: './python3'"),
     (["{root}/python3"], None, "the preview could not start: [Errno 13] Permission denied: '{root}/python3'"),
+    # A path that cannot be resolved is not proven outside (Sol review, 5863184501).
+    (["{root}/loop/python3"], None,
+     "the preview could not start: [Errno 40] Too many levels of symbolic links: '{root}/loop/python3'"),
     # A launched preview that exits: an application exit, unattributed.
     ([sys.executable, "-c", "raise SystemExit(3)"], None, "the preview exited with 3 before it was ready: "),
 ])
@@ -147,6 +150,8 @@ def test_capture_task_keeps_the_text_and_carries_the_origin(tmp_path, preview, o
     root.mkdir()
     (root / "python3").write_text("#!/bin/sh\nexit 0\n")
     (root / "python3").chmod(0o644)
+    (root / "loop").mkdir()
+    (root / "loop" / "python3").symlink_to(root / "loop" / "python3")
     names = {"{outside}": str(tmp_path / "no-such-runtime"), "{root}": str(root)}
 
     def fill(text):
@@ -159,3 +164,16 @@ def test_capture_task_keeps_the_text_and_carries_the_origin(tmp_path, preview, o
     assert isinstance(failure, CaptureFailure) and failure.origin == origin
     assert str(failure).startswith(fill(detail)) and (detail.endswith(": ") or str(failure) == fill(detail))
     assert type(str(failure)) is str and json.loads(json.dumps(failure)) == str(failure)
+
+
+def test_a_path_that_cannot_be_resolved_is_not_proven_outside(tmp_path, monkeypatch):
+    """Resolution failing for any reason leaves the failure unattributed."""
+    from quadratus import preview
+    root = tmp_path / "project"
+    root.mkdir()
+
+    def broken(self, strict=False):
+        raise RuntimeError("Symlink loop from '/x'")
+    monkeypatch.setattr(preview.Path, "resolve", broken)
+    assert preview._outside_runner("/usr/bin/python3", root) is False
+    assert preview._outside_runner("python3", root) is True, "a bare runner needs no resolution"
