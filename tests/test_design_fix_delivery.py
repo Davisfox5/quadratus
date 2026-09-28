@@ -16,7 +16,7 @@ from quadratus.config import Settings
 from quadratus.memory import TaskMemory
 from quadratus.project import Project
 from quadratus.runtime import Fleet
-from quadratus.session import PartialWorkStopped, Session, SessionConfig
+from quadratus.session import Session, SessionConfig
 from tests.test_preferences_in_product import _fake_evidence, _ui
 
 LEAD, REVIEWER = "grok:default", "claude:opus"
@@ -91,10 +91,13 @@ def test_an_evidence_only_fix_declares_nothing_and_reaches_the_final_review(tmp_
     assert not session.completed
 
 
-def test_repeating_the_tasks_earlier_files_is_still_rejected(tmp_path, monkeypatch):
+def test_repeating_the_tasks_earlier_files_is_recorded_not_rejected(tmp_path, monkeypatch):
+    """The declaration is history; the measured diff decides (docs/DIRECTION.md)."""
     reply = 'Scaffold already present; renders captured.\nCHANGED: ["templates/index.html"]'
-    with pytest.raises(PartialWorkStopped, match="CHANGED report"):
-        _run(tmp_path, monkeypatch, reply)
+    session, _, _ = _run(tmp_path, monkeypatch, reply)
+    assert session.design_checks[0]["verified"] is True, "the review still happened"
+    facts = [f for f in session.run_outcome.facts if f.kind == "unverified" and " CHANGED line " in f.detail]
+    assert len(facts) == 1 and "overdeclared" in facts[0].detail and not facts[0].terminal
 
 
 def test_the_capture_output_is_not_a_source_change(tmp_path, monkeypatch):

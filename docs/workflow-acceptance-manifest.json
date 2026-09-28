@@ -722,8 +722,8 @@
     {
       "id": "J36",
       "tests": [
-        "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_rejected",
-        "tests/lifecycle/test_lifecycle_matrix.py::test_a_design_fix_that_repeats_the_tasks_files_is_rejected"
+        "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_recorded_and_the_run_continues",
+        "tests/lifecycle/test_lifecycle_matrix.py::test_a_design_fix_that_repeats_the_tasks_files_is_recorded_and_reviewed"
       ],
       "required_obligations": [
         "calls",
@@ -733,15 +733,15 @@
       ],
       "coverage": {
         "calls": [
-          "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_rejected",
-          "tests/lifecycle/test_lifecycle_matrix.py::test_a_design_fix_that_repeats_the_tasks_files_is_rejected"
+          "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_recorded_and_the_run_continues",
+          "tests/lifecycle/test_lifecycle_matrix.py::test_a_design_fix_that_repeats_the_tasks_files_is_recorded_and_reviewed"
         ],
         "report": [
-          "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_rejected",
-          "tests/lifecycle/test_lifecycle_matrix.py::test_a_design_fix_that_repeats_the_tasks_files_is_rejected"
+          "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_recorded_and_the_run_continues",
+          "tests/lifecycle/test_lifecycle_matrix.py::test_a_design_fix_that_repeats_the_tasks_files_is_recorded_and_reviewed"
         ],
         "partial_work": [
-          "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_rejected"
+          "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_recorded_and_the_run_continues"
         ]
       }
     },

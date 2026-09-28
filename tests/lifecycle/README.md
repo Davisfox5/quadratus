@@ -23,9 +23,9 @@ pytest -q tests/lifecycle
 | --- | --- | --- |
 | worker → FETCH → edits → review BLOCKING → revision → recheck → gate → close-out → next task | `test_the_whole_task_lifecycle_in_every_request_layout` ×4 | Run 9 (newline JSON), Run 11 (request glued to a sentence) |
 | quoted request example inside a delivery | `test_a_quoted_request_example_in_a_delivery_is_a_draft` | review of 03be7e3 |
-| inherited task edits vs this call's edits | `test_a_revision_that_repeats_earlier_files_is_rejected`, `..._with_no_edits_and_an_empty_declaration_proceeds` | source-truth check stays exact |
+| inherited task edits vs this call's edits | `test_a_revision_that_repeats_earlier_files_is_recorded_and_the_run_continues`, `test_an_undeclared_edit_is_recorded_and_still_measured`, `..._with_no_edits_and_an_empty_declaration_proceeds` | the harness diff decides; the declaration is a recorded fact (phase-4 run on ea464cc) |
 | stale renders re-captured with no source edits | `test_stale_renders_are_recaptured_without_source_edits` | Run 12 (design-fix CHANGED mismatch) |
-| design-fix repeating earlier files | `test_a_design_fix_that_repeats_the_tasks_files_is_rejected` | still rejected |
+| design-fix repeating earlier files | `test_a_design_fix_that_repeats_the_tasks_files_is_recorded_and_reviewed` | recorded, review still runs |
 | render of an unrelated page | `test_renders_of_an_unrelated_page_are_an_open_finding` | Run 12 grade (scripted verdict, see below) |
 | render freshness boundary | `test_render_freshness_is_decided_by_timestamp_not_write_order` | frozen-image timing flake |
 | Claude cap envelope | `test_a_claude_lead_at_its_cap_hands_back_partial_work` | capped continuation |
