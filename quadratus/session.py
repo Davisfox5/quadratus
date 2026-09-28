@@ -4394,6 +4394,26 @@ class Session:
             finding.update(status="resolved", resolved_by=spec.task_id, reopened=None, resolution=evidence)
             self._note(f"task {spec.task_id} resolved audit finding {finding['id']}")
 
+    def _design_debt(self, stopping=None) -> list:
+        """``(task_id, problem)`` for the stopping tasks' unverified design
+        evidence, read from their typed ``evidence`` records (map P3.4): a
+        design check that ended ``verified=False``. Audit debt (a record
+        carrying ``findings``) is requirement debt, not this. The legacy
+        ``_design_unverified`` list is compared; a disagreement is recorded
+        on the task, and either one names the stop."""
+        typed = [(o.task_id, o.evidence.get("problem")) for o in self.task_outcomes
+                 if (stopping is None or o.task_id in stopping) and isinstance(o.evidence, dict)
+                 and o.evidence.get("verified") is False and "findings" not in o.evidence]
+        legacy = [d for d in self._design_unverified if stopping is None or d[0] in stopping]
+        typed_ids, legacy_ids = {t for t, _ in typed}, {t for t, _ in legacy}
+        for outcome in self.task_outcomes:
+            if outcome.task_id in typed_ids ^ legacy_ids:
+                note = (f"design debt: typed {outcome.task_id in typed_ids}, "
+                        f"legacy {outcome.task_id in legacy_ids}")
+                if note not in outcome.mismatches:
+                    outcome.mismatches.append(note)
+        return typed or legacy
+
     def _name_findings_stop(self, stopping=None) -> None:
         """Name a stop caused by unverified design evidence.
 
@@ -4405,7 +4425,7 @@ class Session:
         stop (map G8): ``stopping`` is their ids. Another task's recorded
         debt never names this stop.
         """
-        own = [d for d in self._design_unverified if stopping is None or d[0] in stopping]
+        own = self._design_debt(stopping)
         if own and not self.stop_reason:
             task_id, problem = own[-1]
             self._stop_with("unverified", (f"DesignUnverified: task {task_id} is design work without clean "

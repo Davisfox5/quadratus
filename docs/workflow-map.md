@@ -707,6 +707,13 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
    the counter is a separate, unauthorised question (Codex, 5861810828).
    `turn_limited` stays the report mirror (`tests/test_breaker_names.py`).
 
+9. *Design debt read from the typed evidence.* `_name_findings_stop`
+   names `DesignUnverified` from the stopping tasks' `evidence` records (a
+   design check that ended `verified=False`), excluding audit debt (a
+   record with `findings`), and compares the legacy `_design_unverified`
+   list; a disagreement is recorded on the task and either one names the
+   stop. The message text is unchanged (`tests/test_design_debt_typed.py`).
+
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
 the live `design_cross_check` / `is_design_task`, and can drift from the
