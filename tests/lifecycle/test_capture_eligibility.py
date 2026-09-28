@@ -8,12 +8,14 @@ harness-capture fixtures; the decision function is also tested directly for
 the cross-task cases a single loop cannot reach (the loop stops after a task
 whose last check failed)."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from quadratus.outcome import TaskOutcome
 from quadratus.session import Session
+from tests.lifecycle import harness as H
 from tests.lifecycle.test_audit_findings import REQS
 from tests.lifecycle.test_harness_capture import AUDIT, _no_edit, _profile, _run, browser
 
@@ -97,3 +99,50 @@ def test_an_earlier_unrelated_failure_in_the_run_record_does_not_block_this_task
     replay = _run(tmp_path, monkeypatch, [REQS + AUDIT], {"t1": _no_edit}, profile=profile)
     assert started, "the harness captured on the task's own passing gate"
     assert replay.result.error == "" or "did not capture" not in replay.result.error
+
+
+def test_a_passing_task_gate_reaches_capture_despite_an_unrelated_run_check_offline(tmp_path, monkeypatch):
+    """Exercise the real gate/eligibility path without claiming browser proof.
+
+    The browser journey above remains the end-to-end capture control. Here
+    only the preview/capture subprocess boundary is replaced: it records that
+    the current task was admitted, then leaves source-bound synthetic renders
+    for the ordinary design-evidence check.
+    """
+    profile, _ = _profile(tmp_path)
+    captures = []
+    from quadratus import preview
+
+    def capture(_profile, root, task_id, declaration):
+        captures.append((task_id, declaration["path"]))
+        H.evidence(Path(root), task_id, age=H.FRESH)
+        return ""
+
+    monkeypatch.setattr(preview, "capture_task", capture)
+    gate = Session._run_integration_gate
+
+    def gate_then_foreign_failure(self, lead, spec, task, **kw):
+        result = gate(self, lead, spec, task, **kw)
+        self.checks.append({"passed": False, "command": "another task's gate", "output": "", "cwd": "",
+                            "receipts": []})
+        return result
+
+    monkeypatch.setattr(Session, "_run_integration_gate", gate_then_foreign_failure)
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT], {"t1": _no_edit}, profile=profile)
+    assert captures == [("t1", "/index.html")]
+    assert replay.workflow["tasks"][0]["checks"][-1]["passed"] is True
+    assert H.result_json(replay)["design_checks"][0]["verified"] is True
+
+
+def test_a_missing_required_gate_never_reaches_the_offline_capture_boundary(tmp_path, monkeypatch):
+    profile, _ = _profile(tmp_path)
+    from quadratus import preview
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("capture must not start without the task's required gate")
+
+    monkeypatch.setattr(preview, "capture_task", forbidden)
+    monkeypatch.setattr(Session, "_run_integration_gate", lambda self, lead, spec, task, **kw: "")
+    replay = _run(tmp_path, monkeypatch, [REQS + AUDIT], {"t1": _no_edit}, profile=profile)
+    assert "the harness did not capture because the task's required checks have not run" in replay.result.error
+    assert not replay.result.completed
