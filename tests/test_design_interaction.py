@@ -693,6 +693,18 @@ def test_a_tasks_own_capture_fixture_is_accepted_with_provenance(tmp_path):
     assert checked["bytes"] == 11 and checked["sha256"] == hashlib.sha256(b"name\nalpha\n").hexdigest()
 
 
+def test_a_committed_project_sample_is_accepted_with_provenance(tmp_path):
+    """The capture's own rule, which the scope and dispatch gates now share
+    (phase-4 rerun on a6c9576: a task's committed tests/fixtures sample)."""
+    import hashlib
+    root = _fixture_root(tmp_path)
+    (root / "tests" / "fixtures").mkdir(parents=True)
+    (root / "tests" / "fixtures" / "sample.csv").write_text("a,b\n1,2\n")
+    (checked,), _ = validate_steps([dict(action="file", selector="#f", path="tests/fixtures/sample.csv")],
+                                   str(root / "index.html"), root, "t2")
+    assert checked["sha256"] == hashlib.sha256(b"a,b\n1,2\n").hexdigest()
+
+
 @pytest.mark.parametrize("path,task", [
     (".quadratus/capture-fixtures/t2/rows.csv", "t3"),            # another task's fixture
     (".quadratus/capture-fixtures/t2/rows.csv", None),            # no task named

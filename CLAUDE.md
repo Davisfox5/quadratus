@@ -429,6 +429,18 @@ Key design decisions already settled:
   Nothing outside the project is guarded. The lead's cap
   (`lead_max_turns`) binds revision, gate-fix and design-fix as well as the
   draft; a capped fix is one attempt spent and the checks still decide.
+- **A rule the orchestrator is held to is a rule its prompt states, and the
+  one correction states all of them** (phase-4 rerun on a6c9576,
+  2026-09-28). The rerun closed two tasks, then the orchestrator declared
+  capture steps as `{"click": ...}` objects, spent its single correction on
+  the schema, and named the sample its previous task had just committed
+  under `tests/fixtures/`; the fixture-path rule appeared only in the
+  validator's error, and the run stalled. `_CAPTURE_SCOPE_REQUEST` now
+  spells out the step shape and both valid upload paths, the scope
+  correction appends it, and the scope and dispatch gates accept a
+  committed non-hidden project sample exactly as the capture itself
+  (`design_evidence._fixture`) and the lead's instructions already did. Three
+  gates with three rules was the defect; there is one rule now.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

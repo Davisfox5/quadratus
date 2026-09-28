@@ -467,7 +467,14 @@ _SCOPE_REQUEST = (
 _CAPTURE_SCOPE_REQUEST = (
     'A task that changes or reviews what users see adds "capture": {"path": "/page", '
     '"steps": [...]} to its SCOPE: the page the harness renders and the interaction steps '
-    '(click, wait, file) that reach the state showing the change. Declare steps only when '
+    'that reach the state showing the change. Each step is exactly {"action": "click", '
+    '"selector": "<css selector>"}, {"action": "wait", "selector": "<css selector>"} or '
+    '{"action": "file", "selector": "<file input selector>", "path": "<sample file>"}; no '
+    'other keys or shapes. A file step\'s path is project-relative and names either a '
+    'non-hidden file already in the project (a committed sample such as '
+    'tests/fixtures/sample.csv) or .quadratus/capture-fixtures/<task id>/<name> for a '
+    'capture-only sample the lead will write; nothing hidden, absolute or outside the '
+    'project. Declare steps only when '
     'the change is reached by interaction; a change visible without interaction (a '
     'favicon, a header, copy) declares "steps": []. A final wait must name something only '
     'the result creates, never an element already on the page at load. A task that '
@@ -2892,9 +2899,7 @@ class Session:
                     + (self._done_refusal or "")
                     + self._findings_prompt()
                     + ("\n\n" + _SCOPE_REQUEST if self.project and self.config.allow_writes else "")
-                    + ("\n\n" + _CAPTURE_SCOPE_REQUEST
-                       if self.project and self.config.allow_writes and self.config.capture_profile is not None
-                       and self.config.design_self_verify else "")
+                    + ("\n\n" + _CAPTURE_SCOPE_REQUEST if self._capture_guidance() else "")
                     + ("\n\n" + _ORIENT_REQUEST
                        if self.project and self.config.codebase_map is not None else "")
                 ),
@@ -3001,7 +3006,12 @@ class Session:
                 except ValueError as exc:
                     if attempt:
                         raise RunStalled(f"Task scope remains invalid after correction: {exc}") from exc
-                    correction = f"\n\nCORRECTION REQUIRED: {exc}.\n{_SCOPE_REQUEST}"
+                    # The one correction carries every rule the declaration is
+                    # held to. The phase-4 rerun on a6c9576 (2026-09-28) spent
+                    # it on the step schema and then stalled on the fixture
+                    # path, a rule the orchestrator had never been shown.
+                    correction = (f"\n\nCORRECTION REQUIRED: {exc}.\n{_SCOPE_REQUEST}"
+                                  + ("\n" + _CAPTURE_SCOPE_REQUEST if self._capture_guidance() else ""))
                     seat, reply = self._ask_seat(seat, build_with_correction)
                     if (control := parse_control(reply)) is not None:
                         raise RunStalled("Scope correction must supply a valid task, not a control reply.") from exc
@@ -4406,6 +4416,11 @@ class Session:
             outcome.mismatches.append(note)
         return instruction, contract.capture_page
 
+    def _capture_guidance(self) -> bool:
+        """Whether the orchestrator is held to a capture block, and so is told its rules."""
+        return bool(self.project and self.config.allow_writes and self.config.capture_profile is not None
+                    and self.config.design_self_verify)
+
     def _capture_problem(self, spec, resolves) -> str:
         """Why a UI task cannot be dispatched as declared, before any lead
         call; "" if it can. Raises CapabilityUnavailable when the lead could
@@ -4418,12 +4433,21 @@ class Session:
             capture = getattr(spec.scope, "capture", None)
             if not capture:
                 return ('A UI task must declare what the harness captures. ' + _CAPTURE_SCOPE_REQUEST)
+            # A committed project sample or this task's own capture-only
+            # fixture; the capture itself (design_evidence._fixture) holds the
+            # same rule, and the lead's instructions already offer both. The
+            # phase-4 rerun on a6c9576 stalled on the sample task 2 had just
+            # committed under tests/fixtures/.
             own = f".quadratus/capture-fixtures/{spec.task_id}/"
             for step in capture["steps"]:
-                if step["action"] == "file" and not (step["path"].startswith(own)
-                                                     and "/" not in step["path"][len(own):]):
-                    return (f"A harness capture uploads only this task's own fixtures: put "
-                            f"{step['path']} at {own}<name>.")
+                if step["action"] != "file":
+                    continue
+                path = step["path"]
+                if path.startswith(own) and "/" not in path[len(own):]:
+                    continue
+                if any(part.startswith(".") for part in path.split("/")):
+                    return (f"A harness capture uploads a committed project file or this task's own "
+                            f"fixture: {path} is hidden; put a capture-only sample at {own}<name>.")
             target = profile.origin + capture["path"]
             steps = [[s["action"], s["selector"]] for s in capture["steps"]]
             for finding in self.findings:

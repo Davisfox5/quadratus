@@ -355,10 +355,20 @@ def test_a_same_origin_redirect_is_followed_and_passes(tmp_path):
     assert ok, problem
 
 
-@pytest.mark.parametrize("path", ["/etc/DUMMY", "../x/y/z", ".quadratus/capture-fixtures/t1/a/b", "fixtures/a.csv"])
+@pytest.mark.parametrize("path", ["/etc/DUMMY", "../x/y/z", ".quadratus/capture-fixtures/t1/a/b",
+                                  ".quadratus/other/x.csv", ".hidden/a.csv", "tests/.secret.csv", ""])
 def test_a_fixture_path_is_refused_at_parse(path):
-    with pytest.raises(ValueError, match="capture-fixtures"):
+    with pytest.raises(ValueError, match="non-hidden project file or"):
         validate_capture({"path": "/", "steps": [{"action": "file", "selector": "#f", "path": path}]})
+
+
+@pytest.mark.parametrize("path", ["fixtures/a.csv", "tests/fixtures/import_preview_sample.csv",
+                                  ".quadratus/capture-fixtures/t1/a.csv"])
+def test_a_committed_sample_or_own_fixture_passes_parse(path):
+    """The phase-4 rerun on a6c9576 stalled on tests/fixtures/<sample>.csv, the
+    file the previous task had just committed; the capture itself accepts it."""
+    out = validate_capture({"path": "/", "steps": [{"action": "file", "selector": "#f", "path": path}]})
+    assert out["steps"][0]["path"] == path
 
 
 @pytest.mark.parametrize("argument", ["--config=outside-config.txt", "outside-config.txt", "--config=/etc/x"])
