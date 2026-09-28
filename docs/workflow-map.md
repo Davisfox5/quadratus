@@ -717,6 +717,15 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
    task's latest problem on both sides, and which task names the stop. An
    earlier legacy entry for a rechecked task is not a disagreement.
 
+10. *Stop fixtures for the findings and completion candidates* (Codex,
+    5862193380). `tests/lifecycle/test_stop_fixtures.py` runs 19 existing
+    journey tests as written and records each Session's legacy stop inputs
+    (`stop_reason`, `result.error`, `open_findings`, `_design_unverified`,
+    audit findings) beside the typed stop fact in
+    `tests/lifecycle/stop_fixtures.json`. No route changes. Exception stops
+    (`RunStalled`, `DependencyTreeChanged`) leave `stop_reason` empty; their
+    text is in the typed fact and `result.error`.
+
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
 the live `design_cross_check` / `is_design_task`, and can drift from the
