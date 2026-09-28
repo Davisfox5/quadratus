@@ -61,6 +61,16 @@ def test_unknown_until_external_attestation_and_matching_source(tmp_path):
     assert score([run], claim)["runs"][0]["verification"] == "unknown"
 
 
+@pytest.mark.parametrize("reviewer", [None, True, 42, [], {}, "", " \t\n"])
+def test_verified_attestation_requires_meaningful_reviewer_string(tmp_path, reviewer):
+    run = _write(tmp_path / "a", completed=True, events=[], attempts=0)
+    claim = _attest(run)
+    claim[run.name]["reviewer"] = reviewer
+    assert score([run], claim)["runs"][0]["verification"] == "unknown"
+    claim[run.name]["reviewer"] = " independent reviewer "
+    assert score([run], claim)["runs"][0]["verification"] == "verified"
+
+
 def test_claim_cannot_override_incomplete_run(tmp_path):
     run = _write(tmp_path / "a", completed=False, events=[], attempts=0)
     assert score([run], _attest(run))["runs"][0]["verification"] == "unknown"

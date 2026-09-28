@@ -247,7 +247,8 @@ def _verification(run: Path, result: dict | None, attestations: dict):
         evidence_path = run / evidence_path
     if not evidence_path.is_file() or evidence_path.stat().st_size == 0:
         return "unknown", "review evidence missing"
-    if not claim.get("reviewer"):
+    reviewer = claim.get("reviewer")
+    if not isinstance(reviewer, str) or not reviewer.strip():
         return "unknown", "reviewer missing"
     return "verified", "independent attestation with matching source identity"
 
