@@ -72,7 +72,8 @@ def test_a_same_length_rewrite_with_mtime_restored_is_rehashed_and_caught(tmp_pa
 
 def test_the_cache_skips_rereading_an_identical_file(tmp_path):
     root = _project(tmp_path)
-    guard = DependencyGuard(root)
+    # Files written well before they are read: not racily clean.
+    guard = DependencyGuard(root, wall=lambda: time.time_ns() + 10_000_000_000)
     first = guard.identity()
     second = guard.identity()
     assert first.read_bytes > 0 and second.read_bytes == 0 and first.digest == second.digest

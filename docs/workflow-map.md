@@ -833,6 +833,16 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     debt, stop text and applicability are separate packages
     (`tests/lifecycle/test_findings_stop_trigger.py`).
 
+19. *The dependency guard sees a rewrite inside one timestamp tick (Codex,
+    5863853232).* Its per-file hash cache is keyed by lstat; on a
+    filesystem with coarse timestamps a same-size rewrite within one tick
+    keeps that key, so `test_an_edited_venv_file_is_a_change` failed
+    intermittently in the pinned container and a real edit could be
+    missed. A hash is cached only once the file's times are older than the
+    read by more than `_RACY_NS` (2 s, git's "racily clean" rule); a recent
+    file is read again each pass. Bounds, identity fields and stop names
+    are unchanged (`tests/test_deptree_racy.py`).
+
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
 the live `design_cross_check` / `is_design_task`, and can drift from the
