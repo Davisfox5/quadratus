@@ -2927,8 +2927,7 @@ class Session:
         try:
             history = self._run_tasks(max_tasks)
         except BaseException as exc:
-            self.run_outcome.note(classify(exc), f"{type(exc).__name__}: {str(exc)[:300]}",
-                                  legacy=type(exc).__name__, full=f"{type(exc).__name__}: {exc}")
+            self._note_exception(exc)
             try:
                 # A resolution a later task's changes undid must not persist as
                 # resolved because the run ended on an exception.
@@ -2939,6 +2938,24 @@ class Session:
                 self._distrust_resolutions(f"the findings could not be re-checked after "
                                            f"{type(exc).__name__} ({type(failure).__name__})")
             raise
+        try:
+            self._finish_run()
+        except BaseException as exc:
+            # After the loop, an exception used to leave no typed fact while
+            # result.error reported it (map P3.4). It is recorded as the loop's
+            # own exceptions are, the run is not complete, and it is re-raised.
+            self.completed = False
+            self._note_exception(exc)
+            raise
+        return history
+
+    def _note_exception(self, exc: BaseException) -> None:
+        """The typed fact for an exception that ends the run."""
+        self.run_outcome.note(classify(exc), f"{type(exc).__name__}: {str(exc)[:300]}",
+                              legacy=type(exc).__name__, full=f"{type(exc).__name__}: {exc}")
+
+    def _finish_run(self) -> None:
+        """The end-of-run dependency check and the final findings record."""
         try:
             # A tree a failed or capped call changed may not have met another
             # check before the run ended; the end of the run is one.
@@ -2958,7 +2975,6 @@ class Session:
             # The record says what holds at the end, whatever stopped the run.
             self._recheck_resolved_findings()
             self._annotate_open_findings(self.stop_reason[:240] or "the run ended incomplete")
-        return history
 
     def _run_tasks(self, max_tasks: int) -> List[TaskSummary]:
         self.completed = False

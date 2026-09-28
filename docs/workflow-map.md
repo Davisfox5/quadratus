@@ -732,6 +732,14 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     `result.error` is on the typed record intact. Additive report field;
     names, kinds and routes unchanged (`tests/test_stop_full_text.py`).
 
+12. *Post-loop exceptions are typed.* An exception from the end-of-run
+    dependency check or the final findings record used to reach
+    `result.error` with no typed stop, and the session could still read
+    complete. It is now recorded as the loop's exceptions are (same kind,
+    legacy name and text), `completed` is false, and it is re-raised
+    unchanged. The integrity route for a changed dependency tree at the
+    end is untouched (`tests/test_post_loop_exception.py`).
+
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
 the live `design_cross_check` / `is_design_task`, and can drift from the
