@@ -46,13 +46,35 @@ def _workflow_problem(result):
     tasks = workflow.get("tasks")
     if not isinstance(run, dict) or run.get("done_accepted") is not True or not isinstance(tasks, list):
         return "workflow acceptance unavailable"
+    any_required_checks = False
     for task in tasks:
         if not isinstance(task, dict) or not isinstance(task.get("edges"), dict):
             return "task workflow unavailable"
         if task.get("mismatches") or task.get("unsatisfied"):
             return "task workflow debt"
-        if task["edges"].get("delivered") is False or task["edges"].get("reviewer") is False:
-            return "delivery or reviewer edge failed"
+        contract = task.get("contract")
+        if not isinstance(contract, dict) or not isinstance(contract.get("required"), dict):
+            return "task requirement contract unavailable"
+        required = contract["required"]
+        wanted = []
+        if required.get("checks"):
+            wanted.append("checks")
+            any_required_checks = True
+        if required.get("security_verification"):
+            wanted.append("verification")
+        if required.get("design_evidence") in ("harness", "self"):
+            wanted.append("evidence")
+        if required.get("design_review"):
+            wanted.extend(("delivered", "reviewer"))
+        if required.get("settlement"):
+            wanted.append("settlement")
+        if any(task["edges"].get(edge) is not True for edge in wanted):
+            return "required task edge missing or failed"
+        checks = task.get("checks")
+        if not isinstance(checks, list) or (required.get("checks") and not checks):
+            return "task check receipts unavailable"
+        if checks and (not isinstance(checks[-1], dict) or checks[-1].get("passed") is not True):
+            return "task check failed"
     requirements = result.get("requirements")
     if not isinstance(requirements, dict) or not isinstance(requirements.get("listed"), dict) or not isinstance(requirements.get("status"), dict):
         return "requirements record unavailable"
@@ -64,9 +86,11 @@ def _workflow_problem(result):
         return "findings record unavailable"
     if any(not isinstance(item, dict) or item.get("status") != "resolved" for item in findings):
         return "unresolved finding"
-    if any(not isinstance(check, dict) or check.get("passed") is not True
-           for check in result.get("checks", [])):
-        return "failed check"
+    checks = result.get("checks")
+    if not isinstance(checks, list) or (any_required_checks and not checks):
+        return "run check receipts unavailable"
+    if checks and (not isinstance(checks[-1], dict) or checks[-1].get("passed") is not True):
+        return "run check failed"
     return None
 
 

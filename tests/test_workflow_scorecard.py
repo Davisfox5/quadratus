@@ -11,7 +11,9 @@ def _write(run, *, completed, events, attempts=None, seconds=10):
     (run / "result.json").write_text(json.dumps({
         "completed": completed, "source_fingerprint": "source-1",
         "workflow": {"run": {"done_accepted": completed}, "tasks": [
-            {"edges": {"delivered": True, "reviewer": True}, "mismatches": [], "unsatisfied": []}],
+            {"contract": {"required": {"checks": True, "design_review": True}},
+             "edges": {"checks": True, "delivered": True, "reviewer": True},
+             "checks": [{"passed": True}], "mismatches": [], "unsatisfied": []}],
             "parity": {"agree": True, "complete": True, "typed_completed": completed}},
         "requirements": {"listed": {"R1": "example"}, "status": {"R1": "met (audited)"}},
         "findings": [], "checks": [{"passed": True}],
@@ -114,6 +116,12 @@ def test_missing_or_contradictory_workflow_cannot_be_verified(tmp_path):
         lambda item: item["workflow"]["parity"].update(agree=False, problems=["mismatch"]),
         lambda item: item["workflow"]["parity"].update(mismatches=["mismatch"]),
         lambda item: item["workflow"]["tasks"][0]["edges"].update(reviewer=False),
+        lambda item: item["workflow"]["tasks"][0]["edges"].pop("reviewer"),
+        lambda item: item["workflow"]["tasks"][0]["edges"].pop("delivered"),
+        lambda item: item["workflow"]["tasks"][0]["checks"].append({"passed": False}),
+        lambda item: item["workflow"]["tasks"][0].pop("checks"),
+        lambda item: item.pop("checks"),
+        lambda item: item.update(checks=[]),
         lambda item: item["requirements"]["status"].update(R1="NOT MET"),
         lambda item: item["findings"].append({"status": "open"}),
     ):
