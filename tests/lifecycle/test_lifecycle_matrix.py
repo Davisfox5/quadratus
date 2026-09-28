@@ -172,6 +172,43 @@ def test_a_revision_that_repeats_earlier_files_is_rejected(tmp_path, monkeypatch
     assert H.gate_results(replay) == [], "stopped before the gate"
 
 
+def _blocking_from_codex(call, replay):
+    return "BLOCKING: nothing tests negative numbers." if call.vendor == "codex" else "No blocking findings."
+
+
+def test_a_revision_is_told_which_files_are_already_recorded(tmp_path, monkeypatch):
+    """Phase-4 run on ea464cc: a Sol revision re-declared the draft's file and was stopped.
+
+    The design-fix prompt carried the per-call CHANGED instruction since run 12;
+    the revision prompt never did.
+    """
+    def revision(call, replay):
+        note = next(line for line in call.prompt.splitlines() if line.startswith("Files this task has already changed"))
+        assert "app.py" in note and "lists only files this call itself" in call.prompt
+        assert "do not list them again unless this call changes them again" in call.prompt
+        return "Nothing to change after review.\nCHANGED: []"
+
+    replay = _run(tmp_path, monkeypatch, Script(collaborator=_blocking_from_codex, revision=revision))
+    assert len(replay.of("revision")) == 1
+    assert H.ended_at_cap(replay, 1) and _gate_passed(replay)
+
+
+def test_a_fix_round_is_told_which_files_are_already_recorded(tmp_path, monkeypatch):
+    def recheck(call, replay):
+        return "BLOCKING: still no negative-number test." if len(replay.of("recheck")) == 1 else "RESOLVED"
+
+    def revision(call, replay):
+        assert "Files this task has already changed" in call.prompt and "app.py" in call.prompt
+        assert "lists only files this call itself" in call.prompt
+        return "Nothing to change.\nCHANGED: []"
+
+    replay = _run(tmp_path, monkeypatch, Script(collaborator=_blocking_from_codex, revision=revision,
+                                                recheck=recheck))
+    assert len(replay.of("revision")) == 2, "the review revision, then one fix round"
+    assert any("remain unresolved" in c.prompt for c in replay.of("revision"))
+    assert H.ended_at_cap(replay, 1) and _gate_passed(replay)
+
+
 def test_a_revision_with_no_edits_and_an_empty_declaration_proceeds(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, Script())
     assert H.ended_at_cap(replay, 1) and _gate_passed(replay)

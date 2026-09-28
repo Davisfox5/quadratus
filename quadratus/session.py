@@ -5013,6 +5013,7 @@ class Session:
             "into the void. "
             + self._revision_delivery()
             + (self._scope_headroom(spec) if self._writes() else "")
+            + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
         )
 
     def _revision_delivery(self) -> str:
@@ -5083,6 +5084,7 @@ class Session:
             f"These blocking findings remain unresolved:\n{remaining}\n\n"
             "Fix them, or state precisely why the reviewer is wrong. Produce "
             "the complete revised work."
+            + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
         )
 
     def _run_integration_gate(self, lead: str, spec: TaskSpec, task: TaskMemory, *,
@@ -5381,6 +5383,27 @@ class Session:
                    f"{files}; {checked}. Evidence: " + "; ".join(pointers))
         self._note(f"{spec.task_id}: close-out refused by {lead}; harness record kept")
         return summary, "No model-written decision record: the close-out was refused.", []
+
+
+def _revision_changed_delivery(already: str) -> str:
+    """What a revision or fix call's CHANGED line covers, stated for that call.
+
+    Phase-4 run 20260928T090058Z on ea464cc: the Sol revision changed only
+    tests/test_basic.py and declared that file plus templates/index.html,
+    which the task's draft had changed. Fleet rightly rejected a declaration
+    that did not match what the call itself changed, and the run stopped at
+    its first task. The design-fix prompt had carried this instruction since
+    run 12; the revision and fix prompts never did, so a lead revising "your
+    draft" reported the task's files. The check stays exact; the instruction
+    now says which edits belong to this call, from the harness's own diff.
+    """
+    return (
+        ("\n" + already + "." if already else "")
+        + "\nYour CHANGED line lists only files this call itself adds, changes or deletes. "
+        "Files the task changed before this call are already recorded; do not list them "
+        "again unless this call changes them again. If you change nothing, end with "
+        "exactly CHANGED: []."
+    )
 
 
 def _design_fix_delivery(already: str) -> str:
