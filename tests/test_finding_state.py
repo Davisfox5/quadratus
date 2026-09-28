@@ -146,7 +146,85 @@ def test_design_debt_the_legacy_list_cleared_but_the_fact_keeps_is_reported():
     # G8 clearance (session.py:3339) drops the legacy entry; the fact stays active.
     state = FS.project([_task("t2", DESIGN_T2)], RunOutcome())
     report = FS.legacy_parity(state, open_findings=[DESIGN_T2[1]], design_unverified=[])
-    assert report["problems"] == ["design debt: typed ['t2'], legacy []"]
+    assert report["problems"] == ["design debt only in the typed record (x1): t2: " + DESIGN_T2[1]]
+
+
+# -- review 5862287503: adversarial controls ------------------------------------
+
+def test_the_same_task_with_a_different_design_problem_disagrees():
+    state = FS.project([_task("t2", DESIGN_T2)], RunOutcome())
+    report = FS.legacy_parity(state, open_findings=[DESIGN_T2[1]], design_unverified=[("t2", "different problem")])
+    assert not report["agree"]
+    assert any("only in the legacy list" in p and "different problem" in p for p in report["problems"])
+    assert any("only in the typed record" in p and "stale" in p for p in report["problems"])
+    same = FS.legacy_parity(state, open_findings=[DESIGN_T2[1]], design_unverified=[("t2", "stale")])
+    assert same["agree"], same
+
+
+def test_a_repeated_design_problem_is_counted_not_collapsed():
+    state = FS.project([_task("t2", DESIGN_T2)], RunOutcome())
+    report = FS.legacy_parity(state, open_findings=[DESIGN_T2[1]],
+                              design_unverified=[("t2", "stale"), ("t2", "stale")])
+    assert report["problems"] == ["design debt only in the legacy list (x1): t2: " + DESIGN_T2[1]]
+
+
+@pytest.mark.parametrize("stored", [
+    {},
+    {"workflow": None, "findings": []},
+    {"workflow": {"error": "ValueError: record failed"}, "findings": []},
+    {"workflow": {"tasks": [], "run": {"facts": []}}},
+    {"workflow": {"tasks": [], "run": {}}, "findings": []},
+    {"workflow": {"run": {"facts": []}}, "findings": []},
+    {"workflow": {"tasks": [{"task_id": "t1"}], "run": {"facts": []}}, "findings": []},
+    {"workflow": {"tasks": [], "run": {"facts": []}}, "findings": "F1"},
+])
+def test_a_missing_saved_record_is_never_a_clean_empty_one(stored):
+    state = FS.from_result(stored)
+    assert state.problems, "a lost record must not read as valid and empty"
+    assert not FS.legacy_parity(state)["agree"]
+    assert state != FS.from_result({"workflow": {"tasks": [], "run": {"facts": []}}, "findings": []})
+
+
+def test_an_explicit_empty_saved_record_is_valid():
+    state = FS.from_result({"workflow": {"tasks": [], "run": {"facts": []}}, "findings": []})
+    assert state.problems == () and state.stop is None and state.active == ()
+    assert FS.legacy_parity(state)["agree"]
+
+
+def test_a_session_without_its_record_is_a_problem():
+    class Bare:
+        pass
+    state = FS.from_session(Bare())
+    assert {"the task outcomes is missing", "the run outcome is missing", "the ledger is missing"} <= set(
+        state.problems)
+
+
+def test_a_short_divergent_stop_text_is_a_disagreement_not_a_gap():
+    run = RunOutcome()
+    run.note("operator", "PlanDeclined: short", legacy="PlanDeclined")
+    report = FS.legacy_parity(FS.project([], run), error="PlanDeclined: short BUT EXTRA")
+    assert not report["agree"] and report["gaps"] == []
+    assert report["problems"] == ["stop PlanDeclined: typed detail differs from the legacy text"]
+
+
+def test_a_prefix_one_short_of_the_bound_is_a_disagreement():
+    reason = "FindingsOpen: " + "x" * 385            # 399 characters: never cut
+    run = RunOutcome()
+    run.note("unverified", reason, legacy="FindingsOpen")
+    report = FS.legacy_parity(FS.project([], run), error=reason + " and more")
+    assert not report["agree"] and report["gaps"] == []
+
+
+def test_an_exception_message_cut_at_its_own_bound_is_a_gap():
+    # session.py:2930 keeps 300 characters of the message.
+    message = "m" * 500
+    run = RunOutcome()
+    run.note("operator", f"RunStalled: {message[:300]}", legacy="RunStalled")
+    report = FS.legacy_parity(FS.project([], run), error=f"RunStalled: {message}")
+    assert report["agree"] and len(report["gaps"]) == 1
+    short = RunOutcome()
+    short.note("operator", f"RunStalled: {message[:299]}", legacy="RunStalled")
+    assert not FS.legacy_parity(FS.project([], short), error=f"RunStalled: {message}")["agree"]
 
 
 def test_an_unknown_fact_class_stays_active_and_is_reported():

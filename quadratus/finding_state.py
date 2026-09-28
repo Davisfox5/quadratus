@@ -46,6 +46,8 @@ _UNMERGED_LEGACY = re.compile(r"Parallel task (?P<task>\S+) was not merged \((?P
                               r"its files are kept in artifact \S+\.\Z", re.S)
 _DEPENDENCY = ("DependencyTreeChanged:", "DependencyIdentityUnavailable:")
 _FACT_LIMIT = 400
+#: session.py:2930 keeps this much of an exception's message in its run fact.
+_EXCEPTION_MESSAGE_LIMIT = 300
 
 
 def _get(obj, name, default=None):
@@ -206,24 +208,34 @@ def _ledger_items(ledger, problems) -> Tuple[List[Item], dict]:
     return items, by_id
 
 
+def _listed(value, what: str, problems: List[str]) -> list:
+    """``value`` as a list; absent or not a list is a problem, never "empty".
+    An explicit empty list is a valid record and passes silently."""
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    problems.append(f"{what} is missing" if value is None else f"{what} is not a list")
+    return []
+
+
 def project(task_outcomes: Sequence, run_outcome, ledger: Sequence = ()) -> FindingState:
     """The unresolved findings and the named stop, read from the record.
 
     ``task_outcomes`` and ``run_outcome`` are the session's typed record, live
     or as ``result.json`` stores it; ``ledger`` is ``Session.findings``. Inputs
-    are read, never written.
+    are read, never written. A missing input (None, or a record without its
+    ``facts``) is a problem, so a lost record never reads as a clean one.
     """
     problems: List[str] = []
-    ledger_items, by_id = _ledger_items(ledger, problems)
+    ledger_items, by_id = _ledger_items(_listed(ledger, "the ledger", problems), problems)
     items: List[Item] = list(ledger_items)
     seen_tasks: Counter = Counter()
     snapshot_ids: dict = {}
-    for outcome in task_outcomes or []:
+    for outcome in _listed(task_outcomes, "the task outcomes", problems):
         tid = str(_get(outcome, "task_id", "") or "")
         seen_tasks[tid] += 1
         label = tid if seen_tasks[tid] == 1 else f"{tid}#{seen_tasks[tid]}"
         ordinals: Counter = Counter()
-        for fact in _get(outcome, "facts", []) or []:
+        for fact in _listed(_get(outcome, "facts"), f"task {label}'s facts", problems):
             kind, stage = str(_get(fact, "kind", "")), str(_get(fact, "stage", "") or "")
             if kind not in PRECEDENCE:
                 problems.append(f"task {label} fact of unknown class {kind!r} kept active")
@@ -245,7 +257,11 @@ def project(task_outcomes: Sequence, run_outcome, ledger: Sequence = ()) -> Find
             # The ledger resolved it after the snapshot: history, and said so.
             items[items.index(known)] = replace(known, notes=known.notes + (
                 f"open when {', '.join(tasks)} closed; resolved in the ledger since",))
-    run_facts = list(_get(run_outcome, "facts", []) or [])
+    if run_outcome is None:
+        problems.append("the run outcome is missing")
+        run_facts = []
+    else:
+        run_facts = _listed(_get(run_outcome, "facts"), "the run's facts", problems)
     ordinals = Counter()
     stop = None
     for index, fact in enumerate(run_facts):
@@ -274,14 +290,20 @@ def project(task_outcomes: Sequence, run_outcome, ledger: Sequence = ()) -> Find
 
 def from_session(session) -> FindingState:
     """Read-only: the projection of a live session's record."""
-    return project(list(getattr(session, "task_outcomes", []) or []), getattr(session, "run_outcome", None),
-                   list(getattr(session, "findings", []) or []))
+    return project(getattr(session, "task_outcomes", None), getattr(session, "run_outcome", None),
+                   getattr(session, "findings", None))
 
 
 def from_result(result: dict) -> FindingState:
-    """The projection of a ``result.json``: its ``workflow`` record and ledger."""
-    workflow = result.get("workflow") or {}
-    return project(workflow.get("tasks") or [], workflow.get("run") or {}, result.get("findings") or [])
+    """The projection of a ``result.json``: its ``workflow`` record and ledger.
+    A missing ``workflow``, ``tasks``, ``run`` or ``findings`` is a problem,
+    never an empty record (``_workflow_record`` stores None on failure)."""
+    result = result if isinstance(result, dict) else {}
+    workflow = result.get("workflow")
+    if not isinstance(workflow, dict):
+        state = project(None, None, result.get("findings"))
+        return replace(state, problems=("the result has no workflow record",) + state.problems)
+    return project(workflow.get("tasks"), workflow.get("run"), result.get("findings"))
 
 
 def _legacy_key(text: str):
@@ -290,6 +312,11 @@ def _legacy_key(text: str):
     if match:
         return ("unmerged", match["task"], f"not merged: {match['reason']}"[:_FACT_LIMIT])
     return ("text", "", text[:_FACT_LIMIT])
+
+
+def _design_detail(task_id, problem) -> str:
+    """The fact detail _check_design records for a ``_design_unverified`` entry."""
+    return f"Task {task_id} is design work without clean rendered evidence: {problem}."[:_FACT_LIMIT]
 
 
 def _item_key(item: Item):
@@ -320,18 +347,27 @@ def legacy_parity(state: FindingState, *, open_findings: Sequence[str] = (), err
     if want != have:
         problems.append(f"stop: typed {have!r}, legacy {want!r}")
     elif state.stop is not None:
-        text = error or stop_reason
-        if text == state.stop.detail:
+        text, detail = error or stop_reason, state.stop.detail
+        # A prefix is a truncation only when the detail sits exactly at a
+        # writer's bound: Fact's 400 characters (_stop_with), or an exception
+        # fact's "<Class>: " plus 300 characters of message (session.py:2930).
+        # A shorter detail was never cut, so it must equal the legacy text.
+        bounds = {_FACT_LIMIT, len(have) + 2 + _EXCEPTION_MESSAGE_LIMIT}
+        if text == detail:
             pass
-        elif text.startswith(state.stop.detail):
-            gaps.append(f"stop {have}: typed detail is a {len(state.stop.detail)}-character prefix of the "
+        elif text.startswith(detail) and len(detail) in bounds:
+            gaps.append(f"stop {have}: typed detail is a {len(detail)}-character prefix of the "
                         f"{len(text)}-character legacy text")
         else:
             problems.append(f"stop {have}: typed detail differs from the legacy text")
     if design_unverified is not None:
-        legacy_tasks = sorted({str(d[0]) for d in design_unverified})
-        typed_tasks = sorted({i.task for i in state.active if i.category == "design_evidence"})
-        if legacy_tasks != typed_tasks:
-            problems.append(f"design debt: typed {typed_tasks}, legacy {legacy_tasks}")
+        # Task and problem, as _check_design writes both (3262, 3341): the
+        # same task with a different problem is a different debt.
+        legacy_debt = Counter((str(d[0]), _design_detail(d[0], d[1])) for d in design_unverified)
+        typed_debt = Counter((i.task, i.detail) for i in state.active if i.category == "design_evidence")
+        for (task, detail), n in (legacy_debt - typed_debt).items():
+            problems.append(f"design debt only in the legacy list (x{n}): {task}: {detail[:160]}")
+        for (task, detail), n in (typed_debt - legacy_debt).items():
+            problems.append(f"design debt only in the typed record (x{n}): {task}: {detail[:160]}")
     return dict(agree=not problems, problems=problems, gaps=gaps,
                 stop=have, findings=[i.id for i in state.findings()], audit_debt=state.audit_debt())

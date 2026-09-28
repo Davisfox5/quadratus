@@ -71,6 +71,18 @@ Audit debt and design debt never merge:
 - **Design debt** belongs to the task that left it, and
   `design_debt(tasks=…)` binds it to that task (map G8).
 
+**A missing record is never an empty one** (review 5862287503). An absent
+or non-list input is a `problem`, so `legacy_parity` disagrees. This covers:
+
+- a `result.json` with no `workflow`, or a `workflow` that is None or holds
+  `_workflow_record`'s error form;
+- missing `tasks`, `run`, `run.facts` or `findings`;
+- a task without `facts`;
+- a session without its record.
+
+An explicit empty record (`tasks: []`, `run.facts: []`, `findings: []`) is
+valid and projects clean.
+
 **The ledger is the authority.** A task's `open_at_close` is a snapshot.
 
 - A snapshot id that the ledger since resolved is kept in history, with a
@@ -128,6 +140,9 @@ against `not merged: R`). Parity matches them by task id and reason.
   a later check of the same task id verifies (map G8); 3590 extends from
   parallel children.
 - **Reader:** `_name_findings_stop` 4408.
+- **Parity** compares `(task, problem)` pairs as a multiset. Each entry is
+  rendered as the fact detail `_check_design` writes at 3262 and 3341. The
+  same task with a different problem, or a different count, disagrees.
 - **Known disagreement:** the 3339 clear has no typed counterpart. The
   `invalid_proof` fact stays active. `legacy_parity(design_unverified=…)`
   reports this, and
@@ -226,9 +241,19 @@ decision.
 1. **Stop text is truncated.** `Fact.detail` keeps 400 characters
    (`outcome.py:164`, `:229`), and exception facts keep 300 characters of the
    message (2930). `_stop_open_work` reasons can run past 600 characters,
-   and `DesignUnverified` to over 400. Parity reports a truncated prefix as a
-   `gap`, not a disagreement
-   (`test_a_truncated_stop_detail_is_a_gap_not_a_disagreement`). The map's
+   and `DesignUnverified` to over 400.
+
+   Parity reports a prefix as a truncation `gap` only when the typed detail
+   sits exactly at one of those two bounds:
+   - 400 characters, for a `_stop_with` stop;
+   - `<Class>: ` plus 300 characters, for an exception stop.
+
+   A shorter detail was never cut, so it must equal the legacy text exactly;
+   anything else is a disagreement (review 5862287503). Controls:
+   - `test_a_truncated_stop_detail_is_a_gap_not_a_disagreement`;
+   - `test_a_short_divergent_stop_text_is_a_disagreement_not_a_gap`;
+   - `test_a_prefix_one_short_of_the_bound_is_a_disagreement`;
+   - `test_an_exception_message_cut_at_its_own_bound_is_a_gap`. The map's
    removal condition for `stop_reason` needs the full text on the terminal
    fact.
 2. **Post-loop exceptions are untyped**, as in precedence item 5.
@@ -285,6 +310,17 @@ call. The parallel cases use the scripted `Orchestrated` sessions from
 Session is read after `run()` returns, through a spy on `Session.run` that
 changes nothing.
 
-There is no old-base behavioural red. This is a new module with no engine
+**Revision for review 5862287503.** The revised tests were run with the
+reviewed 22eed61 module mounted read-only over the revised tree. They give
+14 assertion failures and no import errors:
+
+- 3 on design pairs;
+- 7 on missing saved records;
+- 1 on a session without its record;
+- 3 on stop-text bounds.
+
+The revised module passes all 45 tests.
+
+There is no old-base behavioural red against 9eabf69. This is a new module with no engine
 route, so on 9eabf69 its tests can only fail on the missing import. Reds
 belong to each switch in the seam above.
