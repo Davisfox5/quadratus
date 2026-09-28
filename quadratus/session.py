@@ -4362,6 +4362,22 @@ class Session:
         self.memory.ledger.requirement_status[rid] = (f"NOT MET: open finding {', '.join(owing)}" if owing
                                                       else f"covered by {task_id}")
 
+    def _closed_with_findings(self, spec, open_before: int) -> bool:
+        """Whether the resolving task closed with findings of its own (map
+        P3.4): active findings the projection files under this task, or new
+        entries on the legacy list, either one. A malformed record fails
+        closed; a disagreement is recorded on the task."""
+        from .finding_state import from_session
+        state = from_session(self)
+        typed = bool(state.problems or [i for i in state.findings() if i.task == spec.task_id])
+        legacy = len(self.open_findings) > open_before
+        mine = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
+        if typed != legacy and mine is not None:
+            note = f"new findings: typed {typed}, legacy {legacy}"
+            if note not in mine.mismatches:
+                mine.mismatches.append(note)
+        return typed or legacy
+
     def _settle_resolution(self, spec, checks_before, open_before) -> List[str]:
         """Commit this task's RESOLVES only after the whole task passed: its
         last gate, no new open finding, and verified, approved renders of the
@@ -4374,7 +4390,7 @@ class Session:
         gates = self.checks[checks_before:]
         if gates and not gates[-1]["passed"]:
             reasons.append("its integration gate failed")
-        if len(self.open_findings) > open_before:
+        if self._closed_with_findings(spec, open_before):
             reasons.append("it closed with open findings")
         approved = self._resolution_candidate
         if not approved or approved[0] != spec.task_id:

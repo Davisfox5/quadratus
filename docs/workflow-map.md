@@ -835,6 +835,15 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     uses the same check (`tests/test_batch_findings_trigger.py`, with an
     unmerged child).
 
+20. *Settlement reads the resolving task's own typed findings (Sol
+    inventory 5863608874).* A RESOLVES task settles only if it closed with
+    no finding of its own; that was read from the legacy list's growth
+    alone. `_closed_with_findings` now also reads the active findings the
+    projection files under the task, failing closed, and records
+    `new findings: typed X, legacy Y` on the task where they disagree
+    (`tests/lifecycle/test_settlement_findings.py`, a real blocking
+    collaborator review).
+
 19. *The dependency guard sees a rewrite inside one timestamp tick (Codex,
     5863853232).* Its per-file hash cache is keyed by lstat; on a
     filesystem with coarse timestamps a same-size rewrite within one tick
