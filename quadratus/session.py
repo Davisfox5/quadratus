@@ -959,6 +959,8 @@ class Session:
         #: Tasks whose lead stopped at its turn limit, in order.
         self.turn_limited: List[str] = []
         self._turn_limited_in_a_row = 0
+        #: The outcomes the serial breaker counter counted since its last reset.
+        self._breaker_counted: list = []
         #: What each capped call left, by task id: the evidence a continuation
         #: is handed and the breaker's stop names.
         self.turn_limited_records: Dict[str, dict] = {}
@@ -1802,6 +1804,30 @@ class Session:
         except Exception:  # noqa: BLE001 -- observation never fails a run
             log.debug("could not capture project source", exc_info=True)
             return None
+
+    def _breaker_reason(self) -> str:
+        """The TurnLimitBreaker stop, naming the serial tasks the counter
+        counted (map P3.4). When other work (a parallel batch) ran between
+        them, "in a row" would be untrue, so the text says what happened.
+        The legacy ``turn_limited`` list stays the report mirror; a counted
+        task missing from it is a recorded mismatch."""
+        names = [o.task_id for o in self._breaker_counted]
+        for outcome in self._breaker_counted:
+            if outcome.task_id not in self.turn_limited:
+                note = "breaker: counted, but missing from turn_limited"
+                if note not in outcome.mismatches:
+                    outcome.mismatches.append(note)
+        ids = [o.task_id for o in self.task_outcomes]
+        positions = [i for i, o in enumerate(self.task_outcomes) if o in self._breaker_counted]
+        between = bool(positions) and any(ids[i] not in names
+                                          for i in range(positions[0], positions[-1] + 1))
+        n = self._turn_limited_in_a_row
+        if between:
+            return (f"TurnLimitBreaker: the lead turn limit was reached on {n} serial tasks with no serial "
+                    f"task completing in between ({', '.join(names)}; a parallel batch ran between them); "
+                    "stopped instead of re-planning again. Work preserved.")
+        return (f"TurnLimitBreaker: the lead turn limit was reached {n} times in a row ({', '.join(names)}); "
+                "stopped instead of re-planning again. Work preserved.")
 
     def _partial_from_outcomes(self) -> set:
         """Tasks whose work was left partial, from the typed record (map
@@ -3079,22 +3105,25 @@ class Session:
                 self._recover_continued(continues)
                 self._partial_tasks.add(spec.task_id)
                 self._turn_limited_in_a_row += 1
+                # The outcome the counter just counted, captured here (map
+                # P3.4): the breaker names these, not the legacy list's tail,
+                # which also holds capped parallel children it never counted.
+                counted = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
+                if counted is not None:
+                    self._breaker_counted.append(counted)
                 self._note(f"task {len(self.history)} stopped at the lead's turn limit; its "
                            f"work is kept and the orchestrator re-plans")
                 if self._turn_limited_in_a_row > self.config.max_turn_limited_in_a_row:
-                    capped = self.turn_limited[-self._turn_limited_in_a_row:]
                     # Recorded, not raised: the stop is the breaker working,
                     # and every capped task's edits stay in place. But it is
                     # named, so the run's error is never blank (Codex, Run 14).
-                    self._stop_with("cap", (
-                        f"TurnLimitBreaker: the lead turn limit was reached "
-                        f"{self._turn_limited_in_a_row} times in a row ({', '.join(capped)}); "
-                        "stopped instead of re-planning again. Work preserved."))
+                    self._stop_with("cap", self._breaker_reason())
                     self._note(f"the lead turn limit was reached {self._turn_limited_in_a_row} "
                                f"times in a row; stopping instead of re-planning again")
                     break
                 continue
             self._turn_limited_in_a_row = 0
+            self._breaker_counted = []
             # Only the task that says it continues the capped one resolves it;
             # an unrelated clean task must not make the run complete (Codex
             # review of #25, 2026-09-25).

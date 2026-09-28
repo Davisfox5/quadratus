@@ -697,6 +697,16 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
    unification stays deferred until its typed inputs are ready (Codex,
    5861527374) (`tests/lifecycle/test_partial_from_outcomes.py`).
 
+8. *Breaker names from what the counter counted.* The serial breaker
+   counter never counted or reset on a parallel batch, but a batch's capped
+   children were appended to `turn_limited`, whose tail the stop named, so
+   a mixed run named a child it never counted. The outcomes the counter
+   counts are captured when it counts them, the stop names those, and when
+   a batch ran between them it says so instead of "in a row". The counter,
+   its timing, limit and stop kind are unchanged; how a batch should affect
+   the counter is a separate, unauthorised question (Codex, 5861810828).
+   `turn_limited` stays the report mirror (`tests/test_breaker_names.py`).
+
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
 the live `design_cross_check` / `is_design_task`, and can drift from the
