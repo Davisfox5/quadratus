@@ -2961,26 +2961,32 @@ class Session:
             history = self._run_tasks(max_tasks)
         except BaseException as exc:
             self._note_exception(exc)
-            try:
-                # A resolution a later task's changes undid must not persist as
-                # resolved because the run ended on an exception.
-                self._recheck_resolved_findings()
-                self._annotate_open_findings(f"{type(exc).__name__}: {str(exc)[:200]}")
-            except Exception as failure:  # noqa: BLE001 -- the original stop is the one reported
-                log.warning("could not finalise audit findings after %s", type(exc).__name__, exc_info=True)
-                self._distrust_resolutions(f"the findings could not be re-checked after "
-                                           f"{type(exc).__name__} ({type(failure).__name__})")
+            self._finalise_findings(exc)
             raise
         try:
             self._finish_run()
         except BaseException as exc:
             # After the loop, an exception used to leave no typed fact while
             # result.error reported it (map P3.4). It is recorded as the loop's
-            # own exceptions are, the run is not complete, and it is re-raised.
+            # own exceptions are, the run is not complete, the ledger is
+            # re-checked the same way (Opus audit 23d6460), and it is re-raised.
             self.completed = False
             self._note_exception(exc)
+            self._finalise_findings(exc)
             raise
         return history
+
+    def _finalise_findings(self, exc: BaseException) -> None:
+        """A resolution a later task's changes undid must not persist as
+        resolved because the run ended on an exception; if the re-check
+        itself fails, every resolution is distrusted instead."""
+        try:
+            self._recheck_resolved_findings()
+            self._annotate_open_findings(f"{type(exc).__name__}: {str(exc)[:200]}")
+        except Exception as failure:  # noqa: BLE001 -- the original stop is the one reported
+            log.warning("could not finalise audit findings after %s", type(exc).__name__, exc_info=True)
+            self._distrust_resolutions(f"the findings could not be re-checked after "
+                                       f"{type(exc).__name__} ({type(failure).__name__})")
 
     def _note_exception(self, exc: BaseException) -> None:
         """The typed fact for an exception that ends the run."""

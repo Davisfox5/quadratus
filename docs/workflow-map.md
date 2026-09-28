@@ -771,6 +771,18 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     and stays unverified, so its strict xfail should be recast rather than
     flipped.
 
+15. *A post-loop exception still re-checks the ledger* (Opus audit 23d6460).
+    After a07e7bf a post-loop exception was typed, but it skipped the
+    findings re-check an incomplete ending gets, so a resolution a later
+    task undid stayed `resolved`. It now runs the same `_finalise_findings`
+    as a loop exception (re-check and annotate, or distrust every
+    resolution if that fails). Whole journey: F1 resolved by t2, t3 changes
+    the page and stops DesignUnverified, an end-of-run `OSError` is
+    injected (`tests/lifecycle/test_post_loop_ledger.py`).
+    The audit's G8 probe E (one task id with two outcomes) is not reachable
+    in one run: an unmerged child's open finding stops the loop after its
+    batch, and no suite session produced a duplicate id; unchanged here.
+
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
 the live `design_cross_check` / `is_design_task`, and can drift from the
