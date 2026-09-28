@@ -152,3 +152,19 @@ def test_a_read_only_task_is_not_held_to_a_scope_it_never_wrote_under(tmp_path):
     exc = TurnLimitReached("turn limit", partial_text="Still reading.", turns=14)
     summary = session._close_turn_limited(LEAD, spec, TaskMemory("t1", LEAD), exc, session._task_before)
     assert summary is not None and session._write_ceiling() is False
+
+
+def test_a_capped_fix_holds_edits_made_under_the_grant_to_scope_after_revocation(tmp_path):
+    """The same rule on the other capped path, _capped_fix (Sol 5866341547)."""
+    from quadratus.memory import TaskMemory
+    from quadratus.providers import TurnLimitReached
+    from quadratus.session import PartialWorkStopped
+    session = _session(tmp_path, [], allow_writes=True)
+    spec = _spec()
+    _dispatch(session, spec)
+    (session.project / "evil.py").write_text("x = 1\n")
+    _drift(session, False)
+    exc = TurnLimitReached("turn limit", partial_text="Still fixing.", turns=14)
+    with pytest.raises(PartialWorkStopped, match="capped gate-fix exceeded the declared scope"):
+        session._capped_fix(LEAD, spec, TaskMemory("t1", LEAD), exc, "gate-fix")
+    assert (session.project / "evil.py").exists() and session._writes() is False
