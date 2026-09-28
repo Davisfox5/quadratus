@@ -115,12 +115,13 @@ def _record(required):
 
 def test_an_older_record_without_the_field_says_so_and_is_not_read_as_false():
     required = dict(checks=False, design_evidence="none", design_review=False, security_verification=False,
-                    settlement=False)
+                    settlement=False, design_instruction="none")
     assert missing_facts(_record(required)) == [
         "t1.contract.required.design_collaboration_applicable (absent: recorded before this field existed)"]
 
 
 def test_a_malformed_value_is_missing():
     required = dict(checks=False, design_evidence="none", design_review=False, security_verification=False,
-                    settlement=False, design_collaboration_applicable="yes")
+                    settlement=False, design_collaboration_applicable="yes",
+                    design_instruction="none")
     assert missing_facts(_record(required)) == ["t1.contract.required.design_collaboration_applicable"]

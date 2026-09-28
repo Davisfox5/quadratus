@@ -44,6 +44,12 @@ class Required:
     #: collaborators see and the review prompt's design lens. Not the same as
     #: ``design_review``, which needs evidence (Codex, 5864370275).
     design_collaboration_applicable: bool = False
+    #: The design instruction the lead is given, fixed at dispatch: "harness"
+    #: (the harness captures), "self" (capture it yourself) or "none". Computed
+    #: with the prompt's own predicate, not ``design_evidence``'s: a design task
+    #: with no writable project has evidence "none" and is still asked for
+    #: renders (O-NEXT-01, 8ab7333; Codex, 5864880543).
+    design_instruction: str = "none"
 
 
 @dataclass(frozen=True)
@@ -68,6 +74,9 @@ class TaskContract:
     #: For a CONTINUES task: the predecessor, its intended state and the debt
     #: it left open, carried into this contract (canonical JSON).
     inherits: Optional[str] = None
+    #: The full page URL (origin + path) a "harness" design instruction names,
+    #: fixed at dispatch so the prompt never reads the live capture profile.
+    capture_page: Optional[str] = None
 
     def __post_init__(self):
         if self.intent not in INTENTS:

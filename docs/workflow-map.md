@@ -877,6 +877,18 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     verification-disabled design tasks keep all three. A saved record
     without the field is reported as absent, never read as False
     (`tests/lifecycle/test_collaboration_applicability.py`).
+23. *The lead's design instruction is fixed at dispatch (O-NEXT-01
+    8ab7333; Codex, 5864880543).* `_lead_prompt` chose between the
+    harness-capture text, the self-capture text and nothing from live
+    `design_self_verify` and `_harness_captures`. It now reads
+    `Required.design_instruction` ("harness" | "self" | "none"), computed
+    at dispatch with the prompt's own predicate, not `design_evidence`'s,
+    so no-project and security design tasks keep their self-capture text.
+    A "harness" instruction names `TaskContract.capture_page` (origin and
+    path fixed at dispatch); the prompt no longer reads the live profile.
+    Live readings are recorded as mismatches. A saved record without the
+    field is reported as absent; a "harness" record without its page is
+    missing (`tests/lifecycle/test_lead_prompt_applicability.py`).
 
 **Legacy readers retained, with why (not a claim of total retirement):**
 - `open_findings`, `_partial_tasks` and `_design_unverified` stay as the
@@ -890,8 +902,9 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
   recheck rule is settled.
 - `stop_reason` names the run's stop and feeds `result.error`; the typed
   stop and `Fact.full` carry the same text.
-- Design collaboration applicability reads the contract since item 22;
-  the live reading is kept only to record a disagreement.
+- Design collaboration applicability (item 22) and the lead's design
+  instruction (item 23) read the contract; the live readings are kept
+  only to record a disagreement.
 
 **Retirement list additions (Codex, 5861036424), status:**
 - Completed: collaborator selection (`collaborators_for`), the render set
@@ -899,8 +912,7 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
   `design_collaboration_applicable` since item 22 (31aa595).
 - Deliberate mirrors: the live `design_cross_check and is_design_task`
   reading is kept beside the contract only to record a disagreement.
-- Open seam: the lead prompt's design/capture instruction
-  (`_lead_prompt`) still reads live config after dispatch, including
-  during lead recovery. Reproduced by O-NEXT-01 (8ab7333); the proposed
-  `Required.design_instruction` waits on a Codex ruling. Design
-  applicability is not retired while this seam is open.
+- Completed: the lead prompt's design/capture instruction reads the
+  contract's `design_instruction` and `capture_page` since item 23,
+  including during lead recovery; the live readings are kept only to
+  record a disagreement.

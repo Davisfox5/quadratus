@@ -2077,7 +2077,8 @@ class Session:
             design_review=bool(self.config.design_cross_check and evidence in ("harness", "self")),
             security_verification=security,
             settlement=bool(outcome.resolves),
-            design_collaboration_applicable=bool(self.config.design_cross_check and is_design_task(spec)))
+            design_collaboration_applicable=bool(self.config.design_cross_check and is_design_task(spec)),
+            design_instruction=self._live_design_instruction(spec))
         commands = getattr(gate, "commands", None)
         checks = tuple(c.id for c in commands) if commands is not None else (("check",) if gate else ())
         intended = None
@@ -2112,7 +2113,8 @@ class Session:
             intended_state=canonical(intended),
             acceptance=tuple(getattr(scope, "acceptance", ()) or ()),
             required=required, allowed_next=stages_for(required, outcome.intent),
-            inherits=canonical(inherits))
+            inherits=canonical(inherits),
+            capture_page=self._live_capture_page(spec) if required.design_instruction == "harness" else None)
 
     def _bind_contract(self, owner: str) -> None:
         """Freeze the task's contract with the owner just selected. Called
@@ -4218,6 +4220,35 @@ class Session:
         return bool(self.config.capture_profile is not None and is_design_task(spec)
                     and getattr(spec.scope, "capture", None))
 
+    def _live_design_instruction(self, spec) -> str:
+        """The lead prompt's design instruction read from live config: the
+        value fixed at dispatch and, afterwards, the legacy side of the check."""
+        if not (self.config.design_self_verify and is_design_task(spec)):
+            return "none"
+        return "harness" if self._harness_captures(spec) else "self"
+
+    def _live_capture_page(self, spec) -> Optional[str]:
+        """The page a harness instruction names, from the live profile."""
+        profile = self.config.capture_profile
+        if profile is None or not getattr(spec.scope, "capture", None):
+            return None
+        return profile.origin + spec.scope.capture["path"]
+
+    def _design_instruction(self, spec):
+        """The lead's design instruction and, for "harness", the page, from
+        the contract fixed at dispatch (map P3.4), live readings recorded
+        beside it. Outside a task the live readings decide, as before."""
+        instruction = self._required("design_instruction", self._live_design_instruction(spec))
+        if instruction != "harness":
+            return instruction, None
+        outcome, contract = self._outcome, getattr(self, "_contract", None)
+        if outcome is None or contract is None or contract.task_id != outcome.task_id:
+            return instruction, self._live_capture_page(spec)
+        live = self._live_capture_page(spec)
+        if live != contract.capture_page:
+            outcome.mismatches.append(f"capture_page: contract {contract.capture_page!r}, legacy {live!r}")
+        return instruction, contract.capture_page
+
     def _capture_problem(self, spec, resolves) -> str:
         """Why a UI task cannot be dispatched as declared, before any lead
         call; "" if it can. Raises CapabilityUnavailable when the lead could
@@ -4664,11 +4695,10 @@ class Session:
         if map_block:
             parts.append(map_block)
         parts.append("You are leading this task. Produce the complete work.")
-        if self.config.design_self_verify and is_design_task(spec) and self._harness_captures(spec):
-            parts.append(_HARNESS_CAPTURE.format(page=self.config.capture_profile.origin
-                                                 + spec.scope.capture["path"],
-                                                 steps=len(spec.scope.capture["steps"])))
-        elif self.config.design_self_verify and is_design_task(spec):
+        instruction, page = self._design_instruction(spec)
+        if instruction == "harness":
+            parts.append(_HARNESS_CAPTURE.format(page=page, steps=len(spec.scope.capture["steps"])))
+        elif instruction == "self":
             import sys as _sys
             package_root = Path(__file__).resolve().parent.parent
             command = (f"PYTHONPATH={package_root} {_sys.executable} -m quadratus.design_evidence "

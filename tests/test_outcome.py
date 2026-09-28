@@ -70,7 +70,7 @@ def test_a_non_terminal_fact_is_history_only():
 
 
 REQUIRED = dict(checks=False, design_evidence="none", design_review=False, security_verification=False,
-                settlement=False, design_collaboration_applicable=False)
+                settlement=False, design_collaboration_applicable=False, design_instruction="none")
 
 
 def _closed(task_id="t1"):
