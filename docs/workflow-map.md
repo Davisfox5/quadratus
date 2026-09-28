@@ -755,6 +755,22 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     evidence controls needs their E2 pair flipped: the prospective xfail
     now passes and the current-behaviour pin no longer holds.
 
+14. *Preview failures carry a proven origin (E1; Codex, 5862699144,
+    option b).* `PreviewFailed` and `capture_task`'s result carry an
+    `origin`, set where the failure is raised and never read from prose.
+    Only two failures are proven environment: the port was already
+    listening, so the preview was never launched; or a conventional runner
+    (python, node, ...) could not be launched. Those stop as
+    `PreviewUnavailable` (operator), with no repair call and the text kept
+    byte-identical. Everything else is unattributed and keeps the existing
+    `invalid_proof` / `DesignUnverified` route: an app that exits before or
+    as it becomes ready, a preview never ready, a project-file preview that
+    cannot launch, budget and capture timeouts, and a failed capture
+    (`tests/lifecycle/test_preview_provenance.py`, with the table). The
+    Opus E1 control's scenario (exit 1 before ready) is an application exit
+    and stays unverified, so its strict xfail should be recast rather than
+    flipped.
+
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read
 the live `design_cross_check` / `is_design_task`, and can drift from the

@@ -160,6 +160,14 @@ class PartialWorkStopped(RuntimeError):
         return "\n".join(lines)
 
 
+class PreviewUnavailable(RuntimeError):
+    """The operator's preview failed where the harness can prove the cause is
+    the environment, not the project (map E1; Codex, 5862699144): it was
+    never launched because the port was taken, or its launch itself failed.
+    An operator handoff: no repair call, nothing recaptured. A preview that
+    ran and then exited, or was never ready, is not this."""
+
+
 class CapabilityUnavailable(RuntimeError):
     """The seat a task needs cannot perform a capability the harness requires.
 
@@ -3299,6 +3307,7 @@ class Session:
         if harness:
             failure = self._harness_capture(spec)
             if failure:
+                self._hand_off_preview(spec, task, record, failure)
                 record.update(verified=False, problem=failure, harness_capture=True)
                 self._open_finding("invalid_proof", f"Task {spec.task_id} is design work without clean "
                                                     f"rendered evidence: {failure}.")
@@ -3334,6 +3343,7 @@ class Session:
             self._run_integration_gate(lead, spec, task)
             failure = self._harness_capture(spec)
             if failure:
+                self._hand_off_preview(spec, task, record, failure)
                 ok, problem, shots, records = False, failure, [], [dict(kind="integrity", message=failure)]
             else:
                 ok, problem, shots, records = check_records(
@@ -4228,6 +4238,22 @@ class Session:
         if before is None or self._source_fingerprint() != before:
             return "the project source changed while the harness previewed and captured it"
         return failure
+
+    def _hand_off_preview(self, spec, task, record, failure) -> None:
+        """Stop as an operator handoff when the capture failure's origin is
+        proven to be the environment; otherwise return and the existing
+        unverified route applies. The failure text is kept as it was."""
+        from .preview import ENVIRONMENT
+        if getattr(failure, "origin", None) != ENVIRONMENT:
+            return
+        record.update(verified=False, problem=str(failure), harness_capture=True)
+        self.design_checks.append(record)
+        task.keep(json.dumps(record), kind="design-evidence")
+        if self._outcome is not None:
+            self._outcome.edge("evidence", False)
+        task.record("user", "The preview failed before the project was served; handed to the operator "
+                            "without a repair call.")
+        raise PreviewUnavailable(f"task {spec.task_id}: {failure}. No repair call was made. Work preserved.")
 
     def _checks_standing_failed(self) -> bool:
         """Whether any check failure still stands at DONE (phase 3, map G12).

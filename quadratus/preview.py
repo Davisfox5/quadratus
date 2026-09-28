@@ -37,8 +37,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import List, Optional, Tuple
 
-__all__ = ["CaptureProfile", "PreviewFailed", "load_profile", "profile_from_dict", "running",
-           "capture_task", "capture_argv", "validate_capture"]
+__all__ = ["CaptureFailure", "CaptureProfile", "ENVIRONMENT", "PreviewFailed", "load_profile",
+           "profile_from_dict", "running", "capture_task", "capture_argv", "validate_capture"]
 
 #: Runners an operator may name by bare name; anything else is a project file.
 _RUNNERS = re.compile(r"python(?:\d+(?:\.\d+)*)?|node|npm|npx|uv|flask|pnpm|yarn")
@@ -109,8 +109,32 @@ class _BoundedLog:
             pass
 
 
+#: A failure the harness can prove came from the environment, not the
+#: project: the preview was never launched, or its launch itself failed.
+ENVIRONMENT = "environment"
+
+
 class PreviewFailed(RuntimeError):
-    """The preview or the capture did not complete; the message says which."""
+    """The preview or the capture did not complete; the message says which.
+
+    ``origin`` is ``ENVIRONMENT`` only where a structured fact proves it
+    (map E1; Codex, 5862699144); None means unattributed, never "product"."""
+
+    def __init__(self, message: str, origin: Optional[str] = None):
+        super().__init__(message)
+        self.origin = origin
+
+
+class CaptureFailure(str):
+    """Why a harness capture failed, as the same text as before, carrying
+    ``origin`` from the failure that produced it (None: unattributed)."""
+
+    origin: Optional[str] = None
+
+    def __new__(cls, text: str, origin: Optional[str] = None):
+        value = super().__new__(cls, text)
+        value.origin = origin
+        return value
 
 
 @dataclass(frozen=True)
@@ -324,7 +348,8 @@ def running(profile: CaptureProfile, root, deadline: Optional[float] = None):
     """
     root = Path(root)
     if _listening(profile.host, profile.port):
-        raise PreviewFailed(f"something is already listening on {profile.origin}; the preview was not started")
+        raise PreviewFailed(f"something is already listening on {profile.origin}; the preview was not started",
+                            origin=ENVIRONMENT)
     ready_url = profile.origin + profile.ready_path
     tempdir = tempfile.mkdtemp(prefix="quadratus-preview-pyc-")
     env = dict(_environment(), **dict(profile.env), PYTHONPYCACHEPREFIX=tempdir)
@@ -335,7 +360,13 @@ def running(profile: CaptureProfile, root, deadline: Optional[float] = None):
     except OSError as exc:
         import shutil
         shutil.rmtree(tempdir, ignore_errors=True)
-        raise PreviewFailed(f"the preview could not start: {exc}") from None
+        # A conventional runner that cannot launch is the environment; a
+        # project file that cannot (missing, not executable) may be the
+        # project's own doing, so it is left unattributed.
+        first = profile.preview[0]
+        runner = bool(_RUNNERS.fullmatch(first) or _RUNNERS.fullmatch(Path(first).name))
+        raise PreviewFailed(f"the preview could not start: {exc}",
+                            origin=ENVIRONMENT if runner else None) from None
     log = _BoundedLog(proc.stdout)
     try:
         ready_by = min(deadline, time.monotonic() + profile.ready_timeout)
@@ -415,7 +446,7 @@ def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict) -> 
                 _stop(capture)
                 output.close()
     except PreviewFailed as exc:
-        return str(exc)
+        return CaptureFailure(str(exc), exc.origin)
     return ""
 
 
