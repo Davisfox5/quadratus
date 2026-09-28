@@ -1,11 +1,13 @@
 # J31 design-fix role packet journey
 
-This is an offline, policy-backed whole-Session replay for workflow-map J31/G11.
-It starts a frontend task, lets the lead edit and capture stale renders, lets a
-revision edit the stylesheet, and reaches the one authorized `design-fix` call.
-The fake provider writes current evidence in one case and leaves it stale in
-the other. The controller, policy loader, Fleet dispatcher, change declaration
-check, integration gate and closeout are real; only vendor replies are scripted.
+This is an offline whole-Session replay for workflow-map J31/G11. It starts a
+frontend task, lets the lead edit and capture stale renders, lets a revision
+edit the stylesheet, and reaches the one authorized `design-fix` call. The fake
+provider writes current evidence in one case and leaves it stale in the other.
+The controller, Fleet dispatcher, change declaration check, integration gate
+and closeout are real; only vendor replies are scripted. The project carries no
+`.quadratus/policy.json`: the role packet asserted here does not depend on a
+repository policy file, and the test makes no claim about one.
 
 ## Behavior observed at `9eabf69`
 

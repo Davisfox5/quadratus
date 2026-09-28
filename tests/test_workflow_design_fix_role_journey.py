@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from tests.lifecycle import harness as H
-from tests.test_policy import document
 
 FILES = {
     "app.py": "def add(a, b):\n    return a + b\n",
@@ -23,11 +22,6 @@ DECLARATION = "KIND: frontend standard\nSCOPE: " + json.dumps(SCOPE) + "\nAdd an
 @pytest.mark.parametrize("recaptured", [True, False])
 def test_design_fix_gets_the_lead_packet_in_a_bounded_session_journey(
         tmp_path, monkeypatch, recaptured):
-    policy = document()
-    # This explicit repository policy gives the two roles observably different
-    # contracts. The default replay fixture has no role-specific policy file.
-    files = {**FILES, ".quadratus/policy.json": json.dumps(policy)}
-
     def respond(call, replay):
         if call.role == "orchestrator":
             return DECLARATION
@@ -50,7 +44,7 @@ def test_design_fix_gets_the_lead_packet_in_a_bounded_session_journey(
             return "RESOLVED"
         return "No blocking findings."
 
-    replay = H.run(tmp_path, monkeypatch, respond, files=files)
+    replay = H.run(tmp_path, monkeypatch, respond, files=FILES)
     fixes = replay.of("design-fix")
     assert len(fixes) == 1
     fix = fixes[0]
