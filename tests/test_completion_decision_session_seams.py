@@ -110,7 +110,7 @@ def _replay_all(log):
     session = log["session"]
     assert log["rounds"], "the session never reached a DONE reply"
     decisions = [_replay_round(r) for r in log["rounds"]]
-    for decision, r in zip(decisions[:-1], log["rounds"]):
+    for decision, r in zip(decisions[:-1], log["rounds"], strict=False):  # the final round is checked below
         assert decision.status == SEND_BACK
         # The findings refusal is the candidate's to name; a requirements
         # refusal was already written by the session's own check.
@@ -156,7 +156,15 @@ def test_a_reopened_finding_is_sent_back_each_round_before_any_requirements_chec
     from pathlib import Path
 
     from tests.lifecycle import harness as H
-    from tests.lifecycle.test_audit_findings import AUDIT, DOCS, REPAIR, REQS, WIDE, _capture, _repair
+    from tests.lifecycle.test_audit_findings import (
+        AUDIT,
+        DOCS,
+        REPAIR,
+        REQS,
+        WIDE,
+        _capture,
+        _repair,
+    )
     from tests.lifecycle.test_audit_findings import _run as audit_run
 
     def docs(call, replay):
@@ -231,7 +239,7 @@ def _cap_run(tmp_path, *, merge_fix_works):
     return session
 
 
-def test_a_repaired_merge_gate_on_the_last_slots_completes_at_the_cap(tmp_path, shadow):
+def test_a_repaired_merge_gate_on_the_last_slots_completes_at_the_cap(tmp_path, shadow):  # noqa: F811 -- pytest fixture
     session = _cap_run(tmp_path, merge_fix_works=True)
     decision, _ = _shadow_decision(shadow, CAP, 3)
     assert shadow["goal"] is True and decision.ready and session.completed
@@ -240,7 +248,7 @@ def test_a_repaired_merge_gate_on_the_last_slots_completes_at_the_cap(tmp_path, 
     _agrees(decision, session, session.stop_reason)
 
 
-def test_a_standing_merge_gate_failure_on_the_last_slots_never_reaches_the_cap(tmp_path, shadow):
+def test_a_standing_merge_gate_failure_on_the_last_slots_never_reaches_the_cap(tmp_path, shadow):  # noqa: F811 -- pytest fixture
     """The batch check breaks the loop, so the cap's ``else`` never runs."""
     session = _cap_run(tmp_path, merge_fix_works=False)
     assert shadow["goal"] is None and shadow["requirements"] is None
