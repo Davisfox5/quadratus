@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from tests._process_liveness import process_stopped
 from quadratus.artifacts import ArtifactStore
 from quadratus.cli_providers import CLIProvider, _extract_native_children
 from quadratus.config import Settings
@@ -208,10 +209,12 @@ def test_native_session_reconciliation_reads_linked_usage_not_inherited_or_unrel
 def test_stop_kills_term_ignoring_child_even_if_parent_exits(tmp_path, parent_ignores, stop):
     marker = tmp_path / 'pids.json'
     child = "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
-    code = ('import os,json,signal,subprocess,sys,time\n'
+    code = ('import os,json,pathlib,signal,subprocess,sys,time\n'
             + ('signal.signal(signal.SIGTERM, signal.SIG_IGN)\n' if parent_ignores else '')
             + f'child=subprocess.Popen([sys.executable,"-c",{child!r}])\n'
-            + f'open({str(marker)!r},"w").write(json.dumps([os.getpgrp(),child.pid]))\n'
+            + "proc=pathlib.Path(f'/proc/{child.pid}/stat')\n"
+            + "start=proc.read_text().rpartition(')')[2].split()[19] if sys.platform.startswith('linux') else None\n"
+            + f'open({str(marker)!r},"w").write(json.dumps([os.getpgrp(),child.pid,start]))\n'
             + 'print("partial output",flush=True)\ntime.sleep(60)\n')
     driver = (
         'import os,signal,sys,threading,subprocess\n'
@@ -232,12 +235,11 @@ def test_stop_kills_term_ignoring_child_even_if_parent_exits(tmp_path, parent_ig
         assert ('KeyboardInterrupt' if stop == 'interrupt' else 'TimeoutExpired') in result.stdout
         if stop == 'timeout':
             assert 'partial output' in result.stdout
-        pgid, pid = json.loads(marker.read_text())
-        proc = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)], capture_output=True, text=True)
-        assert not proc.stdout.strip() or proc.stdout.strip().startswith('Z')
+        pgid, pid, starttime = json.loads(marker.read_text())
+        assert process_stopped(pid, starttime), "recorded TERM-ignoring child survived"
     finally:
         if marker.exists():
-            pgid, _ = json.loads(marker.read_text())
+            pgid, _, _ = json.loads(marker.read_text())
             try:
                 os.killpg(pgid, signal.SIGKILL)
             except OSError:
