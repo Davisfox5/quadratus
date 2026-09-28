@@ -2078,7 +2078,8 @@ class Session:
             security_verification=security,
             settlement=bool(outcome.resolves),
             design_collaboration_applicable=bool(self.config.design_cross_check and is_design_task(spec)),
-            design_instruction=self._live_design_instruction(spec))
+            design_instruction=self._live_design_instruction(spec),
+            security_verdict=self._live_security_verdict() if security else "none")
         commands = getattr(gate, "commands", None)
         checks = tuple(c.id for c in commands) if commands is not None else (("check",) if gate else ())
         intended = None
@@ -2670,7 +2671,9 @@ class Session:
             # actually returned; a refusal or any other interruption leaves it
             # unset, so the record says it was not attempted to completion.
             self._stage("verification")
-            if self.config.security_verdict_json:
+            # Asked and parsed with the protocol fixed at dispatch (O-NEXT-10
+            # D); the live option is recorded beside it.
+            if self._required("security_verdict", self._live_security_verdict()) == "json":
                 self._verify_security_json(spec, task, draft, excursion.worker, verifier)
             else:
                 with invocation(spec.task_id, "verifier"):
@@ -4246,6 +4249,10 @@ class Session:
         if not (self.config.design_self_verify and is_design_task(spec)):
             return "none"
         return "harness" if self._harness_captures(spec) else "self"
+
+    def _live_security_verdict(self) -> str:
+        """The security verifier's protocol read from live config."""
+        return "json" if self.config.security_verdict_json else "prose"
 
     def _live_capture_page(self, spec) -> Optional[str]:
         """The page a harness instruction names, from the live profile."""

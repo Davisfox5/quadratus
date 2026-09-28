@@ -280,6 +280,8 @@ _DESIGN_EVIDENCE = ("harness", "self", "disabled", "none")
 _COLLABORATION = "design_collaboration_applicable"
 _INSTRUCTION = "design_instruction"
 _INSTRUCTIONS = ("harness", "self", "none")
+_VERDICT = "security_verdict"
+_VERDICTS = ("json", "prose", "none")
 #: Edges an audit's ledger findings stand for: the design obligations whose
 #: failure the audit recorded as requirement debt.
 _AUDIT_EDGES = ("evidence", "delivered", "reviewer")
@@ -320,6 +322,10 @@ def _contract_missing(task: TaskOutcome) -> List[str]:
         missing.append(f"{tid}.contract.required.{_INSTRUCTION}")
     elif required[_INSTRUCTION] == "harness" and not _nonempty(contract.get("capture_page")):
         missing.append(f"{tid}.contract.capture_page")
+    if _VERDICT not in required:
+        missing.append(f"{tid}.contract.required.{_VERDICT} (absent: recorded before this field existed)")
+    elif required.get(_VERDICT) not in _VERDICTS:
+        missing.append(f"{tid}.contract.required.{_VERDICT}")
     return missing
 
 

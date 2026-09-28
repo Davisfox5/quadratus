@@ -50,6 +50,11 @@ class Required:
     #: with no writable project has evidence "none" and is still asked for
     #: renders (O-NEXT-01, 8ab7333; Codex, 5864880543).
     design_instruction: str = "none"
+    #: The security verifier's protocol, fixed at dispatch for a security
+    #: task: "json" (structured verdict) or "prose"; "none" otherwise.
+    #: ``security_verification`` fixes that verification happens, this fixes
+    #: how it is asked and parsed (O-NEXT-10 D; Codex, 5865344590).
+    security_verdict: str = "none"
 
 
 @dataclass(frozen=True)

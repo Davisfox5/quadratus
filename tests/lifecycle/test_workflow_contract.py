@@ -114,7 +114,7 @@ def test_the_contract_is_frozen_and_references_grants(tmp_path, monkeypatch):
         "write_grant": "operator", "edits": "scoped:40"}
     assert contract["required"] == dict(checks=True, design_evidence="none", design_review=False,
                                         security_verification=False, settlement=False,
-                                        design_collaboration_applicable=False, design_instruction="none")
+                                        design_collaboration_applicable=False, design_instruction="none", security_verdict="none")
     assert contract["allowed_next"] == ["draft", "review", "checks", "closeout"]
     assert contract["scope"]["permitted_paths"] == ["app.py", "tests/test_app.py"]
     assert len(contract["digest"]) == 64
