@@ -5,7 +5,8 @@
   "limitations": [
     "Scripted controller tests prove deterministic routing only, not model behavior or live GameTape acceptance.",
     "Proof claims were reviewed conservatively; unmapped obligations remain UNPROVEN.",
-    "J30 required errands have no production declaration."
+    "J30 required errands have no production declaration.",
+    "J37 has Session-level partial-write timeout evidence in tests/test_run_budget.py::test_partial_write_timeout_keeps_file_and_never_replays and harness-pack case 07, but no mapped whole-controller replay."
   ],
   "journeys": [
     {
@@ -691,14 +692,29 @@
     },
     {
       "id": "J36",
-      "tests": [],
+      "tests": [
+        "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_rejected",
+        "tests/lifecycle/test_lifecycle_matrix.py::test_a_design_fix_that_repeats_the_tasks_files_is_rejected"
+      ],
       "required_obligations": [
         "calls",
         "outcome",
         "report",
         "partial_work"
       ],
-      "coverage": {}
+      "coverage": {
+        "calls": [
+          "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_rejected",
+          "tests/lifecycle/test_lifecycle_matrix.py::test_a_design_fix_that_repeats_the_tasks_files_is_rejected"
+        ],
+        "report": [
+          "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_rejected",
+          "tests/lifecycle/test_lifecycle_matrix.py::test_a_design_fix_that_repeats_the_tasks_files_is_rejected"
+        ],
+        "partial_work": [
+          "tests/lifecycle/test_lifecycle_matrix.py::test_a_revision_that_repeats_earlier_files_is_rejected"
+        ]
+      }
     },
     {
       "id": "J37",

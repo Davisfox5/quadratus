@@ -105,8 +105,8 @@ def assess(manifest: dict, cases: dict[str, str]) -> dict:
             proof = item["coverage"].get(obligation, [])
             values = [test_statuses[selector] for selector in proof]
             obligation_statuses[obligation] = (
-                "UNPROVEN" if not proof or "UNPROVEN" in values else
-                "FAIL" if "FAIL" in values else "SKIP" if "SKIP" in values else "PASS"
+                "UNPROVEN" if not proof else "FAIL" if "FAIL" in values else
+                "UNPROVEN" if "UNPROVEN" in values else "SKIP" if "SKIP" in values else "PASS"
             )
         values = list(obligation_statuses.values()) + list(test_statuses.values())
         status = "FAIL" if "FAIL" in values else "UNPROVEN" if "UNPROVEN" in values else (

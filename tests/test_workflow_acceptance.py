@@ -4,7 +4,6 @@ import importlib.util
 import json
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("workflow_acceptance", ROOT / "tools/workflow_acceptance.py")
 assert SPEC and SPEC.loader
@@ -35,6 +34,16 @@ def test_failure_and_skip_are_distinct_from_unproven():
     assert wa.assess(manifest, {selector: "FAIL"})["journeys"][0]["status"] == "FAIL"
     assert wa.assess(manifest, {selector: "SKIP"})["journeys"][0]["status"] == "SKIP"
     assert wa.assess(manifest, {})["journeys"][0]["status"] == "UNPROVEN"
+
+
+def test_a_known_failure_takes_precedence_over_a_missing_cited_test():
+    failed, absent = "tests/test_x.py::test_failed", "tests/test_x.py::test_absent"
+    manifest = {"journeys": [{"id": "J1", "tests": [failed, absent],
+                "required_obligations": ["calls"], "coverage": {"calls": [failed, absent]}}]}
+    row = wa.assess(manifest, {failed: "FAIL"})["journeys"][0]
+    assert row["tests"][absent] == "UNPROVEN"
+    assert row["obligations"]["calls"] == "FAIL"
+    assert row["status"] == "FAIL"
 
 
 def test_junit_folds_parameterized_cases_and_preserves_failures(tmp_path):
