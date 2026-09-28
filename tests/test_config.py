@@ -4,18 +4,17 @@ from __future__ import annotations
 
 from quadratus.config import (
     DEFAULT_CLAUDE_MODEL,
-    DEFAULT_GEMINI_MODEL,
     DEFAULT_GROK_MODEL,
     DEFAULT_OPENAI_MODEL,
     Settings,
 )
+from quadratus.registry import VENDORS
 
 
 def test_defaults_when_env_unset(monkeypatch):
     for var in (
         "CLAUDE_MODEL",
         "OPENAI_MODEL",
-        "GEMINI_MODEL",
         "GROK_MODEL",
         "ROUNDS",
         "PROVIDER_ORDER",
@@ -24,20 +23,36 @@ def test_defaults_when_env_unset(monkeypatch):
     s = Settings.from_env()
     assert s.claude_model == DEFAULT_CLAUDE_MODEL
     assert s.openai_model == DEFAULT_OPENAI_MODEL
-    assert s.gemini_model == DEFAULT_GEMINI_MODEL
     assert s.grok_model == DEFAULT_GROK_MODEL
     assert s.rounds == 1
-    assert s.provider_order == ["claude", "openai", "gemini", "grok"]
+    assert s.provider_order == ["claude", "openai", "grok"]
+
+
+def test_the_default_provider_order_is_exactly_the_lineup(monkeypatch):
+    """A provider order naming a vendor with no roster is a run that spends a
+    phase discovering it has nothing to call."""
+    monkeypatch.delenv("PROVIDER_ORDER", raising=False)
+    assert Settings.from_env().provider_order == list(VENDORS)
+
+
+def test_subscription_transport_is_the_default(monkeypatch):
+    """The whole point is spending windows that are already paid for; falling
+    back to billed keys should be something the operator asks for."""
+    monkeypatch.delenv("LLM_BACKEND", raising=False)
+    s = Settings.from_env()
+    assert s.backend == "cli"
+    assert all(s.backend_for(v) == "cli" for v in VENDORS)
+    assert s.uses_cli()
 
 
 def test_env_overrides(monkeypatch):
     monkeypatch.setenv("CLAUDE_MODEL", "claude-custom")
     monkeypatch.setenv("ROUNDS", "3")
-    monkeypatch.setenv("PROVIDER_ORDER", "gemini, openai")
+    monkeypatch.setenv("PROVIDER_ORDER", "grok, openai")
     s = Settings.from_env()
     assert s.claude_model == "claude-custom"
     assert s.rounds == 3
-    assert s.provider_order == ["gemini", "openai"]
+    assert s.provider_order == ["grok", "openai"]
 
 
 def test_invalid_int_falls_back_to_default(monkeypatch):
@@ -50,13 +65,6 @@ def test_rounds_floor_is_one(monkeypatch):
     monkeypatch.setenv("ROUNDS", "0")
     s = Settings.from_env()
     assert s.rounds == 1
-
-
-def test_gemini_key_aliases(monkeypatch):
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-    monkeypatch.setenv("GEMINI_API_KEY", "from-gemini-var")
-    s = Settings.from_env()
-    assert s.google_api_key == "from-gemini-var"
 
 
 def test_grok_key_aliases(monkeypatch):

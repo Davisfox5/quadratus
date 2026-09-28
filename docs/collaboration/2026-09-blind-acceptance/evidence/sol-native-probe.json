@@ -1,0 +1,63 @@
+{
+  "vendor": "codex",
+  "requested_model": "gpt-5.6-sol",
+  "scored": false,
+  "outcome": "RunBudgetExceeded",
+  "elapsed_seconds": 13.133561134338379,
+  "usage": {
+    "input_tokens": 43817,
+    "output_tokens": 78
+  },
+  "resolved_model": null,
+  "diagnostics": {},
+  "native_children": [
+    {
+      "session_id": "unidentified:01a0a5bd-af5e-76a3-bb35-aee0482758b4:item_0",
+      "model": null,
+      "parent_session_id": "01a0a5bd-af5e-76a3-bb35-aee0482758b4",
+      "input_tokens": null,
+      "output_tokens": null,
+      "tool_name": "wait",
+      "detail": "CONTROL FAILURE: native child ran although the call sent --disable multi_agent --disable multi_agent_v2; native activity observed; stream does not report child usage"
+    },
+    {
+      "session_id": "01a0a5bd-c623-7410-9f41-894c71e0bfd0",
+      "model": "gpt-5.6-sol",
+      "parent_session_id": "01a0a5bd-af5e-76a3-bb35-aee0482758b4",
+      "input_tokens": 15836,
+      "output_tokens": 5,
+      "tool_name": "spawn_agent",
+      "detail": "CONTROL FAILURE: native child ran although the call sent --disable multi_agent --disable multi_agent_v2; linked Codex rollout usage"
+    }
+  ],
+  "budget": {
+    "limits": {
+      "max_calls": 1,
+      "max_reported_tokens": 50000,
+      "wall_seconds": 70,
+      "max_concurrent_workers": 1
+    },
+    "reserved_attempts": 1,
+    "in_flight": 0,
+    "input_tokens": 43817,
+    "output_tokens": 78,
+    "reported_tokens": 43895,
+    "unknown_usage_attempts": 0,
+    "stop_reason": "uncontrolled_native_delegation",
+    "preserved_responses": [
+      "budget-responses/attempt-1.txt"
+    ],
+    "elapsed_seconds": 13.13378679798916,
+    "token_boundary": "post-return threshold; in-flight calls can overshoot",
+    "input_boundary": "normalized provider input includes cached input; do not add it again",
+    "wall_boundary": "attempt timeout plus required external process supervisor"
+  },
+  "supervisor": {
+    "outcome": "success",
+    "exit_code": 0,
+    "image_id": "sha256:f801ce6551eb6f00271d94773581c803e02dacd0dc3e94fada29e7ccbfb4e013",
+    "container_name": "quadratus-blind-056575c994124f99abb862c899ea582f"
+  },
+  "interpretation": "Native-off failed on this probe. One linked Sol child is confirmed by the runtime extractor; the separate unidentified wait record is not evidence of a second child. Parent and child counters are reported separately, not assumed additive.",
+  "evidence_limit": "The authenticated HOME was tmpfs and was removed with the container. Raw linked rollout files were not exported; this record preserves the live extractor result. Stdout and probe reply are retained privately. Future probes must export narrowly selected rollout evidence before cleanup."
+}

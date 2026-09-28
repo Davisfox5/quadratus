@@ -1,0 +1,44 @@
+{
+  "kind": "family",
+  "schema_version": 1,
+  "id": "llm-callsite",
+  "version": "0.1.0",
+  "summary": "A new or changed call to a language model in app code: tier name only, catalog-resolved, failover helper, refusal branch, cost posture stated. The adapter declares whether the repository runs the product policy (Haiku, Sonnet, Opus through a catalog; Fable never at runtime) or is a multi-vendor tool whose roster is the catalog.",
+  "kinds": ["backend", "glue"],
+  "required_inputs": [
+    { "name": "call_site", "description": "Module and function that makes or changes the call", "refuse_if_missing": true },
+    { "name": "volume", "description": "How often it fires: per request, per row, per webhook, per set, per day, or on demand", "refuse_if_missing": true },
+    { "name": "tier", "description": "haiku, sonnet or opus with one line on why that tier clears the quality bar; under a multi-vendor adapter, the roster key or seat instead", "refuse_if_missing": true },
+    { "name": "customer_facing", "description": "Whether the output reaches a customer as prose", "refuse_if_missing": true }
+  ],
+  "checklist": [
+    { "id": "tier-not-id", "rule": "The call site names a tier and resolves it through the catalog module; no claude-* string outside the catalog and config. Under a multi-vendor adapter the roster key is the tier and the roster module is the catalog", "because": "r3cruit3r ai_reasoning_service named two snapshots that no longer resolve; LINDA's test_model_catalog guard exists for this; Flex has five constants in client.ts, not three", "applies_to": ["lead", "reviewer", "verifier"], "gate_id": "model-id-grep" },
+    { "id": "through-the-helper", "rule": "Every request goes through the catalog's failover helper, never a raw messages.create or messages.stream; under a multi-vendor adapter, through the provider layer the adapter names in permitted_calls", "because": "r3cruit3r acreate_with_refusal_fallback applies the capability guards; LINDA acreate_with_failover retries a provider blip; a raw call skips both", "applies_to": ["lead", "reviewer", "verifier"], "gate_id": "raw-call-grep" },
+    { "id": "refusal-before-parse", "rule": "A refusal branch runs before any parsing and content[0] is never read unchecked", "because": "A refusal is an HTTP 200 with stop_reason refusal and empty content; joining text blocks returns an empty string that looks like an answer (r3cruit3r CLAUDE.md)", "applies_to": ["lead", "reviewer"] },
+    { "id": "no-removed-params", "rule": "No temperature, top_p, forced tool_choice or thinking disabled; the guard sets adaptive thinking with low effort", "because": "Sending temperature to Sonnet 5 is a 400; tool_choice any is a 400 on Fable 5.1; thinking disabled makes Opus 5 tool calls come back as text", "applies_to": ["lead", "reviewer"] },
+    { "id": "volume-tier-rule", "rule": "A path that fires per row, per recruit, per import, per set or per webhook never defaults to the top tier of the adapter's ladder; failover degrades down a tier, never up", "because": "A failover that escalates cost turns an outage into a bill (r3cruit3r and Flex CLAUDE.md)", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "deterministic-fallback", "rule": "Every call site has a deterministic path when the model refuses or errors, and the caller's contract says what it returns then", "because": "LINDA outcome inference and Flex next-set suggestions both serve a fallback rather than a 500", "applies_to": ["lead", "reviewer"] },
+    { "id": "pricing-row-same-commit", "rule": "A new model id lands with its pricing or catalog row in the same commit", "because": "Flex computeCostMicroUsd falls back to the Fable row for an unknown id and overstates spend; cost reporting is trusted", "applies_to": ["lead", "reviewer"], "gate_id": "catalog-guard-tests" },
+    { "id": "paid-step-ledger", "rule": "A paid step inside a queue or pipeline claims an exactly-once ledger row before the call", "because": "LINDA pipeline_ledger exists because overlapping Celery runs double-spent", "applies_to": ["lead", "reviewer"] },
+    { "id": "prose-writing-rules", "rule": "Customer-facing prose loads the writing rules and the output is labeled as model-produced with its provenance", "because": "Flex AI output renders through src/components/ai with a visible label; LINDA shows what in the transcript produced a summary", "applies_to": ["lead", "reviewer"] },
+    { "id": "routing-skill-run", "rule": "Under a product adapter the df-model-routing skill runs on the diff and its result is pasted; under a multi-vendor adapter the routing_audit_exemption is quoted instead and the skill is not run", "because": "Its router grep missed .py modules until 2026-09-21, so the run has to be shown, not assumed", "applies_to": ["lead"], "gate_id": "model-routing-skill" }
+  ],
+  "overlays_compatible": ["sensitive-path", "usage-integrity", "privacy", "test-quality", "performance"],
+  "gate_ids": ["scope", "model-id-grep", "raw-call-grep", "catalog-guard-tests", "model-routing-skill", "unit-tests", "lint"],
+  "output_contract": {
+    "done_output": ["call site, tier, and helper function quoted", "volume and why the tier fits it", "the refusal branch quoted with what it returns", "pricing or catalog row added, or none needed", "df-model-routing tail"],
+    "stop_conditions": ["volume unknown", "the task asks for opus on a per-row path", "the task asks for a sampling parameter or forced tool_choice", "the repo has no catalog module", "the call needs Fable at runtime and the adapter's runtime_model_policy is product"]
+  },
+  "adapter_fields": [
+    { "name": "runtime_model_policy", "description": "product: Haiku, Sonnet or Opus through a catalog, Fable never at runtime, df-model-routing runs (Flex, LINDA, r3cruit3r). multi-vendor: the roster is the catalog, every vendor and seat it lists is permitted, and the routing audit is exempt (quadratus CLAUDE.md, ORCHESTRATOR_CHAIN)", "required": true },
+    { "name": "catalog_module", "description": "Where model ids resolve, for example backend/services/model_catalog.py, src/lib/ai/client.ts, or a multi-vendor roster such as quadratus/registry.py", "required": true },
+    { "name": "helper_fn", "description": "The failover helper every call goes through", "required": true },
+    { "name": "forbidden_greps", "description": "Greps that must be empty on the diff: claude-* outside the catalog, raw messages.create, content[0]", "required": true },
+    { "name": "guard_tests", "description": "Test files that fail on a hardcoded id or a missing pricing row", "required": true },
+    { "name": "permitted_calls", "description": "multi-vendor only: the provider layer every call goes through and the vendors it may reach, for example quadratus/cli_providers.py and providers.py for Anthropic, OpenAI and xAI", "required": false },
+    { "name": "routing_audit_exemption", "description": "multi-vendor only: where the repository records that the df-model-routing audit does not apply, quoted in the done output in place of the skill tail", "required": false },
+    { "name": "pricing_table", "description": "Where per-model pricing lives, if the repo accounts cost", "required": false },
+    { "name": "ledger_for_paid_steps", "description": "Exactly-once claim mechanism for paid steps in queues, if any", "required": false }
+  ],
+  "eval_cases_ref": "eval-cases.json"
+}

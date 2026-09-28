@@ -1,0 +1,13 @@
+{
+  "at": 1789335415.282458,
+  "reason": "Stop failed acceptance after confirmed scope, attribution, native accounting and process-cleanup defects; preserve partial source.",
+  "vendor_process_groups": [
+    63208,
+    63262,
+    63263,
+    63264,
+    63527
+  ],
+  "groups_present_after_interrupt": [],
+  "explicit_cleanup_groups": []
+}

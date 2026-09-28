@@ -1,0 +1,19 @@
+{"topic": "stack", "note": "Primary language: JavaScript (19 files), Python (5 files), HTML (1 files)", "author": "scan", "session": "scan"}
+{"topic": "layout", "note": "Top-level directories: docs, static, templates, tests", "author": "scan", "session": "scan"}
+{"topic": "layout", "note": "Largest source files: static/js/app.js (1593 lines), app.py (1453 lines), static/css/style.css (1180 lines), static/js/annotations.js (358 lines), templates/index.html (290 lines), static/js/recording.js (180 lines)", "author": "scan", "session": "scan"}
+{"topic": "tests", "note": "Test files live under: tests/browser/scenarios/, tests/ui/, tests/", "author": "scan", "session": "scan"}
+{"topic": "dependencies", "note": "Manifests present: requirements.txt", "author": "scan", "session": "scan"}
+{"topic": "checks", "note": "The project's own check command is: /usr/local/bin/python -m pytest -q", "author": "scan", "session": "scan"}
+{"topic": "project schema", "note": "app.py:108 stores tag_types as dictionaries with name/color; players and clips are project lists.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "clip routes", "note": "app.py:518 starts clip CRUD; create_clip writes through _save_projects and must not be reused for previews.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "tests", "note": "tests/test_basic.py:9 imports app as application; its client fixture redirects project/video paths with monkeypatch.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "imports", "note": "app.py already imports csv and io; finite-number validation will need math or equivalent standard-library handling.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "validator", "note": "`_validate_import_preview_core` in `app.py` above clips CRUD", "author": "grok:default", "session": "t1"}
+{"topic": "tag", "note": "strip + exact name in `project[\"tag_types\"]`", "author": "grok:default", "session": "t1"}
+{"topic": "times", "note": "finite start >= 0; finite end > start", "author": "grok:default", "session": "t1"}
+{"topic": "optional text", "note": "None \u2192 `\"\"`; otherwise verbatim; `players` always `[]`", "author": "grok:default", "session": "t1"}
+{"topic": "tests", "note": "parametrized in `tests/test_basic.py`; pytest 135 passed", "author": "grok:default", "session": "t1"}
+{"topic": "validator", "note": "app.py:519 defines the core validator; it currently returns `\"players\": []` at line 554.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "roster", "note": "app.py:218\u2013235 trims player name/number and stores dictionaries containing id, name, and number.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "ambiguity", "note": "app.py:197 checks duplicate name-and-number pairs, so names or numbers alone can match multiple players.", "author": "openai:gpt-6-astra", "session": "decomposition"}
+{"topic": "tests", "note": "tests/test_basic.py:1342 defines _core_row; adjacent parametrized tests exercise the core validator directly.", "author": "openai:gpt-6-astra", "session": "decomposition"}

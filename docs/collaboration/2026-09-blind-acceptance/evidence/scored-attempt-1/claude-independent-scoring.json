@@ -1,0 +1,87 @@
+{
+  "attempt": "scored-attempt-1 (run b7ccbd24)",
+  "scored_by": "cloud Claude, independent, 2026-09-15",
+  "source_after_sha256": "517fb2ff983b68c26a49e3ec423b7215425ea9400842734479c1d7469c84d7f9",
+  "source_files_verified": 31,
+  "private_set": {
+    "archive_sha256": "71cb8b06a34ed94d6936bd9dfc45ed3889a0f6c5a80be1424850f1140e66371a",
+    "fixtures": 9,
+    "passed": 7,
+    "failed": {
+      "p3_duplicates": "duplicate detection absent (all rows reported valid)",
+      "p4_players": "player matching absent (players always [], unknown player not flagged)"
+    },
+    "passed_names": [
+      "p1_extra_columns",
+      "p2_number_forms",
+      "p5_tags_and_limits",
+      "p6_five_thousand",
+      "p7_utf16",
+      "p8_latin1",
+      "p9_bom_trailing_newline"
+    ]
+  },
+  "public_examiner": {
+    "pytest": {
+      "total": 13,
+      "passed": 9,
+      "failed": [
+        "valid_manifest (players/clip id)",
+        "mixed_manifest (duplicate row)",
+        "clip_id_collisions",
+        "format_note docs/CSV_IMPORT.md missing"
+      ]
+    },
+    "browser": {
+      "checks_defined": 17,
+      "checks_executed": 5,
+      "passed": 0,
+      "note": "UI absent; runner stopped at the first missing control after five checks"
+    }
+  },
+  "application_suite": {
+    "pytest": "102 passed",
+    "js_syntax": "ok"
+  },
+  "controls": {
+    "native_delegation_children_observed": 0,
+    "claude_subagent_stats_spawned": 0,
+    "scope": "132 changed lines in the two permitted paths; within the 150-line tolerance",
+    "store_unchanged": true,
+    "budget_stop": "reported_token_threshold after 3 attempts, reply preserved, no fourth attempt",
+    "wall_seconds": 438.94,
+    "wording": "no native child observed on either invoked vendor, within each vendor's published observability; not a universal enforcement claim"
+  },
+  "usage": {
+    "controller_reported": 614386,
+    "cache_read_input_within_that": {
+      "total": 410538,
+      "claude_fable": 23978,
+      "grok_lead": 172160,
+      "grok_closeout": 214400
+    },
+    "haiku_auxiliary_outside_controller": 2817,
+    "provider_attempts": 3,
+    "vendor_fields_not_uniform": {
+      "claude_num_turns": 5,
+      "grok_modelCalls": {
+        "lead": 10,
+        "closeout": 8
+      }
+    }
+  },
+  "routing_coverage": {
+    "vendors_invoked": [
+      "claude (Fable, orchestrator)",
+      "grok (lead and closeout)"
+    ],
+    "vendors_not_invoked": [
+      "openai"
+    ],
+    "collaborators_for_this_task": 0,
+    "why_no_opus_review": "Complexity._COLLABORATORS maps SIMPLE to 0; collaborators run before closeout in _run_task, so no review was ever assigned to this task",
+    "later_tasks_attempted": 0,
+    "worker_coverage": "unvalidated"
+  },
+  "corrections": "2026-09-15: five record details corrected after Codex's reconciliation (comment 5685233xxx); scores unchanged"
+}

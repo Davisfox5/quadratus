@@ -23,7 +23,7 @@ from .test_session import Recorder  # reuse the scripted fake
 FABLE = "claude:fable"
 OPUS = "claude:opus"
 SOL = "openai:gpt-5.6-sol"
-TRUST = [OPUS, SOL, "gemini:gemini-3.1-pro-preview", "grok:grok-4.6"]
+TRUST = [OPUS, SOL, "grok:default"]
 
 
 @pytest.fixture
@@ -271,17 +271,21 @@ from quadratus.workers import pick_worker, worker_menu  # noqa: E402
 
 
 def test_the_tree_picks_by_errand_and_spreads_vendors():
+    """Picking by skill also has to spread the windows, or the cheapest tier
+    exhausts the one subscription everything else needs."""
+    from quadratus.registry import VENDORS
+
     picks = {pick_worker(e) for e in ("lookup", "read", "check", "format")}
     vendors = {p.split(":")[0] for p in picks}
-    assert vendors == {"grok", "gemini", "claude", "openai"}
+    assert vendors == set(VENDORS)
 
 
 def test_demanding_errands_escalate_within_their_own_family():
     """The skill stays matched; the horsepower goes up one tier."""
     assert pick_worker("check", demanding=True) == "claude:sonnet"
-    assert pick_worker("read", demanding=True) == "gemini:gemini-3.6-thinking"
+    assert pick_worker("read", demanding=True) == "openai:gpt-5.6-terra"
     assert pick_worker("format", demanding=True) == "openai:gpt-5.6-terra"
-    assert pick_worker("lookup", demanding=True) == "grok:grok-4.20"
+    assert pick_worker("lookup", demanding=True) == "grok:expert"
 
 
 def test_a_bump_target_missing_from_the_roster_degrades_to_the_base():
@@ -326,7 +330,7 @@ def test_the_same_prompt_may_be_rerouted_to_a_different_worker(store):
     got = pool.commission(task=task, parent_key=OPUS, prompt="latest React API",
                           label="b", errand="lookup")
     assert got.summary == "found it"
-    assert got.model == "grok:grok-4-1-fast"
+    assert got.model == "grok:worker"
 
 
 def test_workers_actually_run_concurrently(store):
@@ -408,6 +412,7 @@ def test_worker_menu_names_every_errand_in_the_tree():
 # -- the integration gate -------------------------------------------------------
 
 from quadratus.integration import GateResult, IntegrationGate  # noqa: E402
+from tests.gate_facts import ASSERTION_FAILURE  # noqa: E402
 
 
 def test_a_passing_command_passes():
@@ -442,7 +447,8 @@ class StubGate:
         passed = self.outcomes.pop(0) if self.outcomes else True
         return GateResult(passed=passed, command="pytest -q",
                           returncode=0 if passed else 1,
-                          output="" if passed else "2 failed, 30 passed")
+                          output="" if passed else "2 failed, 30 passed",
+                          report=None if passed else ASSERTION_FAILURE)
 
 
 def test_a_passing_gate_costs_no_extra_invocation(store):
@@ -463,6 +469,21 @@ def test_a_failing_gate_feeds_the_output_back_for_one_fix(store):
     assert len(fixes) == 1
     assert "2 failed, 30 passed" in fixes[0]
     assert gate.runs == 2
+
+
+def test_a_failure_without_an_attributable_report_gets_no_fix(store):
+    from quadratus.integration import CheckUnattributable
+
+    class Undeclared(StubGate):
+        def run(self):
+            self.runs += 1
+            return GateResult(passed=False, command="pytest -q", returncode=1, output="2 failed, 30 passed")
+    rec = Recorder()
+    gate = Undeclared([])
+    s = _session(store, rec, config=SessionConfig(integration_gate=gate))
+    with pytest.raises(CheckUnattributable, match="structured report undeclared"):
+        s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert gate.runs == 1 and not any("integration check failed" in c["prompt"] for c in rec.calls)
 
 
 def test_a_persistent_failure_is_carried_loudly_to_the_closeout(store):

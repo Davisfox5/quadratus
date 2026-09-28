@@ -1,0 +1,171 @@
+"""A design-fix call declares only its own edits (GameTape run 12, 2026-09-26).
+
+The call re-ran the tests and captured fresh renders without editing source,
+then declared the three files the task's earlier calls had changed. Fleet's
+exact CHANGED check stopped the run before the final design review. These
+tests drive the real Fleet dispatcher, so the check is exercised, not stubbed.
+"""
+
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from quadratus.artifacts import ArtifactStore
+from quadratus.config import Settings
+from quadratus.memory import TaskMemory
+from quadratus.project import Project
+from quadratus.runtime import Fleet
+from quadratus.session import PartialWorkStopped, Session, SessionConfig
+from tests.test_preferences_in_product import _fake_evidence, _ui
+
+LEAD, REVIEWER = "grok:default", "claude:opus"
+
+
+@pytest.fixture(autouse=True)
+def cli_environment(monkeypatch):
+    monkeypatch.setattr('shutil.which', lambda _: '/unused/cli')
+    for vendor in ('OPENAI', 'CLAUDE', 'GROK'):
+        monkeypatch.delenv(f'QUADRATUS_CLI_ARGS_{vendor}', raising=False)
+
+
+def _postdate(root):
+    """Stamp the renders an hour ahead: the check compares mtimes with the
+    editing call's start, and a write inside that call can land either side."""
+    import os
+    import time
+
+    from quadratus.design_evidence import evidence_dir
+    stamp = time.time() + 3600
+    for view in ("desktop", "mobile"):
+        os.utime(evidence_dir(root, "t6") / view / "page.png", (stamp, stamp))
+
+
+def _run(tmp_path, monkeypatch, fix_reply, review="APPROVED"):
+    root = tmp_path / "project"
+    (root / "templates").mkdir(parents=True)
+    (root / "templates" / "index.html").write_text("<button>Import</button>\n")
+    fleet = Fleet(Settings(backend="cli"), project=Project(root, exclude={root / ".quadratus"}),
+                  allow_writes=True)
+    view = SimpleNamespace()
+    provider = SimpleNamespace(restricted=False, in_directory=lambda *a, **k: view)
+    monkeypatch.setattr(fleet, "provider_for", lambda key: provider)
+    prompts = []
+
+    def generate(model_key, provider, prompt, role):
+        prompts.append((model_key, prompt))
+        if "rendered evidence for this design task is missing" in prompt:
+            _fake_evidence(root)          # fresh renders, written by the capture command
+            _postdate(root)               # set, not raced against the call's start time
+            return fix_reply
+        return review                      # the cross-vendor final review
+    monkeypatch.setattr(fleet, "_generate", generate)
+
+    session = Session("goal", ArtifactStore(tmp_path / "artifacts"), fleet.invoke,
+                      config=SessionConfig(project=root, allow_writes=True,
+                                           project_excludes=(root / ".quadratus",)))
+    spec = _ui()
+    session._active_spec = spec
+    session._task_before = Project(root).contents()
+    # The task's earlier draft and revision already changed the source.
+    (root / "templates" / "index.html").write_text("<button id=preview>Import preview</button>\n")
+    session._last_edit_started = 0
+    task = TaskMemory(spec.task_id, LEAD, session.store)
+    try:
+        session._check_design(spec, LEAD, [REVIEWER], task)
+    finally:
+        fleet.close()
+    return session, prompts, root
+
+
+def test_an_evidence_only_fix_declares_nothing_and_reaches_the_final_review(tmp_path, monkeypatch):
+    session, prompts, root = _run(tmp_path, monkeypatch, "Tests pass; renders captured.\nCHANGED: []")
+    fix = next(p for _, p in prompts if "rendered evidence for this design task is missing" in p)
+    note = next(line for line in fix.splitlines() if line.startswith("Files this task has already changed"))
+    assert "templates/index.html" in note and "already recorded" in fix
+    assert "end with exactly CHANGED: []" in fix and "never list them" in fix
+    record = session.design_checks[0]
+    assert record["verified"] is True and record["final_review"]["reviewer"] == REVIEWER
+    assert not [f for f in session.open_findings if "design" in f]
+    assert (root / "templates" / "index.html").read_text().startswith("<button id=preview>")
+    assert not session.completed
+
+
+def test_repeating_the_tasks_earlier_files_is_still_rejected(tmp_path, monkeypatch):
+    reply = 'Scaffold already present; renders captured.\nCHANGED: ["templates/index.html"]'
+    with pytest.raises(PartialWorkStopped, match="CHANGED report"):
+        _run(tmp_path, monkeypatch, reply)
+
+
+def test_the_capture_output_is_not_a_source_change(tmp_path, monkeypatch):
+    """The evidence lands under .quadratus/, which the project excludes."""
+    session, _, root = _run(tmp_path, monkeypatch, "Renders captured.\nCHANGED: []")
+    summary = root / ".quadratus" / "design-evidence" / "t6" / "summary.json"
+    assert json.loads(summary.read_text())["target"]
+    assert session.design_checks[0]["verified"] is True
+
+
+def test_the_fix_prompt_without_earlier_edits_still_states_the_rule(tmp_path):
+    from quadratus.session import _design_fix_delivery
+    text = _design_fix_delivery("")
+    assert text.startswith("\nYour CHANGED line lists only files this call itself")
+    assert "CHANGED: []" in text
+
+
+# -- renders must show the changed interface (Run 12 grade, 2026-09-26) ----------
+
+def test_every_capture_instruction_asks_for_the_changed_interface(tmp_path, monkeypatch):
+    from quadratus.session import _DESIGN_RENDER_SHOWS
+    _, prompts, _ = _run(tmp_path, monkeypatch, "Renders captured.\nCHANGED: []")
+    fix = next(p for _, p in prompts if "rendered evidence for this design task is missing" in p)
+    review = next(p for _, p in prompts if "final renders" in p)
+    assert _DESIGN_RENDER_SHOWS in fix
+    assert "not evidence for this task" in fix
+    assert "BLOCKING: the renders do not show the changed interface" in review
+
+
+def test_the_lead_prompt_for_design_work_carries_the_rule(tmp_path):
+    from quadratus.session import _DESIGN_RENDER_SHOWS
+    session = Session("goal", ArtifactStore(tmp_path / "a"), lambda *a, **k: "",
+                      config=SessionConfig(project=tmp_path, allow_writes=True))
+    assert _DESIGN_RENDER_SHOWS in session._lead_prompt(_ui())
+
+
+def test_a_render_of_an_unrelated_page_is_an_open_finding(tmp_path, monkeypatch):
+    """A clean render that does not show the change blocks the task."""
+    verdict = "BLOCKING: the renders do not show the changed interface"
+    session, _, _ = _run(tmp_path, monkeypatch, "Renders captured.\nCHANGED: []", review=verdict)
+    assert session.design_checks[0]["verified"] is True       # the render itself was clean
+    assert any("do not show the changed interface" in f for f in session.open_findings)
+    assert not session.completed
+
+
+# -- freshness follows source changes, on success and on failure (Codex review of 3d5c3f3) --
+
+@pytest.mark.parametrize("writes,raises,moves", [
+    (False, False, False),      # an unchanged call keeps earlier renders
+    (True, False, True),        # a changed call invalidates them
+    (True, True, True),         # a call that wrote, then failed, invalidates them too
+    (False, True, False),
+])
+def test_the_freshness_line_moves_only_when_source_changed(tmp_path, writes, raises, moves):
+    from quadratus.providers import ProviderError
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "a.txt").write_text("one\n")
+
+    def invoke(key, prompt, allow_writes=False):
+        if writes:
+            (root / "a.txt").write_text("two\n")
+        if raises:
+            raise ProviderError("stopped at the transport")
+        return "done\nCHANGED: []"
+
+    session = Session("goal", ArtifactStore(tmp_path / "artifacts"), invoke,
+                      config=SessionConfig(project=root, allow_writes=True))
+    session._last_edit_started = 1.0
+    try:
+        session._invoke_model("claude:opus", "edit", allow_writes=True)
+    except ProviderError:
+        pass
+    assert (session._last_edit_started != 1.0) is moves

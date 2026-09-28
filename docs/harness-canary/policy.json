@@ -1,0 +1,96 @@
+{
+  "kind": "policy",
+  "schema_version": 1,
+  "repository_id": "fixture/q9-tenant-api",
+  "library": {
+    "version": "pilot-1"
+  },
+  "instructions": [
+    "README.md"
+  ],
+  "defaults": {
+    "family": "scoped-endpoint",
+    "required_gates": [
+      "scope",
+      "api-tests"
+    ],
+    "scope_max_lines": 40,
+    "overrun_ratio": 1.5,
+    "worker_depth": 1
+  },
+  "capability_policy": {
+    "deny_write": [
+      ".git/**",
+      ".quadratus/policy.json",
+      "README.md"
+    ],
+    "sensitive": [],
+    "external_effects": "deny",
+    "native_delegation": "deny"
+  },
+  "path_rules": [
+    {
+      "paths": [
+        "app.py"
+      ],
+      "families": [
+        "scoped-endpoint"
+      ],
+      "overlays": [
+        "tenant-isolation"
+      ]
+    }
+  ],
+  "gate_bindings": {
+    "cross-tenant-test": {
+      "gate": "api-tests"
+    },
+    "import-smoke": {
+      "gate": "api-tests"
+    },
+    "unit-tests": {
+      "gate": "api-tests"
+    },
+    "scope-predicate-grep": {
+      "absent": true,
+      "because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration."
+    },
+    "lint": {
+      "absent": true,
+      "because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration."
+    }
+  },
+  "gates": [
+    {
+      "id": "scope",
+      "runner": "builtin:scope",
+      "required": true
+    },
+    {
+      "id": "api-tests",
+      "runner": "command",
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "/opt/quadratus/test_contract.py"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 30,
+      "minimum_tests": 9,
+      "required": true,
+      "side_effects": "none"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "trusted-tenant",
+      "state": "fixed",
+      "text": "Tenant comes only from current_tenant Bearer-token authentication. There is no feature gate in this fixture.",
+      "source": "README.md"
+    }
+  ]
+}

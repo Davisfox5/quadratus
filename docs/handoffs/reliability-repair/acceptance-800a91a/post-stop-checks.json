@@ -1,0 +1,13 @@
+{
+  "project": "sports-video-tagger-acceptance-v2",
+  "pytest": {
+    "passed": true,
+    "tests": 80,
+    "seconds": 5.35
+  },
+  "node_syntax": {
+    "passed": true,
+    "file": "static/js/app.js"
+  },
+  "note": "Independent checks after the controlled stop. The interrupted task did not close and these are not its in-run gate."
+}

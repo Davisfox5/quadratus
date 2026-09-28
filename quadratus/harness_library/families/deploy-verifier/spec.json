@@ -1,0 +1,39 @@
+{
+  "kind": "family",
+  "schema_version": 1,
+  "id": "deploy-verifier",
+  "version": "0.1.0",
+  "summary": "Read-only verification of a deployment: migration head matches, health and process groups up, merged and deployed reported as separate facts, escape hatches past their date flagged.",
+  "kinds": ["ops"],
+  "required_inputs": [
+    { "name": "target", "description": "Platform, app names and environment (staging or production)", "refuse_if_missing": true },
+    { "name": "expected_head", "description": "The migration head or commit the deployment should carry", "refuse_if_missing": true },
+    { "name": "checklist_doc", "description": "The repo's validation checklist, if one exists", "refuse_if_missing": false }
+  ],
+  "checklist": [
+    { "id": "read-only", "rule": "Only read commands and the platform CLI's status, logs and ssh-console reads; never deploy, scale, restart or run a migration", "because": "r3cruit3r main auto-deploys with no test gate; a verifier that can also deploy is a second deploy path", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "head-matches", "rule": "The migration head on the running machine equals the expected head; both are pasted", "because": "LINDA's 39-character revision id applied its DDL then failed the version update; r3cruit3r has a documented history of branched heads", "applies_to": ["lead", "reviewer"], "gate_id": "migration-status" },
+    { "id": "merged-vs-deployed", "rule": "Report merged and deployed as two facts with their own evidence; never infer one from the other", "because": "Flex main auto-deploys but a Vercel build can fail after merge; War Room AGENTS.md says a passing build does not establish that an integration works", "applies_to": ["lead", "reviewer"] },
+    { "id": "health-and-groups", "rule": "Every health URL answers and every process group or worker is running; each is listed with its result", "because": "r3cruit3r Celery queues map to fly.toml process groups; a missing group means tasks wait forever", "applies_to": ["lead", "reviewer"], "gate_id": "health-check" },
+    { "id": "escape-hatches", "rule": "Temporary escape hatches past their date are flagged by name", "because": "r3cruit3r ALLOW_DEPLOY_WHEN_DB_UNREACHABLE widened the release gate; an unset expiry becomes permanent", "applies_to": ["lead", "reviewer"] },
+    { "id": "scheduled-runs-green", "rule": "The last cron, beat or scheduled run is green, with its timestamp", "because": "Flex crons.yml opens a cron-failure issue only when the alert step itself works; the verifier reads the run, not the issue list", "applies_to": ["lead", "reviewer"] },
+    { "id": "no-credentials-printed", "rule": "No secret, token or DSN appears in the output; env listings are redacted", "because": "War Room AGENTS.md: never print credentials; audit reports must not contain found credentials", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "honesty-section", "rule": "The report separates checks executed from static review and names what could not be verified", "because": "War Room audit-report rules; a verifier that cannot reach a platform audits nothing and says so", "applies_to": ["lead", "reviewer"] }
+  ],
+  "overlays_compatible": ["sensitive-path", "fleet-ops", "external-effects"],
+  "gate_ids": ["scope", "migration-status", "health-check"],
+  "output_contract": {
+    "done_output": ["merged: commit and evidence", "deployed: version and evidence", "migration head on machine versus expected", "health URLs and process groups with results", "escape hatches flagged", "last scheduled run and timestamp", "honesty section"],
+    "stop_conditions": ["the platform CLI is not authenticated", "the task asks to deploy, restart, scale or migrate", "the expected head is unknown"]
+  },
+  "adapter_fields": [
+    { "name": "platform", "description": "flyctl, vercel, or other", "required": true },
+    { "name": "apps", "description": "App or project names per environment", "required": true },
+    { "name": "health_urls", "description": "URLs that must answer", "required": true },
+    { "name": "process_groups", "description": "Worker or process groups that must be running", "required": false },
+    { "name": "migration_status_command", "description": "How to read the applied head on the machine", "required": true },
+    { "name": "escape_hatches_to_flag", "description": "Env vars or flags that widen a gate, with their intended expiry", "required": false },
+    { "name": "validation_checklist_doc", "description": "The repo's own post-deploy checklist", "required": false }
+  ],
+  "eval_cases_ref": "eval-cases.json"
+}

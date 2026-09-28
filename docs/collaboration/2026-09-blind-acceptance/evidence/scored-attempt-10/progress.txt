@@ -1,0 +1,7 @@
+Project: /work; edits enabled
+asking claude:fable for the next task
+claude:fable is out of window; the seat falls to openai:gpt-6-astra
+task 1: Implement `def _validate_import_preview_core(row, project):` near the clip routes. Validate `tag type`, `start (s)`, and `end (s)` against the contract. Return a candidate containing tag_type, start, end, label, notes, and an empty players list; default absent optional text to empty strings and preserve supplied text verbatim. Return human-readable reasons for failures. This slice excludes CSV decoding, player resolution, duplicate detection, endpoint wiring, and UI. Budget 35 implementation lines and 55 test lines, using parametrized cases. Run `/usr/local/bin/python -m pytest -q`. [backend/simple]
+task 1 closed by grok:default
+asking openai:gpt-6-astra for the next task
+task 2: Extend the existing pure validator with player resolution using exact roster names and number strings. Reject empty tokens within a nonempty list. Preserve token order in resolved IDs. Keep all work free of store and video operations. Budget approximately 30 implementation lines and 55 test lines; defer CSV parsing, duplicate detection, endpoint, and UI work. [backend/simple]

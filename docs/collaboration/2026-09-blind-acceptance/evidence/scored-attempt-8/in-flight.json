@@ -1,0 +1,38 @@
+{
+  "changed": [
+    "app.py",
+    "tests/test_import_preview.py"
+  ],
+  "changed_lines": 105,
+  "inspected": true,
+  "note": "These changes were already on disk when the call stopped and have been preserved. Re-sending the same prompt would apply a second pass on top of them, not repeat the first.",
+  "task": "t1",
+  "description": "Implement the header-reading foundation using the existing `csv` and `io` imports in `app.py`. Accept bytes, decode strictly with `utf-8-sig`, and require `Tag Type`, `Start (s)`, and `End (s)` after normalization. Return `(headers, reader)`; raise `ValueError` for invalid encoding, empty input, or invalid/missing headers. Preserve CSV newline handling and quoted fields. Budget approximately 30 implementation lines and 50 test lines. Leave endpoint wiring and data-row validation for subsequent slices.",
+  "needs": [
+    "execute",
+    "patch"
+  ],
+  "scope": {
+    "permitted_paths": [
+      "app.py",
+      "tests/test_import_preview.py"
+    ],
+    "forbidden_paths": [],
+    "intended_result": "Add def _read_clip_manifest_header(raw): to decode CSV bytes and validate required headers without accessing project or video data.",
+    "acceptance": [
+      "def _read_clip_manifest_header(raw): returns normalized headers and a CSV reader positioned after the header.",
+      "Focused tests verify BOM, LF/CRLF, quoted headers, trimmed case-insensitive names, retained unknown columns, and rejection of invalid UTF-8 or missing required headers.",
+      "def _read_clip_manifest_header(raw): preserves reader.line_num for subsequent physical-line reporting and performs no writes.",
+      "Run /usr/local/bin/python -m pytest -q."
+    ],
+    "max_lines": 80
+  },
+  "invocation": {
+    "task": "t1",
+    "role": "lead",
+    "origin": "seat",
+    "model": "grok:default",
+    "allow_writes": true,
+    "prompt_artifact": "284d2e4de0dc"
+  }
+}

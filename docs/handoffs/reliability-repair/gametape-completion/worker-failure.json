@@ -1,0 +1,28 @@
+{
+  "run": "20260914T193711Z-a3fd912a",
+  "task": "t6",
+  "classification": "docs/rote",
+  "canonical_model": "grok:worker",
+  "role": "lead",
+  "origin": "seat",
+  "outcome": "ProviderError",
+  "input_tokens": 37590,
+  "output_tokens": 777,
+  "seconds": 33.37124854198191,
+  "source_changed_by_failed_call": false,
+  "restricted": true,
+  "transport_direct_write_grant": false,
+  "configured_allowed_tools": [
+    "read_file",
+    "grep",
+    "list_dir",
+    "web_search",
+    "web_fetch"
+  ],
+  "configured_disallowed_tools": [
+    "Agent"
+  ],
+  "vendor_stop_reason": "cancelled",
+  "finding": "The assigned task required executing Node commands, while the restricted tool allowlist has no command execution capability. The call cancelled without a patch. Exact internal vendor cancellation trigger is not recorded.",
+  "changed_paths": []
+}

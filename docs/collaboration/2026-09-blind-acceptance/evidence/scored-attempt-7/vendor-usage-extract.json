@@ -1,0 +1,79 @@
+{
+  "calls": [
+    {
+      "type": "result",
+      "subtype": "success",
+      "stop_reason": "stop_sequence",
+      "session_id": "177927b8-a570-4c80-a2a3-ef14f93ba6a5",
+      "num_turns": 1,
+      "usage": {
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {},
+      "subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "is_error": true,
+      "permission_denials": [],
+      "evidence_file": "call-001.stdout",
+      "sha256": "e9c9a7972330ddae81eb0e543610b5dad0d3a4b1e64336fbe55949e0208dd016"
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 81546,
+        "cached_input_tokens": 61696,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 505,
+        "reasoning_output_tokens": 15
+      },
+      "evidence_file": "call-002.stdout",
+      "sha256": "d7d1014c0cf78a65b2b4b412a5baef4302645f673351803237fa358aef12a79f"
+    },
+    {
+      "type": "error",
+      "evidence_file": "call-003.stdout",
+      "sha256": "70e7bcf2f16b2e8cf01b58b8f46ebc65de3c578c5844da5ac19a3719a4af8945"
+    }
+  ],
+  "raw_envelopes": "Raw stdout, vendor sessions and thought fields remain private outside every repository; each row above names its file and that file's SHA-256."
+}

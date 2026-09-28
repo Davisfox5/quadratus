@@ -1,0 +1,7 @@
+{
+  "outcome": "failed",
+  "exit_code": 2,
+  "image_id": "sha256:d1f99331a1639f5ff364faf9e4c027943613fadba733d452191296b873a390e2",
+  "container_name": "quadratus-blind-185ceda673ac4fefaf9b5b1ac2cd938f",
+  "finished_at": "2026-09-17T16:40:04.170176+00:00"
+}

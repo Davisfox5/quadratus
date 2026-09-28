@@ -1,0 +1,57 @@
+{
+  "contained": false,
+  "host": true,
+  "work_tree": {
+    "ok": true,
+    "entries": 1,
+    "read": "app.py"
+  },
+  "vendors": {
+    "claude": {
+      "applicable": true,
+      "ok": false,
+      "detail": "claude is not installed"
+    },
+    "openai": {
+      "applicable": true,
+      "ok": false,
+      "detail": "codex is not installed"
+    },
+    "grok": {
+      "applicable": false,
+      "detail": "this vendor has no inner sandbox to test; its restriction is a tool denial, which needs no privilege to take effect"
+    }
+  },
+  "auth": {
+    "claude": {
+      "applicable": true,
+      "ok": false,
+      "detail": "claude is not installed"
+    },
+    "openai": {
+      "applicable": true,
+      "ok": false,
+      "detail": "codex is not installed"
+    },
+    "grok": {
+      "applicable": true,
+      "ok": false,
+      "argv": [
+        "/usr/local/bin/grok",
+        "models"
+      ],
+      "exit_code": 0,
+      "proof": "known-failure wording only",
+      "detail": "You are not authenticated."
+    }
+  },
+  "probe_file": "/tmp/canary-scratch/app.py",
+  "blockers": [
+    "claude is not signed in, so every seat on it will fail the moment it is called: claude is not installed",
+    "openai is not signed in, so every seat on it will fail the moment it is called: codex is not installed",
+    "grok is not signed in, so every seat on it will fail the moment it is called: You are not authenticated.",
+    "a seat on claude cannot read the project: its sandbox is configured exactly as this run would configure it, and in that mode it can run no command at all",
+    "a seat on openai cannot read the project: its sandbox is configured exactly as this run would configure it, and in that mode it can run no command at all"
+  ],
+  "ok": false
+}

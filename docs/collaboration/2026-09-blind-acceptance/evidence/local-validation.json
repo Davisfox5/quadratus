@@ -1,0 +1,56 @@
+{
+  "source_commit": "85a20188ec8782ba2599981908c08943ff57a4b4",
+  "checks": [
+    {
+      "command": "QUADRATUS_TEST_DOCKER=1 QUADRATUS_LIVE_CODEX_FEATURES=1 python -m pytest -q",
+      "passed": 864,
+      "skipped": 0,
+      "seconds": 51.95,
+      "exit_code": 0
+    },
+    {
+      "command": "ruff check .",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "source_sha256": {
+    "quadratus/cli_providers.py": "71bc910bdd11678998f1a500c4cfa2ffdbfaae6d3d54f47721f7c983580a7b73",
+    "quadratus/delegation.py": "0b337674391defb41153a850d54754c1580daed56ade47f04eec2fca2cc9a80b",
+    "quadratus/providers.py": "08a541d7e26e87e3ef9db9e7093199c51031fcd8b807fb537e2538ac56ae1aac",
+    "quadratus/runtime.py": "31ff90a259bea99dc75e899328eb4bb27fcab2336d5821a2458a77eea8b8a0fe",
+    "quadratus/project_run.py": "e0ea341b66c735113ce4d88cbfeb2574aaf82aae6f089e756b8b5282841454e7",
+    "quadratus/run_budget.py": "e610e27b82f420213e7343e1fb828c516da55c6a77a235fc710c72e48d6a0d26",
+    "quadratus/isolated_run.py": "9603325c07f53b9756ac9303ef0f7646f2f26d9ea1fb4dad523cc2c531385568",
+    "quadratus/blind_bundle.py": "3aa7ff51e0c3f6347ed9c339d1f14ffe3c99377892604c63fb8cb04f97031488"
+  },
+  "docker_image_id": "sha256:c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28",
+  "configuration_probe": "installed codex-cli 0.154.0; feature-list only, no model call",
+  "negative_application_baseline": {
+    "source_commit": "a8772ab32f28dd96d06fda8152504b0b9f15e262",
+    "public_examiner_tests_failed": 13,
+    "seconds": 0.26,
+    "interpretation": "expected failures: preview feature not implemented; no scored solver run"
+  },
+  "not_claimed": [
+    "authenticated isolated vendor runtime",
+    "live native-control enforcement",
+    "restricted Grok probe",
+    "private held-out scoring cases",
+    "application completion"
+  ],
+  "hosted_ci": {
+    "url": "https://github.com/Davisfox5/quadratus/actions/runs/34972145866",
+    "head": "85a20188ec8782ba2599981908c08943ff57a4b4",
+    "python_versions": [
+      "3.11",
+      "3.12"
+    ],
+    "passed_per_job": 861,
+    "skipped_per_job": 3,
+    "conclusion": "success"
+  }
+}

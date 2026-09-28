@@ -317,7 +317,9 @@ def test_fetching_is_budgeted(store):
 
     rec = Greedy()
     s = _session(store, rec)
-    s.next_task()  # must terminate
+    with pytest.raises(RunStalled, match="fetch budget exhausted"):
+        s.next_task()
+    assert not s.history
     orch_calls = [c for c in rec.calls if "Name the single next task" in c["prompt"]]
     assert len(orch_calls) <= 1 + s.config.max_fetches
 
@@ -400,10 +402,11 @@ def test_the_consult_budget_is_enforced(store):
 
     rec = Chatty()
     s = _session(store, rec)
-    s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    with pytest.raises(RunStalled, match="Consult budget exhausted"):
+        s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
     consults = [c for c in rec.calls if "area of strength" in c["prompt"]]
     assert len(consults) == s.config.max_consults
-    assert any("consult budget spent" in c["prompt"] for c in rec.calls)
+    assert not s.history
 
 
 def test_leads_are_told_the_channels_exist(store):

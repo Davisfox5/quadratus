@@ -1,0 +1,2 @@
+{"model": "claude:fable", "input_tokens": 87027, "output_tokens": 2936, "cost_usd": 1.01707, "measured": true}
+{"model": "grok:default", "input_tokens": 367432, "output_tokens": 11945, "cost_usd": 0.806534, "measured": true}

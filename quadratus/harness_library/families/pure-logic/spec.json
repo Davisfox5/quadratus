@@ -1,0 +1,28 @@
+{
+  "kind": "family",
+  "schema_version": 1,
+  "id": "pure-logic",
+  "version": "0.1.0",
+  "summary": "Pure calculation, classification or matching with defined examples and invariants and no I/O.",
+  "kinds": ["backend", "refactor"],
+  "required_inputs": [
+    { "name": "examples", "description": "Input and expected output pairs from an independent source, not derived from the implementation", "refuse_if_missing": true },
+    { "name": "invariants", "description": "Properties that must hold for every input", "refuse_if_missing": false }
+  ],
+  "checklist": [
+    { "id": "tests-beside-module", "rule": "Tests live beside the module and cover every example given as input", "because": "Flex quote logic regressions were caught only by co-located tests (docs/coding-agent-harnesses-2026-09-21.md, Flex section)", "applies_to": ["lead", "reviewer"] },
+    { "id": "no-io", "rule": "The module performs no network, database or filesystem access", "because": "r3cruit3r tests that hid live API calls behind mocks reached the real Anthropic API (commit 063bbcb)", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "undecided-semantics-stop", "rule": "Stop with an ASK if a business rule the examples depend on is listed as undecided", "because": "r3cruit3r ADR 0001 was reverted because an agent decided the merge threshold on the owner's behalf (commit 97a31c2)", "applies_to": ["lead"] }
+  ],
+  "overlays_compatible": ["test-quality", "performance", "human-decision"],
+  "gate_ids": ["scope", "unit-tests"],
+  "output_contract": {
+    "done_output": ["module path", "test path and the test tail", "the examples covered and any left uncovered with the reason"],
+    "stop_conditions": ["examples missing", "a required invariant contradicts an example", "an undecided business rule"]
+  },
+  "adapter_fields": [
+    { "name": "test_runner", "description": "Command that runs the co-located tests, as an argument list", "required": true },
+    { "name": "typecheck_list", "description": "File that enumerates scripts included in typecheck, if the repo has one", "required": false }
+  ],
+  "eval_cases_ref": "eval-cases.json"
+}

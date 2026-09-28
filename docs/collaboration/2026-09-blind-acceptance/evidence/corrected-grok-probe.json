@@ -1,0 +1,80 @@
+{
+  "vendor": "grok",
+  "requested_seat": "grok:default",
+  "requested_model": "",
+  "scored": false,
+  "mode": "tools",
+  "allow_writes": true,
+  "outcome": "returned",
+  "elapsed_seconds": 6.009747252915986,
+  "usage": {
+    "input_tokens": 8378,
+    "output_tokens": 344
+  },
+  "resolved_model": null,
+  "diagnostics": {
+    "stop_reason": "end_turn"
+  },
+  "native_children": [],
+  "private_rollout_hashes": {},
+  "budget": {
+    "limits": {
+      "max_calls": 1,
+      "max_reported_tokens": 50000,
+      "wall_seconds": 70,
+      "max_concurrent_workers": 1
+    },
+    "reserved_attempts": 1,
+    "in_flight": 0,
+    "input_tokens": 8378,
+    "output_tokens": 344,
+    "reported_tokens": 8722,
+    "unknown_usage_attempts": 0,
+    "stop_reason": "",
+    "preserved_responses": [],
+    "elapsed_seconds": 6.010516794049181,
+    "token_boundary": "post-return threshold; in-flight calls can overshoot",
+    "input_boundary": "normalized provider input includes cached input; do not add it again",
+    "wall_boundary": "attempt timeout plus required external process supervisor"
+  },
+  "runtime_commit": "a001c1bb8a5d940978be2dac2fedb578050676c9",
+  "reported_tools": [
+    "web_search",
+    "open_page",
+    "open_page_with_find",
+    "x_user_search",
+    "x_semantic_search",
+    "x_keyword_search",
+    "x_thread_fetch",
+    "run_terminal_command",
+    "read_file",
+    "search_replace",
+    "list_dir",
+    "grep",
+    "todo_write",
+    "monitor",
+    "update_goal",
+    "enter_plan_mode",
+    "exit_plan_mode",
+    "ask_user_question",
+    "send_feedback",
+    "image_gen",
+    "image_edit",
+    "image_to_video",
+    "reference_to_video",
+    "write"
+  ],
+  "control_check": "pass: targeted denied names absent; read/write/exec reported",
+  "limitation": "Model-reported names, not dumped tool schema or proof against hidden vendor activity",
+  "supervisor": {
+    "outcome": "success",
+    "exit_code": 0,
+    "image_id": "sha256:d1f99331a1639f5ff364faf9e4c027943613fadba733d452191296b873a390e2",
+    "container_name": "quadratus-blind-a21f9759c20548ce8a7c6dd89cd33cf8"
+  },
+  "private_evidence_sha256": {
+    "stdout.private": "00c4c26ead61cb85805ac194b135d4fc33d9bd654c12df004d022a1ee9a81367",
+    "stderr.private": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "reply.private": "84faa709d17ec3df1f8095f1cd7ac1bc89f21ccc5728705ebab1199254ba951b"
+  }
+}

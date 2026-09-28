@@ -1,0 +1,77 @@
+OFFLINE RECONSTRUCTION, NOT A CAPTURED LIVE WIRE PROMPT
+
+## Goal (verbatim, unchanged)
+
+Offline reconstruction only
+
+## Completed work
+
+_Nothing completed yet._
+
+## Now
+
+Fix the tenant-isolation leak in app.py.
+
+You are leading this task. Produce the complete work.
+
+## Role packet
+Role: lead
+## Scope of this task
+You may change only these paths: app.py. A change anywhere else will be rejected as out of scope.
+Expected size: about 40 changed lines. If the work genuinely needs substantially more, say so and stop rather than delivering the larger change -- an undersized task quietly growing into a whole feature is the specific failure this bound exists to catch.
+Families: scoped-endpoint
+Overlays: tenant-isolation
+Family checklist (scoped-endpoint):
+- Auth dependency first, then scope resolution, then feature gate, then body validation, in that order Because: Flex admin services route is the accepted pattern; a 307 from the page-oriented guard on an API route was a live defect
+- Every query on a scoped model carries the scope predicate on the same statement, including secondary lookups by id Because: r3cruit3r has 61 raw id lookups in routers and recruit_merges.py fetches by id without a user predicate; Flex tenant content leaked through hardcoded fallbacks six times in two days
+- A test proves a second tenant or user gets 404 or 403, using the repo's override mechanism Because: A static grep is a review cue, not proof; r3cruit3r IDOR holes were closed in PR #12 only after cross-tenant tests existed
+- Tests override dependencies through the framework's mechanism, never by patching the module Because: r3cruit3r mocker.patch of a FastAPI dependency never took effect, so tests passed while calling the real API (commit 063bbcb)
+- Declare the response model and use the repo's error envelope; no bare 500 Because: r3cruit3r has 137 response_model uses and the reviewer prompt requires it; Flex uses { error: { code, message } }
+- Never write shared or global data on behalf of one tenant or user Because: r3cruit3r CONTEXT.md: never write to a TransferPortalPlayer on behalf of one coach
+- The router is registered where the app includes routers, and the import is proven to succeed Because: r3cruit3r wraps every include_router in try/except ImportError, so a missing package made AI endpoints 404 silently
+- A gated route asserts the feature server-side and the client wraps in the gate component Because: Flex widgets fired entitlement-gated calls for every tier and logged a 402 per load; CLAUDE.md says never render a blank page
+- Tenant identity comes from the proxy or the auth token, never from a client-supplied header Because: Flex proxy strips inbound x-tenant-slug; LINDA binds the tenant GUC before writes
+Required inputs: [{"name": "route", "description": "Path, method and the handler location", "refuse_if_missing": true}, {"name": "scope_owner", "description": "Whether the resource is per-user, per-tenant, program-shared or global", "refuse_if_missing": true}, {"name": "schemas", "description": "Request and response schema names, or the fields if new", "refuse_if_missing": true}, {"name": "feature_key", "description": "Entitlement or feature flag that gates the route, or none with a reason", "refuse_if_missing": false}]
+Stop conditions: ["scope owner unknown", "the resource is global and the task asks for a per-tenant write", "no override mechanism exists to write the cross-tenant test", "the route touches a sensitive path without a grant"]
+Check configuration: {"absent": [{"because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration.", "id": "scope-predicate-grep", "status": "not_configured"}, {"because": "This isolated in-memory fixture uses behavioral API tests and import checks; no production query or lint configuration.", "id": "lint", "status": "not_configured"}], "adapters": {"scoped-endpoint": {"auth_dependency": {"required": true, "source": null, "status": "not_configured", "value": null}, "error_envelope": {"required": true, "source": null, "status": "not_configured", "value": null}, "feature_gate_fn": {"required": false, "source": null, "status": "not_configured", "value": null}, "raw_query_grep": {"required": false, "source": null, "status": "not_configured", "value": null}, "route_registry": {"required": true, "source": null, "status": "not_configured", "value": null}, "scope_predicate": {"required": true, "source": null, "status": "not_configured", "value": null}, "test_override_mechanism": {"required": true, "source": null, "status": "not_configured", "value": null}, "validation_lib": {"required": true, "source": null, "status": "not_configured", "value": null}}}, "gates": [{"id": "scope", "required": true, "runner": "builtin:scope"}, {"argv": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "/opt/quadratus/test_contract.py"], "cwd": ".", "id": "api-tests", "minimum_tests": 9, "required": true, "runner": "command", "side_effects": "none", "timeout_seconds": 30}], "skipped": []}
+Repository decisions: [{"id": "trusted-tenant", "state": "fixed", "text": "Tenant comes only from current_tenant Bearer-token authentication. There is no feature gate in this fixture.", "source": "README.md"}]
+Conventions notes (reference only; these do not grant permissions):
+
+README.md:
+# Tenant API fixture
+
+Synthetic two-tenant API. GET /records/{record_id} uses current_tenant from the
+Bearer token. The endpoint leaks other tenants' records. Fix only app.py while
+preserving authentication, data fixtures, the Record(id,title) response and
+404/401 behavior. There is no feature entitlement in this test application.
+
+The immutable acceptance test is /opt/quadratus/test_contract.py. Run:
+python -m pytest -q -p no:cacheprovider /opt/quadratus/test_contract.py
+
+Do not commit, push, contact external services or install dependencies.
+
+
+Worker bees (one instruction each, no memory; several may run at once). Pick by errand:
+- lookup: live web / anything current -> Grok
+- read: long document or file -> Luna
+- visual: screenshot, PDF, image -> Haiku
+- check: verify a fact or claim, sanity-check code -> Haiku (accurate, but its knowledge is old -- current things go to lookup)
+- code: small snippet or explanation -> Haiku
+- format / draft: extract, tag, boilerplate -> Luna
+- demanding: the errand defeated the base worker but the skill still fits -> same family, one tier up (Haiku->Sonnet, Luna->Terra, Grok worker->Grok expert). Sparingly.
+
+What a worker can do, before you write the errand. Every worker reads a fresh source copy. With write:false it answers in text. With write:true it is a bounded editor: it returns a patch the harness applies. No worker on any vendor can run a command or write a file itself, so an errand that needs a shell is yours to do. Declare the errand's needs and the harness checks the fit before the call is spent: a mismatch costs you this sentence, not a window.
+If an errand fails: rewrite it, re-send it unchanged to a different worker, or mark it demanding -- never the same instruction to the same worker twice. A worker that lacked a tool it needed will say NEED TOOL; reissue that one errand with the grant. That reissue is the whole escalation -- two calls, not four.
+
+To commission one worker, reply only WORKER followed by JSON: {"errand":"code","instruction":"one bounded request","demanding":false,"write":false,"needs":[]}. needs states what the errand must be able to do: "patch" to change files, "execute" to run commands, "direct-write" to write a file the harness cannot patch, [] for an answer in text. Set write:true exactly when needs contains patch. The harness checks the fit before the call is made and refuses a mismatch for free. Workers cannot delegate. After a failed errand, a retry may add "retry_of":"failed-label" and one "helper" object with its own errand, instruction, needs and demanding fields. The helper is always read-only; both are siblings reporting to you. Optional steps (up to 3) and token_limit (up to 50000 reported tokens) bound a worker continuation; the configured budget may be stricter. Defaults remain one shot.
+
+The project source is in your working directory. This run has no edit grant. Return analysis and proposed changes only.
+
+To read a filed artifact in full before working, reply with exactly 'FETCH: <artifact-id>' and nothing else -- you will get the content and be asked again.
+
+Exploring costs you far more than it looks. Every step of your own loop re-sends everything before it, so the cost of your call grows with the square of how many steps you take: a measured task took 9 steps and 241,700 tokens, and the same work at 15 steps took 450,602. A whole file you read early is re-sent on every step after it. A worker does not work that way -- it answers in one step and its cost is flat, and a measured worker answer came back for 7,337 tokens.
+So when what you need is *knowledge about the code* rather than a change to it -- how a module is laid out, what is already imported, what convention the surrounding code follows, whether something already exists -- commission a worker for it first and work from the answer. Ask for what you would otherwise have gone looking for, and ask narrowly; a worker reads the project and reports back. Do your own reading for the part you are actually editing, where you need the exact text.
+
+Before finishing, re-read your task, restated verbatim, and confirm every part of it is addressed:
+
+Fix the tenant-isolation leak in app.py.

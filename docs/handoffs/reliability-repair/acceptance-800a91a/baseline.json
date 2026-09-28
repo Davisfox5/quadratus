@@ -1,0 +1,9 @@
+{
+  "quadratus_commit": "800a91a470160649eded75e504233330db808017",
+  "target_commit": "f93d8b1a4a75d0cdc128b59b650bd95d6bfc6731",
+  "target_branch": "quadratus/reliability-acceptance-v2",
+  "quadratus_tests": 656,
+  "target_tests": 79,
+  "node_syntax": "passed",
+  "goal_unchanged": true
+}

@@ -1,0 +1,138 @@
+--- a/docs/BULK_TAGGING.md
++++ b/docs/BULK_TAGGING.md
+@@ -1,87 +1,127 @@
++# Bulk clip tagging — design and API contract
++
++Filter the clip list, open bulk edit, choose a new tag type and/or player
++assignment, preview the exact clips with before/after values, then confirm.
++This document fixes the contract before any code is written.
++
++## Why a two-step preview
++
++Every mutation route in `app.py` does `_load_projects()` → mutate the dict →
++`_save_projects(projects)` with no lock — `update_clip` (lines 503–520) and
++`delete_clip` (523–532) are the plainest — and `_save_projects` rewrites the
++whole `projects.json`. Two request threads can each read the file, change
++different clips, and write it all back; the second write silently discards the
++first. A bulk edit touches many clips at once, so it needs explicit
++serialization and an explicit staleness check, not lucky timing.
++
++## Endpoints
++
++`POST /api/projects/<pid>/clips/bulk/preview`
++
++```
++{"clip_ids": ["a1b2c3d4", ...], "tag_type": "Shot", "players": ["p1"]}
++```
++
++Omit `tag_type` or `players` to leave that field unchanged. `"players": []`
++clears the assignment explicitly; `"players": null` is rejected rather than
++guessed at. Success is `200 {"preview_id", "project_id", "clips": [...]}`,
++where each clip is `{"id", "before": {"tag_type", "players"}, "after":
++{"tag_type", "players"}}` — the explicit id set and the original state the
++apply will be checked against.
++
++`POST /api/projects/<pid>/clips/bulk/apply` takes `{"preview_id": "..."}` and
++returns `200 {"applied": N, "clips": [...]}` with the updated clip records.
++
++### Status codes
++
++- `400` — `clip_ids` empty, not a list, non-string, duplicated, or naming an id
++  absent from this project; `tag_type` not in `tag_types[].name`; a player id
++  not in `players[].id`; neither field supplied; or a no-op, because no clip
++  would change. Body is `{"error": "..."}` naming the offending value.
++- `404` — unknown project; unknown `preview_id`; or a `preview_id` belonging to
++  another project. Foreign-project clip ids are a `400` at preview time, since
++  they are simply not ids of this project.
++- `409` — the world moved under the preview:
++  `{"error": "...", "conflicts": [{"id", "reason", "expected", "actual"}]}`.
++  `reason` is `"modified"` when a clip's current `tag_type`/`players` differ
++  from the snapshot (`actual` is the current pair), `"deleted"` when the clip
++  is gone (`actual` is `null`), or one batch-level `"consumed"` entry when that
++  preview was already applied.
++- `200` — applied.
++
++Validation completes before any write: a batch applies entirely or not at all.
++
++## Concurrency model
++
++One module-level `threading.RLock` wraps load → modify → save in **every**
++mutation route — clips, annotations, recordings, players, filter presets, tag
++types, video trim/split/cut, project create/delete — not only the new ones. A
++lock on the bulk path alone would not stop `update_clip` clobbering a bulk save.
++
++Previews live in a module-level registry,
++`{preview_id: {"project_id", "changes", "snapshot"}}`, where `snapshot` holds
++each clip's `tag_type` and `players` at preview time. Apply, inside the lock,
++`pop`s the preview first, reloads projects, then compares every clip's current
++`tag_type`/`players` to the snapshot; any mismatch or missing clip rejects the
++whole batch before writing. Otherwise it sets only those two fields and calls
++`_save_projects` once.
++
++Popping first is what makes two simultaneous confirms safe: one thread gets the
++entry and applies it, the other finds nothing and gets `409` `"consumed"`.
++Success is never reported twice and the change is never applied twice.
++
++A bulk apply leaves annotations, `start`/`end`, `recordings`, `label`, `notes`,
++clips outside the batch, other projects, and `filter_presets` untouched.
++Exports keep their filter semantics and read the updated clips from the same
++file.
++
++## Deployment boundary
++
++The guarantees hold for **one Flask process serving concurrent request
++threads** — the supported deployment. Lock and registry are per-process: under
++gunicorn `-w 2` or several `flask run`s neither serializes writes, and no
++multi-process claim is made here.
++
++Previews are memory-only by design. A restart drops them and the next apply
++returns `404`; the client treats `404` and `409` alike — refresh and preview
++again.
++
++## Client rules
++
++A pending preview is discarded when the tag filter, player filter, or search
++text changes, when a preset is selected or cleared, and when the project is
++opened, closed, or switched (`openProject` and `btn-back` already reset filter
++state around `projectViewVersion`; the preview clears there too, so none leaks
++between projects). It is re-requested, never re-used.
++
++The shortcut is **B** for bulk edit, shown on screen beside the button like the
++existing `P select · Enter save` hint. The global `keydown` handler
++(`static/js/app.js:1123`) takes `i`, `o`, `p`, and space; `b` is free, and the
++handler already ignores keys typed into `INPUT`/`SELECT`/`TEXTAREA`.
++
++Required states: **loading** while preview or apply is in flight (confirm
++disabled), **empty** when the filtered set has no clips, **validation** shown
++inline and non-destructively, **conflict** listing conflicting ids and reasons
++with a refresh action, **success** reporting `applied: N` and refreshing the
++list. Controls carry `aria-label`s, the panel is a labelled dialog region, and
++status text lives in a polite live region.
++
++## Test plan
++
++Backend tests reuse the existing `client` fixture (temp `DATA_DIR` and
++`PROJECTS_FILE`) with synthetic projects and clips:
++
++- preview → apply persists, and survives re-reading the file;
++- validation: empty, duplicate, non-string, unknown ids; unknown tag; unknown
++  player; no-op; `players: []` clears; `players: null` rejected;
++- cross-project isolation: project B's ids are `400` under A, B's `preview_id`
++  is `404` under A, and B's clips plus both projects' `filter_presets` are
++  unchanged after an apply;
++- stale preview: a `PUT` between preview and apply gives `409` `"modified"`
++  with nothing written;
++- deletion after preview: a `DELETE` between the two gives `409` `"deleted"`;
++- simultaneous confirms: exactly one `200`, one `409` `"consumed"`;
++- individual edits: a concurrent `PUT` to an unrelated clip is not lost;
++- exports: CSV and JSON show the new values under the same filter queries.
++
++Concurrency is deterministic, not timed: a `threading.Barrier` (or paired
++`threading.Event`s) monkeypatched into a seam inside the locked section holds
++one thread mid-critical-section until the other has entered its route. Two
++`app.test_client()` instances run on two threads against the same monkeypatched
++`PROJECTS_FILE`, and assertions compare the final file to the only legal
++outcome, so a lost update fails rather than passing quietly.
++
++Checks: `/tmp/gametape-trial-env/bin/python -m pytest -q` and
++`node --check static/js/app.js`.

@@ -138,8 +138,8 @@ def test_the_record_renders_as_evidence(app_page, tmp_path):
 def test_an_explicit_model_override_wins(app_page, tmp_path):
     pilot = ScriptedPilot([{"action": "done", "reason": "ok"}])
     run = drive(pilot, goal="g", start_url=str(app_page), out_dir=tmp_path,
-                model="grok:grok-4.6")
-    assert run.pilot == "grok:grok-4.6"
+                model="grok:default")
+    assert run.pilot == "grok:default"
 
 
 def test_pilot_run_defaults_are_safe():

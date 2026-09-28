@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Davisfox5/War-Room/shared/harnesses/schema/family.schema.json",
+  "title": "Harness family card, schema version 1",
+  "description": "One spec.json per family under shared/harnesses/families/<id>/. Every checklist line carries because, naming the incident or constraint that produced it. Prompts live beside it in lead.md and review.md and stay under 80 lines.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "schema_version", "id", "version", "summary", "required_inputs", "checklist", "overlays_compatible", "gate_ids", "output_contract", "adapter_fields", "eval_cases_ref"],
+  "properties": {
+    "kind": { "const": "family" },
+    "schema_version": { "const": 1 },
+    "id": { "enum": ["schema-migration", "scoped-endpoint", "llm-callsite", "background-job", "webhook-contract", "screen", "deploy-verifier", "test-author", "harness-maintainer", "collector", "agent-tool", "external-effect", "pure-logic"] },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "summary": { "type": "string", "minLength": 1 },
+    "kinds": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "required_inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "description", "refuse_if_missing"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+          "description": { "type": "string", "minLength": 1 },
+          "refuse_if_missing": { "type": "boolean" }
+        }
+      }
+    },
+    "checklist": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "rule", "because", "applies_to"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "rule": { "type": "string", "minLength": 1 },
+          "because": { "type": "string", "minLength": 1 },
+          "applies_to": { "type": "array", "minItems": 1, "items": { "enum": ["lead", "reviewer", "verifier", "worker"] } },
+          "gate_id": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "overlays_compatible": {
+      "type": "array",
+      "items": { "enum": ["sensitive-path", "tenant-isolation", "privacy", "external-effects", "performance", "human-decision", "fleet-ops", "test-quality", "usage-integrity"] }
+    },
+    "gate_ids": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "output_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["done_output", "stop_conditions"],
+      "properties": {
+        "done_output": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "stop_conditions": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "adapter_fields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "description", "required"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_]*$" },
+          "description": { "type": "string", "minLength": 1 },
+          "required": { "type": "boolean" }
+        }
+      }
+    },
+    "eval_cases_ref": { "type": "string", "minLength": 1 }
+  }
+}

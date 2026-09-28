@@ -1,0 +1,26 @@
+{
+  "limits": {
+    "max_calls": 24,
+    "max_reported_tokens": 500000,
+    "wall_seconds": 840,
+    "max_concurrent_workers": 2,
+    "max_cost_usd": null,
+    "api_cost_rates": []
+  },
+  "reserved_attempts": 5,
+  "api_cost_usd": 0.0,
+  "api_cost_overshoot_usd": 0.0,
+  "unknown_api_cost_attempts": 0,
+  "cost_boundary": "configured API upper-rate threshold; in-flight calls can overshoot; CLI excluded",
+  "in_flight": 0,
+  "input_tokens": 222716,
+  "output_tokens": 4988,
+  "reported_tokens": 227704,
+  "unknown_usage_attempts": 0,
+  "stop_reason": "",
+  "preserved_responses": [],
+  "elapsed_seconds": 128.153327641,
+  "token_boundary": "post-return threshold; in-flight calls can overshoot",
+  "input_boundary": "normalized provider input includes cached input; do not add it again",
+  "wall_boundary": "attempt timeout plus required external process supervisor"
+}

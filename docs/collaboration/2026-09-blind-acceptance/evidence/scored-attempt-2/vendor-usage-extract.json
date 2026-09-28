@@ -1,0 +1,129 @@
+{
+  "calls": [
+    {
+      "type": "result",
+      "subtype": "success",
+      "stop_reason": "end_turn",
+      "session_id": "e118d9e8-1808-4367-99e0-3b37de85446a",
+      "num_turns": 5,
+      "usage": {
+        "input_tokens": 66,
+        "cache_creation_input_tokens": 60660,
+        "cache_read_input_tokens": 23500,
+        "output_tokens": 2922,
+        "output_tokens_details": {
+          "thinking_tokens": 1018
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 60660,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 32,
+            "output_tokens": 2646,
+            "cache_read_input_tokens": 12232,
+            "cache_creation_input_tokens": 48428,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 48428
+            },
+            "type": "message",
+            "model": null
+          }
+        ],
+        "speed": "standard"
+      },
+      "modelUsage": {
+        "claude-haiku-4-5-20251001": {
+          "inputTokens": 2801,
+          "outputTokens": 14,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.0028710000000000003,
+          "contextWindow": 200000,
+          "maxOutputTokens": 32000,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-4-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        },
+        "claude-fable-5-1": {
+          "inputTokens": 66,
+          "outputTokens": 2922,
+          "cacheReadInputTokens": 23500,
+          "cacheCreationInputTokens": 60660,
+          "webSearchRequests": 0,
+          "costUSD": 1.3658350000000001,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 64000,
+          "thinkingTokens": 1018,
+          "canonicalModel": "claude-fable-5-1",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "is_error": false,
+      "permission_denials": [],
+      "evidence_file": "call-001.stdout",
+      "sha256": "3b65a4a13c0af374b646eb480116dc49032a1aa076d86b50494fc49c9177e06d"
+    },
+    {
+      "stopReason": "end_turn",
+      "sessionId": "01a0a690-b547-7e90-a7df-2bb60b5e444b",
+      "num_turns": 9,
+      "usage": {
+        "input_tokens": 85448,
+        "cache_read_input_tokens": 281984,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 11945,
+        "reasoning_tokens": 10523,
+        "total_tokens": 379377
+      },
+      "modelUsage": {
+        "grok-4.6-build": {
+          "inputTokens": 85448,
+          "outputTokens": 11945,
+          "cacheReadInputTokens": 281984,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 9,
+          "costUSD": 0.13040972
+        }
+      },
+      "evidence_file": "call-002.stdout",
+      "sha256": "be381cbe817b7fafc09e0f96934f683b5de19ae595da0dc91a82838dea2701ed"
+    }
+  ],
+  "raw_envelopes": "Private, retained outside solver inputs; thought fields excluded"
+}

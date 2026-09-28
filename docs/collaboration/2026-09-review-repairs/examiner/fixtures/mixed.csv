@@ -1,0 +1,11 @@
+Tag Type,Start (s),End (s),Label,Players
+Pass,1,2,First,Alex QA
+Pass,abc,2,Bad start,
+Shot,5,5,Zero length,
+Shot,7,6,Negative length,
+Goal,-1,2,Negative start,
+Pass,1,2,First,Alex QA
+Not A Tag,1,2,Unknown tag,
+Pass,8,9,Unknown player,Nobody Here
+Pass,20,21,"<script>alert(1)</script> & ""quotes"" — ‏RTL‏ 😀",
+Pass,30

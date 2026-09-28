@@ -1,0 +1,7 @@
+{
+  "transport": "output/routing-trial/transport-codex-1789323425591190000.json",
+  "prefix": "I\u2019ll inspect the target file and line count, then return only the required unified diff without changing the workspace.\n",
+  "git_apply_check_returncode": 128,
+  "git_apply_check_stderr": "error: corrupt patch at <stdin>:139\n",
+  "patch_lines": 138
+}

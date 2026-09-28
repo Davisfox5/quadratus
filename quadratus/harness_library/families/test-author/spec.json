@@ -1,0 +1,40 @@
+{
+  "kind": "family",
+  "schema_version": 1,
+  "id": "test-author",
+  "version": "0.1.0",
+  "summary": "A test or eval: expected values from an independent source, the repo's override mechanism, fixture isolation for anything with network, DB or a browser, run alone and inside the CI-filtered suite.",
+  "kinds": ["test"],
+  "required_inputs": [
+    { "name": "subject", "description": "The function, route or flow under test, by path", "refuse_if_missing": true },
+    { "name": "oracle", "description": "Where the expected values come from: a spec, a fixture, a hand calculation, a recorded response", "refuse_if_missing": true },
+    { "name": "runner", "description": "pytest, vitest, playwright, jest, node:test, unittest", "refuse_if_missing": true },
+    { "name": "authorization", "description": "For a paid or live run: who authorized it and the cost ceiling", "refuse_if_missing": false }
+  ],
+  "checklist": [
+    { "id": "independent-oracle", "rule": "Expected values come from an independent source, never from running the code under test and pasting its output", "because": "A test that asserts whatever the function returned passes forever; the packages-are-formatting-only test in Flex was written against CLAUDE.md, not the packages", "applies_to": ["lead", "reviewer"] },
+    { "id": "override-not-patch", "rule": "A dependency the framework registers (FastAPI Depends, a DI container) is replaced through the framework's mechanism, never a module patch, because the framework ignores the patch. Every other substitution uses the adapter's declared override_mechanism (vi.mock at a module boundary, fixtures, monkeypatched provider fakes) and the test shows no real provider or service is reached", "because": "r3cruit3r mocker.patch of a FastAPI dependency never took effect and the tests called the real API (commit 063bbcb); quadratus's offline provider fakes are monkeypatch-based by design and reach no vendor, so a blanket ban on module patches would reject the approved Q1 to Q4 regressions", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "fixture-isolated", "rule": "Anything that needs network, a database or a browser is fixture-isolated, or listed in the ignore list with a reason", "because": "r3cruit3r CI ignores 17 files that need Redis or live services; War Room DB tests only under a 127.0.0.1 DSN; LINDA excludes the playwright demo test", "applies_to": ["lead", "reviewer"] },
+    { "id": "run-both-ways", "rule": "The file runs alone and inside the CI-filtered full run; both tails are pasted", "because": "A test that passes alone and is skipped by the CI filter proves nothing; a green CI does not mean the whole suite passes (r3cruit3r reviewer)", "applies_to": ["lead"], "gate_id": "test-both-ways" },
+    { "id": "non-vacuous", "rule": "A guard test proves it can fail: a seeded violation or a negative fixture is asserted as a finding", "because": "Flex CLAUDE.md: a check that can pass while the thing it guards is broken is worse than none; the L1 guard was shown red on the old tree first", "applies_to": ["lead", "reviewer"] },
+    { "id": "paid-run-gated", "rule": "A paid or live run requires a named authorization and a cost ceiling in the input, and counts refusals separately", "because": "War Room evals README: paid evaluations require authorization; keys only from evals/.env; refusals are not failures", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "no-real-looking-secrets", "rule": "Fixtures carry no credential-looking literal", "because": "detect-secrets pre-commit and the ship-check secret grep both trip on them", "applies_to": ["lead", "reviewer"] },
+    { "id": "deterministic", "rule": "No wall-clock, random or ordering dependence without a seed or a freeze", "because": "Flex booking tests once depended on the current date and failed at month end", "applies_to": ["lead", "reviewer"] },
+    { "id": "joins-the-typecheck", "rule": "A new test or script file is included by the typecheck or lint configuration the repo runs", "because": "Flex tsconfig.scripts.json lists scripts by name; an unlisted script rots unseen", "applies_to": ["lead", "reviewer"] }
+  ],
+  "overlays_compatible": ["test-quality", "external-effects", "usage-integrity", "privacy"],
+  "gate_ids": ["scope", "test-both-ways", "lint", "typecheck"],
+  "output_contract": {
+    "done_output": ["subject and oracle named", "override mechanism used, quoted", "tail of the file run alone", "tail of the CI-filtered full run", "the negative case that proves the test can fail", "authorization and ceiling for any paid run, or none"],
+    "stop_conditions": ["oracle unknown", "the subject needs a live system and no fixture path exists", "a paid run is requested without authorization and a ceiling", "the repo has no override mechanism for the dependency"]
+  },
+  "adapter_fields": [
+    { "name": "runner", "description": "The test runner and its invocation", "required": true },
+    { "name": "ignore_list_path", "description": "Where CI's ignore or skip list lives", "required": false },
+    { "name": "override_mechanism", "description": "The substitution mechanism tests use and how a test proves no real provider is reached: app.dependency_overrides (FastAPI), vi.mock at a module boundary (Vitest), fixtures, or monkeypatched provider fakes with a no-network assertion (quadratus)", "required": true },
+    { "name": "e2e_projects", "description": "Browser test projects, if any", "required": false },
+    { "name": "paid_gate", "description": "How a paid run is authorized and capped", "required": false },
+    { "name": "local_db_dsn_rule", "description": "The rule for database tests, for example 127.0.0.1 only", "required": false }
+  ],
+  "eval_cases_ref": "eval-cases.json"
+}

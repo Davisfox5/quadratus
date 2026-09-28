@@ -1,0 +1,51 @@
+{
+ "id": "cheap-gate-failure-skips-paid-review",
+ "shape": "blocked-path",
+ "family": "test-author",
+ "grader": false,
+ "source": "Report, agent set design rule 4 and Q3: deterministic gates run before the expensive round, so a review round is never spent on a finding a command could have produced. Phase 3 (#25): a failure that is not an attributable test-body assertion is an operator handoff with no repair call and no close-out.",
+ "session": {
+  "project": true,
+  "allow_writes": false
+ },
+ "files": {
+  "app.py": "x = 1\n"
+ },
+ "gate": [
+  {
+   "id": "lint",
+   "code": "raise SystemExit(1)",
+   "cheap": true
+  }
+ ],
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Add the parser",
+   "complexity": "standard"
+  }
+ },
+ "script": [
+  {
+   "role": "lead",
+   "reply": "Draft: the change as text."
+  }
+ ],
+ "expect": {
+  "outcome": "CheckUnattributable",
+  "history": 0,
+  "calls": {
+   "role:collaborator": 0,
+   "role:gate-fix": 0
+  },
+  "checks": {
+   "count": 1,
+   "last_passed": false
+  },
+  "error_contains": [
+   "lint: structured report undeclared",
+   "No repair call was made"
+  ]
+ }
+}

@@ -1,0 +1,1 @@
+{"author": "openai:gpt-5.6-sol", "chars": 234, "id": "4782b3d65957", "kind": "draft", "lines": 3, "preview": "Unable to edit or test: the environment’s filesystem sandbox failed to initialize (`bwrap: No permissions to create a new namespace`) for both reading and patching. No files changed and the acceptance check could not run.\n\nCHANGED: []"}

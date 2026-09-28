@@ -1,0 +1,35 @@
+{
+  "changed": [],
+  "changed_lines": 0,
+  "inspected": true,
+  "note": "The call stopped without writing anything; the tree is unchanged.",
+  "task": "t1",
+  "description": "Create the parsing foundation using standard-library `csv` and `io`, following the export column format in `app.py`. Return `(headers, records)`, where records contain `(line, cells)` pairs; preserve cell text and wrong-width records for later row validation. Budget 40 implementation lines and 60 test lines covering encoding, quoting, physical numbering, required headers, blank records, and the 5000/5001 boundary. Defer row classification, endpoint wiring, UI, and documentation.",
+  "needs": [
+    "execute",
+    "patch"
+  ],
+  "scope": {
+    "permitted_paths": [
+      "clip_manifest.py",
+      "tests/test_clip_manifest.py"
+    ],
+    "forbidden_paths": [],
+    "intended_result": "Implement pure CSV decoding helper `def read_manifest(data):` returning normalized headers and physical-line-numbered raw records.",
+    "acceptance": [
+      "`def read_manifest(data):` accepts UTF-8 bytes with optional BOM, LF/CRLF, quoted commas, escaped quotes, and multiline fields.",
+      "`def read_manifest(data):` trims and lowercases headers, requires Tag Type/Start (s)/End (s), and raises ValueError('bad_request') for invalid UTF-8 or missing required headers.",
+      "`def read_manifest(data):` skips records with no fields or all empty fields, preserves each remaining record's starting physical line and original field count, and raises ValueError('too_many_rows') above 5000 nonblank records.",
+      "Focused pytest checks pass; the helper performs no filesystem, project-store, or video operations."
+    ],
+    "max_lines": 100
+  },
+  "invocation": {
+    "task": "t1",
+    "role": "lead",
+    "origin": "seat",
+    "model": "openai:gpt-5.6-sol",
+    "allow_writes": true,
+    "prompt_artifact": "6515254e00c0"
+  }
+}

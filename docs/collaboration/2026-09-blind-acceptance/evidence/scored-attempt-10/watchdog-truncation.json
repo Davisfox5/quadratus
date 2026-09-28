@@ -1,0 +1,13 @@
+{
+  "outcome": "wall_deadline",
+  "what_is_missing": [
+    "result.json",
+    "report.md",
+    "ledger.md",
+    "delegation.md",
+    "changes.diff"
+  ],
+  "why": "the outer watchdog and the inner run limit are both 900 seconds, so the container was killed before run_project could write its own records. The work survived because /work is a bind mount; the run report did not.",
+  "inner_elapsed_seconds": 821.973225083,
+  "outer_wall_seconds": 900
+}

@@ -3,6 +3,11 @@
 **Status: proposed, nothing changed.** Written after reading the repo against
 techniques 5 and 8 in the DF AI techniques playbook.
 
+> Dated 2026-09-12: the lineup is now three vendors (Anthropic, OpenAI, xAI),
+> the default `PROVIDER_ORDER` is `claude,openai,grok`, and the brain trust is
+> three independent frontier reads rather than four. Read "four" below as "one
+> per vendor"; nothing else in the argument depends on the count.
+
 ## What the playbook assumed, and what is actually here
 
 The brief said this repo runs "a fixed Claude-then-GPT cascade with no tier
@@ -20,7 +25,7 @@ lead = self.available[0]
 reviewers = self.available[1:]
 ```
 
-`self.available` is ordered by `PROVIDER_ORDER`, default `claude,openai,gemini`.
+`self.available` is ordered by `PROVIDER_ORDER`, default `claude,openai,grok`.
 So Claude leads and OpenAI reviews because of a string in `config.py`, not
 because of anything about the task. Every task runs all four phases with every
 available provider, whether it is a rename or a schema migration.

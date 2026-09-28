@@ -1,0 +1,242 @@
+--- a/app.py
++++ b/app.py
+@@ -9,6 +9,7 @@
+ import csv
+ import copy
+ import json
++import math
+ import uuid
+ import subprocess
+ import tempfile
+@@ -1263,6 +1264,90 @@
+ 
+ # ── Export ─────────────────────────────────────────────────────────────
+ 
++def _validate_clip_row(project, cols, width, row):
++    """Validate one CSV data row. cols maps normalised header name
++    (lower-cased, trimmed) -> column index. Returns (clip, reasons).
++
++    On success the clip dict includes a "clip_id" key (trimmed, or "")
++    for duplicate detection; the import-preview route should pop it
++    before responding.
++    """
++    if len(row) != width:
++        return None, ["wrong column count"]
++
++    def cell(name):
++        idx = cols.get(name)
++        if idx is None:
++            return None
++        return str(row[idx]).strip()
++
++    reasons = []
++
++    tag_type = cell("tag type") or ""
++    tag_names = {t["name"] for t in project.get("tag_types", [])}
++    if tag_type not in tag_names:
++        reasons.append("unknown tag type")
++
++    start_val = None
++    try:
++        parsed = float(cell("start (s)") or "")
++        if math.isfinite(parsed):
++            start_val = parsed
++            if parsed < 0:
++                reasons.append("start must be a number >= 0")
++        else:
++            reasons.append("start must be a number >= 0")
++    except (TypeError, ValueError):
++        reasons.append("start must be a number >= 0")
++
++    end_val = None
++    try:
++        parsed = float(cell("end (s)") or "")
++        if math.isfinite(parsed):
++            end_val = parsed
++            if start_val is not None and parsed <= start_val:
++                reasons.append("end must be greater than start")
++        else:
++            reasons.append("end must be a number")
++    except (TypeError, ValueError):
++        reasons.append("end must be a number")
++
++    player_ids = []
++    players_raw = cell("players")
++    if players_raw:
++        roster = project.get("players", [])
++        for token in players_raw.split(";"):
++            token = token.strip()
++            if not token:
++                continue
++            if token.startswith("#"):
++                number = token[1:].strip()
++                matches = [p for p in roster if p.get("number", "") == number]
++            else:
++                matches = [p for p in roster if p.get("name") == token]
++            if len(matches) != 1:
++                reasons.append(f"unknown player: {token}")
++            else:
++                player_ids.append(matches[0]["id"])
++
++    clip_id = cell("clip id") or ""
++    if clip_id and any(c.get("id") == clip_id for c in project.get("clips", [])):
++        reasons.append("clip id already exists")
++
++    if reasons:
++        return None, reasons
++
++    return {
++        "tag_type": tag_type,
++        "start": start_val,
++        "end": end_val,
++        "label": cell("label") or "",
++        "notes": cell("notes") or "",
++        "players": player_ids,
++        "clip_id": clip_id,
++    }, []
++
++
+ def _filter_clips(project, params):
+     """Filter clips by tag_type, player, and search query string."""
+     clips = list(project["clips"])
+--- /dev/null
++++ b/tests/test_import_preview.py
+@@ -0,0 +1,138 @@
++import os
++import sys
++
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
++
++import app as application
++
++
++COLS = {
++    "tag type": 0,
++    "start (s)": 1,
++    "end (s)": 2,
++    "label": 3,
++    "notes": 4,
++    "players": 5,
++    "clip id": 6,
++}
++WIDTH = 7
++
++
++def _project(**overrides):
++    project = {
++        "tag_types": [
++            {"name": "Pass", "color": "#2ecc71"},
++            {"name": "Shot", "color": "#3498db"},
++        ],
++        "players": [
++            {"id": "p1", "name": "Alice", "number": "10"},
++            {"id": "p2", "name": "Bob", "number": "7"},
++        ],
++        "clips": [{"id": "c1"}],
++    }
++    project.update(overrides)
++    return project
++
++
++def _row(tag="Pass", start="1.5", end="4.0", label="x", notes="",
++         players="Alice;#7", clip_id=""):
++    return [tag, start, end, label, notes, players, clip_id]
++
++
++def _validate(row, project=None, cols=None, width=None):
++    return application._validate_clip_row(
++        project or _project(), cols or COLS, WIDTH if width is None else width, row,
++    )
++
++
++def test_valid_row_resolves_players_by_name_and_number():
++    clip, reasons = _validate(_row())
++    assert reasons == []
++    assert clip["tag_type"] == "Pass"
++    assert clip["start"] == 1.5
++    assert clip["end"] == 4.0
++    assert isinstance(clip["start"], float)
++    assert isinstance(clip["end"], float)
++    assert clip["label"] == "x"
++    assert clip["notes"] == ""
++    assert clip["players"] == ["p1", "p2"]
++    assert clip["clip_id"] == ""
++
++
++def test_missing_optional_columns_default_empty():
++    cols = {"tag type": 0, "start (s)": 1, "end (s)": 2}
++    clip, reasons = _validate(["Shot", "0", "1.25"], cols=cols, width=3)
++    assert reasons == []
++    assert clip["tag_type"] == "Shot"
++    assert clip["start"] == 0.0
++    assert clip["end"] == 1.25
++    assert clip["label"] == ""
++    assert clip["notes"] == ""
++    assert clip["players"] == []
++    assert clip["clip_id"] == ""
++
++
++def test_wrong_column_count():
++    clip, reasons = _validate(["Pass", "1", "2"])
++    assert clip is None
++    assert reasons == ["wrong column count"]
++
++
++def test_unknown_tag_type():
++    clip, reasons = _validate(_row(tag="Dribble", players=""))
++    assert clip is None
++    assert reasons == ["unknown tag type"]
++
++
++def test_negative_start():
++    clip, reasons = _validate(_row(start="-1", players=""))
++    assert clip is None
++    assert reasons == ["start must be a number >= 0"]
++
++
++def test_nan_start():
++    clip, reasons = _validate(_row(start="nan", players=""))
++    assert clip is None
++    assert reasons == ["start must be a number >= 0"]
++
++
++def test_end_equal_to_start():
++    clip, reasons = _validate(_row(start="1.5", end="1.5", players=""))
++    assert clip is None
++    assert reasons == ["end must be greater than start"]
++
++
++def test_unknown_player_token():
++    clip, reasons = _validate(_row(players="Charlie"))
++    assert clip is None
++    assert reasons == ["unknown player: Charlie"]
++
++
++def test_ambiguous_player_number():
++    project = _project(players=[
++        {"id": "p1", "name": "Alice", "number": "7"},
++        {"id": "p2", "name": "Bob", "number": "7"},
++    ])
++    clip, reasons = _validate(_row(players="#7"), project=project)
++    assert clip is None
++    assert reasons == ["unknown player: #7"]
++
++
++def test_existing_clip_id():
++    clip, reasons = _validate(_row(players="", clip_id="c1"))
++    assert clip is None
++    assert reasons == ["clip id already exists"]
++
++
++def test_malformed_row_accumulates_multiple_reasons():
++    clip, reasons = _validate(_row(
++        tag="Nope", start="-1", end="nan", players="Zed", clip_id="c1",
++    ))
++    assert clip is None
++    assert reasons == [
++        "unknown tag type",
++        "start must be a number >= 0",
++        "end must be a number",
++        "unknown player: Zed",
++        "clip id already exists",
++    ]

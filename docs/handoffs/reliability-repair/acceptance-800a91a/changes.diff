@@ -1,0 +1,436 @@
+--- a/app.py
++++ b/app.py
+@@ -11,6 +11,8 @@
+ import uuid
+ import subprocess
+ import tempfile
++import threading
++import functools
+ from flask import Flask, jsonify, request, send_from_directory, send_file, render_template
+ 
+ app = Flask(__name__, static_folder="static", template_folder="templates")
+@@ -38,6 +40,17 @@
+         json.dump(projects, f, indent=2)
+ 
+ 
++_STORE_LOCK = threading.RLock()
++
++
++def _locked(fn):
++    @functools.wraps(fn)
++    def wrapper(*a, **kw):
++        with _STORE_LOCK:
++            return fn(*a, **kw)
++    return wrapper
++
++
+ # ── Pages ──────────────────────────────────────────────────────────────────
+ 
+ @app.route("/")
+@@ -54,6 +67,7 @@
+ 
+ 
+ @app.route("/api/projects", methods=["POST"])
++@_locked
+ def create_project():
+     data = request.json
+     name = data.get("name", "").strip()
+@@ -93,6 +107,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>", methods=["DELETE"])
++@_locked
+ def delete_project(project_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -111,6 +126,7 @@
+ # ── Video upload ───────────────────────────────────────────────────────────
+ 
+ @app.route("/api/projects/<project_id>/video", methods=["POST"])
++@_locked
+ def upload_video(project_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -139,6 +155,7 @@
+ # ── Tag types ──────────────────────────────────────────────────────────────
+ 
+ @app.route("/api/projects/<project_id>/tag_types", methods=["PUT"])
++@_locked
+ def update_tag_types(project_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -167,6 +184,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/players", methods=["POST"])
++@_locked
+ def create_player(project_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -197,6 +215,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/players/<player_id>", methods=["PUT"])
++@_locked
+ def update_player(project_id, player_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -213,6 +232,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/players/<player_id>", methods=["DELETE"])
++@_locked
+ def delete_player(project_id, player_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -225,6 +245,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/players/import", methods=["POST"])
++@_locked
+ def import_roster(project_id):
+     """Import players from an Excel (.xlsx/.xls) or CSV file.
+ 
+@@ -380,6 +401,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/filter_presets", methods=["POST"])
++@_locked
+ def create_filter_preset(project_id):
+     projects = _load_projects()
+     project = projects.get(project_id)
+@@ -415,6 +437,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/filter_presets/<preset_id>", methods=["PUT"])
++@_locked
+ def update_filter_preset(project_id, preset_id):
+     projects = _load_projects()
+     project = projects.get(project_id)
+@@ -449,6 +472,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/filter_presets/<preset_id>", methods=["DELETE"])
++@_locked
+ def delete_filter_preset(project_id, preset_id):
+     projects = _load_projects()
+     project = projects.get(project_id)
+@@ -475,6 +499,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips", methods=["POST"])
++@_locked
+ def create_clip(project_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -501,6 +526,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>", methods=["PUT"])
++@_locked
+ def update_clip(project_id, clip_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -521,6 +547,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>", methods=["DELETE"])
++@_locked
+ def delete_clip(project_id, clip_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -546,6 +573,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>/annotations", methods=["POST"])
++@_locked
+ def create_annotation(project_id, clip_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -574,6 +602,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>/annotations/<ann_id>", methods=["PUT"])
++@_locked
+ def update_annotation(project_id, clip_id, ann_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -596,6 +625,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>/annotations/<ann_id>", methods=["DELETE"])
++@_locked
+ def delete_annotation(project_id, clip_id, ann_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -611,6 +641,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>/annotations", methods=["DELETE"])
++@_locked
+ def clear_annotations(project_id, clip_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -638,6 +669,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>/recordings", methods=["POST"])
++@_locked
+ def upload_recording(project_id, clip_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -673,6 +705,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/clips/<clip_id>/recordings/<rec_id>", methods=["DELETE"])
++@_locked
+ def delete_recording(project_id, clip_id, rec_id):
+     projects = _load_projects()
+     if project_id not in projects:
+@@ -813,6 +846,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/video/trim", methods=["POST"])
++@_locked
+ def trim_video(project_id):
+     """Trim the video to keep only the segment between start and end."""
+     projects = _load_projects()
+@@ -849,6 +883,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/video/split", methods=["POST"])
++@_locked
+ def split_video(project_id):
+     """Split the video at a timestamp into two projects."""
+     projects = _load_projects()
+@@ -920,6 +955,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/video/cut", methods=["POST"])
++@_locked
+ def cut_video(project_id):
+     """Remove a section from the middle of the video (e.g., halftime)."""
+     projects = _load_projects()
+@@ -1119,6 +1155,7 @@
+ 
+ 
+ @app.route("/api/projects/<project_id>/export/video", methods=["POST"])
++@_locked
+ def export_video(project_id):
+     projects = _load_projects()
+     if project_id not in projects:
+--- /dev/null
++++ b/docs/BULK_EDIT.md
+@@ -0,0 +1,121 @@
++# Safe bulk tagging
++
++Bulk tagging changes tag type and/or players for the explicit filtered clips. Apply is all-or-nothing.
++
++## Why a lock
++
++`app.py` has no `threading` import. Every project mutation does `_load_projects()` → mutate →
++`_save_projects()` without synchronization. Clip update/delete, annotations, players, presets, tag
++types, and video trim/split/cut can therefore lose concurrent writes.
++
++Add one module-level `threading.RLock`, `_STORE_LOCK`. A small `_locked` decorator holds it for the
++entire load-modify-save handler of every route that mutates the project store. Bulk preview and apply
++use the same lock. Reads stay unlocked. A clip `PUT`/`DELETE` lands fully before apply, and conflicts
++if it changed `tag_type` or `players`, or lands fully afterward.
++
++This intentionally serializes writes. Video edit and upload handlers can hold the lock during ffmpeg
++or large file work, so these off-match operations can block live tagging for minutes. Unlocked reads
++retain the existing risk of observing `_save_projects()` while it truncates and rewrites the JSON;
++atomic replacement is outside this slice.
++
++## Preview store
++
++`_BULK_PREVIEWS` is an in-memory dictionary keyed by a `uuid4().hex` `preview_id`. Each entry is
++`{project_id, changes, clips: [{id, tag_type, players}], created}`. `clips` is the explicit affected
++set and its original relevant state. Preview mutates this store, not the project store.
++
++The TTL is 10 minutes. Expiry is checked and expired entries are pruned at the start of every
++preview/apply; no timer removes idle entries. Abandoned previews remain until lazy pruning.
++`expires_in` is the constant 600 seconds at creation and is never refreshed.
++
++Apply pops the entry under `_STORE_LOCK`. Simultaneous applies have one winner; the other gets
++`preview_missing`. Restart empties the store, so the user must preview again. Filter presets,
++annotations, recordings, clip timing, labels, and notes are never changed. Preview timing and labels
++identify rows only; concurrent changes to them do not cause a stale conflict.
++
++## Contract
++
++### Preview
++
++`POST /api/projects/<pid>/clips/bulk_preview`
++
++```json
++{"clip_ids":["c1","c2"],"changes":{"tag_type":"Pass","players":["u1"]}}
++```
++
++`clip_ids` is the exact filtered set; the server never re-derives it. There is no separate cap; size
++is bounded by one project's clips. A non-empty `players` list replaces the full player set, `[]`
++clears it, and omission leaves it unchanged. Player equality is set-based; order is immaterial. At
++least one of `tag_type` or `players` is required.
++
++A missing project returns `404 {"error":"Project not found"}`. The missing `code` is deliberate;
++clients branch on status for 404.
++
++Invalid input returns `400 {"error":"...","code":"<code>"}`. ID-specific errors also include
++`"ids":[...]`, for example `{"error":"Duplicate clip IDs","code":"duplicate_clip_ids","ids":["c1"]}`.
++The first failing 400 check wins, in this order:
++
++1. `bad_request`: malformed JSON, a non-object body, unsupported keys, or wrong field/element types.
++2. `no_changes`: neither supported change key is present.
++3. `empty_clip_ids`.
++4. `duplicate_clip_ids`, listing each duplicate once.
++5. `invalid_tag_type`: no entry in `project["tag_types"]` has that `name`.
++6. `duplicate_players`, listing each duplicate once.
++7. `unknown_players`, listing IDs absent from the project.
++8. `unknown_clip_ids`, listing unknown or foreign-project IDs without revealing which case or project.
++
++Success is 200; clips are sorted by `start`:
++
++```json
++{"preview_id":"uuid4-hex-or-null","project_id":"p1","changes":{"tag_type":"Pass","players":["u1"]},
++ "count":1,"expires_in":600,"clips":[{"id":"c1","start":12.5,"end":18.0,"label":"Counterattack",
++ "before":{"tag_type":"Shot","players":[]},"after":{"tag_type":"Pass","players":["u1"]}}]}
++```
++
++Set-based player equality determines whether `before` equals `after`. Equal clips are excluded. If
++none changes, no preview is stored: `preview_id` is null, `count` is 0, and `clips` is empty.
++
++### Apply
++
++`POST /api/projects/<pid>/clips/bulk_apply` body: `{"preview_id":"uuid4-hex"}`.
++
++Malformed JSON, a non-object body, or a missing, null, empty, or non-string `preview_id` returns
++`400 {"error":"...","code":"bad_request"}` without consuming a preview. Otherwise, under
++`_STORE_LOCK`, apply prunes expired entries, pops the preview, and returns as needed:
++
++- Missing, expired, or consumed: 409 `{"error":"Preview expired or already applied — refresh and preview again","code":"preview_missing"}`.
++- Different preview `project_id`: 409 `{"error":"...","code":"preview_project_mismatch"}`.
++- Deleted project: 404 `{"error":"Project not found"}`; no `code` by design.
++- Tag type or players no longer valid: 409 `{"error":"...","code":"changes_invalid"}`.
++
++Every preview clip must still exist with its original `tag_type` and set-equal `players`. Otherwise,
++apply returns 409 and writes nothing:
++
++```json
++{"error":"Clips changed after preview; refresh and preview again","code":"stale","conflicts":[
++ {"id":"c1","reason":"modified","current":{"tag_type":"Goal","players":[]}},
++ {"id":"c2","reason":"deleted","current":null}]}
++```
++
++Success makes one `_save_projects()` call and returns `200 {"updated":2,"clip_ids":["c1","c2"]}`.
++
++## Frontend rules
++
++**B** outside an input opens bulk edit for the filtered list; existing bindings are I, O, P, and
++Space. Escape closes. Any filter/preset/project change or clip-list reload discards the client
++preview without a server delete. Show loading, empty (0 affected), validation, conflict (IDs plus
++**Refresh**), and success (count), with accessible labels and a visible **B** binding.
++
++## Deployment boundary
++
++Only one Flask process serving concurrent request threads is supported. The lock and preview store
++are per-process. Multiple workers, including Gunicorn `-w >1`, share neither, so neither lost-update
++prevention nor single-apply consumption holds. This is not file locking or multi-process correctness.
++
++## Usage
++
++To be completed in a later slice.
++
++## Validation
++
++To be completed in a later slice.
+--- /dev/null
++++ b/tests/test_bulk_edit.py
+@@ -0,0 +1,88 @@
++import json
++import os
++import sys
++import tempfile
++import threading
++
++import pytest
++
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
++
++import app as application
++
++
++@pytest.fixture
++def client(tmp_path, monkeypatch):
++    """Create a test client with a temp data directory."""
++    monkeypatch.setattr(application, "DATA_DIR", str(tmp_path))
++    monkeypatch.setattr(application, "VIDEOS_DIR", str(tmp_path / "videos"))
++    monkeypatch.setattr(application, "RECORDINGS_DIR", str(tmp_path / "recordings"))
++    monkeypatch.setattr(application, "PROJECTS_FILE", str(tmp_path / "projects.json"))
++    os.makedirs(tmp_path / "videos", exist_ok=True)
++    os.makedirs(tmp_path / "recordings", exist_ok=True)
++    application.app.config["TESTING"] = True
++    with application.app.test_client() as c:
++        yield c
++
++
++def test_concurrent_clip_updates_are_not_lost(client, monkeypatch):
++    rv = client.post("/api/projects", json={"name": "Concurrent"})
++    pid = rv.get_json()["id"]
++
++    rv = client.post(f"/api/projects/{pid}/clips", json={
++        "tag_type": "Pass", "start": 1, "end": 3, "label": "orig-a",
++    })
++    clip_a = rv.get_json()["id"]
++
++    rv = client.post(f"/api/projects/{pid}/clips", json={
++        "tag_type": "Shot", "start": 5, "end": 8, "label": "orig-b",
++    })
++    clip_b = rv.get_json()["id"]
++
++    armed = False
++    barrier = threading.Barrier(2, timeout=5)
++    original_load = application._load_projects
++
++    def wrapped_load():
++        projects = original_load()
++        if armed:
++            # With @_locked the second thread cannot enter _load_projects until
++            # the first handler finishes, so the barrier times out. That timeout
++            # path (BrokenBarrierError) is the expected behaviour when the lock
++            # is present.
++            try:
++                barrier.wait()
++            except threading.BrokenBarrierError:
++                pass
++        return projects
++
++    monkeypatch.setattr(application, "_load_projects", wrapped_load)
++    armed = True
++
++    errors = []
++
++    def put_label(clip_id, label):
++        try:
++            c = application.app.test_client()
++            resp = c.put(
++                f"/api/projects/{pid}/clips/{clip_id}",
++                json={"label": label},
++            )
++            if resp.status_code != 200:
++                errors.append((clip_id, resp.status_code, resp.get_data(as_text=True)))
++        except Exception as exc:
++            errors.append((clip_id, repr(exc)))
++
++    t1 = threading.Thread(target=put_label, args=(clip_a, "label-a"))
++    t2 = threading.Thread(target=put_label, args=(clip_b, "label-b"))
++    t1.start()
++    t2.start()
++    t1.join()
++    t2.join()
++
++    assert not errors, errors
++
++    rv = client.get(f"/api/projects/{pid}")
++    clips = {c["id"]: c["label"] for c in rv.get_json()["clips"]}
++    assert clips[clip_a] == "label-a"
++    assert clips[clip_b] == "label-b"

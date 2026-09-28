@@ -1,0 +1,6 @@
+Project: /work; edits enabled
+asking claude:fable for the next task
+task 1: Fix the tenant-isolation leak in `get_record` in app.py. Change the existing 404 condition on line 29 from `if record is None:` to `if record is None or record["tenant_id"] != tenant:` so a record belonging to another tenant is indistinguishable from a missing one. Do not touch `current_tenant`, `TOKENS`, `RECORDS`, or the `Record` model; do not read any tenant hint from headers or query params. Keep the same signature `get_record(record_id: str, tenant: str = Depends(current_tenant)) -> Record` and the same return `Record(id=record["id"], title=record["title"])`. Then run `python -m pytest -q -p no:cacheprovider /opt/quadratus/test_contract.py` from the project root, save the output as evidence, and stop. [security/simple]
+Family: scoped-endpoint; plan 263c2282a219a7c999d857bae749edfe189d56587322e8b0a6dfbe29cf4b4d04
+task 1 closed by openai:gpt-5.6-sol
+{"completed": false, "run_dir": "/work/.quadratus/runs/20260922T030752Z-c22907f8", "error": ""}

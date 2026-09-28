@@ -1,0 +1,2 @@
+# Reviewable pending patch: preserve blank unified-diff context lines.
+*.patch -whitespace

@@ -1,0 +1,135 @@
+{
+  "baseline": {
+    "name": "baseline",
+    "target_file": "static/js/app.js",
+    "replacement_applied": false,
+    "tests_failed": 0,
+    "tests_passed": 17,
+    "exit_code": 0,
+    "failed_tests": [],
+    "killed": false
+  },
+  "mutants": [
+    {
+      "name": "late-success-discarded",
+      "target_file": "temporary-copy/late-success-discarded.js",
+      "replacement_applied": true,
+      "tests_failed": 2,
+      "tests_passed": 15,
+      "exit_code": 1,
+      "failed_tests": [
+        "committed apply survives change events with captured values",
+        "dismiss and reopen keeps same-project apply busy"
+      ],
+      "killed": true
+    },
+    {
+      "name": "guard-dropped",
+      "target_file": "temporary-copy/guard-dropped.js",
+      "replacement_applied": true,
+      "tests_failed": 4,
+      "tests_passed": 13,
+      "exit_code": 1,
+      "failed_tests": [
+        "another project's preview reaches the server while an apply is pending, and its dialog is released after",
+        "committed apply survives change events with captured values",
+        "dismiss and reopen keeps same-project apply busy",
+        "another project may preview but cannot confirm during pending apply"
+      ],
+      "killed": true
+    },
+    {
+      "name": "capture-after-await",
+      "target_file": "temporary-copy/capture-after-await.js",
+      "replacement_applied": true,
+      "tests_failed": 2,
+      "tests_passed": 15,
+      "exit_code": 1,
+      "failed_tests": [
+        "committed apply survives change events with captured values",
+        "dismiss and reopen keeps same-project apply busy"
+      ],
+      "killed": true
+    },
+    {
+      "name": "busy-ignores-project",
+      "target_file": "temporary-copy/busy-ignores-project.js",
+      "replacement_applied": true,
+      "tests_failed": 2,
+      "tests_passed": 15,
+      "exit_code": 1,
+      "failed_tests": [
+        "another project's preview reaches the server while an apply is pending, and its dialog is released after",
+        "another project may preview but cannot confirm during pending apply"
+      ],
+      "killed": true
+    },
+    {
+      "name": "stale-preview-restored",
+      "target_file": "temporary-copy/stale-preview-restored.js",
+      "replacement_applied": true,
+      "tests_failed": 2,
+      "tests_passed": 15,
+      "exit_code": 1,
+      "failed_tests": [
+        "a preview that returns after the filter changed is discarded",
+        "a preview that returns after switching project is discarded"
+      ],
+      "killed": true
+    },
+    {
+      "name": "apply-ignores-preview-project",
+      "target_file": "temporary-copy/apply-ignores-preview-project.js",
+      "replacement_applied": true,
+      "tests_failed": 1,
+      "tests_passed": 16,
+      "exit_code": 1,
+      "failed_tests": [
+        "Confirm refuses a stored preview that belongs to another project"
+      ],
+      "killed": true
+    },
+    {
+      "name": "settle-focus-dropped",
+      "target_file": "temporary-copy/settle-focus-dropped.js",
+      "replacement_applied": true,
+      "tests_failed": 2,
+      "tests_passed": 15,
+      "exit_code": 1,
+      "failed_tests": [
+        "focus parked by the app moves to Confirm when the preview succeeds",
+        "a failed preview returns focus to Preview; a conflict moves it to Refresh"
+      ],
+      "killed": true
+    },
+    {
+      "name": "tab-keeps-parked-ownership",
+      "target_file": "temporary-copy/tab-keeps-parked-ownership.js",
+      "replacement_applied": true,
+      "tests_failed": 1,
+      "tests_passed": 16,
+      "exit_code": 1,
+      "failed_tests": [
+        "Tab that lands back on the parked control is still the user's choice"
+      ],
+      "killed": true
+    },
+    {
+      "name": "tab-not-prevented",
+      "target_file": "temporary-copy/tab-not-prevented.js",
+      "replacement_applied": true,
+      "tests_failed": 3,
+      "tests_passed": 14,
+      "exit_code": 1,
+      "failed_tests": [
+        "Tab wraps eligible controls and modal suppresses shortcuts",
+        "Preview recovers focus before its response",
+        "Confirm and Refresh recover focus while controls disappear"
+      ],
+      "killed": true
+    }
+  ],
+  "source_sha256_before": "b4202b2199ddd0ce3515617fe3cdb3842ca0fbfa5ce428717b7e2507aba03cf6",
+  "source_sha256_after": "b4202b2199ddd0ce3515617fe3cdb3842ca0fbfa5ce428717b7e2507aba03cf6",
+  "source_unchanged": true
+}

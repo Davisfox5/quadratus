@@ -1,0 +1,3 @@
+﻿Tag Type,Start (s),End (s),Label
+Pass,0,2,"Left, then right"
+Shot,2,3,"Quote ""inside"" label"

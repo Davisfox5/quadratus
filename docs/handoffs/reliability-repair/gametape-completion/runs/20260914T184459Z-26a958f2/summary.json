@@ -1,0 +1,131 @@
+{
+  "completed": false,
+  "allow_writes": true,
+  "source_changed": true,
+  "source_fingerprint": "e9711f2d4aa87fd24a0c81251bf803905f1444796127dfca0a415c230cebe3ff",
+  "scope_reports": [
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 26,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 26,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 52,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 52,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 37,
+      "max_lines": 60,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 37,
+      "max_lines": 60,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 48,
+      "max_lines": 60,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 48,
+      "max_lines": 60,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 48,
+      "max_lines": 60,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/ui/fake_dom.js"
+      ],
+      "changed_lines": 138,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/ui/fake_dom.js"
+      ],
+      "changed_lines": 138,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/ui/fake_dom.js"
+      ],
+      "changed_lines": 166,
+      "max_lines": 100,
+      "oversized": true
+    }
+  ],
+  "error": "PartialWorkStopped: Task exceeded its declared scope; work preserved. Scope check passed: 1 file(s), 166 changed line(s).",
+  "run": "20260914T184459Z-26a958f2",
+  "task_count": 2
+}

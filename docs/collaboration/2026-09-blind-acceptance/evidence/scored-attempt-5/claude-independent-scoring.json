@@ -1,0 +1,59 @@
+{
+  "run": "20260916T200248Z-984ad6ee",
+  "engine_commit": "adc774e",
+  "application_commit": "a8772ab",
+  "scored_by": "Claude, independently, on Davis's Mac",
+  "outcome": "OperatorInputNeeded after two calls and 158 seconds; nothing written",
+  "source": {
+    "files": 30,
+    "identical_to_frozen_input": true
+  },
+  "private_set": {
+    "unchanged": true,
+    "passed": 0,
+    "total": 9
+  },
+  "public_examiner": {
+    "passed": 0,
+    "total": 13
+  },
+  "application_suite": {
+    "passed": 100,
+    "note": "unchanged baseline, offline"
+  },
+  "budget": {
+    "reported_tokens": 56356,
+    "reserved_attempts": 2,
+    "stop_reason": "",
+    "note": "the budget never latched; the run ended on the operator-input channel"
+  },
+  "calls": [
+    {
+      "seat": "claude:fable",
+      "invoked": true,
+      "outcome": "ProviderError",
+      "tokens": 0,
+      "detail": "vendor window limit, envelope reports zero"
+    },
+    {
+      "seat": "openai:gpt-6-astra",
+      "invoked": true,
+      "outcome": "ok",
+      "tokens": 56356,
+      "detail": "asked the operator for read access after its sandbox failed"
+    }
+  ],
+  "attempt_4_fix_confirmed": "the zero-token report no longer latches the budget, so the fallback seat was reserved and called; this is the behaviour Davis asked for, observed live",
+  "finding": "The Codex CLI sandboxes itself with bubblewrap, which needs a user namespace the acceptance container denies via --cap-drop ALL and no-new-privileges. Astra could not read the project and correctly asked rather than guessing. The same bwrap failure appears in attempt 3's Sol lead output, so every OpenAI seat in every isolated run so far has been blind to the source.",
+  "decision_needed": [
+    "allow user namespaces in the container, weakening outer isolation",
+    "or relax the Codex CLI's own read-only sandbox, a vendor control",
+    "or, additive and touching neither, add a real read check to the container preflight"
+  ],
+  "not_done": [
+    "no isolation change",
+    "no vendor control relaxed",
+    "no retry",
+    "no budget, role, tolerance or private-case change"
+  ]
+}

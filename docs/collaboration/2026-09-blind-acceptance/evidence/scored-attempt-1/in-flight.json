@@ -1,0 +1,39 @@
+{
+  "changed": [
+    "app.py",
+    "tests/test_import_preview.py"
+  ],
+  "changed_lines": 132,
+  "inspected": true,
+  "note": "These changes were already on disk when the call stopped and have been preserved. Re-sending the same prompt would apply a second pass on top of them, not repeat the first.",
+  "task": "t1",
+  "description": "Add the first slice of the CSV clip-manifest preview: the backend endpoint with required-column validation only. Players, Clip ID, and duplicate detection are deferred to the next round; the UI and docs come after that.\n\nIn `app.py`, next to `bulk_preview` (before the Annotations section, around line 780), add `POST /api/projects/<project_id>/clips/import_preview`. Do **not** decorate it with `@_locked` and never call `_save_projects` \u2014 it only reads via `_load_projects()`.\n\nBehavior for this slice:\n- `404 {\"error\": \"Project not found\"}` if the project is missing; `400 {\"error\": \"...\", \"code\": \"bad_request\"}` if `file` is not in `request.files`, if `file.read().decode(\"utf-8-sig\")` raises `UnicodeDecodeError` (handles the BOM), or if the header lacks any of `tag type`, `start (s)`, `end (s)` after `.strip().lower()` on each header cell. Use `csv.reader(io.StringIO(text))` (RFC 4180 quoting; CRLF is handled by the csv module).\n- Map header names to column indexes case-insensitively after trimming; unknown columns ignored. Record the header's column count.\n- Iterate data records tracking the physical start line as `reader.line_num + 1` before reading each record (header is line 1, so the first data row is line 2). Skip records that are `[]` or whose cells are all empty after strip \u2014 these don't count toward `summary.total`. Stop with `400 {\"error\": \"Too many rows\", \"code\": \"too_many_rows\"}` once more than 5000 non-blank data rows are seen.\n- Per row: `malformed` with reasons collected in a list if the cell count differs from the header (\"wrong column count\"), `Tag Type` (trimmed) is not in `{t[\"name\"] for t in project[\"tag_types\"]}` (\"unknown tag type\"), `Start (s)`/`End (s)` aren't `float()`-parseable or not `math.isfinite` (\"start must be a number\" / \"end must be a number\"), start `< 0` (\"start must be >= 0\"), or end `<= start` (\"end must be greater than start\"). Otherwise `valid` with `clip = {\"tag_type\", \"start\", \"end\", \"label\", \"notes\", \"players\": []}` where label/notes come from the optional columns if present (trimmed) else `\"\"`. Malformed rows have `clip: null`.\n- Return `200 {\"preview_only\": true, \"summary\": {\"total\", \"valid\", \"malformed\", \"duplicate\": 0}, \"rows\": [...]}` with `{\"line\", \"status\", \"reasons\", \"clip\"}` per row.\n\nCreate `tests/test_import_preview.py` reusing the `client` fixture pattern from `tests/test_bulk_edit.py` (monkeypatch `DATA_DIR`, `VIDEOS_DIR`, `RECORDINGS_DIR`, `PROJECTS_FILE`). Post multipart via `client.post(url, data={\"file\": (io.BytesIO(csv_bytes), \"clips.csv\")}, content_type=\"multipart/form-data\")`. Cover: a mixed CSV with a BOM, CRLF line endings, a blank line, one valid row and one `end <= start` row (assert lines, statuses, reasons, summary); the three `bad_request` cases and the 404; and that `projects.json` bytes are unchanged after a preview. Keep the endpoint to roughly 60\u201370 lines and the tests to roughly 30; run `/usr/local/bin/python -m pytest -q` and confirm existing tests still pass.",
+  "needs": [
+    "execute",
+    "patch"
+  ],
+  "scope": {
+    "permitted_paths": [
+      "app.py",
+      "tests/test_import_preview.py"
+    ],
+    "forbidden_paths": [],
+    "intended_result": "POST /api/projects/<id>/clips/import_preview parses a CSV and returns per-row valid/malformed statuses for the required columns, never writing the store",
+    "acceptance": [
+      "POST with a valid 3-column CSV returns 200 with preview_only true, summary counts and one row per data line with line numbers starting at 2",
+      "Missing file, undecodable bytes (e.g. b'\\xff\\xfe'), and a header lacking 'Start (s)' each return 400 with code bad_request; unknown project returns 404 {\"error\": \"Project not found\"}",
+      "Blank lines are skipped and not counted in summary.total; the row after a blank line reports the correct physical line number",
+      "projects.json is byte-identical before and after the request",
+      "/usr/local/bin/python -m pytest -q passes"
+    ],
+    "max_lines": 100
+  },
+  "invocation": {
+    "task": "t1",
+    "role": "closeout",
+    "origin": "seat",
+    "model": "grok:default",
+    "allow_writes": false,
+    "prompt_artifact": "792c6619ed3a"
+  }
+}

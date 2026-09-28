@@ -1,0 +1,61 @@
+{
+ "id": "scope-out-of-path-blocks",
+ "shape": "scope-trap",
+ "family": "pure-logic",
+ "grader": false,
+ "source": "Report, spine feature 3: scope declared before dispatch, measured after; an out-of-scope path blocks and nothing is reverted.",
+ "session": {
+  "project": true,
+  "allow_writes": true
+ },
+ "files": {
+  "app.py": "x = 1\n"
+ },
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Tiny fix",
+   "complexity": "simple",
+   "scope": {
+    "permitted_paths": [
+     "app.py"
+    ],
+    "max_lines": 20,
+    "intended_result": "one tiny fix",
+    "acceptance": [
+     "file compiles"
+    ]
+   }
+  }
+ },
+ "script": [
+  {
+   "role": "lead",
+   "reply": "Implemented.",
+   "writes": {
+    "other.py": "y = 2\n"
+   }
+  }
+ ],
+ "expect": {
+  "outcome": "PartialWorkStopped",
+  "files": {
+   "other.py": {
+    "exists": true
+   },
+   "app.py": {
+    "equals": "x = 1\n"
+   }
+  },
+  "open_findings": {
+   "contains": [
+    "outside its declared scope"
+   ]
+  },
+  "scope_reports": {
+   "count": 1,
+   "blocking": true
+  }
+ }
+}

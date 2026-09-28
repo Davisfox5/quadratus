@@ -1,0 +1,109 @@
+{
+  "models": {
+    "claude:fable": {
+      "calls": 25,
+      "input_tokens": 3048532,
+      "output_tokens": 82248,
+      "unknown_usage_calls": 1,
+      "roles": [
+        "orchestrator"
+      ],
+      "outcomes": {
+        "ok": 23,
+        "ProviderRefusal": 1,
+        "KeyboardInterrupt": 1
+      }
+    },
+    "grok:default": {
+      "calls": 10,
+      "input_tokens": 2707309,
+      "output_tokens": 79766,
+      "unknown_usage_calls": 0,
+      "roles": [
+        "lead",
+        "closeout"
+      ],
+      "outcomes": {
+        "ok": 10
+      }
+    },
+    "openai:gpt-5.6-sol": {
+      "calls": 39,
+      "input_tokens": 16461956,
+      "output_tokens": 248165,
+      "unknown_usage_calls": 1,
+      "roles": [
+        "lead",
+        "revision",
+        "closeout"
+      ],
+      "outcomes": {
+        "ok": 38,
+        "RuntimeError": 1
+      }
+    },
+    "claude:opus": {
+      "calls": 15,
+      "input_tokens": 4576032,
+      "output_tokens": 203790,
+      "unknown_usage_calls": 0,
+      "roles": [
+        "collaborator",
+        "recheck"
+      ],
+      "outcomes": {
+        "ok": 15
+      }
+    },
+    "grok:worker": {
+      "calls": 1,
+      "input_tokens": 37590,
+      "output_tokens": 777,
+      "unknown_usage_calls": 0,
+      "roles": [
+        "lead"
+      ],
+      "outcomes": {
+        "ProviderError": 1
+      }
+    }
+  },
+  "native_reconciliation": {
+    "controlled_tokens": 27446165,
+    "native_child_tokens": 1381050,
+    "auxiliary_tokens": 0,
+    "known_minimum_tokens": 28827215,
+    "unknown_invocations": 2,
+    "native_children": 3,
+    "unidentified_native_activity": 1,
+    "note": "Subscription usage including cached and repeated input. Native children counted once at their highest cumulative reading, never summed across updates. Auxiliary vendor-internal usage is reported separately and is not Quadratus-dispatched work. Unknown usage is unknown, not zero."
+  },
+  "runs": {
+    "20260914T161220Z-5a94acce": {
+      "invoked": 11,
+      "selected_only": 5
+    },
+    "20260914T165905Z-55931eca": {
+      "invoked": 4,
+      "selected_only": 1
+    },
+    "20260914T170410Z-f7f94fb3": {
+      "invoked": 33,
+      "selected_only": 11
+    },
+    "20260914T183152Z-08d9916f": {
+      "invoked": 7,
+      "selected_only": 2
+    },
+    "20260914T184459Z-26a958f2": {
+      "invoked": 18,
+      "selected_only": 6
+    },
+    "20260914T193711Z-a3fd912a": {
+      "invoked": 17,
+      "selected_only": 6
+    }
+  },
+  "non_seat_invocations": [],
+  "billing": "Subscription CLI calls. Token counts are provider-reported activity; no verified dollar bill is available."
+}

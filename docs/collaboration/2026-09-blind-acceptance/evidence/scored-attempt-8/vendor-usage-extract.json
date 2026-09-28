@@ -1,0 +1,99 @@
+{
+  "calls": [
+    {
+      "type": "result",
+      "subtype": "success",
+      "stop_reason": "stop_sequence",
+      "session_id": "40eaca5a-61c5-421e-acfc-3189d2a7b919",
+      "num_turns": 1,
+      "usage": {
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {},
+      "subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "is_error": true,
+      "permission_denials": [],
+      "evidence_file": "call-001.stdout",
+      "sha256": "a75738f3a28d10b71d2ddd779a18c8228caeb87662feb2a5c30c923d726a4d69"
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 76583,
+        "cached_input_tokens": 49280,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 609,
+        "reasoning_output_tokens": 153
+      },
+      "evidence_file": "call-002.stdout",
+      "sha256": "d2eaff194811cca1447ea16828cc684447aae4111eab4a80ff32e1753ed457e0"
+    },
+    {
+      "stopReason": "end_turn",
+      "sessionId": "01a0b017-d61d-7550-b587-e79c042e3a94",
+      "num_turns": 15,
+      "usage": {
+        "input_tokens": 54069,
+        "cache_read_input_tokens": 383104,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 13429,
+        "reasoning_tokens": 10389,
+        "total_tokens": 450602
+      },
+      "modelUsage": {
+        "grok-4.6-build": {
+          "inputTokens": 54069,
+          "outputTokens": 13429,
+          "cacheReadInputTokens": 383104,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 15,
+          "costUSD": 0.12928976
+        }
+      },
+      "evidence_file": "call-003.stdout",
+      "sha256": "3c2fceb73984b0f55dc65fad62557241786cf283e4911f689cd1c863f9190792"
+    }
+  ],
+  "raw_envelopes": "Raw stdout, vendor sessions and thought fields remain private outside every repository; each row above names its file and that file's SHA-256."
+}

@@ -1,0 +1,47 @@
+{
+  "source": "$LOCAL_REPOS/sports-video-tagger-acceptance/.quadratus/runs/20260913T213024Z-c6140207/invocations.jsonl",
+  "executed_calls": [
+    {
+      "task": "-",
+      "role": "-",
+      "origin": "seat",
+      "requested_model": "claude:fable",
+      "resolved_model": "fable",
+      "selected": true,
+      "invoked": true,
+      "outcome": "ok",
+      "seconds": 38.16791654203553,
+      "input_tokens": 97732,
+      "output_tokens": 2236,
+      "cached_input_tokens": null,
+      "attempt": 1,
+      "post_return_failure": false,
+      "session_id": null,
+      "detail": ""
+    },
+    {
+      "task": "-",
+      "role": "-",
+      "origin": "seat",
+      "requested_model": "claude:opus",
+      "resolved_model": "opus",
+      "selected": true,
+      "invoked": true,
+      "outcome": "ok",
+      "seconds": 161.9811498329509,
+      "input_tokens": 347744,
+      "output_tokens": 14064,
+      "cached_input_tokens": null,
+      "attempt": 1,
+      "post_return_failure": false,
+      "session_id": null,
+      "detail": ""
+    }
+  ],
+  "reported_selected_never_invoked": [
+    "claude:opus",
+    "grok:default",
+    "openai:gpt-5.6-sol"
+  ],
+  "note": "The actual Opus call is recorded as resolved_model=opus but its selection uses claude:opus; task/role are also missing on all executed calls."
+}

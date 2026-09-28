@@ -1,0 +1,7 @@
+{
+  "source": "output/routing-trial/review/transport-codex-1789323873722180000.json",
+  "expected_native_child": "01a09bfe-d4e3-78d3-bbec-8c0438c6ac62",
+  "expected_native_tokens": 135105,
+  "extracted_children": [],
+  "note": "Actual prior CLI stdout replayed against f030fb3 extractor; native child independently proved in vendor session records."
+}

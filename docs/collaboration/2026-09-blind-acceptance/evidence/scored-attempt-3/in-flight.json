@@ -1,0 +1,36 @@
+{
+  "changed": [],
+  "changed_lines": 0,
+  "inspected": true,
+  "note": "The call stopped without writing anything; the tree is unchanged.",
+  "task": "t1",
+  "description": "Add the core CSV-parsing helper for the read-only clip-manifest preview as a pure function in `app.py`, placed after `export_json` under a new `# \u2500\u2500 Import preview \u2500\u2500` section. Signature: `def _import_preview_rows(project, text):`. `text` is already-decoded CSV text (the caller will handle BOM/decoding later); use `csv.reader(io.StringIO(text))` which already handles RFC 4180 quoting and CRLF.\n\nBehaviour:\n- Read the first row as the header. Build a column map by `h.strip().lower()`. Required: `tag type`, `start (s)`, `end (s)`; optional: `label`, `notes`, `players`, `clip id`. If a required header is missing (or the file has no header row), return `(None, (\"Missing required column: <name>\", \"bad_request\"))`. Other columns are ignored.\n- Iterate remaining rows with `line = reader.line_num`-style physical counting (header is line 1; use `enumerate(reader, start=1)` after reading the header via `next(reader)`, so the first data row is line 2). Skip rows that are empty or whose fields are all empty after strip; these do not count toward `total`.\n- If more than 5000 non-blank data rows, return `(None, (\"Too many rows (max 5000)\", \"too_many_rows\"))`.\n- For each counted row: reasons = []. If `len(row) != len(header)`: reason \"wrong column count\" and skip further checks. Else: tag type (strip) must be in `{t[\"name\"] for t in project[\"tag_types\"]}` \u2014 reason \"unknown tag type\". Start/End: `float()` of stripped cell; non-numeric or non-finite (`math.isfinite`) \u2192 \"start must be a number\" / \"end must be a number\"; start < 0 \u2192 \"start must be >= 0\"; end <= start (when both numeric) \u2192 \"end must be greater than start\". Label/Notes default to \"\" when the column is absent.\n- Row dict: `{\"line\": n, \"status\": \"valid\"|\"malformed\", \"reasons\": [...], \"clip\": {...} or None}` with `clip = {\"tag_type\", \"start\", \"end\", \"label\", \"notes\", \"players\": []}` only for valid rows. Summary counts `total`, `valid`, `malformed`, and `duplicate` (always 0 in this slice \u2014 the duplicate/Clip ID/Players rules come in the next task).\n- Import `math` at the top of app.py.\n\nTests in a new `tests/test_import_preview.py` (follow the `sys.path.insert` pattern of `tests/test_bulk_edit.py`; no client fixture needed \u2014 build `project = {\"tag_types\": [{\"name\": \"Pass\"}, {\"name\": \"Shot\"}], \"players\": [], \"clips\": []}` directly). Scenarios:\n1. Valid two-row CSV with header in mixed case and padding (`\" tag TYPE ,Start (s),END (s),Label\"`) \u2192 both rows valid, lines 2 and 3, clip fields correct, summary `{total:2, valid:2, malformed:0, duplicate:0}`.\n2. CRLF text with a blank line between data rows \u2192 blank line skipped, the following row has `line` 4, total is 2.\n3. Malformed cases in one file: end <= start, unknown tag type, non-numeric start, negative start, wrong column count \u2192 each row `malformed` with the expected reason string and `clip` None.\n4. Missing `End (s)` header \u2192 `(None, (msg, \"bad_request\"))`; 5001 data rows \u2192 `(None, (msg, \"too_many_rows\"))`.\n\nRun `/usr/local/bin/python -m pytest -q` and confirm everything passes.",
+  "needs": [
+    "execute",
+    "patch"
+  ],
+  "scope": {
+    "permitted_paths": [
+      "app.py",
+      "tests/test_import_preview.py"
+    ],
+    "forbidden_paths": [],
+    "intended_result": "A pure helper `def _import_preview_rows(project, text):` in app.py that parses CSV text into the preview result (no endpoint, no players/Clip ID/duplicate rules yet), with pytest coverage in tests/test_import_preview.py",
+    "acceptance": [
+      "`def _import_preview_rows(project, text):` exists in app.py next to the export section and returns `(result, None)` where result is `{\"summary\": {\"total\", \"valid\", \"malformed\", \"duplicate\"}, \"rows\": [...]}` or `(None, (message, code))` on a fatal error",
+      "Header names are matched case-insensitively after trim; a missing `Tag Type`, `Start (s)` or `End (s)` header yields `(None, (message, \"bad_request\"))`; more than 5000 data rows yields `(None, (message, \"too_many_rows\"))`",
+      "Blank lines (no fields or all-empty fields) are skipped and not counted in summary.total, but line numbers still count physical lines with the header as line 1",
+      "A row whose column count differs from the header, whose Start/End is non-numeric/non-finite/negative, or whose End <= Start, or whose Tag Type does not exactly match (after trim) a project tag type name is `malformed` with a reason list; otherwise `valid` with `clip` = {tag_type, start, end, label, notes, players: []}",
+      "/usr/local/bin/python -m pytest -q passes, including the new tests"
+    ],
+    "max_lines": 100
+  },
+  "invocation": {
+    "task": "t1",
+    "role": "lead",
+    "origin": "seat",
+    "model": "openai:gpt-5.6-sol",
+    "allow_writes": true,
+    "prompt_artifact": "ff6ab8782a34"
+  }
+}

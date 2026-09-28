@@ -1,0 +1,117 @@
+--- a/app.py
++++ b/app.py
+@@ -1261,6 +1261,41 @@
+     })
+ 
+ 
++# ── Clip-manifest CSV (read-only) ──────────────────────────────────────
++
++_REQUIRED_CLIP_MANIFEST_HEADERS = ("Tag Type", "Start (s)", "End (s)")
++
++
++def _read_clip_manifest_header(raw):
++    """Decode clip-manifest CSV bytes and return (headers, reader).
++
++    Headers are whitespace-trimmed; matching of required names is
++    case-insensitive. The csv.reader is positioned after the header so
++    reader.line_num counts physical lines. Raises ValueError for invalid
++    encoding, empty input, or missing required headers. Does not write.
++    """
++    try:
++        text = raw.decode("utf-8-sig", errors="strict")
++    except UnicodeDecodeError as exc:
++        raise ValueError("undecodable file") from exc
++    if not text:
++        raise ValueError("empty input")
++
++    reader = csv.reader(io.StringIO(text, newline=""))
++    try:
++        header_row = next(reader)
++    except StopIteration:
++        raise ValueError("empty input") from None
++    except csv.Error as exc:
++        raise ValueError("invalid headers") from exc
++
++    headers = [cell.strip() for cell in header_row]
++    present = {name.lower() for name in headers}
++    if any(req.lower() not in present for req in _REQUIRED_CLIP_MANIFEST_HEADERS):
++        raise ValueError("missing required header")
++    return headers, reader
++
++
+ # ── Export ─────────────────────────────────────────────────────────────
+ 
+ def _filter_clips(project, params):
+--- /dev/null
++++ b/tests/test_import_preview.py
+@@ -0,0 +1,70 @@
++"""Focused tests for clip-manifest CSV header reading."""
++import os
++import sys
++
++import pytest
++
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
++import app as application
++
++_read = application._read_clip_manifest_header
++_HDR = b"Tag Type,Start (s),End (s)"
++
++
++def test_positions_reader_after_header():
++    headers, reader = _read(_HDR + b"\nPass,1,2\n")
++    assert headers == ["Tag Type", "Start (s)", "End (s)"]
++    assert reader.line_num == 1
++    assert next(reader) == ["Pass", "1", "2"]
++    assert reader.line_num == 2
++
++
++def test_strips_utf8_bom():
++    headers, reader = _read(b"\xef\xbb\xbf" + _HDR + b"\n")
++    assert headers[0] == "Tag Type"
++    assert reader.line_num == 1
++
++
++def test_lf_and_crlf_newlines():
++    _, lf = _read(_HDR + b"\nPass,1,2\n")
++    _, crlf = _read(_HDR + b"\r\nPass,1,2\r\n")
++    assert next(lf) == next(crlf) == ["Pass", "1", "2"]
++    assert lf.line_num == crlf.line_num == 2
++
++
++def test_quoted_headers_and_fields():
++    headers, reader = _read(b'"Tag Type","Start (s)","End (s)"\n"Pass, x",1,2\n')
++    assert headers == ["Tag Type", "Start (s)", "End (s)"]
++    assert next(reader) == ["Pass, x", "1", "2"]
++
++
++def test_trimmed_case_insensitive_names():
++    headers, _ = _read(b" tag type , START (S) , end (s) \n")
++    assert headers == ["tag type", "START (S)", "end (s)"]
++
++
++def test_retains_unknown_columns():
++    headers, _ = _read(b"Tag Type,Extra,Start (s),End (s),Duration (s)\n")
++    assert headers == ["Tag Type", "Extra", "Start (s)", "End (s)", "Duration (s)"]
++
++
++def test_rejects_invalid_utf8_empty_and_missing_headers():
++    with pytest.raises(ValueError):
++        _read(_HDR + b"\n\xff")
++    with pytest.raises(ValueError):
++        _read(b"Label,Notes\n")
++    with pytest.raises(ValueError):
++        _read(b"Tag Type,Start (s)\n")
++    with pytest.raises(ValueError):
++        _read(b"")
++
++
++def test_line_num_and_no_writes(monkeypatch):
++    monkeypatch.setattr(
++        application, "_save_projects",
++        lambda *a, **k: (_ for _ in ()).throw(AssertionError("write")),
++    )
++    _, reader = _read(b'Tag Type,Start (s),End (s)\n"a\nb",1,2\n')
++    assert reader.line_num == 1
++    assert next(reader)[0] == "a\nb"
++    assert reader.line_num == 3

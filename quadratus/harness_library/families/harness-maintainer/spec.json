@@ -1,0 +1,39 @@
+{
+  "kind": "family",
+  "schema_version": 1,
+  "id": "harness-maintainer",
+  "version": "0.1.0",
+  "summary": "Edits to agent prompts, instruction files, policies, skills and harness cards: facts re-derived by script, every cited path exists, adapters thin and in sync, no hard rule softened.",
+  "kinds": ["docs", "ops"],
+  "required_inputs": [
+    { "name": "target_files", "description": "The instruction, prompt, policy, skill or card files to change", "refuse_if_missing": true },
+    { "name": "reason", "description": "The drift, incident or ruling that motivates the change", "refuse_if_missing": true },
+    { "name": "canonical_source", "description": "For a synced skill or card: the canonical location to edit", "refuse_if_missing": false }
+  ],
+  "checklist": [
+    { "id": "facts-by-script", "rule": "Counts, versions and file names in prompts come from the facts script, never typed by hand", "because": "LINDA code-scout said 57 routers and 106 services when there were 59 and 120; six agents said Python 3.9 on a 3.12 repo", "applies_to": ["lead", "reviewer", "verifier"], "gate_id": "facts-check" },
+    { "id": "paths-exist", "rule": "Every path an agent prompt, spec or card cites exists on disk", "because": "Flex prompts cited src/middleware.ts and check-no-firstxi.mjs months after both were renamed; the agent-prompt-paths test now fails on that", "applies_to": ["lead", "reviewer", "verifier"], "gate_id": "prompt-paths-test" },
+    { "id": "canonical-first", "rule": "A synced skill or card is edited at its canonical source; a mirrored copy is never edited alone", "because": "War Room AGENTS.md: edit canonical sources in shared/, never generated copies; the sync overwrites mirrors", "applies_to": ["lead", "reviewer"] },
+    { "id": "adapters-thin", "rule": "Provider adapters stay thin shims of one role file; model and tool settings are preserved unless the change is about them", "because": "War Room's 2026-09-10 refresh collapsed stale role prompts; the instructions test checks adapter parity", "applies_to": ["lead", "reviewer"], "gate_id": "instructions-test" },
+    { "id": "pointer-stays-pointer", "rule": "Where the repo says CLAUDE.md is a pointer, it stays exactly a pointer; policy lives in the files it points to", "because": "War Room CLAUDE.md is @AGENTS.md by design; duplicated policy drifts", "applies_to": ["lead", "reviewer"] },
+    { "id": "never-soften", "rule": "A hard rule (never, refuse, sensitive path) is never softened by a prompt edit; a change to one needs a recorded ruling", "because": "The sensitive-path rule and the external-effects rule are the load-bearing part of every harness; a helpful rewording has removed a never before", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "schema-validates", "rule": "A policy or card change validates against the schema and the family test", "because": "An invalid policy makes the guard hook deny every write; the validator exists for this", "applies_to": ["lead", "reviewer"], "gate_id": "harness-validate" },
+    { "id": "because-on-every-rule", "rule": "Every checklist line in a card cites the incident or rule it comes from", "because": "A rule with no because is the first one a future editor deletes", "applies_to": ["lead", "reviewer"] },
+    { "id": "report-unverified", "rule": "The done output names what could not be verified, for example a hook firing on a machine you do not have", "because": "The guard hook was pipe-tested in a container; only a Mac session proves it fires in Claude Code", "applies_to": ["lead"] }
+  ],
+  "overlays_compatible": ["fleet-ops", "human-decision", "test-quality"],
+  "gate_ids": ["scope", "facts-check", "prompt-paths-test", "instructions-test", "harness-validate"],
+  "output_contract": {
+    "done_output": ["files changed with the reason", "facts re-derived: which changed", "paths checked: count and any missing", "canonical source edited and which mirrors will refresh on sync", "hard rules touched: none, or the ruling cited", "what could not be verified"],
+    "stop_conditions": ["the change would soften a never without a ruling", "the canonical source is unknown for a synced file", "the change expands the managed-repos list", "the facts script does not run"]
+  },
+  "adapter_fields": [
+    { "name": "agent_dir", "description": "Where agent prompts live", "required": true },
+    { "name": "adapter_dirs", "description": "Provider adapter directories that must stay in parity", "required": false },
+    { "name": "facts_script", "description": "The script that derives counts and versions", "required": true },
+    { "name": "instruction_test", "description": "The test that checks instruction-file consistency", "required": false },
+    { "name": "spec_template_path", "description": "The spec template spec-writer must emit, if the repo has one", "required": false },
+    { "name": "skill_sync_marker", "description": "The marker file that lists synced skills", "required": false }
+  ],
+  "eval_cases_ref": "eval-cases.json"
+}

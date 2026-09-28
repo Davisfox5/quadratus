@@ -1,0 +1,25 @@
+{
+  "task_id": "t6",
+  "description": "Reconcile the mutation-check numbers in `docs/BULK_EDIT.md` with an actual run.\n\n`docs/BULK_EDIT.md` line 247 records `guard-dropped: 5 passed, 1 failed, killed`, while task t4's recorded output for the same harness was `6 passed, 1 failed`. With a 7-test baseline (3 serialization + 4 keyboard tests), 5 + 1 does not add up, so one of the two records is wrong, or the harness is not deterministic across runs. Everything else in the deliverables (loader, serialization tests, keyboard tests, mutation harness, doc sections for apply serialization and keyboard/focus) is in place, so this is the only concrete finding left before DONE.\n\nSteps:\n1. From the project root run `node tests/ui/mutation_check.js` twice with color disabled and `node --test tests/ui/*.test.js` once; keep the raw output.\n2. Edit only the four result lines in the Validation block (lines 246\u2013249) so they match what was observed. Do not touch `tests/ui/mutation_check.js` or any test.\n3. If passed + failed for a mutant is not 7, add one short sentence explaining why (the `node --test` summary distinguishes `pass`, `fail`, `cancelled`, `skipped`, `todo`); if two runs disagree, report that as a finding rather than choosing a number.\n4. Confirm the harness reports the production `static/js/app.js` hash unchanged.",
+  "complexity": "rote",
+  "work_class": "general",
+  "kind": "docs",
+  "lead": null,
+  "metadata_confidence": "labelled",
+  "metadata_notes": [],
+  "scope": {
+    "permitted_paths": [
+      "docs/BULK_EDIT.md"
+    ],
+    "intended_result": "The recorded mutation-check results in docs/BULK_EDIT.md match a fresh, uncolored run of node tests/ui/mutation_check.js, resolving the guard-dropped count inconsistency (doc says 5 passed/1 failed against a 7-test baseline; task t4 recorded 6 passed/1 failed)",
+    "acceptance": [
+      "Run `node tests/ui/mutation_check.js` (no FORCE_COLOR) and `node --test tests/ui/*.test.js` from the project root and capture the JSON/summary output",
+      "The four result lines in the Validation block of docs/BULK_EDIT.md (baseline, guard-dropped, capture-after-await, tab-not-prevented) equal the observed pass/fail counts from that run; for every mutant, passed + failed equals the baseline test count (7) or the doc states the reason (e.g. a cancelled test) in one sentence",
+      "If the run shows counts that differ between two invocations, do not guess: record both observations and flag the nondeterminism as a finding in the task report instead of silently picking one",
+      "The SHA-256 of static/js/app.js printed by the harness still equals a5613bc53459065dbac499f922cab6a0f44d056936c3673e57fc647dfa60707b and no file other than docs/BULK_EDIT.md is changed",
+      "Diff is limited to the affected result lines (at most ~5 lines)"
+    ],
+    "max_lines": 10,
+    "forbidden_paths": []
+  }
+}

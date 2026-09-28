@@ -1,0 +1,4 @@
+Clip ID,Tag Type,Start (s),End (s),Label
+EXISTING,Pass,1,2,Collides with stored clip
+new1,Pass,3,4,Fresh
+new1,Pass,5,6,Repeats a row id

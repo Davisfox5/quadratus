@@ -1,0 +1,62 @@
+{
+  "calls": [
+    {
+      "type": "result",
+      "subtype": "success",
+      "stop_reason": "stop_sequence",
+      "session_id": "de5bc3de-9b5e-4566-8219-60c1dedbe476",
+      "num_turns": 1,
+      "usage": {
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard"
+      },
+      "modelUsage": {},
+      "subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "is_error": true,
+      "permission_denials": [],
+      "evidence_file": "call-001.stdout",
+      "sha256": "12efef2f58e29b755d9e6d6e720fd57937aa5c0cbead48ba4990b2078346aa82"
+    }
+  ],
+  "raw_envelopes": "Raw stdout, vendor sessions and thought fields remain private outside every repository; each row above names its file and that file's SHA-256."
+}

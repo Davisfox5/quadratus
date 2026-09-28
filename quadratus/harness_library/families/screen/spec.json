@@ -1,0 +1,43 @@
+{
+  "kind": "family",
+  "schema_version": 1,
+  "id": "screen",
+  "version": "0.1.0",
+  "summary": "A user-facing screen or component: design brief in, tokens only, loading, empty, error and gated states, model output labeled, browser smoke with zero console errors.",
+  "kinds": ["frontend", "mobile"],
+  "required_inputs": [
+    { "name": "design_brief", "description": "The df-design brief or canvas direction the screen implements", "refuse_if_missing": true },
+    { "name": "data_source", "description": "The endpoint or store the screen reads and writes", "refuse_if_missing": true },
+    { "name": "closest_screen", "description": "The existing screen to match, by path", "refuse_if_missing": true },
+    { "name": "feature_key", "description": "Entitlement gate, or none with a reason", "refuse_if_missing": false }
+  ],
+  "checklist": [
+    { "id": "brief-required", "rule": "A design brief or a decided canvas direction is an input; an undecided direction means ask, never pick", "because": "Flex import wizard and r3cruit3r match-and-merge canvases are undecided; a screen built on a guess is rebuilt", "applies_to": ["lead", "reviewer"] },
+    { "id": "tokens-only", "rule": "Colors, radii and type come from the theme or token file; no literal hex, no second UI library, no forbidden import", "because": "r3cruit3r has 829 legacy hex hits and 23 react-toastify files that the theme does not control; LINDA tokens feed three consumers from one file", "applies_to": ["lead", "reviewer", "verifier"], "gate_id": "token-grep" },
+    { "id": "four-states", "rule": "Loading, empty, error and, when gated, the upgrade state exist in the component, not only in a route-level shell", "because": "Every repo's design section says so; LINDA has no loading.tsx or error.tsx so the shell cannot cover it; Flex says never render a blank page", "applies_to": ["lead", "reviewer"] },
+    { "id": "model-output-labeled", "rule": "Anything a model produced is labeled as such and shows what it was derived from", "because": "Flex AI output carries a visible label; LINDA cites the transcript span; r3cruit3r merge surfaces have a coach accepting a machine judgment", "applies_to": ["lead", "reviewer"] },
+    { "id": "destructive-confirms", "rule": "A destructive or irreversible action confirms first and states what it will do in plain words", "because": "r3cruit3r merge, reject and bulk import; LINDA export of transcript text needs an explicit user action", "applies_to": ["lead", "reviewer"] },
+    { "id": "match-neighbour", "rule": "Shell, header pattern, table primitive and form library match the closest existing screen", "because": "Every CLAUDE.md: when in doubt, match the closest existing screen; LINDA screens must also survive Flex's shell", "applies_to": ["lead", "reviewer"] },
+    { "id": "gate-both-sides", "rule": "A gated screen wraps in the gate component and its data route asserts the feature server-side", "because": "Flex widgets fired gated calls for every tier and logged a 402 per load", "applies_to": ["lead", "reviewer"] },
+    { "id": "browser-smoke", "rule": "The screen renders in a real browser with zero console errors and no failed requests; the receipt is attached", "because": "Quadratus browser.py produces evidence, reviewers produce judgment; type-checks do not catch a late throw", "applies_to": ["lead", "reviewer", "verifier"], "gate_id": "browser-smoke" },
+    { "id": "copy-rules", "rule": "Copy passes the writing rules: no em dashes, no AI tells; identifiers a user reads aloud use the mono font where the design says so", "because": "r3cruit3r mono for recruit ids and timestamps; the df-writing hard rules apply to every repo", "applies_to": ["lead", "reviewer"], "gate_id": "copy-grep" },
+    { "id": "themes-checked", "rule": "The screen is checked against every theme the repo ships: dark only, both, or the tenant override", "because": "LINDA dark first with a light override; Flex must hold up under another tenant's brand; r3cruit3r is dark only", "applies_to": ["lead", "reviewer"] }
+  ],
+  "overlays_compatible": ["human-decision", "privacy", "tenant-isolation", "test-quality", "performance"],
+  "gate_ids": ["scope", "token-grep", "copy-grep", "typecheck", "lint", "browser-smoke", "build"],
+  "output_contract": {
+    "done_output": ["brief or canvas direction cited", "closest screen matched, by path", "the four states, each with its component location", "model output label and provenance, or none", "browser smoke receipt: console errors zero, failed requests zero", "themes checked"],
+    "stop_conditions": ["no brief and the direction is undecided", "the data source does not exist yet", "the task asks for a literal color or a second UI library", "the screen would export transcript or PII without an explicit user action"]
+  },
+  "adapter_fields": [
+    { "name": "ui_lib", "description": "MUI, shadcn, Tailwind aliases, react-native-paper", "required": true },
+    { "name": "token_source", "description": "Theme file or token file the screen reads", "required": true },
+    { "name": "forbidden_imports", "description": "Libraries that must not appear, for example react-toastify", "required": false },
+    { "name": "state_components", "description": "Existing loading, empty, error and gate components to reuse", "required": true },
+    { "name": "gate_hook", "description": "useFeature, FeatureGate, or the repo equivalent", "required": false },
+    { "name": "themes_to_check", "description": "dark only, both, or tenant override", "required": true },
+    { "name": "shell_constraint", "description": "For example: must survive Flex's shell, no own top nav", "required": false },
+    { "name": "smoke_command", "description": "How to render the page in a real browser and collect console errors", "required": true }
+  ],
+  "eval_cases_ref": "eval-cases.json"
+}

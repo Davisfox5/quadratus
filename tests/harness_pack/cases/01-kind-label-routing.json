@@ -1,0 +1,52 @@
+{
+ "id": "kind-label-routing",
+ "shape": "noisy-tool",
+ "family": "harness-maintainer",
+ "grader": false,
+ "source": "Report, Quadratus, GameTape finding 1: Fable prefaced KIND: test rote with a paragraph and the first-line parser dropped the testing pin to general/simple.",
+ "session": {
+  "project": false
+ },
+ "drive": {
+  "kind": "next_task"
+ },
+ "variants": {
+  "good": {
+   "script": [
+    {
+     "role": "orchestrator",
+     "reply": "Confirmed. That matches the reproduced gate failure, so the next step is clear.\n\nKIND: test rote\nFix test isolation in tests/test_import_preview.py so the fixture database is fresh per test."
+    }
+   ],
+   "expect": {
+    "outcome": "completed",
+    "task": {
+     "kind": "test",
+     "complexity": "rote",
+     "metadata_confidence": "labelled",
+     "description_startswith": "Fix test isolation"
+    }
+   }
+  },
+  "bad": {
+   "script": [
+    {
+     "role": "orchestrator",
+     "reply": "Fix test isolation in tests/test_import_preview.py so the fixture database is fresh per test."
+    }
+   ],
+   "expect": {
+    "outcome": "completed",
+    "task": {
+     "kind": "general",
+     "complexity": "simple",
+     "metadata_confidence": "defaulted"
+    },
+    "notes_contain": [
+     "task metadata was not stated"
+    ]
+   }
+  }
+ },
+ "expect": {}
+}

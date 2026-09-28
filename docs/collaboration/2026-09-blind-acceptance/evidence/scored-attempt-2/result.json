@@ -1,0 +1,96 @@
+{
+  "project": "/work",
+  "goal": "# Read-only CSV clip-manifest preview\n\nAdd a CSV clip-manifest preview to GameTape so a coach can validate exported\nclip descriptions before importing them elsewhere. This feature must never\nsave clips, change project data, or read/process video files. Use the following\napplication interface contract and preserve existing behavior. Include focused\nautomated checks. Do not add dependencies or implement a saving/import action.\n\nEndpoint: `POST /api/projects/<project_id>/clips/import_preview`, multipart\nform with one field `file` holding a CSV. It never writes the project store.\n\nCSV: header row required; column names matched case-insensitively after\ntrimming; UTF-8 with optional BOM; LF or CRLF; RFC 4180 quoting. Columns:\n\n| Column | Required | Rule |\n| --- | --- | --- |\n| `Tag Type` | yes | must name an existing project tag type (exact, after trim) |\n| `Start (s)` | yes | finite number, `>= 0` |\n| `End (s)` | yes | finite number, `> Start (s)` |\n| `Label` | no | free text, displayed escaped |\n| `Notes` | no | free text |\n| `Players` | no | `;`-separated names or `#number`; each must match one project player |\n| `Clip ID` | no | if present, must not equal an existing clip id or an earlier row's id |\n| `Duration (s)` | no | ignored (the app's own export writes it) |\n\nColumns not listed in the table are ignored.\nBlank lines (no fields, or all fields empty) are ignored and are not counted\nin `summary.total`; line numbers still count physical lines.\n\nRow statuses: `valid`, `malformed` (any rule above fails, wrong column count,\nundecodable cell), `duplicate` (same `Tag Type`, `Start (s)`, `End (s)` and\n`Label` as an earlier row, or a `Clip ID` already used). A row gets one status;\n`malformed` wins over `duplicate`. Row numbering counts the header as line 1.\n\nResponse `200`:\n\n```json\n{\"preview_only\": true,\n \"summary\": {\"total\": 3, \"valid\": 1, \"malformed\": 1, \"duplicate\": 1},\n \"rows\": [\n   {\"line\": 2, \"status\": \"valid\", \"reasons\": [],\n    \"clip\": {\"tag_type\": \"Pass\", \"start\": 1.5, \"end\": 4.0, \"label\": \"x\",\n             \"notes\": \"\", \"players\": [\"<player id>\"]}},\n   {\"line\": 3, \"status\": \"malformed\", \"reasons\": [\"end must be greater than start\"], \"clip\": null},\n   {\"line\": 4, \"status\": \"duplicate\", \"reasons\": [\"same as line 2\"], \"clip\": null}]}\n```\n\nErrors: `404 {\"error\": \"Project not found\"}`; `400 {\"error\": \"...\", \"code\":\n\"bad_request\"}` for a missing `file`, an undecodable file, or a missing\nrequired header; `400 {\"code\": \"too_many_rows\"}` above 5000 data rows.\n\nUI (tagging screen): a button `#btn-import-preview` with accessible name\n\"Import preview\", a file input `#import-preview-file`, a results region with a\ntable `#import-preview-table` (one `tr[data-status]` per row, escaped text), a\n`#import-preview-summary` element with the counts, and a `role=\"status\"`\nelement for loading/empty/error messages. Everything reachable and operable by\nkeyboard; Escape dismisses the results if they are shown in a dialog.\n\nDocs: `docs/CSV_IMPORT.md` stating the column table, BOM/CRLF handling and\nquoting, citing RFC 4180.\n\n## Application design constraints\n\nStack: Flask with one Jinja template, vanilla CSS and JS. No framework, no build\nstep. Screens are `div.screen` elements toggled by an `.active` class rather than\nrouted.\n\n### Tokens (from static/css/style.css)\n- Background `#0f1117`, foreground `#e0e0e0`, headings `#fff`, secondary `#888`\n- System font stack, 0.9rem on controls, 2.4rem on the project-list title with\n  2px letter-spacing\n- Dark only. There is no light theme.\n\n### Layout\n- `.screen` with `.screen.active` is the only navigation primitive\n- Project list is centered, `max-width: 700px`, 60px top padding\n- `.project-controls` is a 10px-gap flex row\n\n### Rules\n- Tagging is a keyboard task. Every action a user repeats during a match needs a\n  key binding, and the binding is visible on screen.\n- The video is the primary surface. Chrome shrinks, video does not.\n- Timeline and clip state survive a reload. Losing tags mid-match is the worst\n  possible failure.\n- Every screen ships loading, empty, and error states.\n- No new styling dependencies.\n",
+  "completed": false,
+  "allow_writes": true,
+  "error": "PartialWorkStopped: Task exceeded its declared scope; work preserved. Scope check:\n  223 changed lines against a stated bound of ~100. This is the shape of a task expanding into the whole feature; say what grew and why.\n  Changed: app.py, tests/test_import_preview.py",
+  "checks": [],
+  "source_changed": true,
+  "source_fingerprint": "f7592b5b6db57b4f0b2ba679217025ae813ca5f4553f6a26f0c35fbbef22cd1a",
+  "tasks": 0,
+  "in_flight": {
+    "changed": [
+      "app.py",
+      "tests/test_import_preview.py"
+    ],
+    "changed_lines": 223,
+    "inspected": true,
+    "note": "These changes were already on disk when the call stopped and have been preserved. Re-sending the same prompt would apply a second pass on top of them, not repeat the first.",
+    "task": "t1",
+    "description": "Add the first backend slice of the CSV clip-manifest preview: the per-row validator only (the HTTP route, CSV decoding, blank-line skipping, duplicate detection and summary come in the next slice).\n\nIn `app.py`, next to the existing clip/export helpers (e.g. just above `_filter_clips`, which already shows the export column names `Clip ID, Tag Type, Start (s), End (s), Duration (s), Label, Notes, Players`), add:\n\n```python\ndef _validate_clip_row(project, cols, row):\n    \"\"\"Validate one CSV data row. cols maps normalised header name\n    (lower-cased, trimmed) -> column index. Returns (clip, reasons).\"\"\"\n```\n\nRules (from TASK.md column table):\n- `cols` will contain at least `tag type`, `start (s)`, `end (s)`; optional `label`, `notes`, `players`, `clip id`. Its `width` (number of header columns) is passed as `len(cols)`? No \u2014 headers may include ignored columns, so take the expected width from a `cols[\"__width__\"]`-style hack is ugly; instead give the function signature `_validate_clip_row(project, cols, width, row)` and reject `len(row) != width` with reason `\"wrong column count\"`. Return immediately on that reason.\n- Cell values are `str.strip()`-ed before checks.\n- `Tag Type`: must equal (exact, after trim) a name in `project[\"tag_types\"]`, else `\"unknown tag type\"`.\n- `Start (s)`: `float()` parse, must be finite (`math.isfinite`) and `>= 0`, else `\"start must be a number >= 0\"`.\n- `End (s)`: finite number, and if start parsed, `> start`, else `\"end must be greater than start\"` (use `\"end must be a number\"` when unparsable).\n- `Players`: split on `;`, drop empty tokens after trim; a token starting with `#` matches players whose `number == token[1:].strip()`, otherwise matches players whose `name == token` (exact after trim); a token matching zero or more than one player yields `\"unknown player: <token>\"`. Resolved ids keep CSV order.\n- `Clip ID`: if column present and non-empty, must not equal any id in `project[\"clips\"]`, else `\"clip id already exists\"`.\n- Collect all reasons (do not stop at the first, except for column count). If `reasons` is non-empty return `(None, reasons)`; otherwise return `({\"tag_type\", \"start\", \"end\", \"label\", \"notes\", \"players\"}, [])` with `start`/`end` as floats, `label`/`notes` as `\"\"` when the column is absent, `players` as list of ids. Also return the trimmed clip id in the reasons-free path some way the next slice can use for duplicate detection \u2014 simplest: add a `\"clip_id\"` key to the returned dict (the route will pop it before responding; note that in the docstring).\n\nDo not touch `_load_projects`/`_save_projects` or any route. Add `import math` if needed.\n\nCreate `tests/test_import_preview.py` (reuse the `client` fixture pattern from `tests/test_basic.py` only if needed; these are pure unit tests, so build a project dict literally: tag types `Pass`/`Shot`, players `{\"id\":\"p1\",\"name\":\"Alice\",\"number\":\"10\"}` and `{\"id\":\"p2\",\"name\":\"Bob\",\"number\":\"7\"}`, one clip with id `\"c1\"`). Cover: valid row with `Alice;#7` resolving to `[\"p1\",\"p2\"]`; wrong column count; unknown tag type; negative and `nan` start; end equal to start; unknown player token; ambiguous `#number` when two players share a number; existing clip id `c1`; malformed row accumulating multiple reasons. Run `/usr/local/bin/python -m pytest -q` and keep the whole suite green.",
+    "needs": [
+      "execute",
+      "patch"
+    ],
+    "scope": {
+      "permitted_paths": [
+        "app.py",
+        "tests/test_import_preview.py"
+      ],
+      "forbidden_paths": [],
+      "intended_result": "A pure, unit-tested row validator `_validate_clip_row(project, cols, row)` in app.py that turns one parsed CSV data row into either a clip dict or a list of malformed reasons, per the CSV column rules",
+      "acceptance": [
+        "app.py defines `_validate_clip_row(project, cols, row)` returning `(clip_or_None, reasons)` and no route is added yet",
+        "wrong column count, unknown tag type, non-finite/negative start, end <= start, unresolvable/ambiguous player token, and Clip ID equal to an existing project clip id each yield a reason and `clip=None`",
+        "a good row yields `{tag_type, start, end, label, notes, players}` with floats for start/end and player ids resolved from `Name` or `#number` tokens; missing optional columns default to empty",
+        "new tests/test_import_preview.py covers those cases and `/usr/local/bin/python -m pytest -q` passes"
+      ],
+      "max_lines": 100
+    },
+    "invocation": {
+      "task": "t1",
+      "role": "lead",
+      "origin": "seat",
+      "model": "grok:default",
+      "allow_writes": true,
+      "prompt_artifact": "7ef21203508b"
+    }
+  },
+  "budget": {
+    "limits": {
+      "max_calls": 24,
+      "max_reported_tokens": 500000,
+      "wall_seconds": 900,
+      "max_concurrent_workers": 2
+    },
+    "reserved_attempts": 2,
+    "in_flight": 0,
+    "input_tokens": 454459,
+    "output_tokens": 14881,
+    "reported_tokens": 469340,
+    "unknown_usage_attempts": 0,
+    "stop_reason": "",
+    "preserved_responses": [],
+    "elapsed_seconds": 335.7756502350094,
+    "token_boundary": "post-return threshold; in-flight calls can overshoot",
+    "input_boundary": "normalized provider input includes cached input; do not add it again",
+    "wall_boundary": "attempt timeout plus required external process supervisor"
+  },
+  "delegation": {
+    "controlled_tokens": 469340,
+    "native_child_tokens": 0,
+    "auxiliary_tokens": 0,
+    "auxiliary_tokens_scope": "Explicit auxiliary InvocationEvent rows only; vendor aggregates are not included.",
+    "combined_reported_tokens": 469340,
+    "parent_child_overlap": "not_applicable",
+    "known_minimum_tokens": 469340,
+    "unknown_invocations": 0,
+    "unknown_detail": [],
+    "native_children": 0,
+    "unidentified_native_activity": 0,
+    "note": "Subscription usage including cached and repeated input. Native children counted once at their highest cumulative reading, never summed across updates. The combined sum assumes child counters are additional to parent counters; that overlap is unverified. known_minimum_tokens is a deprecated compatibility key for that conditional sum, not an established lower bound. Auxiliary usage covers explicit auxiliary event rows only, not vendor aggregates. Unknown usage is unknown, not zero."
+  },
+  "scope_reports": [
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "app.py",
+        "tests/test_import_preview.py"
+      ],
+      "changed_lines": 223,
+      "max_lines": 100,
+      "oversized": true
+    }
+  ]
+}

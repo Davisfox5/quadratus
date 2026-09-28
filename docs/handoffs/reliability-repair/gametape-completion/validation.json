@@ -1,0 +1,62 @@
+{
+  "checks": [
+    {
+      "command": [
+        "/tmp/gametape-trial-env/bin/python",
+        "-m",
+        "pytest",
+        "-q"
+      ],
+      "exit_code": 0,
+      "seconds": 2.108,
+      "output": "........................................................................ [ 72%]\n............................                                             [100%]\n100 passed in 1.96s\n"
+    },
+    {
+      "command": [
+        "node",
+        "--check",
+        "static/js/app.js"
+      ],
+      "exit_code": 0,
+      "seconds": 0.033,
+      "output": ""
+    },
+    {
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.022,
+      "output": ""
+    }
+  ],
+  "sha256": {
+    "app.py": "d2e764e90987366e1ccc8fe4cdb1ae83113c874f41cf52c5894512e52f9b2f1c",
+    "tests/test_basic.py": "1151a478d85f92bdec50ac46ec1d8c7005d0150f0c949b07534614d5f06441a5",
+    "tests/test_bulk_edit.py": "b59108656393e0af5d6f745d562cfbdfd6ad2b74672eda52ee5be715e6c00ed7",
+    "static/js/app.js": "a5613bc53459065dbac499f922cab6a0f44d056936c3673e57fc647dfa60707b"
+  },
+  "ui_suite": {
+    "command": "node --test tests/ui/*.test.js",
+    "exit_code": 0,
+    "output": "\u2714 Tab wraps eligible controls and modal suppresses shortcuts (14.638542ms)\n\u2714 Escape closes the modal and restores focus (1.886875ms)\n\u2714 Preview recovers focus before its response (1.687792ms)\n\u2714 Confirm and Refresh recover focus while controls disappear (2.460792ms)\n\u2714 committed apply survives change events with captured values (14.027375ms)\n\u2714 dismiss and reopen keeps same-project apply busy (2.052958ms)\n\u2714 another project may preview but cannot confirm during pending apply (2.330459ms)\n\u2714 loads the template and real app, including an APP_JS_PATH override (14.944292ms)\n\u2139 tests 8\n\u2139 suites 0\n\u2139 pass 8\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 51.164541\n"
+  },
+  "mutation_check": {
+    "command": "node tests/ui/mutation_check.js",
+    "exit_code": 0,
+    "result_file": "ui-mutations.json"
+  },
+  "node_version": "v24.15.0",
+  "pipeline_checkpoint": "82e09b3265c3ebc083901d6688e892e60adc8591",
+  "final_checkpoint": "832e50c0273d635b5030343691eae76410e051c2",
+  "ui_source_sha256": {
+    "tests/ui/bulk_keyboard.test.js": "0f1cdc6936dc514482d3ce6ea0a32b5c0a7aae7b45f9ded426b8d0b883e42fd6",
+    "tests/ui/bulk_serialization.test.js": "e65eaf165813a658a4448d9abcf62db66f393cd90816deae6722cc070b16abeb",
+    "tests/ui/fake_dom.js": "465533e3378ca44e1cebb97f6a3be2fd3c4237f63a446046084a1bc1deda530d",
+    "tests/ui/load_app.js": "e97ddc72c31ca82b79aabcd241e6857d56463c084d9cb1a8275c5f87339e35a2",
+    "tests/ui/load_app.test.js": "599b8cc5d1fc2f0dc868526fd3ff61121d72c427c5a9d594fa8ff8fd256f5ac5",
+    "tests/ui/mutation_check.js": "a9f9b6539f0164fb1b3fdafc3ec5994468682c46563c9e0906f81e6db9f1cf2b"
+  }
+}

@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Davisfox5/War-Room/shared/harnesses/schema/policy.schema.json",
+  "title": "Repository harness policy, schema version 1",
+  "description": "One file per repository at .quadratus/policy.json. Facts are derived by script and carry provenance; they never grant capability. Denies combine, required gates combine by id, numeric limits take the stricter value.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "schema_version", "repository_id", "library", "defaults", "capability_policy", "path_rules", "gates", "decisions"],
+  "properties": {
+    "kind": { "const": "policy" },
+    "schema_version": { "const": 1 },
+    "repository_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+    "library": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "lock_file": { "type": "string", "minLength": 1 }
+      }
+    },
+    "instructions": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "facts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["value", "source", "hash", "derived_at"],
+        "properties": {
+          "value": {},
+          "source": { "type": "string", "minLength": 1 },
+          "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "derived_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z)?$" }
+        }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["family", "required_gates", "scope_max_lines", "overrun_ratio", "worker_depth"],
+      "properties": {
+        "family": { "type": "string", "minLength": 1 },
+        "required_gates": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "scope_max_lines": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "overrun_ratio": { "type": "number", "minimum": 1, "maximum": 3 },
+        "worker_depth": { "const": 1 }
+      }
+    },
+    "capability_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deny_write", "external_effects", "native_delegation", "sensitive"],
+      "properties": {
+        "deny_write": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "external_effects": { "enum": ["deny", "explicit_run_grant"] },
+        "native_delegation": { "const": "deny" },
+        "sensitive": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["paths", "requires", "because"],
+            "properties": {
+              "paths": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+              "requires": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+              "because": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "path_rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["paths", "families"],
+        "properties": {
+          "paths": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+          "families": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "overlays": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+        }
+      }
+    },
+    "gate_bindings": {
+      "description": "How a family card's gate ids resolve to this repository's gates. Key: a gate id a family card names. Value: {\"gate\": <id of a gate in `gates`>} or {\"absent\": true, \"because\": ...} recording that this repository has no such gate. A family gate whose id already matches a gate in `gates` needs no entry. A runner never guesses equivalence from names: a family gate that is neither a gate here nor bound here fails validation.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "gate": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "absent": { "const": true },
+          "because": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "runner", "required"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "runner": { "enum": ["command", "builtin:scope", "builtin:diff-size", "builtin:grep", "builtin:registry"] },
+          "argv": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+          "pattern": { "type": "string", "minLength": 1 },
+          "expect": { "enum": ["no-match", "match"] },
+          "cwd": { "type": "string", "minLength": 1 },
+          "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 3600 },
+          "required": { "type": "boolean" },
+          "environment_profile": { "type": "string", "minLength": 1 },
+          "minimum_tests": { "type": "integer", "minimum": 0 },
+          "side_effects": { "enum": ["none", "local", "external"] },
+          "because": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "advisory_max_tokens": { "type": "integer", "minimum": 100 },
+        "reference_bytes_limit": { "type": "integer", "minimum": 1024 }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "state", "text", "source"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "state": { "enum": ["fixed", "open"] },
+          "text": { "type": "string", "minLength": 1 },
+          "source": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

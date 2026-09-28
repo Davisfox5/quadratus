@@ -1,0 +1,8 @@
+{
+  "returned_within_10_seconds": false,
+  "child_alive_after_timeout": true,
+  "outcome": "TimeoutExpired",
+  "finished_after_explicit_cleanup": true,
+  "seconds": 10.015382417012006,
+  "note": "Parent responds to TERM; descendant ignores TERM and inherits output pipes. Probe kills its own group in finally."
+}

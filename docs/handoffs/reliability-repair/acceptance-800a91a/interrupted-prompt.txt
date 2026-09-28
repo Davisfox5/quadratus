@@ -1,0 +1,155 @@
+## Goal (verbatim, unchanged)
+
+Add safe bulk tagging to GameTape so a coach can correct the tag type and/or player assignment for the currently filtered set of clips in one operation.
+
+The existing saved review filters are already implemented. Build on them. Keep the Flask/vanilla-JavaScript stack, JSON persistence, current visual design, existing exports, and existing individual clip editing. Do not add dependencies.
+
+The user flow is: filter clips, open bulk edit, choose a new tag type and/or player (including explicitly clearing a player), preview the exact affected clips and before/after values, then confirm. Changing a filter or switching projects must invalidate a pending preview. Show loading, empty, validation, conflict, and success states, accessible labels, and a visible nonconflicting keyboard shortcut.
+
+Correctness is the main requirement. A preview must identify an explicit set of clip IDs and their relevant original state. If another browser edits or deletes any affected clip between preview and confirmation, reject the whole batch with a useful conflict response and ask the user to refresh; never partially apply or silently overwrite intervening work. Two simultaneous confirmations of the same preview must not both report that they applied the change. Unrelated clips and projects, annotations, clip timing, and filter presets must be preserved. Reject invalid IDs, foreign-project IDs, duplicate IDs, invalid tags, and unknown players before writing anything. Persist successful batches across reload. CSV/JSON exports must reflect the updated clips and existing filter semantics.
+
+First establish a concise design and request/response contract for preview, confirmation, and conflicts. Reason through concurrent requests and the existing load/modify/save persistence pattern before choosing an implementation. The supported deployment is one Flask process with concurrent request threads; explicitly document that boundary instead of claiming multi-process correctness. All existing mutation paths that can race with the new operation must preserve the stated guarantees. Keep changes focused on this feature.
+
+Implement the backend and compact user interface in small reviewable increments. Add regression tests covering successful persistence, validation, cross-project isolation, stale preview, deletion after preview, simultaneous confirmations, and interaction with individual clip edits. Use deterministic synchronization where needed; tests must detect lost updates rather than merely make sequential requests. Review the finished diff for correctness, race conditions, and browser state leakage, resolve findings, and document how to use the feature and its deployment boundary. Finish only when implementation, regression tests, and code review are complete; report limitations honestly.
+
+Work only inside the selected project. Use synthetic data and the existing isolated test fixtures. The Python environment is /tmp/gametape-trial-env/bin/python; verify with /tmp/gametape-trial-env/bin/python -m pytest -q and node --check static/js/app.js. Do not edit data/, .quadratus/, orchestrator.py, fail_logs.txt, test_output.log, credentials, or deployment configuration. Do not invoke the self-healing orchestrator, access another checkout, commit, push, publish, contact anyone, or call paid APIs. Source edits and local checks are authorized. The caller will perform final interactive browser acceptance separately.
+
+## Standing rules (always in force)
+
+- Project source is available in the working directory. Use actual files as evidence. Do not commit or publish changes.
+
+## Completed work
+
+### Task t1 (by openai:gpt-5.6-sol)
+
+Created `docs/BULK_EDIT.md`, defining: - Process-wide `threading.RLock` coverage for all project mutations. - In-memory, ten-minute preview storage consumed atomically during apply. - Complete `bulk_preview` and `bulk_apply` request, success, validation, and conflict contracts. - Player replacement and set-based comparison semantics. - Frontend shortcut, invalidation, and UI-state rules. - Explicit single-process Flask deployment support; multi-worker operation is unsupported. - Placeholder Usage and Validation sections for later implementation slices. No application code was added. The integration gate passed: `/tmp/gametape-trial-env/bin/python -m pytest -q`.
+
+**Why:** A lock across each complete load-modify-save transaction prevents concurrent threads from overwriting one another. Narrower locking around only `_save_projects()` would not prevent stale snapshots from being saved. This intentionally means slow video mutations may block live writes; those operations are classified as off-match. The preview contains an explicit client-supplied clip set and snapshots only `tag_type` and `players`. Apply consumes that preview once and rejects relevant intervening changes atomically. Persisted previews, file locks, and multi-process coordination were excluded because the supported deployment is exactly one threaded Flask process. Player lists replace existing assignments, with order-insensitive equality. Timing, labels, notes, recordings, annotations, and presets remain outside the mutation and conflict boundary.
+
+**Already tried and rejected:**
+- Repository-diff verification was unavailable because the disposable source copy contained no `.git` metadata; scope could only be inspected from its file inventory.
+
+**Full work:**
+[artifact f0d18e3365ba | task-scope | by openai:gpt-5.6-sol | 1 lines, 846 chars]
+{"permitted_paths": ["docs/BULK_EDIT.md"], "forbidden_paths": [], "intended_result": "docs/BULK_EDIT.md exists with the bulk-edit design, request/response contract for preview/confirm/conflict, and the single-process deployment boundary, matching the decisions below", "acceptance": ["docs/BULK_EDIT.md documents POST .../clips/bulk_preview and POST .../clips/bulk_apply with bodies, 200/400/404/409 shapes and conflict codes preview_missing, stale, changes_invalid", "It states the concurrency model: one process-wide threading.RLock held across load-modify-save of every mutating handler plus an in-memory preview store consumed under that lock", "It states explicitly that only one Flask process with threaded requests is supported and why multi-process is not", "No file other than docs/BULK_EDIT.md is created or modified"], "max_lines": 90}
+[...fetch artifact f0d18e3365ba for the full text]
+[artifact d523ce16b2f1 | draft | by openai:gpt-5.6-sol | 11 lines, 458 chars]
+Created [docs/BULK_EDIT.md](/Users/davisfox/Documents/GitHub/sports-video-tagger-acceptance-v2/docs/BULK_EDIT.md) with:
+
+- Locking and preview-store design.
+- Preview/apply request and response contracts.
+- Validation and conflict codes.
+- Frontend behavior and invalidation rules.
+- Explicit single-process deployment boundary.
+- Usage and validation placeholders.
+
+No other files were changed. Tests were not run because this slice is documentation-only.
+[...fetch artifact d523ce16b2f1 for the full text]
+[artifact 252cfbdae2cf | review:claude:opus | by claude:opus | 39 lines, 9587 chars]
+I verified every factual claim in the doc against the source. Confirmed accurate: no `threading` import (app.py:7–14); `update_clip` at app.py:503, `delete_clip` at 523, both load→mutate→save unsynchronized; existing bindings are exactly I/O/P/Space with `B` and `Escape` free (static/js/app.js:1128–1143); `{"error": "Project not found"}` is the house 404 shape; `clip["players"]` holds player ids and `clip["tag_type"]` a tag-type name; only `docs/BULK_EDIT.md` was added.
+
+Findings below, most severe first.
+
+---
+
+**BLOCKING: the 400 body has nowhere to put the ids it promises to list.** (docs/BULK_EDIT.md:47–54) The declared error shape is `400 {"error":"...","code":"<code>"}` — two fields — but the same paragraph says `duplicate_clip_ids` is "listing duplicates", `unknown_clip_ids` is "listing unknown and foreign-project IDs", and `unknown_players`/`duplicate_players` list "the relevant IDs". Nothing says whether those ids are interpolated into the `error` string or carried in a separate key. The frontend validation state (line 96) has to render them, and a test has to assert them; as written, two implementers produce two incompatible payloads. Fix is one line: add an explicit third field (e.g. `"ids": [...]`) to the 400 shape and show it in a sample body. Severity: high. Confidence: high.
+
+**BLOCKING: `_locked` on "every mutating route" serializes live tagging behind ffmpeg.** (docs/BULK_EDIT.md:13–16) Four mutating handlers are not short load-modify-save windows. `trim_video` (app.py:816–846) calls `_ffmpeg_cut` — `subprocess.run(..., timeout=300)` (app.py:724) — *between* `_load_projects()` and `_save_projects()`; `split_video` makes two such calls (app.py:880) for up to 600s; `cut_video` (app.py:923) likewise; `upload_video` (app.py:113) and `upload_recording` (app.py:641) write files up to `MAX_CONTENT_LENGTH` 500 MB (app.py:26) inside the handler. Holding one process-wide RLock across those blocks `POST /clips`, bulk apply, and every other write for minutes. CLAUDE.md's first rule is that tagging is the live-match critical path; a coach pressing I/O during a halftime trim would hang. The doc states the rule with no exception and no acknowledgement. This needs one sentence deciding it before code lands — either "video edit routes acquire the lock only around the load-mutate-save, releasing it across the ffmpeg run (accepting that a clip edit during the run is lost against the timestamp adjustment)", or "accepted: video edits block all writes for up to 10 minutes, they are an off-match operation." Severity: high. Confidence: high.
+
+[...fetch artifact 252cfbdae2cf for the full text]
+[artifact 950d0bbd6533 | revision | by openai:gpt-5.6-sol | 11 lines, 733 chars]
+Revised [docs/BULK_EDIT.md](/Users/davisfox/Documents/GitHub/sports-video-tagger-acceptance-v2/docs/BULK_EDIT.md).
+
+All review findings were addressed:
+
+- Defined error `ids`, validation precedence, malformed apply handling, 404 behavior, and tag/player validation.
+- Defined player replacement and set-based equality semantics.
+- Documented lock blocking, unlocked-read risk, timing-field limitations, lazy TTL pruning, preview consumption, request sizing, and `expires_in`.
+- Standardized on “apply,” clarified preview-store mutation, made the **B** shortcut requirement explicit, and removed the export aside.
+
+Only this document was added. `git diff --check` passed; tests were not run because this slice is documentation-only.
+[...fetch artifact 950d0bbd6533 for the full text]
+
+## Now
+
+Slice 1 of the backend: implement the locking foundation that docs/BULK_EDIT.md §"Why a lock" already committed to, before any bulk_preview/bulk_apply route exists.
+
+In `app.py`: add `import threading` and `import functools`; define `_STORE_LOCK = threading.RLock()` after `_save_projects` and a `_locked(fn)` decorator that acquires `_STORE_LOCK` around the whole handler call (`with _STORE_LOCK: return fn(*a, **kw)`), using `functools.wraps` so Flask endpoint names stay unique. Apply `@_locked` directly under `@app.route(...)` on every mutating route (the POST/PUT/DELETE list from the grep: projects create/delete, video upload, tag_types, players create/update/delete/import, filter_presets create/update/delete, clips create/update/delete, annotations create/update/delete/clear, recordings create/delete, video trim/split/cut, export/video). Do not lock GET routes. Do not change any handler body. The doc already accepts that ffmpeg routes block writes; do not add an exception.
+
+In `tests/test_bulk_edit.py`: copy the fixture from `tests/test_basic.py` (lines 13–25). Write `test_concurrent_clip_updates_are_not_lost`: create a project with two clips; monkeypatch `application._load_projects` with a wrapper that calls the original, then waits on a `threading.Barrier(2, timeout=5)` — only for the two worker threads, keyed by a flag so the setup requests are unaffected (e.g. arm the barrier after setup). Start two threads, each using its own `app.test_client()` to PUT a different clip's `label`. Join them, then GET `/api/projects/<pid>` (or read projects.json) and assert both new labels are present. Because both threads block in `_load_projects` before saving, without the lock the second save overwrites the first; with the RLock the second thread cannot enter `_load_projects` until the first handler finishes, so the barrier must be structured so it cannot deadlock under the lock — use `barrier.wait()` wrapped in `try/except threading.BrokenBarrierError: pass` so the locked case (where the second thread arrives only after the first completes and the barrier times out) still proceeds. Note in a comment that the timeout path is the expected behaviour when the lock is present.
+
+Run `/tmp/gametape-trial-env/bin/python -m pytest -q`. Leave bulk_preview/bulk_apply, the preview store, and the frontend for later slices.
+
+## Codebase map (persists across sessions)
+
+**stack**
+- Primary language: Python (3 files), JavaScript (3 files), HTML (1 files) _(scan, scan)_
+
+**layout**
+- Top-level directories: data, docs, static, templates, tests _(scan, scan)_
+
+**dependencies**
+- Manifests present: requirements.txt _(scan, scan)_
+
+**checks**
+- The project's own check command is: /private/tmp/quadratus-review-env/bin/python -m pytest -q _(scan, scan)_
+
+**project persistence**
+- `app.py` loads and rewrites the entire `projects.json` file for mutations without synchronization or atomic replacement. _(openai:gpt-5.6-sol, t1)_
+
+**video mutations**
+- trim, split, and cut run potentially long ffmpeg operations inside their existing load-modify-save handlers. _(openai:gpt-5.6-sol, t1)_
+
+**clip schema**
+- player assignments are stored as player-ID lists, while `tag_type` stores a tag-type name. _(openai:gpt-5.6-sol, t1)_
+
+**keyboard bindings**
+- I, O, P, and Space are already assigned; B and Escape are available for bulk-edit behavior. _(openai:gpt-5.6-sol, t1)_
+
+**404 convention**
+- missing projects return `{"error":"Project not found"}` without a machine-readable `code`. _(openai:gpt-5.6-sol, t1)_
+
+You are leading this task. Produce the complete work.
+
+## Scope of this task
+Intended result: app.py has a process-wide threading.RLock held across load-modify-save of every mutating route, and a new test file proves concurrent clip writes no longer lose updates
+You may change only these paths: app.py, tests/test_bulk_edit.py. A change anywhere else will be rejected as out of scope.
+This task is finished when:
+  - app.py imports threading, defines module-level _STORE_LOCK = threading.RLock() and a _locked decorator that wraps the handler body while preserving __name__ via functools.wraps
+  - Every route in app.py with methods POST/PUT/DELETE that calls _save_projects or writes files (the 25 mutating routes at lines 56-1121, including video trim/split/cut and export/video) is decorated with @_locked placed between @app.route and def
+  - tests/test_bulk_edit.py reuses the tmp_path/monkeypatch fixture pattern from tests/test_basic.py and contains one test that patches application._load_projects with a wrapper that makes two threads issuing PUT /clips/<id> to two different clips both load before either saves (threading.Barrier(2) or Event, no sleeps), then asserts both edits persist in projects.json; the test must fail if @_locked is removed from update_clip
+  - /tmp/gametape-trial-env/bin/python -m pytest -q passes with no test removed or weakened
+  - No file other than app.py and tests/test_bulk_edit.py is modified; no new route is added
+Expected size: about 100 changed lines. If the work genuinely needs substantially more, say so and stop rather than delivering the larger change -- an undersized task quietly growing into a whole feature is the specific failure this bound exists to catch.
+
+Worker bees (one instruction each, no memory; several may run at once). Pick by errand:
+- lookup: live web / anything current -> Grok
+- read: long document or file -> Luna
+- visual: screenshot, PDF, image -> Haiku
+- check: verify a fact or claim, sanity-check code -> Haiku (accurate, but its knowledge is old -- current things go to lookup)
+- code: small snippet or explanation -> Haiku
+- format / draft: extract, tag, boilerplate -> Luna
+- demanding: the errand defeated the base worker but the skill still fits -> same family, one tier up (Haiku->Sonnet, Luna->Terra, Grok worker->Grok expert). Sparingly.
+If an errand fails: rewrite it, re-send it unchanged to a different worker, or mark it demanding -- never the same instruction to the same worker twice. A worker that lacked a tool it needed will say NEED TOOL; reissue that errand with the tool granted.
+
+To commission one worker, reply only WORKER followed by JSON: {"errand":"code","instruction":"one bounded request","demanding":false,"write":false}. Use write:true only for an authorized project edit. Workers cannot delegate.
+
+Inspect the project source in your working directory. Implement this task using the edit method in your role instructions; prose alone is not implementation.
+
+To read a filed artifact in full before working, reply with exactly 'FETCH: <artifact-id>' and nothing else -- you will get the content and be asked again.
+
+If one specific question outside your strengths blocks you, reply with only 'CONSULT <member>: <question>' -- the member answers blind and their answer comes back to you. Members you may consult: Claude Opus, GPT-5.6 Sol. At most 2 per task; a consult is a question, not a conversation.
+
+This kind of work carries known failure modes. Treat each of these as a requirement:
+- Concurrent code is not accepted on inspection. Add a test that actually interleaves -- stress, fuzz, or a deterministic scheduler -- and show it failing before the fix and passing after.
+- Flag this for human review when you finish. The best measured agent performance on this kind of work is well short of a competent human's, so say what you are least sure about.
+
+Before finishing, re-read your task, restated verbatim, and confirm every part of it is addressed:
+
+Slice 1 of the backend: implement the locking foundation that docs/BULK_EDIT.md §"Why a lock" already committed to, before any bulk_preview/bulk_apply route exists.
+
+In `app.py`: add `import threading` and `import functools`; define `_STORE_LOCK = threading.RLock()` after `_save_projects` and a `_locked(fn)` decorator that acquires `_STORE_LOCK` around the whole handler call (`with _STORE_LOCK: return fn(*a, **kw)`), using `functools.wraps` so Flask endpoint names stay unique. Apply `@_locked` directly under `@app.route(...)` on every mutating route (the POST/PUT/DELETE list from the grep: projects create/delete, video upload, tag_types, players create/update/delete/import, filter_presets create/update/delete, clips create/update/delete, annotations create/update/delete/clear, recordings create/delete, video trim/split/cut, export/video). Do not lock GET routes. Do not change any handler body. The doc already accepts that ffmpeg routes block writes; do not add an exception.
+
+In `tests/test_bulk_edit.py`: copy the fixture from `tests/test_basic.py` (lines 13–25). Write `test_concurrent_clip_updates_are_not_lost`: create a project with two clips; monkeypatch `application._load_projects` with a wrapper that calls the original, then waits on a `threading.Barrier(2, timeout=5)` — only for the two worker threads, keyed by a flag so the setup requests are unaffected (e.g. arm the barrier after setup). Start two threads, each using its own `app.test_client()` to PUT a different clip's `label`. Join them, then GET `/api/projects/<pid>` (or read projects.json) and assert both new labels are present. Because both threads block in `_load_projects` before saving, without the lock the second save overwrites the first; with the RLock the second thread cannot enter `_load_projects` until the first handler finishes, so the barrier must be structured so it cannot deadlock under the lock — use `barrier.wait()` wrapped in `try/except threading.BrokenBarrierError: pass` so the locked case (where the second thread arrives only after the first completes and the barrier times out) still proceeds. Note in a comment that the timeout path is the expected behaviour when the lock is present.
+
+Run `/tmp/gametape-trial-env/bin/python -m pytest -q`. Leave bulk_preview/bulk_apply, the preview store, and the frontend for later slices.

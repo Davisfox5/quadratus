@@ -1,0 +1,101 @@
+{
+  "full-flow-final": {
+    "passed": [
+      "Two synthetic Pass clips available",
+      "Preview contains exactly two rows",
+      "Preview shows explicit player clearing",
+      "Saved filter presets preserved",
+      "Persisted tag and clear for Left channel",
+      "Other content preserved for Left channel",
+      "Persisted tag and clear for Right channel",
+      "Other content preserved for Right channel",
+      "Other project unchanged",
+      "Unselected clip unchanged",
+      "Successful edit updates current filtered list",
+      "JSON and CSV Goal exports reflect batch",
+      "JSON and CSV Pass exports reflect batch",
+      "JSON and CSV Shot exports reflect batch",
+      "Edited clips survive page reload",
+      "Second browser edits affected clip after preview",
+      "Stale confirmation rejects entire batch",
+      "Useful conflict message rendered",
+      "Refresh requires a new preview",
+      "Refresh preserves chosen bulk change",
+      "Refresh preserves unfinished clip tag",
+      "Refresh preserves unfinished clip player"
+    ],
+    "remaining": "Keyboard containment, delayed response, preset and project invalidation checked separately"
+  },
+  "serialization-final": {
+    "passed": [
+      "Selection change cannot enable overlapping preview",
+      "Second confirmation unavailable while first response held",
+      "Dismiss and reopen preserves pending guard",
+      "Other project can prepare a preview",
+      "Global serialization refuses second project apply without losing first marker",
+      "Blocked second project has visible busy explanation",
+      "Returning to first project retains its pending state",
+      "Dismissed and reopened committed result reconciles",
+      "Sequential second batch retains all three Shot clips in UI and server",
+      "Second project can apply after the pending request finishes"
+    ]
+  },
+  "keyboard-final": {
+    "passed": [
+      "B opens bulk dialog",
+      "Background is inert",
+      "Shift+Tab wraps first control to Cancel",
+      "Tab wraps Cancel to first control",
+      "Tab step 1 stays on available dialog control",
+      "Tab step 2 stays on available dialog control",
+      "Tab step 3 stays on available dialog control",
+      "Tab step 4 stays on available dialog control",
+      "Tab step 5 stays on available dialog control",
+      "Tab step 6 stays on available dialog control",
+      "Tab step 7 stays on available dialog control",
+      "Tab step 8 stays on available dialog control",
+      "Escape restores Bulk edit button focus",
+      "Escape restores interactive background",
+      "Modified B does not open dialog",
+      "Typing B does not open dialog",
+      "B does not stack over another modal",
+      "Native Enter starts confirmation",
+      "Disabling focused Confirm moves focus to available dialog control",
+      "Tab stays inside during apply"
+    ]
+  },
+  "late-preview-final": {
+    "confirmDisabled": true,
+    "rows": 0,
+    "heading": "Bulk edit 1 filtered clips"
+  },
+  "late-project-final": {
+    "project": "Other QA Match",
+    "heading": "Bulk edit 3 filtered clips",
+    "rows": 0,
+    "confirmDisabled": true
+  },
+  "apply-race-final": {
+    "scenario": "Change bulk selection while confirmation response is delayed after server commit",
+    "serverGoalClips": 0,
+    "visibleGoalClips": 0,
+    "filter": "Goal",
+    "status": "2 clip(s) updated \u2014 preview again",
+    "selectionEnabled": true
+  },
+  "preview-focus-final": {
+    "scenario": "Keyboard Enter on Preview while HTTP request is held",
+    "focus": {
+      "inside": true,
+      "id": "btn-bulk-cancel",
+      "tag": "BUTTON",
+      "disabled": false
+    }
+  },
+  "presets-final": {
+    "passPresetCount": 2,
+    "goalPresetCount": 0,
+    "previewRows": 0,
+    "confirmDisabled": true
+  }
+}

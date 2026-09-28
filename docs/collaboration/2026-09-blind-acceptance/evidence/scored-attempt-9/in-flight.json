@@ -1,0 +1,37 @@
+{
+  "changed": [
+    "app.py",
+    "tests/test_import_preview.py"
+  ],
+  "changed_lines": 113,
+  "inspected": true,
+  "note": "These changes were already on disk when the call stopped and have been preserved. Re-sending the same prompt would apply a second pass on top of them, not repeat the first.",
+  "task": "t2",
+  "description": "Implement individual-row validation beside the CSV reader, budgeting approximately 50 implementation lines and 50 test lines. Reject wrong column counts, unknown tag types, invalid/nonfinite times, negative starts, and ends not greater than starts. Resolve trimmed semicolon-separated player tokens by exact name or `#number`, requiring exactly one matching project player per token; an empty Players cell yields an empty list. Preserve Label and Notes text, default omitted optional fields to empty values, and ignore Duration and unknown columns. Return the contract\u2019s clip fields with resolved player IDs. Leave blank-record filtering, duplicate detection, row limits, endpoint wiring, and UI for later slices. Run focused tests and the existing pytest suite.",
+  "needs": [
+    "execute",
+    "patch"
+  ],
+  "scope": {
+    "permitted_paths": [
+      "app.py",
+      "tests/test_import_preview.py"
+    ],
+    "forbidden_paths": [],
+    "intended_result": "Add pure row validation through def _validate_clip_manifest_row(headers, cells, project): returning (clip, reasons).",
+    "acceptance": [
+      "def _validate_clip_manifest_row(headers, cells, project): returns a normalized clip and empty reasons for valid cells, or None and nonempty reasons for malformed cells.",
+      "Focused tests cover column count, exact trimmed tag names, finite ordered times, optional text, and unique player resolution.",
+      "The helper performs no project-store or video I/O and does not mutate its inputs."
+    ],
+    "max_lines": 100
+  },
+  "invocation": {
+    "task": "t2",
+    "role": "lead",
+    "origin": "seat",
+    "model": "openai:gpt-5.6-sol",
+    "allow_writes": true,
+    "prompt_artifact": "44bebf0e8828"
+  }
+}

@@ -1,0 +1,26 @@
+Project: /work; edits enabled
+asking claude:fable for the next task
+task 1: Add the first backend slice of the CSV clip-manifest preview: the per-row validator only (the HTTP route, CSV decoding, blank-line skipping, duplicate detection and summary come in the next slice).
+
+In `app.py`, next to the existing clip/export helpers (e.g. just above `_filter_clips`, which already shows the export column names `Clip ID, Tag Type, Start (s), End (s), Duration (s), Label, Notes, Players`), add:
+
+```python
+def _validate_clip_row(project, cols, row):
+    """Validate one CSV data row. cols maps normalised header name
+    (lower-cased, trimmed) -> column index. Returns (clip, reasons)."""
+```
+
+Rules (from TASK.md column table):
+- `cols` will contain at least `tag type`, `start (s)`, `end (s)`; optional `label`, `notes`, `players`, `clip id`. Its `width` (number of header columns) is passed as `len(cols)`? No — headers may include ignored columns, so take the expected width from a `cols["__width__"]`-style hack is ugly; instead give the function signature `_validate_clip_row(project, cols, width, row)` and reject `len(row) != width` with reason `"wrong column count"`. Return immediately on that reason.
+- Cell values are `str.strip()`-ed before checks.
+- `Tag Type`: must equal (exact, after trim) a name in `project["tag_types"]`, else `"unknown tag type"`.
+- `Start (s)`: `float()` parse, must be finite (`math.isfinite`) and `>= 0`, else `"start must be a number >= 0"`.
+- `End (s)`: finite number, and if start parsed, `> start`, else `"end must be greater than start"` (use `"end must be a number"` when unparsable).
+- `Players`: split on `;`, drop empty tokens after trim; a token starting with `#` matches players whose `number == token[1:].strip()`, otherwise matches players whose `name == token` (exact after trim); a token matching zero or more than one player yields `"unknown player: <token>"`. Resolved ids keep CSV order.
+- `Clip ID`: if column present and non-empty, must not equal any id in `project["clips"]`, else `"clip id already exists"`.
+- Collect all reasons (do not stop at the first, except for column count). If `reasons` is non-empty return `(None, reasons)`; otherwise return `({"tag_type", "start", "end", "label", "notes", "players"}, [])` with `start`/`end` as floats, `label`/`notes` as `""` when the column is absent, `players` as list of ids. Also return the trimmed clip id in the reasons-free path some way the next slice can use for duplicate detection — simplest: add a `"clip_id"` key to the returned dict (the route will pop it before responding; note that in the docstring).
+
+Do not touch `_load_projects`/`_save_projects` or any route. Add `import math` if needed.
+
+Create `tests/test_import_preview.py` (reuse the `client` fixture pattern from `tests/test_basic.py` only if needed; these are pure unit tests, so build a project dict literally: tag types `Pass`/`Shot`, players `{"id":"p1","name":"Alice","number":"10"}` and `{"id":"p2","name":"Bob","number":"7"}`, one clip with id `"c1"`). Cover: valid row with `Alice;#7` resolving to `["p1","p2"]`; wrong column count; unknown tag type; negative and `nan` start; end equal to start; unknown player token; ambiguous `#number` when two players share a number; existing clip id `c1`; malformed row accumulating multiple reasons. Run `/usr/local/bin/python -m pytest -q` and keep the whole suite green. [backend/simple]
+task t1 scope check: oversized

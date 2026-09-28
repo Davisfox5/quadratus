@@ -1,0 +1,132 @@
+{
+  "seat": "claude:fable",
+  "scored": false,
+  "prompt_bytes": 11456,
+  "prompt_sha256": "b93e8d9c612a6665efcde13a80f26850fe9307e37994608000e526140a20cf42",
+  "outcome": "ProviderRefusal",
+  "elapsed_seconds": 2.25313670898322,
+  "budget": {
+    "limits": {
+      "max_calls": 1,
+      "max_reported_tokens": 50000,
+      "wall_seconds": 70,
+      "max_concurrent_workers": 1
+    },
+    "reserved_attempts": 1,
+    "in_flight": 0,
+    "input_tokens": 5103,
+    "output_tokens": 0,
+    "reported_tokens": 5103,
+    "unknown_usage_attempts": 0,
+    "stop_reason": "",
+    "preserved_responses": [],
+    "elapsed_seconds": 2.2532977510709316,
+    "token_boundary": "post-return threshold; in-flight calls can overshoot",
+    "input_boundary": "normalized provider input includes cached input; do not add it again",
+    "wall_boundary": "attempt timeout plus required external process supervisor"
+  },
+  "launches": [
+    {
+      "cwd_empty": true,
+      "timeout": 60.0,
+      "argv_sha256": "c52dcf9e76dfd36485c05cbdc39bf74a5fe99beadf02c5b44279d02fe7d27290",
+      "summary_flags": {
+        "--max-turns": "1",
+        "--tools": "",
+        "--effort": "low"
+      }
+    }
+  ],
+  "vendor_envelope": {
+    "stop_reason": "refusal",
+    "num_turns": 1,
+    "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 5101,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 0,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 5101,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "inference_geo": "not_available",
+      "iterations": [
+        {
+          "input_tokens": 2,
+          "output_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 5101,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 5101
+          },
+          "type": "message",
+          "model": null
+        }
+      ],
+      "speed": "standard"
+    },
+    "modelUsage": {
+      "claude-fable-5-1": {
+        "inputTokens": 2,
+        "outputTokens": 0,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 5101,
+        "webSearchRequests": 0,
+        "costUSD": 0.10204,
+        "contextWindow": 1000000,
+        "maxOutputTokens": 64000,
+        "thinkingTokens": 0,
+        "canonicalModel": "claude-fable-5-1",
+        "provider": "firstParty",
+        "costBasis": "list"
+      }
+    },
+    "subagent_stats": {
+      "spawned": 0,
+      "requested": {
+        "background": 0,
+        "foreground": 0,
+        "unset": 0
+      },
+      "started_in_background": 0,
+      "max_depth": 0,
+      "spawned_by_subagents": 0,
+      "completed": 0,
+      "failed": 0,
+      "killed": {
+        "parent": 0,
+        "user": 0,
+        "system": 0
+      },
+      "refused": {
+        "depth_limit": 0,
+        "concurrency_limit": 0,
+        "budget": 0
+      },
+      "by_type": {}
+    },
+    "permission_denials": [],
+    "terminal_reason": "api_error",
+    "is_error": true,
+    "subtype": "success"
+  },
+  "private_stdout_sha256": "b9a7072fa6e83e21990e905b55221a818a0b61ffff9e66edcefefdd2c1f23f6c",
+  "stderr_bytes": 0,
+  "supervisor": {
+    "outcome": "failed",
+    "exit_code": 1,
+    "image_id": "sha256:d1f99331a1639f5ff364faf9e4c027943613fadba733d452191296b873a390e2",
+    "container_name": "quadratus-blind-a0bf7a64f48d4cdfa20415045d1adaf0"
+  },
+  "refusal_label": "reasoning_extraction",
+  "refusal_note": "Vendor safeguards refused the call; no response, retry, fallback, or rephrasing attempted."
+}

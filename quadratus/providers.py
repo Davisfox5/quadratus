@@ -1,4 +1,4 @@
-"""Unified provider abstraction for Claude, ChatGPT, Gemini and Grok.
+"""Unified provider abstraction for Claude, ChatGPT and Grok.
 
 Each provider sends the request shape its vendor documents *today* -- the
 endpoint, the token-cap parameter and the model ID format were each checked
@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 import logging
 import random
+import subprocess
 import time
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
@@ -25,6 +26,44 @@ log = logging.getLogger(__name__)
 
 class ProviderError(RuntimeError):
     """A provider call failed permanently (after retries or non-retryable)."""
+
+
+class TurnLimitReached(ProviderError):
+    """A call stopped at its agentic turn limit before finishing.
+
+    Not a refusal, a timeout or a transport failure: the vendor ran the call,
+    its usage is real, and a writable call may already have changed files. It
+    is never retried here -- a ProviderError passes straight through -- and it
+    carries whatever answer text the vendor returned, which is narration of
+    unfinished work and must never be read as a result.
+    """
+
+    def __init__(self, message, *, partial_text=None, turns=None):
+        super().__init__(message)
+        self.partial_text = partial_text if isinstance(partial_text, str) and partial_text.strip() else None
+        self.turns = turns if isinstance(turns, int) and not isinstance(turns, bool) else None
+
+
+class PartialWorkSuspected(ProviderError):
+    """An editing call stopped without saying what it had already written.
+
+    A timeout or a cancellation is not the same as a failure: the vendor
+    process may have saved most of its work before it stopped. The 2026-09-13
+    trial recorded exactly this -- a 900-second editing call whose output was
+    on disk while the transport layer, seeing only a timeout, began replaying
+    the same writing prompt against the tree that call had just changed.
+
+    A :class:`ProviderError` subclass so existing handlers still treat it as a
+    permanent call failure rather than something to retry, and so nothing that
+    catches ProviderError has to learn a new type to stay correct. What it adds
+    is the instruction not to replay, and ``cause`` for the caller that wants
+    to know which kind of stop it was.
+    """
+
+    def __init__(self, message: str, *, cause: Optional[Exception] = None) -> None:
+        super().__init__(message)
+        #: The transport-level exception underneath -- a TimeoutError, usually.
+        self.cause = cause
 
 
 class ProviderRefusal(ProviderError):
@@ -73,6 +112,7 @@ class LLMProvider:
     """
 
     #: short machine name, e.g. "claude"
+    transport = "api"
     name = "provider"
     #: human label, e.g. "Claude"
     label = "Provider"
@@ -121,6 +161,27 @@ class LLMProvider:
     def _retryable(self, exc: Exception) -> bool:
         raise NotImplementedError
 
+    def _replay_would_be_unsafe(self, exc: Exception) -> bool:
+        """Whether retrying this failure could re-apply work already done.
+
+        Two conditions together, and both are needed. The call must be able to
+        write -- a read-only review that times out has changed nothing, and
+        re-sending it is a genuine retry. And the failure must be one that
+        leaves the outcome unknown rather than known-failed: a timeout or a
+        cancellation stopped a call that may have finished most of its work,
+        whereas a rate-limit response means the vendor never ran it.
+        """
+        if not getattr(self, "allow_writes", False):
+            return False
+        if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)):
+            return True
+        text = str(exc).lower()
+        return any(
+            token in text
+            for token in ("timed out", "timeout", "cancelled", "canceled",
+                          "interrupted", "killed")
+        )
+
     # -- helpers -------------------------------------------------------------
     @staticmethod
     def _exc_tuple(module, names: Sequence[str]) -> tuple:
@@ -136,6 +197,45 @@ class LLMProvider:
     def available(self) -> bool:
         return self._client is not None
 
+    #: How much reasoning the seat asks for, where the transport exposes a
+    #: dial. Empty means "whatever the CLI does by default".
+    effort: str = ""
+    #: Whether this seat gets a bounded call instead of a full agent loop.
+    #: Meaningless to an HTTP API, which is a completion already -- the
+    #: attribute lives on the base so routing can set it without knowing
+    #: which transport is underneath.
+    restricted: bool = False
+
+    def for_seat(
+        self,
+        model: Optional[str],
+        *,
+        effort: str = "",
+        restricted: bool = False,
+    ) -> "LLMProvider":
+        """A view of this provider bound to one seat's whole invocation.
+
+        A seat is not only a model. Two seats can address the same model and
+        still want different calls -- a brain-trust member exploring a
+        repository and a worker answering one question are the same weights
+        run very differently, and on a subscription the difference is most of
+        the cost. So the identity that matters here is (model, effort,
+        restricted), and a clone is made whenever any of the three differs.
+        """
+        same = (
+            (model is None or model == self.model)
+            and effort == self.effort
+            and restricted == self.restricted
+        )
+        if same:
+            return self
+        clone = copy.copy(self)
+        if model is not None:
+            clone.model = model
+        clone.effort = effort
+        clone.restricted = restricted
+        return clone
+
     def for_model(self, model: Optional[str]) -> "LLMProvider":
         """Return a view of this provider bound to a different model.
 
@@ -143,8 +243,13 @@ class LLMProvider:
         summarisation) to a smaller model on the same subscription. Copying the
         provider keeps the already-built client and avoids re-resolving a CLI
         binary or re-constructing an SDK client on every routed call.
+
+        ``None`` means "no change". The empty string is different and load
+        bearing: it means *name no model*, so the CLI applies its own current
+        default. Collapsing the two would silently send whichever model this
+        provider happened to be constructed with.
         """
-        if not model or model == self.model:
+        if model is None or model == self.model:
             return self
         clone = copy.copy(self)
         clone.model = model
@@ -152,9 +257,11 @@ class LLMProvider:
 
     @property
     def status(self) -> str:
-        if self.available():
-            return f"{self.label} ({self.model})"
-        return f"{self.label} unavailable ({self._init_error})"
+        if not self.available():
+            return f"{self.label} unavailable ({self._init_error})"
+        # An empty model is a value here, not a gap: it means the CLI picks,
+        # which is how a seat stays on whatever the vendor currently ships.
+        return f"{self.label} ({self.model or 'CLI default'})"
 
     def generate(
         self,
@@ -190,19 +297,104 @@ class LLMProvider:
                     explanation=second.explanation,
                 ) from second
 
+    def _observed_call(self, prompt, system, turns, attempt):
+        from .workers import worker_loop_control
+        worker_control = worker_loop_control.get()
+        if worker_control is not None:
+            worker_control.reserve()
+        control = getattr(self, 'run_budget', None)
+        if control is not None and control.limits.max_cost_usd is not None:
+            ticket, remaining = control.reserve(transport=self.transport,
+                                                price_key=f'{self.name}:{self.model}')
+        else:
+            ticket, remaining = control.reserve() if control is not None else (None, None)
+        previous_timeout = self.timeout if control is not None else None
+        if control is not None:
+            self.timeout = remaining if previous_timeout is None else min(previous_timeout, remaining)
+        self.last_usage = None
+        self.last_session_id = None
+        self.resolved_model = None
+        self.native_children = []
+        started = time.monotonic()
+        failure = None
+        text = ""
+        try:
+            text = self._call(prompt, system, turns)
+            if not text:
+                raise ProviderError(f"{self.label} returned an empty response.")
+            return text
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            budget_failure = None
+            if control is not None:
+                try:
+                    control.finish(ticket, self.last_usage, native_children=self.native_children,
+                                   reply=text, price_key=f'{self.name}:{self.resolved_model or self.model}')
+                except Exception as exc:
+                    # Preserve an original interruption/partial-work failure.
+                    # The shared controller is latched, so no retry can start.
+                    if failure is None:
+                        failure = budget_failure = exc
+                        exc.provider_outcome = 'ok'
+                        exc.post_return_failure = True
+                        # Also retain it on the exception for direct callers
+                        # whose controller has no on-disk run directory.
+                        exc.provider_response = text
+            if control is not None:
+                self.timeout = previous_timeout
+            if worker_control is not None:
+                try:
+                    worker_control.finish(self.last_usage)
+                except Exception as exc:
+                    if failure is None:
+                        failure = budget_failure = exc
+                        exc.provider_outcome = 'ok'
+                        exc.post_return_failure = True
+                        exc.provider_response = text
+            observer = getattr(self, "attempt_observer", None)
+            if observer is not None:
+                try:
+                    observer(self, attempt, time.monotonic() - started, failure, text)
+                except Exception:
+                    log.debug("attempt accounting failed", exc_info=True)
+            if budget_failure is not None:
+                raise budget_failure
+
     def _generate_once(self, prompt: str, system: str, turns: List[Turn]) -> str:
         """One model's attempt, with transport retries. Refusals pass through."""
+        from .run_budget import RunBudgetExceeded
+
         last_exc: Optional[Exception] = None
         for attempt in range(self.max_retries):
             try:
-                text = self._call(prompt, system, turns)
+                text = self._observed_call(prompt, system, turns, attempt + 1)
                 if not text:
                     raise ProviderError(f"{self.label} returned an empty response.")
                 return text
-            except ProviderError:
+            except (ProviderError, RunBudgetExceeded):
                 raise
             except Exception as exc:
                 last_exc = exc
+                if self._replay_would_be_unsafe(exc):
+                    # A timeout or cancellation on a call that could write does
+                    # not mean nothing happened. On 2026-09-13 an editing call
+                    # hit its 900s ceiling with work already saved to disk, and
+                    # the retry loop began replaying the same writing prompt
+                    # against a tree that call had already changed -- doubling
+                    # edits, or applying a second pass to a first pass's
+                    # output. The tree moved, so the prompt is no longer the
+                    # prompt that was sent. Whether to retry is now the
+                    # caller's decision, made with the partial work in hand.
+                    raise PartialWorkSuspected(
+                        f"{self.label} did not complete ({exc}). This call could "
+                        f"write, so the working tree may already hold partial "
+                        f"work; it must be inspected before anything is retried. "
+                        f"Replaying the same prompt against a changed tree is "
+                        f"not a retry, it is a second, different edit.",
+                        cause=exc,
+                    ) from exc
                 if self._retryable(exc) and attempt < self.max_retries - 1:
                     delay = self.retry_base_delay * (2 ** attempt) + random.uniform(0, 1)
                     log.warning(
@@ -219,13 +411,13 @@ class LLMProvider:
         raise ProviderError(f"{self.label} call failed: {last_exc}") from last_exc
 
 
-def _field(obj, name: str):
+def _field(obj, name: str, default=None):
     """Read ``name`` off an SDK model or a plain dict; None when absent."""
     if obj is None:
-        return None
+        return default
     if isinstance(obj, dict):
-        return obj.get(name)
-    return getattr(obj, name, None)
+        return obj.get(name, default)
+    return getattr(obj, name, default)
 
 
 class ClaudeProvider(LLMProvider):
@@ -246,7 +438,7 @@ class ClaudeProvider(LLMProvider):
         import anthropic
 
         self._sdk = anthropic
-        return anthropic.Anthropic(api_key=self.api_key, timeout=self.timeout)
+        return anthropic.Anthropic(api_key=self.api_key, timeout=self.timeout, max_retries=0)
 
     def _call(self, prompt, system, history):
         messages = [{"role": t.role, "content": t.content} for t in history]
@@ -257,6 +449,12 @@ class ClaudeProvider(LLMProvider):
             system=system,
             messages=messages,
         )
+        usage = _field(resp, 'usage')
+        values = [_field(usage, key) for key in ('input_tokens', 'output_tokens')]
+        cached = [_field(usage, key, 0) for key in ('cache_read_input_tokens', 'cache_creation_input_tokens')]
+        self.last_usage = ({'input_tokens': values[0] + sum(cached), 'output_tokens': values[1]}
+                           if all(type(n) is int and n >= 0 for n in values + cached) else None)
+        self.resolved_model = _field(resp, 'model') or self.model
         # Branch on stop_reason before touching content: a classifier decline
         # is an HTTP 200 whose content is empty (pre-output) or partial
         # (mid-stream), and a partial must not be mistaken for an answer.
@@ -307,7 +505,7 @@ class _OpenAISDKProvider(LLMProvider):
         import openai
 
         self._sdk = openai
-        kwargs = {"api_key": self.api_key, "timeout": self.timeout}
+        kwargs = {"api_key": self.api_key, "timeout": self.timeout, "max_retries": 0}
         if self.base_url:
             kwargs["base_url"] = self.base_url
         return openai.OpenAI(**kwargs)
@@ -351,6 +549,10 @@ class OpenAIProvider(_OpenAISDKProvider):
             input=turns,
             max_output_tokens=self.max_tokens,
         )
+        usage = _field(resp, 'usage')
+        self.last_usage = {'input_tokens': _field(usage, 'input_tokens'),
+                           'output_tokens': _field(usage, 'output_tokens')}
+        self.resolved_model = _field(resp, 'model') or self.model
         return resp.output_text or ""
 
 
@@ -383,72 +585,38 @@ class GrokProvider(_OpenAISDKProvider):
             messages=messages,
             max_completion_tokens=self.max_tokens,
         )
+        usage = _field(resp, 'usage')
+        self.last_usage = {'input_tokens': _field(usage, 'prompt_tokens'),
+                           'output_tokens': _field(usage, 'completion_tokens')}
+        self.resolved_model = _field(resp, 'model') or self.model
         return resp.choices[0].message.content or ""
-
-
-class GeminiProvider(LLMProvider):
-    """Gemini over the google-genai SDK.
-
-    Verified against the SDK reference on 2026-09-06:
-    ``client.models.generate_content(model, contents, config)`` with
-    ``GenerateContentConfig(system_instruction=..., max_output_tokens=...)`` is
-    the documented, non-deprecated call, and conversation roles are ``user``
-    and ``model``. The newer Interactions API exists alongside it; nothing
-    steers text generation off ``generate_content``.
-    """
-
-    name = "gemini"
-    label = "Gemini"
-
-    def _build_client(self):
-        from google import genai
-
-        self._genai = genai
-        return genai.Client(api_key=self.api_key)
-
-    def _call(self, prompt, system, history):
-        from google.genai import types
-
-        contents = []
-        for t in history:
-            role = "model" if t.role == "assistant" else "user"
-            contents.append(types.Content(role=role, parts=[types.Part(text=t.content)]))
-        contents.append(types.Content(role="user", parts=[types.Part(text=prompt)]))
-        resp = self._client.models.generate_content(
-            model=self.model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                max_output_tokens=self.max_tokens,
-            ),
-        )
-        return resp.text or ""
-
-    def _retryable(self, exc):
-        code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-        if code in (408, 429, 500, 502, 503, 504):
-            return True
-        name = exc.__class__.__name__.lower()
-        return any(tok in name for tok in ("timeout", "connection", "servererror", "unavailable"))
 
 
 #: Registry mapping provider names to (class, key-attr, model-attr).
 _REGISTRY = {
     "claude": (ClaudeProvider, "anthropic_api_key", "claude_model"),
     "openai": (OpenAIProvider, "openai_api_key", "openai_model"),
-    "gemini": (GeminiProvider, "google_api_key", "gemini_model"),
     "grok": (GrokProvider, "xai_api_key", "grok_model"),
 }
 
 
-def build_provider(name: str, settings) -> Optional[LLMProvider]:
+def build_provider(name: str, settings, *, allow_writes: bool = False, workdir=None) -> Optional[LLMProvider]:
     """Build a single provider by name from settings, or ``None`` if unknown.
 
     The transport is chosen per provider by ``settings.backend_for(name)``:
     ``"cli"`` drives the vendor's subscription-authenticated coding-agent CLI,
     ``"api"`` uses the billed HTTP SDK. Mixing is supported, so a provider
     whose CLI is not installed can fall back to an API key without forcing the
-    whole run onto billed transport.
+    whole run onto billed transport -- but only when the operator asks for it
+    in so many words. A missing CLI reports itself unavailable rather than
+    silently moving that provider onto billed transport, because the whole
+    point of the default is that a run costs nothing per token.
+
+    ``allow_writes`` reaches the CLI backends only. It is off by default and
+    should stay off for anything that is reviewing rather than building: a
+    coding agent asked merely to critique will edit the working tree, and
+    several of them at once is write-thrash. The API backends have no file
+    access to grant.
     """
     entry = _REGISTRY.get(name)
     if entry is None:
@@ -467,6 +635,8 @@ def build_provider(name: str, settings) -> Optional[LLMProvider]:
         else:
             return cli_cls(
                 model=settings.model_for(name),
+                allow_writes=allow_writes,
+                workdir=workdir,
                 max_tokens=settings.max_tokens,
                 timeout=settings.cli_timeout,
                 max_retries=settings.max_retries,

@@ -1,0 +1,21 @@
+{
+  "README.md": "1f08a10736e8c4f0f4b5a778cd6369152d8bd70041a12c75374aaa56ff88f6ae",
+  "budget.json": "8775ffc0c21d81467cfa370b81a03d55faf5e6e29b8f11950ca83bec13ff363f",
+  "changes.diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "claude-independent-scoring.json": "c20dbb7d4282fd6e18112219784630c6f78ec8cf930cd87e0414e3f26245d4a6",
+  "delegation.md": "f3d2d877fedae8723b1e93b9fc8e14548077ccaf347496d34af595231e33c22a",
+  "effective-config.json": "8e61b567e682035f9cb74331eac4c34fab6053d18607d17761a28cbc1ed861ce",
+  "independent-validation.json": "d57710a5e1a65faea0135f9d872a025bbb4a81b5740426daa3c84279803ba906",
+  "invocations.jsonl": "fcd3614a128768d9b5bb6141255ca6d3867bd4c978c5c56cbe5fd52af5656f28",
+  "launcher-result.json": "3994e34bcda7c2503f6a3fa256f5288d1c856cec0ae14a76840309ce6cddab2e",
+  "ledger.md": "beda9567444ce3d553762bb71416eecdf557f29484ca097b047217bd6d58448b",
+  "progress.txt": "77e235535f240c564b1ea987c07c32c37c9d7fa21293e9662ae3b122faaae4fc",
+  "report.md": "f15e3d2e266e83a4557387712b127a4d3b37d55a477157db7f8e52bb39cdfec4",
+  "result.json": "471723fa2d6e78b5f06a64c2308310c7623b71a480dbd11c8b3639d02cbdf73b",
+  "source-after-sha256.json": "093ca92d4ac814d603a20c83965394d2dfe882e3d1cb9d6b8d9c037fc3a37f81",
+  "source-after.tar.gz": "6d2712510a4f5f5d6662b33edf207db349514b3264fb600add224cddce07bf71",
+  "started.json": "486dcc19635008b7c4ccd8d36078660187cbe549409a62fb6d579922a0f8acc0",
+  "supervisor.json": "279eaf17cb074f2def883de7bafbf944b7cd89229af4b240c8812fa58349b69d",
+  "usage.jsonl": "8c8cf93a74130eda163a4be4aec34f00b5961397763acaa959913128c3303081",
+  "vendor-usage-extract.json": "d5ec99aee3e2b4fc7cfe81b30f306892cf72cb51a994b3aa1ff1c65d3361c18f"
+}

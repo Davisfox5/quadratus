@@ -1,0 +1,70 @@
+async page => {
+  const results = [];
+  const assert = (condition, name) => { if (!condition) throw new Error(name); results.push(name); };
+  const read = async path => (await page.request.get(`http://127.0.0.1:5088${path}`)).json();
+  await page.reload();
+  await page.getByText('Bulk QA Match', {exact:true}).click();
+  const projects = await read('/api/projects');
+  const before = projects.find(p => p.name === 'Bulk QA Match');
+  const other = projects.find(p => p.name === 'Other QA Match');
+  const path = `/api/projects/${before.id}`;
+  const selected = before.clips.filter(c => c.tag_type === 'Pass');
+  assert(selected.length === 2, 'Two synthetic Pass clips available');
+  await page.getByLabel('Filter by tag type').selectOption('Pass');
+  await page.getByRole('button', {name:'Bulk edit',exact:true}).click();
+  await page.getByLabel('Tag type', {exact:true}).selectOption('Goal');
+  await page.getByLabel('Set players to', {exact:true}).selectOption('__clear__');
+  await page.getByRole('button', {name:'Preview',exact:true}).click();
+  await page.getByRole('button', {name:'Confirm',exact:true}).waitFor();
+  await page.waitForFunction(() => !document.getElementById('btn-bulk-confirm').disabled);
+  assert(await page.locator('#bulk-preview-body tr').count() === 2, 'Preview contains exactly two rows');
+  assert((await page.locator('#bulk-preview-body').innerText()).includes('Goal · no player'), 'Preview shows explicit player clearing');
+  await page.screenshot({path:'output/playwright/gametape-bulk/final-preview.png'});
+  await page.getByRole('button', {name:'Confirm',exact:true}).click();
+  await page.locator('#bulk-status').filter({hasText:'2 clip(s) updated'}).waitFor();
+  const after = await read(path);
+  assert(JSON.stringify(after.filter_presets) === JSON.stringify(before.filter_presets), 'Saved filter presets preserved');
+  for (const old of selected) {
+    const current = after.clips.find(c => c.id === old.id);
+    assert(current.tag_type === 'Goal' && current.players.length === 0, `Persisted tag and clear for ${old.label}`);
+    const expected = {...old,tag_type:'Goal',players:[]};
+    assert(JSON.stringify(current) === JSON.stringify(expected), `Other content preserved for ${old.label}`);
+  }
+  assert(JSON.stringify(await read(`/api/projects/${other.id}`)) === JSON.stringify(other), 'Other project unchanged');
+  assert(JSON.stringify(after.clips.find(c => !selected.some(s => s.id===c.id))) === JSON.stringify(before.clips.find(c => !selected.some(s => s.id===c.id))), 'Unselected clip unchanged');
+  assert(await page.locator('#clips-list .clip-card').count() === 0, 'Successful edit updates current filtered list');
+  await page.screenshot({path:'output/playwright/gametape-bulk/final-success.png'});
+  for (const [tag,count] of [['Goal',2],['Pass',0],['Shot',1]]) {
+    const exported = await read(`${path}/export/json?tag_type=${tag}`);
+    const csv = await (await page.request.get(`http://127.0.0.1:5088${path}/export/csv?tag_type=${tag}`)).text();
+    assert(exported.clip_count===count && csv.trim().split('\n').length===count+1, `JSON and CSV ${tag} exports reflect batch`);
+  }
+  await page.reload();
+  await page.getByText('Bulk QA Match', {exact:true}).click();
+  await page.getByLabel('Filter by tag type').selectOption('Goal');
+  assert(await page.locator('#clips-list .clip-card').count() === 2, 'Edited clips survive page reload');
+  await page.locator('#clip-tag-type').selectOption('Shot');
+  await page.locator('#player-checkboxes .player-chip').first().click();
+  await page.getByRole('button', {name:'Bulk edit',exact:true}).click();
+  await page.getByLabel('Tag type', {exact:true}).selectOption('Pass');
+  await page.getByRole('button', {name:'Preview',exact:true}).click();
+  await page.waitForFunction(() => !document.getElementById('btn-bulk-confirm').disabled);
+  const second = await page.context().newPage();
+  await second.goto('http://127.0.0.1:5088/');
+  const response = await second.request.put(`http://127.0.0.1:5088${path}/clips/${selected[0].id}`,{data:{notes:`Second browser correction ${Date.now()}`}});
+  assert(response.status() === 200, 'Second browser edits affected clip after preview');
+  await page.getByRole('button', {name:'Confirm',exact:true}).click();
+  await page.getByRole('button', {name:'Refresh',exact:true}).waitFor();
+  const conflicted = await read(path);
+  assert(selected.every(s => conflicted.clips.find(c => c.id===s.id).tag_type==='Goal'), 'Stale confirmation rejects entire batch');
+  assert((await page.locator('#bulk-status').innerText()).includes('changed'), 'Useful conflict message rendered');
+  await page.screenshot({path:'output/playwright/gametape-bulk/final-conflict.png'});
+  await page.getByRole('button', {name:'Refresh',exact:true}).click();
+  await page.locator('#bulk-status').filter({hasText:'Refreshed'}).waitFor();
+  assert(await page.getByRole('button', {name:'Confirm',exact:true}).isDisabled(), 'Refresh requires a new preview');
+  assert(await page.getByLabel('Tag type',{exact:true}).inputValue() === 'Pass', 'Refresh preserves chosen bulk change');
+  assert(await page.locator('#clip-tag-type').inputValue() === 'Shot', 'Refresh preserves unfinished clip tag');
+  assert(await page.locator('#player-checkboxes input').first().isChecked(), 'Refresh preserves unfinished clip player');
+  await second.close();
+  return {passed:results,remaining:'Keyboard containment, delayed response, preset and project invalidation checked separately'};
+}

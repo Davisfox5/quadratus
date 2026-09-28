@@ -68,3 +68,8 @@ Thumbs.db
 gradio_cached_examples/
 flagged/
 .gradio/
+.quadratus/
+.playwright-cli/
+
+# Claude Code agent worktrees (session scratch, never source)
+.claude/worktrees/

@@ -1,0 +1,207 @@
+{
+  "sessions": [
+    {
+      "stage": "gametape-continuation",
+      "session_id": "01a0a0b4-a203-7583-99b9-ed1fe32d2c99",
+      "request_id": "ed1f7abb-6c1b-4391-bf5d-16f27bd94cd3",
+      "stop_reason": "end_turn",
+      "parent_tokens": 85832,
+      "vendor_total_tokens": 85832,
+      "difference_from_parent": 0,
+      "models": {
+        "grok-4.6-build": {
+          "inputTokens": 43762,
+          "outputTokens": 2262,
+          "cacheReadInputTokens": 39808,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 4
+        }
+      }
+    },
+    {
+      "stage": "gametape-continuation",
+      "session_id": "01a0a0b1-9bc8-7cc1-b452-1f73b597673d",
+      "request_id": "c0a73948-9085-4dcd-99cb-36020a859a02",
+      "stop_reason": "end_turn",
+      "parent_tokens": 348744,
+      "vendor_total_tokens": 348744,
+      "difference_from_parent": 0,
+      "models": {
+        "grok-4.6-build": {
+          "inputTokens": 69890,
+          "outputTokens": 10950,
+          "cacheReadInputTokens": 267904,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 11
+        }
+      }
+    },
+    {
+      "stage": "gametape-continuation-resume",
+      "session_id": "01a0a0de-0df0-79d1-b176-ac1a922202a6",
+      "request_id": "8253c517-ade9-4509-b062-61f297e96634",
+      "stop_reason": "end_turn",
+      "parent_tokens": 150622,
+      "vendor_total_tokens": 150622,
+      "difference_from_parent": 0,
+      "models": {
+        "grok-4.6-build": {
+          "inputTokens": 36515,
+          "outputTokens": 2491,
+          "cacheReadInputTokens": 111616,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 5
+        }
+      }
+    },
+    {
+      "stage": "gametape-continuation-resume",
+      "session_id": "01a0a0dc-6351-7f40-b4b8-e17c4aa22d32",
+      "request_id": "153d514d-b1d8-4dcc-aca8-b312a4f6bbf4",
+      "stop_reason": "end_turn",
+      "parent_tokens": 210978,
+      "vendor_total_tokens": 210978,
+      "difference_from_parent": 0,
+      "models": {
+        "grok-4.6-build": {
+          "inputTokens": 43974,
+          "outputTokens": 7388,
+          "cacheReadInputTokens": 159616,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 6
+        }
+      }
+    },
+    {
+      "stage": "gametape-finish",
+      "session_id": "01a0a0f4-4861-7a41-8f58-292ffd562616",
+      "request_id": "162da329-f751-400d-9f4f-a092757675c2",
+      "stop_reason": "end_turn",
+      "parent_tokens": 70285,
+      "vendor_total_tokens": 70285,
+      "difference_from_parent": 0,
+      "models": {
+        "grok-4.6-build": {
+          "inputTokens": 26785,
+          "outputTokens": 2028,
+          "cacheReadInputTokens": 41472,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 3
+        }
+      }
+    },
+    {
+      "stage": "gametape-finish",
+      "session_id": "01a0a0ec-156f-7530-af13-b8c3d4d0761b",
+      "request_id": "899a5177-ff26-419f-9af3-a503afe17d9b",
+      "stop_reason": "end_turn",
+      "parent_tokens": 956993,
+      "vendor_total_tokens": 956993,
+      "difference_from_parent": 0,
+      "models": {
+        "grok-4.6-build": {
+          "inputTokens": 165069,
+          "outputTokens": 20980,
+          "cacheReadInputTokens": 770944,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 18
+        }
+      }
+    },
+    {
+      "stage": "gametape-finish",
+      "session_id": "01a0a12d-38c6-7393-8d84-50a0ed67d329",
+      "request_id": "00e9fc18-ca64-41af-ad2e-344f587009b2",
+      "stop_reason": "end_turn",
+      "parent_tokens": 230011,
+      "vendor_total_tokens": 230011,
+      "difference_from_parent": 0,
+      "models": {
+        "grok-4.6-build": {
+          "inputTokens": 81918,
+          "outputTokens": 8189,
+          "cacheReadInputTokens": 139904,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 7
+        }
+      }
+    },
+    {
+      "stage": "gametape-finish",
+      "session_id": "01a0a12a-76c7-7b42-a295-39759c7dee4e",
+      "request_id": "db4ee563-a5b9-4a46-9b90-93e767e772eb",
+      "stop_reason": "end_turn",
+      "parent_tokens": 292755,
+      "vendor_total_tokens": 292755,
+      "difference_from_parent": 0,
+      "models": {
+        "grok-4.6-build": {
+          "inputTokens": 59215,
+          "outputTokens": 9796,
+          "cacheReadInputTokens": 223744,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 6
+        }
+      }
+    },
+    {
+      "stage": "gametape-ui-harness",
+      "session_id": "01a0a182-5165-7923-bed3-c64d3c4d3e28",
+      "request_id": "6c926cc4-58f9-4ac0-b283-88ed53ade891",
+      "stop_reason": "end_turn",
+      "parent_tokens": 342012,
+      "vendor_total_tokens": 342012,
+      "difference_from_parent": 0,
+      "models": {
+        "grok-4.6-build": {
+          "inputTokens": 53709,
+          "outputTokens": 13231,
+          "cacheReadInputTokens": 275072,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 8
+        }
+      }
+    },
+    {
+      "stage": "gametape-ui-harness",
+      "session_id": "01a0a187-7912-77f3-99d4-770499419dd8",
+      "request_id": "8271ea28-cb6f-4876-aac8-bfe0afa8f3a3",
+      "stop_reason": "cancelled",
+      "parent_tokens": 38367,
+      "vendor_total_tokens": 38367,
+      "difference_from_parent": 0,
+      "models": {
+        "grok-4.6-build": {
+          "inputTokens": 19670,
+          "outputTokens": 777,
+          "cacheReadInputTokens": 17920,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 2
+        }
+      }
+    },
+    {
+      "stage": "gametape-ui-harness",
+      "session_id": "01a0a185-f03d-74a1-bec4-ff192271b60b",
+      "request_id": "85a585a2-ffdd-4acd-b5dd-9ee3d2f07bf5",
+      "stop_reason": "end_turn",
+      "parent_tokens": 98843,
+      "vendor_total_tokens": 98843,
+      "difference_from_parent": 0,
+      "models": {
+        "grok-4.6-build": {
+          "inputTokens": 30216,
+          "outputTokens": 2451,
+          "cacheReadInputTokens": 66176,
+          "cacheCreationInputTokens": 0,
+          "modelCalls": 4
+        }
+      }
+    }
+  ],
+  "additional_vendor_tokens_over_parent_counters": 0,
+  "model_releases": [
+    "grok-4.6-build"
+  ],
+  "note": "Selected usage and outcome metadata only. Private vendor thought fields and transcripts excluded."
+}

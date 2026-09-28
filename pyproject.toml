@@ -5,24 +5,26 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "quadratus"
 version = "1.0.0"
-description = "Quadratus: Claude, ChatGPT, Gemini and Grok collaborate on one coding task (plan, consensus, build-and-debate, synthesis), on billed APIs or your own subscriptions via the vendor coding-agent CLIs."
+description = "Quadratus: Claude, ChatGPT and Grok collaborate on one coding task (plan, consensus, build-and-debate, synthesis), on your own consumer subscriptions via the vendor coding-agent CLIs, or on billed APIs."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
     "anthropic>=1.0.0",
     "openai>=1.40.0",
-    "google-genai>=0.3.0",
     "python-dotenv>=1.0.0",
     "colorama>=0.4.6",
     "gradio>=6,<7",
     "playwright>=1.40",
+    "jsonschema>=4.18",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
+    "setuptools>=68",
+    "wheel",
 ]
 # Kept for compatibility: playwright is now a baseline dependency, so this
 # extra is empty. Browser evidence and piloting are core infrastructure.
@@ -36,12 +38,20 @@ quadratus-gui = "quadratus.gui:main"
 packages = ["quadratus"]
 py-modules = ["multi_model_workflow", "chat_gui"]
 
+[tool.setuptools.package-data]
+quadratus = ["_gate_producer/*.py", "harness_library/origin.json", "harness_library/schema/*.json", "harness_library/families/*/*.json", "harness_library/families/*/*.md"]
+
 [tool.pytest.ini_options]
+markers = ["requirements_ledger: run with the requirements ledger on"]
 testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Published evidence bundles carry scripts exactly as they ran (sys.path
+# before import, Mac paths); they are records, not project code, and CI was
+# red from the first bundle until they were excluded.
+extend-exclude = ["docs/handoffs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B"]

@@ -1,0 +1,290 @@
+{
+  "completed": true,
+  "allow_writes": true,
+  "source_changed": true,
+  "source_fingerprint": "056c1ec43b7769ff05a6dde8245f12e16d94ca1fdb392fb6926b79015fa45b8c",
+  "scope_reports": [
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/test_bulk_edit.py"
+      ],
+      "changed_lines": 122,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/test_bulk_edit.py"
+      ],
+      "changed_lines": 122,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/test_bulk_edit.py"
+      ],
+      "changed_lines": 122,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/test_bulk_edit.py"
+      ],
+      "changed_lines": 122,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/test_bulk_edit.py"
+      ],
+      "changed_lines": 122,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/test_bulk_edit.py"
+      ],
+      "changed_lines": 122,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/css/style.css",
+        "templates/index.html"
+      ],
+      "changed_lines": 108,
+      "max_lines": 90,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/css/style.css",
+        "templates/index.html"
+      ],
+      "changed_lines": 108,
+      "max_lines": 90,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/css/style.css",
+        "templates/index.html"
+      ],
+      "changed_lines": 108,
+      "max_lines": 90,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 134,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 134,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 150,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 150,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 115,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 115,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 140,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 140,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/test_bulk_edit.py"
+      ],
+      "changed_lines": 68,
+      "max_lines": 70,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/test_bulk_edit.py"
+      ],
+      "changed_lines": 68,
+      "max_lines": 70,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/test_bulk_edit.py"
+      ],
+      "changed_lines": 68,
+      "max_lines": 70,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 12,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js"
+      ],
+      "changed_lines": 12,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/css/style.css",
+        "static/js/app.js",
+        "templates/index.html",
+        "tests/test_bulk_edit.py"
+      ],
+      "changed_lines": 53,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/css/style.css",
+        "static/js/app.js",
+        "templates/index.html",
+        "tests/test_bulk_edit.py"
+      ],
+      "changed_lines": 53,
+      "max_lines": 100,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "docs/BULK_EDIT.md"
+      ],
+      "changed_lines": 78,
+      "max_lines": 80,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "docs/BULK_EDIT.md"
+      ],
+      "changed_lines": 78,
+      "max_lines": 80,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "docs/BULK_EDIT.md"
+      ],
+      "changed_lines": 78,
+      "max_lines": 80,
+      "oversized": false
+    }
+  ],
+  "error": "",
+  "run": "20260914T170410Z-f7f94fb3",
+  "task_count": 8
+}

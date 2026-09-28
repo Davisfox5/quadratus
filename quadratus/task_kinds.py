@@ -52,8 +52,9 @@ no 2026 models at all.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
 
 __all__ = [
     "Confidence",
@@ -65,6 +66,14 @@ __all__ = [
     "policy_for",
     "route",
     "guidance_for",
+    "Need",
+    "KNOWN_NEEDS",
+    "NoCapableSeat",
+    "normalise_needs",
+    "seat_capabilities",
+    "seat_satisfies",
+    "needs_from_text",
+    "escalate_from",
 ]
 
 
@@ -94,10 +103,12 @@ class TaskKind:
     """Kinds of coding work, split where the split changes the routing.
 
     Deliberately not a tidy taxonomy. ``BACKEND``/``FRONTEND``/``MOBILE`` are
-    separate only because the evidence separates them -- one model is measurably
-    behind on real mobile work and not on the others. Where no evidence
-    separates two kinds, they are one kind here, because a distinction that
-    changes nothing is a distinction that will drift out of sync.
+    separate because the evidence once separated them -- a model measurably
+    behind on real mobile work and not on the others -- and the split is kept
+    now that the model has left the lineup because the gate and the evidence
+    line differ, not merely the routing. Where no evidence separates two
+    kinds, they are one kind here, because a distinction that changes nothing
+    is a distinction that will drift out of sync.
     """
 
     #: Turning an operator's request into a stated goal and constraints.
@@ -179,8 +190,8 @@ OPUS = "claude:opus"
 SOL = "openai:gpt-5.6-sol"
 LUNA = "openai:gpt-5.6-luna"
 SONNET = "claude:sonnet"
-GEMINI_PRO = "gemini:gemini-3.1-pro-preview"
-GROK = "grok:grok-4.6"
+GROK = "grok:default"          # xAI's current default, whatever it is
+GROK_WORKER = "grok:worker"   # same line, bounded call, low effort
 FABLE = "claude:fable"
 
 
@@ -188,20 +199,34 @@ FABLE = "claude:fable"
 #:
 #: An earlier version of this table pinned most kinds to Opus or Sol on
 #: benchmark evidence. That was locally right and globally wrong: it
-#: concentrated nearly every invocation on two subscriptions while the Grok
-#: and Google windows sat idle, which is exactly how one window exhausts early
-#: and forces a degraded run while capacity elsewhere goes unspent. Routing by
-#: difficulty spreads the load across all four subscriptions *and* still puts
-#: the strongest model on the work that actually needs it.
+#: concentrated nearly every invocation on two subscriptions while another sat
+#: idle, which is exactly how one window exhausts early and forces a degraded
+#: run while capacity elsewhere goes unspent. Routing by difficulty spreads
+#: the load across every subscription *and* still puts the strongest model on
+#: the work that actually needs it.
 #:
 #: The rungs, per the operator's read of current capability:
-#: * COMPLEX -- many logical steps, high stakes -> Opus 5, top of the pack.
+#: * COMPLEX -- many logical steps, high stakes -> Opus, top of the pack.
 #: * STANDARD -- real judgement, not the hardest -> GPT-5.6 Sol.
-#: * SIMPLE -- the bulk of well-sized (<=100-line) tasks -> Grok 4.6, which is
-#:   capable at this grade and cheap against its own window; expected to close
-#:   the gap further with 4.7.
-#: * ROTE -- mechanical work -> Gemini 3.1 Pro, currently the least proven of
-#:   the four; revisit the rung when 3.5 Pro ships.
+#: * SIMPLE -- the bulk of well-sized (<=100-line) tasks -> Grok, addressed as
+#:   the CLI's current default rather than as an iteration; capable at this
+#:   grade and cheap against its own window.
+#: * ROTE -- mechanical work -> Grok, called as a bounded worker.
+#:
+#: Four rungs across three vendors means one vendor takes two, and xAI is the
+#: one that should: Anthropic already carries the orchestrator seat and every
+#: COMPLEX task, and OpenAI carries STANDARD plus the security, testing and
+#: review pins plus the fallback orchestrator seat. xAI was left holding a
+#: single rung, which under-spends the one window nothing else competes for.
+#: The rung held Grok 4.1 Fast until 2026-09-12, chosen because it was the
+#: cheapest model in the fleet. A probe found the Grok Build CLI rejects that
+#: ID outright, and the search for a cheap replacement was the wrong search:
+#: a consumer subscription reaches one Grok line, and cheapness there is not
+#: a model you pick but a *call you make*. ``grok:worker`` is that call --
+#: the same line as the brain-trust seat, with the file-writing tools absent
+#: and reasoning effort low, measured at ~6K fresh tokens against the full
+#: agent's 120K for the same task. The rung is cheap again, and it stopped
+#: being a claim about which model is smallest.
 #:
 #: A rung that is unavailable or excluded escalates upward (a stronger model
 #: can always do easier work) before it degrades downward.
@@ -209,11 +234,227 @@ DIFFICULTY_LADDER: Dict[str, str] = {
     "complex": OPUS,
     "standard": SOL,
     "simple": GROK,
-    "rote": GEMINI_PRO,
+    "rote": GROK_WORKER,
 }
 
 #: Least to most capable, for escalation.
-_LADDER_ORDER: Tuple[str, ...] = (GEMINI_PRO, GROK, SOL, OPUS)
+_LADDER_ORDER: Tuple[str, ...] = (GROK_WORKER, GROK, SOL, OPUS)
+
+
+def _available_always(_key: str) -> bool:
+    return True
+
+
+# -- what a task needs of its seat --------------------------------------------
+#
+# A seat is an invocation, not just a model (see registry.ModelSpec.restricted):
+# the same Grok line is a full agent in the brain trust and a bounded,
+# tool-less call on the ROTE rung. Difficulty alone cannot see that
+# difference. On 2026-09-14 a task classified docs/rote read "run `node
+# tests/ui/mutation_check.js` twice ... edit only the four result lines" and
+# the ladder seated grok:worker, whose allowlist holds read/search/web tools
+# and no command execution. The call cancelled and the run ended. The
+# mismatch was visible in the task text before any window was spent; nothing
+# looked. These helpers are the looking. Three needs are distinguished
+# because they are satisfied by different seats:
+#
+# * EXECUTE -- the task must *run* something (tests, a build, a script) and
+#   read the result. Only an agentic seat can.
+# * PATCH -- the task must change source. A restricted seat satisfies this:
+#   it returns a validated PATCH block for the harness to apply, without any
+#   write tool. This is the case a naive "needs writes" flag would wrongly
+#   exclude the worker from.
+# * DIRECT_WRITE -- the change cannot travel as a text patch (binary or
+#   generated files, lockfiles, anything regenerated by a tool). Needs an
+#   agentic seat with the write grant.
+
+class Need:
+    """What a task requires of its seat, beyond a model opinion."""
+
+    EXECUTE = "execute"
+    PATCH = "patch"
+    DIRECT_WRITE = "direct-write"
+
+
+KNOWN_NEEDS: FrozenSet[str] = frozenset({Need.EXECUTE, Need.PATCH, Need.DIRECT_WRITE})
+
+#: What an unrestricted (agentic) seat can do. A restricted seat can only
+#: return a patch. The roster row is the only source of the distinction;
+#: whether the seat can be *called* at all is availability's question, not
+#: this table's.
+_AGENTIC_CAPABILITIES: FrozenSet[str] = KNOWN_NEEDS
+_RESTRICTED_CAPABILITIES: FrozenSet[str] = frozenset({Need.PATCH})
+
+
+class NoCapableSeat(LookupError):
+    """No available seat satisfies the task's stated needs.
+
+    Raised only when ``needs`` were given: a task that says it must run
+    commands is worse served by a silent seat that cannot than by a stop the
+    orchestrator can see. ``route()`` keeps its never-raises contract for
+    callers that state no needs.
+    """
+
+    def __init__(self, needs: Iterable[str], tried: Sequence[str]):
+        self.needs = frozenset(needs)
+        self.tried = tuple(tried)
+        super().__init__(
+            "no available seat satisfies "
+            + ", ".join(sorted(self.needs))
+            + " (tried: " + ", ".join(self.tried) + ")"
+        )
+
+
+def normalise_needs(values: Iterable[str]) -> FrozenSet[str]:
+    """Validate explicit need labels. Unknown labels raise, never vanish.
+
+    An orchestrator that writes ``NEEDS: exec`` meant something; dropping
+    the token would route as if it had said nothing, which is the silent
+    misroute this module exists to prevent. The caller re-asks or reclassifies.
+    """
+    cleaned = {str(v).strip().lower().replace("_", "-") for v in values if str(v).strip()}
+    unknown = sorted(cleaned - KNOWN_NEEDS)
+    if unknown:
+        raise ValueError(
+            "unknown need(s): " + ", ".join(unknown)
+            + "; known: " + ", ".join(sorted(KNOWN_NEEDS))
+        )
+    return frozenset(cleaned)
+
+
+def seat_capabilities(key: str) -> FrozenSet[str]:
+    """What the seat behind ``key`` can do, read off its roster row.
+
+    A restricted row (``ModelSpec.restricted``) can only return a patch. Any
+    other row, and any key the roster does not describe, is treated as
+    agentic: this table never makes routing *stricter* than the roster says,
+    and an undescribed key cannot be invoked anyway.
+    """
+    from .registry import resolve  # local: keep the opinion module free of the roster at import
+
+    spec = resolve(key)
+    if spec is not None and getattr(spec, "restricted", False):
+        return _RESTRICTED_CAPABILITIES
+    return _AGENTIC_CAPABILITIES
+
+
+def seat_satisfies(
+    key: str,
+    needs: Iterable[str],
+    capabilities: Callable[[str], FrozenSet[str]] = seat_capabilities,
+) -> bool:
+    """True when every need is within the seat's capabilities."""
+    return frozenset(needs) <= capabilities(key)
+
+
+_RUNNERS = (
+    "node", "npm", "npx", "pnpm", "yarn", "deno", "bun",
+    "pytest", "python", "python3", "pip", "pip3", "tox", "nox", "ruff", "flake8",
+    "mypy", "black", "make", "cmake", "cargo", "go", "gradle", "mvn", "dotnet",
+    "tsc", "eslint", "prettier", "jest", "vitest", "mocha", "playwright",
+    "bash", "sh", "zsh", "ffmpeg", "docker", "git", "curl",
+)
+_RUNNER_ALTERNATION = "|".join(re.escape(r) for r in _RUNNERS)
+#: An interpreter named by path rather than by bare name. Attempt 3 of the
+#: blind acceptance wrote "Run `/usr/local/bin/python -m pytest -q`", which a
+#: pattern anchored on the bare runner does not see -- so an errand that
+#: plainly runs commands declared nothing, and the check that should have
+#: caught it never fired.
+_RUNNER_PATH = r"(?:[\w.-]*/)*"
+#: "run `node ...`", "re-run pytest", "execute npm test", "run ./venv/bin/pytest"
+#: -- a verb of running followed by a known runner, optionally backticked and
+#: optionally reached by path.
+_RUN_VERB_RE = re.compile(
+    r"\b(?:run|re-?run|execute|invoke|launch)\s+(?:the\s+)?`?" + _RUNNER_PATH
+    + r"(?:" + _RUNNER_ALTERNATION + r")\b",
+    re.IGNORECASE,
+)
+#: A backticked command literal starting with a known runner, by name or path:
+#: `node x.js`, `/usr/local/bin/python -m pytest`.
+_BACKTICK_COMMAND_RE = re.compile(
+    r"`" + _RUNNER_PATH + r"(?:" + _RUNNER_ALTERNATION + r")(?:\s[^`]*)?`", re.IGNORECASE,
+)
+#: Outcomes only a run can produce.
+_RUN_OUTCOME_RE = re.compile(
+    r"\b(?:exit\s+code|exit\s+status|test\s+summary|tests?\s+(?:pass|passes|passed|fail|fails|failed)\b"
+    r"|capture\s+(?:the\s+)?(?:raw\s+)?output|observed\s+(?:pass|fail)|from\s+a\s+fresh\s+run)",
+    re.IGNORECASE,
+)
+#: Explicit inflections rather than ``\w*`` suffixes: ``fix\w*`` matched
+#: "fixtures" and ``add\w*`` matched "additional".
+_EDIT_VERB_RE = re.compile(
+    r"\b(?:edit(?:s|ed|ing)?|chang(?:e|es|ed|ing)|modif(?:y|ies|ied|ying)|updat(?:e|es|ed|ing)|"
+    r"add(?:s|ed|ing)?|remov(?:e|es|ed|ing)|delet(?:e|es|ed|ing)|fix(?:es|ed|ing)?|"
+    r"correct(?:s|ed|ing)?|implement(?:s|ed|ing)?|(?:re)?writ(?:e|es|ing|ten)|"
+    r"refactor(?:s|ed|ing)?|renam(?:e|es|ed|ing)|replac(?:e|es|ed|ing)|insert(?:s|ed|ing)?|"
+    r"adjust(?:s|ed|ing)?|amend(?:s|ed|ing)?|patch(?:es|ed|ing)?)\b",
+    re.IGNORECASE,
+)
+_SOURCE_PATH_RE = re.compile(
+    r"(?<![\w/])[\w./-]+\.(?:py|js|mjs|cjs|ts|tsx|jsx|md|rst|txt|html|css|scss|json|ya?ml|toml|"
+    r"ini|cfg|sh|sql|go|rs|java|kt|swift|c|h|cpp|hpp|cs|rb|php|svg)\b",
+)
+#: Verbs that produce or replace a file wholesale, as opposed to editing text.
+_GENERATE_VERB_RE = re.compile(
+    r"\b(?:re-?generat\w*|generat\w*|re-?build\w*|re-?encod\w*|convert\w*|export\w*|"
+    r"render\w*|record\w*|captur\w*|upload\w*|copy|copies|copied|overwrit\w*)\b",
+    re.IGNORECASE,
+)
+#: Targets a text patch cannot carry. SVG is text and is deliberately absent.
+_DIRECT_WRITE_TARGET_RE = re.compile(
+    r"\b(?:binary\s+(?:file|asset)s?|lock\s*files?|package-lock\.json|yarn\.lock|"
+    r"pnpm-lock\.yaml|poetry\.lock|cargo\.lock|uv\.lock|generated\s+files?|"
+    r"screenshots?|image\s+files?|video\s+files?|audio\s+files?)\b"
+    r"|(?<![\w/])[\w./-]+\.(?:png|jpe?g|gif|webp|ico|mp4|webm|mov|mp3|wav|zip|gz|tar|pdf|"
+    r"woff2?|ttf|so|dylib|dll|bin)\b",
+    re.IGNORECASE,
+)
+
+
+def needs_from_text(description: str, acceptance: Iterable[str] = ()) -> FrozenSet[str]:
+    """Infer needs from what the task says, conservatively.
+
+    Reads the description and acceptance criteria together. EXECUTE needs a
+    run verb before a known runner, a backticked command literal, or an
+    outcome only a run produces (exit code, tests passed). PATCH needs an
+    edit verb *and* a source path. DIRECT_WRITE needs a binary, generated or
+    lock-file target *and* a verb that writes or produces it; SVG is text and
+    counts as source. Prose that merely mentions a file, or asks for an
+    explanation, infers nothing: an under-inferred need costs one failed
+    call, an over-inferred one quietly promotes rote work off the cheap rung.
+    """
+    text = "\n".join([description or "", *[str(a) for a in acceptance or ()]])
+    needs = set()
+    if _RUN_VERB_RE.search(text) or _BACKTICK_COMMAND_RE.search(text) or _RUN_OUTCOME_RE.search(text):
+        needs.add(Need.EXECUTE)
+    if _EDIT_VERB_RE.search(text) and _SOURCE_PATH_RE.search(text):
+        needs.add(Need.PATCH)
+    if _DIRECT_WRITE_TARGET_RE.search(text) and (_EDIT_VERB_RE.search(text) or _GENERATE_VERB_RE.search(text)):
+        needs.add(Need.DIRECT_WRITE)
+    return frozenset(needs)
+
+
+def escalate_from(
+    key: str,
+    *,
+    needs: Iterable[str] = (),
+    available: Callable[[str], bool] = _available_always,
+    capabilities: Callable[[str], FrozenSet[str]] = seat_capabilities,
+) -> Optional[str]:
+    """The next seat strictly above ``key`` on the ladder that fits, or None.
+
+    Used after a seat failed for want of capability: a stronger, more
+    capable call is a changed strategy, not a retry. A key off the ladder,
+    or nothing above it that is available and satisfies ``needs``, is None --
+    the caller stops rather than guessing.
+    """
+    if key not in _LADDER_ORDER:
+        return None
+    wanted = frozenset(needs)
+    for candidate in _LADDER_ORDER[_LADDER_ORDER.index(key) + 1:]:
+        if available(candidate) and seat_satisfies(candidate, wanted, capabilities):
+            return candidate
+    return None
 
 
 #: The routing table. Read the ``evidence`` line before changing a row.
@@ -275,21 +516,25 @@ ROUTING: Dict[str, KindPolicy] = {
         ),
     ),
     TaskKind.MOBILE: KindPolicy(
-        exclude=(GEMINI_PRO,),
-        confidence=Confidence.HIGH,
+        confidence=Confidence.LOW,
         evidence=(
-            "The exclusion is the finding: on a real-world Android/Kotlin "
-            "benchmark run by the toolchain vendor, the excluded model landed "
-            "roughly 20 points behind. Directly verified, unlike most of this "
-            "table."
+            "This row used to carry the table's only directly verified "
+            "exclusion: on a real-world Android/Kotlin benchmark run by the "
+            "toolchain vendor, Gemini 3.1 Pro landed roughly 20 points behind. "
+            "That model left the lineup on 2026-09-12 and the exclusion left "
+            "with it -- an exclusion naming a model nothing can route to is "
+            "noise that outlives its evidence. Mobile now rides the ladder "
+            "like any other kind. Restore the exclusion with the model."
         ),
     ),
     TaskKind.BULK: KindPolicy(
         confidence=Confidence.LOW,
         evidence=(
             "Rides the ladder; bulk work is SIMPLE or ROTE by nature, which "
-            "lands it on Grok -- ~4x turn efficiency measured -- or Gemini "
-            "without needing a pin."
+            "lands it on Grok -- ~4x turn efficiency measured on 4.6 -- without "
+            "needing a pin. Both those rungs are xAI now, which is the point: "
+            "bulk is where volume actually accumulates, and it accumulates "
+            "against the least contended window."
         ),
     ),
     TaskKind.GLUE: KindPolicy(
@@ -404,7 +649,8 @@ ROUTING: Dict[str, KindPolicy] = {
         evidence=(
             "Rides the ladder as ROTE, which lands it on the least-loaded "
             "window. The earlier Sonnet pin spent the same Anthropic window "
-            "the orchestrator needs most."
+            "the orchestrator needs most -- and needs more now that two of "
+            "the three orchestrator seats are Anthropic."
         ),
     ),
     TaskKind.PERF: KindPolicy(
@@ -447,10 +693,6 @@ def policy_for(kind: str) -> KindPolicy:
     return ROUTING.get(kind, ROUTING[TaskKind.GENERAL])
 
 
-def _available_always(_key: str) -> bool:
-    return True
-
-
 def route(
     kind: str,
     *,
@@ -458,6 +700,8 @@ def route(
     difficulty: Optional[str] = None,
     candidates: Optional[Sequence[str]] = None,
     available: Callable[[str], bool] = _available_always,
+    needs: Iterable[str] = (),
+    capabilities: Callable[[str], FrozenSet[str]] = seat_capabilities,
 ) -> str:
     """Pick the lead for a task of this ``kind`` at this ``difficulty``.
 
@@ -465,7 +709,7 @@ def route(
     exceptions with evidence or an operator directive behind them (security
     and testing to Sol, review to the pair, scope and decomposition to the
     orchestrator). Everything else routes by the difficulty ladder, which is
-    what spreads the load across all four subscriptions. An unavailable or
+    what spreads the load across every subscription. An unavailable or
     excluded rung escalates upward -- a stronger model can always do easier
     work -- before it degrades downward.
 
@@ -477,36 +721,63 @@ def route(
             Normally the brain trust.
         available: Liveness predicate. A pinned model that is down does not
             block the task; the policy degrades down the checks.
+        needs: What the task requires of its seat (:class:`Need` values). A
+            seat that cannot satisfy every need is skipped at every step --
+            pin, rung, rotation and candidates alike -- exactly as an
+            unavailable one is, so a rote task that must run commands climbs
+            past the restricted worker to the agentic seat above it.
+        capabilities: Seat capability lookup; the roster-backed default is
+            replaced only by tests.
 
     Returns:
-        The model key to lead with. Never raises -- an unroutable task is
-        still a task, and stalling on a routing preference would be worse
-        than running it with the rotation's choice.
+        The model key to lead with. Never raises when ``needs`` is empty --
+        an unroutable task is still a task, and stalling on a routing
+        preference would be worse than running it with the rotation's
+        choice.
+
+    Raises:
+        NoCapableSeat: ``needs`` were stated and no available seat satisfies
+            them. Stated needs are a contract; handing back a seat that
+            cannot honour it would reproduce the 2026-09-14 failure with a
+            different name on it.
     """
     policy = policy_for(kind)
     excluded = set(policy.exclude)
+    wanted = frozenset(needs)
+    tried: List[str] = []
+
+    def fits(key: str) -> bool:
+        if key in excluded or not available(key):
+            return False
+        if seat_satisfies(key, wanted, capabilities):
+            return True
+        tried.append(key)
+        return False
 
     for key in policy.prefer:
-        if key not in excluded and available(key):
+        if fits(key):
             return key
 
     if difficulty in DIFFICULTY_LADDER:
         start = _LADDER_ORDER.index(DIFFICULTY_LADDER[difficulty])
         # The rung itself, then upward: capability only increases.
         for key in _LADDER_ORDER[start:]:
-            if key not in excluded and available(key):
+            if fits(key):
                 return key
         # Downward only when everything stronger is out too.
         for key in reversed(_LADDER_ORDER[:start]):
-            if key not in excluded and available(key):
+            if fits(key):
                 return key
 
-    if default not in excluded and available(default):
+    if fits(default):
         return default
 
     for key in candidates or ():
-        if key not in excluded and available(key):
+        if fits(key):
             return key
+
+    if wanted:
+        raise NoCapableSeat(wanted, tried or [default])
 
     # Everything is excluded or unavailable. Hand back the rotation's pick
     # rather than inventing one: the caller can see the exclusion in the

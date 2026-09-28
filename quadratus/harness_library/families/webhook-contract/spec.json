@@ -1,0 +1,40 @@
+{
+  "kind": "family",
+  "schema_version": 1,
+  "id": "webhook-contract",
+  "version": "0.1.0",
+  "summary": "An inbound or outbound webhook: signature verified with a replay window, claim-mark-release idempotency, tenant bound before any write, contract doc in the same PR.",
+  "kinds": ["backend", "glue"],
+  "required_inputs": [
+    { "name": "direction", "description": "Inbound handler, outbound emitter, or both", "refuse_if_missing": true },
+    { "name": "provider_or_consumer", "description": "Who signs or who receives, and the signature scheme", "refuse_if_missing": true },
+    { "name": "event_types", "description": "The event names handled or emitted", "refuse_if_missing": true },
+    { "name": "tenant_resolution", "description": "How the tenant is found from the delivery before any write", "refuse_if_missing": true }
+  ],
+  "checklist": [
+    { "id": "signature-first", "rule": "The signature is verified against every configured secret before the body is parsed, with a timestamp replay window", "because": "Flex verifies against both platform and tenant secrets; r3cruit3r Stripe webhook verification is a sensitive path because a bypass grants access", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "claim-mark-release", "rule": "Every handler is wrapped in claim, mark, release on the delivery id so a redelivery is a no-op and a crash releases the claim", "because": "Flex claimWebhookEvent exists because Stripe redelivers; LINDA webhook queue drains hourly and a duplicate event double-fired a graph", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "tenant-before-write", "rule": "The tenant is bound from the delivery's trusted identifiers before any write; correlation lookups stay in the bootstrap set", "because": "LINDA AUTH_BOOTSTRAP_TABLES allow the pre-tenant correlation read and nothing else; bind_tenant_async precedes writes", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "proxy-exclusion", "rule": "The webhook path is excluded from tenant-routing middleware and any CSRF or session guard", "because": "Flex api/webhooks is excluded from the proxy matcher; a tenant firewall 404 on a provider callback drops payments silently", "applies_to": ["lead", "reviewer"] },
+    { "id": "outbound-registered", "rule": "An outbound event is registered in the event registry with the standard envelope and a dedupe key per delivery", "because": "LINDA docs/webhooks.md is code under test_integration_contract_docs; Flex-LINDA sequences broke when an envelope field was renamed", "applies_to": ["lead", "reviewer"], "gate_id": "contract-doc-test" },
+    { "id": "contract-doc-same-pr", "rule": "The contract doc changes in the same PR as the wire format", "because": "LINDA test_integration_contract_docs fails the build otherwise; the doc is the consumer's only spec", "applies_to": ["lead", "reviewer"], "gate_id": "contract-doc-test" },
+    { "id": "fail-closed-on-unknown", "rule": "An unknown event type is acknowledged and logged, never processed by a default branch; a missing secret fails closed", "because": "A default branch that treats unknown events as the common case has granted access on unverified events", "applies_to": ["lead", "reviewer"] },
+    { "id": "consumer-impact-note", "rule": "The done output carries a consumer-impact note for the other side of the contract", "because": "Flex and LINDA each consume the other's events; a change with no note reached the consumer as a 4xx in production", "applies_to": ["lead"] },
+    { "id": "no-secrets-in-fixtures", "rule": "Test fixtures sign with a test secret from the environment, never a literal that looks real", "because": "The detect-secrets pre-commit and the ship-check secret grep both flag whsec_ literals", "applies_to": ["lead", "reviewer"] }
+  ],
+  "overlays_compatible": ["sensitive-path", "tenant-isolation", "external-effects", "privacy", "test-quality"],
+  "gate_ids": ["scope", "contract-doc-test", "unit-tests", "import-smoke", "lint"],
+  "output_contract": {
+    "done_output": ["signature verification line quoted with the replay window", "the claim, mark, release calls quoted", "tenant binding line quoted", "event types handled or emitted with the registry entry", "consumer-impact note"],
+    "stop_conditions": ["signature scheme unknown", "tenant cannot be resolved from the delivery", "the path is inside a sensitive billing file without a grant", "the contract doc does not exist and the task does not create it"]
+  },
+  "adapter_fields": [
+    { "name": "signature_scheme", "description": "How deliveries are signed and which secrets are checked", "required": true },
+    { "name": "idempotency_fns", "description": "The claim, mark and release functions", "required": true },
+    { "name": "event_registry", "description": "Where outbound events and their envelope are declared", "required": false },
+    { "name": "contract_doc_path", "description": "The doc that is the consumer's spec", "required": true },
+    { "name": "contract_doc_test", "description": "The test that fails when the doc and wire format diverge", "required": false },
+    { "name": "proxy_exclusion", "description": "Where webhook paths are excluded from middleware", "required": true }
+  ],
+  "eval_cases_ref": "eval-cases.json"
+}

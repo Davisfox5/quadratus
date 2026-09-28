@@ -1,0 +1,90 @@
+{
+ "id": "lead-recovery-once-on-unchanged-tree",
+ "shape": "resume",
+ "family": "harness-maintainer",
+ "grader": false,
+ "source": "Report, Quadratus role hierarchy: a failed lead is replaced once, only when the source is verifiably unchanged; changed or unverified source stops with the work preserved.",
+ "session": {
+  "project": true,
+  "allow_writes": false
+ },
+ "files": {
+  "app.py": "x = 1\n"
+ },
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Add the parser",
+   "complexity": "simple"
+  }
+ },
+ "variants": {
+  "good": {
+   "script": [
+    {
+     "role": "lead",
+     "model": "grok:default",
+     "times": 1,
+     "raise": {
+      "type": "ProviderError",
+      "message": "grok transport failed"
+     }
+    },
+    {
+     "role": "lead",
+     "reply": "Draft: the change as text."
+    },
+    {
+     "role": "closeout",
+     "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+    }
+   ],
+   "expect": {
+    "outcome": "completed",
+    "history": 1,
+    "calls": {
+     "role:lead": 2,
+     "model:grok:default": 1
+    },
+    "notes_contain": [
+     "failed without changing source; one recovery on"
+    ],
+    "store_kinds_contain": [
+     "lead-recovery"
+    ]
+   }
+  },
+  "bad": {
+   "script": [
+    {
+     "role": "lead",
+     "model": "grok:default",
+     "times": 1,
+     "writes": {
+      "app.py": "x = 2\n"
+     },
+     "raise": {
+      "type": "ProviderError",
+      "message": "grok transport failed"
+     }
+    }
+   ],
+   "expect": {
+    "outcome": "PartialWorkStopped",
+    "error_contains": [
+     "source is changed or unverified"
+    ],
+    "files": {
+     "app.py": {
+      "equals": "x = 2\n"
+     }
+    },
+    "calls": {
+     "role:lead": 1
+    }
+   }
+  }
+ },
+ "expect": {}
+}

@@ -1,0 +1,80 @@
+{
+ "id": "worker-corrupt-patch-is-an-outcome",
+ "shape": "noisy-tool",
+ "family": "agent-tool",
+ "grader": false,
+ "source": "Report, Quadratus, GameTape finding 3: a worker's corrupt patch aborted the whole run; failures now return to the lead as outcomes with the legal moves. The worker's rejected reply is replayed as the transport error the patch boundary raised (test_reliability_repair fixture); the harness applies restricted patches at the provider, not in the pool.",
+ "session": {
+  "project": true,
+  "git": true,
+  "allow_writes": true
+ },
+ "files": {
+  "docs/DESIGN.md": "# Design\n"
+ },
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Tiny fix",
+   "complexity": "simple",
+   "scope": {
+    "permitted_paths": [
+     "docs/DESIGN.md"
+    ],
+    "max_lines": 100,
+    "intended_result": "one tiny fix",
+    "acceptance": [
+     "file compiles"
+    ]
+   }
+  }
+ },
+ "script": [
+  {
+   "role": "lead",
+   "times": 1,
+   "reply": "WORKER {\"errand\": \"draft\", \"instruction\": \"Write the bulk tagging contract into docs/DESIGN.md\", \"write\": true}"
+  },
+  {
+   "role": "worker",
+   "raise": {
+    "type": "ProviderError",
+    "message": "PATCH must contain a unified diff with --- and +++ paths; git apply --check: corrupt patch at line 4"
+   }
+  },
+  {
+   "role": "lead",
+   "reply": "The worker patch was rejected; closing the task incomplete with the design described in prose."
+  },
+  {
+   "role": "closeout",
+   "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+  }
+ ],
+ "expect": {
+  "outcome": "completed",
+  "history": 1,
+  "calls": {
+   "role:worker": 1
+  },
+  "files": {
+   "docs/DESIGN.md": {
+    "equals": "# Design\n"
+   }
+  },
+  "prompts": [
+   {
+    "role": "lead",
+    "contains": "different worker"
+   },
+   {
+    "role": "lead",
+    "contains": "close the task incomplete"
+   }
+  ],
+  "store_contains": [
+   "FAILED"
+  ]
+ }
+}

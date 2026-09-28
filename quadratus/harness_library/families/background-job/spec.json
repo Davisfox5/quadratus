@@ -1,0 +1,40 @@
+{
+  "kind": "family",
+  "schema_version": 1,
+  "id": "background-job",
+  "version": "0.1.0",
+  "summary": "A scheduled or queued job: registered in every list the runtime reads, with a consumer, idempotent under overlap, and its wake-up cost stated.",
+  "kinds": ["backend", "ops"],
+  "required_inputs": [
+    { "name": "job", "description": "Task or endpoint name and where it lives", "refuse_if_missing": true },
+    { "name": "trigger", "description": "Beat schedule, cron expression, queue name, or HTTP trigger", "refuse_if_missing": true },
+    { "name": "overlap_behavior", "description": "What happens if two runs overlap or a run repeats: skip, dedupe key, or safe by construction", "refuse_if_missing": true },
+    { "name": "cost_posture", "description": "What the schedule wakes: a database, a paid API, a browser", "refuse_if_missing": true }
+  ],
+  "checklist": [
+    { "id": "registered-everywhere", "rule": "The job is in every list the runtime reads: the explicit imports tuple, task_routes, the cron case table and the all list, or the launchd plist", "because": "Flex crons.yml is the only scheduler and a route missing from either list never runs; r3cruit3r celery_config imports tuple is explicit; nothing else notices", "applies_to": ["lead", "reviewer", "verifier"], "gate_id": "registry-check" },
+    { "id": "consumer-exists", "rule": "A consumer exists for the queue or schedule: a fly.toml process group, a GitHub Actions cron, a launchd job", "because": "A routed Celery task with no worker on its queue waits forever; r3cruit3r queues map to fly.toml process groups", "applies_to": ["lead", "reviewer"], "gate_id": "registry-check" },
+    { "id": "idempotent-under-overlap", "rule": "Two overlapping or repeated runs produce one effect: a dedupe key, a claim row, or an operation that is safe to repeat", "because": "GitHub scheduled triggers lag and duplicate; Flex crons are documented as idempotent for that reason; LINDA pipeline_ledger exists because overlap double-spent", "applies_to": ["lead", "reviewer"] },
+    { "id": "sanctioned-runner", "rule": "Database and tenant work goes through the sanctioned runner: async_runner.run_async, tenant_context, or the repo equivalent", "because": "r3cruit3r Celery tasks that opened their own loop leaked connections; LINDA Celery entry points must arm the tenant GUC or RLS returns zero rows", "applies_to": ["lead", "reviewer"] },
+    { "id": "cost-posture-stated", "rule": "Every new wake-up states what it wakes and how often; no new beat entry outside the minimal list without that statement", "because": "r3cruit3r BEAT_MINIMAL_TASKS and test_neon_cost_posture exist because beat entries kept Neon awake and billed", "applies_to": ["lead", "reviewer", "verifier"], "gate_id": "posture-tests" },
+    { "id": "http-trigger-auth", "rule": "An HTTP-triggered job verifies the shared secret first and fails closed when it is unset", "because": "Flex cron guards once returned true with no secret, making paid endpoints world-callable; verifyCronSecret now fails closed", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "json-every-path", "rule": "An HTTP-triggered job returns JSON on every path, including errors", "because": "Flex crons.yml treats a 200 with a non-JSON body as a route that never executed, since a missing route returns the HTML 404 page", "applies_to": ["lead", "reviewer"] },
+    { "id": "paid-step-ledger", "rule": "A paid step claims an exactly-once ledger row before spending", "because": "LINDA pipeline_ledger; Flex claimWebhookEvent", "applies_to": ["lead", "reviewer"] },
+    { "id": "registration-proof", "rule": "The done output pastes the registration proof: the task in app.tasks, the route in both crons.yml lists, the process group in fly.toml", "because": "A green test suite does not prove a schedule fires; only the registries do", "applies_to": ["lead"], "gate_id": "registry-check" }
+  ],
+  "overlays_compatible": ["external-effects", "tenant-isolation", "usage-integrity", "performance", "test-quality"],
+  "gate_ids": ["scope", "registry-check", "posture-tests", "unit-tests", "lint"],
+  "output_contract": {
+    "done_output": ["registration proof for every registry", "the consumer named", "the overlap mechanism quoted", "cost posture: what wakes and how often", "trigger auth line quoted for HTTP jobs"],
+    "stop_conditions": ["overlap behavior unknown", "no consumer exists and the task does not add one", "the job would add a beat entry outside the minimal list without an operator ruling", "the trigger has no secret configured"]
+  },
+  "adapter_fields": [
+    { "name": "registries", "description": "Every list the runtime reads and how to check membership", "required": true },
+    { "name": "runner_fn", "description": "The sanctioned runner for DB and tenant work", "required": true },
+    { "name": "consumer_map", "description": "Queue or schedule to consumer: fly.toml process groups, Actions cron, launchd", "required": true },
+    { "name": "posture_tests", "description": "Tests that fail on a new wake-up outside the minimal list", "required": false },
+    { "name": "minimal_schedule_list", "description": "The allow-list of beat entries, if the repo has one", "required": false },
+    { "name": "trigger_auth_fn", "description": "The secret check for HTTP-triggered jobs", "required": false }
+  ],
+  "eval_cases_ref": "eval-cases.json"
+}

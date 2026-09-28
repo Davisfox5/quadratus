@@ -1,0 +1,40 @@
+{
+  "kind": "family",
+  "schema_version": 1,
+  "id": "agent-tool",
+  "version": "0.1.0",
+  "summary": "A tool an LLM can call: reads run directly, side effects only through the policy executor, a tool result never authorizes a write, external results wrapped untrusted, loop caps unchanged, contract doc in the same PR.",
+  "kinds": ["backend", "glue"],
+  "required_inputs": [
+    { "name": "tool", "description": "Name, registry location and whether it reads or has side effects", "refuse_if_missing": true },
+    { "name": "executor", "description": "For a side effect: the policy executor and action kind it goes through", "refuse_if_missing": true },
+    { "name": "blast_radius", "description": "What the tool can reach: one tenant, one user, or global", "refuse_if_missing": true },
+    { "name": "contract_doc", "description": "The tool contract doc the consumer reads", "refuse_if_missing": true }
+  ],
+  "checklist": [
+    { "id": "reads-direct-writes-executor", "rule": "A read runs directly; a side effect goes only through the policy executor for its action kind, one executor per kind", "because": "LINDA Ask LINDA: one executor per action kind, the policy decides, not the model; linda_outcomes never imports the router", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "result-never-authorizes", "rule": "A tool result never authorizes a write; authorization comes from the policy and the caller's scope", "because": "A model that reads 'approved: true' from a tool result and writes on it is the confused-deputy path the LINDA design forbids", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "untrusted-wrapped", "rule": "External or user-supplied results are wrapped as untrusted data and namespaced so they cannot pose as instructions", "because": "Quadratus Fable safety classifiers and LINDA transcripts both carry text that reads like instructions", "applies_to": ["lead", "reviewer"] },
+    { "id": "loop-caps-unchanged", "rule": "Tool-call loop caps, fetch caps and consult caps stay as they are; a tool that needs more stops and asks", "because": "Quadratus max_fetches and max_consults exist because open-ended loops burned windows; LINDA loop caps are a safety property", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "static-block-stable", "rule": "The static system block stays byte-stable; new tool descriptions go in the tool schema, not the prompt", "because": "LINDA prompt caching keys on the static block; a changed byte invalidates every cache", "applies_to": ["lead", "reviewer"], "gate_id": "static-block-hash" },
+    { "id": "scoped-like-an-endpoint", "rule": "The tool applies the same scope predicate as the equivalent endpoint; tenant and user come from the session, never from tool arguments", "because": "Flex MCP routes are API routes under another name; r3cruit3r agents_router scopes by user", "applies_to": ["lead", "reviewer", "verifier"], "gate_id": "scope-predicate-grep" },
+    { "id": "contract-doc-same-pr", "rule": "The tool contract doc changes in the same PR", "because": "LINDA test_integration_contract_docs; the doc is what the consumer and the operator read", "applies_to": ["lead", "reviewer"], "gate_id": "contract-doc-test" },
+    { "id": "strict-schema", "rule": "The tool schema is strict; unknown fields are rejected and required fields are enforced before the handler runs", "because": "Models invent arguments; a lenient schema turns an invented field into a silent default", "applies_to": ["lead", "reviewer"] },
+    { "id": "blast-radius-stated", "rule": "The done output states the blast radius: what the tool can read or change and for whom", "because": "The three Flex MCP servers and the War Room MCP server each reach production data; a reviewer needs the radius in one line", "applies_to": ["lead"] }
+  ],
+  "overlays_compatible": ["tenant-isolation", "privacy", "sensitive-path", "external-effects", "test-quality"],
+  "gate_ids": ["scope", "scope-predicate-grep", "static-block-hash", "contract-doc-test", "unit-tests", "lint"],
+  "output_contract": {
+    "done_output": ["tool name, registry entry and read or side-effect classification", "executor and action kind for a side effect", "the untrusted wrapper quoted", "loop caps confirmed unchanged", "static block hash before and after", "blast radius line"],
+    "stop_conditions": ["a side effect has no executor for its action kind", "the task asks to raise a loop cap", "the task asks the tool to write on the strength of a tool result", "blast radius unknown"]
+  },
+  "adapter_fields": [
+    { "name": "tool_registry", "description": "Where tools are declared", "required": true },
+    { "name": "policy_executor", "description": "The executor side effects go through, per action kind", "required": true },
+    { "name": "untrusted_wrapper", "description": "How external results are wrapped and namespaced", "required": true },
+    { "name": "loop_caps", "description": "Where the caps live and their current values", "required": true },
+    { "name": "static_block_path", "description": "The cached system block, for the hash gate", "required": false },
+    { "name": "contract_doc_path", "description": "The tool contract doc", "required": true }
+  ],
+  "eval_cases_ref": "eval-cases.json"
+}

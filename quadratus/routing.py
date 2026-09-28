@@ -2,11 +2,12 @@
 
 Two problems live here, and they share a fix.
 
-**The orchestrator seat.** Fable 5 holds it, and yields it only for a
-security-classified segment, where its classifiers would refuse to discuss the
-project it is supervising. An earlier design handed the seat over as a one-way
-assignment, which meant nothing ever handed it back -- once a single security
-question moved the seat, the deputy kept it for the rest of the session.
+**The orchestrator seat.** Fable 5 holds it, and yields it for exactly two
+reasons: a security-classified segment, where its classifiers would refuse to
+discuss the project it is supervising, and its own unavailability. An earlier
+design handed the seat over as a one-way assignment, which meant nothing ever
+handed it back -- once a single security question moved the seat, the deputy
+kept it for the rest of the session.
 
 The fix is to stop storing who holds the seat. :func:`orchestrator_seat`
 computes the holder from the segment in front of it, so reversion is not a
@@ -18,17 +19,34 @@ the model's context: decisions made while Fable is out land in the ledger,
 and Fable reads them when it resumes. That is the same append-only structure
 the compaction design already needs, doing double duty.
 
-The two yield reasons revert differently, which is why they are distinct:
+Both yield reasons land on the same deputy, because there is only one:
+:data:`quadratus.registry.ORCHESTRATOR_CHAIN` is two models long by operator
+directive, Fable and GPT-6 Astra, and no capable third model is quietly
+appended. Opus 5 could hold the seat and deliberately does not -- it is a
+brain-trust peer and half the pinned reviewer pair, and those roles are worth
+more to the run than a second understudy. When neither seat is available the
+run stops.
 
-There is exactly one way for anyone other than the primary to hold the seat:
-a security excursion, scoped to one segment, which reverts at its end.
+An earlier version of this module halted the run whenever the *primary* was
+unavailable, on the reasoning that the orchestrator is the only participant
+that persists -- it holds the goal, the policy it authored, and the thread of
+what has been decided -- so substituting it would quietly turn the run into a
+different run. The reasoning was right about the risk and wrong about where
+it bit. "Quietly" was the problem: a substitution that is *recorded* -- the
+seat carries :data:`SeatReason.FALLBACK_UNAVAILABLE`, and the ledger says the
+seat changed hands and when -- is visible to the operator without costing
+them a session with work in flight. So there is one recorded substitution,
+and then a full stop.
 
-An unavailable primary is not a seating problem at all -- it halts the run.
-The orchestrator is the only participant that persists across the session,
-holding the goal, the policy it authored, and the record of what has been
-decided. Debaters are re-invoked fresh each round and lose nothing by being
-swapped. Substituting the orchestrator would quietly turn the run into a
-different run, so :class:`OrchestratorUnavailable` is raised instead.
+Continuity across that substitution survives because it was never held in the
+model's context. The ledger is append-only, the invariants are re-emitted
+verbatim on every render, and the deputy reads the same rendered state the
+primary would have. That is the same mechanism a security excursion already
+relies on.
+
+Reversion needs no mechanism. The seat is computed per segment rather than
+stored, so the segment after the window rolls over seats the primary again by
+default.
 
 **Work routing.** Separately from who supervises, security-classified *work*
 is routed by operator preference to GPT-5.6 Sol. This is experience-based
@@ -56,6 +74,7 @@ __all__ = [
     "SeatReason",
     "Seat",
     "orchestrator_seat",
+    "OrchestratorUnavailable",
     "SECURITY_WORK_CHAIN",
     "route_security_work",
     "WorkClass",
@@ -72,15 +91,12 @@ class ExcursionUnavailable(RuntimeError):
 
 
 class OrchestratorUnavailable(RuntimeError):
-    """The primary orchestrator is not available, so the run cannot proceed.
+    """Nobody in the orchestrator chain can take the seat.
 
-    Deliberately fatal. The orchestrator is the only participant that persists
-    across the whole session -- it holds the goal, the policy it authored, and
-    the thread of what has already been decided. Debaters are re-invoked fresh
-    each round and lose nothing by being swapped; the orchestrator cannot be
-    swapped without the run silently becoming a different run. Continuing
-    under a substitute would produce a worse artifact without saying so, which
-    is the failure mode this whole design exists to avoid.
+    Still fatal, and now narrow: a run with no orchestrator is not a run.
+    What it no longer means is that the *primary* is down -- that is covered
+    by the chain, loudly, with the substitution recorded on the seat. See the
+    module docstring for why the halt was narrowed rather than kept.
     """
 
 
@@ -98,8 +114,11 @@ class SeatReason:
     PRIMARY = "primary"
     #: Yielded for this segment only because the work is security-classified.
     DELEGATED_SECURITY = "delegated-security"
-    #: Retained for reading historical run logs. No longer produced: an
-    #: unavailable primary halts the run rather than being substituted for.
+    #: The model ahead of this one in the chain could not be reached -- an
+    #: exhausted subscription window, a withdrawn model, a CLI that is not
+    #: signed in. Recorded rather than silent: a run that changed hands is a
+    #: different run, and the operator is entitled to know it happened without
+    #: having to lose the session to find out.
     FALLBACK_UNAVAILABLE = "fallback-unavailable"
 
 
@@ -146,14 +165,14 @@ def orchestrator_seat(
             False for an exhausted subscription window or an unreachable
             model. Called lazily, so an expensive check costs nothing when the
             primary is fine.
-        chain: Override the seat preference order, primary first.
+        chain: Override the seat preference order, primary first. A security
+            segment deputises from its tail, so one override covers both.
 
     Returns:
         The :class:`Seat` for this segment.
 
     Raises:
-        OrchestratorUnavailable: if the primary is unavailable outside a
-            security segment. There is no substitution path: the run halts.
+        OrchestratorUnavailable: when no one in the chain can take the seat.
         ExcursionUnavailable: if a security segment has no deputy available.
     """
     order = list(chain if chain is not None else ORCHESTRATOR_CHAIN)
@@ -165,35 +184,66 @@ def orchestrator_seat(
     if not security_segment:
         if available(primary):
             return Seat(primary, SeatReason.PRIMARY, reverts_at_segment_end=False)
+        # The primary is out. Substituting is a real cost -- the seat holds
+        # the thread of the run -- but it is a cost the ledger already pays
+        # for, and the alternative is ending a session with work in flight.
+        # The substitution is recorded on the seat rather than being silent,
+        # and it lapses on its own: the next segment recomputes and seats the
+        # primary again the moment it is reachable.
+        # One recorded substitution, not a cascade. The chain is short on
+        # purpose (see ORCHESTRATOR_CHAIN); this loop honours whatever length
+        # it has rather than assuming two.
+        for key in order[1:]:
+            if available(key):
+                return Seat(
+                    key,
+                    SeatReason.FALLBACK_UNAVAILABLE,
+                    # Not scoped to this segment -- there is nothing to hand
+                    # back to while the primary is down. Reversion happens by
+                    # recomputation, not by a flag.
+                    reverts_at_segment_end=False,
+                )
         raise OrchestratorUnavailable(
-            f"{primary} is unavailable and the run cannot continue without it. "
-            f"Wait for the subscription window to roll over, or resume the "
-            f"session once it is reachable."
+            f"{primary} is unavailable and so is its fallback "
+            f"({', '.join(order[1:]) or 'none configured'}). The run stops "
+            f"here rather than seating a model that has other work to do: "
+            f"wait for a subscription window to roll over, sign the CLI back "
+            f"in, and resume the session once one of them is reachable."
         )
 
     # A security segment skips the primary by design: its classifiers would
     # refuse to discuss the subject it is supervising. The deputy holds the
-    # seat for that thread only.
-    for key in order[1:]:
+    # seat for that thread only. It deputises from the same order as an
+    # unavailable primary does, because the two questions happen to have the
+    # same answer -- see ORCHESTRATOR_CHAIN for both reasons.
+    bench = order[1:]
+    for key in bench:
         if available(key):
             return Seat(key, SeatReason.DELEGATED_SECURITY, reverts_at_segment_end=True)
 
     raise ExcursionUnavailable(
         f"no deputy is available to take a security segment; "
-        f"{primary} cannot, and every alternative in the chain is down."
+        f"{primary} cannot, and every alternative ({', '.join(bench) or 'none'}) "
+        f"is down."
     )
 
 
 #: Where security-classified work goes, in preference order.
 #:
-#: Sol leads on operator preference from direct experience. Sonnet 5 follows
-#: because it carries no request-declining classifier at all, so it cannot
-#: false-positive on authorized work. Opus 5 anchors the chain: it is not the
-#: operator's preference here, but its classifier fires far less often than
-#: Fable's and something has to be able to take the work.
+#: Sol leads on operator preference from direct experience. Opus 5 anchors the
+#: chain: it is not the operator's preference here, but its classifier fires
+#: far less often than Fable's and something has to be able to take the work.
+#:
+#: Sonnet sat between them until 2026-09-12, on the reasoning that it carries
+#: no request-declining classifier at all and so cannot false-positive on
+#: authorized work. Removed by operator directive: Sonnet is a worker-tier
+#: model and holds no role in security, verification, or the brain trust. The
+#: classifier argument was an argument for *not being refused*, which is not
+#: the same as an argument for being trusted with the work -- and the
+#: excursion already routes around a refusal by other means. Do not re-add it
+#: here on the strength of the classifier tag.
 SECURITY_WORK_CHAIN: List[str] = [
     "openai:gpt-5.6-sol",
-    "claude:sonnet",
     "claude:opus",
 ]
 
@@ -300,20 +350,27 @@ def open_security_excursion(
     worker = route_security_work(
         seat.key, work_class=WorkClass.SECURITY, available=available
     )
-    if worker == seat.key:
-        # Every model the security chain would defer to is unavailable, so the
-        # only candidate left is the one already holding the seat. Deferral and
-        # independent verification are the two things this excursion exists to
-        # guarantee, and neither survives here. Fabricating an excursion that
-        # quietly self-performs and self-checks would be worse than stopping:
-        # the operator would see a security answer carrying a verification it
-        # never actually received.
+    if worker == seat.key or not available(worker):
+        # Nobody is left to hand the work to. Deferral and independent
+        # verification are the two things this excursion exists to guarantee,
+        # and neither survives here. Fabricating an excursion that quietly
+        # self-performs, or one whose named worker cannot answer, would be
+        # worse than stopping: the operator would see a security answer
+        # carrying a verification it never actually received.
+        #
+        # Two ways to arrive: the only candidate left is the model already
+        # holding the seat, or the chain is down to the last resort
+        # ``route_security_work`` returns when everything is unavailable --
+        # which it returns rather than raising, correctly for its own caller
+        # and so has to be caught here. The second case became reachable when
+        # the deputy stopped being a member of SECURITY_WORK_CHAIN; operator
+        # decision, 2026-09-12, to refuse rather than let the invocation fail
+        # later at transport.
         raise ExcursionUnavailable(
-            f"security work cannot be deferred: every model in "
-            f"SECURITY_WORK_CHAIN is unavailable except {seat.key}, which is "
-            f"acting as orchestrator. Restore one of "
-            f"{', '.join(k for k in SECURITY_WORK_CHAIN if k != seat.key)} "
-            f"or handle this item outside the run."
+            f"security work cannot be deferred: nothing in "
+            f"SECURITY_WORK_CHAIN is available to take it "
+            f"({', '.join(k for k in SECURITY_WORK_CHAIN if k != seat.key)}). "
+            f"Restore one of them or handle this item outside the run."
         )
     # The acting orchestrator double-checks. It did not author the answer, so
     # this is review rather than self-review.

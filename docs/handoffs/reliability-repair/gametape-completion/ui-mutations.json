@@ -1,0 +1,71 @@
+{
+  "baseline": {
+    "name": "baseline",
+    "target_file": "$GAMETAPE/static/js/app.js",
+    "replacement_applied": false,
+    "tests_failed": 0,
+    "tests_passed": 7,
+    "exit_code": 0,
+    "failed_tests": [],
+    "killed": false
+  },
+  "mutants": [
+    {
+      "name": "late-success-discarded",
+      "target_file": "/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/gametape-mutants-SpAvPq/late-success-discarded.js",
+      "replacement_applied": true,
+      "tests_failed": 2,
+      "tests_passed": 5,
+      "exit_code": 1,
+      "failed_tests": [
+        "committed apply survives change events with captured values",
+        "dismiss and reopen keeps same-project apply busy"
+      ],
+      "killed": true
+    },
+    {
+      "name": "guard-dropped",
+      "target_file": "/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/gametape-mutants-SpAvPq/guard-dropped.js",
+      "replacement_applied": true,
+      "tests_failed": 3,
+      "tests_passed": 4,
+      "exit_code": 1,
+      "failed_tests": [
+        "committed apply survives change events with captured values",
+        "dismiss and reopen keeps same-project apply busy",
+        "another project may preview but cannot confirm during pending apply"
+      ],
+      "killed": true
+    },
+    {
+      "name": "capture-after-await",
+      "target_file": "/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/gametape-mutants-SpAvPq/capture-after-await.js",
+      "replacement_applied": true,
+      "tests_failed": 2,
+      "tests_passed": 5,
+      "exit_code": 1,
+      "failed_tests": [
+        "committed apply survives change events with captured values",
+        "dismiss and reopen keeps same-project apply busy"
+      ],
+      "killed": true
+    },
+    {
+      "name": "tab-not-prevented",
+      "target_file": "/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/gametape-mutants-SpAvPq/tab-not-prevented.js",
+      "replacement_applied": true,
+      "tests_failed": 3,
+      "tests_passed": 4,
+      "exit_code": 1,
+      "failed_tests": [
+        "Tab wraps eligible controls and modal suppresses shortcuts",
+        "Preview recovers focus before its response",
+        "Confirm and Refresh recover focus while controls disappear"
+      ],
+      "killed": true
+    }
+  ],
+  "source_sha256_before": "a5613bc53459065dbac499f922cab6a0f44d056936c3673e57fc647dfa60707b",
+  "source_sha256_after": "a5613bc53459065dbac499f922cab6a0f44d056936c3673e57fc647dfa60707b",
+  "source_unchanged": true
+}

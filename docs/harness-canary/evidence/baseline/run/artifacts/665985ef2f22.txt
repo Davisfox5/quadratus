@@ -1,0 +1,9 @@
+Unable to complete because the workspace sandbox cannot initialize. No files were changed.
+
+Both editing and the required test command failed before execution with:
+
+```text
+bwrap: No permissions to create a new namespace, likely because the kernel does not allow non-privileged user namespaces. On e.g. debian this can be enabled with 'sysctl kernel.unprivileged_userns_clone=1'.
+```
+
+The environment must be repaired or restarted before I can modify `app.py` and verify the contract tests.

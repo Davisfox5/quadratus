@@ -1,0 +1,20 @@
+{
+  "platform_tested": "Darwin",
+  "python": "3.12.14",
+  "import_test": "Fresh repository with only base 8e71b6b, then bundle fetch and fast-forward to exact 9ac8bac. Verified package imports from the reconstructed checkout.",
+  "quadratus": "572 passed in 15.95s",
+  "ruff": "All checks passed",
+  "gametape": "79 passed in 0.30s",
+  "linux_tested": false,
+  "live_cli_acceptance": "Not run as part of packaging; deferred to Mac after cloud repair.",
+  "dependencies": {
+    "pytest": "9.1.1",
+    "ruff": "0.16.7",
+    "anthropic": "1.5.0",
+    "openai": "3.13.0",
+    "gradio": "6.27.0",
+    "playwright": "1.62.0",
+    "python-dotenv": "1.2.3",
+    "colorama": "0.4.6"
+  }
+}

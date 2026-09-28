@@ -1,0 +1,191 @@
+{
+  "runtime_base_commit": "b1a6ff9ee76218802958466bd174fc6f42b92c34",
+  "controls": [
+    "--disable",
+    "multi_agent",
+    "--disable",
+    "multi_agent_v2",
+    "-c",
+    "agents.enabled=false"
+  ],
+  "probes": [
+    {
+      "vendor": "codex",
+      "requested_model": "gpt-5.6-sol",
+      "scored": false,
+      "mode": "tools",
+      "outcome": "returned",
+      "elapsed_seconds": 9.030522336019203,
+      "usage": {
+        "input_tokens": 12552,
+        "output_tokens": 114
+      },
+      "resolved_model": null,
+      "diagnostics": {},
+      "native_children": [],
+      "private_rollout_hashes": {
+        "rollout-2026-09-15T16-46-09-01a0a5f6-2cb8-7fd1-9582-2e164820d18b.jsonl": "fa1dfa4febdd7314a59014bf83f3ba9ea317ef3f4a0148ea8dc31f9fee1941c3"
+      },
+      "budget": {
+        "limits": {
+          "max_calls": 1,
+          "max_reported_tokens": 50000,
+          "wall_seconds": 70,
+          "max_concurrent_workers": 1
+        },
+        "reserved_attempts": 1,
+        "in_flight": 0,
+        "input_tokens": 12552,
+        "output_tokens": 114,
+        "reported_tokens": 12666,
+        "unknown_usage_attempts": 0,
+        "stop_reason": "",
+        "preserved_responses": [],
+        "elapsed_seconds": 9.030812836019322,
+        "token_boundary": "post-return threshold; in-flight calls can overshoot",
+        "input_boundary": "normalized provider input includes cached input; do not add it again",
+        "wall_boundary": "attempt timeout plus required external process supervisor"
+      },
+      "reply": "functions.wait\nfunctions.request_user_input\nfunctions.exec",
+      "supervisor": {
+        "outcome": "success",
+        "exit_code": 0,
+        "image_id": "sha256:f801ce6551eb6f00271d94773581c803e02dacd0dc3e94fada29e7ccbfb4e013",
+        "container_name": "quadratus-blind-61a34075681a481aa934d21d3461f95c"
+      },
+      "cli_events": [
+        {
+          "type": "thread.started",
+          "thread_id": "01a0a5f6-2cb8-7fd1-9582-2e164820d18b"
+        },
+        {
+          "type": "item.completed",
+          "item": {
+            "id": "item_0",
+            "type": "agent_message",
+            "text": "functions.wait\nfunctions.request_user_input\nfunctions.exec"
+          }
+        },
+        {
+          "type": "turn.completed",
+          "usage": {
+            "input_tokens": 12552,
+            "cached_input_tokens": 10112,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 114,
+            "reasoning_output_tokens": 98
+          }
+        }
+      ]
+    },
+    {
+      "vendor": "codex",
+      "requested_model": "gpt-5.6-sol",
+      "scored": false,
+      "mode": "spawn",
+      "outcome": "returned",
+      "elapsed_seconds": 7.651304461993277,
+      "usage": {
+        "input_tokens": 12750,
+        "output_tokens": 28
+      },
+      "resolved_model": null,
+      "diagnostics": {},
+      "native_children": [],
+      "private_rollout_hashes": {
+        "rollout-2026-09-15T16-46-56-01a0a5f6-e40d-74d0-a21f-99e16bc8635f.jsonl": "a46b3fce477cd96c7d69ae54634a89426a4564f6df266552bfe00b92c5f59018"
+      },
+      "budget": {
+        "limits": {
+          "max_calls": 1,
+          "max_reported_tokens": 50000,
+          "wall_seconds": 70,
+          "max_concurrent_workers": 1
+        },
+        "reserved_attempts": 1,
+        "in_flight": 0,
+        "input_tokens": 12750,
+        "output_tokens": 28,
+        "reported_tokens": 12778,
+        "unknown_usage_attempts": 0,
+        "stop_reason": "",
+        "preserved_responses": [],
+        "elapsed_seconds": 7.651581711950712,
+        "token_boundary": "post-return threshold; in-flight calls can overshoot",
+        "input_boundary": "normalized provider input includes cached input; do not add it again",
+        "wall_boundary": "attempt timeout plus required external process supervisor"
+      },
+      "reply": "Native delegation unavailable",
+      "supervisor": {
+        "outcome": "success",
+        "exit_code": 0,
+        "image_id": "sha256:f801ce6551eb6f00271d94773581c803e02dacd0dc3e94fada29e7ccbfb4e013",
+        "container_name": "quadratus-blind-15de1b6d242d4cb98e8bbe7c50796ddf"
+      },
+      "cli_events": [
+        {
+          "type": "thread.started",
+          "thread_id": "01a0a5f6-e40d-74d0-a21f-99e16bc8635f"
+        },
+        {
+          "type": "item.completed",
+          "item": {
+            "id": "item_0",
+            "type": "agent_message",
+            "text": "Native delegation unavailable"
+          }
+        },
+        {
+          "type": "turn.completed",
+          "usage": {
+            "input_tokens": 12750,
+            "cached_input_tokens": 10112,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 28,
+            "reasoning_output_tokens": 19
+          }
+        }
+      ]
+    }
+  ],
+  "reported_tokens_this_pair": 25444,
+  "interpretation": "Both scoped live checks passed: no native-agent tools reported, no native children or collaboration events observed. This is bounded test evidence, not proof about all future CLI versions or all behaviors. Raw matching parent rollouts retained privately and hashed.",
+  "runtime_source_sha256": {
+    "quadratus/__init__.py": "7f155435c0bd7b64f4e59daa3af3a056bb4af1bd5a6ab876e12651a64d6f3fa4",
+    "quadratus/artifacts.py": "539ce1312b6d2533bbb7ab21c4f9dceb0b2ab087b50a8b9abb74923f1fc73aa2",
+    "quadratus/blind_bundle.py": "5932eb162fb5c76a2700655065e3d6ecda42697a26725c8aced55c06b7cbbacb",
+    "quadratus/browser.py": "0ab382e6ae18686d3c6c16b53a6cd1c23b8ab905adef3966c3afc43db33e7a5f",
+    "quadratus/browser_pilot.py": "6aeffd8a2f82d2256a2854f4b0fd942f098a3bf14e4dcd7505d1f4ee65e09c57",
+    "quadratus/cli.py": "374252698432ef6ff9383f2c4f05647e50335ca7999b31825ff908a92d46549e",
+    "quadratus/cli_providers.py": "1f288a0016eb069691b10efb0e74a4ba1f904920e17a68c3fec72a1d12ed60d5",
+    "quadratus/codebase_map.py": "5087ef0821293b09319b8bf58c6717932463c06a5d40f86289297baad9036ca6",
+    "quadratus/config.py": "bbe147d68533b9d16a7daa2fe6ddf08ccfa7542bc5090874c63c2ae8cd546a2e",
+    "quadratus/delegation.py": "53cec2b502bb2fdcf889ab2a5fe267b47affeec9e8ef5b2d6abdd31ea3665f36",
+    "quadratus/gui.py": "f200d49d06f2fbc6c43cf1ffc7e760e521fc30dcf5dfd282f0dcbdae6fdd112a",
+    "quadratus/integration.py": "cb9d1df9b83d6e028de1a15027986fe7e0e566c0232c2e21fe2fceeb1499f920",
+    "quadratus/isolated_run.py": "6a3c382dab650ba516a9cd9a0050e06d9199ed796b1ffab7f34edfe86cff479a",
+    "quadratus/latest.py": "97bc41c16ee059230dc181cd041345e00e425a0738322aae6fa5bfbd30209613",
+    "quadratus/ledger.py": "57f5d845c01af740f295f8046aa496f689f5ae00d2bdb85a571e4c4900188a44",
+    "quadratus/memory.py": "2daea08d1588dea52bcba1bbb085eb7f78f764394dfb3f26fb60252f85419bc9",
+    "quadratus/native_sessions.py": "e8ed3ce302581f0b5c48c250396915093ce4eaedd81686b97da375580fa7819d",
+    "quadratus/orchestrator.py": "a32053ea119f81fb90c2cb54427ae0b38067bec36a96e4f6fd746b7a6e2ea28d",
+    "quadratus/probe.py": "b7d77d0a88af69fbffc14becdf163748f8541040f14b6dd57018be20269b1d91",
+    "quadratus/project.py": "4d9432911b40551d6aa6a3346059fd7cbfe156b0abc3482c3096415ce699fb71",
+    "quadratus/project_run.py": "4a76c45c367b3e5a45bd1109331edfef295cc736076a3a9fbd171fb9807921ec",
+    "quadratus/prompts.py": "347debab62a4b6d23f6c39fb2f83450b80b74ea6312aaa24795058564f78348c",
+    "quadratus/providers.py": "802a8d58419b993a2fee14e3d8f80139f993e12d74b5db76d6253b4a8b5df5b5",
+    "quadratus/registry.py": "36ae3292d627e683e95ef3c4a06302069a7367ae41d0fc5e1095e9a43d315ba0",
+    "quadratus/repo_scan.py": "51adb8b53dd6f8c41f2f5b9f7f15cd345a402f6f78948f72ba0e5583957f28a4",
+    "quadratus/routing.py": "f4a3586fe1988a979e138e263007a7d0e54f58bd57553976543d8d0a5014e7c9",
+    "quadratus/run_budget.py": "e610e27b82f420213e7343e1fb828c516da55c6a77a235fc710c72e48d6a0d26",
+    "quadratus/runtime.py": "31ff90a259bea99dc75e899328eb4bb27fcab2336d5821a2458a77eea8b8a0fe",
+    "quadratus/scope.py": "4cfef7c5aeac77546efe40ce9682d68b50946d673d7168ed4348e59e98d0bb03",
+    "quadratus/session.py": "7b300d3ab81697bdcca3195aa0d14fbea2d296c75a27a65b384b526975672a00",
+    "quadratus/structured.py": "6968ec0704d81cdeef29d37c0fb56be6226d4299b3f079af550239a934c2120f",
+    "quadratus/task_kinds.py": "24d1b65454785071f4d3c38f827fbeeb3fa122ee09994e387d1c9bd91992983f",
+    "quadratus/taskmeta.py": "6dd886f6e20f5643dd8527811361c75514a6bd172688666c1ae8e939f64b7550",
+    "quadratus/usage.py": "2b7086e709ceed763d1e320f6bee8335793b200ddb6a80ce304f4f19d281630e",
+    "quadratus/workers.py": "7105d3f8677df4197adce11f75329317285cc8b125e0a1d55615966fef59d145",
+    "tools/acceptance/native_probe.py": "38b026bdefce7c9dda9fc63da7945391a6d40f0c3fa0cf20cdc661113774433e"
+  }
+}

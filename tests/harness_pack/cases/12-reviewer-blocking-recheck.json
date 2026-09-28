@@ -1,0 +1,122 @@
+{
+ "id": "reviewer-blocking-recheck",
+ "shape": "fake-done",
+ "family": "scoped-endpoint",
+ "grader": true,
+ "source": "Report, Quadratus role hierarchy: reviewers mark BLOCKING, the lead revises, the reviewer rechecks only its own findings; unresolved findings are carried to the record, never dropped.",
+ "session": {
+  "project": false
+ },
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Add the parser",
+   "complexity": "standard"
+  }
+ },
+ "variants": {
+  "good": {
+   "script": [
+    {
+     "role": "lead",
+     "reply": "Draft: the change as text."
+    },
+    {
+     "role": "collaborator",
+     "reply": "NO FINDINGS"
+    },
+    {
+     "role": "closeout",
+     "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+    }
+   ],
+   "expect": {
+    "outcome": "completed",
+    "calls": {
+     "role:collaborator": 1,
+     "role:revision": 0,
+     "role:recheck": 0
+    },
+    "open_findings": {
+     "empty": true
+    }
+   }
+  },
+  "resolved": {
+   "script": [
+    {
+     "role": "lead",
+     "reply": "Draft: the change as text."
+    },
+    {
+     "role": "collaborator",
+     "reply": "BLOCKING: the second-tenant lookup by id carries no scope predicate."
+    },
+    {
+     "role": "revision",
+     "reply": "Revised: the lookup now filters on tenant_id."
+    },
+    {
+     "role": "recheck",
+     "reply": "RESOLVED"
+    },
+    {
+     "role": "closeout",
+     "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+    }
+   ],
+   "expect": {
+    "outcome": "completed",
+    "calls": {
+     "role:revision": 1,
+     "role:recheck": 1
+    },
+    "open_findings": {
+     "empty": true
+    }
+   }
+  },
+  "bad": {
+   "script": [
+    {
+     "role": "lead",
+     "reply": "Draft: the change as text."
+    },
+    {
+     "role": "collaborator",
+     "reply": "BLOCKING: the second-tenant lookup by id carries no scope predicate."
+    },
+    {
+     "role": "revision",
+     "reply": "Revised, mostly."
+    },
+    {
+     "role": "recheck",
+     "reply": "UNRESOLVED: the lookup by id still has no tenant predicate."
+    },
+    {
+     "role": "closeout",
+     "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+    }
+   ],
+   "expect": {
+    "outcome": "completed",
+    "calls": {
+     "role:revision": 2,
+     "role:recheck": 2
+    },
+    "open_findings": {
+     "count": 1,
+     "contains": [
+      "UNRESOLVED: the lookup by id still has no tenant predicate."
+     ]
+    },
+    "store_contains": [
+     "Blocking findings still unresolved at close"
+    ]
+   }
+  }
+ },
+ "expect": {}
+}

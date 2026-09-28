@@ -1,0 +1,27 @@
+{
+  "all_saved_files_unchanged_by_stop": true,
+  "hashes_after_stop": {
+    "app.py": "8bb7abe98f22534500761b6368b93dcf1d5fb7712e31519eb6d401c0a032329f",
+    "tests/test_bulk_edit.py": "6dd50e17af965c1e42c72123ec0d52269299178ed56fb5582c52afb398906554",
+    "docs/BULK_EDIT.md": "d6c4b50e3ef84243f4489d6bb69bca3f37e7b75ca0388d302f0e922ffe3467ad"
+  },
+  "observed_processes": [
+    {
+      "pid": 85104,
+      "ppid": 76454,
+      "pgid": 85104,
+      "command": "/opt/homebrew/bin/grok"
+    },
+    {
+      "pid": 76454,
+      "ppid": 90980,
+      "pgid": 76454,
+      "command": "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python"
+    }
+  ],
+  "surviving_observed_pids": [],
+  "unknown_invocations": 1,
+  "in_flight_task": "t2",
+  "in_flight_changed_lines": 125,
+  "saved_files_unchanged_after_checks": true
+}

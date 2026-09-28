@@ -1,0 +1,5 @@
+Project: /work; edits enabled
+asking claude:fable for the next task
+claude:fable is out of window; the seat falls to openai:gpt-6-astra
+task 1: Create the parsing foundation using standard-library `csv` and `io`, following the export column format in `app.py`. Return `(headers, records)`, where records contain `(line, cells)` pairs; preserve cell text and wrong-width records for later row validation. Budget 40 implementation lines and 60 test lines covering encoding, quoting, physical numbering, required headers, blank records, and the 5000/5001 boundary. Defer row classification, endpoint wiring, UI, and documentation. [backend/simple]
+grok:default failed without changing source; one recovery on openai:gpt-5.6-sol

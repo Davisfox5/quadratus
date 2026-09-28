@@ -1,0 +1,16 @@
+{
+  "supervisor": {
+    "outcome": "success",
+    "exit_code": 0,
+    "image_id": "sha256:d1f99331a1639f5ff364faf9e4c027943613fadba733d452191296b873a390e2",
+    "container_name": "quadratus-blind-dcb0b32fb66b4023a5414634afd57818"
+  },
+  "command": "python -m pytest -q",
+  "pytest_exit_status": "0",
+  "network": false,
+  "credentials": false,
+  "source_hashes_match_before": true,
+  "source_hashes_unchanged_after": true,
+  "excluded_from_comparison": "pytest __pycache__/.pytest_cache, written by the check itself",
+  "output": "........................................................................ [ 66%]\n....................................                                     [100%]\n108 passed in 2.07s\n"
+}

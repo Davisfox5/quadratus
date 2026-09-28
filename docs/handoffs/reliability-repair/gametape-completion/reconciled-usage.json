@@ -1,0 +1,8 @@
+{
+  "quadratus_parent_and_identified_codex_child_tokens": 28827215,
+  "additional_claude_vendor_aggregate_tokens": 4586562,
+  "additional_grok_vendor_aggregate_tokens": 0,
+  "known_minimum_tokens": 33413777,
+  "unknown_invocations": 2,
+  "note": "Claude adjustment is aggregate minus already-counted parent, not the full aggregate added again. Native Claude tasks lack individual attribution. Cached and repeated input included. No verified dollar bill."
+}

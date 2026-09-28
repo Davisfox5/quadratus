@@ -1,0 +1,296 @@
+{
+  "runtime_base_commit": "b1a6ff9ee76218802958466bd174fc6f42b92c34",
+  "probes": [
+    {
+      "vendor": "grok",
+      "requested_model": "default",
+      "scored": false,
+      "mode": "tools",
+      "outcome": "ProviderError",
+      "elapsed_seconds": 1.1188699590275064,
+      "usage": null,
+      "resolved_model": null,
+      "diagnostics": {},
+      "native_children": [],
+      "private_rollout_hashes": {},
+      "budget": {
+        "limits": {
+          "max_calls": 1,
+          "max_reported_tokens": 50000,
+          "wall_seconds": 70,
+          "max_concurrent_workers": 1
+        },
+        "reserved_attempts": 1,
+        "in_flight": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "reported_tokens": 0,
+        "unknown_usage_attempts": 1,
+        "stop_reason": "unknown_usage",
+        "preserved_responses": [],
+        "elapsed_seconds": 1.1190995839424431,
+        "token_boundary": "post-return threshold; in-flight calls can overshoot",
+        "input_boundary": "normalized provider input includes cached input; do not add it again",
+        "wall_boundary": "attempt timeout plus required external process supervisor"
+      },
+      "probe_name": "grok-tools",
+      "supervisor": {
+        "outcome": "failed",
+        "exit_code": 1,
+        "image_id": "sha256:f801ce6551eb6f00271d94773581c803e02dacd0dc3e94fada29e7ccbfb4e013",
+        "container_name": "quadratus-blind-5eac39c0407642a581e80ff501e2ec37"
+      },
+      "failure_reason": "Probe sent literal model default; CLI rejected unknown model id. Production Fleet uses an empty wire alias. Corrected probe uses Fleet alias_for; unknown usage retained, no automatic retry."
+    },
+    {
+      "vendor": "claude",
+      "requested_model": "fable",
+      "scored": false,
+      "mode": "tools",
+      "outcome": "returned",
+      "elapsed_seconds": 3.5631792939966545,
+      "usage": {
+        "input_tokens": 11420,
+        "output_tokens": 140
+      },
+      "resolved_model": "claude-fable-5-1",
+      "diagnostics": {},
+      "native_children": [],
+      "private_rollout_hashes": {},
+      "budget": {
+        "limits": {
+          "max_calls": 1,
+          "max_reported_tokens": 50000,
+          "wall_seconds": 70,
+          "max_concurrent_workers": 1
+        },
+        "reserved_attempts": 1,
+        "in_flight": 0,
+        "input_tokens": 11420,
+        "output_tokens": 140,
+        "reported_tokens": 11560,
+        "unknown_usage_attempts": 0,
+        "stop_reason": "",
+        "preserved_responses": [],
+        "elapsed_seconds": 3.5634460019646212,
+        "token_boundary": "post-return threshold; in-flight calls can overshoot",
+        "input_boundary": "normalized provider input includes cached input; do not add it again",
+        "wall_boundary": "attempt timeout plus required external process supervisor"
+      },
+      "probe_name": "claude-tools",
+      "supervisor": {
+        "outcome": "success",
+        "exit_code": 0,
+        "image_id": "sha256:f801ce6551eb6f00271d94773581c803e02dacd0dc3e94fada29e7ccbfb4e013",
+        "container_name": "quadratus-blind-018082c435c4423a9f005dd0268aa166"
+      },
+      "reply": "Glob\nGrep\nListAgents\nRead\nReportFindings\nScheduleWakeup\nSkill\nToolSearch\nWorkflow\nCronCreate\nCronDelete\nCronList\nDesignSync\nEnterWorktree\nExitWorktree\nMonitor\nPushNotification\nRemoteTrigger\nSendMessage\nTaskOutput\nTaskStop\nWebFetch\nWebSearch"
+    },
+    {
+      "vendor": "grok",
+      "requested_seat": "grok:default",
+      "requested_model": "",
+      "scored": false,
+      "mode": "tools",
+      "outcome": "returned",
+      "elapsed_seconds": 4.389764377032407,
+      "usage": {
+        "input_tokens": 10008,
+        "output_tokens": 177
+      },
+      "resolved_model": null,
+      "diagnostics": {
+        "stop_reason": "end_turn"
+      },
+      "native_children": [],
+      "private_rollout_hashes": {},
+      "budget": {
+        "limits": {
+          "max_calls": 1,
+          "max_reported_tokens": 50000,
+          "wall_seconds": 70,
+          "max_concurrent_workers": 1
+        },
+        "reserved_attempts": 1,
+        "in_flight": 0,
+        "input_tokens": 10008,
+        "output_tokens": 177,
+        "reported_tokens": 10185,
+        "unknown_usage_attempts": 0,
+        "stop_reason": "",
+        "preserved_responses": [],
+        "elapsed_seconds": 4.39051750197541,
+        "token_boundary": "post-return threshold; in-flight calls can overshoot",
+        "input_boundary": "normalized provider input includes cached input; do not add it again",
+        "wall_boundary": "attempt timeout plus required external process supervisor"
+      },
+      "probe_name": "grok-tools-corrected",
+      "supervisor": {
+        "outcome": "success",
+        "exit_code": 0,
+        "image_id": "sha256:f801ce6551eb6f00271d94773581c803e02dacd0dc3e94fada29e7ccbfb4e013",
+        "container_name": "quadratus-blind-5a49a6a06a3f42519958f06f09887c69"
+      },
+      "reply": "web_search\nopen_page\nopen_page_with_find\nx_user_search\nx_semantic_search\nx_keyword_search\nx_thread_fetch\nrun_terminal_command\nread_file\nsearch_replace\nlist_dir\ngrep\ntodo_write\nmonitor\nsearch_tool\nuse_tool\nworkflow\nenter_plan_mode\nexit_plan_mode\nask_user_question\nsend_feedback\nimage_gen\nimage_edit\nimage_to_video\nreference_to_video\nwrite"
+    },
+    {
+      "vendor": "claude",
+      "requested_seat": "claude:fable",
+      "requested_model": "fable",
+      "scored": false,
+      "mode": "spawn",
+      "outcome": "returned",
+      "elapsed_seconds": 2.5063422509701923,
+      "usage": {
+        "input_tokens": 11842,
+        "output_tokens": 35
+      },
+      "resolved_model": "claude-fable-5-1",
+      "diagnostics": {},
+      "native_children": [],
+      "private_rollout_hashes": {},
+      "budget": {
+        "limits": {
+          "max_calls": 1,
+          "max_reported_tokens": 50000,
+          "wall_seconds": 70,
+          "max_concurrent_workers": 1
+        },
+        "reserved_attempts": 1,
+        "in_flight": 0,
+        "input_tokens": 11842,
+        "output_tokens": 35,
+        "reported_tokens": 11877,
+        "unknown_usage_attempts": 0,
+        "stop_reason": "",
+        "preserved_responses": [],
+        "elapsed_seconds": 2.506592875928618,
+        "token_boundary": "post-return threshold; in-flight calls can overshoot",
+        "input_boundary": "normalized provider input includes cached input; do not add it again",
+        "wall_boundary": "attempt timeout plus required external process supervisor"
+      },
+      "probe_name": "claude-spawn",
+      "supervisor": {
+        "outcome": "success",
+        "exit_code": 0,
+        "image_id": "sha256:f801ce6551eb6f00271d94773581c803e02dacd0dc3e94fada29e7ccbfb4e013",
+        "container_name": "quadratus-blind-7f5351c2c4d64c848d213e3f3f526833"
+      },
+      "reply": "Native delegation unavailable \u2014 no Agent, Task, or spawn_agent tool is present in this session."
+    },
+    {
+      "vendor": "grok",
+      "requested_seat": "grok:default",
+      "requested_model": "",
+      "scored": false,
+      "mode": "spawn",
+      "outcome": "returned",
+      "elapsed_seconds": 5.721537751960568,
+      "usage": {
+        "input_tokens": 10063,
+        "output_tokens": 169
+      },
+      "resolved_model": null,
+      "diagnostics": {
+        "stop_reason": "end_turn"
+      },
+      "native_children": [],
+      "private_rollout_hashes": {},
+      "budget": {
+        "limits": {
+          "max_calls": 1,
+          "max_reported_tokens": 50000,
+          "wall_seconds": 70,
+          "max_concurrent_workers": 1
+        },
+        "reserved_attempts": 1,
+        "in_flight": 0,
+        "input_tokens": 10063,
+        "output_tokens": 169,
+        "reported_tokens": 10232,
+        "unknown_usage_attempts": 0,
+        "stop_reason": "",
+        "preserved_responses": [],
+        "elapsed_seconds": 5.722100835992023,
+        "token_boundary": "post-return threshold; in-flight calls can overshoot",
+        "input_boundary": "normalized provider input includes cached input; do not add it again",
+        "wall_boundary": "attempt timeout plus required external process supervisor"
+      },
+      "probe_name": "grok-spawn",
+      "supervisor": {
+        "outcome": "success",
+        "exit_code": 0,
+        "image_id": "sha256:f801ce6551eb6f00271d94773581c803e02dacd0dc3e94fada29e7ccbfb4e013",
+        "container_name": "quadratus-blind-3c59d39613ec44b693543239720cdaf7"
+      },
+      "reply": "Native delegation unavailable."
+    },
+    {
+      "vendor": "grok",
+      "requested_seat": "grok:worker",
+      "requested_model": "",
+      "scored": false,
+      "mode": "restricted-read",
+      "outcome": "returned",
+      "read_canary_matches": false,
+      "source_unchanged": true,
+      "elapsed_seconds": 4.042857292923145,
+      "usage": {
+        "input_tokens": 5720,
+        "output_tokens": 117
+      },
+      "resolved_model": null,
+      "diagnostics": {
+        "stop_reason": "end_turn"
+      },
+      "native_children": [],
+      "private_rollout_hashes": {},
+      "budget": {
+        "limits": {
+          "max_calls": 1,
+          "max_reported_tokens": 50000,
+          "wall_seconds": 70,
+          "max_concurrent_workers": 1
+        },
+        "reserved_attempts": 1,
+        "in_flight": 0,
+        "input_tokens": 5720,
+        "output_tokens": 117,
+        "reported_tokens": 5837,
+        "unknown_usage_attempts": 0,
+        "stop_reason": "",
+        "preserved_responses": [],
+        "elapsed_seconds": 4.050208876025863,
+        "token_boundary": "post-return threshold; in-flight calls can overshoot",
+        "input_boundary": "normalized provider input includes cached input; do not add it again",
+        "wall_boundary": "attempt timeout plus required external process supervisor"
+      },
+      "probe_name": "grok-restricted-read",
+      "supervisor": {
+        "outcome": "success",
+        "exit_code": 0,
+        "image_id": "sha256:f801ce6551eb6f00271d94773581c803e02dacd0dc3e94fada29e7ccbfb4e013",
+        "container_name": "quadratus-blind-f30b6de79c5647959d640114f0dcfb30"
+      },
+      "reply": "I'll read `probe.txt` from the working directory and return only its exact contents.read-proof-1361018831604157bbf9f9b1eea303d6",
+      "read_canary_found": true,
+      "interpretation": "Fresh random file contents appear in reply and source is unchanged, demonstrating read access. Exact-reply criterion failed because Grok added narration. The envelope does not name the tool used; no claim of direct read_file telemetry."
+    }
+  ],
+  "known_reported_tokens": 49691,
+  "unknown_usage_attempts": 1,
+  "interpretation": "Limited native-off tool-list and spawn checks passed for Claude and Grok. Empty observed-child lists do not prove absence of all hidden vendor activity; Claude json exposes denials, not undenied child calls. Grok restricted read demonstrated contents access but failed exact output formatting.",
+  "probe_source_sha256": {
+    "runtime": "38b026bdefce7c9dda9fc63da7945391a6d40f0c3fa0cf20cdc661113774433e",
+    "runtime-v2": "8b56645c25d5f34f3f8be8cf0678717cce8e60111071ad696c1b6f7665551ea7",
+    "runtime-v3": "abca6254fff5a1a45dc1e27752f086bd365e872eab056a6b063b15b326976543"
+  },
+  "private_examiner_archive": {
+    "filename": "private-challenge-2026-09-15.tar.gz",
+    "sha256": "71cb8b06a34ed94d6936bd9dfc45ed3889a0f6c5a80be1424850f1140e66371a",
+    "downloaded_from": "Claude session attachment, resent on request",
+    "verified_locally": true,
+    "outside_repositories": true,
+    "contents_opened": false
+  }
+}

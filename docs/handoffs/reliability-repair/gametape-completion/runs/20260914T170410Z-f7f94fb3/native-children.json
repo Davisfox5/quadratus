@@ -1,0 +1,34 @@
+[
+  {
+    "session_id": "unidentified:01a0a11b-9bae-7ba3-9248-50bd6ccdc49b:item_12",
+    "model": null,
+    "parent_session_id": "01a0a11b-9bae-7ba3-9248-50bd6ccdc49b",
+    "input_tokens": null,
+    "output_tokens": null,
+    "tool_name": "wait"
+  },
+  {
+    "session_id": "01a0a11b-ef9f-7622-a8c3-5e900b04a868",
+    "model": "gpt-5.6-sol",
+    "parent_session_id": "01a0a11b-9bae-7ba3-9248-50bd6ccdc49b",
+    "input_tokens": 425183,
+    "output_tokens": 3362,
+    "tool_name": "spawn_agent"
+  },
+  {
+    "session_id": "01a0a11c-05fb-7ab0-a988-f0667c262e64",
+    "model": "gpt-5.6-sol",
+    "parent_session_id": "01a0a11b-9bae-7ba3-9248-50bd6ccdc49b",
+    "input_tokens": 332111,
+    "output_tokens": 4032,
+    "tool_name": "spawn_agent"
+  },
+  {
+    "session_id": "01a0a11c-17a2-72a3-badd-879a9440ee05",
+    "model": "gpt-5.6-sol",
+    "parent_session_id": "01a0a11b-9bae-7ba3-9248-50bd6ccdc49b",
+    "input_tokens": 611653,
+    "output_tokens": 4709,
+    "tool_name": "spawn_agent"
+  }
+]

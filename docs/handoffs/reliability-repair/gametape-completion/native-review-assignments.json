@@ -1,0 +1,17 @@
+[
+  {
+    "session_id": "01a0a11b-ef9f-7622-a8c3-5e900b04a868",
+    "task_label": "backend_review",
+    "detail": "Task category from recorded native recipient label; private instruction content omitted"
+  },
+  {
+    "session_id": "01a0a11c-05fb-7ab0-a988-f0667c262e64",
+    "task_label": "frontend_review",
+    "detail": "Task category from recorded native recipient label; private instruction content omitted"
+  },
+  {
+    "session_id": "01a0a11c-17a2-72a3-badd-879a9440ee05",
+    "task_label": "tests_review",
+    "detail": "Task category from recorded native recipient label; private instruction content omitted"
+  }
+]

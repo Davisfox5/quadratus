@@ -1,0 +1,163 @@
+diff --git a/docs/BULK_EDIT.md b/docs/BULK_EDIT.md
+index eb2e22f..12cdcf0 100644
+--- a/docs/BULK_EDIT.md
++++ b/docs/BULK_EDIT.md
+@@ -166,7 +166,10 @@ append). **Preview** posts `{clip_ids, changes}` for the current filter. Confirm
+ disabled and enables only when a non-null preview is stored. The Clip / Before / After
+ table shows `start–end label` and `tag_type · player names` (`no player` when empty).
+ Press Enter on the focused **Confirm** button (native) or click it. Success writes
+-`N clip(s) updated` and resets both selects to keep. **Cancel (Esc)** closes.
++`N clip(s) updated` and resets both selects to keep only if the preview generation
++is unchanged. If choices changed or the modal was reopened while applying, the
++committed result still appears, current choices are preserved, and the status asks
++for a new preview. **Cancel (Esc)** closes.
+ 
+ `#bulk-status` (`role="status"` `aria-live="polite"`):
+ 
+@@ -192,7 +195,7 @@ Measured in this slice:
+ 
+ ```
+ $ /tmp/gametape-trial-env/bin/python -m pytest -q
+-100 passed in 1.91s
++100 passed in 1.96s
+ 
+ $ node --check static/js/app.js
+ ```
+@@ -239,16 +242,23 @@ fixes by exact replacement, and runs `tests/ui/bulk_serialization.test.js` and
+ `tests/ui/bulk_keyboard.test.js` with `APP_JS_PATH` set to each copy (not
+ `load_app.test.js`). Production `static/js/app.js` is SHA-256 hashed before and after
+ and remained `a5613bc53459065dbac499f922cab6a0f44d056936c3673e57fc647dfa60707b`.
+-Observed (uncolored spec reporter; `FORCE_COLOR` can hide the `#`/`ℹ` summary
+-prefixes the harness parses):
++Final caller-verified results (the mutation subprocess uses uncolored TAP):
+ 
+ ```
+-baseline:             7 passed, 0 failed
+-guard-dropped:        5 passed, 1 failed, killed
+-capture-after-await:  6 passed, 1 failed, killed
+-tab-not-prevented:    4 passed, 3 failed, killed
++baseline:                7 passed, 0 failed
++late-success-discarded:   5 passed, 2 failed, killed
++guard-dropped:            4 passed, 3 failed, killed
++capture-after-await:     5 passed, 2 failed, killed
++tab-not-prevented:       4 passed, 3 failed, killed
+ ```
+ 
++The caller strengthened the serialization tests to dispatch real `change` events,
++check the committed clip state after dismissal/reopen, and assert the second
++request count before awaiting it. Before that correction, restoring the original
++generation-based lost-success bug passed all three serialization tests; now it
++fails both relevant cases. All four mutants complete with explicit failures and
++no cancelled tests. Production code is unchanged by these test corrections.
++
+ Limitations: single-process only (see Deployment boundary). `_BULK_PREVIEWS` has no
+ size cap; idle entries live until 600s lazy prune. `export_video`, `trim_video`,
+ `split_video`, and `cut_video` hold `_STORE_LOCK` across ffmpeg, stalling every store
+diff --git a/tests/ui/bulk_serialization.test.js b/tests/ui/bulk_serialization.test.js
+index d3b9fcf..40bdf52 100644
+--- a/tests/ui/bulk_serialization.test.js
++++ b/tests/ui/bulk_serialization.test.js
+@@ -43,15 +43,22 @@ async function preview(app, gate, id = "A") {
+ 
+ const applyCalls = app => app.calls.fetch.filter(call => call.path.endsWith("/bulk_apply"));
+ 
+-test("committed apply uses selector values captured at Confirm", async () => {
++test("committed apply survives change events with captured values", async () => {
+   const { app, gates } = setup();
+   await preview(app, gates.previewA);
+   const applying = app.evalInApp("applyBulkEdit()");
+   app.evalInApp("document.getElementById('bulk-tag-type').value = 'Goal'; document.getElementById('bulk-player').value = '__clear__'");
++  for (const id of ["bulk-tag-type", "bulk-player"]) {
++    app.document.getElementById(id).dispatchEvent(app.document.createEvent("change"));
++  }
++  assert.equal(app.document.getElementById("btn-bulk-preview").disabled, true);
++  assert.equal(app.document.getElementById("btn-bulk-confirm").disabled, true);
+   gates.applyA.resolve({ updated: 1, clip_ids: ["A-c1"] });
+   await applying;
+   assert.equal(app.evalInApp("currentProject.clips[0].tag_type"), "Shot");
+   assert.equal(app.evalInApp("currentProject.clips[0].players.join(',')"), "p2");
++  assert.equal(app.document.getElementById("bulk-tag-type").value, "Goal");
++  assert.equal(app.document.getElementById("bulk-player").value, "__clear__");
+   assert.match(app.evalInApp("document.getElementById('bulk-status').textContent"), /updated/);
+   assert.equal(app.evalInApp("bulkApplyPending"), null);
+ });
+@@ -68,6 +75,9 @@ test("dismiss and reopen keeps same-project apply busy", async () => {
+   gates.applyA.resolve({ updated: 1, clip_ids: ["A-c1"] });
+   await applying;
+   assert.equal(app.document.getElementById("btn-bulk-preview").disabled, false);
++  assert.equal(app.evalInApp("currentProject.clips[0].tag_type"), "Shot");
++  assert.equal(app.evalInApp("currentProject.clips[0].players.join(',')"), "p2");
++  assert.match(app.evalInApp("document.getElementById('bulk-status').textContent"), /updated/);
+   assert.equal(app.evalInApp("bulkApplyPending"), null);
+ });
+ 
+@@ -76,8 +86,9 @@ test("another project may preview but cannot confirm during pending apply", asyn
+   await preview(app, gates.previewA);
+   const applying = app.evalInApp("applyBulkEdit()");
+   await preview(app, gates.previewB, "B");
+-  await app.evalInApp("applyBulkEdit()");
++  const secondApply = app.evalInApp("applyBulkEdit()");
+   assert.equal(applyCalls(app).length, 1);
++  await secondApply;
+   assert.equal(app.evalInApp("document.getElementById('bulk-status').textContent"), app.evalInApp("BULK_APPLY_STATUS"));
+   const displayed = app.evalInApp("JSON.stringify({ clips: currentProject.clips, status: document.getElementById('bulk-status').textContent })");
+   gates.applyA.resolve({ updated: 1, clip_ids: ["A-c1"] });
+diff --git a/tests/ui/mutation_check.js b/tests/ui/mutation_check.js
+index 64ad6e3..442199f 100644
+--- a/tests/ui/mutation_check.js
++++ b/tests/ui/mutation_check.js
+@@ -13,6 +13,19 @@ function replaceExact(source, pattern, replacement, name, after = 0) {
+ }
+ 
+ const MUTANTS = [
++  {
++    name: "late-success-discarded",
++    apply(source) {
++      const start = source.indexOf("async function applyBulkEdit()");
++      const end = source.indexOf("async function refreshBulkProject()", start);
++      if (start < 0 || end < 0) throw new Error(`${this.name}: apply function not found`);
++      const body = replaceExact(source.slice(start, end),
++        "    if (!currentProject || currentProject.id !== projectId) return;",
++        "    if (generation !== bulkPreviewGeneration || !currentProject || currentProject.id !== projectId) return;",
++        this.name);
++      return source.slice(0, start) + body + source.slice(end);
++    },
++  },
+   {
+     name: "guard-dropped",
+     apply(source) {
+@@ -43,10 +56,11 @@ const MUTANTS = [
+ ];
+ 
+ function runSuite(appPath) {
+-  const run = spawnSync(process.execPath, ["--test", "--test-timeout=2000", ...TEST_FILES], {
++  const run = spawnSync(process.execPath, ["--test", "--test-timeout=2000", "--test-reporter=tap", ...TEST_FILES], {
+     cwd: ROOT,
+-    env: { ...process.env, APP_JS_PATH: appPath },
++    env: { ...process.env, APP_JS_PATH: appPath, FORCE_COLOR: "0" },
+     encoding: "utf8",
++    timeout: 10000,
+   });
+   if (run.error) throw run.error;
+   // Node 24's default spec reporter uses ℹ; TAP and earlier defaults use #.
+@@ -55,7 +69,10 @@ function runSuite(appPath) {
+   if (!passed || !failed) {
+     throw new Error(`test summary missing for ${appPath}:\n${run.stdout}\n${run.stderr}`);
+   }
+-  return { tests_failed: Number(failed[1]), tests_passed: Number(passed[1]) };
++  return {
++    tests_failed: Number(failed[1]), tests_passed: Number(passed[1]), exit_code: run.status,
++    failed_tests: [...run.stdout.matchAll(/^not ok \d+ - (.+)$/gm)].map(match => match[1]),
++  };
+ }
+ 
+ const hash = source => crypto.createHash("sha256").update(source).digest("hex");
+@@ -90,7 +107,7 @@ function main() {
+   results.source_sha256_after = after;
+   results.source_unchanged = true;
+   console.log(JSON.stringify(results, null, 2));
+-  if (results.baseline.tests_failed || results.mutants.some(item => !item.killed)) {
++  if (results.baseline.exit_code !== 0 || !results.baseline.tests_passed || results.baseline.tests_failed || results.mutants.some(item => !item.killed)) {
+     process.exitCode = 1;
+   }
+ }

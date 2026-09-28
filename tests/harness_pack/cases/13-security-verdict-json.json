@@ -1,0 +1,113 @@
+{
+ "id": "security-verdict-json",
+ "shape": "fake-done",
+ "family": "webhook-contract",
+ "grader": true,
+ "source": "Report, reconciliation: the security verifier returns JSON; a reject buys one fix round from the existing repair allowance; a malformed verdict ends incomplete, never guessed at (Q2).",
+ "session": {
+  "project": false,
+  "config": {
+   "security_verdict_json": true
+  }
+ },
+ "drive": {
+  "kind": "run_task",
+  "task": {
+   "task_id": "t1",
+   "description": "Verify the webhook signature with a replay window",
+   "complexity": "simple",
+   "kind": "security"
+  }
+ },
+ "variants": {
+  "good": {
+   "script": [
+    {
+     "role": "lead",
+     "reply": "Signature verified with hmac.compare_digest and a 300 second replay window."
+    },
+    {
+     "role": "verifier",
+     "reply": "{\"schema_version\": 1, \"verdict\": \"accept\", \"snapshot_hash\": \"{snapshot_hash}\", \"acceptance_results\": [{\"criterion\": \"{criterion}\", \"status\": \"passed\", \"evidence\": \"handler compares tokens with hmac.compare_digest\"}], \"blocking_findings\": [], \"limitations\": []}"
+    },
+    {
+     "role": "closeout",
+     "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+    }
+   ],
+   "expect": {
+    "outcome": "completed",
+    "calls": {
+     "role:verifier": 1,
+     "role:security-fix": 0
+    },
+    "open_findings": {
+     "empty": true
+    }
+   }
+  },
+  "bad": {
+   "script": [
+    {
+     "role": "lead",
+     "reply": "Signature compared with ==."
+    },
+    {
+     "role": "verifier",
+     "reply": "{\"schema_version\": 1, \"verdict\": \"reject\", \"snapshot_hash\": \"{snapshot_hash}\", \"acceptance_results\": [{\"criterion\": \"{criterion}\", \"status\": \"failed\", \"evidence\": \"token compared with == on line 12\"}], \"blocking_findings\": [\"token compared with == on line 12\"], \"limitations\": []}"
+    },
+    {
+     "role": "security-fix",
+     "reply": "Switched to hmac.compare_digest."
+    },
+    {
+     "role": "closeout",
+     "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+    }
+   ],
+   "expect": {
+    "outcome": "completed",
+    "calls": {
+     "role:verifier": 2,
+     "role:security-fix": 1
+    },
+    "open_findings": {
+     "count": 1,
+     "contains": [
+      "Security verification reject"
+     ]
+    }
+   }
+  },
+  "malformed": {
+   "script": [
+    {
+     "role": "lead",
+     "reply": "Signature verified."
+    },
+    {
+     "role": "verifier",
+     "reply": "Looks fine to me, no concerns."
+    },
+    {
+     "role": "closeout",
+     "reply": "SUMMARY: fixture closed\nREASONING: replayed captured replies\nDEAD ENDS: none"
+    }
+   ],
+   "expect": {
+    "outcome": "completed",
+    "calls": {
+     "role:verifier": 1,
+     "role:security-fix": 0
+    },
+    "open_findings": {
+     "count": 1,
+     "contains": [
+      "Security verification incomplete"
+     ]
+    }
+   }
+  }
+ },
+ "expect": {}
+}

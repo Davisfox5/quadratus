@@ -1,0 +1,7 @@
+{
+  "baseline": "f93d8b1a4a75d0cdc128b59b650bd95d6bfc6731",
+  "target": "832e50c0273d635b5030343691eae76410e051c2",
+  "patch_applies_cleanly": true,
+  "all_tracked_file_hashes_match": true,
+  "verified_files": 61
+}

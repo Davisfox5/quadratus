@@ -1,0 +1,16 @@
+{
+  "authorized_by": "Davis",
+  "source": "Direct instruction in Codex task; relayed at https://github.com/Davisfox5/War-Room/pull/4#issuecomment-5770617451",
+  "instruction": "Keep working with Claude until all work is done. Once everything is complete, and you have run a live test on Quadratus, kill any watchers you have left over.",
+  "recorded_at": "2026-09-22T03:05:22.562098+00:00",
+  "runs": [
+    "baseline",
+    "candidate"
+  ],
+  "max_calls_each": 24,
+  "max_reported_tokens_each": 500000,
+  "external_wall_seconds_each": 900,
+  "internal_wall_seconds_each": 840,
+  "automatic_reruns": false,
+  "transport": "subscription CLI only"
+}

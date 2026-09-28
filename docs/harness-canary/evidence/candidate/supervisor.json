@@ -1,0 +1,10 @@
+{
+  "outcome": "failed",
+  "exit_code": 1,
+  "image_id": "sha256:ec4033007992a312694c1bd084a78bafd2cbf8e8dec559009892c5128b3f0373",
+  "container_name": "quadratus-blind-18ba62fcacfa4badb709eb6e2adeeda1",
+  "idle_seconds": null,
+  "elapsed_seconds": 128.54720237501897,
+  "finished_at": "2026-09-22T03:10:00.899979+00:00",
+  "version": "candidate"
+}

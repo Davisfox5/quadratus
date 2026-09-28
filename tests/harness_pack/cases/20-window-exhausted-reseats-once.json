@@ -1,0 +1,64 @@
+{
+ "id": "window-exhausted-reseats-once",
+ "shape": "resume",
+ "family": "harness-maintainer",
+ "grader": false,
+ "source": "Report, Quadratus role hierarchy, and the operator decision of 2026-09-12: an exhausted seat re-asks once; verified live as Fable 429 to Astra. Both seats spent is a full stop.",
+ "session": {
+  "project": false
+ },
+ "drive": {
+  "kind": "next_task"
+ },
+ "variants": {
+  "good": {
+   "script": [
+    {
+     "role": "orchestrator",
+     "model": "claude:fable",
+     "mark_down": "claude:fable",
+     "raise": {
+      "type": "WindowExhausted",
+      "message": "You've reached your Fable limit."
+     }
+    },
+    {
+     "role": "orchestrator",
+     "model": "openai:gpt-6-astra",
+     "reply": "KIND: general simple\nParse the numbers"
+    }
+   ],
+   "expect": {
+    "outcome": "completed",
+    "task": {
+     "description_startswith": "Parse the numbers"
+    },
+    "seat": "openai:gpt-6-astra",
+    "notes_contain": [
+     "is out of window; the seat falls to openai:gpt-6-astra"
+    ],
+    "calls": {
+     "role:orchestrator": 2
+    }
+   }
+  },
+  "bad": {
+   "script": [
+    {
+     "role": "orchestrator",
+     "raise": {
+      "type": "WindowExhausted",
+      "message": "window gone"
+     }
+    }
+   ],
+   "expect": {
+    "outcome": "ReplayWindowExhausted",
+    "calls": {
+     "role:orchestrator": 1
+    }
+   }
+  }
+ },
+ "expect": {}
+}

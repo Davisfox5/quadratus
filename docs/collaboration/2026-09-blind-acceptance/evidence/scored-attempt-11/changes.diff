@@ -1,0 +1,192 @@
+--- a/app.py
++++ b/app.py
+@@ -1261,6 +1261,71 @@
+     })
+ 
+ 
++# ── Clip-manifest CSV ──────────────────────────────────────────────────
++
++def _read_clip_manifest_header(raw_bytes):
++    """Decode UTF-8 clip-manifest bytes; return (columns, csv.reader).
++
++    columns are trimmed, case-folded names in file order (unknowns kept).
++    reader is strict and positioned after the header; reader.line_num is
++    the last physical line consumed (header is line 1).
++    """
++    try:
++        text = raw_bytes.decode("utf-8-sig", errors="strict")
++    except UnicodeDecodeError as exc:
++        raise ValueError("undecodable file") from exc
++
++    reader = csv.reader(io.StringIO(text, newline=""), strict=True)
++    try:
++        header = next(reader)
++    except StopIteration:
++        raise ValueError("missing header") from None
++    except csv.Error as exc:
++        raise ValueError("invalid header quoting") from exc
++
++    columns = [name.strip().lower() for name in header]
++    if not any(columns):
++        raise ValueError("missing header")
++    required = ("tag type", "start (s)", "end (s)")
++    if any(name not in columns for name in required):
++        raise ValueError("missing required header")
++    return columns, reader
++
++
++def _resolve_clip_manifest_players(value, players):
++    """Resolve a Players cell to (player_ids, reasons).
++
++    Tokens are `;`-separated exact names or `#number` values after trim.
++    Empty/whitespace cells return ([], []). Any failing token returns
++    ([], reasons) so later row classification can mark the row malformed.
++    Token order is preserved. Input player records are not modified.
++    """
++    if not (value or "").strip():
++        return [], []
++
++    ids, reasons = [], []
++    roster = players or []
++    for raw in str(value).split(";"):
++        token = raw.strip()
++        if not token or (token.startswith("#") and not token[1:]):
++            reasons.append("empty player token")
++            continue
++        if token.startswith("#"):
++            key, field = token[1:], "number"
++        else:
++            key, field = token, "name"
++        matches = [p for p in roster if p.get(field, "") == key]
++        if len(matches) == 1:
++            ids.append(matches[0]["id"])
++        elif not matches:
++            reasons.append(f"unknown player '{token}'")
++        else:
++            reasons.append(f"ambiguous player '{token}'")
++    if reasons:
++        return [], reasons
++    return ids, []
++
++
+ # ── Export ─────────────────────────────────────────────────────────────
+ 
+ def _filter_clips(project, params):
+--- /dev/null
++++ b/tests/test_csv_import_preview.py
+@@ -0,0 +1,115 @@
++"""Focused tests for clip-manifest CSV header decoding and player resolution."""
++import os
++import sys
++
++import pytest
++
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
++
++import app as application
++
++
++def _read(raw):
++    return application._read_clip_manifest_header(raw)
++
++
++def _players():
++    return [
++        {"id": "a1", "name": "Alice", "number": "10"},
++        {"id": "b2", "name": "Bob", "number": "7"},
++    ]
++
++
++def _resolve(value, players=None):
++    if players is None:
++        players = _players()
++    return application._resolve_clip_manifest_players(value, players)
++
++
++def test_bom_crlf_quoted_unknown_and_case():
++    raw = b'\xef\xbb\xbf" TAG TYPE ","Start (s)",Extra,"END (S)"\r\n'
++    columns, reader = _read(raw)
++    assert columns == ["tag type", "start (s)", "extra", "end (s)"]
++    assert reader.line_num == 1
++    assert list(reader) == []
++
++
++def test_quoted_multiline_data_remains_readable():
++    raw = b'Tag Type,Start (s),End (s),Notes\nPass,1,2,"x\ny"\n'
++    columns, reader = _read(raw)
++    assert columns[0] == "tag type"
++    assert next(reader) == ["Pass", "1", "2", "x\ny"]
++    assert reader.line_num == 3
++
++
++def test_undecodable_bytes_raise():
++    with pytest.raises(ValueError, match="undecodable"):
++        _read(b"\xff\xfe")
++
++
++def test_absent_header_raises():
++    with pytest.raises(ValueError, match="missing header"):
++        _read(b"")
++    with pytest.raises(ValueError, match="missing header"):
++        _read(b"\n")
++
++
++def test_missing_required_header_raises():
++    with pytest.raises(ValueError, match="missing required header"):
++        _read(b"Tag Type,Label,Notes\n")
++
++
++def test_invalid_header_quoting_raises():
++    with pytest.raises(ValueError, match="invalid header quoting"):
++        _read(b'"Tag Type,Start (s),End (s)\n')
++
++
++def test_helper_never_calls_store_or_video(monkeypatch):
++    calls = []
++    monkeypatch.setattr(application, "_load_projects", lambda *a, **k: calls.append("load"))
++    monkeypatch.setattr(application, "_save_projects", lambda *a, **k: calls.append("save"))
++    monkeypatch.setattr(application.subprocess, "run", lambda *a, **k: calls.append("video"))
++    _read(b"Tag Type,Start (s),End (s)\nPass,1,2\n")
++    assert calls == []
++
++
++def test_resolve_names_numbers_whitespace_and_order():
++    assert _resolve("Bob;Alice") == (["b2", "a1"], [])
++    assert _resolve("#10;#7") == (["a1", "b2"], [])
++    assert _resolve(" Alice ; #7 ") == (["a1", "b2"], [])
++
++
++def test_resolve_empty_cell():
++    assert _resolve("") == ([], [])
++    assert _resolve("   ") == ([], [])
++
++
++def test_resolve_unknown_empty_token_discards_ids():
++    assert _resolve("Alice;Nobody") == ([], ["unknown player 'Nobody'"])
++    assert _resolve("Alice;") == ([], ["empty player token"])
++    assert _resolve("#") == ([], ["empty player token"])
++
++
++def test_resolve_ambiguous_name_and_number():
++    players = _players() + [
++        {"id": "a9", "name": "Alice", "number": "99"},
++        {"id": "c3", "name": "Cara", "number": "7"},
++    ]
++    assert _resolve("Alice", players) == ([], ["ambiguous player 'Alice'"])
++    assert _resolve("#7", players) == ([], ["ambiguous player '#7'"])
++
++
++def test_resolve_does_not_mutate_players():
++    players = _players()
++    snapshot = [dict(p) for p in players]
++    _resolve("Alice;#7;Nobody", players)
++    assert players == snapshot
++
++
++def test_resolve_never_calls_store_or_video(monkeypatch):
++    calls = []
++    monkeypatch.setattr(application, "_load_projects", lambda *a, **k: calls.append("load"))
++    monkeypatch.setattr(application, "_save_projects", lambda *a, **k: calls.append("save"))
++    monkeypatch.setattr(application.subprocess, "run", lambda *a, **k: calls.append("video"))
++    _resolve("Alice")
++    assert calls == []

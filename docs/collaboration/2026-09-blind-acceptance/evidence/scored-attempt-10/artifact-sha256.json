@@ -1,0 +1,16 @@
+{
+  "README.md": "51053973bf8f0962043c60ad7fd1cddfd2a831518965cb34f89c15520d3f910c",
+  "budget.json": "27a9a787b3fbf6e599dd091248ea307d2717bb89b030f2121325f85251bae047",
+  "claude-independent-scoring.json": "f6fe00f82c29d6cbe94e50c19315c5192396ae84a29fd7d6813102c3ad49c6ed",
+  "codebase-map.jsonl": "eb82c1aab11f63b9494e35537dc64bad38c03231e6c2ac916fc963599364b1f2",
+  "effective-config.json": "8e61b567e682035f9cb74331eac4c34fab6053d18607d17761a28cbc1ed861ce",
+  "invocations.jsonl": "5c9c3aa1c66197029de2ef53daa6db74715a92b0223de7eecc8a5312edd10aa6",
+  "preflight.json": "673c2d12917baba85e924d88b31f9c0c7a686f6d1c6cf974c2cd4e1d95cd3046",
+  "progress.txt": "4902978bd3a62707765c61434b6385f3ef75674a471df4265fcb470706ae5625",
+  "source-after-sha256.json": "ef2fec4912e1325e6c28899d325af36bb83b16ff72dbb4e70037908bf78237f8",
+  "source-after.tar.gz": "567c742523a6fca808397e6cf81bf7775480ea3a98ad18233037fdeba58b10e7",
+  "started.json": "3ae59157335d9db8f02343e6eaf5194964d7614c750d521f9cb7ea6ef2ab77f0",
+  "supervisor.json": "aefeb5976a3d5987c491910818f936d376966c1fb1510bf2d2aabb61b253a44f",
+  "usage.jsonl": "be0b64deaee17db37371763a34927372acb69494166511dda8d956d4adcaede6",
+  "watchdog-truncation.json": "56f46cc4bb400e6f1255e70bb455b67c8d577bb5de8efe39b43af34783a17ec9"
+}

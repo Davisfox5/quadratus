@@ -1,0 +1,44 @@
+{
+  "kind": "family",
+  "schema_version": 1,
+  "id": "schema-migration",
+  "version": "0.1.0",
+  "summary": "One database migration for a stated model change that stays safe while the old application code is still serving.",
+  "kinds": ["data"],
+  "required_inputs": [
+    { "name": "model_change", "description": "The model or schema diff, or the table spec, with file and line", "refuse_if_missing": true },
+    { "name": "current_head", "description": "Output of the migration tool's head or status command on the target tree", "refuse_if_missing": true },
+    { "name": "table_classification", "description": "Whether each touched table is tenant-scoped, global, bootstrap or hybrid", "refuse_if_missing": true },
+    { "name": "populated", "description": "Whether the table has rows in production, which decides backfill sequencing", "refuse_if_missing": false }
+  ],
+  "checklist": [
+    { "id": "single-parent", "rule": "The new revision's parent is the single current head; never create a second head", "because": "Two Alembic heads aborted every LINDA deploy twice on 2026-09-08 (#224, #226); r3cruit3r's release_migrate.py records the 2026-05-06 branched-migration incident", "applies_to": ["lead", "reviewer"], "gate_id": "migration-heads" },
+    { "id": "revision-id-length", "rule": "Revision ids fit the version table column (32 characters for Alembic)", "because": "A 39-character id failed UPDATE alembic_version after the DDL had already run (LINDA #194, #196)", "applies_to": ["lead", "reviewer"], "gate_id": "migration-revision-id" },
+    { "id": "additive-expand", "rule": "Add columns nullable or with a server default; never drop or rename a column in the same deploy as code that still reads it", "because": "Fly and Vercel run the migration before new code boots while old code serves (LINDA fly.toml release_command, Flex vercel-migrate.mjs)", "applies_to": ["lead", "reviewer", "verifier"] },
+    { "id": "tenant-policy-hook", "rule": "A new table with a tenant column ships its tenant policy in the same migration, or is listed as global with a reason", "because": "LINDA lead_reports (lead_003) was created after rls_002 with tenant_id and no rls_statements call; the ORM-metadata guard could not see it", "applies_to": ["lead", "reviewer", "verifier"], "gate_id": "migration-tenant-policy" },
+    { "id": "recovery-rehearsed", "rule": "Rehearse the recovery the tool supports: Alembic downgrade and re-upgrade, Prisma generated down-migration", "because": "Prisma has no downgrade command, so a shared up-down-up rule would be wrong for Flex (Codex review, 2026-09-21)", "applies_to": ["lead", "verifier"], "gate_id": "migration-rehearsal" },
+    { "id": "history-immutable", "rule": "Never edit a migration that has already run anywhere", "because": "LINDA Fable 5.1 audit item 11; a stamped history cannot be replayed if its files change", "applies_to": ["lead", "reviewer"] },
+    { "id": "file-tracked", "rule": "The revision file is tracked by git before the task closes", "because": "r3cruit3r deployed an untracked migration from a local Docker context and CI then failed with Can't locate revision (commit 005b3c0)", "applies_to": ["lead", "reviewer"], "gate_id": "migration-tracked" },
+    { "id": "idempotent-style", "rule": "Follow the repository's idempotent style for guards (inspector checks in Alembic, IF NOT EXISTS and duplicate_object blocks in Prisma SQL)", "because": "r3cruit3r's fresh-database replay failed until five migrations were guarded (commit e27d845); 36 of 47 Flex migrations use the handwritten idempotent style", "applies_to": ["lead", "reviewer"] },
+    { "id": "no-stamp-reliance", "rule": "Do not rely on a release script's stamp-on-error path to make a migration pass", "because": "r3cruit3r release_migrate.py stamps on DuplicateColumn, which silently hides a migration that re-adds an existing column", "applies_to": ["lead", "reviewer"] },
+    { "id": "registries", "rule": "Update every registry the repo keeps for new tables or fields: encrypted-field lists, tenant teardown lists, global-table lists, ARCHITECTURE.md model sections", "because": "Flex training-maxes migration spec calls out encrypted-fields.ts and tenant-teardown.ts; LINDA ARCHITECTURE.md must change in the same PR as models.py", "applies_to": ["lead", "reviewer"], "gate_id": "migration-registries" },
+    { "id": "backfill-separate", "rule": "Anything that needs a backfill goes in a separate dry-run-by-default script, never inside the migration", "because": "Add, deploy, backfill, remove is the documented sequence in r3cruit3r and Flex planner prompts", "applies_to": ["lead", "reviewer"] }
+  ],
+  "overlays_compatible": ["sensitive-path", "tenant-isolation", "privacy", "human-decision"],
+  "gate_ids": ["scope", "migration-heads", "migration-revision-id", "migration-tenant-policy", "migration-rehearsal", "migration-tracked", "migration-registries"],
+  "output_contract": {
+    "done_output": ["revision id and parent id", "table classification per touched table", "tenant policy present yes or no, with the migration that carries it", "the DDL emitted", "the rehearsal log tail", "one sentence: safe while old code runs because ..."],
+    "stop_conditions": ["more than one head on the target tree", "a table's classification is unknown", "the change needs a drop or rename that old code still reads", "the sensitive-path grant is missing", "no scratch database is configured for the rehearsal gate"]
+  },
+  "adapter_fields": [
+    { "name": "tool", "description": "alembic or prisma", "required": true },
+    { "name": "heads_command", "description": "Argument list that prints the current heads or migration status", "required": true },
+    { "name": "revision_id_limit", "description": "Maximum revision id length, 32 for Alembic, unused for Prisma", "required": false },
+    { "name": "idempotent_style_example", "description": "Path of a migration that shows the repo's guard style", "required": true },
+    { "name": "tenant_policy_hook", "description": "How tenant scoping is applied: rls_statements call, tenantId column convention, or user_id predicate", "required": true },
+    { "name": "registries", "description": "Paths of the lists that must name a new table or field", "required": false },
+    { "name": "scratch_db_url", "description": "Disposable database URL on 127.0.0.1 for the rehearsal gate", "required": true },
+    { "name": "rehearsal_command", "description": "Argument list that performs the tool-specific rehearsal against the scratch database", "required": true }
+  ],
+  "eval_cases_ref": "eval-cases.json"
+}

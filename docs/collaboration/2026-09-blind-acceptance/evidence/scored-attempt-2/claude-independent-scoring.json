@@ -1,0 +1,60 @@
+{
+  "attempt": "scored-attempt-2 (run d9df9b6c)",
+  "scored_by": "cloud Claude, independent, 2026-09-15",
+  "source_after_sha256": "5ffac78277ba88898cfb8b8168de5156b24e120cf750efd4d1c6725f0df93891",
+  "source_files_verified": 31,
+  "artifact_manifest_verified": 19,
+  "private_set": {
+    "archive_sha256": "71cb8b06a34ed94d6936bd9dfc45ed3889a0f6c5a80be1424850f1140e66371a",
+    "fixtures": 9,
+    "passed": 0,
+    "reason": "no HTTP endpoint exists; every case receives 405 Method Not Allowed; only a per-row validator helper and its unit tests were written"
+  },
+  "public_examiner": {
+    "pytest": {
+      "total": 13,
+      "passed": 0
+    },
+    "browser": {
+      "checks_defined": 17,
+      "checks_executed": 0,
+      "passed": 0,
+      "note": "not run; no UI and no endpoint"
+    }
+  },
+  "application_suite": {
+    "pytest": "111 passed (102 existing plus 9 new validator unit tests)",
+    "js_syntax": "ok"
+  },
+  "stop": {
+    "reason": "PartialWorkStopped: 223 changed lines against a declared 100 (tolerance 150)",
+    "paths_within_scope": true,
+    "code_lines_added": 85,
+    "test_lines_added": 138,
+    "wall_seconds": 335.78,
+    "provider_attempts": 2,
+    "tasks_closed": 0
+  },
+  "usage": {
+    "controller_reported": 469340,
+    "fable": {
+      "input": 87027,
+      "output": 2936,
+      "haiku_auxiliary_included_once": 2815
+    },
+    "grok_lead": {
+      "input": 367432,
+      "output": 11945,
+      "cache_read_within_input": 281984,
+      "modelCalls": 9
+    },
+    "threshold_crossed": false
+  },
+  "controls": {
+    "native_children_observed": 0,
+    "claude_subagent_stats_spawned": 0,
+    "store_unchanged": true,
+    "wording": "no native child observed within each vendor's published observability"
+  },
+  "comparison_to_attempt_1": "attempt 1 delivered an endpoint scoring 7/9 privately; attempt 2 delivered a helper the contract cannot observe, 0/9; the decomposition chose a lower-level first slice and under-estimated it"
+}

@@ -1,0 +1,41 @@
+{
+  "stage": "Earlier reproductions before their corresponding UI fix; not current behavior",
+  "results": {
+    "apply-race-result.txt": {
+      "scenario": "Change bulk selection while confirmation response is delayed after server commit",
+      "serverGoalClips": 0,
+      "visibleGoalClips": 2,
+      "filter": "Goal",
+      "status": "",
+      "selectionEnabled": true
+    },
+    "apply-order-race-result.txt": {
+      "scenario": "Newer batch confirmed before older success response arrives",
+      "visibleBeforeOldResponse": 3,
+      "visibleAfterOldResponse": 1,
+      "serverShotClips": 3
+    },
+    "pending-projects-result.txt": {
+      "scenario": "Two projects each have a committed apply with its response held",
+      "aBusyWhileBothPending": false,
+      "aStatus": "",
+      "bBusyAfterASettles": false,
+      "bStatus": ""
+    },
+    "focus-after-inert.txt": {
+      "activeId": "",
+      "activeTag": "BODY",
+      "insideDialog": false,
+      "backgroundInert": true
+    },
+    "preview-focus-result.txt": {
+      "scenario": "Keyboard Enter on Preview while HTTP request is held",
+      "focus": {
+        "inside": true,
+        "id": "btn-bulk-preview",
+        "tag": "BUTTON",
+        "disabled": true
+      }
+    }
+  }
+}

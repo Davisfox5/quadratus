@@ -1,0 +1,92 @@
+{
+  "run": "20260917T152004Z-7303ff7d",
+  "engine_commit": "cd33f7d",
+  "application_commit": "a8772ab",
+  "scored_by": "Claude, independently, on Davis's Mac; Codex remains out of context",
+  "scored_at": "2026-09-17T15:45:00Z",
+  "private_set": {
+    "archive_sha256": "71cb8b06a34ed94d6936bd9dfc45ed3889a0f6c5a80be1424850f1140e66371a",
+    "matches_published_commitment": true,
+    "own_SHA256SUMS_manifest_verified": "14 of 14 files OK",
+    "unchanged_since_attempt_1": true,
+    "passed": 0,
+    "total": 9,
+    "every_case": "HTTP 405: the endpoint does not exist; no source was written"
+  },
+  "public_examiner": {
+    "passed": 0,
+    "failed": 13,
+    "total": 13
+  },
+  "application_suite": {
+    "passed": 100,
+    "note": "the unchanged GameTape baseline, reconstructed from the archive in a fresh network-disabled credential-free container; source hashes matched before and after"
+  },
+  "browser_checks": {
+    "executed": 0,
+    "note": "no frontend file changed"
+  },
+  "stop": {
+    "reason": "RunBudgetExceeded: unknown_usage",
+    "reported_tokens": 82051,
+    "threshold": 500000,
+    "elapsed_seconds": 41.642129393,
+    "calls_reserved": 3,
+    "max_calls": 24,
+    "unknown_usage_attempts": 1,
+    "source_changed": false,
+    "tasks": 1
+  },
+  "usage_verified": {
+    "claude:fable": {
+      "role": "orchestrator",
+      "input": 0,
+      "output": 0,
+      "seconds": 1.497,
+      "outcome": "ProviderError: reached the Fable limit"
+    },
+    "openai:gpt-6-astra": {
+      "role": "orchestrator (fallback seat)",
+      "input": 81546,
+      "output": 505,
+      "seconds": 39.718,
+      "outcome": "ok"
+    },
+    "grok:default": {
+      "role": "lead, task 1",
+      "usage": "unknown at the time; now read as zero",
+      "seconds": 0.37,
+      "outcome": "ProviderError: Not signed in"
+    },
+    "openai:gpt-5.6-sol": {
+      "role": "lead recovery",
+      "outcome": "selected, never invoked; refused by the latched budget"
+    }
+  },
+  "what_this_run_establishes": {
+    "the_containment_repair_works": "no bwrap string anywhere in the run; Astra ran three shell commands (rg --files, a grep across app.py and the tests, a sed of specific line ranges plus cat TASK.md) and wrote a task grounded in the export column format it had read. First grounded work by an OpenAI seat in this harness, across seven attempts.",
+    "the_permission_axis_rests_where_it_was_said_to": "the transcript's working directory is /tmp/quadratus-review-onsp9knu, the disposable source copy, not the project",
+    "grok_is_signed_out": "the staged token expired 2026-09-14T22:13Z; reproducible on the host, where `grok models` prints 'You are not authenticated.' and exits 0. A credential fact, not an engine defect.",
+    "a_no_spend_refusal_could_end_a_run": "the 0.37s refusal reported no usage, latched the budget as unknown_usage, and refused the Sol recovery the engine had already selected"
+  },
+  "repairs_landed_after_this_run": [
+    "a vendor refusal that never reached a model reports zero spend rather than unknown; narrow and erring towards unknown, with the timeout-after-partial-work guard pinned by its own test",
+    "the preflight asks whether each CLI is signed in: positive proof for codex, known-failure wording for grok (which exits 0 on a dead session), not applicable for claude"
+  ],
+  "verification": {
+    "engine_suite": "1030 passed, 1 skipped (gradio absent), Docker and installed-CLI checks enabled",
+    "ruff": "clean",
+    "diff_check": "clean",
+    "model_calls_in_repair": 0,
+    "preflight_against_the_real_container": "exits 1 and names grok's dead session as the blocker, with the credential seed mounted"
+  },
+  "still_unexercised": "the worker tool-fit check (a0f16ec), now present and unreached for four attempts; attempt 7 selected a lead and wrote a task but never commissioned an errand",
+  "blocked_on": "grok login. The preflight refuses to launch until the session is live.",
+  "not_done": [
+    "no app feature",
+    "no private-case edit",
+    "no budget, role or tolerance change",
+    "no vendor safeguard bypassed",
+    "no paid API fallback enabled"
+  ]
+}
