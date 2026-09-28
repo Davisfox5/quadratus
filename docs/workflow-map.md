@@ -319,7 +319,7 @@ parity assertion to those and fills the rest.
 | `stop_reason` strings | typed terminal outcome (same names) | P3 | **still decides**: written beside the typed stop, it gates whether `_name_findings_stop` names a stop and is read by `project_run` for the result error; see P3.4 |
 | Generic gate-fix for any failure | structured attribution routing | P3 | **retired** in P3.2 |
 | 11 `is_design_task` applicability checks | `TaskContract.required` computed at dispatch | P2 | **still decide** (11 call sites; the contract only records disagreement); see P3.4 |
-| DONE computed twice (2546, 2657) | one function reading outcomes and ledger | P3 | **still two sites**, both ending in `_guard_completion`; see P3.4 |
+| DONE computed twice (2546, 2657) | one function reading outcomes and ledger | P3 | **one decision** (`completion_decision.decide`, wired at both sites); see P3.4 item 16 |
 
 Each temporary parity field added in P1 names its P3 removal step in code.
 
@@ -785,6 +785,23 @@ Overall P3 is not complete: the seven legacy inputs above still decide.
     The audit's G8 probe E (one task id with two outcomes) is not reachable
     in one run: an unmerged child's open finding stops the loop after its
     batch, and no suite session produced a duplicate id; unchanged here.
+
+16. *DONE computed once (Codex, 5862969439).* Both DONE sites apply
+    `completion_decision.decide` over `snapshot_session`, re-read after every
+    step (not `resolve`, which keeps the pre-step legacy mirrors), the cleared
+    candidate (064f930) imported byte-identical. The session makes the
+    steps in today's order (the goal question, the requirements check, the
+    dependency check at DONE) and keeps every side effect
+    (`_findings_block_done`, the reopen counter, the refusal text, the
+    progress notes); it applies the Decision's partial mismatches,
+    `done_accepted`, `completed`, annotations and named stop explicitly.
+    `_guard_completion` and `_stop_findings_unresolved` are retired; the E2
+    replaced-evidence check still runs only where the guard runs, and a
+    fact it adds re-decides with the same answers. Parity: the stop
+    fixtures (byte-identical stop fields), the named-stop, completion-guard,
+    requirements and E2 suites, and the candidate's 74 shadow and seam
+    tests against the wired path. `open_findings` and `_partial_tasks` stay
+    legacy inputs until their own rows clear.
 
 **Retirement list additions (Codex, 5861036424):** collaborator selection
 (`collaborators_for`) and the design prompt's applicability text still read

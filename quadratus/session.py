@@ -38,6 +38,16 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 from .artifacts import ArtifactStore
 from .codebase_map import CodebaseMap
+from .completion_decision import (
+    CAP,
+    CHECK_REQUIREMENTS,
+    CONFIRM_GOAL,
+    DONE_REPLY,
+    SEND_BACK,
+    STEP,
+    decide,
+    snapshot_session,
+)
 from .contract import Required, TaskContract, canonical, stages_for
 from .delegation import (
     DelegationLedger,
@@ -59,7 +69,6 @@ from .outcome import (
     RunOutcome,
     TaskOutcome,
     classify,
-    completion_blockers,
     primary,
     unclassified,
 )
@@ -1040,33 +1049,15 @@ class Session:
         else:
             self.run_outcome.note(kind, text)
 
-    def _guard_completion(self, where: str) -> None:
-        """The last word on completion (phase 3, #25): the legacy inputs said
-        complete, and the typed record must agree. A task that never closed,
-        an incomplete record, an unsatisfied mandatory edge, an active
-        terminal fact or a reference the ledger still owes keeps the run
-        incomplete under a named stop. Never a repair: nothing is called."""
-        self._note_replaced_evidence()
-        owed = sorted({f"{kind[:-1]} {ref}" for outcome in self.task_outcomes
-                       for kind, refs in self._open_refs(outcome).items() for ref in refs})
-        audit_findings: dict = {}
-        for finding in self.findings:
-            audit_findings.setdefault(finding.get("task"), []).append(finding.get("status"))
-        blockers = completion_blockers(self.task_outcomes, owed=owed, audit_findings=audit_findings)
-        if blockers:
-            self.completed = False
-            self._stop_with("unverified", f"CompletionUnproven: {where} was accepted but the record "
-                                          f"does not support it: {'; '.join(blockers)[:600]}. Work preserved.")
-            self._note(f"completion refused: {len(blockers)} blocker(s) on the record")
-
-    def _note_replaced_evidence(self) -> None:
+    def _note_replaced_evidence(self) -> bool:
         """An approved delivery whose files no longer hold the approved bytes
         (map E2, Codex 5862294492): a later task can rewrite an earlier
         task's renders, which CHANGED cannot see. The task gets an active
         ``unverified`` fact, so the record cannot count as complete; it is
         not integrity, and nothing is recaptured or re-reviewed."""
+        noted = False
         if not self.project:
-            return
+            return noted
         for outcome in self.task_outcomes:
             files = (outcome.delivery or {}).get("files") or {}
             if outcome.edges.get("reviewer") is not True or not files:
@@ -1082,6 +1073,8 @@ class Session:
             detail = f"approved evidence changed after its review: {', '.join(changed)}"
             if changed and not any(f.detail == detail[:400] for f in outcome.facts):
                 outcome.note("unverified", detail, stage="delivery")
+                noted = True
+        return noted
 
     def _stop_with(self, kind: str, reason: str) -> None:
         """Set the legacy ``stop_reason`` and record the run's typed stop."""
@@ -3074,37 +3067,22 @@ class Session:
                     break
                 continue
             if spec is None:
-                if self._findings_block_done():
-                    if self._requirement_reopens < self.config.max_requirement_reopens:
-                        self._requirement_reopens += 1
-                        self.run_outcome.note("unverified", "DONE sent back: audit findings open", terminal=False)
-                        continue
-                    self._stop_findings_unresolved("the reopen allowance ran out")
-                    break
-                if not self._requirements_satisfied():
-                    if self._requirement_reopens < self.config.max_requirement_reopens:
-                        self._requirement_reopens += 1
-                        self.run_outcome.note("unverified", "DONE sent back: requirements open", terminal=False)
-                        continue
+                # One completion decision (quadratus.completion_decision, map
+                # P3.4): the session makes its steps and applies the result.
+                self._findings_block_done()
+                decision = self._completion_decision(DONE_REPLY, max_tasks)
+                if decision.status == SEND_BACK:
+                    self._requirement_reopens += 1
+                    if decision.refusal:
+                        self._done_refusal = decision.refusal
+                    self.run_outcome.note("unverified", decision.reopen_fact, terminal=False)
+                    continue
+                name = decision.stop.name if decision.stop else ""
+                if name == "RequirementsUnmet":
                     self._note("requirements still open after the reopen allowance; stopping incomplete")
-                    self.completed = False
-                    # Named (map G9): the run used to end here with a blank error.
-                    why = (self._done_refusal or "").replace("--- DONE SENT BACK ---", "").strip()
-                    self._stop_with("unverified", (
-                        f"RequirementsUnmet: DONE was sent back {self._requirement_reopens} time(s) and the "
-                        f"requirements are still not met: {why[:400] or 'the requirements check did not pass'}. "
-                        "Work preserved."))
-                    break
-                self._verify_dependencies("at DONE")
-                self.run_outcome.done_accepted = True
-                self.completed = (not self.open_findings and not self._unresolved_partial
-                                  and not self._open_findings_for(None)
-                                  and not self._checks_standing_failed())
-                if not self.completed:
-                    self._stop_open_work("DoneWithOpenWork", "the orchestrator reported DONE")
-                else:
-                    self._guard_completion("DONE")
-                self._note("the orchestrator reports the goal met")
+                self._apply_completion(decision)
+                if name not in ("FindingsUnresolved", "RequirementsUnmet"):
+                    self._note("the orchestrator reports the goal met")
                 break
             if spec.description == previous_description:
                 raise RunStalled(
@@ -3226,37 +3204,73 @@ class Session:
             # of 13, completed false). Raising the cap is not the fix -- the
             # extra iteration runs whatever task it is handed. One terminal
             # question instead, whose reply is never executed.
-            self._recheck_resolved_findings()
-            if self._open_findings_for(None):
-                # No slot is left to repay them, so the goal question is not asked.
-                self._stop_findings_unresolved("the task cap was reached")
-                return list(self.history)
-            # The same short-circuit order as before: the goal question is asked
-            # only with no capped or audit debt, and requirements only after a
+            # The same decision at the cap: with open audit findings no slot is
+            # left to repay them and the goal question is not asked; it is asked
+            # only with no capped or audit debt, requirements only after a
             # confirmed goal.
-            confirmed = satisfied = None
-            if not self._unresolved_partial and not self._open_findings_for(None):
-                confirmed = self._confirm_goal_met()
-                if confirmed:
-                    satisfied = self._requirements_satisfied()
-            self.completed = bool(confirmed and satisfied and not self.open_findings
-                                  and not self._checks_standing_failed())
-            self.run_outcome.done_accepted = self.completed
-            if not self.completed:
-                if confirmed is False:
-                    self._stop_with("cap", (f"GoalUnconfirmedAtCap: the task cap ({max_tasks}) was reached and "
-                                            "the orchestrator did not confirm the goal met. Work preserved."))
-                elif confirmed and satisfied is False:
-                    why = (self._done_refusal or "").replace("--- DONE SENT BACK ---", "").strip()
-                    self._stop_with("unverified", (
-                        f"RequirementsUnmet: the task cap ({max_tasks}) was reached with the goal confirmed "
-                        f"but the requirements not met: {why[:400] or 'the requirements check did not pass'}. "
-                        "Work preserved."))
-                else:
-                    self._stop_open_work("GoalUnconfirmedAtCap", f"the task cap ({max_tasks}) was reached")
-            else:
-                self._guard_completion("the cap's goal confirmation")
+            self._recheck_resolved_findings()
+            self._apply_completion(self._completion_decision(CAP, max_tasks))
         return list(self.history)
+
+    def _completion_decision(self, site: str, max_tasks: int):
+        """The completion decision at ``site`` (quadratus.completion_decision),
+        its steps made by the session's own calls in today's order: the goal
+        question, the requirements check, the dependency check at DONE.
+
+        The session re-reads its state after every step, as today's
+        conjunction did, rather than using ``resolve``, which keeps the
+        pre-step legacy mirrors: a dependency check that changes them must
+        be seen (tests/lifecycle/test_partial_from_outcomes.py). Each step is
+        made at most once. Replaced approved evidence (E2) is noted only
+        where the guard runs, as before, and a fact it adds is read by one
+        more decision with the same answers."""
+        answers: dict = {}
+        made: set = set()
+        noted = False
+        while True:
+            decision = decide(snapshot_session(self, site=site, max_tasks=max_tasks, **answers))
+            if decision.status != STEP:
+                guarded = decision.ready or (decision.stop is not None
+                                             and decision.stop.name == "CompletionUnproven")
+                if guarded and not noted:
+                    noted = True
+                    if self._note_replaced_evidence():
+                        continue
+                return decision
+            if decision.step in made:
+                raise RuntimeError(f"completion step {decision.step} requested twice")
+            made.add(decision.step)
+            if decision.step == CONFIRM_GOAL:
+                answers["goal_confirmed"] = bool(self._confirm_goal_met())
+            elif decision.step == CHECK_REQUIREMENTS:
+                answers["requirements_satisfied"] = bool(self._requirements_satisfied())
+                answers["done_refusal"] = self._done_refusal or ""
+            else:
+                self._verify_dependencies("at DONE")
+                answers["dependencies_verified"] = True
+
+    def _apply_completion(self, decision) -> None:
+        """What a final completion decision says, applied as the legacy
+        branches wrote it: partial mismatches, ``done_accepted``,
+        ``completed``, the annotated findings, the named stop and its note."""
+        for task_id, note in decision.partial_mismatches:
+            for outcome in self.task_outcomes:
+                if outcome.task_id == task_id and note not in outcome.mismatches:
+                    outcome.mismatches.append(note)
+        if decision.done_accepted is not None:
+            self.run_outcome.done_accepted = decision.done_accepted
+        self.completed = decision.completed
+        stop = decision.stop
+        if stop is None:
+            return
+        for finding in self.findings:
+            if finding["id"] in decision.annotate and finding["status"] == "open":
+                finding["unresolved_reason"] = decision.annotate_reason
+        self._stop_with(stop.kind, stop.reason)
+        if stop.name == "FindingsUnresolved":
+            self._note(f"audit findings still {decision.annotate_reason}; stopping incomplete")
+        elif stop.name == "CompletionUnproven":
+            self._note(f"completion refused: {len(decision.blockers)} blocker(s) on the record")
 
     def _brief_design_reviewers(self, spec) -> None:
         """Point the design reviewers at the draft's renders, if it left any.
@@ -4132,16 +4146,6 @@ class Session:
                        for d in _snapshot_files((task_id, None, None, now_evidence)).values()):
                     return problem, now_evidence
         return problem, None
-
-    def _stop_findings_unresolved(self, why: str) -> None:
-        opened = self._open_findings_for(None)
-        for finding in self.findings:
-            if finding["status"] == "open":
-                finding["unresolved_reason"] = f"open when {why}"
-        self._stop_with("unverified", (f"FindingsUnresolved: audit findings {', '.join(opened)} are still "
-                                       f"open; {why}. Work preserved."))
-        self._note(f"audit findings still open when {why}; stopping incomplete")
-        self.completed = False
 
     def _findings_block_done(self) -> bool:
         """Whether open findings refuse DONE, after re-checking resolved ones
