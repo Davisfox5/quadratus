@@ -1901,6 +1901,17 @@ class Session:
                              overrun_ratio=min(report.overrun_ratio, outer.overrun_ratio))
         return report
 
+    def _snapshot_outer(self, spec):
+        """An independent copy of the operator's outer limit over this task,
+        or None when there is none or it is the task's own scope. A copy, not
+        the live object: a limit widened in place after dispatch must not
+        widen the ceiling with it (Sol, 5865637806)."""
+        limit = self.config.default_scope
+        if limit is None or limit is spec.scope:
+            return None
+        import copy
+        return copy.deepcopy(limit)
+
     @staticmethod
     def _limits_identity(spec, limit) -> str:
         """``operator_limits`` for ``limit`` over this task: "none" when there
@@ -2040,7 +2051,7 @@ class Session:
             # The gate the contract describes, held with it (map P3.4, checks).
             self._task_gate = self.config.integration_gate
             # The operator's outer limit, a ceiling for this task (O-NEXT-10 E).
-            self._task_outer = self.config.default_scope
+            self._task_outer = self._snapshot_outer(spec)
             # Derived here, bound (frozen, with its owner) at the selection point
             # in _run_task / _run_security_task, before the first model call.
             self._contract = self._build_contract(spec, outcome)
@@ -2112,7 +2123,7 @@ class Session:
             design_collaboration_applicable=bool(self.config.design_cross_check and is_design_task(spec)),
             design_instruction=self._live_design_instruction(spec),
             security_verdict=self._live_security_verdict() if security else "none",
-            operator_limits=self._limits_identity(spec, self.config.default_scope))
+            operator_limits=self._limits_identity(spec, getattr(self, "_task_outer", None)))
         commands = getattr(gate, "commands", None)
         checks = tuple(c.id for c in commands) if commands is not None else (("check",) if gate else ())
         intended = None

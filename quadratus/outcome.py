@@ -25,6 +25,7 @@ Rules carried from the discussion (5856768605):
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
 
@@ -330,7 +331,7 @@ def _contract_missing(task: TaskOutcome) -> List[str]:
     if _LIMITS not in required:
         missing.append(f"{tid}.contract.required.{_LIMITS} (absent: recorded before this field existed)")
     elif not (required.get(_LIMITS) == "none" or (isinstance(required.get(_LIMITS), str)
-                                                 and required[_LIMITS].startswith("sha256:"))):
+                                                 and re.fullmatch(r"sha256:[0-9a-f]{64}", required[_LIMITS]))):
         missing.append(f"{tid}.contract.required.{_LIMITS}")
     return missing
 

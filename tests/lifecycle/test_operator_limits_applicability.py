@@ -52,7 +52,7 @@ def _dispatch(session):
                     scope=TaskScope(permitted_paths=["app.py", "README.md"], max_lines=40))
     outcome = TaskOutcome("t1", "implementation")
     session._outcome = outcome
-    session._task_outer = session.config.default_scope
+    session._task_outer = session._snapshot_outer(spec)
     session._contract = session._build_contract(spec, outcome)
     session._active_spec = spec
     session._task_before = session._capture_source()
@@ -97,6 +97,31 @@ def test_a_limit_widened_after_dispatch_does_not_loosen(tmp_path):
     assert after.out_of_scope == ["app.py"], "the dispatch limit is a ceiling"
     assert f"operator_limits: contract {_identity(NARROW)!r}, legacy {_identity(WIDE)!r}" \
         in session._outcome.mismatches
+
+
+def _narrow():
+    return TaskScope(permitted_paths=["README.md"], max_lines=1)
+
+
+def test_a_limit_widened_in_place_does_not_loosen(tmp_path):
+    """Sol, 5865637806: the ceiling is a snapshot, not the live object."""
+    session = _session(tmp_path, _narrow())
+    spec = _dispatch(session)
+    _edit_app(session)
+    session.config.default_scope.permitted_paths = ["app.py", "README.md"]
+    session.config.default_scope.max_lines = 200
+    after = session._measure_scope(spec, session._task_before)
+    assert after.out_of_scope == ["app.py"] and after.max_lines == 1
+    assert any(m.startswith("operator_limits: contract 'sha256:") for m in session._outcome.mismatches)
+
+
+def test_a_limit_tightened_in_place_still_restricts(tmp_path):
+    session = _session(tmp_path, TaskScope(permitted_paths=["app.py", "README.md"], max_lines=200))
+    spec = _dispatch(session)
+    _edit_app(session)
+    assert session._measure_scope(spec, session._task_before).out_of_scope == []
+    session.config.default_scope.permitted_paths = ["README.md"]
+    assert session._measure_scope(spec, session._task_before).out_of_scope == ["app.py"]
 
 
 def test_a_widened_limit_keeps_the_ceiling_in_the_line_budget(tmp_path):
@@ -152,7 +177,8 @@ def test_a_task_whose_scope_is_the_limit_has_no_outer_limit(tmp_path):
     session = _session(tmp_path, WIDE)
     spec = TaskSpec("t1", "Implement add.", kind="refactor", scope=WIDE)
     outcome = TaskOutcome("t1", "implementation")
-    session._outcome, session._task_outer = outcome, WIDE
+    session._outcome = outcome
+    session._task_outer = session._snapshot_outer(spec)
     session._contract = session._build_contract(spec, outcome)
     assert session._contract.required.operator_limits == "none"
     assert session._outer_limits(spec) == [] and outcome.mismatches == []
@@ -188,6 +214,9 @@ def test_an_older_record_without_the_limit_says_so():
 def test_a_malformed_limit_is_missing():
     assert missing_facts(_record(dict(BASE, operator_limits="README.md"))) == [
         "t1.contract.required.operator_limits"]
+    for malformed in ("sha256:", "sha256:not-a-digest", "sha256:" + "0" * 63, "sha256:" + "A" * 64):
+        assert missing_facts(_record(dict(BASE, operator_limits=malformed))) == [
+            "t1.contract.required.operator_limits"], malformed
     assert missing_facts(_record(dict(BASE, operator_limits="sha256:" + "0" * 64))) == []
 
 
