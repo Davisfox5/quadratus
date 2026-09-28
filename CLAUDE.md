@@ -429,6 +429,19 @@ Key design decisions already settled:
   Nothing outside the project is guarded. The lead's cap
   (`lead_max_turns`) binds revision, gate-fix and design-fix as well as the
   draft; a capped fix is one attempt spent and the checks still decide.
+- **The measured diff is the truth; the CHANGED line is the lead's account of
+  it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
+  project around every editing call, so it already knows what changed. The
+  declaration was required to equal that diff exactly or the run stopped,
+  and four live runs ended on the declaration's shape alone (runs 5, 9, 11
+  and the phase-4 run, where a revision re-listed a file its own draft had
+  changed). `runtime.changed_report` now classifies the line (missing,
+  malformed, undeclared, overdeclared, misplaced) and the session records a
+  disagreement as a non-terminal `unverified` fact with the reply kept; the
+  scope, gate and design checks read the diff, so nothing on that line can
+  widen what was measured. The one stop that survives is a request line that
+  failed to parse with no CHANGED line: neither a request nor a delivery
+  (run 9), never filed as a draft.
 - **A rule the orchestrator is held to is a rule its prompt states, and the
   one correction states all of them** (phase-4 rerun on a6c9576,
   2026-09-28). The rerun closed two tasks, then the orchestrator declared

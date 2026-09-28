@@ -127,13 +127,45 @@ def test_the_editing_dispatchers_accept_the_run9_shape(tmp_path, monkeypatch, re
 
 @pytest.mark.parametrize('reply', [RUN9 + "\nThen I will review it.", "Plan.\nWORKER\n[1, 2]"])
 def test_the_editing_dispatcher_still_refuses_a_malformed_request(tmp_path, monkeypatch, reply):
+    """A request line that does not parse, with no CHANGED line, is neither
+    served nor filed as a draft (run 9). This stop outlives the exact CHANGED
+    check, which is now a recorded disagreement (docs/DIRECTION.md)."""
     (tmp_path / 'a.py').write_text('x\n')
     fleet = _fleet(tmp_path, monkeypatch, reply)
     try:
-        with pytest.raises(PartialWorkStopped, match='CHANGED report'):
+        with pytest.raises(PartialWorkStopped, match='neither a request nor a delivery'):
             fleet.invoke(OPUS, 'edit', allow_writes=True)
     finally:
         fleet.close()
+
+
+@pytest.mark.parametrize('reply, status', [
+    ('Done.\nCHANGED: ["a.py", "b.py"]', "overdeclared"),        # the phase-4 run's shape
+    ('Done.\nCHANGED: []', "undeclared"),
+    ('Done.', "missing"),
+    ('Done.\nCHANGED: ["a.py"]\nCHANGED: ["a.py"]', "malformed"),
+    ('Done.\nCHANGED: ["a.py", "a.py"]', "malformed"),
+    ('Done.\nCHANGED: "a.py"', "malformed"),
+    ('Done.\nCHANGED: ["a.py"]\nThat is all.', "misplaced"),
+    ('Done.\nCHANGED: ["a.py"]', "match"),
+])
+def test_a_changed_line_that_disagrees_with_the_diff_is_classified_not_refused(tmp_path, monkeypatch,
+                                                                            reply, status):
+    from quadratus.delegation import invocation, invocation_context
+    (tmp_path / 'a.py').write_text('x\n')
+    fleet = _fleet(tmp_path, monkeypatch, reply)
+    monkeypatch.setattr(fleet, '_generate', lambda *a: ((tmp_path / 'a.py').write_text('y\n'), reply)[1])
+    try:
+        with invocation("t1", "revision"):
+            assert fleet.invoke(OPUS, 'edit', allow_writes=True) == reply
+            report = invocation_context.get()["changed_report"]
+    finally:
+        fleet.close()
+    assert report["status"] == status and report["measured"] == ["a.py"]
+    if status == "match":
+        assert report["declared"] == ["a.py"] and report["detail"] == ""
+    else:
+        assert "a.py" in report["detail"] or status == "misplaced"
 
 
 def test_a_project_run_serves_the_run9_shape_end_to_end(tmp_path, monkeypatch):

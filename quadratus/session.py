@@ -1041,6 +1041,8 @@ class Session:
         self.task_outcomes: List[TaskOutcome] = []
         self.run_outcome = RunOutcome()
         self._outcome: Optional[TaskOutcome] = None
+        #: Fleet's CHANGED classification for the editing call in flight.
+        self._last_changed_report: Optional[dict] = None
         self.requirement_audits: List[dict] = []
         self.requirement_reviews: List[dict] = []
 
@@ -1163,6 +1165,9 @@ class Session:
                     reply = self.invoke(key, prompt, allow_writes=True)
                 else:
                     reply = self.invoke(key, prompt)
+                # Fleet leaves its CHANGED classification on this inner
+                # context, which resets on exit; carry it out for _edit.
+                self._last_changed_report = (invocation_context.get() or {}).get("changed_report")
                 if allow_writes and spec is not None and self._task_memory is not None:
                     report = self._assess_scope(spec, self._task_memory, self._task_before)
                     if spec.scope is not None and report is None:
@@ -1221,20 +1226,48 @@ class Session:
         """
         allow_writes = self._writes()
         before = self._capture_source() if allow_writes else None
+        self._last_changed_report = None
         try:
             with invocation(getattr(self._active_spec, "task_id", "run"), role):
-                return self._invoke_model(key, prompt, allow_writes=allow_writes)
+                reply = self._invoke_model(key, prompt, allow_writes=allow_writes)
+            report = self._last_changed_report
+            if report and report.get("status") != "match":
+                self._record_changed_report(key, role, reply, report)
+            return reply
         except TurnLimitReached as exc:
             if capped is None:
                 raise
             return self._capped_fix(key, capped[0], capped[1], exc, role)
         except PartialWorkStopped as exc:
             if exc.partial.get('reply'):
-                self.store.put(exc.partial['reply'], kind='changed-report-mismatch', author=key)
+                self.store.put(exc.partial['reply'], kind='unparsed-request', author=key)
             raise
         except PartialWorkSuspected as exc:
             state = self._inspect_partial_edits(before)
             raise PartialWorkStopped(str(exc), partial=state) from exc
+
+    def _record_changed_report(self, key: str, role: str, reply: str, report: dict) -> None:
+        """A CHANGED line that disagreed with the measured diff, kept as history.
+
+        The measured diff is what the scope, gate and design checks read, so
+        the disagreement changes no decision (docs/DIRECTION.md; phase-4 run
+        on ea464cc, where a revision re-listed its draft's file and the run
+        ended). It is written as a non-terminal fact on the task, the reply is
+        kept as an artifact, and the operator sees it in progress. A lead
+        re-asked in the same task already gets the measured list in its prompt.
+        """
+        status, detail = report.get("status", "?"), str(report.get("detail", ""))
+        self.store.put(reply, kind='changed-report-mismatch', author=key)
+        # Class ``unverified``: the lead's own account of its edits did not
+        # verify against the diff. Non-terminal, so it is history from the
+        # start and never an open finding (quadratus.finding_state).
+        text = f"{role} CHANGED line {status}: {detail}"
+        if self._outcome is not None:
+            self._outcome.note("unverified", text, terminal=False)
+        else:
+            self.run_outcome.note("unverified", text, terminal=False)
+        task_id = getattr(self._active_spec, "task_id", "run")
+        self._note(f"task {task_id}: {role} CHANGED line {status}; the measured diff is used ({detail[:120]})")
 
     def _capped_fix(self, lead, spec, task, exc, role) -> str:
         """A gate-fix or design-fix stopped at the lead's turn limit.
