@@ -5,10 +5,14 @@ No provider calls, project execution, or acceptance inference occur here.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
+from dataclasses import fields
 from decimal import Decimal
 from pathlib import Path
+
+from quadratus.outcome import Fact, RunOutcome, TaskOutcome, completion_blockers, typed_completed
 
 
 def _json(path: Path):
@@ -25,9 +29,111 @@ def _number(value):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 else None
 
 
+def _count(value):
+    return value if type(value) is int and value >= 0 else None
+
+
 def _sum_complete(rows, key):
     values = [_number(row.get(key)) for row in rows]
     return sum(values) if all(value is not None for value in values) else None
+
+
+def _saved_outcomes(workflow):
+    """Restore only complete, well-shaped serialized outcomes for the engine's rule.
+
+    Dataclass defaults are useful during execution but must not turn an omitted
+    saved field into apparent completion evidence.
+    """
+    run_record, task_records = workflow.get("run"), workflow.get("tasks")
+    if not isinstance(run_record, dict) or not isinstance(task_records, list):
+        return None
+    run_keys = {field.name for field in fields(RunOutcome)}
+    task_keys = {field.name for field in fields(TaskOutcome)}
+    if not run_keys <= run_record.keys() or not task_records:
+        return None
+    try:
+        if (type(run_record["done_accepted"]) is not bool or
+                not isinstance(run_record["facts"], list) or
+                not isinstance(run_record["readiness"], list)):
+            return None
+        def restore_facts(records):
+            required = {field.name for field in fields(Fact)}
+            if not isinstance(records, list) or any(
+                    not isinstance(record, dict) or not required <= record.keys() or
+                    type(record["terminal"]) is not bool or type(record["recovered"]) is not bool
+                    for record in records):
+                raise ValueError("malformed facts")
+            return [Fact(**{key: record[key] for key in required}) for record in records]
+
+        run = RunOutcome(facts=restore_facts(run_record["facts"]),
+                         done_accepted=run_record["done_accepted"],
+                         readiness=run_record["readiness"])
+        tasks = []
+        for record in task_records:
+            if (not isinstance(record, dict) or not task_keys <= record.keys() or
+                    not isinstance(record.get("unsatisfied"), list)):
+                return None
+            contract, dispatch = record["contract"], record["dispatch"]
+            if (not isinstance(contract, dict) or not isinstance(dispatch, dict) or
+                    not isinstance(record["edges"], dict) or
+                    not isinstance(record["checks"], list) or
+                    not isinstance(record["mismatches"], list) or
+                    not isinstance(record["owner_changes"], list) or
+                    not isinstance(record["stages"], list) or
+                    not isinstance(record["continues"], str) or
+                    not isinstance(record["open_at_close"], dict) or
+                    not isinstance(record["closed_as"], str) or
+                    not isinstance(record["task_id"], str) or
+                    not isinstance(record["intent"], str)):
+                return None
+            if record["closed_as"] not in ("closed", "turn_limited"):
+                return None
+            required = contract.get("required")
+            if (not isinstance(required, dict) or
+                    any(type(required.get(key)) is not bool for key in
+                        ("checks", "design_review", "security_verification", "settlement")) or
+                    required.get("design_evidence") not in ("harness", "self", "disabled", "none")):
+                return None
+            data = {key: record[key] for key in task_keys}
+            data["facts"] = restore_facts(record["facts"])
+            task = TaskOutcome(**data)
+            if record["unsatisfied"] != task.unsatisfied():
+                return None
+            tasks.append(task)
+        if len({task.task_id for task in tasks}) != len(tasks):
+            return None
+        return run, tasks
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return None
+
+
+def _final_check_problem(checks, *, required, run_level=False):
+    if not isinstance(checks, list) or (required and not checks):
+        return "check receipts unavailable"
+    if not checks:
+        return None
+    final = checks[-1]
+    if not isinstance(final, dict) or final.get("passed") is not True:
+        return "final check failed"
+    receipts = final.get("receipts", [])
+    if not isinstance(receipts, list):
+        return "check receipts malformed"
+    # Run gate receipts carry `required`; task receipts omit it. A task's
+    # passed wrapper is authoritative for optional task gate failures.
+    if run_level and any(not isinstance(receipt, dict) or
+                         type(receipt.get("required")) is not bool for receipt in receipts):
+        return "check receipt requirement unavailable"
+    if all(isinstance(receipt, dict) and type(receipt.get("required")) is bool
+           for receipt in receipts):
+        if any(receipt["required"] and receipt.get("status") != "passed"
+               for receipt in receipts):
+            return "required receipt failed"
+    elif any("required" in receipt for receipt in receipts if isinstance(receipt, dict)):
+        return "check receipt requirement malformed"
+    elif any(not isinstance(receipt, dict) or not isinstance(receipt.get("status"), str)
+             for receipt in receipts):
+        return "check receipts malformed"
+    return None
 
 
 def _workflow_problem(result):
@@ -40,57 +146,48 @@ def _workflow_problem(result):
     if not isinstance(parity, dict) or not all(parity.get(key) is True for key in
                                                   ("agree", "complete", "typed_completed")):
         return "workflow parity incomplete or contradictory"
-    if parity.get("problems") or parity.get("mismatches") or parity.get("missing"):
+    if (not isinstance(parity.get("problems"), list) or
+            not isinstance(parity.get("missing"), list) or
+            parity["problems"] or parity["missing"] or parity.get("mismatches")):
         return "workflow parity reports debt"
-    run = workflow.get("run")
-    tasks = workflow.get("tasks")
-    if not isinstance(run, dict) or run.get("done_accepted") is not True or not isinstance(tasks, list):
-        return "workflow acceptance unavailable"
-    any_required_checks = False
+    restored = _saved_outcomes(workflow)
+    if restored is None:
+        return "workflow outcome schema incomplete"
+    run, tasks = restored
+    if not run.done_accepted or not typed_completed(run, tasks, []):
+        return "workflow acceptance or active stop contradicts completion"
+    if not isinstance(result.get("error"), str) or result["error"]:
+        return "completed run carries error"
+    findings = result.get("findings")
+    if not isinstance(findings, list):
+        return "findings record unavailable"
+    audit_findings = {}
+    for finding in findings:
+        if not isinstance(finding, dict) or finding.get("status") != "resolved":
+            return "unresolved finding"
+        if finding.get("task"):
+            audit_findings.setdefault(finding["task"], []).append(finding["status"])
+    try:
+        blockers = completion_blockers(tasks, audit_findings=audit_findings)
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return "workflow outcome malformed"
+    if blockers:
+        return "task workflow debt"
     for task in tasks:
-        if not isinstance(task, dict) or not isinstance(task.get("edges"), dict):
-            return "task workflow unavailable"
-        if task.get("mismatches") or task.get("unsatisfied"):
-            return "task workflow debt"
-        contract = task.get("contract")
-        if not isinstance(contract, dict) or not isinstance(contract.get("required"), dict):
-            return "task requirement contract unavailable"
-        required = contract["required"]
-        wanted = []
-        if required.get("checks"):
-            wanted.append("checks")
-            any_required_checks = True
-        if required.get("security_verification"):
-            wanted.append("verification")
-        if required.get("design_evidence") in ("harness", "self"):
-            wanted.append("evidence")
-        if required.get("design_review"):
-            wanted.extend(("delivered", "reviewer"))
-        if required.get("settlement"):
-            wanted.append("settlement")
-        if any(task["edges"].get(edge) is not True for edge in wanted):
-            return "required task edge missing or failed"
-        checks = task.get("checks")
-        if not isinstance(checks, list) or (required.get("checks") and not checks):
-            return "task check receipts unavailable"
-        if checks and (not isinstance(checks[-1], dict) or checks[-1].get("passed") is not True):
-            return "task check failed"
+        problem = _final_check_problem(task.checks, required=task.contract["required"]["checks"])
+        if problem:
+            return "task " + problem
     requirements = result.get("requirements")
     if not isinstance(requirements, dict) or not isinstance(requirements.get("listed"), dict) or not isinstance(requirements.get("status"), dict):
         return "requirements record unavailable"
     if any(not str(requirements["status"].get(rid, "")).startswith(("covered", "met"))
            for rid in requirements["listed"]):
         return "unmet requirement"
-    findings = result.get("findings")
-    if not isinstance(findings, list):
-        return "findings record unavailable"
-    if any(not isinstance(item, dict) or item.get("status") != "resolved" for item in findings):
-        return "unresolved finding"
     checks = result.get("checks")
-    if not isinstance(checks, list) or (any_required_checks and not checks):
-        return "run check receipts unavailable"
-    if checks and (not isinstance(checks[-1], dict) or checks[-1].get("passed") is not True):
-        return "run check failed"
+    problem = _final_check_problem(checks, required=any(
+        task.contract["required"]["checks"] for task in tasks), run_level=True)
+    if problem:
+        return "run " + problem
     return None
 
 
@@ -103,6 +200,10 @@ def _verification(run: Path, result: dict | None, attestations: dict):
         return "unknown", "malformed independent attestation"
     if claim.get("status") != "verified":
         return "unverified" if claim.get("status") == "unverified" else "unknown", "external verdict"
+    saved_result = run / "result.json"
+    if (not saved_result.is_file() or
+            claim.get("result_sha256") != hashlib.sha256(saved_result.read_bytes()).hexdigest()):
+        return "unknown", "saved result identity mismatch"
     if not result or result.get("completed") is not True:
         return "unknown", "run did not record completion"
     problem = _workflow_problem(result)
@@ -127,18 +228,33 @@ def score_run(run: Path, attestations: dict):
     result = _json(run / "result.json")
     persisted_budget = _json(run / "budget.json")
     final_budget = result.get("budget") if isinstance(result, dict) else None
-    budget = final_budget if isinstance(final_budget, dict) else persisted_budget
+    # A saved final result is authoritative. Its explicit null cannot be
+    # replaced by an earlier budget checkpoint.
+    budget = final_budget if isinstance(result, dict) else persisted_budget
+    budget = budget if isinstance(budget, dict) else None
     final_elapsed = _number((budget or {}).get("elapsed_seconds"))
     persisted_elapsed = _number((persisted_budget or {}).get("elapsed_seconds"))
-    if final_budget is not None and persisted_elapsed is not None and (final_elapsed is None or final_elapsed < persisted_elapsed):
-        final_elapsed = None
+    attempts = _count((budget or {}).get("reserved_attempts"))
+    usage_unknown = _count((budget or {}).get("unknown_usage_attempts"))
+    persisted_attempts = _count((persisted_budget or {}).get("reserved_attempts"))
+    persisted_unknown = _count((persisted_budget or {}).get("unknown_usage_attempts"))
+    budget_consistent = budget is not None
+    if isinstance(result, dict) and isinstance(persisted_budget, dict):
+        if persisted_elapsed is not None and (final_elapsed is None or final_elapsed < persisted_elapsed):
+            final_elapsed = None
+            budget_consistent = False
+        if persisted_attempts is not None and (attempts is None or attempts < persisted_attempts):
+            attempts = None
+            budget_consistent = False
+        if persisted_unknown is not None and (usage_unknown is None or usage_unknown < persisted_unknown):
+            usage_unknown = None
+            budget_consistent = False
     events = _jsonl(run / "invocations.jsonl")
     verdict, reason = _verification(run, result, attestations)
     invoked = [event for event in events or [] if event.get("invoked") is True]
     failed = [event for event in invoked if event.get("outcome") != "ok"]
-    attempts = _number((budget or {}).get("reserved_attempts"))
-    usage_unknown = _number((budget or {}).get("unknown_usage_attempts"))
-    coverage_complete = events is not None and attempts == len(invoked)
+    coverage_complete = (events is not None and budget_consistent and attempts is not None
+                         and usage_unknown is not None and attempts == len(invoked))
     vendor_costs = [_number((event.get("diagnostics") or {}).get("vendor_cost_usd")) for event in invoked]
     # An explicit zero is meaningful; missing per-call cost is not zero.
     known_spend = sum(Decimal(str(value)) for value in vendor_costs if value is not None)
@@ -192,10 +308,11 @@ def score(runs: list[Path], attestations: dict):
             **totals, **ratios,
             "observed_vendor_spend_usd": float(spend) if fully_costed else None,
             "vendor_spend_complete": fully_costed,
-            "vendor_spend_known_partial_usd": float(spend) if spend else None,
+            "vendor_spend_known_partial_usd": float(spend) if any(
+                row["observed_vendor_spend_usd"] is not None for row in rows) else None,
             "vendor_spend_per_verified_completion_usd": float(spend / verified) if fully_costed and verified else None,
         },
-        "method": "All selected runs, including failed attempts, enter aggregate totals. Budget elapsed starts after preflight and excludes operator time. Unknown cells remain null. Vendor spend requires per-invocation vendor-reported cost; API-price counterfactual and subscription marginal spend are excluded. Independent completion requires external evidence bound to the saved source fingerprint and a consistent saved workflow record.",
+        "method": "All selected runs, including failed attempts, enter aggregate totals. Budget elapsed is the run budget clock, beginning after repository scan; it includes session readiness and plan-gate wait, and its final snapshot includes trace/report I/O. It is not an external supervisor clock. Unknown cells remain null. Vendor spend requires per-invocation vendor-reported cost; API-price counterfactual and subscription marginal spend are excluded. Independent completion requires external evidence bound to the saved source fingerprint, exact result digest, and a consistent saved workflow record.",
     }
 
 

@@ -1,6 +1,9 @@
 """Conservative scoring from saved, synthetic records only."""
+import hashlib
 import json
+from copy import deepcopy
 
+from quadratus.outcome import TaskOutcome
 from tools.workflow_scorecard import score
 
 
@@ -8,13 +11,22 @@ def _write(run, *, completed, events, attempts=None, seconds=10):
     run.mkdir()
     if attempts is None:
         attempts = sum(event.get("invoked") is True for event in events)
+    task = TaskOutcome(task_id="t1", intent="implementation", lead="Sol",
+                       contract={"task_id": "t1", "owner": "Sol", "intended_state": "state-1",
+                                 "required": {"checks": True, "design_review": True,
+                                              "security_verification": False, "settlement": False,
+                                              "design_evidence": "none"}},
+                       dispatch={"state": "dispatched", "owner": "Sol"},
+                       stages=["checks"], edges={"checks": True, "delivered": True, "reviewer": True},
+                       checks=[{"passed": True, "output_artifact": "artifact-1", "receipts": []}],
+                       source_before="source-1", source_after="source-1", dependency="stable",
+                       partial={"changed": []}, closed_as="closed")
     (run / "result.json").write_text(json.dumps({
-        "completed": completed, "source_fingerprint": "source-1",
-        "workflow": {"run": {"done_accepted": completed}, "tasks": [
-            {"contract": {"required": {"checks": True, "design_review": True}},
-             "edges": {"checks": True, "delivered": True, "reviewer": True},
-             "checks": [{"passed": True}], "mismatches": [], "unsatisfied": []}],
-            "parity": {"agree": True, "complete": True, "typed_completed": completed}},
+        "completed": completed, "error": "", "source_fingerprint": "source-1",
+        "workflow": {"run": {"done_accepted": completed, "facts": [], "readiness": []},
+            "tasks": [task.to_dict()],
+            "parity": {"agree": True, "complete": True, "typed_completed": completed,
+                       "problems": [], "missing": []}},
         "requirements": {"listed": {"R1": "example"}, "status": {"R1": "met (audited)"}},
         "findings": [], "checks": [{"passed": True}],
         "budget": {"reserved_attempts": attempts, "elapsed_seconds": seconds,
@@ -29,7 +41,8 @@ def _write(run, *, completed, events, attempts=None, seconds=10):
 
 def _attest(run):
     return {run.name: {"status": "verified", "reviewer": "independent reviewer",
-                       "evidence": "review.txt", "source_fingerprint": "source-1"}}
+                       "evidence": "review.txt", "source_fingerprint": "source-1",
+                       "result_sha256": hashlib.sha256((run / "result.json").read_bytes()).hexdigest()}}
 
 
 def test_unknown_until_external_attestation_and_matching_source(tmp_path):
@@ -152,3 +165,96 @@ def test_diagnostics_cache_and_conflicting_cache_are_conservative(tmp_path):
     events["cached_input_tokens"] = 90
     (run / "invocations.jsonl").write_text(json.dumps(events) + "\n")
     assert score([run], _attest(run))["runs"][0]["cached_input_tokens_subset"] is None
+
+
+def test_adversarial_completion_matrix(tmp_path):
+    run = _write(tmp_path / "a", completed=True, events=[])
+    path = run / "result.json"
+    baseline = json.loads(path.read_text())
+    claim = _attest(run)
+    assert score([run], claim)["runs"][0]["verification"] == "verified"
+    def drop_review(r, flag):
+        required = r["workflow"]["tasks"][0]["contract"]["required"]
+        if flag is None:
+            required.pop("design_review")
+        else:
+            required["design_review"] = flag
+        edges = r["workflow"]["tasks"][0]["edges"]
+        edges.pop("delivered")
+        edges.pop("reviewer")
+
+    mutations = (
+        lambda r: drop_review(r, None),
+        lambda r: drop_review(r, False),
+        lambda r: r["workflow"]["tasks"][0]["contract"]["required"].update(checks=None),
+        lambda r: r["checks"][-1].update(receipts=[{"id": "required", "required": True,
+                                                   "status": "failed"}]),
+        lambda r: r["checks"][-1].update(receipts=[{"id": "unknown", "status": "passed"}]),
+        lambda r: r["workflow"]["tasks"][0]["facts"].append(
+            {"kind": "operator", "detail": "stop", "stage": "checks", "terminal": True,
+             "recovered": False, "legacy_route": False, "legacy": None}),
+        lambda r: r["workflow"]["run"]["facts"].append(
+            {"kind": "operator", "detail": "stop", "stage": "run", "terminal": True,
+             "recovered": False, "legacy_route": False, "legacy": None}),
+        lambda r: r["workflow"]["tasks"][0].update(closed_as="stopped:ProviderRefusal"),
+        lambda r: r.update(error="stopped:ProviderRefusal"),
+        lambda r: r["workflow"]["tasks"][0].pop("dispatch"),
+    )
+    for mutate in mutations:
+        record = deepcopy(baseline)
+        mutate(record)
+        path.write_text(json.dumps(record))
+        assert score([run], claim)["runs"][0]["verification"] == "unknown"
+        if mutate not in mutations[:2]:
+            assert score([run], _attest(run))["runs"][0]["verification"] == "unknown"
+
+
+def test_valid_continuation_discharges_predecessor_edge(tmp_path):
+    run = _write(tmp_path / "a", completed=True, events=[])
+    path = run / "result.json"
+    record = json.loads(path.read_text())
+    first = record["workflow"]["tasks"][0]
+    first["closed_as"] = "turn_limited"
+    first["edges"]["reviewer"] = False
+    first["unsatisfied"] = ["reviewer"]
+    second = deepcopy(first)
+    second["task_id"] = second["contract"]["task_id"] = "t2"
+    second["continues"] = "t1"
+    second["closed_as"] = "closed"
+    second["edges"]["reviewer"] = True
+    second["unsatisfied"] = []
+    record["workflow"]["tasks"].append(second)
+    path.write_text(json.dumps(record))
+    assert score([run], _attest(run))["runs"][0]["verification"] == "verified"
+    second["contract"]["intended_state"] = "other-state"
+    path.write_text(json.dumps(record))
+    assert score([run], _attest(run))["runs"][0]["verification"] == "unknown"
+
+
+def test_budget_snapshots_and_zero_vendor_cost(tmp_path):
+    run = _write(tmp_path / "a", completed=True, events=[
+        {"invoked": True, "outcome": "ok", "input_tokens": 10, "output_tokens": 2,
+         "cached_input_tokens": 1, "diagnostics": {"vendor_cost_usd": 0}},
+    ], attempts=1, seconds=30)
+    report = score([run], _attest(run))
+    assert report["summary"]["vendor_spend_known_partial_usd"] == 0
+    path = run / "result.json"
+    original = json.loads(path.read_text())
+    for final_budget, persisted_budget in (
+        (None, {"elapsed_seconds": 5, "reserved_attempts": 1, "unknown_usage_attempts": 0}),
+        ({"elapsed_seconds": 30, "reserved_attempts": 1, "unknown_usage_attempts": 0},
+         {"elapsed_seconds": 5, "reserved_attempts": 2, "unknown_usage_attempts": 0}),
+        ({"elapsed_seconds": 30, "reserved_attempts": 1, "unknown_usage_attempts": 0},
+         {"elapsed_seconds": 5, "reserved_attempts": 1, "unknown_usage_attempts": 1}),
+    ):
+        changed = deepcopy(original)
+        changed["budget"] = final_budget
+        path.write_text(json.dumps(changed))
+        (run / "budget.json").write_text(json.dumps(persisted_budget))
+        row = score([run], _attest(run))["runs"][0]
+        if final_budget is None:
+            assert row["budget_elapsed_seconds"] is None
+            assert row["reserved_attempts"] is None
+        assert row["attempt_event_coverage_complete"] is False
+        assert row["input_tokens"] is None
+        assert row["vendor_spend_complete"] is False
