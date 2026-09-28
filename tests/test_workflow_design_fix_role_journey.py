@@ -67,6 +67,7 @@ def test_design_fix_gets_the_lead_packet_in_a_bounded_session_journey(
     (task,) = result["workflow"]["tasks"]
     assert task["task_id"] == "t1"
     assert task["dispatch"]["owner"] == task["contract"]["owner"]
+    assert task["dispatch"]["owner"] == task["invoked_owner"]
     assert task["invoked_owner"] == task["lead"]
     # The seat key names the API family (openai), while the CLI executable is
     # named codex; the model id is the stable identity shared by both records.
