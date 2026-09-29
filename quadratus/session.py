@@ -2822,6 +2822,15 @@ class Session:
         lead = task.author
         partial = dict(exc.partial or {})
         state = partial if "inspected" in partial else self._inspect_partial_edits(self._task_before)
+        if self.project and not state.get("inspected"):
+            # The task-level path needs to know what the call left; without
+            # that the run stops, as every other uninspectable case does
+            # (Codex review of d80d9d3: a malformed WORKER reply on an
+            # uninspectable tree reached a second orchestrator round).
+            raise PartialWorkStopped(
+                f"Task {spec.task_id} failed ({exc.cause}: {str(exc)[:200]}) and the source could "
+                "not be inspected; work preserved. " + str(state.get("note") or ""),
+                partial=dict(state, cause=exc.cause)) from exc
         changed = list(state.get("changed") or [])
         if exc.cause == "scope":
             # The scope check opened an out-of-path finding for the same
