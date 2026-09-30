@@ -805,9 +805,10 @@ def _read_hypothesis(spec):
 
 _HYPOTHESIS_REQUEST = (
     "This is a survey run. The previous task did not finish, or left a finding. Your "
-    "next task must carry one line 'HYPOTHESIS: <what that failure showed and what this "
+    "next task should carry one line 'HYPOTHESIS: <what that failure showed and what this "
     "task does differently>'. It is recorded beside the harness's own record of the "
-    "failure and never acted on; a task without it is sent back. The recovery allowance "
+    "failure as diagnostic text and never acted on; omitting it is recorded, not refused. "
+    "The recovery allowance "
     "is the operator's: {left} continuation or repair task(s) remain, and a continuation "
     "that fails the same way as its predecessor with nothing new changed stops the run."
 )
@@ -2818,7 +2819,8 @@ class Session:
         said = (exc.partial_text or "").strip()
         record = dict(task=spec.task_id, lead=lead, turns=exc.turns,
                       changed=state["changed"], changed_lines=state["changed_lines"],
-                      note=state["note"], partial_text=said[:4000] or None)
+                      note=state["note"], partial_text=said[:4000] or None,
+                      content=self._content_fingerprint(state["changed"]))
         task.keep(json.dumps(record), kind="turn-limited", author=lead)
         self.turn_limited_records[spec.task_id] = record
         from .project_files import MAX_INSPECT_BYTES
@@ -2896,7 +2898,8 @@ class Session:
                                          inspected=state.get("inspected"), note=state.get("note"))
         record = dict(task=spec.task_id, lead=lead, cause=exc.cause, error=str(exc)[:2000],
                       changed=changed, changed_lines=state.get("changed_lines", 0), note=state.get("note"),
-                      role=str(self._active_call.get("role") or ""))
+                      role=str(self._active_call.get("role") or ""),
+                      content=self._content_fingerprint(changed))
         task.keep(json.dumps(record), kind="task-failed", author=lead)
         self.failed_records[spec.task_id] = record
         from .project_files import MAX_INSPECT_BYTES
@@ -3111,10 +3114,29 @@ class Session:
             return True
         return any(f["task"] == last.task_id and f["status"] == "open" for f in self.findings)
 
+    def _content_fingerprint(self, paths) -> Dict[str, str]:
+        """sha256 of each changed path's content as the task left it (missing
+        for a deleted file), so a repeat is judged on content, never on
+        filenames alone (Codex on the survey design, 2026-09-30)."""
+        if not self.project:
+            return {}
+        import hashlib
+        root = Path(self.project)
+        out = {}
+        for path in paths:
+            try:
+                out[path] = hashlib.sha256((root / path).read_bytes()).hexdigest()
+            except OSError:
+                out[path] = "missing"
+        return out
+
     def _survey_repeat(self, spec, continues, unfinished: str) -> Optional[str]:
         """Why this unfinished continuation is a same-cause repeat of the task
-        it continues, or None: same cause (cap, or the failure's cause) and
-        nothing newly changed beyond what the predecessor changed."""
+        it continues, or None. A repeat is the same cause (cap, or the
+        failure's cause), the same error (its first line), and no new
+        evidence: every file the continuation changed holds the content its
+        predecessor left, judged by content hash and task lineage, never by
+        filenames alone."""
         if not continues:
             return None
         def record(tid):
@@ -3126,11 +3148,15 @@ class Session:
         cause_after = after.get("cause") or "cap"
         if cause_before != cause_after:
             return None
-        new = set(after.get("changed") or []) - set(before.get("changed") or [])
-        if new:
+        def head(rec):
+            return (rec.get("error") or rec.get("partial_text") or "").strip().splitlines()[:1]
+        if head(before) != head(after):
             return None
-        return (f"{spec.task_id} continued {continues} and failed the same way ({cause_after}) with "
-                f"nothing newly changed")
+        earlier, later = before.get("content") or {}, after.get("content") or {}
+        if any(earlier.get(path) != digest for path, digest in later.items()):
+            return None
+        return (f"{spec.task_id} continued {continues} and failed the same way ({cause_after}: "
+                f"{' '.join(head(after))[:120]}) with no new content in the files it changed")
 
     def next_task(self) -> Optional[TaskSpec]:
         """Ask the orchestrator what to do next, given the ledger.
@@ -3501,19 +3527,15 @@ class Session:
             )
             continues, spec = _read_continues(spec)
             hypothesis, spec = _read_hypothesis(spec)
-            if self.config.survey is not None and self._survey_after_failure() and not hypothesis:
-                self._covers_corrections += 1
-                if self._covers_corrections > self.config.max_requirement_reopens:
-                    raise RunStalled("the orchestrator kept naming tasks without a HYPOTHESIS line after a failure")
-                self._done_refusal = ("\n\n--- TASK SENT BACK ---\nThe previous task did not finish or left a "
-                                      "finding; this task needs a 'HYPOTHESIS: <...>' line. Name the task again.")
-                previous_description = None
-                continue
-            if hypothesis is not None:
-                self.survey["hypotheses"].append(dict(task=spec.task_id, after=self.history[-1].task_id
-                                                      if self.history else None, text=hypothesis[:600]))
-                self.store.put(hypothesis, kind="hypothesis", author=self.seat().key)
-                self._note(f"hypothesis for {spec.task_id}: {hypothesis[:160]}")
+            if self.config.survey is not None and (hypothesis is not None or self._survey_after_failure()):
+                # Diagnostic text, never a rule the reply can fail on (Codex on
+                # the survey design): an omitted line is recorded as omitted.
+                self.survey["hypotheses"].append(dict(
+                    task=spec.task_id, after=self.history[-1].task_id if self.history else None,
+                    text=hypothesis[:600] if hypothesis else None))
+                if hypothesis:
+                    self.store.put(hypothesis, kind="hypothesis", author=self.seat().key)
+                self._note(f"hypothesis for {spec.task_id}: {(hypothesis or 'none stated')[:160]}")
             covers, spec = _read_covers(spec)
             problem = self._covers_problem(covers)
             if problem:

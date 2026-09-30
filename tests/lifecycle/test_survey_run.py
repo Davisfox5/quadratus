@@ -67,31 +67,46 @@ def test_distinct_failures_keep_the_run_going_and_are_all_recorded(tmp_path, mon
     assert "HYPOTHESIS" not in replay.of("orchestrator")[0].prompt, "only after a failure"
 
 
-def test_a_missing_hypothesis_after_a_failure_is_sent_back_once(tmp_path, monkeypatch):
+def test_a_missing_hypothesis_after_a_failure_is_recorded_not_refused(tmp_path, monkeypatch):
     def lead(call, replay):
         if call.task == "t1":
             H.write(call, {"app.py": FIXED, "other.py": "x\n"})
             return 'Did both.\nCHANGED: ["other.py", "app.py"]'
         H.write(call, {"other.py": ""})
         return 'Cleaned up.\nCHANGED: ["other.py"]'
-    plan = _plan(DECL_T1, _continue("t1", None), _continue("t1", "t1 overran; keep to the files"))
+    plan = _plan(DECL_T1, _continue("t1", None))
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=plan, lead=lead), files=FILES, max_tasks=5,
                    survey=SurveyConfig(recovery_tasks=4), record_complete=False)
-    prompts = [c.prompt for c in replay.of("orchestrator")]
-    assert "--- TASK SENT BACK ---" in prompts[2] and "HYPOTHESIS" in prompts[2]
-    assert [c.task for c in replay.of("lead")] == ["t1", "t2"]
+    assert [c.task for c in replay.of("lead")] == ["t1", "t2"], "the task ran; nothing was sent back"
+    assert _survey(replay)["hypotheses"] == [dict(task="t2", after="t1", text=None)]
+    assert not replay.artifacts("hypothesis")
 
 
-def test_a_same_cause_repeat_with_nothing_new_changed_stops_the_run(tmp_path, monkeypatch):
+def test_a_same_cause_repeat_with_no_new_content_stops_the_run(tmp_path, monkeypatch):
+    """The same cause, the same error and nothing new in the tree: a repeat.
+    (A scope overrun cannot repeat with identical content, since identical
+    writes are no change; a malformed reply can.)"""
+    def lead(call, replay):
+        return 'WORKER {"errand":"code"}'
+    plan = _plan(DECL_T1, _continue("t1", "try again"), _continue("t2", "and again"))
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=plan, lead=lead), files=FILES, max_tasks=5,
+                   survey=SurveyConfig(recovery_tasks=4), record_complete=False)
+    assert [c.task for c in replay.of("lead")] == ["t1", "t2"], "the repeat stops before a third"
+    assert replay.result.error.startswith("SurveyRepeatStop: t2 continued t1 and failed the same way (channel:")
+    assert _survey(replay)["repeats"] and not replay.result.completed
+
+
+def test_the_same_cause_with_new_content_is_not_a_repeat(tmp_path, monkeypatch):
+    """A changed filename proves nothing; different content in the same file does."""
     def lead(call, replay):
         H.write(call, {"app.py": FIXED, "other.py": f"{call.task}\n"})
         return 'Did both.\nCHANGED: ["other.py", "app.py"]'
     plan = _plan(DECL_T1, _continue("t1", "try again"), _continue("t2", "and again"))
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=plan, lead=lead), files=FILES, max_tasks=5,
                    survey=SurveyConfig(recovery_tasks=4), record_complete=False)
-    assert [c.task for c in replay.of("lead")] == ["t1", "t2"], "the repeat stops before a third"
-    assert replay.result.error.startswith("SurveyRepeatStop: t2 continued t1 and failed the same way (scope)")
-    assert _survey(replay)["repeats"] and not replay.result.completed
+    assert [c.task for c in replay.of("lead")] == ["t1", "t2", "t3"], "new content keeps the survey going"
+    assert not _survey(replay)["repeats"]
+    assert not replay.result.error.startswith("SurveyRepeatStop")
 
 
 def test_the_allowance_stops_the_run_before_one_repair_too_many(tmp_path, monkeypatch):
