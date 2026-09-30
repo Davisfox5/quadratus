@@ -174,7 +174,7 @@ def _task_category(outcome, fact) -> str:
         return "design_review"
     if kind == "unverified":
         return "review"
-    if kind in ("cap", "transport", "refusal"):
+    if kind in ("cap", "failed", "transport", "refusal"):
         return kind
     return "other"
 

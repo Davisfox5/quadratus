@@ -454,6 +454,19 @@ Key design decisions already settled:
   committed non-hidden project sample exactly as the capture itself
   (`design_evidence._fixture`) and the lead's instructions already did. Three
   gates with three rules was the defect; there is one rule now.
+- **A task that breaks its own rules fails the task, not the run**
+  (operator ruling, 2026-09-28; `session.TaskFailed`). Two live runs each
+  ended on the first task-level fault, so every later task's faults stayed
+  unseen and each run could teach one lesson. Scope overrun, a reply that is
+  neither a request nor a delivery, a lead channel that does not converge,
+  and a transport stop after writes now take the capped-task path: work
+  kept, a terminal `failed` fact on the task, the orchestrator told to name
+  the remaining work with CONTINUES, a clean continuation recovering the
+  fact, and two unfinished tasks in a row tripping the same breaker a cap
+  does. What still stops the run is what no re-plan repairs: a refusal, a
+  denied capability, a tree the harness cannot inspect, dependency or
+  evidence integrity, a spent budget, an operator question, and the
+  orchestrator's own stalls.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

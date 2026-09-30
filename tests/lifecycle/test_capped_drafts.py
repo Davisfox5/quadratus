@@ -62,11 +62,15 @@ def test_g1_a_capped_redraft_with_no_change_is_recorded_as_such(tmp_path, monkey
     assert (replay.project / "README.md").read_text() == FILES_OK["README.md"]
 
 
-def test_g1_a_capped_redraft_outside_its_scope_still_stops_with_the_work_kept(tmp_path, monkeypatch):
+def test_g1_a_capped_redraft_outside_its_scope_fails_the_task_with_the_work_kept(tmp_path, monkeypatch):
     replay = _recovered_then_capped(tmp_path, monkeypatch, {"app.py": "def add(a, b):\n    return 1\n"})
-    assert replay.result.error.startswith("PartialWorkStopped: Turn-limited edits exceed the declared scope")
+    t1 = _task(replay)
+    assert t1["closed_as"] == "failed"
+    fact = next(f for f in t1["facts"] if f["kind"] == "failed")
+    assert fact["detail"].startswith("scope: Turn-limited edits exceed the declared scope")
+    assert [f["kind"] for f in t1["facts"] if f["terminal"] and not f["recovered"]] == ["cap", "failed"]
     assert (replay.project / "app.py").read_text() == "def add(a, b):\n    return 1\n"
-    assert _task(replay)["closed_as"] == "stopped:PartialWorkStopped"
+    assert not replay.result.completed
 
 
 def test_g2_a_capped_security_draft_is_a_capped_task_and_nothing_is_verified(tmp_path):

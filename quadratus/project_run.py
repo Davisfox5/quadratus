@@ -312,12 +312,13 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # tasks' preserved edits as in-flight work.
         error = session.stop_reason
         records = list((getattr(session, 'turn_limited_records', {}) or {}).values())
-        if error.startswith('TurnLimitBreaker') and records:
-            changed = sorted({name for r in records for name in r.get('changed') or []})
+        failed = list((getattr(session, 'failed_records', {}) or {}).values())
+        if error.startswith(('TurnLimitBreaker', 'TaskFailureBreaker')) and (records or failed):
+            changed = sorted({name for r in records + failed for name in r.get('changed') or []})
             in_flight = dict(
-                note='Stopped by the turn-limit breaker; every capped task\'s edits are preserved.',
-                changed=changed, changed_lines=sum(r.get('changed_lines') or 0 for r in records),
-                turn_limited=records)
+                note='Stopped by the unfinished-task breaker; every capped or failed task\'s edits are preserved.',
+                changed=changed, changed_lines=sum(r.get('changed_lines') or 0 for r in records + failed),
+                turn_limited=records, failed=failed)
             (run_dir / 'in-flight.json').write_text(json.dumps(in_flight, indent=2), encoding='utf-8')
     # What each call did inside its own session, from the vendors' transcripts.
     # Collected after the run so a slow copy never delays a model call.
@@ -376,6 +377,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'source_changed': bool(diff), 'source_fingerprint': project.fingerprint(),
         'tasks': len(session.history) if session else 0,
         'turn_limited_tasks': list(getattr(session, 'turn_limited', []) or []) if session else [],
+        'failed_tasks': list(getattr(session, 'failed', []) or []) if session else [],
         'personal_preferences': _preferences_record(settings),
         'requirements': _requirements_record(session),
         'design_checks': list(getattr(session, 'design_checks', []) or []) if session else [],

@@ -125,12 +125,16 @@ def test_a_gate_fix_below_the_cap_is_unchanged(tmp_path, monkeypatch):
     assert not replay.artifacts("capped-fix")
 
 
-def test_a_capped_gate_fix_outside_its_scope_still_stops_with_work_preserved(tmp_path, monkeypatch):
+def test_a_capped_gate_fix_outside_its_scope_fails_the_task_with_work_preserved(tmp_path, monkeypatch):
     def gate_fix(call, replay):
         H.write(call, {"app.py": FIXED, "README.md": "# rewritten\n"})
         return H.claude_cap("Fixed add and tidied the README.")
     replay = _run(tmp_path, monkeypatch, Script(lead=_looked, **{"gate-fix": gate_fix}), files=FILES)
-    assert replay.result.error.startswith("PartialWorkStopped") and "exceeded the declared scope" in replay.result.error
+    t1 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t1")
+    assert t1["closed_as"] == "failed"
+    fact = next(f for f in t1["facts"] if f["kind"] == "failed")
+    assert fact["detail"].startswith("scope: A capped gate-fix exceeded the declared scope")
+    assert not replay.result.completed
     assert (replay.project / "README.md").read_text() == "# rewritten\n"
 
 

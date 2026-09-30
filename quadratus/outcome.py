@@ -31,7 +31,7 @@ from typing import Dict, List, Optional
 
 #: Highest first. See docs/workflow-map.md section 5.
 PRECEDENCE = ("refusal", "security", "integrity", "denial", "operator", "budget",
-              "cap", "transport", "product", "invalid_proof", "unverified")
+              "cap", "failed", "transport", "product", "invalid_proof", "unverified")
 
 #: Exception class name to outcome class. Looked up along the MRO, so a
 #: subclass without its own row takes its parent's. Unknown is an operator
@@ -52,12 +52,14 @@ _EXCEPTION_CLASS = {
     "PreviewUnavailable": "operator",
     "RunBudgetExceeded": "budget",
     "TurnLimitReached": "cap",
+    #: A task's own failure, handed back like a cap (session.TaskFailed).
+    "TaskFailed": "failed",
     "WindowExhausted": "transport",
     "ProviderError": "transport",
 }
 
 #: ``stop_reason`` prefixes the session writes, to outcome class.
-_STOP_PREFIX = {"TurnLimitBreaker": "cap", "FindingsUnresolved": "unverified",
+_STOP_PREFIX = {"TurnLimitBreaker": "cap", "TaskFailureBreaker": "failed", "FindingsUnresolved": "unverified",
                 "DesignUnverified": "unverified", "CompletionUnproven": "unverified"}
 
 
@@ -159,7 +161,7 @@ class TaskOutcome:
     #: Places where a legacy applicability decision disagreed with the
     #: contract's derived requirement. Recorded, never acted on (phase 2).
     mismatches: List[str] = field(default_factory=list)
-    #: Legacy mirror: "closed", "turn_limited" or "stopped:<Exception>".
+    #: Legacy mirror: "closed", "turn_limited", "failed" or "stopped:<Exception>".
     #: Temporary; removed in phase 3 when history reads outcomes.
     closed_as: str = "open"
 
@@ -260,7 +262,7 @@ def missing_facts(task: TaskOutcome) -> List[str]:
     missing = [f"{task.task_id}.contract mismatch: {m}" for m in task.mismatches]
     if task.closed_as != "open":
         missing += _dispatch_missing(task)
-    if task.closed_as in ("closed", "turn_limited"):
+    if task.closed_as in ("closed", "turn_limited", "failed"):
         for name in ("lead", "source_before", "source_after", "dependency"):
             if not getattr(task, name):
                 missing.append(f"{task.task_id}.{name}")
@@ -451,7 +453,7 @@ def completion_blockers(tasks: List[TaskOutcome], *, owed: Optional[List[str]] =
     def discharged_by_continuation(task, edge) -> bool:
         state = (task.contract or {}).get("intended_state")
         for successor in chain(task.task_id):
-            if (successor.closed_as not in ("closed", "turn_limited") or successor.active
+            if (successor.closed_as not in ("closed", "turn_limited", "failed") or successor.active
                     or missing_facts(successor)):
                 continue
             if successor.edges.get(edge) is not True or edge not in _required_edges(successor):
@@ -515,7 +517,8 @@ def parity(run: RunOutcome, tasks: List[TaskOutcome], *, open_findings: List[str
             problems.append(f"no typed stop fact for legacy error {want!r}")
         elif stop.legacy != want:
             problems.append(f"stop: typed {stop.legacy!r}, legacy {want!r}")
-    closed = [f"{t.task_id}:{t.closed_as}" for t in tasks if t.closed_as in ("closed", "turn_limited")]
+    closed = [f"{t.task_id}:{t.closed_as}" for t in tasks
+              if t.closed_as in ("closed", "turn_limited", "failed")]
     if sorted(closed) != sorted(history):
         problems.append(f"tasks: typed {sorted(closed)}, legacy {sorted(history)}")
     missing = [m for t in tasks for m in missing_facts(t)]
