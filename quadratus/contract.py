@@ -65,6 +65,14 @@ class Required:
     #: disagreement is recorded and fails closed (O-NEXT-10 C; Codex,
     #: 5865627034).
     requirements_ledger: bool = False
+    #: The execution tier fixed at dispatch (direct-execution slice,
+    #: 2026-09-30): "normal", or "direct" for a task the orchestrator labelled
+    #: TIER: direct and the deterministic admission accepted. Direct drops the
+    #: collaborator review (and so the revision round) and the model
+    #: close-out; every check, capture, review-of-evidence, scope and stop
+    #: stays. ``tier_refused`` is why a requested direct tier was refused.
+    tier: str = "normal"
+    tier_refused: str = ""
 
 
 @dataclass(frozen=True)
@@ -125,7 +133,7 @@ def stages_for(required: Required, intent: str) -> Tuple[str, ...]:
     its excursion: no collaborator review, a mandatory verification."""
     if required.security_verification:
         return tuple(["draft"] + (["checks"] if required.checks else []) + ["verification", "closeout"])
-    stages = ["draft", "review"]
+    stages = ["draft"] + ([] if required.tier == "direct" else ["review"])
     if required.checks:
         stages.append("checks")
     if required.design_evidence in ("harness", "self"):

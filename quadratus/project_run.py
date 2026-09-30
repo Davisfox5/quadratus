@@ -55,7 +55,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 progress=None, ask_operator=None, plan_gate=None,
                 default_scope=None, run_limits=None, forbid=(), declared_paths=(),
                 security_verdict_json=False, gates=None, extra_checks=(), capture_profile=None,
-                readiness=None, survey=None):
+                readiness=None, survey=None, direct_tier=False):
     """Keep both successful and interrupted runs next to their source tree.
 
     ``extra_checks`` are further operator checks, each an argv list (or a
@@ -111,7 +111,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     run_limits=run_limits, policy=policy, gates=gates,
                     security_verdict_json=security_verdict_json,
                     fleet_type=Fleet, session_factory=new_session, extras=extras,
-                    capture_profile=profile, readiness=probes, survey=survey)
+                    capture_profile=profile, readiness=probes, survey=survey, direct_tier=direct_tier)
 
 
 #: Flags that change only how much a runner prints, never what it runs.
@@ -227,7 +227,7 @@ def _merge_extras(gates, extras):
 def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
-         extras=(), capture_profile=None, readiness=(), survey=None):
+         extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
@@ -264,6 +264,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         capture_profile=capture_profile,
         readiness_probes=tuple(readiness or ()),
         survey=survey,
+        direct_tier=direct_tier,
     )
     preview = policy.resolve(default_scope.permitted_paths if default_scope else (),
                              writing=allow_writes) if policy else None
@@ -411,6 +412,27 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     return ProjectResult(completed, report, run_dir, diff, error)
 
 
+def _calls_by_task(session):
+    """Invoked model calls per task and role, from the delegation ledger:
+    count, reported tokens and seconds. Measured, so a tier's saving is read
+    from what ran, never from the label (direct tier, 2026-09-30)."""
+    ledger = getattr(session.config, 'delegation_ledger', None)
+    out = {}
+    for event in getattr(ledger, 'events', None) or []:
+        if not getattr(event, 'invoked', False):
+            continue
+        role = (event.role or '').split(':')[0]
+        row = out.setdefault(event.task, {}).setdefault(role, dict(calls=0, input_tokens=0, output_tokens=0,
+                                                                     seconds=0.0, unknown_usage=0))
+        row['calls'] += 1
+        if event.input_tokens is None and event.output_tokens is None:
+            row['unknown_usage'] += 1
+        row['input_tokens'] += event.input_tokens or 0
+        row['output_tokens'] += event.output_tokens or 0
+        row['seconds'] = round(row['seconds'] + (event.seconds or 0.0), 1)
+    return out
+
+
 def _survey_record(session, completed):
     """The survey section: what a run that continues through failures
     collected, reported apart from acceptance (SessionConfig.survey). None
@@ -485,6 +507,7 @@ def _workflow_record(session, completed, error):
             open_ids = ['unknown']
         history = [f"{s.task_id}:{getattr(s, 'outcome', 'closed')}" for s in session.history]
         return {'tasks': [t.to_dict() for t in session.task_outcomes],
+                'calls_by_task': _calls_by_task(session),
                 'run': asdict(session.run_outcome),
                 'parity': parity(session.run_outcome, session.task_outcomes, open_findings=open_ids,
                                  legacy_completed=completed, legacy_error=error, history=history)}

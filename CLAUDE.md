@@ -506,6 +506,24 @@ Key design decisions already settled:
   config), and `tests/test_prompt_rule_parity.py` pins each statement to its
   parser. A new enforcement site gets its prompt sentence and its guard test
   in the same change.
+- **The direct execution tier is opt-in and admitted by facts, never by
+  the label** (first slice, 2026-09-30; `--direct-tier`, `Required.tier`).
+  The diagnostic run's favicon task spent a draft collaborator, a revision
+  round and a model close-out on a four-file change. The orchestrator may
+  label a task `TIER: direct`; `_direct_refusal` admits it only when writes
+  are granted, SCOPE names exact paths outside dependency trees and
+  policy-denied or sensitive paths, `max_lines` is within
+  `direct_max_lines`, the task is not an audit, security, review, RESOLVES
+  or CONTINUES task, and the run has a check. The tier is fixed on the
+  contract at dispatch with the refusal reason; an admitted task draws no
+  draft collaborator (so no revision round), gets a harness-written
+  close-out (no map notes), and keeps every check, the harness capture, the
+  cross-vendor design review where it applies, scope measurement and every
+  stop. `result.json.workflow.calls_by_task` records calls, tokens and
+  seconds per task and role, so a saving is read from what ran. The
+  explicit-task entry point (a caller-supplied TaskSpec through the public
+  runner without the orchestrator) is `Session.run_task` today; a
+  `run_project` wrapper for it is the follow-on.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

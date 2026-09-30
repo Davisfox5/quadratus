@@ -393,3 +393,30 @@ def test_the_generated_capture_command_denied_at_the_cap_is_a_capability_stop(tm
                   settings_kw={"lead_max_turns": 14})
     assert replay.result.error.startswith("CapabilityUnavailable")
     assert [c.task for c in replay.of("lead")] == ["t1"]
+
+
+# -- a review-only lead writes its own fixture (diagnostic run 20260930T020711Z) --------
+
+def test_a_review_only_lead_may_write_its_own_fixture_and_is_told_to(tmp_path, monkeypatch):
+    """t2 of the diagnostic run was an audit whose task text named a
+    capture-only sample and also said "without editing source"; the lead
+    reported CHANGED: [] and never wrote it (Codex, 5903031111). The lead's
+    instruction now says the sample is harness state it must write, and the
+    write is not a source edit: the audit's scope stays clean and the task
+    is not failed for it. The capture itself needs a browser (the @browser
+    cases above); here the fixture reaches the capture as a regular file."""
+    profile, _ = _profile(tmp_path)
+    audit = _decl("KIND: frontend standard",
+                  dict(AUDIT_SCOPE, capture={"path": "/index.html", "steps": UPLOAD_STEPS("t1")}),
+                  "Audit the preview table without editing source.")
+    replay = _run(tmp_path, monkeypatch, [REQS + audit], {"t1": _with_fixture("t1", _no_edit)}, profile=profile,
+                  files={**_design_files(), "templates/index.html": UPLOAD_PAGE.format(style="max-width:100%")},
+                  record_complete=False)
+    prompt = _lead_prompts(replay)[0]
+    assert "uploads .quadratus/capture-fixtures/t1/sample.csv into #csv" in prompt
+    assert "you must write it before you finish" in prompt and "needs no CHANGED entry" in prompt
+    assert (replay.project / ".quadratus/capture-fixtures/t1/sample.csv").read_text() == "a,b\n1,2\n"
+    task = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t1")
+    assert task["closed_as"] == "closed", "writing the fixture is not a scope failure"
+    assert task["partial"]["changed"] == [], "harness state is not a source change"
+    assert "not a regular file" not in (replay.result.error or "")

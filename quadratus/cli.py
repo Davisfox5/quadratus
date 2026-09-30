@@ -116,6 +116,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
                 security_verdict_json=getattr(args, "security_verdict_json", False),
                 survey=(SurveyConfig(recovery_tasks=args.survey_recovery)
                         if getattr(args, "survey_recovery", None) else None),
+                direct_tier=bool(getattr(args, "direct_tier", False)),
                 progress=lambda message: print(f">> {message}", flush=True),
                 ask_operator=_operator(args),
                 plan_gate=(lambda plan: print(plan) is None and
@@ -370,6 +371,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             "Run as a survey: continue through failures, spending at most N continuation or "
             "repair tasks, require a HYPOTHESIS line on each re-plan, stop only on a same-cause "
             "repeat, and report a survey section apart from acceptance."
+        ),
+    )
+    engine.add_argument(
+        "--direct-tier", action="store_true",
+        help=(
+            "Enable the direct execution tier: the orchestrator may label a small, local task "
+            "TIER: direct; a deterministic admission decides, and an admitted task runs with no "
+            "collaborator review and no model close-out. Checks, capture, design review and "
+            "every stop are unchanged."
         ),
     )
     engine.add_argument(

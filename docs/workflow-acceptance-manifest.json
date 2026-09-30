@@ -898,6 +898,49 @@
           "tests/lifecycle/test_survey_run.py::test_distinct_failures_keep_the_run_going_and_are_all_recorded"
         ]
       }
+    },
+    {
+      "id": "J42",
+      "tests": [
+        "tests/lifecycle/test_direct_tier.py::test_the_favicon_task_on_the_direct_tier_drops_review_and_closeout_only",
+        "tests/lifecycle/test_direct_tier.py::test_the_same_task_on_the_normal_tier_keeps_the_full_call_graph",
+        "tests/lifecycle/test_direct_tier.py::test_the_orchestrator_is_told_the_tier_rules_only_when_enabled",
+        "tests/lifecycle/test_direct_tier.py::test_admission_refuses_and_records_why",
+        "tests/lifecycle/test_direct_tier.py::test_without_the_flag_a_label_is_refused_and_recorded",
+        "tests/lifecycle/test_direct_tier.py::test_admission_refuses_a_sensitive_path_and_a_run_without_a_check",
+        "tests/lifecycle/test_direct_tier.py::test_a_direct_task_that_overruns_its_scope_still_fails_the_task",
+        "tests/lifecycle/test_direct_tier.py::test_a_direct_task_whose_check_fails_still_gets_its_fix_round",
+        "tests/lifecycle/test_direct_tier.py::test_a_refused_direct_lead_is_still_the_refusal_stop"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "calls": [
+          "tests/lifecycle/test_direct_tier.py::test_the_favicon_task_on_the_direct_tier_drops_review_and_closeout_only",
+          "tests/lifecycle/test_direct_tier.py::test_the_same_task_on_the_normal_tier_keeps_the_full_call_graph"
+        ],
+        "outcome": [
+          "tests/lifecycle/test_direct_tier.py::test_the_favicon_task_on_the_direct_tier_drops_review_and_closeout_only",
+          "tests/lifecycle/test_direct_tier.py::test_the_same_task_on_the_normal_tier_keeps_the_full_call_graph",
+          "tests/lifecycle/test_direct_tier.py::test_the_orchestrator_is_told_the_tier_rules_only_when_enabled",
+          "tests/lifecycle/test_direct_tier.py::test_admission_refuses_and_records_why",
+          "tests/lifecycle/test_direct_tier.py::test_without_the_flag_a_label_is_refused_and_recorded",
+          "tests/lifecycle/test_direct_tier.py::test_admission_refuses_a_sensitive_path_and_a_run_without_a_check",
+          "tests/lifecycle/test_direct_tier.py::test_a_direct_task_that_overruns_its_scope_still_fails_the_task",
+          "tests/lifecycle/test_direct_tier.py::test_a_direct_task_whose_check_fails_still_gets_its_fix_round",
+          "tests/lifecycle/test_direct_tier.py::test_a_refused_direct_lead_is_still_the_refusal_stop"
+        ],
+        "report": [
+          "tests/lifecycle/test_direct_tier.py::test_the_favicon_task_on_the_direct_tier_drops_review_and_closeout_only"
+        ],
+        "partial_work": [
+          "tests/lifecycle/test_direct_tier.py::test_a_direct_task_that_overruns_its_scope_still_fails_the_task"
+        ]
+      }
     }
   ]
 }

@@ -309,6 +309,9 @@ class TaskSpec:
     metadata_confidence: str = "labelled"
     #: Provenance for the above, rendered into diagnostics.
     metadata_notes: List[str] = field(default_factory=list)
+    #: The execution tier the orchestrator asked for ("normal" or "direct");
+    #: what it gets is fixed on the contract at dispatch.
+    tier: str = "normal"
     #: What this task is allowed to touch and how far it may go. ``None``
     #: means unbounded, which is the honest description of a task nobody
     #: scoped. See :mod:`quadratus.scope`.
@@ -403,6 +406,11 @@ class SessionConfig:
     max_gate_fixes: int = 1
     #: The survey run profile (SurveyConfig); None is an ordinary run.
     survey: Optional["SurveyConfig"] = None
+    #: The direct execution tier, opt-in: the orchestrator may label a task
+    #: TIER: direct and the deterministic admission decides. Off by default.
+    direct_tier: bool = False
+    #: The largest declared max_lines a direct-tier task may carry.
+    direct_max_lines: int = 40
     #: A lead that stops at its turn limit hands its unfinished task back
     #: for re-planning. This many in a row are tolerated; one more ends the
     #: run cleanly, so a limit set too low cannot loop.
@@ -662,12 +670,14 @@ _HARNESS_CAPTURE = (
 )
 
 def _capture_fixture_note(spec) -> str:
-    """The files the declared capture uploads, stated to the lead (diagnostic
-    run 20260930T020711Z: t2 declared a capture-only sample under
-    .quadratus/capture-fixtures/t2/ that no one wrote, and the harness capture
-    found no regular file; the lead had never been told the path). A
-    capture-only sample is the lead's to write; a committed sample must stay
-    a regular file."""
+    """The files the declared capture uploads, stated to the lead as the
+    harness's own rule. Diagnostic run 20260930T020711Z: t2, a review-only
+    audit, declared a capture-only sample under .quadratus/capture-fixtures/t2/;
+    the task text named the path and its content, but also said "without
+    editing source", and the lead reported CHANGED: [] without writing it
+    (Codex, 5903031111). The harness-capture instruction never said that a
+    capture-only sample is harness state a review-only lead may and must
+    write. Now it does; a committed sample must stay a regular file."""
     steps = (getattr(getattr(spec, "scope", None), "capture", None) or {}).get("steps") or []
     lines = []
     own = f".quadratus/capture-fixtures/{spec.task_id}/"
@@ -844,6 +854,34 @@ def _literal_paths(scope) -> Optional[set]:
     if not paths or any(any(ch in p for ch in "*?[]") for p in paths):
         return None
     return {p.strip("./") for p in paths}
+
+
+_TIER = re.compile(r"^\s*TIER:\s*(direct|normal)\s*$", re.MULTILINE | re.IGNORECASE)
+
+
+def _read_tier(spec):
+    """Split a ``TIER: direct`` line off a task. Returns (tier, spec)."""
+    match = _TIER.search(spec.description or "")
+    if not match:
+        return "normal", spec
+    description = _TIER.sub("", spec.description).strip()
+    return match.group(1).lower(), replace(spec, description=description or spec.description)
+
+
+def _tier_request(max_lines: int) -> str:
+    return (
+        "Direct tier (opt-in on this run): a task may carry a line 'TIER: direct' when it is a "
+        "small, local, reversible change. The harness admits it only when every one of these "
+        "holds, checked deterministically at dispatch: writes are granted; SCOPE names exact "
+        "file paths (no wildcards) and none is a dependency tree, a policy-denied or sensitive "
+        f"path; max_lines is at most {max_lines}; it is not an audit (edits none), not a "
+        "security task, not a review task, names no RESOLVES and no CONTINUES; and the run has "
+        "a check to run. An admitted task runs with no collaborator review, no revision round "
+        "and no model close-out: one lead call, the scope measurement, the check and its one "
+        "fix round, the harness capture and the design review where the task changes what "
+        "users see, all stops unchanged. A refused label runs the task normally and records "
+        "why; the label proves nothing about risk on its own."
+    )
 
 
 _CONTINUES = re.compile(r"^\s*CONTINUES:\s*(\S+)\s*$", re.MULTILINE)
@@ -1600,6 +1638,10 @@ class Session:
         """
         # A collaborator that is down is not a collaborator; skipping it here
         # beats failing the task mid-flight when its invocation errors.
+        if self._tier(spec) == "direct":
+            # Fixed on the contract at dispatch: no collaborator, so no
+            # revision round; the checks and evidence still decide.
+            return []
         others = [p for p in self.brain_trust if p != lead and self._available(p)]
         chosen = others[: Complexity.collaborator_count(spec.complexity, len(others))]
         if self._collaboration_applicable(spec):
@@ -2331,6 +2373,76 @@ class Session:
                 f"readiness probe {first['id']} failed ({first['reason']}); no model call was made. "
                 f"Output tail: {first['output'][-400:]}")
 
+    def _direct_refusal(self, spec, outcome=None) -> str:
+        """Why a requested direct tier is refused, or "" when admitted. Every
+        rule reads a fact the harness holds, never the label or a line count
+        alone as proof of safety (Codex, #41). Stated to the orchestrator in
+        the same words by ``_tier_request``."""
+        if not self.config.direct_tier:
+            return "the direct tier is not enabled on this run"
+        if not (self.project and self.config.allow_writes):
+            return "writes are not granted"
+        scope = getattr(spec, "scope", None)
+        if scope is None:
+            return "no SCOPE declared"
+        if _literal_paths(scope) is None:
+            return "SCOPE has no exact file paths"
+        from .deptree import DEPENDENCY_DIRS
+        for raw in scope.permitted_paths:
+            path = raw[2:] if raw.startswith("./") else raw
+            parts = path.split("/")
+            if any(part in DEPENDENCY_DIRS for part in parts):
+                return f"{path} is inside a dependency tree"
+            if self._policy_denies(path):
+                return f"{path} is a policy-denied or sensitive path"
+        if scope.max_lines is None or scope.max_lines > self.config.direct_max_lines:
+            return f"max_lines {scope.max_lines} exceeds the direct bound {self.config.direct_max_lines}"
+        if is_review_only(spec):
+            return "an audit (edits none) is not direct work"
+        if spec.work_class == WorkClass.SECURITY:
+            return "security work is not direct work"
+        if spec.kind == TaskKind.REVIEW:
+            return "review work is not direct work"
+        resolves = list(getattr(outcome, "resolves", None) or getattr(self, "_current_resolves", []) or [])
+        if resolves:
+            return "a RESOLVES task is not direct work"
+        continues = getattr(outcome, "continues", None) or getattr(self, "_continues", None)
+        if continues:
+            return "a CONTINUES task is not direct work"
+        if self.config.integration_gate is None:
+            return "the run has no check to run"
+        return ""
+
+    def _policy_denies(self, path: str) -> bool:
+        """Whether the repository policy's deny_write or sensitive sets cover
+        ``path`` (fnmatch on the policy's globs)."""
+        import fnmatch
+        policy = self.config.repository_policy
+        try:
+            capability = policy.document["capability_policy"] if policy is not None else None
+        except (AttributeError, KeyError, TypeError):
+            capability = None
+        if not capability:
+            return False
+        globs = list(capability.get("deny_write") or [])
+        globs += [p for entry in capability.get("sensitive") or [] for p in entry.get("paths") or []]
+        return any(fnmatch.fnmatch(path, g) or (g.endswith("/**") and fnmatch.fnmatch(path, g[:-3]))
+                   for g in globs)
+
+    def _live_tier(self, spec) -> str:
+        """The tier as the live facts read it: the requested label and the
+        admission, recomputed; the contract's value is the one that binds."""
+        return "direct" if getattr(spec, "tier", "normal") == "direct" and not self._direct_refusal(spec) else "normal"
+
+    def _live_collaboration(self, spec) -> bool:
+        """Design collaboration as the live facts read it: a design task on a
+        run with cross-checking, never on the direct tier."""
+        return bool(self.config.design_cross_check and is_design_task(spec) and self._live_tier(spec) != "direct")
+
+    def _tier(self, spec) -> str:
+        """The current task's tier from its contract, the live reading beside it."""
+        return self._required("tier", self._live_tier(spec))
+
     def _build_contract(self, spec, outcome) -> TaskContract:
         """The task's contract, derived once at dispatch from the same facts
         the legacy applicability decisions read (see _contract_agrees)."""
@@ -2344,13 +2456,17 @@ class Session:
         else:
             evidence = "harness" if self._harness_captures(spec) else "self"
         gate = self.config.integration_gate
+        refused = self._direct_refusal(spec, outcome)
+        tier = "direct" if spec.tier == "direct" and not refused else "normal"
         required = Required(
             checks=gate is not None,
             design_evidence=evidence,
             design_review=bool(self.config.design_cross_check and evidence in ("harness", "self")),
             security_verification=security,
             settlement=bool(outcome.resolves),
-            design_collaboration_applicable=bool(self.config.design_cross_check and is_design_task(spec)),
+            design_collaboration_applicable=self._live_collaboration(spec),
+            tier=tier,
+            tier_refused=refused if spec.tier == "direct" else "",
             design_instruction=self._live_design_instruction(spec),
             security_verdict=self._live_security_verdict() if security else "none",
             operator_limits=self._limits_identity(spec, getattr(self, "_task_outer", None)),
@@ -2431,8 +2547,7 @@ class Session:
     def _collaboration_applicable(self, spec) -> bool:
         """Whether design collaboration applies to this task, from its
         contract (map P3.4), the live reading recorded beside it."""
-        return self._required("design_collaboration_applicable",
-                              bool(self.config.design_cross_check and is_design_task(spec)))
+        return self._required("design_collaboration_applicable", self._live_collaboration(spec))
 
     def _required(self, requirement: str, legacy):
         """The current task's own requirement, from the contract fixed at
@@ -2763,7 +2878,8 @@ class Session:
         labels = {peer: f"Reviewer {chr(65 + i)}"
                   for i, peer in enumerate(collaborators)}
         notes: List[tuple] = []
-        self._stage("review")
+        if self._tier(spec) != "direct":
+            self._stage("review")
         for peer in collaborators:
             with invocation(spec.task_id, "collaborator"):
                 note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
@@ -2851,6 +2967,13 @@ class Session:
                 )
 
         self._run_integration_gate(lead, spec, task)
+        if self._tier(spec) == "direct" and not collaborators:
+            # The direct tier draws no draft collaborator, but the design
+            # review of the evidence is still required where it applies:
+            # one available cross-vendor peer, invoked only for that review.
+            vendor = lead.partition(":")[0]
+            collaborators = [p for p in self.brain_trust
+                             if p != lead and self._available(p) and p.partition(":")[0] != vendor][:1]
         self._check_design(spec, lead, collaborators, task)
         if (self._outcome is not None and self.design_checks
                 and self.design_checks[-1].get("task") == spec.task_id):
@@ -2859,7 +2982,10 @@ class Session:
 
         self._assess_scope(spec, task, before)
         self._stage("closeout")
-        summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
+        if self._tier(spec) == "direct":
+            summary_text, reasoning, dead_ends = self._mechanical_close_out(lead, spec, task)
+        else:
+            summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
         summary = task.close(
             summary=summary_text, reasoning=reasoning, dead_ends=dead_ends
         )
@@ -3318,6 +3444,7 @@ class Session:
                        if self._capture_guidance() else "")
                     + self._operator_limits_note()
                     + self._survey_request()
+                    + ("\n\n" + _tier_request(self.config.direct_max_lines) if self.config.direct_tier else "")
                     + ("\n\nA task identical to the one you named last round is refused and "
                        "stops the run: the last close-out is your evidence, so name the next "
                        "step or a narrower one." if self.history else "")
@@ -3648,6 +3775,8 @@ class Session:
                 f"[{spec.kind}/{spec.complexity}]"
             )
             continues, spec = _read_continues(spec)
+            requested_tier, spec = _read_tier(spec)
+            spec = replace(spec, tier=requested_tier)
             hypothesis, spec = _read_hypothesis(spec)
             if self.config.survey is not None and (hypothesis is not None or self._survey_after_failure()):
                 # Diagnostic text, never a rule the reply can fail on (Codex on
@@ -5861,6 +5990,36 @@ class Session:
             "case; a line 'BLOCKING: none' is read as no finding. Do not redo the work; "
             "verify it."
         )
+
+    def _mechanical_close_out(self, lead: str, spec: TaskSpec, task: TaskMemory):
+        """The direct tier's record, written by the harness from what it
+        measured: no model call, no map notes. The orchestrator reads it at
+        its next planning call exactly where a close-out summary goes."""
+        changed, lines = [], 0
+        state = self._inspect_partial_edits(self._task_before) if self.project else {}
+        if state.get("inspected"):
+            changed, lines = list(state.get("changed") or []), state.get("changed_lines", 0)
+        check = self.checks[-1] if self.checks else None
+        checks = ("no check ran" if check is None else
+                  ("check passed" if check.get("passed") else "check FAILED")
+                  + (": " + ", ".join(f"{r.get('id')} {r.get('status')}" for r in check.get("receipts") or [])
+                     if check.get("receipts") else ""))
+        record = (self.design_checks[-1] if self.design_checks
+                  and self.design_checks[-1].get("task") == spec.task_id else None)
+        evidence = ("no design evidence required" if record is None else
+                    "design evidence verified and reviewed" if record.get("verified")
+                    and (record.get("final_review") or {}).get("verdict") == "APPROVED"
+                    else f"design evidence not verified: {str(record.get('problem') or '')[:160]}")
+        summary_text = (
+            f"Direct tier, recorded by the harness. Changed: {', '.join(changed) or 'no files'}"
+            + (f" ({lines} lines)" if changed else "") + f". {checks}. {evidence}. "
+            "No collaborator review and no model close-out were run for this task; the codebase "
+            "map was not amended by it."
+        )
+        task.keep(json.dumps(dict(task=spec.task_id, lead=lead, tier="direct", changed=changed,
+                                  changed_lines=lines, checks=checks, evidence=evidence)),
+                  kind="direct-closeout", author="harness")
+        return summary_text, "Recorded by the harness from measured facts (direct tier).", []
 
     @_invocation_role("closeout")
     def _close_out(self, lead: str, spec: TaskSpec, task: TaskMemory):
