@@ -3930,12 +3930,12 @@ class Session:
                 # One completion decision (quadratus.completion_decision, map
                 # P3.4): the session makes its steps and applies the result.
                 self._findings_block_done()
-                decision = self._completion_decision(DONE_REPLY, max_tasks)
-                if self._explicit_tasks is not None and decision.status == SEND_BACK:
-                    # Nobody to send the list back to: the same decision with
-                    # no reopen allowance names the stop instead.
-                    self._note("the task list ended with open work and no orchestrator to re-plan")
-                    decision = self._completion_decision(DONE_REPLY, max_tasks, reopens=0, max_reopens=0)
+                # An explicit list has nobody to send it back to: the same
+                # decision, made once with no reopen allowance, names the
+                # stop instead (a second decision would audit twice).
+                decision = self._completion_decision(
+                    DONE_REPLY, max_tasks,
+                    **(dict(reopens=0, max_reopens=0) if self._explicit_tasks is not None else {}))
                 if decision.status == SEND_BACK:
                     self._requirement_reopens += 1
                     if decision.refusal:
@@ -4798,7 +4798,20 @@ class Session:
             return False
         status = ledger.requirement_status
         uncovered = [r for r in ledger.requirements if not status.get(r, "").startswith(("covered", "met"))]
-        if uncovered:
+        if uncovered and self._explicit_tasks is not None:
+            # An explicit run judges the tasks it listed, never the whole
+            # goal (Codex, live run 20260930T141209Z: the favicon task closed
+            # clean and the end-of-list audit marked the goal's baseline
+            # requirements NOT MET). What no listed task claimed is recorded
+            # as unclaimed and left unjudged; what a task claimed is audited.
+            claimed = [r for r in ledger.requirements if r not in uncovered]
+            self.explicit["requirements_unclaimed"] = list(uncovered)
+            self.explicit["requirements_claimed"] = claimed
+            self._note(f"requirements no listed task claimed, left unjudged: {', '.join(uncovered)}")
+            if not claimed:
+                return True
+            verdicts = self._audit_requirements(ids=claimed)
+        elif uncovered:
             self._done_refusal = (
                 "\n\n--- DONE SENT BACK ---\nThese requirements are not covered by any finished "
                 f"task: {', '.join(uncovered)} (never covered, or found not met by the audit and not "
@@ -4806,7 +4819,11 @@ class Session:
                 "why one cannot be done.")
             self._note(f"DONE sent back: uncovered {', '.join(uncovered)}")
             return False
-        verdicts = self._audit_requirements()
+        else:
+            verdicts = self._audit_requirements()
+            if self._explicit_tasks is not None:
+                self.explicit["requirements_claimed"] = list(verdicts)
+                self.explicit["requirements_unclaimed"] = []
         unmet = {r: why for r, (ok, why) in verdicts.items() if not ok}
         for rid, (ok, why) in verdicts.items():
             status[rid] = "met (audited)" if ok else f"NOT MET: {why[:160]}"
@@ -4849,18 +4866,24 @@ class Session:
                     continue
         return found
 
-    def _audit_requirements(self) -> dict:
-        """One read-only call: each requirement met or not, with evidence."""
+    def _audit_requirements(self, ids: Optional[List[str]] = None) -> dict:
+        """One read-only call: each requirement met or not, with evidence.
+        ``ids`` restricts the audit to those requirements (an explicit run
+        audits only what its listed tasks claimed); every listed requirement
+        otherwise."""
         ledger = self.memory.ledger
+        audited = {r: t for r, t in ledger.requirements.items() if ids is None or r in ids}
         auditor = self._auditor()
         if auditor is None:
             self.requirement_audits.append(dict(auditor=None, result="no auditor from another vendor available"))
-            return {r: (False, "no auditor from another vendor available") for r in ledger.requirements}
+            return {r: (False, "no auditor from another vendor available") for r in audited}
         before = self._capture_source() if self.project else None
         checks = "\n".join(f"- {c['command']}: {'passed' if c['passed'] else 'FAILED'}" for c in self.checks[-3:])
         prompt = (
             f"## Goal (verbatim)\n\n{self.memory.goal.strip()}\n\n## Requirements\n\n"
-            + "\n".join(f"{rid}: {text}" for rid, text in ledger.requirements.items())
+            + "\n".join(f"{rid}: {text}" for rid, text in audited.items())
+            + ("\n\nOnly the requirements listed above are audited; the others the goal names were "
+               "not claimed by any task in this run and are not judged." if ids is not None else "")
             + (f"\n\n## Latest project checks\n{checks}" if checks else "")
             + (("\n\n## How ambiguous requirements were settled (judge against these)\n"
                 + "\n".join([f"- {r}: decided by the orchestrator: {t}" for r, t in ledger.decisions.items()]
@@ -4868,7 +4891,13 @@ class Session:
                if ledger.decisions or ledger.rulings else "")
             + (("\n\n## Rendered design evidence\n" + "\n".join(
                 f"- {d['task']}: " + (", ".join(d.get('screenshots') or []) or d.get('problem', ''))
-                for d in self.design_checks)) if self.design_checks else "")
+                + (f"; independent design review by {d['final_review'].get('reviewer')}: "
+                   f"{(d['final_review'].get('verdict') or '')[:200]}" if d.get('final_review') else
+                   "; no independent design review verdict on record")
+                for d in self.design_checks)
+                + "\nA design review verdict listed above is the independent approval of that task's "
+                "renders; where one reads APPROVED, do not report the approval as absent.")
+               if self.design_checks else "")
             + "\n\nYou are an independent auditor. The project in your working directory is the "
             "delivered work. For each requirement, check the delivered files themselves: code, "
             "interface, tests and documentation. Documentation must agree with the goal, not only "
@@ -4896,7 +4925,7 @@ class Session:
         if self.project and before is not None and self._capture_source() != before:
             self._note("the source changed during the requirements audit; its verdicts are void")
             self.requirement_audits.append(dict(auditor=auditor, result="void: the tree changed during the audit"))
-            return {r: (False, "the tree changed during the audit") for r in ledger.requirements}
+            return {r: (False, "the tree changed during the audit") for r in audited}
         found = {}
         for m in _AUDIT_LINE.finditer(reply or ""):
             met, why = m.group(2).upper() == "MET", m.group(3).strip()
@@ -4905,7 +4934,7 @@ class Session:
                 if not resolved:
                     met, why = False, f"MET claimed without a file or test that exists in the project ({why[:100]})"
             found[m.group(1).upper()] = (met, why)
-        verdicts = {r: found.get(r, (False, "the auditor gave no verdict")) for r in ledger.requirements}
+        verdicts = {r: found.get(r, (False, "the auditor gave no verdict")) for r in audited}
         self.requirement_audits.append(dict(auditor=auditor, verdicts={r: dict(met=ok, why=why)
                                                                        for r, (ok, why) in verdicts.items()}))
         return verdicts

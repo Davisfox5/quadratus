@@ -539,9 +539,18 @@ Key design decisions already settled:
   every text a `COVERS:` line, and the operator's list had neither; the
   refusal landed after launch and the record said the task "ran"). `ran`
   is now recorded at dispatch, and a list longer than `max_tasks` is
-  refused because the cap's goal question is an orchestrator call. The list ending is not a DONE: `completed` means every
-  listed task closed clean, and `result.json.explicit_tasks` says
-  `goal_judged: false`. Task completion and whole-goal proof stay distinct.
+  refused because the cap's goal question is an orchestrator call. The
+  list ending is not a DONE: `completed` means every listed task closed
+  clean and every requirement a listed task claimed audited met;
+  requirements no task claimed are recorded as `requirements_unclaimed`
+  and left unjudged (live run 20260930T141209Z: the favicon task closed
+  clean on the direct tier with zero orchestrator calls and the
+  end-of-list audit marked the goal's baseline requirements NOT MET), and
+  `result.json.explicit_tasks` says `goal_judged: false`. Task completion
+  and whole-goal proof stay distinct. The same run showed the audit prompt
+  never carried the design review's verdict, so the auditor reported
+  approval absent; each design evidence line now names the reviewer and
+  verdict.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

@@ -69,3 +69,55 @@ def test_a_covers_naming_an_unlisted_requirement_is_named_upfront(tmp_path, monk
                   record_complete=False)
     assert replay.calls == []
     assert "COVERS names requirements that do not exist: R2" in replay.result.error
+
+
+# Live run 20260930T141209Z-48c0083f (Codex on #35): the favicon task closed
+# clean on the direct tier with zero orchestrator calls, and the end-of-list
+# audit then marked the goal's baseline requirements NOT MET; the audit
+# prompt also never carried the design review's APPROVED verdict.
+
+REQS2 = "REQUIREMENTS:\nR1: README documents add\nR2: the CSV parser rejects malformed input\n"
+
+
+@pytest.mark.requirements_ledger
+def test_an_explicit_run_audits_only_what_its_tasks_claimed(tmp_path, monkeypatch):
+    prompts = []
+
+    def auditor(call, replay):
+        prompts.append(call.prompt)
+        return "R1: MET - README.md"
+    replay = _run(tmp_path, monkeypatch, [REQS2 + README_TASK + "\nCOVERS: R1"], max_tasks=1,
+                  script=_script(**{"requirements-review": lambda c, r: "COMPLETE", "auditor": auditor}))
+    assert replay.of("orchestrator") == []
+    assert replay.result.completed, replay.result.error
+    assert len(prompts) == 1 and "R1: README documents add" in prompts[0] and "R2:" not in prompts[0]
+    assert "not claimed by any task in this run" in prompts[0]
+    record = json.loads((Path(replay.result.run_dir) / "result.json").read_text())["explicit_tasks"]
+    assert record["requirements_claimed"] == ["R1"] and record["requirements_unclaimed"] == ["R2"]
+
+
+@pytest.mark.requirements_ledger
+def test_a_claimed_requirement_the_audit_finds_unmet_still_ends_incomplete(tmp_path, monkeypatch):
+    replay = _run(tmp_path, monkeypatch, [REQS2 + README_TASK + "\nCOVERS: R1"], max_tasks=1,
+                  script=_script(**{"requirements-review": lambda c, r: "COMPLETE",
+                                    "auditor": lambda c, r: "R1: NOT MET - README.md never names add"}),
+                  record_complete=False)
+    assert replay.of("orchestrator") == []
+    assert not replay.result.completed and "RequirementsUnmet" in replay.result.error, replay.result.error
+
+
+@pytest.mark.requirements_ledger
+def test_the_audit_prompt_carries_the_design_review_verdict(tmp_path, monkeypatch):
+    from tests.lifecycle.test_explicit_tasks import FAVICON_TASK
+    prompts = []
+
+    def auditor(call, replay):
+        prompts.append(call.prompt)
+        return "R1: MET - static/favicon.svg"
+    reqs = "REQUIREMENTS:\nR1: GET /favicon.ico returns 200 with an SVG icon\n"
+    replay = _run(tmp_path, monkeypatch, [reqs + FAVICON_TASK + "\nCOVERS: R1\nTIER: direct"], max_tasks=1,
+                  direct_tier=True,
+                  script=_script(**{"requirements-review": lambda c, r: "COMPLETE", "auditor": auditor}))
+    assert replay.result.completed, replay.result.error
+    assert len(prompts) == 1
+    assert "independent design review by" in prompts[0] and "APPROVED" in prompts[0], prompts[0][-1500:]

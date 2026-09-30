@@ -470,9 +470,12 @@ def _explicit_record(session, completed):
         tasks_closed_clean=[t for t in ran if closed.get(t) == 'closed'],
         tasks_unfinished=[t for t in ran if closed.get(t) not in (None, 'closed')],
         goal_judged=False,
+        requirements_claimed=list(record.get('requirements_claimed', [])),
+        requirements_unclaimed=list(record.get('requirements_unclaimed', [])),
         completed=completed,
         note='completed means every listed task closed clean with no open finding or failing '
-             'check; no orchestrator planned, acknowledged or judged the goal.',
+             'check and every requirement a listed task claimed audited met; requirements no '
+             'task claimed are unjudged; no orchestrator planned, acknowledged or judged the goal.',
     )
 
 
