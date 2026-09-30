@@ -76,10 +76,11 @@ def test_a_second_invalid_capture_still_stalls(tmp_path):
 # -- the lead is told the fixture it must write (diagnostic run 20260930T020711Z) ----
 
 def _harness_lead_prompt(tmp_path, steps):
+    from types import SimpleNamespace
+
     from quadratus.scope import TaskScope
     from quadratus.session import TaskSpec
     from quadratus.task_kinds import TaskKind
-    from types import SimpleNamespace
     session = Session("audit", ArtifactStore(tmp_path / ".quadratus"), lambda *a, **k: "",
                       config=SessionConfig(project=tmp_path, allow_writes=True, design_self_verify=True,
                                            capture_profile=SimpleNamespace(origin="http://127.0.0.1:5000")))
