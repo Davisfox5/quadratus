@@ -111,6 +111,9 @@ still has to be read by the lead.
   feature's state. It does not prove a model recognises an unrelated image;
   live browser and feature-state acceptance still decides that.
 
+- `test_explicit_tasks.py` (J43) scripts an orchestrator that raises if
+  called: an explicit-task run that reaches it fails the test.
+
 ## Not covered yet
 
 - A lead reply that is itself a quoted CONSULT or WORKER example at line

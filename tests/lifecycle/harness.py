@@ -202,7 +202,7 @@ def ended_at_cap(replay, cap: int) -> bool:
 def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
         limits=None, settings=None, extra_checks=(), lead_runs_commands=True,
         capture_profile=None, readiness=None, record_complete=True, survey=None,
-        direct_tier=False) -> Replay:
+        direct_tier=False, tasks=None) -> Replay:
     """``lead_runs_commands``: the replayed leads write their renders
     directly, which models a lead whose transport can run the capture. Set
     False for the real claude fact ("granted": only exact allow rules run),
@@ -232,6 +232,7 @@ def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
                                 **({"readiness": readiness} if readiness else {}),
                                 **({"survey": survey} if survey else {}),
                                 **({"direct_tier": True} if direct_tier else {}),
+                                **({"tasks": tasks} if tasks is not None else {}),
                                 run_limits=limits or RunLimits(max_calls=120, max_reported_tokens=6_000_000,
                                                                wall_seconds=600, max_concurrent_workers=2))
     # Phase 1 of the shared workflow plan: on every whole-controller replay,

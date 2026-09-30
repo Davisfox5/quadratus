@@ -520,10 +520,24 @@ Key design decisions already settled:
   close-out (no map notes), and keeps every check, the harness capture, the
   cross-vendor design review where it applies, scope measurement and every
   stop. `result.json.workflow.calls_by_task` records calls, tokens and
-  seconds per task and role, so a saving is read from what ran. The
-  explicit-task entry point (a caller-supplied TaskSpec through the public
-  runner without the orchestrator) is `Session.run_task` today; a
-  `run_project` wrapper for it is the follow-on.
+  seconds per task and role, so a saving is read from what ran.
+- **Direct edits bind to exact file identities** (Codex on #42, P2). A
+  bare directory in SCOPE is a prefix grant, so admission refuses a path
+  spelled with a trailing slash or that exists as a directory, and an
+  admitted task's scope is marked `TaskScope.exact`: each permitted path
+  permits only itself, so a declared file that becomes a directory puts
+  every descendant out of scope. The normal tier keeps prefix grants.
+- **The explicit-task entry runs the operator's list with zero orchestrator
+  calls** (`run_project(tasks=[...])`, `--tasks FILE`, 2026-09-30). Each
+  text is read by the orchestrator reply's own parsers (KIND, SCOPE, TIER,
+  COVERS) under the runner's lifecycle: lock, gate plan, budget, readiness,
+  dependency watch, every per-task check and stop. No planner call, no
+  acknowledgment call, no task the list did not name; a text the loop would
+  send back is `TaskListInvalid` before any lead call, and a list longer
+  than `max_tasks` is refused because the cap's goal question is an
+  orchestrator call. The list ending is not a DONE: `completed` means every
+  listed task closed clean, and `result.json.explicit_tasks` says
+  `goal_judged: false`. Task completion and whole-goal proof stay distinct.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

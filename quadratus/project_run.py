@@ -55,8 +55,15 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 progress=None, ask_operator=None, plan_gate=None,
                 default_scope=None, run_limits=None, forbid=(), declared_paths=(),
                 security_verdict_json=False, gates=None, extra_checks=(), capture_profile=None,
-                readiness=None, survey=None, direct_tier=False):
+                readiness=None, survey=None, direct_tier=False, tasks=None):
     """Keep both successful and interrupted runs next to their source tree.
+
+    ``tasks`` is an operator-written task list (explicit-task entry): each
+    text is read as an orchestrator reply would be and run in order under the
+    same lifecycle, with no planner or acknowledgment call and no task the
+    list did not name. The result's ``explicit_tasks`` section says which
+    ran and that the goal was not judged; ``completed`` then means every
+    listed task closed clean, not that the goal is proven.
 
     ``extra_checks`` are further operator checks, each an argv list (or a
     string split without a shell), run as required gates beside ``check``
@@ -77,6 +84,12 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
         raise ValueError('Describe the project change to make.')
     if max_tasks < 1:
         raise ValueError('max_tasks must be at least 1')
+    if tasks is not None:
+        tasks = list(tasks)
+        if not tasks or any(not str(t).strip() for t in tasks):
+            raise ValueError('tasks must name at least one task, each a non-empty text')
+        if len(tasks) > max_tasks:
+            raise ValueError(f'max_tasks ({max_tasks}) must cover the {len(tasks)} listed task(s)')
     if not isinstance(project, Project):
         project = Project(project)
     state = Path(state_dir).expanduser() if state_dir else Path('.quadratus')
@@ -111,7 +124,8 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     run_limits=run_limits, policy=policy, gates=gates,
                     security_verdict_json=security_verdict_json,
                     fleet_type=Fleet, session_factory=new_session, extras=extras,
-                    capture_profile=profile, readiness=probes, survey=survey, direct_tier=direct_tier)
+                    capture_profile=profile, readiness=probes, survey=survey, direct_tier=direct_tier,
+                    tasks=list(tasks) if tasks is not None else None)
 
 
 #: Flags that change only how much a runner prints, never what it runs.
@@ -227,7 +241,7 @@ def _merge_extras(gates, extras):
 def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
-         extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False):
+         extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False, tasks=None):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
@@ -295,7 +309,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             invariants=['Project source is available in the working directory. '
                         'Use actual files as evidence. Do not commit or publish changes.'],
         )
-        session.run(max_tasks=max_tasks)
+        session.run(max_tasks=max_tasks, **({'tasks': tasks} if tasks is not None else {}))
     except (Exception, KeyboardInterrupt) as exc:  # persist partial work and its cause
         error = f'{type(exc).__name__}: {exc}'
         # A stopped editing call already inspected the tree and kept whatever
@@ -388,6 +402,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                                 if session else None),
         'workflow': _workflow_record(session, completed, error),
         'survey': _survey_record(session, completed),
+        'explicit_tasks': _explicit_record(session, completed),
         'parallel_batches': list(getattr(session, 'parallel_batches', []) or []) if session else [],
         'trace': {'calls': len(traces),
                   'transcripts_found': sum(1 for t in traces if t.get('tool_calls') is not None),
@@ -431,6 +446,27 @@ def _calls_by_task(session):
         row['output_tokens'] += event.output_tokens or 0
         row['seconds'] = round(row['seconds'] + (event.seconds or 0.0), 1)
     return out
+
+
+def _explicit_record(session, completed):
+    """The explicit-task section: which listed tasks ran, which text was
+    refused, and that no one judged the goal. None on an orchestrated run."""
+    record = getattr(session, 'explicit', None) if session is not None else None
+    if record is None:
+        return None
+    ran = [r['task'] for r in record.get('ran', [])]
+    closed = {s.task_id: getattr(s, 'outcome', 'closed') for s in getattr(session, 'history', [])}
+    return dict(
+        listed=record.get('listed', 0), ran=list(record.get('ran', [])),
+        not_run=record.get('listed', 0) - len(ran),
+        invalid=record.get('invalid'),
+        tasks_closed_clean=[t for t in ran if closed.get(t) == 'closed'],
+        tasks_unfinished=[t for t in ran if closed.get(t) not in (None, 'closed')],
+        goal_judged=False,
+        completed=completed,
+        note='completed means every listed task closed clean with no open finding or failing '
+             'check; no orchestrator planned, acknowledged or judged the goal.',
+    )
 
 
 def _survey_record(session, completed):

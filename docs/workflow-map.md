@@ -21,7 +21,7 @@ from `6382cf2`.
 - **Twelve concrete gaps** turned up while mapping (section 6). Some are real
   defects, such as a turn cap escaping on two paths and stale state read
   across tasks. They go into the matrix as journeys, not as side fixes.
-- **The matrix has 42 journeys** (section 7; J9 is split into J9a and J9b, J32 to J38 were added from review, J39 from the 2026-09-28 live runs, and J40 and J41 from the survey plan, J42 from the direct tier). Each one names what the current
+- **The matrix has 43 journeys** (section 7; J9 is split into J9a and J9b, J32 to J38 were added from review, J39 from the 2026-09-28 live runs, and J40 and J41 from the survey plan, J42 from the direct tier, J43 from the explicit-task entry). Each one names what the current
   engine does, what the agreed plan requires, and the phase that changes it.
   Phase 1 adds no behaviour: it records a typed outcome beside today's
   decisions and asserts they agree on every whole-run replay.
@@ -311,7 +311,8 @@ review.
 | J37 | Transport timeout after writes | PartialWorkSuspected, then Stopped | `failed`, tree inspected, the run continues | P1, revised 2026-09-28 |
 | J39 | A task fails on its own rules (scope, reply, channel, transport after writes) | the run stopped on the first one | `failed` on the task, work kept, CONTINUES re-plans; a clean continuation recovers it; two unfinished in a row is `TaskFailureBreaker` | 2026-09-28 |
 | J40 | A check still fails after the fix round | `CheckFailing` stop after the task | `check.failed` finding under the task's COVERS; a RESOLVES task whose own check passes settles it; the original task's check facts become history | 2026-09-30 |
-| J42 | Direct tier: the favicon task replayed on both tiers; admission refusals; overrun, failing check and refusal on a direct task | not a tier | no collaborator, revision or close-out call on the direct tier, design review kept, calls recorded per role; every refusal reason recorded; stops unchanged | 2026-09-30 |
+| J42 | Direct tier: the favicon task replayed on both tiers; admission refusals (wildcards, directories by spelling or on disk, dependency and policy paths, size, audits); overrun, a declared file turned directory, failing check and refusal on a direct task | not a tier | no collaborator, revision or close-out call on the direct tier, design review kept, calls recorded per role; every refusal reason recorded; direct edits bind to exact file identities (`TaskScope.exact`), the normal tier keeps prefix grants; stops unchanged | 2026-09-30 |
+| J43 | Explicit-task entry: `run_project(tasks=[...])` / `--tasks FILE`; an invalid listed text; a list past the cap; a refusal, a budget stop and a failed task on a listed run; one task on both tiers | not an entry | listed tasks run in order under the runner lifecycle with zero orchestrator calls; a text the loop would send back is `TaskListInvalid` before any lead call; the list ending is not a DONE (`explicit_tasks.goal_judged` is false); every stop unchanged | 2026-09-30 |
 | J41 | Survey run: distinct failures in sequence, a same-cause repeat, the recovery allowance, a re-plan without HYPOTHESIS | not a mode | distinct failures continue and are all recorded with hypotheses; a repeat is `SurveyRepeatStop`; the allowance is `SurveyAllowanceSpent`; a missing HYPOTHESIS is sent back; an ordinary run is unchanged | 2026-09-30 |
 | J38 | A check fails, then passes later in the same task (G12) | incomplete, blank error | the recovered failure is history; DONE can stand | P3 |
 

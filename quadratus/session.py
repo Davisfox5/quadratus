@@ -136,6 +136,15 @@ __all__ = [
 ]
 
 
+class TaskListInvalid(RuntimeError):
+    """An operator-listed task (``Session.run(tasks=...)``) failed a rule the
+    orchestrator's reply would have been sent back for: no label, an invalid
+    scope, a bad COVERS or RESOLVES, a missing capture, or a control reply
+    in place of a task. There is nobody to send it back to, so the run stops
+    before any lead call on that task, and the operator corrects the list.
+    """
+
+
 class OperatorInputNeeded(RuntimeError):
     """The orchestrator asked a question only the operator can answer.
 
@@ -873,13 +882,16 @@ def _tier_request(max_lines: int) -> str:
         "Direct tier (opt-in on this run): a task may carry a line 'TIER: direct' when it is a "
         "small, local, reversible change. The harness admits it only when every one of these "
         "holds, checked deterministically at dispatch: writes are granted; SCOPE names exact "
-        "file paths (no wildcards) and none is a dependency tree, a policy-denied or sensitive "
-        f"path; max_lines is at most {max_lines}; it is not an audit (edits none), not a "
+        "file paths (no wildcards, no directories: a path spelled with a trailing slash or "
+        "that is an existing directory is refused) and none is a dependency tree, a "
+        f"policy-denied or sensitive path; max_lines is at most {max_lines}; it is not an audit (edits none), not a "
         "security task, not a review task, names no RESOLVES and no CONTINUES; and the run has "
         "a check to run. An admitted task runs with no collaborator review, no revision round "
         "and no model close-out: one lead call, the scope measurement, the check and its one "
         "fix round, the harness capture and the design review where the task changes what "
-        "users see, all stops unchanged. A refused label runs the task normally and records "
+        "users see, all stops unchanged. On the direct tier each permitted path permits only "
+        "that one file: a write anywhere else, including under a declared path, is out of "
+        "scope. A refused label runs the task normally and records "
         "why; the label proves nothing about risk on its own."
     )
 
@@ -1193,6 +1205,10 @@ class Session:
         #: Survey run bookkeeping (SessionConfig.survey): recovery tasks
         #: spent, the hypotheses recorded, and repeats detected.
         self.survey: dict = dict(recovery_used=0, hypotheses=[], repeats=[])
+        #: Operator-listed tasks (``run(tasks=...)``): the texts still to run,
+        #: and the record of the ones that did. None on an orchestrated run.
+        self._explicit_tasks: Optional[List[str]] = None
+        self.explicit: Optional[dict] = None
         #: The capped task the task now running continues, if any.
         self._continues: Optional[str] = None
         #: Each capped task's starting content for the files it changed, so
@@ -2395,6 +2411,12 @@ class Session:
                 return f"{path} is inside a dependency tree"
             if self._policy_denies(path):
                 return f"{path} is a policy-denied or sensitive path"
+            # A directory is a prefix grant, not a file (Codex, #42 P2): the
+            # spelling says so, or the tree does.
+            if raw.endswith("/") or not parts[-1] or parts[-1] in (".", ".."):
+                return f"{raw} is spelled as a directory, not a file"
+            if self.project and (Path(self.project) / path).is_dir():
+                return f"{path} is an existing directory, not a file"
         if scope.max_lines is None or scope.max_lines > self.config.direct_max_lines:
             return f"max_lines {scope.max_lines} exceeds the direct bound {self.config.direct_max_lines}"
         if is_review_only(spec):
@@ -2458,6 +2480,11 @@ class Session:
         gate = self.config.integration_gate
         refused = self._direct_refusal(spec, outcome)
         tier = "direct" if spec.tier == "direct" and not refused else "normal"
+        if tier == "direct" and scope is not None and not scope.exact:
+            # Direct edits bind to the declared file identities: no prefix
+            # semantics, and a declared path turned directory is out of scope
+            # for every descendant (Codex, #42 P2).
+            scope = spec.scope = replace(scope, exact=True)
         required = Required(
             checks=gate is not None,
             design_evidence=evidence,
@@ -3398,6 +3425,64 @@ class Session:
             lines.append("The repository policy refuses writes under: " + ", ".join(denied[:20]) + ".")
         return ("\n\n" + " ".join(lines)) if lines else ""
 
+    def _next_explicit_task(self) -> Optional[TaskSpec]:
+        """The next operator-listed task, read by the orchestrator reply's own
+        parsers with no model call, or None when the list is spent. What the
+        loop would send back for correction stops the run here instead."""
+        if not self._explicit_tasks:
+            self._note("the task list is spent")
+            return None
+        index = self.explicit["listed"] - len(self._explicit_tasks) + 1
+        text = self._explicit_tasks.pop(0)
+        task_id = f"t{len(self.history) + 1}"
+        self._note(f"listed task {index} of {self.explicit['listed']} runs as {task_id}")
+
+        def refuse(problem: str):
+            self.explicit["invalid"] = dict(index=index, problem=str(problem)[:400])
+            raise TaskListInvalid(f"listed task {index}: {problem}")
+
+        reply = self._absorb_requirements(text)
+        control = parse_control(reply)
+        if control is not None:
+            refuse(f"a {control.verb} reply is not a task")
+        if self._parallel_enabled() and _parallel_blocks(reply):
+            refuse("a parallel batch is not a listed task; list each task on its own")
+        try:
+            meta = _read_metadata(reply)
+        except AmbiguousMetadata as exc:
+            refuse(f"{exc}; state one 'KIND: <kind> <difficulty>' line first")
+        meta = self._absorb_orientation(meta, "operator")
+        scope = self.config.default_scope
+        if self.project and self.config.allow_writes:
+            from .scope import read_scope
+            try:
+                scope, description = read_scope(meta.description, max_lines=MAX_TASK_LINES)
+            except ValueError as exc:
+                refuse(f"invalid scope: {exc}")
+        else:
+            description = meta.description.strip()
+        if not description:
+            refuse("no task description")
+        if meta.defaulted:
+            self._note(f"task metadata was not stated; routing as {meta.render()}")
+        try:
+            spec = TaskSpec(task_id=task_id, description=description, kind=meta.kind,
+                            complexity=meta.difficulty, metadata_confidence=meta.confidence,
+                            metadata_notes=list(meta.notes), scope=scope)
+        except ValueError as exc:
+            refuse(f"invalid task requirements: {exc}")
+        self.explicit["ran"].append(dict(index=index, task=task_id))
+        return spec
+
+    def _refuse_listed(self, spec, problem: str) -> None:
+        """A send-back on a listed task is a stop: there is no orchestrator
+        to correct it."""
+        if self._explicit_tasks is None:
+            return
+        index = next((r["index"] for r in self.explicit["ran"] if r["task"] == spec.task_id), None)
+        self.explicit["invalid"] = dict(index=index, problem=str(problem)[:400])
+        raise TaskListInvalid(f"listed task {index}: {problem}")
+
     def next_task(self) -> Optional[TaskSpec]:
         """Ask the orchestrator what to do next, given the ledger.
 
@@ -3611,8 +3696,17 @@ class Session:
         _, reply = self._ask_seat(seat, lambda fetched: prompt + ("\n\n" + _render_fetches(fetched) if fetched else ""))
         return reply
 
-    def run(self, *, max_tasks: int = 20) -> List[TaskSummary]:
+    def run(self, *, max_tasks: int = 20, tasks: Optional[Sequence[str]] = None) -> List[TaskSummary]:
         """Drive tasks until the orchestrator says DONE or the cap is hit.
+
+        ``tasks`` runs an operator-written task list instead (explicit-task
+        entry, 2026-09-30): each text is read exactly as an orchestrator's
+        reply would be (KIND, SCOPE, TIER, COVERS lines, the description),
+        in order, with no planner call, no acknowledgment call and no task
+        the list did not name. A text the loop would have sent back stops
+        the run (``TaskListInvalid``). The list ending is not a DONE: every
+        task closing clean makes the run complete, and the record says no
+        one judged the goal (``explicit["goal_judged"] is False``).
 
         Whatever ends the run, every audit finding still open says why in its
         own record (Codex review of e47c7ed), beside the run's error.
@@ -3628,6 +3722,22 @@ class Session:
         """
         if max_tasks < 1:
             raise ValueError("max_tasks must be at least 1")
+        if tasks is not None:
+            listed = [str(t) for t in tasks]
+            try:
+                if not listed or any(not t.strip() for t in listed):
+                    raise ValueError("tasks must name at least one task, each a non-empty text")
+                if len(listed) > max_tasks:
+                    # The cap's terminal goal question is an orchestrator call;
+                    # a list longer than the cap would reach it.
+                    raise ValueError(f"max_tasks ({max_tasks}) must cover the {len(listed)} listed task(s)")
+            except ValueError as exc:
+                # Typed like every other stop, so the record names it.
+                self.run_outcome = RunOutcome()
+                self._note_exception(exc)
+                raise
+            self._explicit_tasks = listed
+            self.explicit = dict(listed=len(listed), ran=[], invalid=None, goal_judged=False)
         try:
             history = self._run_tasks(max_tasks)
         except BaseException as exc:
@@ -3704,7 +3814,9 @@ class Session:
             self.dependency_watch.start()
         if self.config.readiness_probes:
             self._run_readiness()
-        if self.config.plan_gate is not None:
+        if self.config.plan_gate is not None and self._explicit_tasks is not None:
+            self._note("the task list is the operator's; the plan gate is not asked")
+        elif self.config.plan_gate is not None:
             self._note("asking the orchestrator for the expected task list")
             if not self.config.plan_gate(self.plan()):
                 self._stop_with("operator", "PlanDeclined: the operator's plan gate declined the expected task "
@@ -3718,8 +3830,11 @@ class Session:
         used = 0
         while used < max_tasks:
             used += 1
-            self._note(f"asking {self.seat().key} for the next task")
-            spec = self.next_task()
+            if self._explicit_tasks is not None:
+                spec = self._next_explicit_task()
+            else:
+                self._note(f"asking {self.seat().key} for the next task")
+                spec = self.next_task()
             self._done_refusal = ""
             batch, self._batch = ([spec] + self._batch if spec is not None and self._batch else None), []
             if batch and used - 1 + len(batch) > max_tasks:
@@ -3749,6 +3864,11 @@ class Session:
                 # P3.4): the session makes its steps and applies the result.
                 self._findings_block_done()
                 decision = self._completion_decision(DONE_REPLY, max_tasks)
+                if self._explicit_tasks is not None and decision.status == SEND_BACK:
+                    # Nobody to send the list back to: the same decision with
+                    # no reopen allowance names the stop instead.
+                    self._note("the task list ended with open work and no orchestrator to re-plan")
+                    decision = self._completion_decision(DONE_REPLY, max_tasks, reopens=0, max_reopens=0)
                 if decision.status == SEND_BACK:
                     self._requirement_reopens += 1
                     if decision.refusal:
@@ -3785,12 +3905,14 @@ class Session:
                     task=spec.task_id, after=self.history[-1].task_id if self.history else None,
                     text=hypothesis[:600] if hypothesis else None))
                 if hypothesis:
-                    self.store.put(hypothesis, kind="hypothesis", author=self.seat().key)
+                    self.store.put(hypothesis, kind="hypothesis",
+                                   author="operator" if self._explicit_tasks is not None else self.seat().key)
                 self._note(f"hypothesis for {spec.task_id}: {(hypothesis or 'none stated')[:160]}")
             covers, spec = _read_covers(spec)
             problem = self._covers_problem(covers)
             if problem:
                 # Corrected before any lead call is spent (Codex review of #25).
+                self._refuse_listed(spec, problem)
                 self._covers_corrections += 1
                 if self._covers_corrections > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming tasks without valid COVERS: {problem}")
@@ -3804,6 +3926,7 @@ class Session:
                        "RESOLVES appears on more than one line; name every finding on one line.")
             if problem:
                 # The same allowance as COVERS: refused before any lead call.
+                self._refuse_listed(spec, problem)
                 self._covers_corrections += 1
                 if self._covers_corrections > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming tasks with an invalid RESOLVES: {problem}")
@@ -3812,6 +3935,7 @@ class Session:
                 continue
             problem = self._capture_problem(spec, resolves)
             if problem:
+                self._refuse_listed(spec, problem)
                 self._covers_corrections += 1
                 if self._covers_corrections > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming UI tasks without a valid capture: {problem}")
@@ -3946,7 +4070,7 @@ class Session:
                 self.task_outcomes[-1].mismatches.append(note)
         return typed or legacy
 
-    def _completion_decision(self, site: str, max_tasks: int):
+    def _completion_decision(self, site: str, max_tasks: int, **overrides):
         """The completion decision at ``site`` (quadratus.completion_decision),
         its steps made by the session's own calls in today's order: the goal
         question, the requirements check, the dependency check at DONE.
@@ -3958,7 +4082,7 @@ class Session:
         made at most once. Replaced approved evidence (E2) is noted only
         where the guard runs, as before, and a fact it adds is read by one
         more decision with the same answers."""
-        answers: dict = {}
+        answers: dict = dict(overrides)
         made: set = set()
         noted = False
         while True:

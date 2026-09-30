@@ -516,7 +516,7 @@ def snapshot_session(session, *, site: str, max_tasks: int = 0, **answers) -> Co
         legacy_open_findings=tuple(session.open_findings),
         legacy_partial=frozenset(session._partial_tasks),
         max_tasks=max_tasks,
-        reopens=session._requirement_reopens,
-        max_reopens=session.config.max_requirement_reopens,
+        reopens=answers.pop("reopens", session._requirement_reopens),
+        max_reopens=answers.pop("max_reopens", session.config.max_requirement_reopens),
         **answers,
     )

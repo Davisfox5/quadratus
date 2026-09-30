@@ -46,6 +46,7 @@ _EXCEPTION_CLASS = {
     "CapabilityUnavailable": "denial",
     "OperatorInputNeeded": "operator",
     "RunStalled": "operator",
+    "TaskListInvalid": "operator",
     "PolicyError": "operator",
     "CapabilityProbeFailed": "operator",
     "CheckUnattributable": "operator",
