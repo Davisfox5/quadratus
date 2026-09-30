@@ -3507,9 +3507,10 @@ class Session:
                 done.open_at_close = dict(
                     findings=list(unresolved),
                     requirements=[rid for rid in covers if not str(status.get(rid, "")).startswith(("covered", "met"))])
+            check_debt = self._record_check_debt(spec, covers)
             self._current_covers, self._current_resolves = [], []
             self._note(f"task {len(self.history)} closed by {summary.author}")
-            if self._findings_stop_due() or (self.checks and not self.checks[-1]['passed']):
+            if self._findings_stop_due() or (self.checks and not self.checks[-1]['passed'] and not check_debt):
                 self._name_findings_stop({spec.task_id})
                 break
             if unresolved:
@@ -4413,16 +4414,16 @@ class Session:
             return "RESOLVES needs the requirements ledger, which is off for this run."
         if not resolves:
             return "RESOLVES names no finding."
-        if not is_design_task(spec):
-            # Only a UI task's own renders can show a measured fault gone.
-            return ("RESOLVES needs a UI task whose own renders can show the fault gone; this task "
-                    "is not one.")
         if len(set(resolves)) != len(resolves):
             return f"RESOLVES names a finding twice: {', '.join(resolves)}."
         by_id = {f["id"]: f for f in self.findings}
         unknown = [r for r in resolves if r not in by_id]
         if unknown:
             return f"RESOLVES names findings that do not exist: {', '.join(unknown)}."
+        if any(by_id[r].get("target") for r in resolves) and not is_design_task(spec):
+            # Only a UI task's own renders can show a measured fault gone.
+            return ("RESOLVES needs a UI task whose own renders can show the fault gone; this task "
+                    "is not one.")
         closed = [r for r in resolves if by_id[r]["status"] != "open"]
         if closed:
             return f"RESOLVES names findings that are already resolved: {', '.join(closed)}."
@@ -4436,22 +4437,28 @@ class Session:
         opened = [f for f in self.findings if f["status"] == "open"]
         if not opened:
             return ""
-        lines = [f"- {f['id']} (found by {f['task']}, requirements {', '.join(f['requirements'])}): the "
-                 f"{f['view']} render of {f['target']} is {f['width']}px wide at a {f['viewport']}px viewport"
+        lines = [f"- {f['id']} (found by {f['task']}, requirements {', '.join(f['requirements'])}): "
+                 + (f"the {f['view']} render of {f['target']} is {f['width']}px wide at a "
+                    f"{f['viewport']}px viewport" if f.get("target") else f["message"])
                  + (f" (reopened: {f['reopened']})" if f.get("reopened") else "")
+                 + (f" (last attempt: {f['last_attempt'][:160]})" if f.get("last_attempt") else "")
                  for f in opened]
-        return ("\n\n--- OPEN AUDIT FINDINGS ---\nThese measured faults were found by a review-only task "
-                "and keep their requirements NOT MET. Name a task that fixes one or more of them, with a "
-                "COVERS line including their requirements and a line 'RESOLVES: F<n>' naming them. It "
-                "resolves a finding only if its own fresh renders of the same page, reached by the same "
-                "interaction steps and fixture, verify with no overflow "
-                "and are approved by the cross-vendor design review.\n" + "\n".join(lines))
+        return ("\n\n--- OPEN FINDINGS ---\nThese measured faults keep their requirements NOT MET. "
+                "Name a task that fixes one or more of them, with a "
+                "COVERS line including their requirements and one line 'RESOLVES: F<n>' naming them "
+                "(one RESOLVES line, ids from this list only, each once, no duplicates). A render "
+                "finding needs a UI task named alone, and resolves only if the task's own fresh "
+                "renders of the same page, reached by the same interaction steps and fixture, verify "
+                "with no overflow and are approved by the cross-vendor design review. A failed-check "
+                "finding resolves when the resolving task's own integration check passes and it "
+                "closes with no new finding; read the check's output artifact before planning the "
+                "repair.\n" + "\n".join(lines))
 
     def _recheck_resolved_findings(self) -> None:
         """Reopen each resolved finding whose resolving renders no longer
         verify against the trusted source (a later task changed it)."""
         for finding in self.findings:
-            if finding["status"] != "resolved" or not self.project:
+            if finding["status"] != "resolved" or not self.project or not finding.get("target"):
                 continue
             problem = self._identity_problem(finding["resolved_by"], finding["target"], finding["steps"],
                                              finding["resolution"])
@@ -4645,7 +4652,7 @@ class Session:
             target = profile.origin + capture["path"]
             steps = [[s["action"], s["selector"]] for s in capture["steps"]]
             for finding in self.findings:
-                if finding["id"] in (resolves or ()) and (
+                if finding["id"] in (resolves or ()) and finding.get("target") and (
                         target != finding["target"] or steps != [s[:2] for s in finding["steps"]]):
                     return (f"The declared capture ({target}, {len(steps)} steps) is not the state "
                             f"{finding['id']} was measured in ({finding['target']}, "
@@ -4809,17 +4816,21 @@ class Session:
             reasons.append("its integration gate failed")
         if self._closed_with_findings(spec, open_before):
             reasons.append("it closed with open findings")
-        approved = self._resolution_candidate
-        if not approved or approved[0] != spec.task_id:
-            reasons.append("its renders were not verified and approved")
-        else:
-            changed, observed = self._identity_check(*approved)
-            if changed:
-                reasons.append(f"its approved renders did not hold until it closed: {changed[:160]}")
-            if observed is not None:
-                self._refuse_settlement_mismatch(spec, approved, observed, reasons)
         if not reasons:
-            self._resolve_findings(spec, approved)
+            self._resolve_check_findings(spec)
+        design = [f for f in self.findings if f["id"] in self._current_resolves and f.get("target")]
+        if design:
+            approved = self._resolution_candidate
+            if not approved or approved[0] != spec.task_id:
+                reasons.append("its renders were not verified and approved")
+            else:
+                changed, observed = self._identity_check(*approved)
+                if changed:
+                    reasons.append(f"its approved renders did not hold until it closed: {changed[:160]}")
+                if observed is not None:
+                    self._refuse_settlement_mismatch(spec, approved, observed, reasons)
+            if not reasons:
+                self._resolve_findings(spec, approved)
         still = [f for f in self.findings if f["id"] in self._current_resolves and f["status"] == "open"]
         for finding in still:
             if reasons:
@@ -4904,6 +4915,40 @@ class Session:
             if finding["id"] in self._current_resolves and "last_attempt" not in finding:
                 finding["last_attempt"] = f"the resolving task stopped before it closed: {reason}"
 
+    def _record_check_debt(self, spec, covers) -> Optional[str]:
+        """A task whose last check still fails after its fix round leaves a
+        finding the orchestrator repairs by RESOLVES, instead of ending the
+        run (survey plan, 2026-09-30; the second remaining task-level stop
+        after session.TaskFailed). Needs the requirements ledger and a COVERS
+        line to hold the debt; otherwise today's CheckFailing stop stands.
+        Returns the finding id, or None when nothing was recorded."""
+        outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
+        if outcome is None or not outcome.checks or outcome.checks[-1].get("passed"):
+            return None
+        if not (self.config.requirements_ledger and covers):
+            return None
+        last = outcome.checks[-1]
+        fid = f"F{len(self.findings) + 1}"
+        message = (f"the project check still failed after {spec.task_id}'s work (attempt "
+                   f"{last.get('attempt', '?')}, gate {last.get('gate', 'full')})")
+        self.findings.append(dict(
+            id=fid, task=spec.task_id, requirements=list(covers), kind="check.failed",
+            target=None, steps=[], view=None, width=None, viewport=None, message=message[:300],
+            check=dict(attempt=last.get("attempt"), gate=last.get("gate"),
+                       output_artifact=last.get("output_artifact"), attribution=last.get("attribution")),
+            evidence=None, status="open"))
+        for rid in covers:
+            self.memory.ledger.requirement_status[rid] = f"NOT MET: open finding {', '.join(self._open_findings_for(rid))}"
+        self._note(f"task {spec.task_id}: failed check recorded as finding {fid}; the orchestrator re-plans")
+        return fid
+
+    def _check_findings_settled(self, task_id: str) -> bool:
+        """Whether every finding ``task_id`` recorded is resolved (and it
+        recorded at least one): its failed check was repaired by a later
+        task, so the failure is history for the completion questions."""
+        mine = [f for f in self.findings if f["task"] == task_id and f.get("kind") == "check.failed"]
+        return bool(mine) and all(f["status"] == "resolved" for f in mine)
+
     def _record_audit_findings(self, spec, records) -> List[str]:
         """Record each measured overflow of a review-only task as a finding
         owned by that task and its COVERS ids (from the harness, never model
@@ -4939,6 +4984,23 @@ class Session:
         ledger = self._required("requirements_ledger", live) and live
         return (ledger and bool(self._current_covers) and bool(records)
                 and all(r.get("kind") == "product.overflow" for r in records))
+
+    def _resolve_check_findings(self, spec) -> None:
+        """Close each check finding this task names: its own gate passed and
+        it closed clean, which is what the failed check asked for. The task
+        that left the failure keeps its record; its check facts become
+        history (a recovered failure, quadratus.outcome)."""
+        for finding in self.findings:
+            if (finding["id"] not in self._current_resolves or finding["status"] != "open"
+                    or finding.get("target")):
+                continue
+            finding.update(status="resolved", resolved_by=spec.task_id, reopened=None)
+            for outcome in self.task_outcomes:
+                if outcome.task_id == finding["task"] and self._check_findings_settled(outcome.task_id):
+                    for fact in outcome.facts:
+                        if fact.stage == "checks" and fact.kind == "product" and fact.active:
+                            fact.recovered = True
+            self._note(f"{spec.task_id} resolved {finding['id']}: its check passed")
 
     def _resolve_findings(self, spec, approved) -> None:
         """Close each finding this task names in RESOLVES whose acceptance its
@@ -5012,7 +5074,8 @@ class Session:
         """What is still open, as facts from the record; each is one reason."""
         reasons = []
         for outcome in self.task_outcomes:
-            if outcome.checks and not outcome.checks[-1]["passed"]:
+            if (outcome.checks and not outcome.checks[-1]["passed"]
+                    and not self._check_findings_settled(outcome.task_id)):
                 last = outcome.checks[-1]
                 reasons.append(f"task {outcome.task_id}'s last check still fails (attempt {last.get('attempt', '?')}, "
                                f"output artifact {last.get('output_artifact', 'unavailable')})")

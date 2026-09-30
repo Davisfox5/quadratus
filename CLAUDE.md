@@ -467,6 +467,17 @@ Key design decisions already settled:
   denied capability, a tree the harness cannot inspect, dependency or
   evidence integrity, a spent budget, an operator question, and the
   orchestrator's own stalls.
+- **A check that still fails after its fix round is requirement debt, not
+  a run stop** (survey plan, 2026-09-30; `_record_check_debt`). With the
+  ledger on and a COVERS line, the task's requirements go NOT MET under a
+  `check.failed` finding, the orchestrator sees it with the check's output
+  artifact and names a RESOLVES task, and that task settles it when its own
+  integration check passes and it closes with no new finding; no renders
+  are asked for. The original task keeps its failed check on record; its
+  `product` facts become history when the finding resolves. Without the
+  ledger or a COVERS line the `CheckFailing` stop stands. Unverified design
+  evidence is not routed this way yet: map G8 says only the task's own
+  renders discharge it.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

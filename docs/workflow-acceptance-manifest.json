@@ -829,6 +829,38 @@
           "tests/lifecycle/test_j39_task_failures.py::test_two_failed_tasks_in_a_row_trip_the_breaker_with_a_named_stop"
         ]
       }
+    },
+    {
+      "id": "J40",
+      "tests": [
+        "tests/lifecycle/test_check_debt.py::test_a_failed_check_becomes_a_finding_and_a_repair_task_resolves_it",
+        "tests/lifecycle/test_check_debt.py::test_the_orchestrator_is_told_the_check_finding_and_how_it_resolves",
+        "tests/lifecycle/test_check_debt.py::test_a_repair_whose_check_still_fails_leaves_the_finding_open",
+        "tests/lifecycle/test_check_debt.py::test_with_the_ledger_off_the_failed_check_is_todays_stop"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "calls": [
+          "tests/lifecycle/test_check_debt.py::test_a_failed_check_becomes_a_finding_and_a_repair_task_resolves_it"
+        ],
+        "outcome": [
+          "tests/lifecycle/test_check_debt.py::test_a_failed_check_becomes_a_finding_and_a_repair_task_resolves_it",
+          "tests/lifecycle/test_check_debt.py::test_the_orchestrator_is_told_the_check_finding_and_how_it_resolves",
+          "tests/lifecycle/test_check_debt.py::test_a_repair_whose_check_still_fails_leaves_the_finding_open",
+          "tests/lifecycle/test_check_debt.py::test_with_the_ledger_off_the_failed_check_is_todays_stop"
+        ],
+        "report": [
+          "tests/lifecycle/test_check_debt.py::test_the_orchestrator_is_told_the_check_finding_and_how_it_resolves"
+        ],
+        "partial_work": [
+          "tests/lifecycle/test_check_debt.py::test_a_failed_check_becomes_a_finding_and_a_repair_task_resolves_it"
+        ]
+      }
     }
   ]
 }

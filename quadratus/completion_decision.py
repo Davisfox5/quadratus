@@ -73,6 +73,9 @@ class FindingRef:
     task: str
     status: str
     requirements: Tuple[str, ...] = ()
+    #: "check.failed" for a failed-check finding (session._record_check_debt);
+    #: a measured render overflow carries its own kind.
+    kind: str = ""
 
 
 @dataclass(frozen=True)
@@ -94,7 +97,8 @@ class LedgerSnapshot:
         ``memory.ledger.requirement_status`` and the ``findings`` dicts."""
         return cls(enabled=bool(enabled), requirement_status=dict(requirement_status),
                    findings=tuple(FindingRef(str(f.get("id")), str(f.get("task")), str(f.get("status")),
-                                             tuple(f.get("requirements") or ())) for f in findings))
+                                             tuple(f.get("requirements") or ()), str(f.get("kind") or ""))
+                                  for f in findings))
 
     def open_findings(self) -> List[str]:
         """Open finding ids, in ledger order (``_open_findings_for(None)``)."""
@@ -118,6 +122,19 @@ class LedgerSnapshot:
         for finding in self.findings:
             found.setdefault(finding.task, []).append(finding.status)
         return found
+
+    def check_findings(self) -> Dict[str, List[str]]:
+        """Failed-check finding statuses by the task whose check failed."""
+        found: Dict[str, List[str]] = {}
+        for finding in self.findings:
+            if finding.kind == "check.failed":
+                found.setdefault(finding.task, []).append(finding.status)
+        return found
+
+    def checks_settled(self) -> set:
+        """Tasks whose failed check was recorded as debt and repaired since."""
+        return {tid for tid, statuses in self.check_findings().items()
+                if statuses and all(s == "resolved" for s in statuses)}
 
 
 @dataclass(frozen=True)
@@ -235,8 +252,10 @@ def assess(inputs: CompletionInputs) -> Debt:
     active = [f for f in inputs.run.facts if f.active] + [f for t in tasks for f in t.active]
     order = {k: i for i, k in enumerate(PRECEDENCE)}
     kinds = sorted({f.kind for f in active}, key=lambda k: (order.get(k, len(order)), k))
+    settled = inputs.ledger.checks_settled()
     return Debt(
-        checks_failing=tuple(t.task_id for t in tasks if t.checks and not t.checks[-1]["passed"]),
+        checks_failing=tuple(t.task_id for t in tasks
+                             if t.checks and not t.checks[-1]["passed"] and t.task_id not in settled),
         merge_gate_failing=any(f.active and f.kind == "product" for f in inputs.run.facts),
         partial_typed=tuple(sorted({t.task_id for t in tasks
                                     if any(f.active and (f.kind in ("cap", "failed") or f.stage == "merge")
@@ -388,6 +407,8 @@ def _open_work(inputs: CompletionInputs, debt: Debt) -> List[str]:
     """``Session._open_work``, from the snapshot: what is still open."""
     reasons = []
     for task in inputs.tasks:
+        if task.checks and not task.checks[-1]["passed"] and task.task_id not in debt.checks_failing:
+            continue
         if task.checks and not task.checks[-1]["passed"]:
             last = task.checks[-1]
             reasons.append(f"task {task.task_id}'s last check still fails (attempt {last.get('attempt', '?')}, "
@@ -428,7 +449,8 @@ def _guard(inputs: CompletionInputs, debt: Debt, where: str, *, done_accepted: b
            partial_mismatches) -> Decision:
     """``Session._guard_completion``: the typed record must agree."""
     blockers = completion_blockers(list(inputs.tasks), owed=list(debt.owed),
-                                   audit_findings=inputs.ledger.audit_findings())
+                                   audit_findings=inputs.ledger.audit_findings(),
+                                   check_findings=inputs.ledger.check_findings())
     divergences = tuple(f"run-level active {f.kind} fact is not a completion blocker today: {f.detail[:120]}"
                         for f in inputs.run.facts if f.active)
     if blockers:

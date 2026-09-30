@@ -405,7 +405,8 @@ def _required_edges(task: TaskOutcome) -> List[str]:
 
 
 def completion_blockers(tasks: List[TaskOutcome], *, owed: Optional[List[str]] = None,
-                        audit_findings: Optional[dict] = None) -> List[str]:
+                        audit_findings: Optional[dict] = None,
+                        check_findings: Optional[dict] = None) -> List[str]:
     """Why the typed record cannot count as complete, whatever the legacy
     inputs say. Empty only when every task closed with a complete, well-formed
     record, no task carries an active terminal fact, every mandatory edge was
@@ -474,8 +475,15 @@ def completion_blockers(tasks: List[TaskOutcome], *, owed: Optional[List[str]] =
         statuses = list((audit_findings or {}).get(tid) or [])
         audit_settled = (task.intent == "audit" and bool(statuses)
                          and all(status == "resolved" for status in statuses))
+        checks = list((check_findings or {}).get(tid) or [])
+        check_settled = bool(checks) and all(status == "resolved" for status in checks)
         for edge in task.unsatisfied():
             if audit_settled and edge in _AUDIT_EDGES:
+                continue
+            # A failed check recorded as a finding (``check_findings``: its
+            # statuses by task, session._record_check_debt) and resolved by a
+            # later task: the failure is history.
+            if check_settled and edge == "checks":
                 continue
             if discharged_by_continuation(task, edge):
                 continue

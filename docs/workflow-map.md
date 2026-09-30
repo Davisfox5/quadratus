@@ -21,7 +21,7 @@ from `6382cf2`.
 - **Twelve concrete gaps** turned up while mapping (section 6). Some are real
   defects, such as a turn cap escaping on two paths and stale state read
   across tasks. They go into the matrix as journeys, not as side fixes.
-- **The matrix has 39 journeys** (section 7; J9 is split into J9a and J9b, J32 to J38 were added from review, and J39 from the 2026-09-28 live runs). Each one names what the current
+- **The matrix has 40 journeys** (section 7; J9 is split into J9a and J9b, J32 to J38 were added from review, J39 from the 2026-09-28 live runs, and J40 from the survey plan). Each one names what the current
   engine does, what the agreed plan requires, and the phase that changes it.
   Phase 1 adds no behaviour: it records a typed outcome beside today's
   decisions and asserts they agree on every whole-run replay.
@@ -96,6 +96,7 @@ from `6382cf2`.
 | Window exhausted | `WindowExhausted` | one re-seat for the orchestrator; stops for others | |
 | Run budget | `RunBudgetExceeded` (latched) | stop; responses kept | |
 | Gate failed (any cause) | receipt `failed` / `error` / `blocked` | **always** a gate-fix, the same prompt for every cause | none: environment and product look alike |
+| Gate still failing after the fix round | `check.failed` finding on the task's COVERS (2026-09-30, `_record_check_debt`) | requirement debt; the orchestrator names a RESOLVES task, settled when that task's own check passes and it closes clean; needs the ledger and a COVERS line, else `CheckFailing` as before | `product` fact recovered on resolution |
 | Capture failed | `capture_task` string / `integrity` record | one design-fix, whatever the cause | none |
 | Product overflow in an audit | `product.overflow` | audit debt `F<n>` | |
 | Reviewer BLOCKING | review text | revision; open finding if still unresolved | |
@@ -309,6 +310,7 @@ review.
 | J36 | CHANGED report mismatch | PartialWorkStopped | recorded as a non-terminal `unverified` fact, reply kept, run continues on the measured diff; an unparsed request line with no CHANGED line still stops | P1, revised after the phase-4 run |
 | J37 | Transport timeout after writes | PartialWorkSuspected, then Stopped | `failed`, tree inspected, the run continues | P1, revised 2026-09-28 |
 | J39 | A task fails on its own rules (scope, reply, channel, transport after writes) | the run stopped on the first one | `failed` on the task, work kept, CONTINUES re-plans; a clean continuation recovers it; two unfinished in a row is `TaskFailureBreaker` | 2026-09-28 |
+| J40 | A check still fails after the fix round | `CheckFailing` stop after the task | `check.failed` finding under the task's COVERS; a RESOLVES task whose own check passes settles it; the original task's check facts become history | 2026-09-30 |
 | J38 | A check fails, then passes later in the same task (G12) | incomplete, blank error | the recovered failure is history; DONE can stand | P3 |
 
 J1 to J31 are whole-controller replays through `tests/lifecycle/harness.py`

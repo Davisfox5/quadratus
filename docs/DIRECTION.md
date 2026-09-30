@@ -66,11 +66,11 @@ toward it.
 
 ## Backlog (not blockers)
 
-- A failed integration gate or unverified design still stops the run after
-  the task closes (`CheckFailing`, `DesignUnverified`). Routing those to a
-  RESOLVES-style repair task instead of a stop is the next candidate for
-  task-level failure, after the 2026-09-28 batch (scope, reply, channel,
-  transport after writes).
+- Unverified design evidence on an editing task still stops the run after
+  the task closes (`DesignUnverified`); map G8 says only that task's own
+  renders discharge it, so routing it to a RESOLVES repair needs that rule
+  revisited first. A failed check became requirement debt on 2026-09-30
+  (`check.failed` findings).
 
 - Task-scope snapshot proposal `550c58a`.
 - F2 stale merge context (O-NEXT-15).

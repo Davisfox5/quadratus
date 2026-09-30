@@ -14,7 +14,7 @@ SPEC.loader.exec_module(wa)
 def test_manifest_matches_map_and_selectors_exist():
     manifest = json.loads((ROOT / "docs/workflow-acceptance-manifest.json").read_text())
     assert wa.validate(manifest, ROOT) == []
-    assert len(manifest["journeys"]) == 40
+    assert len(manifest["journeys"]) == 41
 
 
 def test_missing_proof_stays_unproven_after_mapped_test_passes():

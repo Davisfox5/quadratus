@@ -94,7 +94,7 @@ def test_an_overflow_audit_becomes_debt_and_a_repair_resolves_it(tmp_path, monke
     assert f1["view"] == "mobile" and f1["width"] == 450 and f1["viewport"] == 390
     assert f1["status"] == "resolved" and f1["resolved_by"] == "t2" and f1["resolution"]["sha256"]
     assert f1["evidence"]["summary"] == ".quadratus/design-evidence/t1/summary.json"
-    assert "OPEN AUDIT FINDINGS" in _orchestrator_prompts(replay)[1] and "F1 (found by t1" in _orchestrator_prompts(replay)[1]
+    assert "OPEN FINDINGS" in _orchestrator_prompts(replay)[1] and "F1 (found by t1" in _orchestrator_prompts(replay)[1]
     assert not replay.of("design-fix"), "no recapture is spent on a measured fault in an audit"
     assert json.loads((replay.result.run_dir / "findings.json").read_text())[0]["status"] == "resolved"
 
@@ -185,10 +185,14 @@ def test_a_failed_gate_keeps_the_finding_open_and_stays_the_primary_stop(tmp_pat
     replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, repair + "\nRESOLVES: F1"],
                   {"t1": _capture(measured=WIDE), "t2": breaking},
                   roles={"gate-fix": lambda call, replay: "Could not see why.\nCHANGED: []"})
-    f1 = replay.findings[0]
+    f1, f2 = replay.findings
     assert H.gate_results(replay)[-1] == "FAILED"
     assert f1["status"] == "open" and "integration gate failed" in f1["last_attempt"]
-    assert not replay.result.error.startswith("FindingsUnresolved") and not replay.result.completed
+    # The failed gate is t2's own debt now (check debt, 2026-09-30), and the
+    # explicit repair that did not establish acceptance is still the stop.
+    assert f2["task"] == "t2" and f2["kind"] == "check.failed" and f2["status"] == "open"
+    assert replay.result.error.startswith("FindingsUnresolved: task t2 named RESOLVES F1")
+    assert not replay.result.completed
 
 
 def test_an_audit_whose_evidence_cannot_be_delivered_creates_no_debt(tmp_path, monkeypatch):
