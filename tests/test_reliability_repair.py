@@ -35,9 +35,9 @@ from quadratus.providers import PartialWorkSuspected, ProviderError
 from quadratus.scope import TaskScope, changed_paths, count_change_lines
 from quadratus.session import (
     PartialWorkStopped,
-    RunStalled,
     Session,
     SessionConfig,
+    TaskFailed,
     TaskSpec,
     _describe_tree_change,
     _review_subject_note,
@@ -291,7 +291,7 @@ def test_a_lead_that_only_fails_workers_stalls_rather_than_looping(tmp_path):
 
     session = Session("goal", store, invoke, config=SessionConfig(max_worker_failures=3))
     session.workers = pool
-    with pytest.raises(RunStalled, match="not converging"):
+    with pytest.raises(TaskFailed, match="not converging"):
         session._draft_with_channels(OPUS, TaskSpec("t1", "design it"), _memory(store))
 
 

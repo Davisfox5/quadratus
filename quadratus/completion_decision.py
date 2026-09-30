@@ -239,7 +239,7 @@ def assess(inputs: CompletionInputs) -> Debt:
         checks_failing=tuple(t.task_id for t in tasks if t.checks and not t.checks[-1]["passed"]),
         merge_gate_failing=any(f.active and f.kind == "product" for f in inputs.run.facts),
         partial_typed=tuple(sorted({t.task_id for t in tasks
-                                    if any(f.active and (f.kind == "cap" or f.stage == "merge")
+                                    if any(f.active and (f.kind in ("cap", "failed") or f.stage == "merge")
                                            for f in t.facts)})),
         partial_legacy=tuple(sorted(inputs.legacy_partial)),
         ledger_findings_open=tuple(inputs.ledger.open_findings()),
@@ -397,7 +397,7 @@ def _open_work(inputs: CompletionInputs, debt: Debt) -> List[str]:
     if debt.partial:
         # Typed and legacy together, as the blocking predicate reads them
         # (Codex, 5864252244); the same text when they agree.
-        reasons.append(f"capped task(s) {', '.join(debt.partial)} not continued to completion")
+        reasons.append(f"capped or failed task(s) {', '.join(debt.partial)} not continued to completion")
     if debt.ledger_findings_open:
         reasons.append(f"audit findings {', '.join(debt.ledger_findings_open)} are open")
     if debt.legacy_open_findings:

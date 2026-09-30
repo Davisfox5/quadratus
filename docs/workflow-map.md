@@ -21,7 +21,7 @@ from `6382cf2`.
 - **Twelve concrete gaps** turned up while mapping (section 6). Some are real
   defects, such as a turn cap escaping on two paths and stale state read
   across tasks. They go into the matrix as journeys, not as side fixes.
-- **The matrix has 38 journeys** (section 7; J9 is split into J9a and J9b, and J32 to J38 were added from review). Each one names what the current
+- **The matrix has 39 journeys** (section 7; J9 is split into J9a and J9b, J32 to J38 were added from review, and J39 from the 2026-09-28 live runs). Each one names what the current
   engine does, what the agreed plan requires, and the phase that changes it.
   Phase 1 adds no behaviour: it records a typed outcome beside today's
   decisions and asserts they agree on every whole-run replay.
@@ -83,12 +83,15 @@ from `6382cf2`.
 | --- | --- | --- | --- |
 | Provider refusal | `ProviderRefusal` | preserved and stops; close-out refusal gets a harness record | never retried or rerouted (Fleet disables the fallback) |
 | Relevant permission denial | `CapabilityUnavailable` from runtime | stop after the one call, even at the cap | above the cap |
-| Scope overrun or unmeasurable scope | `PartialWorkStopped` | stop, work preserved | above everything but refusal |
+| Scope overrun | `TaskFailed("scope")` | the task fails, work preserved, the orchestrator re-plans with CONTINUES (2026-09-28: two live runs ended on the first such fault) | `failed`, below cap |
+| Unmeasurable scope (tree not inspectable) | `PartialWorkStopped` | stop, work preserved | integrity |
+| Lead channel did not converge (fetch or consult budget, malformed WORKER, request after the channel closed, unresolved request as a draft) | `TaskFailed("channel")` | the task fails, the run continues | `failed` |
 | Task scope invalid twice (orchestrator) | `RunStalled` after one correction | stop; the correction now carries the scope and capture rules in full (a6c9576 rerun stalled on a rule it was never shown) | operator |
 | Dependency tree changed or unavailable | `DependencyTreeChanged` / `…Unavailable` | stop at the next edge; latched | integrity |
-| CHANGED mismatch | non-terminal `unverified` fact on the task (`runtime.changed_report`) | recorded, run continues; the measured diff is what every check reads. A request line that fails to parse with no CHANGED line still stops (`PartialWorkStopped`) | none: not a stop since 2026-09-28 (phase-4 run on ea464cc) |
-| Timeout after writes | `PartialWorkSuspected` becomes `PartialWorkStopped` | stop, tree inspected | integrity |
+| CHANGED mismatch | non-terminal `unverified` fact on the task (`runtime.changed_report`) | recorded, run continues; the measured diff is what every check reads. A request line that fails to parse with no CHANGED line fails the task (`TaskFailed("reply")`), reply kept | none: not a stop since 2026-09-28 (phase-4 run on ea464cc) |
+| Timeout after writes, or a lead transport failure on a changed tree | `PartialWorkSuspected` / `ProviderError` becomes `TaskFailed("transport")` | the task fails, tree inspected, run continues; an uninspectable tree is still `PartialWorkStopped` | `failed` |
 | Turn cap | `TurnLimitReached` | lead or revision: capped-task path; gate-fix or design-fix: attempt spent | below denial |
+| Two unfinished tasks in a row (capped or failed) | `TurnLimitBreaker` / `TaskFailureBreaker` | stop; every task's edits kept | `cap` / `failed` |
 | Transport error | retried by `_retryable` (at most 4, backoff), then `ProviderError` | lead gets one recovery on a fresh lead if the tree is unchanged | below cap |
 | Window exhausted | `WindowExhausted` | one re-seat for the orchestrator; stops for others | |
 | Run budget | `RunBudgetExceeded` (latched) | stop; responses kept | |
@@ -118,7 +121,7 @@ from `6382cf2`.
 | Gate fixes | 1 | per task, shared by gate-fix, design re-gates and security-fix | `max_gate_fixes` |
 | Design fix | 1 | per design task | `_check_design` |
 | Security verification rounds | 2 | per security task | 2203 |
-| Consecutive capped tasks | 1 | run | `max_turn_limited_in_a_row` |
+| Consecutive unfinished (capped or failed) tasks | 1 | run | `max_turn_limited_in_a_row` |
 | DONE reopens | 3 | run | `max_requirement_reopens` |
 | Task-naming corrections | 3 (a separate counter on the same limit) | run | `_covers_corrections` |
 | Operator ASKs | 3 per decision | decision | `_MAX_ASKS_PER_DECISION` |
@@ -166,11 +169,12 @@ review.
 5. operator or environment (preflight, capability lost, runner or setup error, ASK);
 6. budget;
 7. cap;
-8. transport;
-9. product (structured attributable failure);
-10. invalid proof;
-11. unverified (delivery, review or settlement missing);
-12. clean.
+8. failed (a task broke its own rules: scope, reply, channel, transport after writes; handed back like a cap);
+9. transport;
+10. product (structured attributable failure);
+11. invalid proof;
+12. unverified (delivery, review or settlement missing);
+13. clean.
 
 **Rules for using the precedence** (amendment 1):
 
@@ -281,7 +285,7 @@ review.
 | J12 | Audit finds overflow, becomes debt `F<n>` | debt recorded | same, typed | P1 |
 | J13 | Repair resolves `F<n>` with verified, approved renders | resolved | same, typed | P1 |
 | J14 | Repair fails to resolve | FindingsUnresolved | same | P1 |
-| J15 | Scope overrun | PartialWorkStopped | `integrity`, preserved | P1 |
+| J15 | Scope overrun | PartialWorkStopped | `failed`, preserved, the run continues; two in a row trip the breaker | P1, revised 2026-09-28 |
 | J16 | Dependency tree changed or unavailable | DependencyTreeChanged | `integrity`, above cap and product | P1 |
 | J17 | Provider refusal (lead, fix, close-out) | stop or harness record | `refusal`, never rerouted | P1 |
 | J18 | Relevant denial at the cap | CapabilityUnavailable | `denial`, above cap | P1 |
@@ -303,7 +307,8 @@ review.
 | J34 | CONTINUES carries unresolved requirement and finding ids | ids re-listed | carried once, never double-counted or settled early | P2 |
 | J35 | Parallel child debt | child finding kept open | the merge gate cannot close unresolved child debt | P1, then P3 |
 | J36 | CHANGED report mismatch | PartialWorkStopped | recorded as a non-terminal `unverified` fact, reply kept, run continues on the measured diff; an unparsed request line with no CHANGED line still stops | P1, revised after the phase-4 run |
-| J37 | Transport timeout after writes | PartialWorkSuspected, then Stopped | `integrity`, tree inspected | P1 |
+| J37 | Transport timeout after writes | PartialWorkSuspected, then Stopped | `failed`, tree inspected, the run continues | P1, revised 2026-09-28 |
+| J39 | A task fails on its own rules (scope, reply, channel, transport after writes) | the run stopped on the first one | `failed` on the task, work kept, CONTINUES re-plans; a clean continuation recovers it; two unfinished in a row is `TaskFailureBreaker` | 2026-09-28 |
 | J38 | A check fails, then passes later in the same task (G12) | incomplete, blank error | the recovered failure is history; DONE can stand | P3 |
 
 J1 to J31 are whole-controller replays through `tests/lifecycle/harness.py`

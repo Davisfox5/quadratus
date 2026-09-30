@@ -272,7 +272,7 @@ def _capped(tid="t1"):
 
 def test_done_with_a_capped_task_never_continued_is_done_with_open_work():
     decision = decide(answered(tasks=[_capped()], legacy_partial=frozenset({"t1"})))
-    assert decision.stop == C.Stop("cap", ("DoneWithOpenWork: the orchestrator reported DONE, but capped task(s) "
+    assert decision.stop == C.Stop("cap", ("DoneWithOpenWork: the orchestrator reported DONE, but capped or failed task(s) "
                                            "t1 not continued to completion. Work preserved."))
     assert decision.status == INCOMPLETE and decision.done_accepted is True
 
@@ -281,7 +281,7 @@ def test_the_cap_with_capped_debt_never_asks_the_goal():
     inp = inputs(CAP, [_capped()], legacy_partial=frozenset({"t1"}), max_tasks=1)
     decision, made = drive(inp)
     assert made == [], "the goal question is not asked over capped debt"
-    assert decision.stop.reason == ("GoalUnconfirmedAtCap: the task cap (1) was reached, but capped task(s) t1 "
+    assert decision.stop.reason == ("GoalUnconfirmedAtCap: the task cap (1) was reached, but capped or failed task(s) t1 "
                                     "not continued to completion. Work preserved.")
     with pytest.raises(ValueError, match="forbids the goal question"):
         decide(replace(inp, goal_confirmed=True))
@@ -293,7 +293,7 @@ def test_typed_and_legacy_partial_disagreement_is_reported_for_the_session_to_re
     assert not decision.ready
     # Named since Codex 5864252244: the reason reads typed and legacy together.
     assert decision.divergences == ()
-    assert decision.stop.reason.endswith("capped task(s) t1 not continued to completion. Work preserved.")
+    assert decision.stop.reason.endswith("capped or failed task(s) t1 not continued to completion. Work preserved.")
 
 
 def test_partiality_is_not_evaluated_at_done_when_legacy_open_findings_short_circuit():

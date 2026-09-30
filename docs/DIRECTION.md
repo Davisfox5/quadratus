@@ -66,6 +66,12 @@ toward it.
 
 ## Backlog (not blockers)
 
+- A failed integration gate or unverified design still stops the run after
+  the task closes (`CheckFailing`, `DesignUnverified`). Routing those to a
+  RESOLVES-style repair task instead of a stop is the next candidate for
+  task-level failure, after the 2026-09-28 batch (scope, reply, channel,
+  transport after writes).
+
 - Task-scope snapshot proposal `550c58a`.
 - F2 stale merge context (O-NEXT-15).
 - O-NEXT-13 capture seam proposal.

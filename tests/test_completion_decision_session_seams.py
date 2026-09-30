@@ -310,7 +310,7 @@ def test_synthetic_typed_only_partial_blocks_and_is_named(tmp_path, monkeypatch,
     _capped_done(tmp_path, monkeypatch, lambda s: s._partial_tasks.clear())
     decisions, session = _replay_all(rounds)
     final = decisions[-1]
-    assert session.stop_reason == ("DoneWithOpenWork: the orchestrator reported DONE, but capped task(s) t1 not "
+    assert session.stop_reason == ("DoneWithOpenWork: the orchestrator reported DONE, but capped or failed task(s) t1 not "
                                    "continued to completion. Work preserved.")
     assert final.stop.kind == "cap" and final.status == INCOMPLETE
     assert final.partial_mismatches == (("t1", "partial: typed True, legacy False"),)
@@ -331,6 +331,6 @@ def test_synthetic_legacy_open_findings_short_circuit_partiality_at_done(tmp_pat
     assert final.divergences == ()
     # The mismatch is not recorded (the short circuit), but the reason names
     # the typed partial work (Codex 5864252244).
-    assert session.stop_reason == ("DoneWithOpenWork: the orchestrator reported DONE, but capped task(s) t1 not "
+    assert session.stop_reason == ("DoneWithOpenWork: the orchestrator reported DONE, but capped or failed task(s) t1 not "
                                    "continued to completion; 1 open finding(s), first: an injected legacy "
                                    "finding. Work preserved.")

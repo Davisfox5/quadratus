@@ -3,7 +3,7 @@
  "shape": "scope-trap",
  "family": "pure-logic",
  "grader": false,
- "source": "Report, spine feature 3: scope declared before dispatch, measured after; an out-of-scope path blocks and nothing is reverted.",
+ "source": "Report, spine feature 3: scope declared before dispatch, measured after; an out-of-scope path blocks and nothing is reverted. Contract change 2026-09-28 (session.TaskFailed): the out-of-path write fails the task, not the run; the finding is carried by the task's failed fact.",
  "session": {
   "project": true,
   "allow_writes": true
@@ -39,7 +39,17 @@
   }
  ],
  "expect": {
-  "outcome": "PartialWorkStopped",
+  "outcome": "task_failed",
+  "failed_tasks": [
+   "t1"
+  ],
+  "task_failed": {
+   "task": "t1",
+   "cause": "scope",
+   "changed_contains": [
+    "other.py"
+   ]
+  },
   "files": {
    "other.py": {
     "exists": true
@@ -49,13 +59,14 @@
    }
   },
   "open_findings": {
-   "contains": [
-    "outside its declared scope"
-   ]
+   "empty": true
   },
   "scope_reports": {
    "count": 1,
    "blocking": true
-  }
+  },
+  "store_kinds_contain": [
+   "task-failed"
+  ]
  }
 }
