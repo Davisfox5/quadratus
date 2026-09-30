@@ -348,7 +348,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     completed = bool(session and session.completed and not error)
     checks = session.checks if session else []
     ledger = session.memory.render(current='') if session else ''
-    status = 'Goal reported complete' if completed else 'Run incomplete'
+    explicit = getattr(session, 'explicit', None) if session else None
+    status = (('Listed tasks completed; the goal was not judged' if explicit is not None
+               else 'Goal reported complete') if completed else 'Run incomplete')
     lines = [f'# {status}', '', f'Project: {project.root}', '',
              f'Edits: {"enabled" if allow_writes else "disabled"}', '',
              f'Run files: {run_dir}', '']
@@ -357,6 +359,11 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                   f"Policy plan: {preview['hash']}", '']
     if error:
         lines += [f'Error: {error}', '']
+    if explicit is not None:
+        ran = [r['task'] for r in explicit.get('ran', [])]
+        lines += [f"Explicit task list: {len(ran)} of {explicit.get('listed', 0)} listed task(s) ran"
+                  + (f" ({', '.join(ran)})" if ran else '') + '. No orchestrator planned, acknowledged '
+                  'or judged the goal; completion here means every listed task closed clean.', '']
     if in_flight:
         changed = in_flight.get('changed') or []
         lines += ['## In-flight work when the run stopped', '',

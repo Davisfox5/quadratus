@@ -3474,6 +3474,13 @@ class Session:
         self.explicit["ran"].append(dict(index=index, task=task_id))
         return spec
 
+    def _explicit_list_spent(self) -> bool:
+        """An explicit run whose list is spent and whose completion has not
+        been decided: one more loop turn reads the list's end as the DONE
+        site and always breaks."""
+        return self._explicit_tasks is not None and not self._explicit_tasks and not self.stop_reason \
+            and not self.completed
+
     def _refuse_listed(self, spec, problem: str) -> None:
         """A send-back on a listed task is a stop: there is no orchestrator
         to correct it."""
@@ -3828,7 +3835,10 @@ class Session:
         # the cap bounds tasks run however they are grouped (Codex review of
         # #25: a 3-task batch used to cost one slot).
         used = 0
-        while used < max_tasks:
+        # An explicit list that fills the cap exactly still ends through its
+        # own completion path, never the cap's goal question, which is an
+        # orchestrator call (Codex on #42, 357d40a P2).
+        while used < max_tasks or self._explicit_list_spent():
             used += 1
             if self._explicit_tasks is not None:
                 spec = self._next_explicit_task()
