@@ -661,6 +661,33 @@ _HARNESS_CAPTURE = (
     "state show the change, and keep the declared selectors working."
 )
 
+def _capture_fixture_note(spec) -> str:
+    """The files the declared capture uploads, stated to the lead (diagnostic
+    run 20260930T020711Z: t2 declared a capture-only sample under
+    .quadratus/capture-fixtures/t2/ that no one wrote, and the harness capture
+    found no regular file; the lead had never been told the path). A
+    capture-only sample is the lead's to write; a committed sample must stay
+    a regular file."""
+    steps = (getattr(getattr(spec, "scope", None), "capture", None) or {}).get("steps") or []
+    lines = []
+    own = f".quadratus/capture-fixtures/{spec.task_id}/"
+    for step in steps:
+        if step.get("action") != "file":
+            continue
+        path, selector = step.get("path", ""), step.get("selector", "")
+        if path.startswith(own):
+            lines.append(f"The capture uploads {path} into {selector}: that file does not exist yet and "
+                         "you must write it before you finish, as a valid, non-secret sample of what "
+                         "that input accepts. It is harness state, not project source: it needs no "
+                         "CHANGED entry and stays for later captures.")
+        else:
+            lines.append(f"The capture uploads the committed file {path} into {selector}: it must "
+                         "remain a regular file at that path; do not move, rename or delete it.")
+    if not lines:
+        return ""
+    return " " + " ".join(lines) + " Without the uploaded file the capture fails and the task is recorded as unverified design work."
+
+
 #: What a design render must show to count as evidence. GameTape run 12
 #: (2026-09-26): the captured page was the app's empty project list, where the
 #: new import controls do not appear; it rendered cleanly and would have
@@ -5429,7 +5456,8 @@ class Session:
         parts.append("You are leading this task. Produce the complete work.")
         instruction, page = self._design_instruction(spec)
         if instruction == "harness":
-            parts.append(_HARNESS_CAPTURE.format(page=page, steps=len(spec.scope.capture["steps"])))
+            parts.append(_HARNESS_CAPTURE.format(page=page, steps=len(spec.scope.capture["steps"]))
+                         + _capture_fixture_note(spec))
         elif instruction == "self":
             import sys as _sys
             package_root = Path(__file__).resolve().parent.parent

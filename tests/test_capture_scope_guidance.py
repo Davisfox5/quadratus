@@ -71,3 +71,46 @@ def test_a_second_invalid_capture_still_stalls(tmp_path):
     session, _ = _session(tmp_path, iter([_declaration(KEYED), _declaration(KEYED)]))
     with pytest.raises(RunStalled, match="remains invalid after correction"):
         session.next_task()
+
+
+# -- the lead is told the fixture it must write (diagnostic run 20260930T020711Z) ----
+
+def _harness_lead_prompt(tmp_path, steps):
+    from quadratus.scope import TaskScope
+    from quadratus.session import TaskSpec
+    from quadratus.task_kinds import TaskKind
+    from types import SimpleNamespace
+    session = Session("audit", ArtifactStore(tmp_path / ".quadratus"), lambda *a, **k: "",
+                      config=SessionConfig(project=tmp_path, allow_writes=True, design_self_verify=True,
+                                           capture_profile=SimpleNamespace(origin="http://127.0.0.1:5000")))
+    spec = TaskSpec("t2", "Audit the preview table.", kind=TaskKind.FRONTEND,
+                    scope=TaskScope(["templates/index.html"], acceptance=["rows appear"], max_lines=20,
+                                    review_only=True, capture={"path": "/", "steps": steps}))
+    return session._lead_prompt(spec)
+
+
+def test_the_lead_is_told_to_write_its_own_capture_fixture(tmp_path, monkeypatch):
+    monkeypatch.setattr("quadratus.session.Session._harness_captures", lambda self, spec: True)
+    text = _harness_lead_prompt(tmp_path, [{"action": "file", "selector": "#csv",
+                                            "path": ".quadratus/capture-fixtures/t2/manifest.csv"},
+                                           {"action": "wait", "selector": "#rows tr"}])
+    assert "uploads .quadratus/capture-fixtures/t2/manifest.csv into #csv" in text
+    assert "you must write it before you finish" in text and "needs no CHANGED entry" in text
+    assert "recorded as unverified design work" in text
+
+
+def test_the_lead_is_told_a_committed_sample_must_stay_put(tmp_path, monkeypatch):
+    monkeypatch.setattr("quadratus.session.Session._harness_captures", lambda self, spec: True)
+    text = _harness_lead_prompt(tmp_path, [{"action": "file", "selector": "#csv",
+                                            "path": "tests/fixtures/sample.csv"}])
+    assert "uploads the committed file tests/fixtures/sample.csv into #csv" in text
+    assert "do not move, rename or delete it" in text
+
+
+def test_no_file_step_adds_no_fixture_note(tmp_path, monkeypatch):
+    monkeypatch.setattr("quadratus.session.Session._harness_captures", lambda self, spec: True)
+    from quadratus.session import _capture_fixture_note
+    text = _harness_lead_prompt(tmp_path, [{"action": "wait", "selector": "#rows tr"}])
+    assert "(after 1 declared interaction steps)" in text
+    assert "you must write it before you finish" not in text and "must remain a regular file" not in text
+    assert _capture_fixture_note(type("S", (), {"task_id": "t2", "scope": None})()) == ""
