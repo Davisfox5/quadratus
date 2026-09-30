@@ -454,6 +454,16 @@ Key design decisions already settled:
   committed non-hidden project sample exactly as the capture itself
   (`design_evidence._fixture`) and the lead's instructions already did. Three
   gates with three rules was the defect; there is one rule now.
+- **The OpenAI Decisions API is prepared for, not wired** (2026-09-30,
+  `docs/decisions-api.md`, `quadratus/decisions.py`). Announced at DevDay
+  on 2026-09-29: a constrained GPT-6 Luna picks one of a developer's fixed
+  answers in about 150 ms. It matches three routing decisions here
+  (difficulty, kind, worker escalation) and none of the parsers or the tier
+  admission. No endpoint, schema, model id or pricing was published and the
+  SDK has no resource, so the transport is a placeholder that refuses with
+  what is missing. When it lands: opt-in per run, billed and metered, the
+  deterministic rule stays the default and the fallback, verdict and source
+  recorded on the task.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
