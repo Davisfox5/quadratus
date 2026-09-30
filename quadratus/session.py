@@ -63,6 +63,8 @@ from .deptree import (
     DependencyTreeChanged,
     DependencyWatch,
 )
+from .design_evidence import MAX_SELECTOR_CHARS
+from .design_evidence import MAX_STEPS as MAX_CAPTURE_STEPS
 from .memory import PersistentMemory, TaskMemory, TaskSummary
 from .outcome import (
     PRECEDENCE,
@@ -99,6 +101,8 @@ from .task_kinds import (
 )
 from .task_kinds import route as route_kind
 from .taskmeta import (
+    MAX_PREFACE_LINES,
+    MAX_REQUEST_PREFACE_LINES,
     AmbiguousMetadata,
     TaskMetadata,
     lead_request,
@@ -128,6 +132,7 @@ __all__ = [
     "SessionConfig",
     "RunStalled",
     "OperatorInputNeeded",
+    "TaskFailed",
 ]
 
 
@@ -167,6 +172,34 @@ class PartialWorkStopped(RuntimeError):
         if note:
             lines.append(note)
         return "\n".join(lines)
+
+
+#: What a task can fail on by itself (``TaskFailed.cause``).
+TASK_FAILURE_CAUSES = ("scope", "reply", "channel", "transport")
+
+
+class TaskFailed(PartialWorkStopped):
+    """One task broke its own rules; the task fails, the run goes on.
+
+    Raised where a lead's work or reply broke the task it was doing (the
+    measured edits exceed the declared scope, a reply that is neither a
+    request nor a delivery, a request channel that did not converge, a
+    transport stop after writes) and caught by the task runner, which keeps
+    the edits, records the cause on the task and hands the remaining work
+    back to the orchestrator exactly as a capped task is. Two live runs
+    (2026-09-28) ended on the first such failure, so every later task's
+    faults stayed unseen; a task-level failure lets one run show several.
+
+    Never raised for what the harness cannot inspect, for a dependency or
+    evidence integrity stop, a refusal, a denied capability, a spent budget,
+    an operator question or the orchestrator's own stalls: those still stop
+    the run, because no re-plan repairs them.
+    """
+
+    def __init__(self, cause: str, message: str, *, partial: Optional[dict] = None) -> None:
+        assert cause in TASK_FAILURE_CAUSES, cause
+        super().__init__(message, partial=partial)
+        self.cause = cause
 
 
 class PreviewUnavailable(RuntimeError):
@@ -304,6 +337,25 @@ class TaskSpec:
             self.kind = TaskKind.SECURITY
 
 
+@dataclass(frozen=True)
+class SurveyConfig:
+    """A survey run: one run that continues through many failures and records
+    each, judged apart from acceptance (Davis, 2026-09-30; Codex and Claude
+    answers on #39).
+
+    The orchestrator never asks for more: the operator sets the allowance in
+    advance, the harness spends it. ``recovery_tasks`` is how many
+    continuation or repair tasks (CONTINUES or RESOLVES named after a
+    failure) may run; the next failure past it ends the run. The ordinary
+    two-unfinished breaker is replaced by a same-cause repeat stop: a
+    continuation that fails the same way as its predecessor with no new
+    evidence (the same cause and nothing newly changed) stops the run.
+    Every re-plan after a failure carries a ``HYPOTHESIS:`` line, recorded
+    beside the harness's own record and never acted on.
+    """
+    recovery_tasks: int = 6
+
+
 @dataclass
 class SessionConfig:
     project: Optional[Path] = None
@@ -349,6 +401,8 @@ class SessionConfig:
     #: How many fix rounds a failing integration gate buys the lead before
     #: the failure is carried into the record as an open problem.
     max_gate_fixes: int = 1
+    #: The survey run profile (SurveyConfig); None is an ordinary run.
+    survey: Optional["SurveyConfig"] = None
     #: A lead that stops at its turn limit hands its unfinished task back
     #: for re-planning. This many in a row are tolerated; one more ends the
     #: run cleanly, so a limit set too low cannot loop.
@@ -437,11 +491,17 @@ class SessionConfig:
 
 
 _SCOPE_REQUEST = (
-    'After KIND, include one line: SCOPE: {"permitted_paths": ["relative/file.py"], '
+    'After KIND, include exactly one line: SCOPE: {"permitted_paths": ["relative/file.py"], '
     '"intended_result": "one concrete result", "acceptance": ["verifiable condition"], '
-    '"max_lines": 100}. Then describe the task. Name narrow project-relative files or '
-    'directories; no absolute paths, parent traversal or project-wide wildcard. '
-    'max_lines must be a positive integer no greater than 100. Decompose larger work. '
+    '"max_lines": ' + str(MAX_TASK_LINES) + '}. The line starts at the left margin with '
+    'SCOPE: in capitals and holds the whole JSON object; an indented, bulleted or fenced '
+    'SCOPE line is not read, and a second one is refused. Then describe the task in plain '
+    'text on the following lines: a reply with no description after its labels is refused. '
+    'Name narrow project-relative files or directories; no absolute paths, parent '
+    'traversal, backslashes, a leading ~, a .quadratus path, surrounding whitespace or a '
+    'project-wide wildcard. '
+    'max_lines must be a positive integer no greater than ' + str(MAX_TASK_LINES) + '. '
+    'Decompose larger work. '
     'For a task that only reviews or audits and must not change source, add '
     '"edits": "none" to SCOPE; its findings then go to separately scoped tasks. '
     'These bounds are measured after every editing call; an overrun stops the task '
@@ -457,7 +517,9 @@ _SCOPE_REQUEST = (
     'alternatives or thinking aloud; if you change your mind, rewrite the line. Give '
     'each function exactly one signature, and quote that signature verbatim in '
     'intended_result and acceptance. A declaration whose signatures disagree is '
-    'rejected and comes back for correction.'
+    'rejected and comes back for correction. You get one correction: a second '
+    'invalid declaration stops the run, and the correction must be a task, not '
+    'DONE, ASK or FETCH. Keep the declaration short (well under 20,000 bytes).'
 )
 
 #: What a UI task's SCOPE capture declares when the harness captures (Run 19:
@@ -467,10 +529,18 @@ _SCOPE_REQUEST = (
 _CAPTURE_SCOPE_REQUEST = (
     'A task that changes or reviews what users see adds "capture": {"path": "/page", '
     '"steps": [...]} to its SCOPE: the page the harness renders and the interaction steps '
-    'that reach the state showing the change. Each step is exactly {"action": "click", '
+    'that reach the state showing the change. The harness treats a task as one that '
+    'changes what users see when its KIND is frontend or any permitted path is under a '
+    'templates, static, components, pages, views, style or styles directory or ends in '
+    '.html, .css, .scss, .sass, .less, .jsx, .tsx, .vue or .svelte; such a task without a '
+    'capture is sent back. The capture object has exactly the keys path and steps. path '
+    'is a route on the preview origin starting with /, with no query string, spaces, '
+    'shell characters or parent segments. steps holds at most ' + str(MAX_CAPTURE_STEPS) + ' '
+    'steps. Each step is exactly {"action": "click", '
     '"selector": "<css selector>"}, {"action": "wait", "selector": "<css selector>"} or '
     '{"action": "file", "selector": "<file input selector>", "path": "<sample file>"}; no '
-    'other keys or shapes. A file step\'s path is project-relative and names either a '
+    'other keys or shapes, and a selector is at most ' + str(MAX_SELECTOR_CHARS) + ' characters. '
+    'A file step\'s path is project-relative and names either a '
     'non-hidden file already in the project (a committed sample such as '
     'tests/fixtures/sample.csv) or .quadratus/capture-fixtures/<task id>/<name> for a '
     'capture-only sample the lead will write; nothing hidden, absolute or outside the '
@@ -502,7 +572,10 @@ _ORIENT_REQUEST = (
     'reading, stated concretely enough to act on -- "app.py defines the Flask routes; '
     'csv and io are already imported at the top" beats "app.py is the main file". '
     f'Keep each under {_MAX_ORIENT_NOTE_CHARS} characters. Omit the section entirely '
-    'if you read nothing new. Do not investigate beyond what the task needed.'
+    'if you read nothing new. Do not investigate beyond what the task needed. MAP NOTES '
+    'is the last section of the reply: every line after it that contains a colon is read '
+    'as a note, so KIND, SCOPE, NEEDS, COVERS, RESOLVES and CONTINUES lines placed after '
+    'it are lost.'
 )
 
 _READ_BEFORE_YOU_EXPLORE = (
@@ -521,6 +594,8 @@ _READ_BEFORE_YOU_EXPLORE = (
 )
 
 _NEEDS_REQUEST = (
+    "Any line beginning NEEDS: is read as this declaration, so put that word at the start "
+    "of no other line; two NEEDS lines that disagree are refused with no correction. "
     'After KIND, optionally include NEEDS: ["execute", "patch", "direct-write"] '
     'with only the operations required for this task (or [] for none). '
     'execute means running commands; patch means producing edits the harness can '
@@ -586,6 +661,33 @@ _HARNESS_CAPTURE = (
     "state show the change, and keep the declared selectors working."
 )
 
+def _capture_fixture_note(spec) -> str:
+    """The files the declared capture uploads, stated to the lead (diagnostic
+    run 20260930T020711Z: t2 declared a capture-only sample under
+    .quadratus/capture-fixtures/t2/ that no one wrote, and the harness capture
+    found no regular file; the lead had never been told the path). A
+    capture-only sample is the lead's to write; a committed sample must stay
+    a regular file."""
+    steps = (getattr(getattr(spec, "scope", None), "capture", None) or {}).get("steps") or []
+    lines = []
+    own = f".quadratus/capture-fixtures/{spec.task_id}/"
+    for step in steps:
+        if step.get("action") != "file":
+            continue
+        path, selector = step.get("path", ""), step.get("selector", "")
+        if path.startswith(own):
+            lines.append(f"The capture uploads {path} into {selector}: that file does not exist yet and "
+                         "you must write it before you finish, as a valid, non-secret sample of what "
+                         "that input accepts. It is harness state, not project source: it needs no "
+                         "CHANGED entry and stays for later captures.")
+        else:
+            lines.append(f"The capture uploads the committed file {path} into {selector}: it must "
+                         "remain a regular file at that path; do not move, rename or delete it.")
+    if not lines:
+        return ""
+    return " " + " ".join(lines) + " Without the uploaded file the capture fails and the task is recorded as unverified design work."
+
+
 #: What a design render must show to count as evidence. GameTape run 12
 #: (2026-09-26): the captured page was the app's empty project list, where the
 #: new import controls do not appear; it rendered cleanly and would have
@@ -608,7 +710,9 @@ _DESIGN_RENDER_SHOWS = (
     "a status line or loading indicator; where the result updates a region that is "
     "already showing, name the new state in the selector (an attribute or a row, e.g. "
     "[data-state=done] or #results tr). A final wait on something visible before the "
-    "steps is recorded as insufficient evidence. Each step must succeed, or the evidence is "
+    "steps is recorded as insufficient evidence. At most " + str(MAX_CAPTURE_STEPS) + " steps, "
+    "each selector at most " + str(MAX_SELECTOR_CHARS) + " characters; --file takes "
+    "SELECTOR=PATH with no [ in the selector. Each step must succeed, or the evidence is "
     "recorded as unverified with the failed step named. A page wider than the viewport "
     "is unverified too, and the check names the elements past its right edge. Steps "
     "need a local preview URL (localhost) or a page file in the project. "
@@ -632,13 +736,19 @@ _REQUIREMENTS_REQUEST = (
     "user interface, documentation, and any promise about working with what the "
     "product already does -- and every constraint it sets on what must NOT happen "
     "(for example read-only, no new dependencies, no saving). Then name your first "
-    "task as usual."
+    "task as usual, in the same reply, with its own COVERS line."
 )
 _COVERS_REQUEST = (
     "Include one line 'COVERS: R2, R5' naming the requirements this task delivers. "
     "The run is complete only when every requirement is covered by a finished task "
     "and an independent audit finds it met; DONE before that is sent back to you."
 )
+#: How many operator questions one decision may spend before it is judged to
+#: be interrogating rather than deciding. Three is generous: a decision that
+#: genuinely needs more operator input than that is a scoping conversation,
+#: which belongs in the interview, not the loop.
+_MAX_ASKS_PER_DECISION = 3
+
 _ASK_SPARINGLY = (
     "Ask the operator sparingly. Reply 'ASK: <one question>' only for a large-scale "
     "production decision that only they can make: scope, data safety, security, cost, "
@@ -646,17 +756,27 @@ _ASK_SPARINGLY = (
     "one of those, decide it yourself with a line 'DECIDE: R<n> - <the reading you "
     "chose and why>', preferring the reading that keeps existing behaviour working and "
     "satisfies every promise in the goal. Decisions are recorded as yours and the "
-    "audit checks the work against them."
+    "audit checks the work against them. A DECIDE line counts only for a requirement "
+    "the requirements review flagged AMBIGUOUS; any other is dropped. At most "
+    + str(_MAX_ASKS_PER_DECISION) + " ASKs per decision: more than that stops the run "
+    "as interrogating rather than deciding."
 )
 _DECIDE = re.compile(r"^\s*DECIDE:\s*(R\d+)\s*[-:—]\s*(.+?)\s*$", re.MULTILINE)
-_PARALLEL_REQUEST = (
-    "Independent tasks run in parallel. When two or three tasks change disjoint "
-    "files and none needs another's result, name them together: a line 'PARALLEL', "
-    "then each task as a complete block (KIND, SCOPE, COVERS and description), "
-    "blocks separated by a line '---'. Each SCOPE must list exact file paths, no "
-    "wildcards, and no file may appear in two blocks. Work that shares a file stays "
-    "one task at a time."
-)
+def _parallel_request(limit: int) -> str:
+    return (
+        f"Independent tasks run in parallel. When two to {limit} tasks change disjoint "
+        "files and none needs another's result, name them together: a line 'PARALLEL', "
+        "then each task as a complete block (KIND, SCOPE, COVERS and description), "
+        "blocks separated by a line '---'. Each SCOPE must list exact file paths, no "
+        "wildcards, and no file may appear in two blocks. Work that shares a file stays "
+        "one task at a time. A task that RESOLVES a finding, and a task the harness "
+        "captures, are named alone, never in a batch. A batch that breaks any of these "
+        "rules is not run in parallel: its first block runs alone and the rest are "
+        "dropped, so name them again next round."
+    )
+
+
+_PARALLEL_REQUEST = _parallel_request(3)
 _REQ_BLOCK = re.compile(r"^\s*REQUIREMENTS:\s*\n((?:\s*R\d+\s*[:.)-].*\n?)+)", re.MULTILINE)
 _REQ_LINE = re.compile(r"^\s*(R\d+)\s*[:.)-]\s*(.+?)\s*$", re.MULTILINE)
 _COVERS = re.compile(r"^\s*COVERS:\s*(.+?)\s*$", re.MULTILINE)
@@ -739,6 +859,42 @@ def _read_continues(spec):
     return match.group(1), replace(spec, description=description or spec.description)
 
 
+def _check_ids(receipts, *, passed: bool) -> List[str]:
+    """Check identities from a gate's receipts: the ids whose status is (or
+    is not) passed. A single-command gate carries no receipts and is the one
+    check, ``check``."""
+    if not receipts:
+        return ["check"]
+    ids = [r.get("id") or "check" for r in receipts
+           if (r.get("status") == "passed") == passed and r.get("id") != "scope"]
+    return ids
+
+
+_HYPOTHESIS = re.compile(r"^\s*HYPOTHESIS:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _read_hypothesis(spec):
+    """Split a ``HYPOTHESIS: <text>`` line off a task (survey runs): what
+    the orchestrator inferred from the last failure and what it changes.
+    Returns (text or None, spec without the line)."""
+    match = _HYPOTHESIS.search(spec.description or "")
+    if not match:
+        return None, spec
+    description = _HYPOTHESIS.sub("", spec.description).strip()
+    return match.group(1), replace(spec, description=description or spec.description)
+
+
+_HYPOTHESIS_REQUEST = (
+    "This is a survey run. The previous task did not finish, or left a finding. Your "
+    "next task should carry one line 'HYPOTHESIS: <what that failure showed and what this "
+    "task does differently>'. It is recorded beside the harness's own record of the "
+    "failure as diagnostic text and never acted on; omitting it is recorded, not refused. "
+    "The recovery allowance "
+    "is the operator's: {left} continuation or repair task(s) remain, and a continuation "
+    "that fails the same way as its predecessor with nothing new changed stops the run."
+)
+
+
 def _handoff_note(record: dict) -> str:
     """What a capped call left, for the lead that continues it.
 
@@ -750,8 +906,12 @@ def _handoff_note(record: dict) -> str:
     task, lead, turns = record.get("task"), record.get("lead"), record.get("turns")
     changed = record.get("changed") or []
     rounds = f" after {turns} rounds" if turns else ""
-    lines = [f"## Handoff from {task}",
-             f"{task}'s lead ({lead}) stopped at its round limit{rounds}, before finishing."]
+    lines = [f"## Handoff from {task}"]
+    if record.get("cause"):
+        lines.append(f"{task}'s lead ({lead}) failed before finishing ({record['cause']}): "
+                     f"{(record.get('error') or '')[:300]}")
+    else:
+        lines.append(f"{task}'s lead ({lead}) stopped at its round limit{rounds}, before finishing.")
     if changed:
         lines.append(f"It changed {', '.join(changed)} ({record.get('changed_lines') or 0} lines), "
                      "unreviewed and unchecked. Those files are below as they are now: build on "
@@ -988,6 +1148,13 @@ class Session:
         #: What each capped call left, by task id: the evidence a continuation
         #: is handed and the breaker's stop names.
         self.turn_limited_records: Dict[str, dict] = {}
+        #: Tasks that failed on their own rules (TaskFailed), in order, and
+        #: what each left: the same handoff a capped task gets.
+        self.failed: List[str] = []
+        self.failed_records: Dict[str, dict] = {}
+        #: Survey run bookkeeping (SessionConfig.survey): recovery tasks
+        #: spent, the hypotheses recorded, and repeats detected.
+        self.survey: dict = dict(recovery_used=0, hypotheses=[], repeats=[])
         #: The capped task the task now running continues, if any.
         self._continues: Optional[str] = None
         #: Each capped task's starting content for the files it changed, so
@@ -1173,8 +1340,8 @@ class Session:
                     if spec.scope is not None and report is None:
                         raise PartialWorkStopped("Scope could not be measured; edits preserved for inspection.")
                     if report and (report.blocking or report.oversized):
-                        raise PartialWorkStopped("Task exceeded its declared scope; work preserved. " + report.render(),
-                                                 partial=self._inspect_partial_edits(self._task_before))
+                        raise TaskFailed("scope", "Task exceeded its declared scope; work preserved. "
+                                         + report.render(), partial=self._inspect_partial_edits(self._task_before))
         except BaseException:
             if self._task_memory is not None:
                 try:
@@ -1238,13 +1405,20 @@ class Session:
             if capped is None:
                 raise
             return self._capped_fix(key, capped[0], capped[1], exc, role)
+        except TaskFailed:
+            raise
         except PartialWorkStopped as exc:
             if exc.partial.get('reply'):
+                # Neither a request nor a delivery (run 9): the reply is kept
+                # and the task fails; the run does not.
                 self.store.put(exc.partial['reply'], kind='unparsed-request', author=key)
+                raise TaskFailed("reply", str(exc), partial=exc.partial) from exc
             raise
         except PartialWorkSuspected as exc:
             state = self._inspect_partial_edits(before)
-            raise PartialWorkStopped(str(exc), partial=state) from exc
+            if not state.get("inspected"):
+                raise PartialWorkStopped(str(exc), partial=state) from exc
+            raise TaskFailed("transport", str(exc), partial=state) from exc
 
     def _record_changed_report(self, key: str, role: str, reply: str, report: dict) -> None:
         """A CHANGED line that disagreed with the measured diff, kept as history.
@@ -1284,9 +1458,9 @@ class Session:
                                          "scope; work preserved.",
                                          partial=self._inspect_partial_edits(self._task_before)) from exc
             if report and (report.blocking or report.oversized):
-                raise PartialWorkStopped(f"A capped {role} exceeded the declared scope; work preserved. "
-                                         + report.render(),
-                                         partial=self._inspect_partial_edits(self._task_before)) from exc
+                raise TaskFailed("scope", f"A capped {role} exceeded the declared scope; work preserved. "
+                                 + report.render(),
+                                 partial=self._inspect_partial_edits(self._task_before)) from exc
         said = (exc.partial_text or "").strip()
         text = (f"[{role} stopped at the lead turn limit"
                 + (f" ({exc.turns} turns)" if exc.turns else "")
@@ -1500,7 +1674,10 @@ class Session:
                 task.record("assistant", f"[fetched artifact {artifact_id}]")
             reply = call(model_key, build_prompt(fetched))
         if _parse_fetch(reply) is not None:
-            raise RunStalled("Artifact fetch budget exhausted before an answer was produced.")
+            message = "Artifact fetch budget exhausted before an answer was produced."
+            if task is not None:
+                raise TaskFailed("channel", message)
+            raise RunStalled(message)
         return reply
 
     def _resolve_consultant(self, name: str, lead: str) -> Optional[str]:
@@ -1538,7 +1715,7 @@ class Session:
         if state.get("workers_closed"):
             try:
                 return self._request_after_close(state, spec), True
-            except RunStalled as exc:
+            except TaskFailed as exc:
                 state["closed"] = exc
                 return str(exc), True
 
@@ -1614,16 +1791,17 @@ class Session:
         self._note(f"task {spec.task_id}: worker channel closed after {state['failures']} failed errands")
         return ("The worker channel is now closed for this task after "
                 f"{state['failures']} failed errands. Do the remaining work yourself in this "
-                "session, or report exactly what blocks you. Another worker request stops the run.")
+                "session, or report exactly what blocks you. Another worker request fails this task.")
 
     def _request_after_close(self, state: dict, spec) -> str:
         state["closed_requests"] = state.get("closed_requests", 0) + 1
         if state["closed_requests"] >= 2:
-            raise RunStalled(
+            raise TaskFailed(
+                "channel",
                 f"the lead is not converging: it kept requesting workers for task {spec.task_id!r} "
                 "after the worker channel closed")
         return ("The worker channel is closed for this task. Do the work yourself, or report "
-                "exactly what blocks you. Another worker request stops the run.")
+                "exactly what blocks you. Another worker request fails this task.")
 
     def _serve_worker(self, body: str, lead: str, spec: TaskSpec, task: TaskMemory, state: dict,
                       *, answer_only: bool = False) -> List[str]:
@@ -1648,7 +1826,7 @@ class Session:
                     or any(not isinstance(n, str) for n in needs or ())):
                 raise ValueError('invalid worker request')
         except (ValueError, TypeError) as exc:
-            raise RunStalled("Expected WORKER JSON with errand and instruction.") from exc
+            raise TaskFailed("channel", "Expected WORKER JSON with errand and instruction.") from exc
         helper = request.get('helper')
         if helper is not None:
             if (request.get('retry_of') not in state['failed_errands'] or not isinstance(helper, dict)
@@ -1657,10 +1835,10 @@ class Session:
                     or not helper['instruction'].strip() or helper.get('write', False) is not False
                     or type(helper.get('demanding', False)) is not bool
                     or helper.get('helper') is not None):
-                raise RunStalled('A sibling helper requires a failed retry_of label and a read-only errand')
+                raise TaskFailed("channel", 'A sibling helper requires a failed retry_of label and a read-only errand')
         writes = request.get('write', False)
         if writes and not self._writes():
-            raise RunStalled("Worker requested edits without an operator write grant.")
+            raise TaskFailed("channel", "Worker requested edits without an operator write grant.")
         label = f"{request['errand']}-{self.workers.spawned(spec.task_id) + 1}"
         # A worker failure is an outcome, not the end of the run. The
         # single-worker path used to let the exception escape: on
@@ -1814,7 +1992,7 @@ class Session:
             requests = _parse_consults(body)
             if not requests:
                 if body.startswith(('ASK:', 'CONSULT', 'WORKER', 'FETCH:')):
-                    raise RunStalled("An unresolved request cannot be accepted as a draft.")
+                    raise TaskFailed("channel", "An unresolved request cannot be accepted as a draft.")
                 return draft
             if not consults:
                 # A refusal is charged against the same allowance a served
@@ -1823,7 +2001,8 @@ class Session:
                 # review of #25: seven identical replies before a sentinel).
                 consults_used += len(requests)
                 if consults_used > self.config.max_consults:
-                    raise RunStalled(
+                    raise TaskFailed(
+                        "channel",
                         "The lead kept requesting consults inside a security "
                         "excursion, where none are served; it is not converging.")
                 task.record("user", "[consult refused] not available inside a security excursion")
@@ -1833,7 +2012,7 @@ class Session:
                     "what blocks you.")
                 continue
             if consults_used + len(requests) > self.config.max_consults:
-                raise RunStalled("Consult budget exhausted before a draft was produced.")
+                raise TaskFailed("channel", "Consult budget exhausted before a draft was produced.")
             for name, question in requests:
                 consults_used += 1
                 peer = self._resolve_consultant(name, lead)
@@ -1887,11 +2066,21 @@ class Session:
         task missing from it is a recorded mismatch."""
         names = [o.task_id for o in self._breaker_counted]
         for outcome in self._breaker_counted:
-            if outcome.task_id not in self.turn_limited:
-                note = "breaker: counted, but missing from turn_limited"
+            listed = self.failed if outcome.closed_as == "failed" else self.turn_limited
+            if outcome.task_id not in listed:
+                note = "breaker: counted, but missing from " + (
+                    "failed" if outcome.closed_as == "failed" else "turn_limited")
                 if note not in outcome.mismatches:
                     outcome.mismatches.append(note)
         n = self._turn_limited_in_a_row
+        if any(o.closed_as == "failed" for o in self._breaker_counted):
+            # A failed task in the count: the stop says what each task did.
+            what = ", ".join(f"{o.task_id} " + ("failed: " + self.failed_records.get(o.task_id, {}).get("cause", "?")
+                                                if o.closed_as == "failed" else "capped")
+                             for o in self._breaker_counted)
+            between = " with a parallel batch between them" if self._breaker_mixed() else " in a row"
+            return (f"TaskFailureBreaker: {n} serial tasks were left unfinished{between} ({what}); "
+                    "stopped instead of re-planning again. Work preserved.")
         if self._breaker_mixed():
             return (f"TurnLimitBreaker: the lead turn limit was reached on {n} serial tasks with no serial "
                     f"task completing in between ({', '.join(names)}; a parallel batch ran between them); "
@@ -1904,7 +2093,7 @@ class Session:
         P3.4): an active cap (a CONTINUES that completed recovers it) or an
         active not-merged fact on a parallel child."""
         return {o.task_id for o in self.task_outcomes
-                if any(f.active and (f.kind == "cap" or f.stage == "merge") for f in o.facts)}
+                if any(f.active and (f.kind in ("cap", "failed") or f.stage == "merge") for f in o.facts)}
 
     @property
     def _unresolved_partial(self) -> bool:
@@ -2370,6 +2559,7 @@ class Session:
         for outcome in self.task_outcomes:
             if continues and outcome.task_id == continues:
                 outcome.recover("cap")
+                outcome.recover("failed")
 
     def _prepare_dispatch(self, spec: TaskSpec) -> None:
         """This task's own scope and gate, settled before its contract is
@@ -2403,7 +2593,12 @@ class Session:
             raise RunStalled("Cannot capture source to measure this editing task.")
         self.in_flight = {}
         try:
-            result = self._run_task(spec)
+            try:
+                result = self._run_task(spec)
+            except TaskFailed as exc:
+                if self._task_memory is None:
+                    raise
+                result = self._close_failed(spec, exc)
         except BaseException:
             self.in_flight = self._inspect_partial_edits(self._task_before)
             self.in_flight.update(task=spec.task_id, description=spec.description,
@@ -2488,12 +2683,20 @@ class Session:
                     or self._active_call.get('role') != 'lead'):
                 raise
             state = self._inspect_partial_edits(before)
-            if not state['inspected'] or state['changed']:
+            if not state['inspected']:
                 raise PartialWorkStopped(
-                    # The cause is named: "overloaded" was dropped from a
-                    # capped-looking Grok error (Grok review of #33).
                     f'Lead failed ({type(exc).__name__}: {str(exc)[:200]}); '
-                    'source is changed or unverified. Work preserved.',
+                    'source could not be inspected. Work preserved.',
+                    partial=state,
+                ) from exc
+            if state['changed']:
+                # The cause is named: "overloaded" was dropped from a
+                # capped-looking Grok error (Grok review of #33). The tree
+                # changed, so this is the task's failure, never a replay.
+                raise TaskFailed(
+                    "transport",
+                    f'Lead failed ({type(exc).__name__}: {str(exc)[:200]}) after changing '
+                    'source. Work preserved.',
                     partial=state,
                 ) from exc
             excluded = policy_for(spec.kind).exclude
@@ -2692,12 +2895,13 @@ class Session:
                     raise PartialWorkStopped("Turn-limited edits could not be measured against the "
                                              "task scope; work preserved.", partial=state) from exc
                 if report and (report.blocking or report.oversized):
-                    raise PartialWorkStopped("Turn-limited edits exceed the declared scope; work "
-                                             "preserved. " + report.render(), partial=state) from exc
+                    raise TaskFailed("scope", "Turn-limited edits exceed the declared scope; work "
+                                     "preserved. " + report.render(), partial=state) from exc
         said = (exc.partial_text or "").strip()
         record = dict(task=spec.task_id, lead=lead, turns=exc.turns,
                       changed=state["changed"], changed_lines=state["changed_lines"],
-                      note=state["note"], partial_text=said[:4000] or None)
+                      note=state["note"], partial_text=said[:4000] or None,
+                      content=self._content_fingerprint(state["changed"]))
         task.keep(json.dumps(record), kind="turn-limited", author=lead)
         self.turn_limited_records[spec.task_id] = record
         from .project_files import MAX_INSPECT_BYTES
@@ -2713,8 +2917,8 @@ class Session:
                else ". No change to project files was detected after it stopped; the "
                     "continuation is handed the task's files as they are now")
             + ". This task is not done: name the remaining work as a new, smaller task "
-              f"whose description includes the line 'CONTINUES: {spec.task_id}', "
-              "and do not assume any of it is finished. Size max_lines for the remaining "
+              f"whose description includes the line 'CONTINUES: {spec.task_id}' on its own line "
+              "with nothing else on it, and do not assume any of it is finished. Size max_lines for the remaining "
               "work only, and count every test not yet written in full, including its "
               "setup (fixtures, stubs, fakes); if that setup is large, give it its own task."
             + (f" The lead's last words, which are narration and not a result: {said[:300]}"
@@ -2732,6 +2936,87 @@ class Session:
         self.memory.absorb(summary)
         self.history.append(summary)
         self.turn_limited.append(spec.task_id)
+        return summary
+
+    def _close_failed(self, spec, exc: TaskFailed) -> TaskSummary:
+        """A task failed on its own rules: keep the work, record it, re-plan.
+
+        The capped-task path, applied to a failure (docs/DIRECTION.md;
+        operator ruling 2026-09-28). The edits stay where they are. No
+        review, gate or close-out call is made for it: the harness writes
+        the record from the evidence, the cause is a terminal ``failed``
+        fact on the task, and the orchestrator is told to name the remaining
+        work with CONTINUES. A continuation that closes clean recovers the
+        fact; two unfinished tasks in a row trip the same breaker a cap does.
+        """
+        task = self._task_memory
+        lead = task.author
+        partial = dict(exc.partial or {})
+        state = partial if "inspected" in partial else self._inspect_partial_edits(self._task_before)
+        if self.project and not state.get("inspected"):
+            # The task-level path needs to know what the call left; without
+            # that the run stops, as every other uninspectable case does
+            # (Codex review of d80d9d3: a malformed WORKER reply on an
+            # uninspectable tree reached a second orchestrator round).
+            raise PartialWorkStopped(
+                f"Task {spec.task_id} failed ({exc.cause}: {str(exc)[:200]}) and the source could "
+                "not be inspected; work preserved. " + str(state.get("note") or ""),
+                partial=dict(state, cause=exc.cause)) from exc
+        changed = list(state.get("changed") or [])
+        if exc.cause == "scope":
+            # The scope check opened an out-of-path finding for the same
+            # edits; the failed fact below carries the same list and is what
+            # the continuation recovers, so the finding is history from here.
+            marker = f"Task {spec.task_id} changed paths outside its declared scope: "
+            self.open_findings = [text for text in self.open_findings if not text.startswith(marker)]
+            if self._outcome is not None:
+                for fact in self._outcome.facts:
+                    if fact.kind == "integrity" and fact.detail.startswith(marker):
+                        fact.recovered = True
+        if self._outcome is not None:
+            self._outcome.note("failed", f"{exc.cause}: {exc}")
+            self._outcome.partial = dict(changed=changed, changed_lines=state.get("changed_lines", 0),
+                                         inspected=state.get("inspected"), note=state.get("note"))
+        record = dict(task=spec.task_id, lead=lead, cause=exc.cause, error=str(exc)[:2000],
+                      changed=changed, changed_lines=state.get("changed_lines", 0), note=state.get("note"),
+                      role=str(self._active_call.get("role") or ""),
+                      content=self._content_fingerprint(changed))
+        task.keep(json.dumps(record), kind="task-failed", author=lead)
+        self.failed_records[spec.task_id] = record
+        from .project_files import MAX_INSPECT_BYTES
+        before = self._task_before or {}
+        self._cap_baselines[spec.task_id] = {
+            path: before.get(path, b"") for path in changed
+            if len(before.get(path, b"")) <= MAX_INSPECT_BYTES}
+        listed = ", ".join(changed) or "no files"
+        what = {
+            "scope": "its edits exceeded the declared scope",
+            "reply": "its lead's reply was neither a request nor a delivery",
+            "channel": "its lead's requests did not converge on a draft",
+            "transport": "its lead's call stopped after changing source",
+        }[exc.cause]
+        summary_text = (
+            f"FAILED before finishing: {what}. {str(exc)[:600]}"
+            f" Changed, unreviewed and ungated: {listed}"
+            + (f" ({state.get('changed_lines', 0)} lines)" if changed else "")
+            + ". This task is not done: name the remaining work as a new, smaller task "
+              f"whose description includes the line 'CONTINUES: {spec.task_id}', and do not "
+              "assume any of it is finished. Size max_lines for the remaining work only"
+            + (", and split it if the declared scope was too small for it" if exc.cause == "scope" else "")
+            + ". If the failure shows the plan was wrong, name a different task instead."
+        )
+        summary = task.close(
+            summary=summary_text,
+            reasoning=("Recorded by the harness from the failed call's evidence. No close-out "
+                       "model call is made for an unfinished task."),
+            dead_ends=[],
+        )
+        from dataclasses import replace
+        summary = replace(summary, outcome="failed")
+        self.memory.absorb(summary)
+        self.history.append(summary)
+        self.failed.append(spec.task_id)
+        self._note(f"task {spec.task_id} failed ({exc.cause}): {str(exc)[:160]}; work kept, the orchestrator re-plans")
         return summary
 
     def _run_security_task(self, spec: TaskSpec) -> TaskSummary:
@@ -2859,6 +3144,12 @@ class Session:
                 'status is passed, failed or insufficient_evidence; evidence must be nonempty. '
                 'Accept requires all criteria passed and no findings or limitations. '
                 'Missing evidence means insufficient_evidence. No fences or prose. '
+                'This JSON replaces the BLOCKING: lines asked for above: findings go in '
+                'blocking_findings. snapshot_hash echoes the hash below exactly. Each '
+                'criterion is copied verbatim from the list below, in the same order. A reject '
+                'must name a blocking finding or a failed criterion. Strict JSON: no duplicate '
+                'keys, no NaN or Infinity. A verdict that fails any of these opens a security '
+                'finding with no second try. '
                 f'\nSnapshot hash: {snapshot}\nAcceptance criteria: {json.dumps(acceptance)}'
             )
             with invocation(spec.task_id, "verifier"):
@@ -2893,6 +3184,94 @@ class Session:
             return
 
     # -- orchestration -------------------------------------------------------
+    def _survey_request(self) -> str:
+        """The HYPOTHESIS instruction, on a survey run after an unfinished
+        task or a task that left a finding."""
+        if self.config.survey is None or not self._survey_after_failure():
+            return ""
+        left = max(0, self.config.survey.recovery_tasks - self.survey["recovery_used"])
+        return "\n\n" + _HYPOTHESIS_REQUEST.format(left=left)
+
+    def _survey_after_failure(self) -> bool:
+        """Whether the last closed task was unfinished or left a finding."""
+        if not self.history:
+            return False
+        last = self.history[-1]
+        if getattr(last, "outcome", "closed") in ("turn_limited", "failed"):
+            return True
+        return any(f["task"] == last.task_id and f["status"] == "open" for f in self.findings)
+
+    def _content_fingerprint(self, paths) -> Dict[str, str]:
+        """sha256 of each changed path's content as the task left it (missing
+        for a deleted file), so a repeat is judged on content, never on
+        filenames alone (Codex on the survey design, 2026-09-30)."""
+        if not self.project:
+            return {}
+        import hashlib
+        root = Path(self.project)
+        out = {}
+        for path in paths:
+            try:
+                out[path] = hashlib.sha256((root / path).read_bytes()).hexdigest()
+            except OSError:
+                out[path] = "missing"
+        return out
+
+    def _survey_repeat(self, spec, continues, unfinished: str) -> Optional[str]:
+        """Why this unfinished continuation is a same-cause repeat of the task
+        it continues, or None. A repeat is the same cause (cap, or the
+        failure's cause), the same error (its first line), and no new
+        evidence: every file the continuation changed holds the content its
+        predecessor left, judged by content hash and task lineage, never by
+        filenames alone."""
+        if not continues:
+            return None
+        def record(tid):
+            return self.turn_limited_records.get(tid) or self.failed_records.get(tid)
+        before, after = record(continues), record(spec.task_id)
+        if not before or not after:
+            return None
+        cause_before = before.get("cause") or "cap"
+        cause_after = after.get("cause") or "cap"
+        if cause_before != cause_after:
+            return None
+        def head(rec):
+            # The harness's own signature: a failure's first error line, or
+            # for a cap the fact of the cap and its round count; never the
+            # model's progress prose (Codex review of 1995d02).
+            if rec.get("cause"):
+                return (rec.get("error") or "").strip().splitlines()[:1]
+            return [f"turn limit after {rec.get('turns') or '?'} rounds"]
+        if head(before) != head(after):
+            return None
+        earlier, later = before.get("content") or {}, after.get("content") or {}
+        if any(earlier.get(path) != digest for path, digest in later.items()):
+            return None
+        return (f"{spec.task_id} continued {continues} and failed the same way ({cause_after}: "
+                f"{' '.join(head(after))[:120]}) with no new content in the files it changed")
+
+    def _operator_limits_note(self) -> str:
+        """The operator's path limits and the repository policy's denied paths,
+        stated to the orchestrator: a declaration outside them was refused at
+        dispatch by a rule it had never been shown."""
+        lines = []
+        limit = self.config.default_scope
+        if limit is not None and self.config.allow_writes:
+            lines.append("Every permitted path must fall under the operator's limits: "
+                         + ", ".join(limit.permitted_paths) + ".")
+        policy = self.config.repository_policy
+        denied = []
+        try:
+            capability = policy.document["capability_policy"] if policy is not None else None
+            if capability:
+                denied = list(capability.get("deny_write") or [])
+                denied += [p for entry in capability.get("sensitive") or [] for p in entry.get("paths") or []]
+        except (AttributeError, KeyError, TypeError):
+            denied = []
+        if denied and self.config.allow_writes:
+            lines.append("The repository policy refuses writes under: " + ", ".join(denied[:20]) + ".")
+        return ("\n\n" + " ".join(lines)) if lines else ""
+
     def next_task(self) -> Optional[TaskSpec]:
         """Ask the orchestrator what to do next, given the ledger.
 
@@ -2927,12 +3306,21 @@ class Session:
                     "nothing else. " + _ASK_SPARINGLY
                     + f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}\n\n{_NEEDS_REQUEST}"
                     + ("\n\n" + (_COVERS_REQUEST if self.memory.ledger.requirements
-                                  else _REQUIREMENTS_REQUEST) if self.config.requirements_ledger else "")
-                    + ("\n\n" + _PARALLEL_REQUEST if self._parallel_enabled() else "")
+                                  else _REQUIREMENTS_REQUEST + " " + _COVERS_REQUEST)
+                       if self.config.requirements_ledger else "")
+                    + ("\n\n" + _parallel_request(self.config.max_parallel_tasks)
+                       if self._parallel_enabled() else "")
                     + (self._done_refusal or "")
                     + self._findings_prompt()
                     + ("\n\n" + _SCOPE_REQUEST if self.project and self.config.allow_writes else "")
-                    + ("\n\n" + _CAPTURE_SCOPE_REQUEST if self._capture_guidance() else "")
+                    + ("\n\n" + _CAPTURE_SCOPE_REQUEST
+                       + f" This task's id will be t{len(self.history) + 1}."
+                       if self._capture_guidance() else "")
+                    + self._operator_limits_note()
+                    + self._survey_request()
+                    + ("\n\nA task identical to the one you named last round is refused and "
+                       "stops the run: the last close-out is your evidence, so name the next "
+                       "step or a narrower one." if self.history else "")
                     + ("\n\n" + _ORIENT_REQUEST
                        if self.project and self.config.codebase_map is not None else "")
                 ),
@@ -3260,6 +3648,16 @@ class Session:
                 f"[{spec.kind}/{spec.complexity}]"
             )
             continues, spec = _read_continues(spec)
+            hypothesis, spec = _read_hypothesis(spec)
+            if self.config.survey is not None and (hypothesis is not None or self._survey_after_failure()):
+                # Diagnostic text, never a rule the reply can fail on (Codex on
+                # the survey design): an omitted line is recorded as omitted.
+                self.survey["hypotheses"].append(dict(
+                    task=spec.task_id, after=self.history[-1].task_id if self.history else None,
+                    text=hypothesis[:600] if hypothesis else None))
+                if hypothesis:
+                    self.store.put(hypothesis, kind="hypothesis", author=self.seat().key)
+                self._note(f"hypothesis for {spec.task_id}: {(hypothesis or 'none stated')[:160]}")
             covers, spec = _read_covers(spec)
             problem = self._covers_problem(covers)
             if problem:
@@ -3293,14 +3691,24 @@ class Session:
                 continue
             self._current_covers, self._current_resolves = list(covers), list(resolves or [])
             self._resolution_candidate = None
+            if self.config.survey is not None and (continues or resolves):
+                if self.survey["recovery_used"] >= self.config.survey.recovery_tasks:
+                    self._stop_with("budget", (f"SurveyAllowanceSpent: the recovery allowance of "
+                                               f"{self.config.survey.recovery_tasks} task(s) is spent and "
+                                               f"{spec.task_id} would be another. Work preserved."))
+                    self._note("the survey recovery allowance is spent; stopping before the next repair")
+                    break
+                self.survey["recovery_used"] += 1
             checks_before, open_before = len(self.checks), len(self.open_findings)
             self._continues = continues
             try:
                 summary = self.run_task(spec)
             finally:
                 self._continues = None
-            if getattr(summary, "outcome", "closed") == "turn_limited":
-                # A capped continuation carries its predecessor's debt forward.
+            unfinished = getattr(summary, "outcome", "closed")
+            if unfinished in ("turn_limited", "failed"):
+                # A capped or failed continuation carries its predecessor's
+                # debt forward.
                 self._partial_tasks.discard(continues)
                 self._recover_continued(continues)
                 self._partial_tasks.add(spec.task_id)
@@ -3311,18 +3719,36 @@ class Session:
                 counted = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
                 if counted is not None:
                     self._breaker_counted.append(counted)
-                self._note(f"task {len(self.history)} stopped at the lead's turn limit; its "
-                           f"work is kept and the orchestrator re-plans")
+                self._note(f"task {len(self.history)} "
+                           + ("stopped at the lead's turn limit" if unfinished == "turn_limited"
+                              else "failed on its own rules")
+                           + "; its work is kept and the orchestrator re-plans")
+                if self.config.survey is not None:
+                    # A survey run replaces the count with a same-cause repeat
+                    # check: distinct failures keep going, a repeat stops.
+                    repeat = self._survey_repeat(spec, continues, unfinished)
+                    if repeat:
+                        self.survey["repeats"].append(repeat)
+                        self._stop_with("failed" if unfinished == "failed" else "cap",
+                                        f"SurveyRepeatStop: {repeat}; stopped instead of re-planning again. "
+                                        "Work preserved.")
+                        self._note(f"same-cause repeat: {repeat}; stopping")
+                        break
+                    continue
                 if self._turn_limited_in_a_row > self.config.max_turn_limited_in_a_row:
                     # Recorded, not raised: the stop is the breaker working,
                     # and every capped task's edits stay in place. But it is
                     # named, so the run's error is never blank (Codex, Run 14).
-                    self._stop_with("cap", self._breaker_reason())
-                    self._note((f"the lead turn limit was reached on {self._turn_limited_in_a_row} serial "
-                                "tasks with a parallel batch between them; stopping instead of "
-                                "re-planning again") if self._breaker_mixed() else
-                               (f"the lead turn limit was reached {self._turn_limited_in_a_row} "
-                                "times in a row; stopping instead of re-planning again"))
+                    reason = self._breaker_reason()
+                    failed = reason.startswith("TaskFailureBreaker")
+                    self._stop_with("failed" if failed else "cap", reason)
+                    n = self._turn_limited_in_a_row
+                    between = ("on {n} serial tasks with a parallel batch between them" if self._breaker_mixed()
+                               else "{n} times in a row").format(n=n)
+                    self._note((f"{n} serial tasks were left unfinished"
+                                + (" with a parallel batch between them" if self._breaker_mixed() else " in a row")
+                                if failed else f"the lead turn limit was reached {between}")
+                               + "; stopping instead of re-planning again")
                     break
                 continue
             self._turn_limited_in_a_row = 0
@@ -3346,9 +3772,10 @@ class Session:
                 done.open_at_close = dict(
                     findings=list(unresolved),
                     requirements=[rid for rid in covers if not str(status.get(rid, "")).startswith(("covered", "met"))])
+            check_debt = self._record_check_debt(spec, covers)
             self._current_covers, self._current_resolves = [], []
             self._note(f"task {len(self.history)} closed by {summary.author}")
-            if self._findings_stop_due() or (self.checks and not self.checks[-1]['passed']):
+            if self._findings_stop_due() or (self.checks and not self.checks[-1]['passed'] and not check_debt):
                 self._name_findings_stop({spec.task_id})
                 break
             if unresolved:
@@ -3874,8 +4301,8 @@ class Session:
                         target.unlink()
                 self.history.append(summary)
                 self.memory.absorb(summary)
-                if getattr(summary, "outcome", "closed") == "turn_limited":
-                    self.turn_limited.append(spec.task_id)
+                if getattr(summary, "outcome", "closed") in ("turn_limited", "failed"):
+                    (self.turn_limited if summary.outcome == "turn_limited" else self.failed).append(spec.task_id)
                     self._partial_tasks.discard(continues)
                     self._recover_continued(continues)
                     self._partial_tasks.add(spec.task_id)
@@ -4125,7 +4552,9 @@ class Session:
             "with rendered evidence above. Reply with exactly one line per requirement and nothing "
             "else: 'R1: MET - <file path or test name that shows it>' or "
             "'R1: NOT MET - <what is missing or contradicts the goal>'. A MET without a cited "
-            "file or test is counted as not met."
+            "file or test is counted as not met. A citation resolves only as a project-relative "
+            "file path with an extension, or a test function named test_* defined in a file "
+            "whose name starts with test and ends in .py; other names do not resolve."
         )
         saved = self._active_spec
         self._active_spec = None
@@ -4252,16 +4681,16 @@ class Session:
             return "RESOLVES needs the requirements ledger, which is off for this run."
         if not resolves:
             return "RESOLVES names no finding."
-        if not is_design_task(spec):
-            # Only a UI task's own renders can show a measured fault gone.
-            return ("RESOLVES needs a UI task whose own renders can show the fault gone; this task "
-                    "is not one.")
         if len(set(resolves)) != len(resolves):
             return f"RESOLVES names a finding twice: {', '.join(resolves)}."
         by_id = {f["id"]: f for f in self.findings}
         unknown = [r for r in resolves if r not in by_id]
         if unknown:
             return f"RESOLVES names findings that do not exist: {', '.join(unknown)}."
+        if any(by_id[r].get("target") for r in resolves) and not is_design_task(spec):
+            # Only a UI task's own renders can show a measured fault gone.
+            return ("RESOLVES needs a UI task whose own renders can show the fault gone; this task "
+                    "is not one.")
         closed = [r for r in resolves if by_id[r]["status"] != "open"]
         if closed:
             return f"RESOLVES names findings that are already resolved: {', '.join(closed)}."
@@ -4275,22 +4704,28 @@ class Session:
         opened = [f for f in self.findings if f["status"] == "open"]
         if not opened:
             return ""
-        lines = [f"- {f['id']} (found by {f['task']}, requirements {', '.join(f['requirements'])}): the "
-                 f"{f['view']} render of {f['target']} is {f['width']}px wide at a {f['viewport']}px viewport"
+        lines = [f"- {f['id']} (found by {f['task']}, requirements {', '.join(f['requirements'])}): "
+                 + (f"the {f['view']} render of {f['target']} is {f['width']}px wide at a "
+                    f"{f['viewport']}px viewport" if f.get("target") else f["message"])
                  + (f" (reopened: {f['reopened']})" if f.get("reopened") else "")
+                 + (f" (last attempt: {f['last_attempt'][:160]})" if f.get("last_attempt") else "")
                  for f in opened]
-        return ("\n\n--- OPEN AUDIT FINDINGS ---\nThese measured faults were found by a review-only task "
-                "and keep their requirements NOT MET. Name a task that fixes one or more of them, with a "
-                "COVERS line including their requirements and a line 'RESOLVES: F<n>' naming them. It "
-                "resolves a finding only if its own fresh renders of the same page, reached by the same "
-                "interaction steps and fixture, verify with no overflow "
-                "and are approved by the cross-vendor design review.\n" + "\n".join(lines))
+        return ("\n\n--- OPEN FINDINGS ---\nThese measured faults keep their requirements NOT MET. "
+                "Name a task that fixes one or more of them, with a "
+                "COVERS line including their requirements and one line 'RESOLVES: F<n>' naming them "
+                "(one RESOLVES line, ids from this list only, each once, no duplicates). A render "
+                "finding needs a UI task named alone, and resolves only if the task's own fresh "
+                "renders of the same page, reached by the same interaction steps and fixture, verify "
+                "with no overflow and are approved by the cross-vendor design review. A failed-check "
+                "finding resolves when the resolving task's own integration check passes and it "
+                "closes with no new finding; read the check's output artifact before planning the "
+                "repair.\n" + "\n".join(lines))
 
     def _recheck_resolved_findings(self) -> None:
         """Reopen each resolved finding whose resolving renders no longer
         verify against the trusted source (a later task changed it)."""
         for finding in self.findings:
-            if finding["status"] != "resolved" or not self.project:
+            if finding["status"] != "resolved" or not self.project or not finding.get("target"):
                 continue
             problem = self._identity_problem(finding["resolved_by"], finding["target"], finding["steps"],
                                              finding["resolution"])
@@ -4484,7 +4919,7 @@ class Session:
             target = profile.origin + capture["path"]
             steps = [[s["action"], s["selector"]] for s in capture["steps"]]
             for finding in self.findings:
-                if finding["id"] in (resolves or ()) and (
+                if finding["id"] in (resolves or ()) and finding.get("target") and (
                         target != finding["target"] or steps != [s[:2] for s in finding["steps"]]):
                     return (f"The declared capture ({target}, {len(steps)} steps) is not the state "
                             f"{finding['id']} was measured in ({finding['target']}, "
@@ -4648,17 +5083,21 @@ class Session:
             reasons.append("its integration gate failed")
         if self._closed_with_findings(spec, open_before):
             reasons.append("it closed with open findings")
-        approved = self._resolution_candidate
-        if not approved or approved[0] != spec.task_id:
-            reasons.append("its renders were not verified and approved")
-        else:
-            changed, observed = self._identity_check(*approved)
-            if changed:
-                reasons.append(f"its approved renders did not hold until it closed: {changed[:160]}")
-            if observed is not None:
-                self._refuse_settlement_mismatch(spec, approved, observed, reasons)
         if not reasons:
-            self._resolve_findings(spec, approved)
+            self._resolve_check_findings(spec, gates)
+        design = [f for f in self.findings if f["id"] in self._current_resolves and f.get("target")]
+        if design:
+            approved = self._resolution_candidate
+            if not approved or approved[0] != spec.task_id:
+                reasons.append("its renders were not verified and approved")
+            else:
+                changed, observed = self._identity_check(*approved)
+                if changed:
+                    reasons.append(f"its approved renders did not hold until it closed: {changed[:160]}")
+                if observed is not None:
+                    self._refuse_settlement_mismatch(spec, approved, observed, reasons)
+            if not reasons:
+                self._resolve_findings(spec, approved)
         still = [f for f in self.findings if f["id"] in self._current_resolves and f["status"] == "open"]
         for finding in still:
             if reasons:
@@ -4743,6 +5182,42 @@ class Session:
             if finding["id"] in self._current_resolves and "last_attempt" not in finding:
                 finding["last_attempt"] = f"the resolving task stopped before it closed: {reason}"
 
+    def _record_check_debt(self, spec, covers) -> Optional[str]:
+        """A task whose last check still fails after its fix round leaves a
+        finding the orchestrator repairs by RESOLVES, instead of ending the
+        run (survey plan, 2026-09-30; the second remaining task-level stop
+        after session.TaskFailed). Needs the requirements ledger and a COVERS
+        line to hold the debt; otherwise today's CheckFailing stop stands.
+        Returns the finding id, or None when nothing was recorded."""
+        outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
+        if outcome is None or not outcome.checks or outcome.checks[-1].get("passed"):
+            return None
+        if not (self.config.requirements_ledger and covers):
+            return None
+        last = outcome.checks[-1]
+        fid = f"F{len(self.findings) + 1}"
+        failed_checks = _check_ids(last.get("receipts") or [], passed=False)
+        message = (f"the project check still failed after {spec.task_id}'s work (attempt "
+                   f"{last.get('attempt', '?')}, gate {last.get('gate', 'full')}; failed: "
+                   f"{', '.join(failed_checks)})")
+        self.findings.append(dict(
+            id=fid, task=spec.task_id, requirements=list(covers), kind="check.failed",
+            target=None, steps=[], view=None, width=None, viewport=None, message=message[:300],
+            check=dict(attempt=last.get("attempt"), gate=last.get("gate"), failed_checks=failed_checks,
+                       output_artifact=last.get("output_artifact"), attribution=last.get("attribution")),
+            evidence=None, status="open"))
+        for rid in covers:
+            self.memory.ledger.requirement_status[rid] = f"NOT MET: open finding {', '.join(self._open_findings_for(rid))}"
+        self._note(f"task {spec.task_id}: failed check recorded as finding {fid}; the orchestrator re-plans")
+        return fid
+
+    def _check_findings_settled(self, task_id: str) -> bool:
+        """Whether every finding ``task_id`` recorded is resolved (and it
+        recorded at least one): its failed check was repaired by a later
+        task, so the failure is history for the completion questions."""
+        mine = [f for f in self.findings if f["task"] == task_id and f.get("kind") == "check.failed"]
+        return bool(mine) and all(f["status"] == "resolved" for f in mine)
+
     def _record_audit_findings(self, spec, records) -> List[str]:
         """Record each measured overflow of a review-only task as a finding
         owned by that task and its COVERS ids (from the harness, never model
@@ -4778,6 +5253,36 @@ class Session:
         ledger = self._required("requirements_ledger", live) and live
         return (ledger and bool(self._current_covers) and bool(records)
                 and all(r.get("kind") == "product.overflow" for r in records))
+
+    def _resolve_check_findings(self, spec, gates) -> None:
+        """Close each check finding this task names when the checks that
+        failed were rerun on this task's source and passed (Codex review of
+        1995d02: a repair whose policy selected a different gate must not
+        settle it). ``gates`` are the checks this task ran. The task that
+        left the failure keeps its record; its check facts become history
+        (a recovered failure, quadratus.outcome)."""
+        passed = set()
+        for gate in gates:
+            if gate.get("passed"):
+                passed |= set(_check_ids(gate.get("receipts") or [], passed=True))
+        for finding in self.findings:
+            if (finding["id"] not in self._current_resolves or finding["status"] != "open"
+                    or finding.get("target")):
+                continue
+            failed = list((finding.get("check") or {}).get("failed_checks") or ["check"])
+            missing = [c for c in failed if c not in passed]
+            if missing:
+                finding["last_attempt"] = (f"{spec.task_id}: its checks did not rerun {', '.join(missing)} "
+                                           "with a passing receipt")
+                continue
+            finding.update(status="resolved", resolved_by=spec.task_id, reopened=None,
+                           resolution=dict(checks=failed, gates=[g.get("command") for g in gates]))
+            for outcome in self.task_outcomes:
+                if outcome.task_id == finding["task"] and self._check_findings_settled(outcome.task_id):
+                    for fact in outcome.facts:
+                        if fact.stage == "checks" and fact.kind == "product" and fact.active:
+                            fact.recovered = True
+            self._note(f"{spec.task_id} resolved {finding['id']}: its check passed")
 
     def _resolve_findings(self, spec, approved) -> None:
         """Close each finding this task names in RESOLVES whose acceptance its
@@ -4851,7 +5356,8 @@ class Session:
         """What is still open, as facts from the record; each is one reason."""
         reasons = []
         for outcome in self.task_outcomes:
-            if outcome.checks and not outcome.checks[-1]["passed"]:
+            if (outcome.checks and not outcome.checks[-1]["passed"]
+                    and not self._check_findings_settled(outcome.task_id)):
                 last = outcome.checks[-1]
                 reasons.append(f"task {outcome.task_id}'s last check still fails (attempt {last.get('attempt', '?')}, "
                                f"output artifact {last.get('output_artifact', 'unavailable')})")
@@ -4861,7 +5367,7 @@ class Session:
         # decides (map P3.4, Codex 5864252244); the same text when they agree.
         partial = sorted(self._partial_from_outcomes() | set(self._partial_tasks))
         if partial:
-            reasons.append(f"capped task(s) {', '.join(partial)} not continued to completion")
+            reasons.append(f"capped or failed task(s) {', '.join(partial)} not continued to completion")
         ledger = self._open_findings_for(None)
         if ledger:
             reasons.append(f"audit findings {', '.join(ledger)} are open")
@@ -4893,7 +5399,8 @@ class Session:
         from .project_files import context_pack, render_pack
         blocks: List[str] = []
         paths: List[str] = []
-        record = self.turn_limited_records.get(self._continues or "")
+        record = (self.turn_limited_records.get(self._continues or "")
+                  or self.failed_records.get(self._continues or ""))
         if record:
             blocks.append(_handoff_note(record))
             paths.extend(record.get("changed") or [])
@@ -4949,7 +5456,8 @@ class Session:
         parts.append("You are leading this task. Produce the complete work.")
         instruction, page = self._design_instruction(spec)
         if instruction == "harness":
-            parts.append(_HARNESS_CAPTURE.format(page=page, steps=len(spec.scope.capture["steps"])))
+            parts.append(_HARNESS_CAPTURE.format(page=page, steps=len(spec.scope.capture["steps"]))
+                         + _capture_fixture_note(spec))
         elif instruction == "self":
             import sys as _sys
             package_root = Path(__file__).resolve().parent.parent
@@ -4965,6 +5473,11 @@ class Session:
         parts.append('To commission one worker, reply only WORKER followed by JSON: '
                      '{"errand":"code","instruction":"one bounded request",'
                      '"demanding":false,"write":false,"needs":[]}. '
+                     'errand is one of the menu names above (demanding is a boolean flag, not an '
+                     'errand); instruction is a non-empty string; write and demanding are booleans; '
+                     'needs is a list of strings. A WORKER reply that does not parse this way, a '
+                     'helper that nests another helper, or write:true without an edit grant fails '
+                     'this task. '
                      'needs states what the errand must be able to do: "patch" to change '
                      'files, "execute" to run commands, "direct-write" to write a file '
                      'the harness cannot patch, [] for an answer in text. Set write:true '
@@ -4995,8 +5508,15 @@ class Session:
         parts.append(
             "To read a filed artifact in full before working, reply with "
             "exactly 'FETCH: <artifact-id>' and nothing else -- you will get "
-            "the content and be asked again."
+            "the content and be asked again. A request (FETCH, CONSULT or WORKER) closes "
+            "the reply: at most " + str(MAX_REQUEST_PREFACE_LINES) + " lines of preface may "
+            "precede it, and a reply that carries a CHANGED line is a delivery, never a "
+            "request. There is no ASK channel for you: a reply beginning ASK:, or a request "
+            "line that does not parse, fails this task. Report a blocker in words instead."
         )
+        if lead is None:
+            parts.append("Consults are not available in this task; decide with your own judgment "
+                         "or commission a worker.")
         if lead is not None:
             consultables = [p for p in self.brain_trust if p != lead]
             names = ", ".join(
@@ -5071,6 +5591,7 @@ class Session:
             + self._revision_delivery()
             + (self._scope_headroom(spec) if self._writes() else "")
             + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
+            + _NO_REQUESTS_IN_FIX
         )
 
     def _revision_delivery(self) -> str:
@@ -5142,6 +5663,7 @@ class Session:
             "Fix them, or state precisely why the reviewer is wrong. Produce "
             "the complete revised work."
             + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
+            + _NO_REQUESTS_IN_FIX
         )
 
     def _run_integration_gate(self, lead: str, spec: TaskSpec, task: TaskMemory, *,
@@ -5185,7 +5707,9 @@ class Session:
                     f"Task: {spec.description}\n\n"
                     f"The project's own integration check failed after your "
                     f"work:\n{result.for_models()}\n\n"
-                    "Fix the failure. Produce the complete revised work.",
+                    "Fix the failure. Produce the complete revised work."
+                    + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
+                    + _NO_REQUESTS_IN_FIX,
                     role="gate-fix",
                 )
             except TurnLimitReached as exc:
@@ -5332,8 +5856,10 @@ class Session:
             "verbatim error; without those, treat it as unverified. State "
             "plainly whether it should be accepted, and what must change if "
             "not. Start each finding that must be fixed on its own line with "
-            "'BLOCKING:'; anything else in your reply is read as a note, not a "
-            "finding. Do not redo the work; verify it."
+            "'BLOCKING:' or 'UNRESOLVED:'. The words BLOCKING and UNRESOLVED in capitals "
+            "are read as findings wherever they appear, so in prose write them in lower "
+            "case; a line 'BLOCKING: none' is read as no finding. Do not redo the work; "
+            "verify it."
         )
 
     @_invocation_role("closeout")
@@ -5440,6 +5966,12 @@ class Session:
                    f"{files}; {checked}. Evidence: " + "; ".join(pointers))
         self._note(f"{spec.task_id}: close-out refused by {lead}; harness record kept")
         return summary, "No model-written decision record: the close-out was refused.", []
+
+
+_NO_REQUESTS_IN_FIX = (
+    "\nRequests are not served in this call: a FETCH, CONSULT or WORKER reply is filed as "
+    "your revision text, unserved. Finish with what you have."
+)
 
 
 def _revision_changed_delivery(already: str) -> str:
@@ -5622,8 +6154,8 @@ def _parse_consults(reply: str):
 _BLOCKED_REPORT_RULE = (
     "If you cannot read, edit or run something, say so with evidence: quote "
     "the exact command or tool call you attempted, its exit status, and the "
-    "verbatim error text. A blocked report without those three is rejected. "
-    "Never describe test output you did not see."
+    "verbatim error text. A blocked report without those three is read as unverified "
+    "by whoever checks the work. Never describe test output you did not see."
 )
 
 _WORKER_RECOVERY = (
@@ -5637,13 +6169,6 @@ _WORKER_RECOVERY = (
 )
 
 
-#: How many operator questions one decision may spend before it is judged to
-#: be interrogating rather than deciding. Three is generous: a decision that
-#: genuinely needs more operator input than that is a scoping conversation,
-#: which belongs in the interview, not the loop.
-_MAX_ASKS_PER_DECISION = 3
-
-
 #: Asks the orchestrator to label the task so :mod:`quadratus.task_kinds` can
 #: act on it. Kind and difficulty together are the routing decision: the few
 #: pinned kinds go where the evidence says, everything else rides the
@@ -5654,7 +6179,11 @@ _KIND_REQUEST = (
     "simple, standard, complex -- judge it by how many logical steps the task "
     "takes and what breaks if it is wrong. Most well-sized tasks are simple; "
     "reserve complex for genuinely hard reasoning. Then the task on the "
-    "following line. Omit the line if none fits."
+    "following line. Omit the line if none fits. The KIND line is read only within "
+    f"the first {MAX_PREFACE_LINES} lines of the reply; later it is prose and the task "
+    "is routed as general/simple. In those same lines no line may begin with ASK:, "
+    "FETCH:, CONSULT or WORKER, and no line may be the bare word DONE, because each is "
+    "read as that control verb rather than as your task."
 )
 
 

@@ -115,7 +115,8 @@ def test_recovery_is_bounded_and_preserves_work(tmp_path, monkeypatch, failure):
         assert result.error and not result.completed
         if failure == 'partial':
             assert (tmp_path / 'a.md').read_text() == 'partial\n'
-            assert 'PartialWorkStopped' in result.error
+            data = json.loads((result.run_dir / 'result.json').read_text())
+            assert data['failed_tasks'] == ['t1'], "a changed tree fails the task, not the run"
 
 
 def test_unknown_source_inspection_cannot_recover(tmp_path, monkeypatch):

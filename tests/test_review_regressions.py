@@ -6,7 +6,7 @@ from quadratus.artifacts import ArtifactStore
 from quadratus.config import Settings
 from quadratus.memory import TaskMemory
 from quadratus.scope import TaskScope
-from quadratus.session import Complexity, RunStalled, Session, SessionConfig, TaskSpec
+from quadratus.session import Complexity, Session, SessionConfig, TaskSpec
 from quadratus.workers import WorkerPool
 
 
@@ -50,8 +50,9 @@ def test_ungranted_worker_edit_is_rejected_before_invocation(tmp_path):
         return 'WORKER {"errand":"code","instruction":"edit","write":true}'
     session = Session('work', ArtifactStore(tmp_path / '.quadratus'), invoke=invoke,
                       config=SessionConfig(project=tmp_path))
-    with pytest.raises(RunStalled, match='without an operator write grant'):
-        session.run_task(TaskSpec('t1', 'fix', complexity=Complexity.SIMPLE))
+    summary = session.run_task(TaskSpec('t1', 'fix', complexity=Complexity.SIMPLE))
+    assert summary.outcome == 'failed'
+    assert 'without an operator write grant' in session.failed_records['t1']['error']
     assert len(calls) == 1
 
 

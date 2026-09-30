@@ -112,9 +112,10 @@ def test_an_unmerged_parallel_child_is_integrity_and_its_debt_stays_open(tmp_pat
     session, project = parallel_session(tmp_path, Orchestrated([BATCH, "DONE"], rogue="b.py"))
     session.run(max_tasks=4)
     children = {o.task_id: o for o in session.task_outcomes}
-    # Today the child's own scope check stops it inside its copy; the parent
-    # then refuses the merge. Both facts are integrity.
-    assert children["t2"].closed_as == "stopped:PartialWorkStopped" and children["t2"].primary == "integrity"
+    # The child's own scope check fails the task inside its copy; the parent
+    # then refuses the merge, which is the integrity fact that ranks first.
+    assert children["t2"].closed_as == "stopped:unmerged" and children["t2"].primary == "integrity"
+    assert [f.kind for f in children["t2"].facts if f.kind == "failed"] == ["failed"]
     assert [f.stage for f in children["t2"].facts if f.kind == "integrity"][-1] == "merge"
     assert children["t1"].primary == "clean"
     assert not session.completed

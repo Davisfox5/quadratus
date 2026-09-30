@@ -239,12 +239,12 @@ def test_two_caps_in_a_row_stop_the_run_instead_of_looping(tmp_path, monkeypatch
     assert (tmp_path / "a.md").read_text() == "partial\n", "the kept work stays in place"
 
 
-def test_a_capped_lead_that_wrote_outside_its_scope_stops_with_the_work_preserved(tmp_path, monkeypatch):
+def test_a_capped_lead_that_wrote_outside_its_scope_fails_the_task_with_the_work_preserved(tmp_path, monkeypatch):
     result, rows, data, seen = _run(tmp_path, monkeypatch, [_capped_after_writing("oops", path="b.md")],
                                     tasks=[TASK_1])
-    assert not result.completed and "PartialWorkStopped" in (result.error or "")
+    assert not result.completed and result.error
     assert (tmp_path / "b.md").read_text() == "partial\n"
-    assert data["turn_limited_tasks"] == []
+    assert data["turn_limited_tasks"] == [] and data["failed_tasks"] == ["t1"]
 
 
 def test_an_unrelated_clean_task_does_not_resolve_a_capped_one(tmp_path, monkeypatch):
@@ -253,7 +253,7 @@ def test_an_unrelated_clean_task_does_not_resolve_a_capped_one(tmp_path, monkeyp
         tmp_path, monkeypatch, [_capped_after_writing("half done"), _finishes],
         tasks=[TASK_1, UNRELATED])
     assert not result.completed
-    assert "capped task(s) t1 not continued to completion" in result.error, result.error
+    assert "capped or failed task(s) t1 not continued to completion" in result.error, result.error
     assert data["turn_limited_tasks"] == ["t1"]
     assert "CONTINUES: t1" in seen["orchestrator"][1], "the orchestrator is told how to link the follow-up"
 

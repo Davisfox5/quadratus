@@ -402,11 +402,13 @@ def test_the_consult_budget_is_enforced(store):
 
     rec = Chatty()
     s = _session(store, rec)
-    with pytest.raises(RunStalled, match="Consult budget exhausted"):
-        s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    summary = s.run_task(TaskSpec("t1", "work", complexity=Complexity.SIMPLE))
+    assert summary.outcome == "failed", "the task fails on its own channel; the run goes on"
+    assert s.failed_records["t1"]["cause"] == "channel"
+    assert "Consult budget exhausted" in s.failed_records["t1"]["error"]
     consults = [c for c in rec.calls if "area of strength" in c["prompt"]]
     assert len(consults) == s.config.max_consults
-    assert not s.history
+    assert [h.outcome for h in s.history] == ["failed"]
 
 
 def test_leads_are_told_the_channels_exist(store):

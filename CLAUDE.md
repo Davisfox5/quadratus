@@ -454,6 +454,58 @@ Key design decisions already settled:
   committed non-hidden project sample exactly as the capture itself
   (`design_evidence._fixture`) and the lead's instructions already did. Three
   gates with three rules was the defect; there is one rule now.
+- **A task that breaks its own rules fails the task, not the run**
+  (operator ruling, 2026-09-28; `session.TaskFailed`). Two live runs each
+  ended on the first task-level fault, so every later task's faults stayed
+  unseen and each run could teach one lesson. Scope overrun, a reply that is
+  neither a request nor a delivery, a lead channel that does not converge,
+  and a transport stop after writes now take the capped-task path: work
+  kept, a terminal `failed` fact on the task, the orchestrator told to name
+  the remaining work with CONTINUES, a clean continuation recovering the
+  fact, and two unfinished tasks in a row tripping the same breaker a cap
+  does. What still stops the run is what no re-plan repairs: a refusal, a
+  denied capability, a tree the harness cannot inspect, dependency or
+  evidence integrity, a spent budget, an operator question, and the
+  orchestrator's own stalls.
+- **A check that still fails after its fix round is requirement debt, not
+  a run stop** (survey plan, 2026-09-30; `_record_check_debt`). With the
+  ledger on and a COVERS line, the task's requirements go NOT MET under a
+  `check.failed` finding, the orchestrator sees it with the check's output
+  artifact and names a RESOLVES task, and that task settles it when its own
+  integration check passes and it closes with no new finding; no renders
+  are asked for. The original task keeps its failed check on record; its
+  `product` facts become history when the finding resolves. Without the
+  ledger or a COVERS line the `CheckFailing` stop stands. Unverified design
+  evidence is not routed this way yet: map G8 says only the task's own
+  renders discharge it.
+- **A survey run continues through failures and reports them apart from
+  acceptance** (Davis, 2026-09-30; `SessionConfig.survey`, `quadratus
+  --survey-recovery N`). Synthesis of Davis's idea with Codex's and Claude's
+  answers on #39: the orchestrator gets no discretion over budget. The
+  operator sets a recovery allowance of N continuation or repair tasks in
+  advance and the harness spends it; the next repair past it is
+  `SurveyAllowanceSpent`. The two-unfinished breaker gives way to a
+  same-cause repeat stop (`SurveyRepeatStop`: a continuation that fails
+  the same way as its predecessor with nothing newly changed), so distinct
+  failures keep the run going. Every re-plan after an unfinished task or an
+  open finding must carry `HYPOTHESIS: <what the failure showed and what
+  changes>`, kept as an artifact and in `result.json`'s `survey` section
+  beside the harness's own record, never acted on. The acceptance verdict
+  is computed exactly as on an ordinary run; the survey section (unique
+  causes, recovered vs open, repeats, allowance spent, hypotheses) is
+  diagnostic data, not success.
+- **Prompt parity is audited, not assumed** (2026-09-28). An inventory of
+  every site that rejects or stops on how a reply is written, checked
+  against the prompt each seat receives, found 15 rules never stated, 24
+  stated in part and 3 stated backwards (the bounded editor was offered
+  lead channels the worker pool refuses; the verifier was told prose is a
+  note while capitalised BLOCKING in prose counts). All are stated now, the
+  bounds are quoted from the constants the parsers enforce
+  (`MAX_PREFACE_LINES`, `MAX_REQUEST_PREFACE_LINES`, `MAX_STEPS`,
+  `MAX_SELECTOR_CHARS`, `_MAX_ASKS_PER_DECISION`, the parallel limit from
+  config), and `tests/test_prompt_rule_parity.py` pins each statement to its
+  parser. A new enforcement site gets its prompt sentence and its guard test
+  in the same change.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

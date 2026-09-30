@@ -123,14 +123,17 @@ def test_j3_a_gate_still_failing_is_an_attributed_product_fact_and_a_named_stop(
 
 # -- J15 / J16 / J17 / J18 stops that keep their precedence ------------------------------
 
-def test_j15_a_scope_overrun_is_integrity_with_the_work_kept(tmp_path, monkeypatch):
+def test_j15_a_scope_overrun_fails_the_task_with_the_work_kept(tmp_path, monkeypatch):
+    """Revised 2026-09-28 (J39): the task fails and is handed back; the run
+    itself ends here only because the task cap is one."""
     def lead(call, replay):
         H.write(call, {"app.py": FIXED, "README.md": "# rewritten\n"})
         return 'Did both.\nCHANGED: ["README.md", "app.py"]'
     replay = _run(tmp_path, monkeypatch, Script(lead=lead))
     t1 = _task(replay, "t1")
-    assert t1["closed_as"] == "stopped:PartialWorkStopped" and t1["primary"] == "integrity"
-    assert _stop(replay)["legacy"] == "PartialWorkStopped" and _stop(replay)["kind"] == "integrity"
+    assert t1["closed_as"] == "failed" and t1["primary"] == "failed"
+    assert _facts(t1, active=True) == ["failed"], "the out-of-path finding is carried by the failed fact"
+    assert _stop(replay)["kind"] == "failed" and "capped or failed task(s) t1" in _stop(replay)["detail"]
     assert (replay.project / "README.md").read_text() == "# rewritten\n"
 
 

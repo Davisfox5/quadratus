@@ -357,9 +357,12 @@ def capability_preamble(allow_writes: bool, model_key: Optional[str] = None) -> 
         "Check this against the errand before you start. If it cannot be done "
         "with these, reply with only 'NEED TOOL: <what you need>' and nothing "
         "else -- that is one line, not an attempt. Asking is cheap and the "
-        "errand comes back to you with the grant. Do not work around a "
+        "errand comes back to you with the grant: one NEED TOOL per errand, and a "
+        "second on the reissued errand is a failure. Do not work around a "
         "missing tool by writing the change out as text: an answer the "
-        "harness cannot apply is the expensive way to fail.\n"
+        "harness cannot apply is the expensive way to fail. You cannot hire, consult "
+        "or fetch: a reply beginning WORKER, CONSULT or FETCH is refused, and "
+        "CONTINUE: is refused unless this errand says it allows more steps.\n"
     )
 
 

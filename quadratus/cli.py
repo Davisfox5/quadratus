@@ -102,6 +102,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
     if args.project:
         from .project import Project
         from .project_run import run_project
+        from .session import SurveyConfig
         try:
             project = Project.open(args.project, clone_url=args.clone or '', branch=args.branch or '')
             result = run_project(
@@ -113,6 +114,8 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
                 forbid=args.forbid, declared_paths=args.declared_paths,
                 max_tasks=args.max_tasks, mode=args.mode,
                 security_verdict_json=getattr(args, "security_verdict_json", False),
+                survey=(SurveyConfig(recovery_tasks=args.survey_recovery)
+                        if getattr(args, "survey_recovery", None) else None),
                 progress=lambda message: print(f">> {message}", flush=True),
                 ask_operator=_operator(args),
                 plan_gate=(lambda plan: print(plan) is None and
@@ -359,6 +362,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             "A further required check run beside --check, split without a "
             "shell (repeatable; e.g. --extra-check 'node --test tests/ui/a.test.js'). "
             "Patterns are refused: name the files."
+        ),
+    )
+    engine.add_argument(
+        "--survey-recovery", type=int, default=None, metavar="N",
+        help=(
+            "Run as a survey: continue through failures, spending at most N continuation or "
+            "repair tasks, require a HYPOTHESIS line on each re-plan, stop only on a same-cause "
+            "repeat, and report a survey section apart from acceptance."
         ),
     )
     engine.add_argument(
