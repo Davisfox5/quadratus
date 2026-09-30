@@ -533,9 +533,13 @@ Key design decisions already settled:
   COVERS) under the runner's lifecycle: lock, gate plan, budget, readiness,
   dependency watch, every per-task check and stop. No planner call, no
   acknowledgment call, no task the list did not name; a text the loop would
-  send back is `TaskListInvalid` before any lead call, and a list longer
-  than `max_tasks` is refused because the cap's goal question is an
-  orchestrator call. The list ending is not a DONE: `completed` means every
+  send back is `TaskListInvalid`, found for the whole list before any call
+  with every problem named at once (live run 20260930T134226Z: the ledger
+  is on by default, so the first text needs a `REQUIREMENTS:` block and
+  every text a `COVERS:` line, and the operator's list had neither; the
+  refusal landed after launch and the record said the task "ran"). `ran`
+  is now recorded at dispatch, and a list longer than `max_tasks` is
+  refused because the cap's goal question is an orchestrator call. The list ending is not a DONE: `completed` means every
   listed task closed clean, and `result.json.explicit_tasks` says
   `goal_judged: false`. Task completion and whole-goal proof stay distinct.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional

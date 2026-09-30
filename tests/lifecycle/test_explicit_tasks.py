@@ -88,14 +88,16 @@ def test_a_listed_task_may_carry_the_direct_tier_label(tmp_path, monkeypatch):
     ("KIND: docs simple\nSCOPE: " + json.dumps(T2) + "\nDONE", "DONE"),
     ("DONE", "DONE"),
 ])
-def test_a_task_the_loop_would_send_back_stops_the_run_before_any_lead_call(tmp_path, monkeypatch, text, reason):
+def test_a_task_the_loop_would_send_back_stops_the_run_before_any_call(tmp_path, monkeypatch, text, reason):
+    """The whole list is checked first (Codex, live run 20260930T134226Z):
+    a bad second text is refused before the first spends a call."""
     replay = _run(tmp_path, monkeypatch, [README_TASK, text], record_complete=False)
     assert replay.result.error.startswith("TaskListInvalid: listed task 2:"), replay.result.error
     assert reason.lower() in replay.result.error.lower()
-    assert replay.of("orchestrator") == [] and len(replay.of("lead")) == 1
+    assert replay.calls == []
     record = json.loads((Path(replay.result.run_dir) / "result.json").read_text())["explicit_tasks"]
-    assert record["invalid"]["index"] == 2 and record["not_run"] == 1
-    assert record["tasks_closed_clean"] == ["t1"] and not replay.result.completed
+    assert record["invalid"]["index"] == 2 and record["not_run"] == 2
+    assert record["ran"] == [] and record["tasks_closed_clean"] == [] and not replay.result.completed
 
 
 def test_a_list_longer_than_the_cap_is_refused_before_any_call(tmp_path, monkeypatch):

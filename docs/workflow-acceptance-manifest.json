@@ -954,7 +954,7 @@
       "tests": [
         "tests/lifecycle/test_explicit_tasks.py::test_listed_tasks_run_in_order_with_no_planner_call",
         "tests/lifecycle/test_explicit_tasks.py::test_a_listed_task_may_carry_the_direct_tier_label",
-        "tests/lifecycle/test_explicit_tasks.py::test_a_task_the_loop_would_send_back_stops_the_run_before_any_lead_call",
+        "tests/lifecycle/test_explicit_tasks.py::test_a_task_the_loop_would_send_back_stops_the_run_before_any_call",
         "tests/lifecycle/test_explicit_tasks.py::test_a_list_longer_than_the_cap_is_refused_before_any_call",
         "tests/lifecycle/test_explicit_tasks.py::test_the_session_itself_refuses_a_list_past_the_cap_with_a_typed_stop",
         "tests/lifecycle/test_explicit_tasks.py::test_a_refusal_on_a_listed_task_is_still_the_refusal_stop",
@@ -963,7 +963,10 @@
         "tests/lifecycle/test_explicit_tasks.py::test_the_direct_and_normal_tiers_deliver_the_same_checked_readme",
         "tests/lifecycle/test_codex_explicit_cap.py::test_exactly_full_list_never_invokes_orchestrator",
         "tests/lifecycle/test_codex_explicit_cap.py::test_a_failed_task_that_fills_the_cap_stays_incomplete_without_a_call",
-        "tests/lifecycle/test_codex_explicit_cap.py::test_the_report_says_the_goal_was_not_judged"
+        "tests/lifecycle/test_codex_explicit_cap.py::test_the_report_says_the_goal_was_not_judged",
+        "tests/lifecycle/test_codex_explicit_cap.py::test_a_list_without_requirements_is_refused_whole_before_any_call",
+        "tests/lifecycle/test_codex_explicit_cap.py::test_a_list_with_requirements_and_covers_runs_under_the_default_ledger",
+        "tests/lifecycle/test_codex_explicit_cap.py::test_a_covers_naming_an_unlisted_requirement_is_named_upfront"
       ],
       "required_obligations": [
         "calls",
@@ -976,19 +979,22 @@
           "tests/lifecycle/test_explicit_tasks.py::test_listed_tasks_run_in_order_with_no_planner_call",
           "tests/lifecycle/test_explicit_tasks.py::test_a_listed_task_may_carry_the_direct_tier_label",
           "tests/lifecycle/test_explicit_tasks.py::test_the_direct_and_normal_tiers_deliver_the_same_checked_readme",
-          "tests/lifecycle/test_codex_explicit_cap.py::test_exactly_full_list_never_invokes_orchestrator"
+          "tests/lifecycle/test_codex_explicit_cap.py::test_exactly_full_list_never_invokes_orchestrator",
+          "tests/lifecycle/test_codex_explicit_cap.py::test_a_list_with_requirements_and_covers_runs_under_the_default_ledger"
         ],
         "outcome": [
           "tests/lifecycle/test_explicit_tasks.py::test_listed_tasks_run_in_order_with_no_planner_call",
-          "tests/lifecycle/test_explicit_tasks.py::test_a_task_the_loop_would_send_back_stops_the_run_before_any_lead_call",
+          "tests/lifecycle/test_explicit_tasks.py::test_a_task_the_loop_would_send_back_stops_the_run_before_any_call",
           "tests/lifecycle/test_explicit_tasks.py::test_a_failed_listed_task_keeps_its_work_and_the_list_ends_incomplete",
-          "tests/lifecycle/test_codex_explicit_cap.py::test_a_failed_task_that_fills_the_cap_stays_incomplete_without_a_call"
+          "tests/lifecycle/test_codex_explicit_cap.py::test_a_failed_task_that_fills_the_cap_stays_incomplete_without_a_call",
+          "tests/lifecycle/test_codex_explicit_cap.py::test_a_list_without_requirements_is_refused_whole_before_any_call"
         ],
         "report": [
           "tests/lifecycle/test_explicit_tasks.py::test_listed_tasks_run_in_order_with_no_planner_call",
-          "tests/lifecycle/test_explicit_tasks.py::test_a_task_the_loop_would_send_back_stops_the_run_before_any_lead_call",
+          "tests/lifecycle/test_explicit_tasks.py::test_a_task_the_loop_would_send_back_stops_the_run_before_any_call",
           "tests/lifecycle/test_explicit_tasks.py::test_a_failed_listed_task_keeps_its_work_and_the_list_ends_incomplete",
-          "tests/lifecycle/test_codex_explicit_cap.py::test_the_report_says_the_goal_was_not_judged"
+          "tests/lifecycle/test_codex_explicit_cap.py::test_the_report_says_the_goal_was_not_judged",
+          "tests/lifecycle/test_codex_explicit_cap.py::test_a_list_without_requirements_is_refused_whole_before_any_call"
         ],
         "partial_work": [
           "tests/lifecycle/test_explicit_tasks.py::test_a_refusal_on_a_listed_task_is_still_the_refusal_stop",

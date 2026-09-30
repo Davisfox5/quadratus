@@ -393,9 +393,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=(
             "Run this JSON list of task texts in order instead of asking the orchestrator: "
             "each text is read as an orchestrator reply would be (KIND, SCOPE, TIER, COVERS "
-            "lines and the description). No planner or acknowledgment call is made and no "
-            "other task runs; a text the loop would send back stops the run. The goal is "
-            "still required for the record and the prompts, and it is not judged."
+            "lines and the description). With the requirements ledger on (the default), the "
+            "first text starts with a 'REQUIREMENTS:' block (R1: ...) and every text carries "
+            "a 'COVERS: R1' line; the whole list is checked before any call and every problem "
+            "is reported at once. No planner or acknowledgment call is made and no other task "
+            "runs; a text the loop would send back stops the run. The goal is still required "
+            "for the record and the prompts, and it is not judged."
         ),
     )
     engine.add_argument(

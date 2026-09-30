@@ -3433,6 +3433,7 @@ class Session:
             self._note("the task list is spent")
             return None
         index = self.explicit["listed"] - len(self._explicit_tasks) + 1
+        self._explicit_index = index
         text = self._explicit_tasks.pop(0)
         task_id = f"t{len(self.history) + 1}"
         self._note(f"listed task {index} of {self.explicit['listed']} runs as {task_id}")
@@ -3471,8 +3472,52 @@ class Session:
                             metadata_notes=list(meta.notes), scope=scope)
         except ValueError as exc:
             refuse(f"invalid task requirements: {exc}")
-        self.explicit["ran"].append(dict(index=index, task=task_id))
         return spec
+
+    def _task_list_problems(self, listed: List[str]) -> List[tuple]:
+        """What the loop would refuse in an explicit list, found by the same
+        parsers before anything runs: control replies, unlabelled or
+        unscoped texts, and, with the ledger on, a first text without a
+        REQUIREMENTS block or any text without a COVERS line naming listed
+        ids. Deterministic and call-free; the loop's own checks still run."""
+        problems: List[tuple] = []
+        requirements: Dict[str, str] = {}
+        editing = bool(self.project and self.config.allow_writes)
+        for index, text in enumerate(listed, 1):
+            found, rest = _read_requirements(_DECIDE.sub("", text))
+            if found and not requirements:
+                requirements = dict(found)
+            elif found:
+                problems.append((index, "REQUIREMENTS may be listed once, on the first text"))
+            if (control := parse_control(rest)) is not None:
+                problems.append((index, f"a {control.verb} reply is not a task"))
+                continue
+            try:
+                meta = _read_metadata(rest)
+            except AmbiguousMetadata as exc:
+                problems.append((index, f"{exc}; state one 'KIND: <kind> <difficulty>' line first"))
+                continue
+            description = meta.description
+            if editing:
+                from .scope import read_scope
+                try:
+                    _, description = read_scope(description, max_lines=MAX_TASK_LINES)
+                except ValueError as exc:
+                    problems.append((index, f"invalid scope: {exc}"))
+                    continue
+            if self.config.requirements_ledger:
+                match = _COVERS.search(description or "")
+                covers = re.findall(r"R\d+", match.group(1)) if match else []
+                if not requirements:
+                    problems.append((index, "No requirements are listed yet. Start the first text with a "
+                                            "'REQUIREMENTS:' block numbering the goal's requirements (R1: ...)"))
+                elif not covers:
+                    problems.append((index, "The task has no COVERS line"))
+                else:
+                    unknown = [r for r in covers if r not in requirements]
+                    if unknown:
+                        problems.append((index, f"COVERS names requirements that do not exist: {', '.join(unknown)}"))
+        return problems
 
     def _explicit_list_spent(self) -> bool:
         """An explicit run whose list is spent and whose completion has not
@@ -3486,7 +3531,7 @@ class Session:
         to correct it."""
         if self._explicit_tasks is None:
             return
-        index = next((r["index"] for r in self.explicit["ran"] if r["task"] == spec.task_id), None)
+        index = getattr(self, "_explicit_index", None)
         self.explicit["invalid"] = dict(index=index, problem=str(problem)[:400])
         raise TaskListInvalid(f"listed task {index}: {problem}")
 
@@ -3745,6 +3790,18 @@ class Session:
                 raise
             self._explicit_tasks = listed
             self.explicit = dict(listed=len(listed), ran=[], invalid=None, goal_judged=False)
+            problems = self._task_list_problems(listed)
+            if problems:
+                # Every problem at once, before the dependency watch, the
+                # readiness probes or any call: the operator corrects the
+                # list in one pass (Codex, live run 20260930T134226Z, where
+                # the ledger refused the first text after launch).
+                self.run_outcome = RunOutcome()
+                self.explicit["invalid"] = dict(index=problems[0][0], problem=problems[0][1][:400],
+                                                all=[dict(index=i, problem=p[:400]) for i, p in problems])
+                exc = TaskListInvalid("; ".join(f"listed task {i}: {p}" for i, p in problems))
+                self._note_exception(exc)
+                raise exc
         try:
             history = self._run_tasks(max_tasks)
         except BaseException as exc:
@@ -3964,6 +4021,11 @@ class Session:
                 self.survey["recovery_used"] += 1
             checks_before, open_before = len(self.checks), len(self.open_findings)
             self._continues = continues
+            if self._explicit_tasks is not None:
+                # Recorded at dispatch: a listed text refused before this
+                # point was intake, not work (Codex, live run
+                # 20260930T134226Z: "ran" named a task no call ever made).
+                self.explicit["ran"].append(dict(index=self._explicit_index, task=spec.task_id))
             try:
                 summary = self.run_task(spec)
             finally:
