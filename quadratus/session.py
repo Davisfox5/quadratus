@@ -3790,6 +3790,10 @@ class Session:
                 raise
             self._explicit_tasks = listed
             self.explicit = dict(listed=len(listed), ran=[], invalid=None, goal_judged=False)
+            # Claims come from the operator list and survive audit status changes.
+            self._explicit_claims = {rid for text in listed
+                                     for match in [_COVERS.search(text)] if match
+                                     for rid in re.findall(r"R\d+", match.group(1))}
             problems = self._task_list_problems(listed)
             if problems:
                 # Every problem at once, before the dependency watch, the
@@ -4788,7 +4792,12 @@ class Session:
             if any(not s.startswith(("covered", "met")) for s in
                    (ledger.requirement_status.get(r, "open") for r in ledger.requirements)):
                 return self._requirements_satisfied()
-        unsettled = [r for r in ledger.ambiguous if not ledger.settled(r)]
+        claimed = (getattr(self, "_explicit_claims", set()) if self._explicit_tasks is not None
+                   else set(ledger.requirements))
+        if self._explicit_tasks is not None:
+            self.explicit["requirements_claimed"] = [r for r in ledger.requirements if r in claimed]
+            self.explicit["requirements_unclaimed"] = [r for r in ledger.requirements if r not in claimed]
+        unsettled = [r for r in ledger.ambiguous if r in claimed and not ledger.settled(r)]
         if unsettled:
             self._done_refusal = (
                 "\n\n--- DONE SENT BACK ---\nThese requirements are ambiguous and not yet settled: "
@@ -4797,21 +4806,9 @@ class Session:
             self._note(f"DONE sent back: unsettled ambiguous requirements: {', '.join(unsettled)}")
             return False
         status = ledger.requirement_status
-        uncovered = [r for r in ledger.requirements if not status.get(r, "").startswith(("covered", "met"))]
-        if uncovered and self._explicit_tasks is not None:
-            # An explicit run judges the tasks it listed, never the whole
-            # goal (Codex, live run 20260930T141209Z: the favicon task closed
-            # clean and the end-of-list audit marked the goal's baseline
-            # requirements NOT MET). What no listed task claimed is recorded
-            # as unclaimed and left unjudged; what a task claimed is audited.
-            claimed = [r for r in ledger.requirements if r not in uncovered]
-            self.explicit["requirements_unclaimed"] = list(uncovered)
-            self.explicit["requirements_claimed"] = claimed
-            self._note(f"requirements no listed task claimed, left unjudged: {', '.join(uncovered)}")
-            if not claimed:
-                return True
-            verdicts = self._audit_requirements(ids=claimed)
-        elif uncovered:
+        uncovered = [r for r in ledger.requirements
+                     if r in claimed and not status.get(r, "").startswith(("covered", "met"))]
+        if uncovered:
             self._done_refusal = (
                 "\n\n--- DONE SENT BACK ---\nThese requirements are not covered by any finished "
                 f"task: {', '.join(uncovered)} (never covered, or found not met by the audit and not "
@@ -4819,11 +4816,12 @@ class Session:
                 "why one cannot be done.")
             self._note(f"DONE sent back: uncovered {', '.join(uncovered)}")
             return False
+        if self._explicit_tasks is not None:
+            self._note("requirements no listed task claimed, left unjudged: "
+                       + ", ".join(self.explicit["requirements_unclaimed"]))
+            verdicts = self._audit_requirements(ids=self.explicit["requirements_claimed"]) if claimed else {}
         else:
             verdicts = self._audit_requirements()
-            if self._explicit_tasks is not None:
-                self.explicit["requirements_claimed"] = list(verdicts)
-                self.explicit["requirements_unclaimed"] = []
         unmet = {r: why for r, (ok, why) in verdicts.items() if not ok}
         for rid, (ok, why) in verdicts.items():
             status[rid] = "met (audited)" if ok else f"NOT MET: {why[:160]}"
