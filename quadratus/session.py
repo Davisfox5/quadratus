@@ -789,6 +789,17 @@ def _read_continues(spec):
     return match.group(1), replace(spec, description=description or spec.description)
 
 
+def _check_ids(receipts, *, passed: bool) -> List[str]:
+    """Check identities from a gate's receipts: the ids whose status is (or
+    is not) passed. A single-command gate carries no receipts and is the one
+    check, ``check``."""
+    if not receipts:
+        return ["check"]
+    ids = [r.get("id") or "check" for r in receipts
+           if (r.get("status") == "passed") == passed and r.get("id") != "scope"]
+    return ids
+
+
 _HYPOTHESIS = re.compile(r"^\s*HYPOTHESIS:\s*(.+?)\s*$", re.MULTILINE)
 
 
@@ -3149,7 +3160,12 @@ class Session:
         if cause_before != cause_after:
             return None
         def head(rec):
-            return (rec.get("error") or rec.get("partial_text") or "").strip().splitlines()[:1]
+            # The harness's own signature: a failure's first error line, or
+            # for a cap the fact of the cap and its round count; never the
+            # model's progress prose (Codex review of 1995d02).
+            if rec.get("cause"):
+                return (rec.get("error") or "").strip().splitlines()[:1]
+            return [f"turn limit after {rec.get('turns') or '?'} rounds"]
         if head(before) != head(after):
             return None
         earlier, later = before.get("content") or {}, after.get("content") or {}
@@ -4960,7 +4976,7 @@ class Session:
         if self._closed_with_findings(spec, open_before):
             reasons.append("it closed with open findings")
         if not reasons:
-            self._resolve_check_findings(spec)
+            self._resolve_check_findings(spec, gates)
         design = [f for f in self.findings if f["id"] in self._current_resolves and f.get("target")]
         if design:
             approved = self._resolution_candidate
@@ -5072,12 +5088,14 @@ class Session:
             return None
         last = outcome.checks[-1]
         fid = f"F{len(self.findings) + 1}"
+        failed_checks = _check_ids(last.get("receipts") or [], passed=False)
         message = (f"the project check still failed after {spec.task_id}'s work (attempt "
-                   f"{last.get('attempt', '?')}, gate {last.get('gate', 'full')})")
+                   f"{last.get('attempt', '?')}, gate {last.get('gate', 'full')}; failed: "
+                   f"{', '.join(failed_checks)})")
         self.findings.append(dict(
             id=fid, task=spec.task_id, requirements=list(covers), kind="check.failed",
             target=None, steps=[], view=None, width=None, viewport=None, message=message[:300],
-            check=dict(attempt=last.get("attempt"), gate=last.get("gate"),
+            check=dict(attempt=last.get("attempt"), gate=last.get("gate"), failed_checks=failed_checks,
                        output_artifact=last.get("output_artifact"), attribution=last.get("attribution")),
             evidence=None, status="open"))
         for rid in covers:
@@ -5128,16 +5146,29 @@ class Session:
         return (ledger and bool(self._current_covers) and bool(records)
                 and all(r.get("kind") == "product.overflow" for r in records))
 
-    def _resolve_check_findings(self, spec) -> None:
-        """Close each check finding this task names: its own gate passed and
-        it closed clean, which is what the failed check asked for. The task
-        that left the failure keeps its record; its check facts become
-        history (a recovered failure, quadratus.outcome)."""
+    def _resolve_check_findings(self, spec, gates) -> None:
+        """Close each check finding this task names when the checks that
+        failed were rerun on this task's source and passed (Codex review of
+        1995d02: a repair whose policy selected a different gate must not
+        settle it). ``gates`` are the checks this task ran. The task that
+        left the failure keeps its record; its check facts become history
+        (a recovered failure, quadratus.outcome)."""
+        passed = set()
+        for gate in gates:
+            if gate.get("passed"):
+                passed |= set(_check_ids(gate.get("receipts") or [], passed=True))
         for finding in self.findings:
             if (finding["id"] not in self._current_resolves or finding["status"] != "open"
                     or finding.get("target")):
                 continue
-            finding.update(status="resolved", resolved_by=spec.task_id, reopened=None)
+            failed = list((finding.get("check") or {}).get("failed_checks") or ["check"])
+            missing = [c for c in failed if c not in passed]
+            if missing:
+                finding["last_attempt"] = (f"{spec.task_id}: its checks did not rerun {', '.join(missing)} "
+                                           "with a passing receipt")
+                continue
+            finding.update(status="resolved", resolved_by=spec.task_id, reopened=None,
+                           resolution=dict(checks=failed, gates=[g.get("command") for g in gates]))
             for outcome in self.task_outcomes:
                 if outcome.task_id == finding["task"] and self._check_findings_settled(outcome.task_id):
                     for fact in outcome.facts:
