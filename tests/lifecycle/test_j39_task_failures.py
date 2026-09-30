@@ -170,11 +170,10 @@ def test_a_cap_then_a_failure_is_the_same_breaker(tmp_path, monkeypatch):
     assert _task(replay, "t1")["closed_as"] == "turn_limited" and _task(replay, "t2")["closed_as"] == "failed"
 
 
-@pytest.mark.parametrize("kind", ["scope", "transport", "reply", "channel"])
+@pytest.mark.parametrize("kind", ["scope", "transport"])
 def test_what_the_harness_cannot_inspect_still_stops_the_run(tmp_path, monkeypatch, kind):
-    """The task-level path needs an inspected tree; without one the run stops.
-    The reply and channel cases reach the common close path (Codex review of
-    d80d9d3: a malformed WORKER on an uninspectable tree ran a second round)."""
+    """The task-level path needs an inspected tree; without one the run stops
+    at the upstream guard (unmeasurable scope, uninspected transport stop)."""
     import subprocess
 
     from quadratus import session as session_module
@@ -183,20 +182,35 @@ def test_what_the_harness_cannot_inspect_still_stops_the_run(tmp_path, monkeypat
         H.write(call, {"README.md": "# rewritten\n"})
         if kind == "transport":
             raise subprocess.TimeoutExpired(call.argv, 1)
-        if kind == "reply":
-            return 'WORKER {"errand":"code"}'
-        if kind == "channel":
-            return "CONSULT Sol: what should add return?"
         return 'Did it.\nCHANGED: ["README.md"]'
 
     uninspected = dict(inspected=False, changed=[], changed_lines=0, note="Inspection unavailable")
     monkeypatch.setattr(session_module.Session, "_inspect_partial_edits", lambda self, before: uninspected)
     monkeypatch.setattr(session_module.Session, "_assess_scope", lambda self, spec, task, before: None)
+    replay = H.run(tmp_path, monkeypatch, Script(lead=lead), files=FILES, max_tasks=3, record_complete=False)
+    assert not replay.result.completed
+    assert replay.result.error.startswith("PartialWorkStopped"), replay.result.error
+    assert _task(replay, "t1")["closed_as"] == "stopped:PartialWorkStopped"
+
+
+@pytest.mark.parametrize("kind", ["reply", "channel"])
+def test_a_failed_close_on_an_uninspectable_tree_stops_the_run(tmp_path, monkeypatch, kind):
+    """Codex review of d80d9d3: the common failure-close path itself. The lead
+    writes nothing and only the inspection helper is stubbed, so no upstream
+    guard fires; on the parent this ran a second orchestrator round."""
+    from quadratus import session as session_module
+
+    def lead(call, replay):
+        return 'WORKER {"errand":"code"}' if kind == "reply" else "CONSULT Sol: what should add return?"
+
+    uninspected = dict(inspected=False, changed=[], changed_lines=0, note="Project cannot be inspected")
+    monkeypatch.setattr(session_module.Session, "_inspect_partial_edits", lambda self, before: uninspected)
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_then_continue_then_done, lead=lead,
                                                  consultant=lambda call, replay: "The sum."),
                    files=FILES, max_tasks=3, record_complete=False)
     assert not replay.result.completed
     assert replay.result.error.startswith("PartialWorkStopped"), replay.result.error
+    assert "Project cannot be inspected" in replay.result.error
     assert len(replay.of("orchestrator")) == 1, "no second round on an uninspectable tree"
     assert _task(replay, "t1")["closed_as"] == "stopped:PartialWorkStopped"
     assert not replay.artifacts("task-failed")
