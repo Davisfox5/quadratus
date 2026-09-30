@@ -63,6 +63,8 @@ from .deptree import (
     DependencyTreeChanged,
     DependencyWatch,
 )
+from .design_evidence import MAX_SELECTOR_CHARS
+from .design_evidence import MAX_STEPS as MAX_CAPTURE_STEPS
 from .memory import PersistentMemory, TaskMemory, TaskSummary
 from .outcome import (
     PRECEDENCE,
@@ -99,6 +101,8 @@ from .task_kinds import (
 )
 from .task_kinds import route as route_kind
 from .taskmeta import (
+    MAX_PREFACE_LINES,
+    MAX_REQUEST_PREFACE_LINES,
     AmbiguousMetadata,
     TaskMetadata,
     lead_request,
@@ -487,11 +491,17 @@ class SessionConfig:
 
 
 _SCOPE_REQUEST = (
-    'After KIND, include one line: SCOPE: {"permitted_paths": ["relative/file.py"], '
+    'After KIND, include exactly one line: SCOPE: {"permitted_paths": ["relative/file.py"], '
     '"intended_result": "one concrete result", "acceptance": ["verifiable condition"], '
-    '"max_lines": 100}. Then describe the task. Name narrow project-relative files or '
-    'directories; no absolute paths, parent traversal or project-wide wildcard. '
-    'max_lines must be a positive integer no greater than 100. Decompose larger work. '
+    '"max_lines": ' + str(MAX_TASK_LINES) + '}. The line starts at the left margin with '
+    'SCOPE: in capitals and holds the whole JSON object; an indented, bulleted or fenced '
+    'SCOPE line is not read, and a second one is refused. Then describe the task in plain '
+    'text on the following lines: a reply with no description after its labels is refused. '
+    'Name narrow project-relative files or directories; no absolute paths, parent '
+    'traversal, backslashes, a leading ~, a .quadratus path, surrounding whitespace or a '
+    'project-wide wildcard. '
+    'max_lines must be a positive integer no greater than ' + str(MAX_TASK_LINES) + '. '
+    'Decompose larger work. '
     'For a task that only reviews or audits and must not change source, add '
     '"edits": "none" to SCOPE; its findings then go to separately scoped tasks. '
     'These bounds are measured after every editing call; an overrun stops the task '
@@ -507,7 +517,9 @@ _SCOPE_REQUEST = (
     'alternatives or thinking aloud; if you change your mind, rewrite the line. Give '
     'each function exactly one signature, and quote that signature verbatim in '
     'intended_result and acceptance. A declaration whose signatures disagree is '
-    'rejected and comes back for correction.'
+    'rejected and comes back for correction. You get one correction: a second '
+    'invalid declaration stops the run, and the correction must be a task, not '
+    'DONE, ASK or FETCH. Keep the declaration short (well under 20,000 bytes).'
 )
 
 #: What a UI task's SCOPE capture declares when the harness captures (Run 19:
@@ -517,10 +529,18 @@ _SCOPE_REQUEST = (
 _CAPTURE_SCOPE_REQUEST = (
     'A task that changes or reviews what users see adds "capture": {"path": "/page", '
     '"steps": [...]} to its SCOPE: the page the harness renders and the interaction steps '
-    'that reach the state showing the change. Each step is exactly {"action": "click", '
+    'that reach the state showing the change. The harness treats a task as one that '
+    'changes what users see when its KIND is frontend or any permitted path is under a '
+    'templates, static, components, pages, views, style or styles directory or ends in '
+    '.html, .css, .scss, .sass, .less, .jsx, .tsx, .vue or .svelte; such a task without a '
+    'capture is sent back. The capture object has exactly the keys path and steps. path '
+    'is a route on the preview origin starting with /, with no query string, spaces, '
+    'shell characters or parent segments. steps holds at most ' + str(MAX_CAPTURE_STEPS) + ' '
+    'steps. Each step is exactly {"action": "click", '
     '"selector": "<css selector>"}, {"action": "wait", "selector": "<css selector>"} or '
     '{"action": "file", "selector": "<file input selector>", "path": "<sample file>"}; no '
-    'other keys or shapes. A file step\'s path is project-relative and names either a '
+    'other keys or shapes, and a selector is at most ' + str(MAX_SELECTOR_CHARS) + ' characters. '
+    'A file step\'s path is project-relative and names either a '
     'non-hidden file already in the project (a committed sample such as '
     'tests/fixtures/sample.csv) or .quadratus/capture-fixtures/<task id>/<name> for a '
     'capture-only sample the lead will write; nothing hidden, absolute or outside the '
@@ -552,7 +572,10 @@ _ORIENT_REQUEST = (
     'reading, stated concretely enough to act on -- "app.py defines the Flask routes; '
     'csv and io are already imported at the top" beats "app.py is the main file". '
     f'Keep each under {_MAX_ORIENT_NOTE_CHARS} characters. Omit the section entirely '
-    'if you read nothing new. Do not investigate beyond what the task needed.'
+    'if you read nothing new. Do not investigate beyond what the task needed. MAP NOTES '
+    'is the last section of the reply: every line after it that contains a colon is read '
+    'as a note, so KIND, SCOPE, NEEDS, COVERS, RESOLVES and CONTINUES lines placed after '
+    'it are lost.'
 )
 
 _READ_BEFORE_YOU_EXPLORE = (
@@ -571,6 +594,8 @@ _READ_BEFORE_YOU_EXPLORE = (
 )
 
 _NEEDS_REQUEST = (
+    "Any line beginning NEEDS: is read as this declaration, so put that word at the start "
+    "of no other line; two NEEDS lines that disagree are refused with no correction. "
     'After KIND, optionally include NEEDS: ["execute", "patch", "direct-write"] '
     'with only the operations required for this task (or [] for none). '
     'execute means running commands; patch means producing edits the harness can '
@@ -658,7 +683,9 @@ _DESIGN_RENDER_SHOWS = (
     "a status line or loading indicator; where the result updates a region that is "
     "already showing, name the new state in the selector (an attribute or a row, e.g. "
     "[data-state=done] or #results tr). A final wait on something visible before the "
-    "steps is recorded as insufficient evidence. Each step must succeed, or the evidence is "
+    "steps is recorded as insufficient evidence. At most " + str(MAX_CAPTURE_STEPS) + " steps, "
+    "each selector at most " + str(MAX_SELECTOR_CHARS) + " characters; --file takes "
+    "SELECTOR=PATH with no [ in the selector. Each step must succeed, or the evidence is "
     "recorded as unverified with the failed step named. A page wider than the viewport "
     "is unverified too, and the check names the elements past its right edge. Steps "
     "need a local preview URL (localhost) or a page file in the project. "
@@ -682,13 +709,19 @@ _REQUIREMENTS_REQUEST = (
     "user interface, documentation, and any promise about working with what the "
     "product already does -- and every constraint it sets on what must NOT happen "
     "(for example read-only, no new dependencies, no saving). Then name your first "
-    "task as usual."
+    "task as usual, in the same reply, with its own COVERS line."
 )
 _COVERS_REQUEST = (
     "Include one line 'COVERS: R2, R5' naming the requirements this task delivers. "
     "The run is complete only when every requirement is covered by a finished task "
     "and an independent audit finds it met; DONE before that is sent back to you."
 )
+#: How many operator questions one decision may spend before it is judged to
+#: be interrogating rather than deciding. Three is generous: a decision that
+#: genuinely needs more operator input than that is a scoping conversation,
+#: which belongs in the interview, not the loop.
+_MAX_ASKS_PER_DECISION = 3
+
 _ASK_SPARINGLY = (
     "Ask the operator sparingly. Reply 'ASK: <one question>' only for a large-scale "
     "production decision that only they can make: scope, data safety, security, cost, "
@@ -696,17 +729,27 @@ _ASK_SPARINGLY = (
     "one of those, decide it yourself with a line 'DECIDE: R<n> - <the reading you "
     "chose and why>', preferring the reading that keeps existing behaviour working and "
     "satisfies every promise in the goal. Decisions are recorded as yours and the "
-    "audit checks the work against them."
+    "audit checks the work against them. A DECIDE line counts only for a requirement "
+    "the requirements review flagged AMBIGUOUS; any other is dropped. At most "
+    + str(_MAX_ASKS_PER_DECISION) + " ASKs per decision: more than that stops the run "
+    "as interrogating rather than deciding."
 )
 _DECIDE = re.compile(r"^\s*DECIDE:\s*(R\d+)\s*[-:—]\s*(.+?)\s*$", re.MULTILINE)
-_PARALLEL_REQUEST = (
-    "Independent tasks run in parallel. When two or three tasks change disjoint "
-    "files and none needs another's result, name them together: a line 'PARALLEL', "
-    "then each task as a complete block (KIND, SCOPE, COVERS and description), "
-    "blocks separated by a line '---'. Each SCOPE must list exact file paths, no "
-    "wildcards, and no file may appear in two blocks. Work that shares a file stays "
-    "one task at a time."
-)
+def _parallel_request(limit: int) -> str:
+    return (
+        f"Independent tasks run in parallel. When two to {limit} tasks change disjoint "
+        "files and none needs another's result, name them together: a line 'PARALLEL', "
+        "then each task as a complete block (KIND, SCOPE, COVERS and description), "
+        "blocks separated by a line '---'. Each SCOPE must list exact file paths, no "
+        "wildcards, and no file may appear in two blocks. Work that shares a file stays "
+        "one task at a time. A task that RESOLVES a finding, and a task the harness "
+        "captures, are named alone, never in a batch. A batch that breaks any of these "
+        "rules is not run in parallel: its first block runs alone and the rest are "
+        "dropped, so name them again next round."
+    )
+
+
+_PARALLEL_REQUEST = _parallel_request(3)
 _REQ_BLOCK = re.compile(r"^\s*REQUIREMENTS:\s*\n((?:\s*R\d+\s*[:.)-].*\n?)+)", re.MULTILINE)
 _REQ_LINE = re.compile(r"^\s*(R\d+)\s*[:.)-]\s*(.+?)\s*$", re.MULTILINE)
 _COVERS = re.compile(r"^\s*COVERS:\s*(.+?)\s*$", re.MULTILINE)
@@ -2847,8 +2890,8 @@ class Session:
                else ". No change to project files was detected after it stopped; the "
                     "continuation is handed the task's files as they are now")
             + ". This task is not done: name the remaining work as a new, smaller task "
-              f"whose description includes the line 'CONTINUES: {spec.task_id}', "
-              "and do not assume any of it is finished. Size max_lines for the remaining "
+              f"whose description includes the line 'CONTINUES: {spec.task_id}' on its own line "
+              "with nothing else on it, and do not assume any of it is finished. Size max_lines for the remaining "
               "work only, and count every test not yet written in full, including its "
               "setup (fixtures, stubs, fakes); if that setup is large, give it its own task."
             + (f" The lead's last words, which are narration and not a result: {said[:300]}"
@@ -3074,6 +3117,12 @@ class Session:
                 'status is passed, failed or insufficient_evidence; evidence must be nonempty. '
                 'Accept requires all criteria passed and no findings or limitations. '
                 'Missing evidence means insufficient_evidence. No fences or prose. '
+                'This JSON replaces the BLOCKING: lines asked for above: findings go in '
+                'blocking_findings. snapshot_hash echoes the hash below exactly. Each '
+                'criterion is copied verbatim from the list below, in the same order. A reject '
+                'must name a blocking finding or a failed criterion. Strict JSON: no duplicate '
+                'keys, no NaN or Infinity. A verdict that fails any of these opens a security '
+                'finding with no second try. '
                 f'\nSnapshot hash: {snapshot}\nAcceptance criteria: {json.dumps(acceptance)}'
             )
             with invocation(spec.task_id, "verifier"):
@@ -3174,6 +3223,28 @@ class Session:
         return (f"{spec.task_id} continued {continues} and failed the same way ({cause_after}: "
                 f"{' '.join(head(after))[:120]}) with no new content in the files it changed")
 
+    def _operator_limits_note(self) -> str:
+        """The operator's path limits and the repository policy's denied paths,
+        stated to the orchestrator: a declaration outside them was refused at
+        dispatch by a rule it had never been shown."""
+        lines = []
+        limit = self.config.default_scope
+        if limit is not None and self.config.allow_writes:
+            lines.append("Every permitted path must fall under the operator's limits: "
+                         + ", ".join(limit.permitted_paths) + ".")
+        policy = self.config.repository_policy
+        denied = []
+        try:
+            capability = policy.document["capability_policy"] if policy is not None else None
+            if capability:
+                denied = list(capability.get("deny_write") or [])
+                denied += [p for entry in capability.get("sensitive") or [] for p in entry.get("paths") or []]
+        except (AttributeError, KeyError, TypeError):
+            denied = []
+        if denied and self.config.allow_writes:
+            lines.append("The repository policy refuses writes under: " + ", ".join(denied[:20]) + ".")
+        return ("\n\n" + " ".join(lines)) if lines else ""
+
     def next_task(self) -> Optional[TaskSpec]:
         """Ask the orchestrator what to do next, given the ledger.
 
@@ -3208,13 +3279,21 @@ class Session:
                     "nothing else. " + _ASK_SPARINGLY
                     + f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}\n\n{_NEEDS_REQUEST}"
                     + ("\n\n" + (_COVERS_REQUEST if self.memory.ledger.requirements
-                                  else _REQUIREMENTS_REQUEST) if self.config.requirements_ledger else "")
-                    + ("\n\n" + _PARALLEL_REQUEST if self._parallel_enabled() else "")
+                                  else _REQUIREMENTS_REQUEST + " " + _COVERS_REQUEST)
+                       if self.config.requirements_ledger else "")
+                    + ("\n\n" + _parallel_request(self.config.max_parallel_tasks)
+                       if self._parallel_enabled() else "")
                     + (self._done_refusal or "")
                     + self._findings_prompt()
                     + ("\n\n" + _SCOPE_REQUEST if self.project and self.config.allow_writes else "")
-                    + ("\n\n" + _CAPTURE_SCOPE_REQUEST if self._capture_guidance() else "")
+                    + ("\n\n" + _CAPTURE_SCOPE_REQUEST
+                       + f" This task's id will be t{len(self.history) + 1}."
+                       if self._capture_guidance() else "")
+                    + self._operator_limits_note()
                     + self._survey_request()
+                    + ("\n\nA task identical to the one you named last round is refused and "
+                       "stops the run: the last close-out is your evidence, so name the next "
+                       "step or a narrower one." if self.history else "")
                     + ("\n\n" + _ORIENT_REQUEST
                        if self.project and self.config.codebase_map is not None else "")
                 ),
@@ -4446,7 +4525,9 @@ class Session:
             "with rendered evidence above. Reply with exactly one line per requirement and nothing "
             "else: 'R1: MET - <file path or test name that shows it>' or "
             "'R1: NOT MET - <what is missing or contradicts the goal>'. A MET without a cited "
-            "file or test is counted as not met."
+            "file or test is counted as not met. A citation resolves only as a project-relative "
+            "file path with an extension, or a test function named test_* defined in a file "
+            "whose name starts with test and ends in .py; other names do not resolve."
         )
         saved = self._active_spec
         self._active_spec = None
@@ -5364,6 +5445,11 @@ class Session:
         parts.append('To commission one worker, reply only WORKER followed by JSON: '
                      '{"errand":"code","instruction":"one bounded request",'
                      '"demanding":false,"write":false,"needs":[]}. '
+                     'errand is one of the menu names above (demanding is a boolean flag, not an '
+                     'errand); instruction is a non-empty string; write and demanding are booleans; '
+                     'needs is a list of strings. A WORKER reply that does not parse this way, a '
+                     'helper that nests another helper, or write:true without an edit grant fails '
+                     'this task. '
                      'needs states what the errand must be able to do: "patch" to change '
                      'files, "execute" to run commands, "direct-write" to write a file '
                      'the harness cannot patch, [] for an answer in text. Set write:true '
@@ -5394,8 +5480,15 @@ class Session:
         parts.append(
             "To read a filed artifact in full before working, reply with "
             "exactly 'FETCH: <artifact-id>' and nothing else -- you will get "
-            "the content and be asked again."
+            "the content and be asked again. A request (FETCH, CONSULT or WORKER) closes "
+            "the reply: at most " + str(MAX_REQUEST_PREFACE_LINES) + " lines of preface may "
+            "precede it, and a reply that carries a CHANGED line is a delivery, never a "
+            "request. There is no ASK channel for you: a reply beginning ASK:, or a request "
+            "line that does not parse, fails this task. Report a blocker in words instead."
         )
+        if lead is None:
+            parts.append("Consults are not available in this task; decide with your own judgment "
+                         "or commission a worker.")
         if lead is not None:
             consultables = [p for p in self.brain_trust if p != lead]
             names = ", ".join(
@@ -5470,6 +5563,7 @@ class Session:
             + self._revision_delivery()
             + (self._scope_headroom(spec) if self._writes() else "")
             + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
+            + _NO_REQUESTS_IN_FIX
         )
 
     def _revision_delivery(self) -> str:
@@ -5541,6 +5635,7 @@ class Session:
             "Fix them, or state precisely why the reviewer is wrong. Produce "
             "the complete revised work."
             + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
+            + _NO_REQUESTS_IN_FIX
         )
 
     def _run_integration_gate(self, lead: str, spec: TaskSpec, task: TaskMemory, *,
@@ -5584,7 +5679,9 @@ class Session:
                     f"Task: {spec.description}\n\n"
                     f"The project's own integration check failed after your "
                     f"work:\n{result.for_models()}\n\n"
-                    "Fix the failure. Produce the complete revised work.",
+                    "Fix the failure. Produce the complete revised work."
+                    + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
+                    + _NO_REQUESTS_IN_FIX,
                     role="gate-fix",
                 )
             except TurnLimitReached as exc:
@@ -5731,8 +5828,10 @@ class Session:
             "verbatim error; without those, treat it as unverified. State "
             "plainly whether it should be accepted, and what must change if "
             "not. Start each finding that must be fixed on its own line with "
-            "'BLOCKING:'; anything else in your reply is read as a note, not a "
-            "finding. Do not redo the work; verify it."
+            "'BLOCKING:' or 'UNRESOLVED:'. The words BLOCKING and UNRESOLVED in capitals "
+            "are read as findings wherever they appear, so in prose write them in lower "
+            "case; a line 'BLOCKING: none' is read as no finding. Do not redo the work; "
+            "verify it."
         )
 
     @_invocation_role("closeout")
@@ -5839,6 +5938,12 @@ class Session:
                    f"{files}; {checked}. Evidence: " + "; ".join(pointers))
         self._note(f"{spec.task_id}: close-out refused by {lead}; harness record kept")
         return summary, "No model-written decision record: the close-out was refused.", []
+
+
+_NO_REQUESTS_IN_FIX = (
+    "\nRequests are not served in this call: a FETCH, CONSULT or WORKER reply is filed as "
+    "your revision text, unserved. Finish with what you have."
+)
 
 
 def _revision_changed_delivery(already: str) -> str:
@@ -6021,8 +6126,8 @@ def _parse_consults(reply: str):
 _BLOCKED_REPORT_RULE = (
     "If you cannot read, edit or run something, say so with evidence: quote "
     "the exact command or tool call you attempted, its exit status, and the "
-    "verbatim error text. A blocked report without those three is rejected. "
-    "Never describe test output you did not see."
+    "verbatim error text. A blocked report without those three is read as unverified "
+    "by whoever checks the work. Never describe test output you did not see."
 )
 
 _WORKER_RECOVERY = (
@@ -6036,13 +6141,6 @@ _WORKER_RECOVERY = (
 )
 
 
-#: How many operator questions one decision may spend before it is judged to
-#: be interrogating rather than deciding. Three is generous: a decision that
-#: genuinely needs more operator input than that is a scoping conversation,
-#: which belongs in the interview, not the loop.
-_MAX_ASKS_PER_DECISION = 3
-
-
 #: Asks the orchestrator to label the task so :mod:`quadratus.task_kinds` can
 #: act on it. Kind and difficulty together are the routing decision: the few
 #: pinned kinds go where the evidence says, everything else rides the
@@ -6053,7 +6151,11 @@ _KIND_REQUEST = (
     "simple, standard, complex -- judge it by how many logical steps the task "
     "takes and what breaks if it is wrong. Most well-sized tasks are simple; "
     "reserve complex for genuinely hard reasoning. Then the task on the "
-    "following line. Omit the line if none fits."
+    "following line. Omit the line if none fits. The KIND line is read only within "
+    f"the first {MAX_PREFACE_LINES} lines of the reply; later it is prose and the task "
+    "is routed as general/simple. In those same lines no line may begin with ASK:, "
+    "FETCH:, CONSULT or WORKER, and no line may be the bare word DONE, because each is "
+    "read as that control verb rather than as your task."
 )
 
 

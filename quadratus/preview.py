@@ -480,13 +480,14 @@ def validate_capture(capture) -> dict:
         raise ValueError('SCOPE capture must be {"path": "/...", "steps": [...]}')
     path = _web_path(capture.get("path", "/"), "capture path")
     steps = capture.get("steps") or []
-    if not isinstance(steps, list) or len(steps) > 12:
-        raise ValueError("SCOPE capture steps must be a list of at most 12 steps")
+    from .design_evidence import MAX_SELECTOR_CHARS, MAX_STEPS
+    if not isinstance(steps, list) or len(steps) > MAX_STEPS:
+        raise ValueError(f"SCOPE capture steps must be a list of at most {MAX_STEPS} steps")
     out = []
     for step in steps:
         if (not isinstance(step, dict) or step.get("action") not in ("click", "wait", "file")
                 or not isinstance(step.get("selector"), str) or not step["selector"].strip()
-                or len(step["selector"]) > 300 or set(step) - {"action", "selector", "path"}
+                or len(step["selector"]) > MAX_SELECTOR_CHARS or set(step) - {"action", "selector", "path"}
                 or (step["action"] == "file") != isinstance(step.get("path"), str)):
             raise ValueError("SCOPE capture steps need action click, wait or file, a selector, "
                              "and a path for file steps only")
