@@ -86,8 +86,6 @@ from `6382cf2`.
 | Scope overrun | `TaskFailed("scope")` | the task fails, work preserved, the orchestrator re-plans with CONTINUES (2026-09-28: two live runs ended on the first such fault) | `failed`, below cap |
 | Unmeasurable scope (tree not inspectable) | `PartialWorkStopped` | stop, work preserved | integrity |
 | Lead channel did not converge (fetch or consult budget, malformed WORKER, request after the channel closed, unresolved request as a draft) | `TaskFailed("channel")` | the task fails, the run continues | `failed` |
-| Task scope invalid twice (orchestrator) | `RunStalled` after one correction | stop; the correction now carries the scope and capture rules in full (a6c9576 rerun stalled on a rule it was never shown) | operator |
-| Scope overrun or unmeasurable scope | `PartialWorkStopped` | stop, work preserved | above everything but refusal |
 | Task scope invalid twice (orchestrator) | `RunStalled` after one correction | stop; the correction now carries the scope and capture rules in full (a6c9576 rerun stalled on a rule it was never shown). Since the 2026-09-28 parity batch every reply rule the harness enforces is stated in the eliciting prompt, with the bounds quoted from the parser constants (`tests/test_prompt_rule_parity.py`) | operator |
 | Dependency tree changed or unavailable | `DependencyTreeChanged` / `…Unavailable` | stop at the next edge; latched | integrity |
 | CHANGED mismatch | non-terminal `unverified` fact on the task (`runtime.changed_report`) | recorded, run continues; the measured diff is what every check reads. A request line that fails to parse with no CHANGED line fails the task (`TaskFailed("reply")`), reply kept | none: not a stop since 2026-09-28 (phase-4 run on ea464cc) |
