@@ -59,7 +59,8 @@ _EXCEPTION_CLASS = {
 }
 
 #: ``stop_reason`` prefixes the session writes, to outcome class.
-_STOP_PREFIX = {"TurnLimitBreaker": "cap", "TaskFailureBreaker": "failed", "FindingsUnresolved": "unverified",
+_STOP_PREFIX = {"TurnLimitBreaker": "cap", "TaskFailureBreaker": "failed", "SurveyRepeatStop": "failed",
+                "SurveyAllowanceSpent": "budget", "FindingsUnresolved": "unverified",
                 "DesignUnverified": "unverified", "CompletionUnproven": "unverified"}
 
 

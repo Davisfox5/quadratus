@@ -478,6 +478,22 @@ Key design decisions already settled:
   ledger or a COVERS line the `CheckFailing` stop stands. Unverified design
   evidence is not routed this way yet: map G8 says only the task's own
   renders discharge it.
+- **A survey run continues through failures and reports them apart from
+  acceptance** (Davis, 2026-09-30; `SessionConfig.survey`, `quadratus
+  --survey-recovery N`). Synthesis of Davis's idea with Codex's and Claude's
+  answers on #39: the orchestrator gets no discretion over budget. The
+  operator sets a recovery allowance of N continuation or repair tasks in
+  advance and the harness spends it; the next repair past it is
+  `SurveyAllowanceSpent`. The two-unfinished breaker gives way to a
+  same-cause repeat stop (`SurveyRepeatStop`: a continuation that fails
+  the same way as its predecessor with nothing newly changed), so distinct
+  failures keep the run going. Every re-plan after an unfinished task or an
+  open finding must carry `HYPOTHESIS: <what the failure showed and what
+  changes>`, kept as an artifact and in `result.json`'s `survey` section
+  beside the harness's own record, never acted on. The acceptance verdict
+  is computed exactly as on an ordinary run; the survey section (unique
+  causes, recovered vs open, repeats, allowance spent, hypotheses) is
+  diagnostic data, not success.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

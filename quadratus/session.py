@@ -333,6 +333,25 @@ class TaskSpec:
             self.kind = TaskKind.SECURITY
 
 
+@dataclass(frozen=True)
+class SurveyConfig:
+    """A survey run: one run that continues through many failures and records
+    each, judged apart from acceptance (Davis, 2026-09-30; Codex and Claude
+    answers on #39).
+
+    The orchestrator never asks for more: the operator sets the allowance in
+    advance, the harness spends it. ``recovery_tasks`` is how many
+    continuation or repair tasks (CONTINUES or RESOLVES named after a
+    failure) may run; the next failure past it ends the run. The ordinary
+    two-unfinished breaker is replaced by a same-cause repeat stop: a
+    continuation that fails the same way as its predecessor with no new
+    evidence (the same cause and nothing newly changed) stops the run.
+    Every re-plan after a failure carries a ``HYPOTHESIS:`` line, recorded
+    beside the harness's own record and never acted on.
+    """
+    recovery_tasks: int = 6
+
+
 @dataclass
 class SessionConfig:
     project: Optional[Path] = None
@@ -378,6 +397,8 @@ class SessionConfig:
     #: How many fix rounds a failing integration gate buys the lead before
     #: the failure is carried into the record as an open problem.
     max_gate_fixes: int = 1
+    #: The survey run profile (SurveyConfig); None is an ordinary run.
+    survey: Optional["SurveyConfig"] = None
     #: A lead that stops at its turn limit hands its unfinished task back
     #: for re-planning. This many in a row are tolerated; one more ends the
     #: run cleanly, so a limit set too low cannot loop.
@@ -768,6 +789,30 @@ def _read_continues(spec):
     return match.group(1), replace(spec, description=description or spec.description)
 
 
+_HYPOTHESIS = re.compile(r"^\s*HYPOTHESIS:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _read_hypothesis(spec):
+    """Split a ``HYPOTHESIS: <text>`` line off a task (survey runs): what
+    the orchestrator inferred from the last failure and what it changes.
+    Returns (text or None, spec without the line)."""
+    match = _HYPOTHESIS.search(spec.description or "")
+    if not match:
+        return None, spec
+    description = _HYPOTHESIS.sub("", spec.description).strip()
+    return match.group(1), replace(spec, description=description or spec.description)
+
+
+_HYPOTHESIS_REQUEST = (
+    "This is a survey run. The previous task did not finish, or left a finding. Your "
+    "next task must carry one line 'HYPOTHESIS: <what that failure showed and what this "
+    "task does differently>'. It is recorded beside the harness's own record of the "
+    "failure and never acted on; a task without it is sent back. The recovery allowance "
+    "is the operator's: {left} continuation or repair task(s) remain, and a continuation "
+    "that fails the same way as its predecessor with nothing new changed stops the run."
+)
+
+
 def _handoff_note(record: dict) -> str:
     """What a capped call left, for the lead that continues it.
 
@@ -1025,6 +1070,9 @@ class Session:
         #: what each left: the same handoff a capped task gets.
         self.failed: List[str] = []
         self.failed_records: Dict[str, dict] = {}
+        #: Survey run bookkeeping (SessionConfig.survey): recovery tasks
+        #: spent, the hypotheses recorded, and repeats detected.
+        self.survey: dict = dict(recovery_used=0, hypotheses=[], repeats=[])
         #: The capped task the task now running continues, if any.
         self._continues: Optional[str] = None
         #: Each capped task's starting content for the files it changed, so
@@ -3046,6 +3094,44 @@ class Session:
             return
 
     # -- orchestration -------------------------------------------------------
+    def _survey_request(self) -> str:
+        """The HYPOTHESIS instruction, on a survey run after an unfinished
+        task or a task that left a finding."""
+        if self.config.survey is None or not self._survey_after_failure():
+            return ""
+        left = max(0, self.config.survey.recovery_tasks - self.survey["recovery_used"])
+        return "\n\n" + _HYPOTHESIS_REQUEST.format(left=left)
+
+    def _survey_after_failure(self) -> bool:
+        """Whether the last closed task was unfinished or left a finding."""
+        if not self.history:
+            return False
+        last = self.history[-1]
+        if getattr(last, "outcome", "closed") in ("turn_limited", "failed"):
+            return True
+        return any(f["task"] == last.task_id and f["status"] == "open" for f in self.findings)
+
+    def _survey_repeat(self, spec, continues, unfinished: str) -> Optional[str]:
+        """Why this unfinished continuation is a same-cause repeat of the task
+        it continues, or None: same cause (cap, or the failure's cause) and
+        nothing newly changed beyond what the predecessor changed."""
+        if not continues:
+            return None
+        def record(tid):
+            return self.turn_limited_records.get(tid) or self.failed_records.get(tid)
+        before, after = record(continues), record(spec.task_id)
+        if not before or not after:
+            return None
+        cause_before = before.get("cause") or "cap"
+        cause_after = after.get("cause") or "cap"
+        if cause_before != cause_after:
+            return None
+        new = set(after.get("changed") or []) - set(before.get("changed") or [])
+        if new:
+            return None
+        return (f"{spec.task_id} continued {continues} and failed the same way ({cause_after}) with "
+                f"nothing newly changed")
+
     def next_task(self) -> Optional[TaskSpec]:
         """Ask the orchestrator what to do next, given the ledger.
 
@@ -3086,6 +3172,7 @@ class Session:
                     + self._findings_prompt()
                     + ("\n\n" + _SCOPE_REQUEST if self.project and self.config.allow_writes else "")
                     + ("\n\n" + _CAPTURE_SCOPE_REQUEST if self._capture_guidance() else "")
+                    + self._survey_request()
                     + ("\n\n" + _ORIENT_REQUEST
                        if self.project and self.config.codebase_map is not None else "")
                 ),
@@ -3413,6 +3500,20 @@ class Session:
                 f"[{spec.kind}/{spec.complexity}]"
             )
             continues, spec = _read_continues(spec)
+            hypothesis, spec = _read_hypothesis(spec)
+            if self.config.survey is not None and self._survey_after_failure() and not hypothesis:
+                self._covers_corrections += 1
+                if self._covers_corrections > self.config.max_requirement_reopens:
+                    raise RunStalled("the orchestrator kept naming tasks without a HYPOTHESIS line after a failure")
+                self._done_refusal = ("\n\n--- TASK SENT BACK ---\nThe previous task did not finish or left a "
+                                      "finding; this task needs a 'HYPOTHESIS: <...>' line. Name the task again.")
+                previous_description = None
+                continue
+            if hypothesis is not None:
+                self.survey["hypotheses"].append(dict(task=spec.task_id, after=self.history[-1].task_id
+                                                      if self.history else None, text=hypothesis[:600]))
+                self.store.put(hypothesis, kind="hypothesis", author=self.seat().key)
+                self._note(f"hypothesis for {spec.task_id}: {hypothesis[:160]}")
             covers, spec = _read_covers(spec)
             problem = self._covers_problem(covers)
             if problem:
@@ -3446,6 +3547,14 @@ class Session:
                 continue
             self._current_covers, self._current_resolves = list(covers), list(resolves or [])
             self._resolution_candidate = None
+            if self.config.survey is not None and (continues or resolves):
+                if self.survey["recovery_used"] >= self.config.survey.recovery_tasks:
+                    self._stop_with("budget", (f"SurveyAllowanceSpent: the recovery allowance of "
+                                               f"{self.config.survey.recovery_tasks} task(s) is spent and "
+                                               f"{spec.task_id} would be another. Work preserved."))
+                    self._note("the survey recovery allowance is spent; stopping before the next repair")
+                    break
+                self.survey["recovery_used"] += 1
             checks_before, open_before = len(self.checks), len(self.open_findings)
             self._continues = continues
             try:
@@ -3470,6 +3579,18 @@ class Session:
                            + ("stopped at the lead's turn limit" if unfinished == "turn_limited"
                               else "failed on its own rules")
                            + "; its work is kept and the orchestrator re-plans")
+                if self.config.survey is not None:
+                    # A survey run replaces the count with a same-cause repeat
+                    # check: distinct failures keep going, a repeat stops.
+                    repeat = self._survey_repeat(spec, continues, unfinished)
+                    if repeat:
+                        self.survey["repeats"].append(repeat)
+                        self._stop_with("failed" if unfinished == "failed" else "cap",
+                                        f"SurveyRepeatStop: {repeat}; stopped instead of re-planning again. "
+                                        "Work preserved.")
+                        self._note(f"same-cause repeat: {repeat}; stopping")
+                        break
+                    continue
                 if self._turn_limited_in_a_row > self.config.max_turn_limited_in_a_row:
                     # Recorded, not raised: the stop is the breaker working,
                     # and every capped task's edits stay in place. But it is

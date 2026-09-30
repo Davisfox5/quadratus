@@ -861,6 +861,41 @@
           "tests/lifecycle/test_check_debt.py::test_a_failed_check_becomes_a_finding_and_a_repair_task_resolves_it"
         ]
       }
+    },
+    {
+      "id": "J41",
+      "tests": [
+        "tests/lifecycle/test_survey_run.py::test_distinct_failures_keep_the_run_going_and_are_all_recorded",
+        "tests/lifecycle/test_survey_run.py::test_a_missing_hypothesis_after_a_failure_is_sent_back_once",
+        "tests/lifecycle/test_survey_run.py::test_a_same_cause_repeat_with_nothing_new_changed_stops_the_run",
+        "tests/lifecycle/test_survey_run.py::test_the_allowance_stops_the_run_before_one_repair_too_many",
+        "tests/lifecycle/test_survey_run.py::test_an_ordinary_run_has_no_survey_section_and_keeps_its_breaker"
+      ],
+      "required_obligations": [
+        "calls",
+        "outcome",
+        "report",
+        "partial_work"
+      ],
+      "coverage": {
+        "calls": [
+          "tests/lifecycle/test_survey_run.py::test_distinct_failures_keep_the_run_going_and_are_all_recorded",
+          "tests/lifecycle/test_survey_run.py::test_a_missing_hypothesis_after_a_failure_is_sent_back_once"
+        ],
+        "outcome": [
+          "tests/lifecycle/test_survey_run.py::test_distinct_failures_keep_the_run_going_and_are_all_recorded",
+          "tests/lifecycle/test_survey_run.py::test_a_missing_hypothesis_after_a_failure_is_sent_back_once",
+          "tests/lifecycle/test_survey_run.py::test_a_same_cause_repeat_with_nothing_new_changed_stops_the_run",
+          "tests/lifecycle/test_survey_run.py::test_the_allowance_stops_the_run_before_one_repair_too_many",
+          "tests/lifecycle/test_survey_run.py::test_an_ordinary_run_has_no_survey_section_and_keeps_its_breaker"
+        ],
+        "report": [
+          "tests/lifecycle/test_survey_run.py::test_distinct_failures_keep_the_run_going_and_are_all_recorded"
+        ],
+        "partial_work": [
+          "tests/lifecycle/test_survey_run.py::test_distinct_failures_keep_the_run_going_and_are_all_recorded"
+        ]
+      }
     }
   ]
 }

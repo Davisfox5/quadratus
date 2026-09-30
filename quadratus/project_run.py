@@ -55,7 +55,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 progress=None, ask_operator=None, plan_gate=None,
                 default_scope=None, run_limits=None, forbid=(), declared_paths=(),
                 security_verdict_json=False, gates=None, extra_checks=(), capture_profile=None,
-                readiness=None):
+                readiness=None, survey=None):
     """Keep both successful and interrupted runs next to their source tree.
 
     ``extra_checks`` are further operator checks, each an argv list (or a
@@ -111,7 +111,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     run_limits=run_limits, policy=policy, gates=gates,
                     security_verdict_json=security_verdict_json,
                     fleet_type=Fleet, session_factory=new_session, extras=extras,
-                    capture_profile=profile, readiness=probes)
+                    capture_profile=profile, readiness=probes, survey=survey)
 
 
 #: Flags that change only how much a runner prints, never what it runs.
@@ -227,7 +227,7 @@ def _merge_extras(gates, extras):
 def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
-         extras=(), capture_profile=None, readiness=()):
+         extras=(), capture_profile=None, readiness=(), survey=None):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
@@ -263,6 +263,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         security_verdict_json=security_verdict_json,
         capture_profile=capture_profile,
         readiness_probes=tuple(readiness or ()),
+        survey=survey,
     )
     preview = policy.resolve(default_scope.permitted_paths if default_scope else (),
                              writing=allow_writes) if policy else None
@@ -385,6 +386,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'dependency_identity': (getattr(getattr(session, 'dependency_watch', None), 'record', None)
                                 if session else None),
         'workflow': _workflow_record(session, completed, error),
+        'survey': _survey_record(session, completed),
         'parallel_batches': list(getattr(session, 'parallel_batches', []) or []) if session else [],
         'trace': {'calls': len(traces),
                   'transcripts_found': sum(1 for t in traces if t.get('tool_calls') is not None),
@@ -407,6 +409,35 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     (run_dir / 'findings.json').write_text(
         json.dumps(list(getattr(session, 'findings', []) or []) if session else [], indent=2), encoding='utf-8')
     return ProjectResult(completed, report, run_dir, diff, error)
+
+
+def _survey_record(session, completed):
+    """The survey section: what a run that continues through failures
+    collected, reported apart from acceptance (SessionConfig.survey). None
+    on an ordinary run."""
+    if session is None or getattr(session.config, "survey", None) is None:
+        return None
+    outcomes = list(getattr(session, "task_outcomes", []) or [])
+    failures = []
+    for outcome in outcomes:
+        for fact in outcome.facts:
+            if fact.kind in ("failed", "cap") or (fact.kind == "product" and fact.stage == "checks"):
+                cause = (fact.detail.split(":", 1)[0] if fact.kind == "failed" else fact.kind)
+                failures.append(dict(task=outcome.task_id, kind=fact.kind, cause=cause,
+                                     detail=fact.detail[:200], recovered=bool(fact.recovered)))
+    findings = list(getattr(session, "findings", []) or [])
+    return dict(
+        recovery_tasks=session.config.survey.recovery_tasks,
+        recovery_used=session.survey.get("recovery_used", 0),
+        failures=failures,
+        unique_causes=sorted({f["cause"] for f in failures}),
+        recovered=[f["task"] for f in failures if f["recovered"]],
+        open=[f["task"] for f in failures if not f["recovered"]],
+        findings=[dict(id=f["id"], kind=f.get("kind"), status=f["status"], task=f["task"]) for f in findings],
+        repeats=list(session.survey.get("repeats", [])),
+        hypotheses=list(session.survey.get("hypotheses", [])),
+        completed=completed,
+    )
 
 
 def _requirements_record(session):
