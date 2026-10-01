@@ -459,6 +459,17 @@ Key design decisions already settled:
   failed requests. Deterministic and dumb by design — it produces evidence,
   reviewers produce judgement.
 
+## How development is coordinated
+
+`docs/DEVELOPMENT_PROCESS.md` carries the short rules adopted on
+2026-10-01 from the plan published on #35; `docs/dev-record.json` is the one
+shared development record (candidate SHA, gate, each task's scope, author,
+independent reviewer, delivery and review SHAs, blockers), edited only
+through `tools/dev_record.py` (`claim`, `deliver`, `review`, `receipt`,
+`ready`, `render`). Claude coordinates and integrates; Codex is the root
+reviewer and owns local execution and live runs. The acceptance manifest and
+the workflow scorecard keep their own evidence.
+
 ## Model routing: this repo is build-time tooling
 
 `df-model-routing` audits **shipped products** against the Haiku/Sonnet/Opus

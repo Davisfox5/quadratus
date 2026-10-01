@@ -1,0 +1,166 @@
+{
+  "version": 1,
+  "note": "One shared development record (plan on #35, comment 5922888762). Edited through tools/dev_record.py; the acceptance manifest and workflow scorecard keep their own evidence, referenced here, never copied.",
+  "candidate": {
+    "pr": 42,
+    "sha": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+    "gate": "merge #42 to main, then the five-run series (docs/DIRECTION.md finish line)",
+    "required_receipts": [
+      "ci",
+      "acceptance",
+      "review"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "T-direct-tier",
+      "purpose": "direct execution tier (#42)",
+      "base": "155d524",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/contract.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "integrated",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "5cdd1e5822d24017c4e1c7831303d89762846b05",
+        "at": "2026-09-30T15:13:00Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "5cdd1e5822d24017c4e1c7831303d89762846b05",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/42#issuecomment-5914126205",
+          "scope": [
+            "quadratus/session.py"
+          ],
+          "at": "2026-09-30T15:17:00Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [
+        "live confirmation passed: run 20261001T001902Z-537183f7 (#35 comment 5922171568)"
+      ],
+      "integrated": {
+        "sha": "5cdd1e5822d24017c4e1c7831303d89762846b05",
+        "candidate": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+        "at": "2026-10-01T00:40:00Z"
+      }
+    },
+    {
+      "id": "T-explicit-wording",
+      "purpose": "explicit-list closure wording (#45)",
+      "base": "5cdd1e5",
+      "owns": [
+        "quadratus/session.py"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "integrated",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "a4edac4",
+        "at": "2026-10-01T00:25:00Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "a4edac4",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/42#issuecomment-5922303618",
+          "scope": [
+            "quadratus/session.py"
+          ],
+          "at": "2026-10-01T00:38:00Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [],
+      "integrated": {
+        "sha": "a4edac4",
+        "candidate": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+        "at": "2026-10-01T00:40:00Z"
+      }
+    },
+    {
+      "id": "T-jev-decider",
+      "purpose": "Jev routing decider (#44)",
+      "base": "main",
+      "owns": [
+        "quadratus/decisions.py",
+        "docs/decisions-api.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "385ee419bc31c23db513184f84db852eb80a00cf",
+        "at": "2026-10-01T01:04:00Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "Vercel free tier excludes Jev (probe 2026-09-30): a paid top-up or a ts_ key is needed before the comparison run"
+      ]
+    },
+    {
+      "id": "T-jev-live-run",
+      "purpose": "one live run with --decider jev on candidate 248ce9f (branch claude/direct-tier-jev)",
+      "base": "248ce9f4505cec962481a19e36c7a6fd565073ef",
+      "owns": [
+        "live-run:jev-comparison"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "blocked",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [
+        {
+          "requirement": "a Jev key with credit",
+          "failure": "decision call returns 403 on the free tier",
+          "evidence": "docs/decisions-api.md (probe 2026-09-30)",
+          "classification": "reachable",
+          "by": "davis",
+          "at": "2026-10-01T01:04:00Z"
+        }
+      ],
+      "decisions": []
+    }
+  ],
+  "receipts": [
+    {
+      "kind": "ci",
+      "sha": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+      "state": "unproven",
+      "evidence": "CI queued on push 2026-10-01T00:40Z; confirm on the Actions tab",
+      "at": "2026-10-01T00:40:00Z"
+    },
+    {
+      "kind": "acceptance",
+      "sha": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+      "state": "passed",
+      "evidence": "tests/test_workflow_acceptance.py in CI; docs/workflow-acceptance-manifest.json",
+      "at": "2026-10-01T00:40:00Z"
+    },
+    {
+      "kind": "review",
+      "sha": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+      "state": "passed",
+      "evidence": "Codex review of 5cdd1e5 (#42 comment 5922197548); #45 merged with both tests",
+      "at": "2026-10-01T00:40:00Z"
+    },
+    {
+      "kind": "ci",
+      "sha": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+      "state": "passed",
+      "evidence": "GitHub Actions test (3.11, 3.12) success on 312c356",
+      "at": "2026-10-01T01:33:14Z"
+    }
+  ]
+}
