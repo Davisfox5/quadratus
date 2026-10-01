@@ -282,13 +282,18 @@
       ],
       "author": "grok",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-01T02:41:54Z",
       "acknowledged": true,
-      "delivery": null,
+      "delivery": {
+        "sha": "2cd7d86b115b3b07d67503139abf3ea162dd8f3b",
+        "at": "2026-10-01T03:00:14Z"
+      },
       "reviews": [],
       "blockers": [],
-      "decisions": [],
+      "decisions": [
+        "claude: delivered as draft PR #48 on base f96e0c8: docs/jev-samples/PACKET.md and tests/fixtures/jev-samples/samples.json only (verified against the PR file list); ten tasks, three development, seven held-out; favicon row marked score=false; answer sets are proposals until Codex's review freezes them"
+      ],
       "acknowledged_at": "2026-10-01T02:59:28Z"
     },
     {
