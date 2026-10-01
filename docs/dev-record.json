@@ -221,13 +221,17 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-01T02:41:54Z",
-      "acknowledged": false,
-      "delivery": null,
+      "acknowledged": true,
+      "delivery": {
+        "sha": "93941b56005688c6245f07cd0d03e678c3413fab",
+        "at": "2026-10-01T02:53:19Z"
+      },
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [],
+      "acknowledged_at": "2026-10-01T02:53:18Z"
     },
     {
       "id": "T-grok-samples",
