@@ -104,7 +104,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "reviewed",
+      "state": "integrated",
       "acknowledged": true,
       "delivery": {
         "sha": "b2e56171afe22e712adbc96d146f1f2410a9e26f",
@@ -128,7 +128,12 @@
         "Vercel free tier excludes Jev (probe 2026-09-30): a paid top-up or a ts_ key is needed before the comparison run",
         "claude: Codex's #44 review (P1 shared budget bypass, three P2) fixed in 9119013; boundary tests on the orchestrated path in tests/lifecycle/test_decider.py; Codex's reproducer tests/lifecycle/test_codex_jev_budget.py lives on the candidate only because it needs the explicit-task entry",
         "claude: backlog from the live run: the choice question sends bare label names with null criteria, so Jev classified a four-file favicon task (route + SVG + template + test) as backend; give each kind and difficulty label a one-line criterion before any routing-quality claim"
-      ]
+      ],
+      "integrated": {
+        "sha": "b2e56171afe22e712adbc96d146f1f2410a9e26f",
+        "candidate": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+        "at": "2026-10-01T02:41:54Z"
+      }
     },
     {
       "id": "T-jev-live-run",
@@ -139,7 +144,7 @@
       ],
       "author": "codex",
       "reviewer": "claude",
-      "state": "reviewed",
+      "state": "integrated",
       "acknowledged": true,
       "delivery": {
         "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
@@ -178,7 +183,12 @@
         "claude: run 20261001T022457Z-6602cd28 started on f96e0c8 (#35 comment 5923488989); live Jev decisions kind=backend (0.78, previously stated frontend) and difficulty=simple (0.63), 1,310 in / 217 out tokens, 0.588 s",
         "claude: run 20261001T022457Z-6602cd28 PASSED with fresh independent grade: Jev answered kind=backend (0.78) and difficulty=simple (0.63), no refusal; lead stayed grok:default so routing did not change; overhead 1,527 tokens, 0.639 s, about $0.000055; whole run 6 calls, 326,126 tokens, 150.3 s. Integration established; usefulness and savings not"
       ],
-      "acknowledged_at": "2026-10-01T02:26:21Z"
+      "acknowledged_at": "2026-10-01T02:26:21Z",
+      "integrated": {
+        "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+        "candidate": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+        "at": "2026-10-01T02:41:54Z"
+      }
     },
     {
       "id": "T-grok-comparison",
@@ -191,6 +201,64 @@
       "reviewer": "claude",
       "state": "claimed",
       "claimed_at": "2026-10-01T02:09:22Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
+    },
+    {
+      "id": "T-jev-labels",
+      "purpose": "explicit definitions and examples for every task.kind and task.difficulty answer, a stated tie-break for mixed work, one definition source for the Jev question and the docs, version pinned in evidence; no new categories, no confidence cutoff, routing and admission unchanged (#35 comment 5923633181)",
+      "base": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+      "owns": [
+        "quadratus/decision_labels.py",
+        "quadratus/decisions.py",
+        "quadratus/session.py:_route_with_decider",
+        "docs/decisions-api.md",
+        "tests/test_decisions.py",
+        "tests/lifecycle/test_decider.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-01T02:41:54Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
+    },
+    {
+      "id": "T-grok-samples",
+      "purpose": "about ten executable sample tasks from repository work across rote/simple/standard/complex and mixed cases, with acceptance checks, permitted paths, capabilities, defensible kind/difficulty answer sets and rule-default versus alternative leads; development and held-out cases kept distinct; answer sets frozen before any Jev call (#35 comment 5923633181)",
+      "base": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+      "owns": [
+        "docs/jev-samples/",
+        "tests/fixtures/jev-samples/"
+      ],
+      "author": "grok",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-01T02:41:54Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
+    },
+    {
+      "id": "T-codex-harness",
+      "purpose": "reproducible offline experiment harness and comparison packet: versions, hashes, requests/answers, default and selected lead, call ledger, grade; a bounded classification/comparison proposal with limits, repetition count and stop rules for Davis (#35 comment 5923633181)",
+      "base": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+      "owns": [
+        "tools/jev_experiment/",
+        "docs/jev-experiment-plan.md"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "claimed",
+      "claimed_at": "2026-10-01T02:41:54Z",
       "acknowledged": false,
       "delivery": null,
       "reviews": [],
