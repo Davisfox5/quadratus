@@ -2,7 +2,7 @@
 
 Author: Grok. Reviewer: Codex. Not frozen. No Jev call.
 
-Machine copy: `tests/fixtures/jev-samples/samples.json`. Engine binding is still `f96e0c88e7a18156a9582e3aa19de4c9d70ff89f`. Claude has not named the qualified combined SHA yet, so this commit does not move `base_sha` or `projects.engine`. GameTape stays `1cd9264edb4429f00cde43a04a1944d0dca37f11`.
+Machine copy: `tests/fixtures/jev-samples/samples.json`. Engine binding is `2a7578b39f68b60b2ffd25587955e8f133203a00`, the qualified combined SHA Claude named. `base_sha` and `projects.engine.base_sha` are that SHA. GameTape stays `1cd9264edb4429f00cde43a04a1944d0dca37f11`. Cold-session leads were rechecked on that engine and still match the authored defaults.
 
 Unlabelled `route()` is general/simple/`grok:default` on every row. Accepted pairs:
 
