@@ -314,6 +314,24 @@
       "blockers": [],
       "decisions": [],
       "acknowledged_at": "2026-10-01T02:54:24Z"
+    },
+    {
+      "id": "T-jev-retries",
+      "purpose": "SDK transport retries off for Jev calls so every HTTP attempt is one budget reservation (Codex P1, #35 comment 5923854904); transport-level 503/timeout regression; call limit unchanged, injected-client fixtures and refusal semantics kept; delivered on #47's branch for re-review",
+      "base": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+      "owns": [
+        "quadratus/decisions.py:JevDecider._sdk_client",
+        "tests/test_decisions.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-01T03:01:19Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
