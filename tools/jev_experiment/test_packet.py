@@ -134,3 +134,29 @@ def test_long_input_cannot_be_silently_truncated(sample):
     sample["tasks"][0]["task_text"] = "a" * 8001
     with pytest.raises(ValueError, match="context slice"):
         P.prepare(sample, ENGINE)
+
+
+def test_project_refs_require_explicit_repository_and_commit(sample, tmp_path):
+    import subprocess
+    project = tmp_path / "project"
+    project.mkdir()
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    (project / "app.py").write_text("print('baseline')\n")
+    subprocess.run(["git", "-C", str(project), "add", "app.py"], check=True)
+    subprocess.run(["git", "-C", str(project), "-c", "user.name=Fixture", "-c",
+                    "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], check=True)
+    base = P.git(project, "rev-parse", "HEAD")
+    sample["projects"] = {"game": {"base_sha": base}}
+    sample["tasks"][0]["project"] = "game"
+    sample["tasks"][0]["source_refs"] = [{"path": "app.py"}]
+    with pytest.raises(ValueError, match="explicit root"):
+        P.prepare(sample, ENGINE)
+    # Dirty checkout is deliberately not the baseline; immutable Git bytes are.
+    (project / "app.py").write_text("changed checkout\n")
+    frozen = P.prepare(sample, ENGINE, {"game": project})
+    identity = frozen["content"]["source_projects"]["game"]
+    assert identity["base_sha"] == base
+    assert identity["files"]["app.py"]["git_blob"] == P.git(project, "rev-parse", base + ":app.py")
+    sample["tasks"][0]["source_refs"] = [{"path": "absent.py"}]
+    with pytest.raises(ValueError, match="source reference missing"):
+        P.prepare(sample, ENGINE, {"game": project})

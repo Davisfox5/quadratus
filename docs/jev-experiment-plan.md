@@ -15,7 +15,9 @@ quality and cost of actual assignments.
 - One exact independently reviewed candidate with all required CI checks passing.
   The label-definition scope at 93941b56005688c6245f07cd0d03e678c3413fab has scoped
   clearance. It is not a launch-qualified combined candidate.
-- Resolve the SDK transport-retry finding on PR35 comment5923854904. Actual
+- The SDK transport-retry finding on PR35 comment5923854904 is corrected and
+  independently cleared on5844fd50394a5094d0fbbb07c7469821cf2399b1 (73 frozen tests).
+  Preserve this fix in the combined candidate. Actual
   typesafe-sdk0.7.0 retried synthetic503 twice under one budget reservation. The
   next experiment requires zero hidden retries and an offline transport regression.
 - Review approximately ten Grok-authored tasks on sample base
@@ -46,12 +48,22 @@ live availability must match; otherwise stop rather than silently choose a new a
 
 ```sh
 python tools/jev_experiment/packet.py prepare --engine /absolute/candidate \
-  --packet /absolute/packet.json --out /absolute/new-freeze.json
+  --packet /absolute/packet.json --project gametape=/absolute/gametape-repo \
+  --out /absolute/new-freeze.json
 python tools/jev_experiment/packet.py score --engine /absolute/candidate \
   --freeze /absolute/new-freeze.json --observations /absolute/observations.json \
   --out /absolute/new-score.json
 python -m pytest -q tools/jev_experiment/test_packet.py
 ```
+
+For mixed repositories, the packet declares `projects: {engine: {base_sha: ...},
+gametape: {base_sha: ...}}` and each task declares its `project` (default `engine`).
+Each source reference uses that project unless it explicitly overrides `project`.
+The engine root comes from `--engine`; all other roots must be supplied with
+`--project ID=/absolute/repo`. Full Git baseline trees and blob hashes are frozen
+separately from the routing engine identity. Dirty working-tree files are not
+baseline inputs: execution must materialize the frozen commit, apply only declared
+fixtures, and independently verify the actual starting hashes before launch.
 
 Outputs are exclusive-create. Inputs with injected routing metadata are rejected.
 The immutable freeze includes the author's proposed default and the observed

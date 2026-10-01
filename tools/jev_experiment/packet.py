@@ -65,11 +65,35 @@ def bind_engine(root):
     return session
 
 
-def validate(packet, engine):
+def project_sources(packet, engine, supplied=None):
+    roots = {"engine": engine.resolve(), **(supplied or {})}
+    projects = packet.get("projects", {"engine": {"base_sha": packet["base_sha"]}})
+    identities = {}
+    for name, entry in projects.items():
+        if name not in roots or not re.fullmatch(r"[0-9a-f]{40}", entry.get("base_sha", "")):
+            raise ValueError(f"project {name}: explicit root and full base SHA required")
+        root, base = Path(roots[name]).resolve(), entry["base_sha"]
+        raw = subprocess.check_output(["git", "-C", str(root), "ls-tree", "-rz", "--full-tree", base])
+        files = {}
+        for record in raw.split(b"\0"):
+            if not record:
+                continue
+            info, path = record.split(b"\t", 1)
+            mode, kind, blob = info.decode().split()
+            if kind != "blob":
+                raise ValueError("sample baselines with submodules are unsupported")
+            files[path.decode()] = {"mode": mode, "git_blob": blob}
+        identities[name] = {"base_sha": base, "tree": git(root, "rev-parse", base + "^{tree}"),
+                            "files": files, "digest": digest(files)}
+    return roots, identities
+
+
+def validate(packet, engine, projects=None):
     from quadratus.session import Complexity
     from quadratus.task_kinds import KNOWN_NEEDS, ROUTING
     if packet.get("version") != 1 or not re.fullmatch(r"[0-9a-f]{40}", packet.get("base_sha", "")):
         raise ValueError("version 1 and full base SHA required")
+    _, identities = project_sources(packet, engine, projects)
     ids = set()
     if not packet.get("tasks"):
         raise ValueError("empty sample")
@@ -103,8 +127,9 @@ def validate(packet, engine):
             raise ValueError(f"{tid}: missing references/checks/rationale")
         for ref in task["source_refs"]:
             safe_relative(ref["path"])
-            # Verify the reference at the sample's immutable base, not HEAD.
-            git(engine, "cat-file", "-e", packet["base_sha"] + ":" + ref["path"])
+            project = ref.get("project", task.get("project", "engine"))
+            if project not in identities or ref["path"] not in identities[project]["files"]:
+                raise ValueError(f"{tid}: source reference missing in project {project}: {ref['path']}")
         for check in task["checks"]:
             if check["status"] not in {"existing", "proposed"} or not check["argv"]:
                 raise ValueError(f"{tid}: invalid check")
@@ -162,9 +187,10 @@ def route(task, engine, answers=None):
                 "vendor_load_after": dict(s._leads_by_vendor)}
 
 
-def prepare(packet, engine):
+def prepare(packet, engine, projects=None):
     bind_engine(engine)
-    validate(packet, engine)
+    validate(packet, engine, projects)
+    _, source_projects = project_sources(packet, engine, projects)
     identity = engine_identity(engine)
     rows = []
     for task in packet["tasks"]:
@@ -180,7 +206,7 @@ def prepare(packet, engine):
                      "author_default_matches": task["expected_default_lead"] == default["lead"],
                      "proposed_checks": sum(c["status"] == "proposed" for c in task["checks"])})
     content = {"format": 1, "packet": packet, "packet_digest": digest(packet), "engine": identity,
-               "python": sys.version, "routing_state": {"rotation": 0, "vendor_history": {},
+               "source_projects": source_projects, "python": sys.version, "routing_state": {"rotation": 0, "vendor_history": {},
                "availability": "all configured seats assumed available", "session": "fresh per arm/task",
                "tier": "normal; dispatch/admission and code execution not exercised"},
                "rows": rows, "provider_calls": 0, "authorization": "offline preparation only",
@@ -233,7 +259,8 @@ def score(frozen, observations, engine, repeats=3):
     return {"freeze_digest": frozen["freeze_digest"], "rows": results, "missing": missing,
             "complete": not missing, "counts_by_split": {
                 split: {"observed": sum(r["split"] == split for r in results),
-                        "acceptable": sum(r["split"] == split and r["acceptable"] for r in results)}
+                        "acceptable": sum(r["split"] == split and r["acceptable"] for r in results),
+                        "refused": sum(r["split"] == split and bool(r["refusal"]) for r in results)}
                 for split in ("development", "held_out")},
             "conclusion_boundary": "Label consistency and actual offline lead changes only; no task quality or savings inference"}
 
@@ -249,13 +276,20 @@ def main():
     p.add_argument("command", choices=["prepare", "score"])
     p.add_argument("--engine", type=Path, required=True)
     p.add_argument("--packet", type=Path)
+    p.add_argument("--project", action="append", default=[], metavar="ID=/absolute/repo")
     p.add_argument("--freeze", type=Path)
     p.add_argument("--observations", type=Path)
     p.add_argument("--out", type=Path, required=True)
     args = p.parse_args()
     bind_engine(args.engine)
     if args.command == "prepare":
-        result = prepare(json.loads(args.packet.read_text()), args.engine)
+        projects = {}
+        for value in args.project:
+            name, sep, path = value.partition("=")
+            if not sep or name == "engine" or name in projects or not Path(path).is_absolute():
+                p.error("projects need unique IDs and absolute roots; engine uses --engine")
+            projects[name] = Path(path)
+        result = prepare(json.loads(args.packet.read_text()), args.engine, projects)
     else:
         result = score(json.loads(args.freeze.read_text()), json.loads(args.observations.read_text()), args.engine)
     write_new(args.out, result)
