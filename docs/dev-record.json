@@ -139,7 +139,7 @@
       "author": "codex",
       "reviewer": "claude",
       "state": "claimed",
-      "acknowledged": false,
+      "acknowledged": true,
       "delivery": null,
       "reviews": [],
       "blockers": [
@@ -159,8 +159,10 @@
       ],
       "decisions": [
         "unblocked by davis: direct TypeSafe key obtained; live decisions verified on jev-1.13.0 (#44 at 3e4528a)",
-        "claude: candidate for the run is #42 at f96e0c8 (claude/direct-tier); claude/direct-tier-jev at 4f11a27 is superseded. Invocation unchanged: identical to 20261001T001902Z plus --decider jev, KIND line dropped, direct TypeSafe key in the project's gitignored .env"
-      ]
+        "claude: candidate for the run is #42 at f96e0c8 (claude/direct-tier); claude/direct-tier-jev at 4f11a27 is superseded. Invocation unchanged: identical to 20261001T001902Z plus --decider jev, KIND line dropped, direct TypeSafe key in the project's gitignored .env",
+        "claude: run 20261001T022457Z-6602cd28 started on f96e0c8 (#35 comment 5923488989); live Jev decisions kind=backend (0.78, previously stated frontend) and difficulty=simple (0.63), 1,310 in / 217 out tokens, 0.588 s"
+      ],
+      "acknowledged_at": "2026-10-01T02:26:21Z"
     },
     {
       "id": "T-grok-comparison",
