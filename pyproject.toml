@@ -20,6 +20,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# External routing decider (quadratus.decisions): TypeSafe AI's Jev.
+decisions = [
+    "typesafe-sdk>=0.7",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",

@@ -63,7 +63,7 @@ source lines are listed in the next section.
 | `audit_debt` (ledger row), `ledger_missing` (snapshot id absent from ledger) | audit | no, the ledger is its own list |
 | `design_evidence` (stage `design`, `invalid_proof`), `design_review` (stage `design`, `unverified`) | design | yes |
 | `review`, `security`, `scope`, `cheap_gate`, `unmerged`, `run_finding` | none | yes |
-| `check`, `cap`, `transport`, `refusal`, `stopped`, `merge_gate`, `dependency`, `sent_back`, `stop`, `other` | none | no |
+| `check`, `cap`, `failed`, `transport`, `refusal`, `stopped`, `merge_gate`, `dependency`, `sent_back`, `stop`, `other` | none | no |
 
 Audit debt and design debt never merge:
 

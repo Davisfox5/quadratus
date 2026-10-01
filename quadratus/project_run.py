@@ -55,8 +55,15 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 progress=None, ask_operator=None, plan_gate=None,
                 default_scope=None, run_limits=None, forbid=(), declared_paths=(),
                 security_verdict_json=False, gates=None, extra_checks=(), capture_profile=None,
-                readiness=None):
+                readiness=None, survey=None, direct_tier=False, tasks=None, decider=None):
     """Keep both successful and interrupted runs next to their source tree.
+
+    ``tasks`` is an operator-written task list (explicit-task entry): each
+    text is read as an orchestrator reply would be and run in order under the
+    same lifecycle, with no planner or acknowledgment call and no task the
+    list did not name. The result's ``explicit_tasks`` section says which
+    ran and that the goal was not judged; ``completed`` then means every
+    listed task closed clean, not that the goal is proven.
 
     ``extra_checks`` are further operator checks, each an argv list (or a
     string split without a shell), run as required gates beside ``check``
@@ -65,6 +72,10 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
     ``capture_profile`` is a path to the operator's preview profile
     (quadratus.preview), validated against the selected project here, before
     any model call; with it the harness captures UI tasks' renders itself.
+
+    ``decider`` names an external routing decider (``"jev"``) consulted only
+    where the orchestrator stated no usable label; ``None`` or ``"rule"`` is
+    the deterministic default. Its calls are billed API calls, metered.
 
     ``readiness`` is the operator's capability readiness probes
     (quadratus.readiness): a JSON path or list, validated here and run once
@@ -77,6 +88,12 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
         raise ValueError('Describe the project change to make.')
     if max_tasks < 1:
         raise ValueError('max_tasks must be at least 1')
+    if tasks is not None:
+        tasks = list(tasks)
+        if not tasks or any(not str(t).strip() for t in tasks):
+            raise ValueError('tasks must name at least one task, each a non-empty text')
+        if len(tasks) > max_tasks:
+            raise ValueError(f'max_tasks ({max_tasks}) must cover the {len(tasks)} listed task(s)')
     if not isinstance(project, Project):
         project = Project(project)
     state = Path(state_dir).expanduser() if state_dir else Path('.quadratus')
@@ -111,7 +128,8 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     run_limits=run_limits, policy=policy, gates=gates,
                     security_verdict_json=security_verdict_json,
                     fleet_type=Fleet, session_factory=new_session, extras=extras,
-                    capture_profile=profile, readiness=probes)
+                    capture_profile=profile, readiness=probes, survey=survey, direct_tier=direct_tier,
+                    tasks=list(tasks) if tasks is not None else None, decider=decider)
 
 
 #: Flags that change only how much a runner prints, never what it runs.
@@ -227,7 +245,8 @@ def _merge_extras(gates, extras):
 def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
-         extras=(), capture_profile=None, readiness=()):
+         extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False, tasks=None,
+         decider=None):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
@@ -253,6 +272,13 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     meter = UsageMeter(run_dir / 'usage.jsonl')
     delegation = DelegationLedger(path=run_dir / 'invocations.jsonl')
     budget = RunBudget(run_limits, path=run_dir / 'budget.json') if run_limits else None
+    if isinstance(decider, str) or decider is None:
+        from .decisions import decider_from_name
+        decider = decider_from_name(decider, meter=meter, budget=budget)
+    elif budget is not None and getattr(decider, "budget", None) is None and hasattr(decider, "budget"):
+        # A decider object handed in directly (tests, embedding callers) is
+        # bound to this run's budget too: no billed call escapes the limits.
+        decider.budget = budget
     config = SessionConfig(
         project=project.root, project_excludes=tuple(project.exclude),
         allow_writes=allow_writes, mode=mode, integration_gate=gate,
@@ -263,6 +289,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         security_verdict_json=security_verdict_json,
         capture_profile=capture_profile,
         readiness_probes=tuple(readiness or ()),
+        survey=survey,
+        direct_tier=direct_tier,
+        decider=decider,
     )
     preview = policy.resolve(default_scope.permitted_paths if default_scope else (),
                              writing=allow_writes) if policy else None
@@ -293,7 +322,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             invariants=['Project source is available in the working directory. '
                         'Use actual files as evidence. Do not commit or publish changes.'],
         )
-        session.run(max_tasks=max_tasks)
+        session.run(max_tasks=max_tasks, **({'tasks': tasks} if tasks is not None else {}))
     except (Exception, KeyboardInterrupt) as exc:  # persist partial work and its cause
         error = f'{type(exc).__name__}: {exc}'
         # A stopped editing call already inspected the tree and kept whatever
@@ -312,12 +341,13 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # tasks' preserved edits as in-flight work.
         error = session.stop_reason
         records = list((getattr(session, 'turn_limited_records', {}) or {}).values())
-        if error.startswith('TurnLimitBreaker') and records:
-            changed = sorted({name for r in records for name in r.get('changed') or []})
+        failed = list((getattr(session, 'failed_records', {}) or {}).values())
+        if error.startswith(('TurnLimitBreaker', 'TaskFailureBreaker')) and (records or failed):
+            changed = sorted({name for r in records + failed for name in r.get('changed') or []})
             in_flight = dict(
-                note='Stopped by the turn-limit breaker; every capped task\'s edits are preserved.',
-                changed=changed, changed_lines=sum(r.get('changed_lines') or 0 for r in records),
-                turn_limited=records)
+                note='Stopped by the unfinished-task breaker; every capped or failed task\'s edits are preserved.',
+                changed=changed, changed_lines=sum(r.get('changed_lines') or 0 for r in records + failed),
+                turn_limited=records, failed=failed)
             (run_dir / 'in-flight.json').write_text(json.dumps(in_flight, indent=2), encoding='utf-8')
     # What each call did inside its own session, from the vendors' transcripts.
     # Collected after the run so a slow copy never delays a model call.
@@ -331,7 +361,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     completed = bool(session and session.completed and not error)
     checks = session.checks if session else []
     ledger = session.memory.render(current='') if session else ''
-    status = 'Goal reported complete' if completed else 'Run incomplete'
+    explicit = getattr(session, 'explicit', None) if session else None
+    status = (('Listed tasks completed; the goal was not judged' if explicit is not None
+               else 'Goal reported complete') if completed else 'Run incomplete')
     lines = [f'# {status}', '', f'Project: {project.root}', '',
              f'Edits: {"enabled" if allow_writes else "disabled"}', '',
              f'Run files: {run_dir}', '']
@@ -340,6 +372,11 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                   f"Policy plan: {preview['hash']}", '']
     if error:
         lines += [f'Error: {error}', '']
+    if explicit is not None:
+        ran = [r['task'] for r in explicit.get('ran', [])]
+        lines += [f"Explicit task list: {len(ran)} of {explicit.get('listed', 0)} listed task(s) ran"
+                  + (f" ({', '.join(ran)})" if ran else '') + '. No orchestrator planned, acknowledged '
+                  'or judged the goal; completion here means every listed task closed clean.', '']
     if in_flight:
         changed = in_flight.get('changed') or []
         lines += ['## In-flight work when the run stopped', '',
@@ -376,6 +413,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'source_changed': bool(diff), 'source_fingerprint': project.fingerprint(),
         'tasks': len(session.history) if session else 0,
         'turn_limited_tasks': list(getattr(session, 'turn_limited', []) or []) if session else [],
+        'failed_tasks': list(getattr(session, 'failed', []) or []) if session else [],
         'personal_preferences': _preferences_record(settings),
         'requirements': _requirements_record(session),
         'design_checks': list(getattr(session, 'design_checks', []) or []) if session else [],
@@ -383,12 +421,15 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'dependency_identity': (getattr(getattr(session, 'dependency_watch', None), 'record', None)
                                 if session else None),
         'workflow': _workflow_record(session, completed, error),
+        'survey': _survey_record(session, completed),
+        'explicit_tasks': _explicit_record(session, completed),
         'parallel_batches': list(getattr(session, 'parallel_batches', []) or []) if session else [],
         'trace': {'calls': len(traces),
                   'transcripts_found': sum(1 for t in traces if t.get('tool_calls') is not None),
                   'calls_outside_project': sum(1 for t in traces if t.get('outside_project')),
                   'unserved_requests': sum(len(t.get('protocol_attempts') or []) for t in traces),
                   'injected_rules': sorted({r['source'] for t in traces for r in t.get('injected_rules') or []})},
+        'decisions': list(getattr(session, 'decisions', []) or []) if session else [],
         'in_flight': in_flight,
         'policy_preview': preview,
         'policy_plans': getattr(session, 'policy_plans', []),
@@ -405,6 +446,80 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     (run_dir / 'findings.json').write_text(
         json.dumps(list(getattr(session, 'findings', []) or []) if session else [], indent=2), encoding='utf-8')
     return ProjectResult(completed, report, run_dir, diff, error)
+
+
+def _calls_by_task(session):
+    """Invoked model calls per task and role, from the delegation ledger:
+    count, reported tokens and seconds. Measured, so a tier's saving is read
+    from what ran, never from the label (direct tier, 2026-09-30)."""
+    ledger = getattr(session.config, 'delegation_ledger', None)
+    out = {}
+    for event in getattr(ledger, 'events', None) or []:
+        if not getattr(event, 'invoked', False):
+            continue
+        role = (event.role or '').split(':')[0]
+        row = out.setdefault(event.task, {}).setdefault(role, dict(calls=0, input_tokens=0, output_tokens=0,
+                                                                     seconds=0.0, unknown_usage=0))
+        row['calls'] += 1
+        if event.input_tokens is None and event.output_tokens is None:
+            row['unknown_usage'] += 1
+        row['input_tokens'] += event.input_tokens or 0
+        row['output_tokens'] += event.output_tokens or 0
+        row['seconds'] = round(row['seconds'] + (event.seconds or 0.0), 1)
+    return out
+
+
+def _explicit_record(session, completed):
+    """The explicit-task section: which listed tasks ran, which text was
+    refused, and that no one judged the goal. None on an orchestrated run."""
+    record = getattr(session, 'explicit', None) if session is not None else None
+    if record is None:
+        return None
+    ran = [r['task'] for r in record.get('ran', [])]
+    closed = {s.task_id: getattr(s, 'outcome', 'closed') for s in getattr(session, 'history', [])}
+    return dict(
+        listed=record.get('listed', 0), ran=list(record.get('ran', [])),
+        not_run=record.get('listed', 0) - len(ran),
+        invalid=record.get('invalid'),
+        tasks_closed_clean=[t for t in ran if closed.get(t) == 'closed'],
+        tasks_unfinished=[t for t in ran if closed.get(t) not in (None, 'closed')],
+        goal_judged=False,
+        requirements_claimed=list(record.get('requirements_claimed', [])),
+        requirements_unclaimed=list(record.get('requirements_unclaimed', [])),
+        completed=completed,
+        note='completed means every listed task closed clean with no open finding or failing '
+             'check and every requirement a listed task claimed audited met; requirements no '
+             'task claimed are unjudged; no orchestrator planned, acknowledged or judged the goal.',
+    )
+
+
+def _survey_record(session, completed):
+    """The survey section: what a run that continues through failures
+    collected, reported apart from acceptance (SessionConfig.survey). None
+    on an ordinary run."""
+    if session is None or getattr(session.config, "survey", None) is None:
+        return None
+    outcomes = list(getattr(session, "task_outcomes", []) or [])
+    failures = []
+    for outcome in outcomes:
+        for fact in outcome.facts:
+            if fact.kind in ("failed", "cap") or (fact.kind == "product" and fact.stage == "checks"):
+                cause = (fact.detail.split(":", 1)[0] if fact.kind == "failed" else fact.kind)
+                failures.append(dict(task=outcome.task_id, kind=fact.kind, cause=cause,
+                                     detail=fact.detail[:200], recovered=bool(fact.recovered)))
+    findings = list(getattr(session, "findings", []) or [])
+    return dict(
+        recovery_tasks=session.config.survey.recovery_tasks,
+        recovery_used=session.survey.get("recovery_used", 0),
+        failures=failures,
+        unique_causes=sorted({f["cause"] for f in failures}),
+        recovered=[f["task"] for f in failures if f["recovered"]],
+        open=[f["task"] for f in failures if not f["recovered"]],
+        findings=[dict(id=f["id"], kind=f.get("kind"), status=f["status"], task=f["task"]) for f in findings],
+        repeats=list(session.survey.get("repeats", [])),
+        hypotheses=list(session.survey.get("hypotheses", [])),
+        completed=completed,
+    )
 
 
 def _requirements_record(session):
@@ -452,6 +567,7 @@ def _workflow_record(session, completed, error):
             open_ids = ['unknown']
         history = [f"{s.task_id}:{getattr(s, 'outcome', 'closed')}" for s in session.history]
         return {'tasks': [t.to_dict() for t in session.task_outcomes],
+                'calls_by_task': _calls_by_task(session),
                 'run': asdict(session.run_outcome),
                 'parity': parity(session.run_outcome, session.task_outcomes, open_findings=open_ids,
                                  legacy_completed=completed, legacy_error=error, history=history)}

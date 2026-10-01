@@ -32,7 +32,7 @@ from quadratus.delegation import (
 )
 from quadratus.runtime import Fleet
 from quadratus.scope import TaskScope
-from quadratus.session import _BLOCKED_REPORT_RULE, RunStalled, Session, SessionConfig, TaskSpec
+from quadratus.session import _BLOCKED_REPORT_RULE, Session, SessionConfig, TaskSpec
 from quadratus.task_kinds import TaskKind
 
 SOL = "openai:gpt-5.6-sol"
@@ -207,8 +207,8 @@ def test_repeated_consult_requests_in_a_security_excursion_stall_the_run(tmp_pat
         return "CONSULT Opus 5: still asking?"
 
     session = _security_session(tmp_path, invoke)
-    with pytest.raises(RunStalled, match="not converging"):
-        session.run_task(SECURITY_TASK)
+    summary = session.run_task(SECURITY_TASK)
+    assert summary.outcome == "failed" and "not converging" in session.failed_records["t1"]["error"]
     assert len(calls) == session.config.max_consults + 1
     assert set(calls) == {SOL}
 

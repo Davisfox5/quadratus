@@ -407,8 +407,11 @@ def test_a_grok_error_at_the_cap_count_is_a_failure_not_a_continuation(tmp_path,
 
     replay = _run(tmp_path, monkeypatch, Script(orchestrator=_continuing(DECL_T2), lead=lead), max_tasks=2,
                   files=FILES_OK, settings=Settings(backend="cli", lead_max_turns=14))
-    assert [c.task for c in replay.of("lead")] == ["t1"], "one lead, no continuation, no recovery"
-    assert "overloaded" in replay.result.error
+    assert [c.task for c in replay.of("lead") if c.task == "t1"] == ["t1"], "no recovery on a changed tree"
+    t1 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t1")
+    assert t1["closed_as"] == "failed", "a failure on a changed tree fails the task (J39), never a continuation"
+    fact = next(f for f in t1["facts"] if f["kind"] == "failed")
+    assert fact["detail"].startswith("transport: ") and "overloaded" in fact["detail"]
     assert "partial" in _read(replay, "README.md"), "the written work is preserved"
 
 
@@ -541,11 +544,15 @@ def test_a_continuation_sized_for_its_tests_and_setup_proceeds(tmp_path, monkeyp
     assert "test_case_5" in _read(replay, "tests/test_clock.py")
 
 
-def test_a_continuation_whose_tests_overrun_still_stops_with_work_preserved(tmp_path, monkeypatch):
+def test_a_continuation_whose_tests_overrun_fails_the_task_with_work_preserved(tmp_path, monkeypatch):
     """The ceiling is unchanged: 1.5 x 60 = 90 lines, and the tests are not trimmed to fit."""
     replay = _continuation_run(tmp_path, monkeypatch, cases=14)      # ~103 lines
-    assert "Task exceeded its declared scope" in replay.result.error
-    assert "stopped past 90" in replay.result.error and "in tests" in replay.result.error
+    t2 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t2")
+    assert t2["closed_as"] == "failed"
+    fact = next(f for f in t2["facts"] if f["kind"] == "failed")
+    assert fact["detail"].startswith("scope: Task exceeded its declared scope")
+    assert "stopped past 90" in (fact.get("full") or fact["detail"]) and "in tests" in (fact.get("full") or fact["detail"])
+    assert not replay.result.completed
     assert "test_case_13" in _read(replay, "tests/test_clock.py"), "the work is preserved"
 
 
@@ -962,14 +969,17 @@ def test_a_one_line_ui_fix_is_editing_work_not_an_audit(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("path", ["README.md", "templates/index.html"])
-def test_a_declared_audit_that_edits_any_source_is_stopped(tmp_path, monkeypatch, path):
+def test_a_declared_audit_that_edits_any_source_fails_the_task(tmp_path, monkeypatch, path):
     """Codex review of 9a31aac: edits:none is enforced, even on a permitted
     path, and the work is preserved; harness fixtures are not source."""
     def lead(call, replay):
         H.write(call, {path: "edited by an audit\n"})
         return f'Audited.\nCHANGED: ["{path}"]'
     replay = _design_run(tmp_path, monkeypatch, max_lines=1, edits="none", lead=lead)
-    assert "exceeded its declared scope" in replay.result.error
+    t1 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t1")
+    assert t1["closed_as"] == "failed"
+    assert any(f["kind"] == "failed" and "exceeded its declared scope" in f["detail"] for f in t1["facts"])
+    assert not replay.result.completed
     assert _read(replay, path) == "edited by an audit\n"
 
 

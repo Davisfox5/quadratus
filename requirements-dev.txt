@@ -3,3 +3,6 @@ pytest>=8.0
 ruff>=0.5
 setuptools>=68
 wheel
+
+# External routing decider (quadratus.decisions), so its availability path is tested.
+typesafe-sdk>=0.7

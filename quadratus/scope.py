@@ -151,12 +151,19 @@ class TaskScope:
     #: operator declared a capture profile (SCOPE ``"capture"``): ``{"path",
     #: "steps"}``, validated syntactically at parse; see quadratus.preview.
     capture: Optional[Dict[str, object]] = None
+    #: Exact-file binding (direct tier, Codex on #42): ``permitted_paths`` are
+    #: file identities, not patterns or prefixes. A path permits only itself,
+    #: so a declared file that becomes a directory puts every descendant out
+    #: of scope. Set by the harness at dispatch, never declared by a task.
+    exact: bool = False
 
     def permits(self, path: str) -> bool:
         """Whether ``path`` may be edited under this scope."""
         path = str(path).removeprefix("./")
         if any(_matches(path, pattern) for pattern in self.forbidden_paths):
             return False
+        if self.exact:
+            return path in {str(p).removeprefix("./") for p in self.permitted_paths}
         if not self.permitted_paths:
             return True
         return any(_matches(path, pattern) for pattern in self.permitted_paths)
@@ -237,6 +244,7 @@ class TaskScope:
             "max_lines": self.max_lines,
             **({"edits": "none"} if self.review_only else {}),
             **({"capture": self.capture} if self.capture else {}),
+            **({"exact": True} if self.exact else {}),
         }
 
 

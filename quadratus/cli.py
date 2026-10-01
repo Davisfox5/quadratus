@@ -102,6 +102,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
     if args.project:
         from .project import Project
         from .project_run import run_project
+        from .session import SurveyConfig
         try:
             project = Project.open(args.project, clone_url=args.clone or '', branch=args.branch or '')
             result = run_project(
@@ -110,9 +111,14 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
                 extra_checks=getattr(args, "extra_check", None) or (),
                 capture_profile=getattr(args, "capture_profile", None),
                 readiness=getattr(args, "readiness", None),
+                decider=getattr(args, "decider", None),
                 forbid=args.forbid, declared_paths=args.declared_paths,
                 max_tasks=args.max_tasks, mode=args.mode,
                 security_verdict_json=getattr(args, "security_verdict_json", False),
+                survey=(SurveyConfig(recovery_tasks=args.survey_recovery)
+                        if getattr(args, "survey_recovery", None) else None),
+                direct_tier=bool(getattr(args, "direct_tier", False)),
+                tasks=_task_list(getattr(args, "tasks", None)),
                 progress=lambda message: print(f">> {message}", flush=True),
                 ask_operator=_operator(args),
                 plan_gate=(lambda plan: print(plan) is None and
@@ -171,6 +177,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
         integration_gate=gate,
         security_verdict_json=getattr(args, "security_verdict_json", False),
         progress=progress,
+        decider=_decider_for(args, meter),
     )
 
     fleet = Fleet(settings, usage_meter=meter, allow_writes=args.allow_writes)
@@ -220,6 +227,27 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
     print(_c("\n" + meter.render_report(), Fore.CYAN))
     print(_c(f"\nArtifacts, map and usage log: {state}", Fore.CYAN))
     return 0
+
+
+def _task_list(path):
+    """The operator's explicit task list: a JSON array of non-empty strings."""
+    if not path:
+        return None
+    import json
+    try:
+        listed = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"--tasks {path}: {exc}") from exc
+    if not isinstance(listed, list) or not listed or any(not isinstance(t, str) or not t.strip() for t in listed):
+        raise ValueError(f"--tasks {path}: expected a JSON array of non-empty task texts")
+    return listed
+
+
+def _decider_for(args, meter=None):
+    """The decider named on the command line, for a projectless session (the
+    project runner resolves its own, with the run budget)."""
+    from .decisions import decider_from_name
+    return decider_from_name(getattr(args, "decider", None), meter=meter)
 
 
 def _operator(args):
@@ -352,6 +380,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     engine.add_argument(
+        "--decider", choices=("rule", "jev"), default="rule",
+        help=(
+            "Who answers a routing decision the orchestrator left unlabelled (task kind and "
+            "difficulty): 'rule' is the deterministic default; 'jev' asks TypeSafe AI's Jev "
+            "(pip install 'quadratus[decisions]', TYPESAFE_API_KEY), a billed API call that is "
+            "metered and recorded on the task. A stated label is never overridden."
+        ),
+    )
+    engine.add_argument(
         "--extra-check",
         metavar="CMD",
         action="append",
@@ -359,6 +396,36 @@ def main(argv: Optional[List[str]] = None) -> int:
             "A further required check run beside --check, split without a "
             "shell (repeatable; e.g. --extra-check 'node --test tests/ui/a.test.js'). "
             "Patterns are refused: name the files."
+        ),
+    )
+    engine.add_argument(
+        "--survey-recovery", type=int, default=None, metavar="N",
+        help=(
+            "Run as a survey: continue through failures, spending at most N continuation or "
+            "repair tasks, require a HYPOTHESIS line on each re-plan, stop only on a same-cause "
+            "repeat, and report a survey section apart from acceptance."
+        ),
+    )
+    engine.add_argument(
+        "--tasks", metavar="FILE", default=None,
+        help=(
+            "Run this JSON list of task texts in order instead of asking the orchestrator: "
+            "each text is read as an orchestrator reply would be (KIND, SCOPE, TIER, COVERS "
+            "lines and the description). With the requirements ledger on (the default), the "
+            "first text starts with a 'REQUIREMENTS:' block (R1: ...) and every text carries "
+            "a 'COVERS: R1' line; the whole list is checked before any call and every problem "
+            "is reported at once. No planner or acknowledgment call is made and no other task "
+            "runs; a text the loop would send back stops the run. The goal is still required "
+            "for the record and the prompts, and it is not judged."
+        ),
+    )
+    engine.add_argument(
+        "--direct-tier", action="store_true",
+        help=(
+            "Enable the direct execution tier: the orchestrator may label a small, local task "
+            "TIER: direct; a deterministic admission decides, and an admitted task runs with no "
+            "collaborator review and no model close-out. Checks, capture, design review and "
+            "every stop are unchanged."
         ),
     )
     engine.add_argument(

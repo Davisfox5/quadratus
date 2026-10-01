@@ -57,6 +57,14 @@ class Price:
 #: A missing model falls back to DEFAULT_PRICE so the meter keeps counting
 #: tokens even when the dollar figure is a shrug.
 PRICES: Dict[str, Price] = {
+    # TypeSafe AI's Jev (quadratus.decisions): input from the OpenRouter listing on
+    # 2026-09-30; output tokens are free per the SDK's own usage schema.
+    "jev:jev-latest": Price(0.042, 0.0),
+    "jev:jev-1.13": Price(0.042, 0.0),
+    # What jev-latest resolved to on the first live call (2026-09-30).
+    "jev:jev-1.13.0": Price(0.042, 0.0),
+    # The same model through Vercel's AI Gateway, which adds no markup.
+    "jev:typesafe-ai/jev": Price(0.042, 0.0),
     "claude:fable": Price(10.0, 50.0),
     "claude:opus": Price(5.0, 25.0),
     "claude:sonnet": Price(2.0, 10.0),
