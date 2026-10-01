@@ -1,0 +1,324 @@
+{
+  "version": 1,
+  "task": "T-grok-samples",
+  "base_sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+  "routing_source": "quadratus/task_kinds.py route() at base_sha",
+  "frozen": false,
+  "jev_calls": 0,
+  "rule_default_when_unlabelled": {
+    "kind": "general",
+    "difficulty": "simple",
+    "lead": "grok:default"
+  },
+  "ladder": {
+    "complex": "claude:opus",
+    "standard": "openai:gpt-5.6-sol",
+    "simple": "grok:default",
+    "rote": "grok:worker"
+  },
+  "pins": {
+    "scope": ["claude:fable"],
+    "decompose": ["claude:fable"],
+    "review": ["openai:gpt-5.6-sol", "claude:opus"],
+    "security": ["openai:gpt-5.6-sol"],
+    "test": ["openai:gpt-5.6-sol"]
+  },
+  "worker_capabilities": ["patch"],
+  "samples": [
+    {
+      "id": "dev-favicon",
+      "split": "development",
+      "observed_jev_run": "20261001T022457Z-6602cd28",
+      "source": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923533394",
+      "starting_state": "GameTape replacement baseline 1cd9264, the 33-file tree before that run's four-file patch.",
+      "task_text": "Use the exact favicon task text recorded in the source comment's SDK request (SCOPE, the four acceptance lines, TIER: direct, COVERS: R1). Do not add a KIND line.",
+      "acceptance": [
+        "GET /favicon.ico returns 200 with Content-Type image/svg+xml",
+        "static/favicon.svg exists and is a small SVG",
+        "templates/index.html links /favicon.ico",
+        "tests/test_basic.py gains test_favicon",
+        "pytest -q has no new failures"
+      ],
+      "permitted_paths": ["app.py", "static/favicon.svg", "templates/index.html", "tests/test_basic.py"],
+      "max_lines": 40,
+      "capabilities": ["patch", "execute"],
+      "acceptable": {
+        "kind": [
+          {"label": "frontend", "rationale": "Acceptance includes a rendered page and an SVG in the document head."},
+          {"label": "backend", "rationale": "The change adds a Flask route. Reasonable, not wrong."}
+        ],
+        "difficulty": [
+          {"label": "simple", "rationale": "One small route, one asset, one link, one test."}
+        ]
+      },
+      "not_acceptable": {
+        "difficulty": ["rote"],
+        "reason": "A new route with a behaviour assertion is not a mechanical edit."
+      },
+      "leads": {
+        "frontend+simple": "grok:default",
+        "backend+simple": "grok:default",
+        "frontend+standard": "openai:gpt-5.6-sol",
+        "backend+rote+execute": "grok:default"
+      },
+      "route_effect": "Kind does not change the lead at simple. simple versus standard does. rote plus execute does not stay on grok:worker; it climbs to grok:default, the same seat as simple.",
+      "score": false
+    },
+    {
+      "id": "dev-mutation-node",
+      "split": "development",
+      "source": "quadratus/task_kinds.py module comment, 2026-09-14 incident, at the base SHA",
+      "starting_state": "Quadratus tree at the base SHA. The historical sentence does not name the result file; confirm that path before any execution and do not widen it.",
+      "task_text": "Run `node tests/ui/mutation_check.js` twice and edit only the four result lines.",
+      "acceptance": ["The node script was run twice", "Only four result lines differ from the starting file"],
+      "permitted_paths": ["tests/ui/mutation_check.js"],
+      "max_lines": 4,
+      "capabilities": ["execute", "patch"],
+      "acceptable": {
+        "kind": [
+          {"label": "test", "rationale": "The work is a mutation check."},
+          {"label": "docs", "rationale": "This is how the incident was classified. Reasonable if the four lines are recorded output rather than the check itself."}
+        ],
+        "difficulty": [
+          {"label": "rote", "rationale": "The edit is mechanical once the script has been run."},
+          {"label": "simple", "rationale": "Also reasonable: the runner still has to read the output and place four lines."}
+        ]
+      },
+      "leads": {
+        "test+rote": "openai:gpt-5.6-sol",
+        "test+simple": "openai:gpt-5.6-sol",
+        "docs+rote+execute": "grok:default",
+        "docs+simple": "grok:default"
+      },
+      "route_effect": "Kind changes the lead (Sol versus grok:default). Difficulty does not, once execute is required: grok:worker cannot run node.",
+      "score": false
+    },
+    {
+      "id": "dev-trial-sentence",
+      "split": "development",
+      "source": "docs/GAMETAPE_TRIAL.md at the base SHA (it records baseline 49dd28b)",
+      "starting_state": "Quadratus tree at the base SHA.",
+      "task_text": "In docs/GAMETAPE_TRIAL.md add one sentence after the baseline line: the 2026-10-01 favicon runs used replacement baseline 1cd9264 and are not this trial. Change nothing else. Do not run a command.",
+      "acceptance": ["Exactly one added sentence", "The existing baseline line is unchanged", "No other file changes"],
+      "permitted_paths": ["docs/GAMETAPE_TRIAL.md"],
+      "max_lines": 5,
+      "capabilities": ["patch"],
+      "acceptable": {
+        "kind": [{"label": "docs", "rationale": "A documentation sentence, no code."}],
+        "difficulty": [
+          {"label": "rote", "rationale": "The sentence is specified."},
+          {"label": "simple", "rationale": "Reasonable if placing it without disturbing the list is treated as a small judgement."}
+        ]
+      },
+      "leads": {
+        "docs+rote": "grok:worker",
+        "docs+simple": "grok:default"
+      },
+      "route_effect": "Difficulty changes the lead. This is the control. No command, so the worker is not skipped.",
+      "score": false
+    },
+    {
+      "id": "hold-heading",
+      "split": "held-out",
+      "source": "templates/index.html on GameTape baseline 1cd9264 (the favicon run edited this file for a different change)",
+      "starting_state": "GameTape replacement baseline 1cd9264, before the favicon patch.",
+      "task_text": "Change only the visible project-list heading text in templates/index.html to Games. Do not add a route, a test, or a stylesheet. Do not run a command.",
+      "acceptance": ["The heading text is Games", "No other line in the file changes", "No new file"],
+      "permitted_paths": ["templates/index.html"],
+      "max_lines": 5,
+      "capabilities": ["patch"],
+      "acceptable": {
+        "kind": [
+          {"label": "frontend", "rationale": "The user-visible page text changes."},
+          {"label": "docs", "rationale": "Reasonable if the heading is treated as copy rather than interface structure."}
+        ],
+        "difficulty": [
+          {"label": "rote", "rationale": "One specified string."},
+          {"label": "simple", "rationale": "Reasonable for the same reason as dev-trial-sentence."}
+        ]
+      },
+      "leads": {
+        "frontend+rote": "grok:worker",
+        "frontend+simple": "grok:default",
+        "docs+rote": "grok:worker",
+        "docs+simple": "grok:default"
+      },
+      "route_effect": "Kind does not change the lead. Difficulty does. If a reviewer later decides the lead must execute a browser, both rote rows climb to grok:default and the contrast disappears; that fork is not taken here.",
+      "score": true
+    },
+    {
+      "id": "hold-import-note",
+      "split": "held-out",
+      "source": "import-preview acceptance text in run 20261001T022457Z task t2, which named app.py:1339-1564; verify the range on 1cd9264 before execution",
+      "starting_state": "GameTape replacement baseline 1cd9264.",
+      "task_text": "Read the import preview route. Write docs/import-preview-readonly.md stating whether it writes projects.json, with the file and line you read. Do not edit app.py. Do not run a command.",
+      "acceptance": ["The new note cites a real line in app.py", "app.py is unchanged", "The note answers the write question and does not invent a line"],
+      "permitted_paths": ["docs/import-preview-readonly.md"],
+      "max_lines": 30,
+      "capabilities": ["patch"],
+      "acceptable": {
+        "kind": [
+          {"label": "review", "rationale": "The job is to check an existing route and record what is there."},
+          {"label": "comprehend", "rationale": "Equally a read of existing code."},
+          {"label": "docs", "rationale": "The only edit is a new note."}
+        ],
+        "difficulty": [
+          {"label": "simple", "rationale": "One function, one question."},
+          {"label": "rote", "rationale": "Reasonable if the line is obvious once opened."}
+        ]
+      },
+      "leads": {
+        "review+simple": "openai:gpt-5.6-sol",
+        "review+rote": "openai:gpt-5.6-sol",
+        "comprehend+simple": "grok:default",
+        "docs+rote": "grok:worker"
+      },
+      "route_effect": "Kind changes the lead. Difficulty does not while the review pin holds.",
+      "score": true
+    },
+    {
+      "id": "hold-dotenv-guard",
+      "split": "held-out",
+      "source": "GameTape app.py and tests/test_basic.py on baseline 1cd9264; .env is already a denied write in the Quadratus policy examples",
+      "starting_state": "GameTape replacement baseline 1cd9264, before the favicon patch.",
+      "task_text": "Reject a Flask request whose path ends in .env. Add tests/test_basic.py coverage that the client does not get 200 for that path. Touch nothing else.",
+      "acceptance": ["A .env-like path is not 200", "The new test fails if the guard is removed", "No other route changes"],
+      "permitted_paths": ["app.py", "tests/test_basic.py"],
+      "max_lines": 40,
+      "capabilities": ["patch", "execute"],
+      "acceptable": {
+        "kind": [
+          {"label": "security", "rationale": "The change is a refusal of a sensitive path."},
+          {"label": "backend", "rationale": "It is also one HTTP route and a test. Reasonable, not wrong."}
+        ],
+        "difficulty": [
+          {"label": "simple", "rationale": "One guard and one assertion."},
+          {"label": "standard", "rationale": "Reasonable if the reviewer treats path handling as a judgement rather than a small edit."}
+        ]
+      },
+      "leads": {
+        "security+simple": "openai:gpt-5.6-sol",
+        "security+standard": "openai:gpt-5.6-sol",
+        "backend+simple": "grok:default",
+        "backend+standard": "openai:gpt-5.6-sol"
+      },
+      "route_effect": "security versus backend changes the lead at simple (Sol versus grok:default) and does not change it at standard (both Sol). The test file does not by itself make the whole task kind test.",
+      "score": true
+    },
+    {
+      "id": "hold-one-assertion",
+      "split": "held-out",
+      "source": "tests/test_basic.py on GameTape baseline 1cd9264",
+      "starting_state": "GameTape replacement baseline 1cd9264, before the favicon patch.",
+      "task_text": "Add one pytest assertion that the existing index route still returns 200. Do not change app.py. Run pytest -q for that file only.",
+      "acceptance": ["The new test passes", "app.py is unchanged", "No other test file changes"],
+      "permitted_paths": ["tests/test_basic.py"],
+      "max_lines": 20,
+      "capabilities": ["patch", "execute"],
+      "acceptable": {
+        "kind": [{"label": "test", "rationale": "The task is only a test."}],
+        "difficulty": [
+          {"label": "rote", "rationale": "One specified assertion."},
+          {"label": "simple", "rationale": "Also reasonable."}
+        ]
+      },
+      "leads": {
+        "test+rote": "openai:gpt-5.6-sol",
+        "test+simple": "openai:gpt-5.6-sol",
+        "test+complex": "openai:gpt-5.6-sol"
+      },
+      "route_effect": "Difficulty does not change the lead. The test pin wins at every rung, provided Sol can execute.",
+      "score": true
+    },
+    {
+      "id": "hold-ledger-append",
+      "split": "held-out",
+      "source": "quadratus/ledger.py (class Ledger, append-only) at the base SHA",
+      "starting_state": "Quadratus tree at the base SHA.",
+      "task_text": "Add a test that two Ledger instances appending to the same file do not drop a line. Do not change Ledger's public behaviour except to fix a drop you can show.",
+      "acceptance": ["The test fails on a deliberate drop and passes after", "No unrelated method is rewritten"],
+      "permitted_paths": ["quadratus/ledger.py", "tests/test_ledger_append.py"],
+      "max_lines": 80,
+      "capabilities": ["patch", "execute"],
+      "acceptable": {
+        "kind": [
+          {"label": "test", "rationale": "The requested product is a test."},
+          {"label": "concurrency", "rationale": "The failure mode named is a lost update. Reasonable, not wrong."}
+        ],
+        "difficulty": [
+          {"label": "standard", "rationale": "Shared-file append needs a real interleaving, not a one-line edit."},
+          {"label": "simple", "rationale": "Reasonable if the existing Ledger is already safe and the test is small."},
+          {"label": "complex", "rationale": "Reasonable if the reviewer treats a lost-update proof as many steps."}
+        ]
+      },
+      "leads": {
+        "test+simple": "openai:gpt-5.6-sol",
+        "test+standard": "openai:gpt-5.6-sol",
+        "concurrency+simple": "grok:default",
+        "concurrency+standard": "openai:gpt-5.6-sol",
+        "concurrency+complex": "claude:opus"
+      },
+      "route_effect": "test versus concurrency changes the lead at simple and at complex, and does not change it at standard. Concurrency also keeps its human-check gate; that gate is not a seat.",
+      "score": true
+    },
+    {
+      "id": "hold-import-readonly",
+      "split": "held-out",
+      "source": "same import-preview range as hold-import-note; the deliverable is a review comment, not a new feature",
+      "starting_state": "GameTape replacement baseline 1cd9264.",
+      "task_text": "Review the import preview route for a write of projects.json or a video file. Report the file and line and stop. Create no file and edit none.",
+      "acceptance": ["The report cites a real line or says the write is absent and names the function read", "The tree is unchanged"],
+      "permitted_paths": [],
+      "max_lines": 0,
+      "capabilities": [],
+      "acceptable": {
+        "kind": [
+          {"label": "review", "rationale": "Read-only defect check."},
+          {"label": "comprehend", "rationale": "Read-only question about existing code."}
+        ],
+        "difficulty": [
+          {"label": "simple", "rationale": "One function, one question."},
+          {"label": "standard", "rationale": "Reasonable if tracing the save path is not obvious."}
+        ]
+      },
+      "leads": {
+        "review+simple": "openai:gpt-5.6-sol",
+        "review+standard": "openai:gpt-5.6-sol",
+        "comprehend+simple": "grok:default",
+        "comprehend+standard": "openai:gpt-5.6-sol"
+      },
+      "route_effect": "Kind changes the lead at simple and does not change it at standard. Empty capabilities, so nothing is escalated off a worker; comprehend+rote would be grok:worker, which is not in the acceptable difficulty set.",
+      "score": true
+    },
+    {
+      "id": "hold-list-timing",
+      "split": "held-out",
+      "source": "the project-list page on GameTape baseline 1cd9264",
+      "starting_state": "GameTape replacement baseline 1cd9264, before the favicon patch.",
+      "task_text": "Measure how long the project list takes to render. Record the baseline milliseconds in docs/list-timing.md. Do not change application code unless a repeatable run is over 200ms, and if you change code show the before and after numbers.",
+      "acceptance": ["A baseline number from a real run is recorded", "No code change without a before and after", "The measurement command is in the note"],
+      "permitted_paths": ["docs/list-timing.md"],
+      "max_lines": 40,
+      "capabilities": ["execute", "patch"],
+      "acceptable": {
+        "kind": [
+          {"label": "perf", "rationale": "The question is a measurement."},
+          {"label": "docs", "rationale": "Reasonable if no code change is expected and the product is the note."}
+        ],
+        "difficulty": [
+          {"label": "simple", "rationale": "One measurement and a note."},
+          {"label": "standard", "rationale": "Reasonable if getting a stable number is the work."}
+        ]
+      },
+      "leads": {
+        "perf+simple+execute": "grok:default",
+        "perf+standard": "openai:gpt-5.6-sol",
+        "perf+rote+execute": "grok:default",
+        "docs+simple+execute": "grok:default",
+        "docs+rote+execute": "grok:default"
+      },
+      "route_effect": "simple versus standard changes the lead for perf. rote versus simple does not, because execute skips grok:worker. tool_first (a profiler) does not select a seat. docs versus perf does not change the lead at simple once execute is set.",
+      "score": true
+    }
+  ]
+}
