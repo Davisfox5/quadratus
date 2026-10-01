@@ -199,13 +199,30 @@
       ],
       "author": "grok",
       "reviewer": "claude",
-      "state": "claimed",
+      "state": "reviewed",
       "claimed_at": "2026-10-01T02:09:22Z",
-      "acknowledged": false,
-      "delivery": null,
-      "reviews": [],
+      "acknowledged": true,
+      "delivery": {
+        "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+        "at": "2026-10-01T02:54:24Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923763006",
+          "scope": [
+            "analysis:#35 Jev comparison write-up"
+          ],
+          "at": "2026-10-01T02:54:24Z"
+        }
+      ],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: delivery is the write-up relayed in #35 comment 5923763006 (Grok CLI, 31,671 tokens, no Jev call); arithmetic re-checked against Codex's tables (1,527 tokens, 0.639 s, $0.000055, +20.7% whole-run, +28.8% task tokens, 13.761 s unexplained wall residual). Caveat on the verdict's last sentence, as Codex also noted: the native-accounting gap is not attributable to Jev, which is weaker than 'not a Jev effect'; causality is unresolved. Its test design for a later sample (frozen labels, cells where default and label pick different leads, a no-Jev arm, outcome or cost scored, agreement not scored) is adopted as input to T-grok-samples and T-codex-harness"
+      ],
+      "acknowledged_at": "2026-10-01T02:54:23Z"
     },
     {
       "id": "T-jev-labels",
@@ -230,7 +247,9 @@
       },
       "reviews": [],
       "blockers": [],
-      "decisions": [],
+      "decisions": [
+        "claude: Codex acknowledged the scope for independent review (#35 comment 5923763006)"
+      ],
       "acknowledged_at": "2026-10-01T02:53:18Z"
     },
     {
@@ -263,11 +282,12 @@
       "reviewer": "claude",
       "state": "claimed",
       "claimed_at": "2026-10-01T02:41:54Z",
-      "acknowledged": false,
+      "acknowledged": true,
       "delivery": null,
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [],
+      "acknowledged_at": "2026-10-01T02:54:24Z"
     }
   ],
   "receipts": [
