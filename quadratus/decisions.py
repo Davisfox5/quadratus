@@ -49,6 +49,14 @@ class Decision:
     context: str = ""
     #: Where the same decision is made today, for the record.
     rule: str = ""
+    #: One line per answer, from :mod:`quadratus.decision_labels`; a decider
+    #: sends these as the criteria rather than bare names. Empty means the
+    #: caller built the decision by hand (tests, the rule).
+    definitions: Optional[Dict[str, str]] = None
+    #: How to choose between answers when the work is mixed.
+    guidance: str = ""
+    #: Which wording the answer was judged against.
+    labels: str = ""
 
 
 @dataclass(frozen=True)
@@ -247,8 +255,10 @@ class JevDecider:
         if reason:
             raise DecisionsUnavailable(reason)
         name = decision.id.replace(".", "_")
-        question = {"type": "choice", "instructions": decision.question,
-                    "criteria": {answer: None for answer in decision.answers}}
+        definitions = decision.definitions or {}
+        instructions = decision.question + (f" {decision.guidance}" if decision.guidance else "")
+        question = {"type": "choice", "instructions": instructions,
+                    "criteria": {answer: definitions.get(answer) for answer in decision.answers}}
         ticket = None
         if self.budget is not None:
             ticket, _remaining = self.budget.reserve(transport="api", price_key=f"jev:{self.model}")
@@ -287,10 +297,23 @@ class JevDecider:
         if choice not in decision.answers:
             raise DecisionsUnavailable(f"Jev answered {choice!r}, not one of {decision.answers}")
         probabilities = dict(getattr(answer, "probabilities", {}) or {})
+        usage_record = {k: record[k] for k in ("model", "host", "input_tokens", "output_tokens", "seconds")}
+        if decision.labels:
+            usage_record["labels"] = decision.labels
         return Verdict(decision=decision.id, answer=choice, source=f"jev:{model}",
                        confidence=getattr(answer, "confidence", None),
-                       note=json.dumps(probabilities, sort_keys=True),
-                       usage={k: record[k] for k in ("model", "host", "input_tokens", "output_tokens", "seconds")})
+                       note=json.dumps(probabilities, sort_keys=True), usage=usage_record)
+
+
+def describe(decision_id: str, answers: Sequence[str], *, context: str = "") -> Decision:
+    """A :class:`Decision` with its definitions, guidance and labels version
+    attached from :mod:`quadratus.decision_labels`: the shape every routing
+    call sends, so no decider is handed bare names."""
+    from .decision_labels import LABELS_VERSION, definitions_for, guidance_for
+    row = DECISIONS[decision_id]
+    return Decision(id=decision_id, question=row["question"], answers=tuple(answers), context=context,
+                    rule=row["rule"], definitions=definitions_for(decision_id, answers),
+                    guidance=guidance_for(decision_id), labels=LABELS_VERSION)
 
 
 def decider_from_name(name: Optional[str], *, meter: Any = None, budget: Any = None):
