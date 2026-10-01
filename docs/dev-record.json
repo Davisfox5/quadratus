@@ -528,6 +528,30 @@
         "claude: Mac session cross-check (#35 comment 5924762066): all ten selected leads reproduce offline through the engine at 2a7578b; arithmetic reconciles. Reading: kind answers confident (P>=0.93 on 7/10), difficulty answers not (P<0.70 on 7/10), and both lead moves against the accepted set were below 0.70. Hypothesis only, post hoc on ten rote/simple rows: a P>=0.70 floor keeping the rule default below it would have given 10/10 accepted leads; to be pre-registered in any Stage B packet, not adopted from this run. Recommendation carried: keep kind delegation, hold difficulty delegation pending standard/complex rows"
       ],
       "acknowledged_at": "2026-10-01T04:11:05Z"
+    },
+    {
+      "id": "T-jev-stage-b-prep",
+      "purpose": "Stage B pair runner and plan: five GameTape feature tasks, each run with and without Jev on identical checkouts and limits, both arms of a pair launched together, results collected into one paired comparison; drafts bound to the real tree in the IDE before any run (Davis, 2026-10-01)",
+      "base": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+      "owns": [
+        "tools/jev_stage_b/",
+        "docs/jev-stage-b-plan.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-01T19:11:18Z",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "0ed43f2128544d34a6b81e99eae0beb5936d62b3",
+        "at": "2026-10-01T19:11:21Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "claude: Davis's directive in the coordinator chat, 2026-10-01: Claude quarterbacks the Stage B live runs from the IDE on the Mac; Codex's weekly window is about 10% and is spent only on a usage reading and a light review of the runner. Execution ownership for this series therefore sits with Claude, by operator decision, as an exception to DIRECTION.md's Codex-executes rule; recorded here so the exception is visible"
+      ],
+      "acknowledged_at": "2026-10-01T19:11:18Z"
     }
   ],
   "receipts": [
