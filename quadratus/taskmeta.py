@@ -120,6 +120,9 @@ class TaskMetadata:
         confidence: How the route was arrived at. ``"labelled"`` -- the model
             stated it. ``"degraded"`` -- it stated something unrecognised and
             the default was substituted. ``"defaulted"`` -- it stated nothing.
+            ``"decided"`` -- it stated nothing usable and an operator-enabled
+            external decider (quadratus.decisions) answered; the verdict and
+            its source are in ``notes`` and on the session's decisions record.
             Three grades, all explicit; the bug being fixed was a default that
             looked exactly like a statement.
         notes: Human-readable provenance, rendered into diagnostics.
