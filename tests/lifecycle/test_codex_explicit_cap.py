@@ -121,3 +121,16 @@ def test_the_audit_prompt_carries_the_design_review_verdict(tmp_path, monkeypatc
     assert replay.result.completed, replay.result.error
     assert len(prompts) == 1
     assert "independent design review by" in prompts[0] and "APPROVED" in prompts[0], prompts[0][-1500:]
+
+
+def test_the_progress_line_at_list_end_names_the_list_not_an_orchestrator(tmp_path, monkeypatch):
+    """Live run 20261001T001902Z (Codex on #35): progress.log said "the
+    orchestrator reports the goal met" on an explicit run with zero
+    orchestrator calls."""
+    lines = []
+    monkeypatch.setattr("quadratus.session.Session._note",
+                        lambda self, message: lines.append(message), raising=True)
+    replay = _run(tmp_path, monkeypatch, [README_TASK], max_tasks=1)
+    assert replay.result.completed, replay.result.error
+    assert not any("orchestrator reports the goal met" in line for line in lines), lines
+    assert any("task list ran to its end" in line for line in lines), lines

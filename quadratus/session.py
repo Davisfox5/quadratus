@@ -3951,7 +3951,11 @@ class Session:
                     self._note("requirements still open after the reopen allowance; stopping incomplete")
                 self._apply_completion(decision)
                 if name not in ("FindingsUnresolved", "RequirementsUnmet"):
-                    self._note("the orchestrator reports the goal met")
+                    # The explicit list has no orchestrator and judges no goal
+                    # (Codex, live run 20261001T001902Z): say what happened.
+                    self._note("the task list ran to its end; every listed task closed clean and the "
+                               "goal was not judged" if self._explicit_tasks is not None
+                               else "the orchestrator reports the goal met")
                 break
             if spec.description == previous_description:
                 raise RunStalled(
