@@ -126,7 +126,8 @@
       "blockers": [],
       "decisions": [
         "Vercel free tier excludes Jev (probe 2026-09-30): a paid top-up or a ts_ key is needed before the comparison run",
-        "claude: Codex's #44 review (P1 shared budget bypass, three P2) fixed in 9119013; boundary tests on the orchestrated path in tests/lifecycle/test_decider.py; Codex's reproducer tests/lifecycle/test_codex_jev_budget.py lives on the candidate only because it needs the explicit-task entry"
+        "claude: Codex's #44 review (P1 shared budget bypass, three P2) fixed in 9119013; boundary tests on the orchestrated path in tests/lifecycle/test_decider.py; Codex's reproducer tests/lifecycle/test_codex_jev_budget.py lives on the candidate only because it needs the explicit-task entry",
+        "claude: backlog from the live run: the choice question sends bare label names with null criteria, so Jev classified a four-file favicon task (route + SVG + template + test) as backend; give each kind and difficulty label a one-line criterion before any routing-quality claim"
       ]
     },
     {
@@ -138,10 +139,24 @@
       ],
       "author": "codex",
       "reviewer": "claude",
-      "state": "claimed",
+      "state": "reviewed",
       "acknowledged": true,
-      "delivery": null,
-      "reviews": [],
+      "delivery": {
+        "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+        "at": "2026-10-01T02:31:05Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923533394",
+          "scope": [
+            "live-run:jev-comparison"
+          ],
+          "at": "2026-10-01T02:31:05Z"
+        }
+      ],
       "blockers": [
         {
           "requirement": "a Jev key with credit",
@@ -160,7 +175,8 @@
       "decisions": [
         "unblocked by davis: direct TypeSafe key obtained; live decisions verified on jev-1.13.0 (#44 at 3e4528a)",
         "claude: candidate for the run is #42 at f96e0c8 (claude/direct-tier); claude/direct-tier-jev at 4f11a27 is superseded. Invocation unchanged: identical to 20261001T001902Z plus --decider jev, KIND line dropped, direct TypeSafe key in the project's gitignored .env",
-        "claude: run 20261001T022457Z-6602cd28 started on f96e0c8 (#35 comment 5923488989); live Jev decisions kind=backend (0.78, previously stated frontend) and difficulty=simple (0.63), 1,310 in / 217 out tokens, 0.588 s"
+        "claude: run 20261001T022457Z-6602cd28 started on f96e0c8 (#35 comment 5923488989); live Jev decisions kind=backend (0.78, previously stated frontend) and difficulty=simple (0.63), 1,310 in / 217 out tokens, 0.588 s",
+        "claude: run 20261001T022457Z-6602cd28 PASSED with fresh independent grade: Jev answered kind=backend (0.78) and difficulty=simple (0.63), no refusal; lead stayed grok:default so routing did not change; overhead 1,527 tokens, 0.639 s, about $0.000055; whole run 6 calls, 326,126 tokens, 150.3 s. Integration established; usefulness and savings not"
       ],
       "acknowledged_at": "2026-10-01T02:26:21Z"
     },
