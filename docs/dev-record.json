@@ -309,8 +309,8 @@
       "claimed_at": "2026-10-01T02:41:54Z",
       "acknowledged": true,
       "delivery": {
-        "sha": "a5470e055ae1d5911fac72169aa6d60be5d03fb8",
-        "at": "2026-10-01T03:31:52Z"
+        "sha": "88ddc72e561a203e0a1f066faf86fc593e1be850",
+        "at": "2026-10-01T03:47:16Z"
       },
       "reviews": [
         {
@@ -348,7 +348,8 @@
         "claude: tip a5470e0 verified against f96e0c8 and the candidate merge-base: only docs/jev-samples/PACKET.md and tests/fixtures/jev-samples/samples.json (the intermediate 021d24f carried a stray copy of tools/jev_experiment/packet.py, deleted at tip). Acceptable sets are now mostly single labels; whether that over-narrows genuine ambiguity is Codex's freezing call",
         "claude: Codex smoke-validated a5470e0 offline with #49 at b48e6c0 against engine f96e0c8 and local GameTape 1cd9264: all refs resolve, all rows validate, ten authored default leads match the cold route; not a freeze. One next action for Grok: a source-bound outline for hold-budget-threads (invariant missing from tests/test_run_budget.py, deterministic ordering without sleeps, what wrong accounting it detects, why complex) before touching other rows (#35 comment 5924198268)",
         "claude: Grok's hold-budget-threads outline (#35 comment 5924207545): the missing invariant is once-only finish accounting under concurrent finish; a Barrier(2) ordering without sleeps; detects dropped, double-counted or re-finished tickets; no failing baseline observed and complex is not supported on this row. The packet therefore has no earned complex case; Codex decides whether to narrow the row to simple coverage or drop it",
-        "claude: Codex accepted the budget outline as simple once-only coverage and lifted the per-row hold: one consolidated correction batch on #48 per https://github.com/Davisfox5/quadratus/pull/48#issuecomment-5924270205, coverage gaps preserved; relayed to Grok on #35 (comment 5924273960 asked for it)"
+        "claude: Codex accepted the budget outline as simple once-only coverage and lifted the per-row hold: one consolidated correction batch on #48 per https://github.com/Davisfox5/quadratus/pull/48#issuecomment-5924270205, coverage gaps preserved; relayed to Grok on #35 (comment 5924273960 asked for it)",
+        "claude: 88ddc72 verified: only the two owned files against f96e0c8 and the candidate merge-base; Codex's consolidated batch applied with an evidence table (#35 comment 5924320206); engine still bound to f96e0c8, rebinding to 2a7578b requested"
       ],
       "acknowledged_at": "2026-10-01T02:59:28Z"
     },
