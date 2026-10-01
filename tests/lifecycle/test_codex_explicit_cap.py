@@ -121,3 +121,21 @@ def test_the_audit_prompt_carries_the_design_review_verdict(tmp_path, monkeypatc
     assert replay.result.completed, replay.result.error
     assert len(prompts) == 1
     assert "independent design review by" in prompts[0] and "APPROVED" in prompts[0], prompts[0][-1500:]
+
+
+def test_explicit_progress_never_claims_an_orchestrator_judged_the_goal(tmp_path, monkeypatch):
+    from quadratus.session import Session
+
+    messages = []
+    original = Session._note
+
+    def note(session, text):
+        messages.append(text)
+        return original(session, text)
+
+    monkeypatch.setattr(Session, "_note", note)
+    replay = _run(tmp_path, monkeypatch, [README_TASK], max_tasks=1)
+    assert replay.result.completed
+    assert replay.of("orchestrator") == []
+    assert "listed tasks completed; the goal was not judged" in messages
+    assert not any("orchestrator reports the goal met" in text for text in messages)

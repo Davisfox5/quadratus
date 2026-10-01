@@ -3950,7 +3950,10 @@ class Session:
                 if name == "RequirementsUnmet":
                     self._note("requirements still open after the reopen allowance; stopping incomplete")
                 self._apply_completion(decision)
-                if name not in ("FindingsUnresolved", "RequirementsUnmet"):
+                if self._explicit_tasks is not None:
+                    self._note("listed tasks " + ("completed" if self.completed else "incomplete")
+                               + "; the goal was not judged")
+                elif name not in ("FindingsUnresolved", "RequirementsUnmet"):
                     self._note("the orchestrator reports the goal met")
                 break
             if spec.description == previous_description:
