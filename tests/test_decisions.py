@@ -268,3 +268,52 @@ def test_the_docs_carry_the_rendered_definitions_verbatim():
     doc = (Path(__file__).resolve().parents[1] / "docs" / "decisions-api.md").read_text(encoding="utf-8")
     assert L.render_markdown() in doc
     assert f"`{L.LABELS_VERSION}`" in doc
+
+
+# --- SDK transport retries (Codex P1, #35 comment 5923854904) ------------------
+
+@pytest.mark.parametrize("failure", ["503", "timeout"])
+def test_the_real_sdk_makes_one_http_attempt_per_budget_reservation(failure):
+    """The real typesafe-sdk through a mock transport, no sockets, no key: a
+    503 or a timeout is one HTTP attempt, one reservation, one latched
+    unknown-usage stop. The SDK's default policy would have retried twice
+    below the reservation."""
+    httpx2 = pytest.importorskip("httpx2")
+    pytest.importorskip("typesafe_sdk")
+    from quadratus.run_budget import RunBudget, RunBudgetExceeded, RunLimits
+    attempts = []
+
+    def handler(request):
+        attempts.append(request.url.path)
+        if failure == "timeout":
+            raise httpx2.ReadTimeout("synthetic timeout", request=request)
+        return httpx2.Response(503, json={"error": "synthetic unavailable"})
+
+    budget = RunBudget(RunLimits(max_calls=1))
+    decider = D.JevDecider(api_key="offline-fixture-not-a-key", budget=budget,
+                           transport=httpx2.MockTransport(handler))
+    with pytest.raises(RunBudgetExceeded):
+        decider.decide(D.describe("task.difficulty", ("rote", "simple")))
+    assert attempts == ["/v1/systemone"], attempts
+    assert budget.snapshot()["reserved_attempts"] == 1 and budget.snapshot()["unknown_usage_attempts"] == 1
+
+
+def test_the_real_sdk_round_trip_is_one_attempt_and_one_reservation():
+    httpx2 = pytest.importorskip("httpx2")
+    pytest.importorskip("typesafe_sdk")
+    from quadratus.run_budget import RunBudget, RunLimits
+    attempts = []
+
+    def handler(request):
+        attempts.append(request.url.path)
+        return httpx2.Response(200, json={
+            "model": "jev-1.13.0", "usage": {"input_tokens": 300, "output_tokens": 0},
+            "answers": {"task_difficulty": {"type": "choice", "choice": "rote", "confidence": 0.9,
+                                            "probabilities": {"rote": 0.9, "simple": 0.1}}}})
+
+    budget = RunBudget(RunLimits(max_calls=1))
+    decider = D.JevDecider(api_key="offline-fixture-not-a-key", budget=budget,
+                           transport=httpx2.MockTransport(handler))
+    verdict = decider.decide(D.describe("task.difficulty", ("rote", "simple")))
+    assert verdict.answer == "rote" and verdict.source == "jev:jev-1.13.0" and attempts == ["/v1/systemone"]
+    assert budget.snapshot()["reserved_attempts"] == 1 and budget.snapshot()["input_tokens"] == 300

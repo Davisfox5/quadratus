@@ -195,7 +195,7 @@ class JevDecider:
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None,
                  client: Any = None, meter: Any = None, timeout: float = 10.0,
-                 base_url: Optional[str] = None, budget: Any = None):
+                 base_url: Optional[str] = None, budget: Any = None, transport: Any = None):
         self.api_key = api_key if api_key is not None else os.environ.get(JEV_API_KEY_ENV, "").strip()
         gateway = self.api_key.startswith(JEV_GATEWAY_KEY_PREFIX)
         self.base_url = (base_url or os.environ.get(JEV_BASE_URL_ENV, "").strip()
@@ -211,6 +211,9 @@ class JevDecider:
         #: budget stop propagates; it is never swallowed as a refusal.
         self.budget = budget
         self.timeout = timeout
+        #: An httpx transport handed to the SDK client, for offline tests that
+        #: drive the real SDK without sockets. None means the SDK's own.
+        self.transport = transport
         self.calls: List[dict] = []
 
     def available(self) -> str:
@@ -226,10 +229,18 @@ class JevDecider:
         return ""
 
     def _sdk_client(self):
+        """The SDK client with transport retries off. The SDK's default
+        policy retries a failed request twice on its own, below the one
+        budget reservation that surrounds ``system_one``; with max_calls=1
+        and a 503 that is three HTTP attempts for one ticket (Codex, #35
+        comment 5923854904). Every attempt this decider makes is one
+        reservation, so the SDK makes none of its own."""
         if self._client is None:
-            from typesafe_sdk import TypeSafeClient
+            from typesafe_sdk import RetryPolicy, TypeSafeClient
             self._client = TypeSafeClient(api_key=self.api_key, model=self.model, timeout=self.timeout,
-                                          **({"base_url": self.base_url} if self.base_url else {}))
+                                          retry=RetryPolicy(max_retries=0),
+                                          **({"base_url": self.base_url} if self.base_url else {}),
+                                          **({"transport": self.transport} if self.transport is not None else {}))
         return self._client
 
     @property

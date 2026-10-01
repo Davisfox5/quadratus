@@ -65,6 +65,12 @@ What the engine does with it (`JevDecider`, `Session._route_with_decider`):
 - A refusal (no package, no key, transport error, out-of-set answer) keeps
   the rule's default and says why; nothing raises into the run.
 - Each call is metered under `jev:<model>` with the SDK's token counts.
+- SDK transport retries are off (`RetryPolicy(max_retries=0)`): the SDK's
+  default retried a failed request twice below the one budget reservation,
+  so a 503 with `max_calls=1` was three HTTP attempts for one ticket
+  (Codex, 2026-10-01). Every HTTP attempt is now one reservation; a
+  transport-level 503 or timeout is one attempt and one latched
+  unknown-usage stop. A retry, if ever wanted, is a second budgeted call.
 
 Not wired yet: `worker.escalate` (the lead's demanding flag), and any use of
 `noul` or `score` questions. Those wait for a live run that shows the two
