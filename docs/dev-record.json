@@ -350,25 +350,38 @@
       "claimed_at": "2026-10-01T02:41:54Z",
       "acknowledged": true,
       "delivery": {
-        "sha": "ec6886ecb3e219403e8b26ba00ae037c41b511d9",
-        "at": "2026-10-01T03:06:04Z"
+        "sha": "54a2576c47c40fa07f5b347423833f9f9cee8430",
+        "at": "2026-10-01T03:14:36Z"
       },
       "reviews": [
         {
           "reviewer": "claude",
           "sha": "ec6886ecb3e219403e8b26ba00ae037c41b511d9",
-          "verdict": "cleared",
+          "verdict": "stale",
           "evidence": "https://github.com/Davisfox5/quadratus/pull/49#issuecomment-5923907891",
           "scope": [
             "tools/jev_experiment/",
             "docs/jev-experiment-plan.md"
           ],
-          "at": "2026-10-01T03:06:04Z"
+          "at": "2026-10-01T03:06:04Z",
+          "stale_reason": "delivery moved from ec6886e to 54a2576"
+        },
+        {
+          "reviewer": "claude",
+          "sha": "54a2576c47c40fa07f5b347423833f9f9cee8430",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923985726",
+          "scope": [
+            "tools/jev_experiment/",
+            "docs/jev-experiment-plan.md"
+          ],
+          "at": "2026-10-01T03:14:36Z"
         }
       ],
       "blockers": [],
       "decisions": [
-        "claude: review of ec6886e: 12 tests pass at the SHA and on a committed merge with #47's 5844fd5; lint clean; no provider client; freeze and scoring integrity checks hold. Two gate items, not tool defects: (1) the packet schema the harness validates (tasks[], acceptable_kinds, acceptable_difficulties, scope{...}, source_refs, checks[argv], expected_default_lead, split 'held_out') is not the shape #48 delivered (samples[], acceptable.kind[{label,rationale}], permitted_paths, leads, split 'held-out'); the harness schema is the contract and #48 converts before freeze; (2) source_refs are verified in the engine repo at base_sha while the samples cite GameTape project files at baseline 1cd9264, so the packet needs a project repo and baseline for those refs. Small: counts_by_split folds refusals into not-acceptable; a refused count beside it keeps them visible"
+        "claude: review of ec6886e: 12 tests pass at the SHA and on a committed merge with #47's 5844fd5; lint clean; no provider client; freeze and scoring integrity checks hold. Two gate items, not tool defects: (1) the packet schema the harness validates (tasks[], acceptable_kinds, acceptable_difficulties, scope{...}, source_refs, checks[argv], expected_default_lead, split 'held_out') is not the shape #48 delivered (samples[], acceptable.kind[{label,rationale}], permitted_paths, leads, split 'held-out'); the harness schema is the contract and #48 converts before freeze; (2) source_refs are verified in the engine repo at base_sha while the samples cite GameTape project files at baseline 1cd9264, so the packet needs a project repo and baseline for those refs. Small: counts_by_split folds refusals into not-acceptable; a refused count beside it keeps them visible",
+        "claude: review of 54a2576: 13 tests pass at the SHA and on a committed merge with #47's 5844fd5; lint clean; projects map binds refs to committed blobs at the declared baseline, dirty checkouts ignored, missing roots and refs refused; refused count added. Small, non-blocking: when a packet declares projects, nothing checks that projects.engine.base_sha equals the top-level base_sha, so the two can disagree silently; refuse the mismatch or derive one from the other"
       ],
       "acknowledged_at": "2026-10-01T02:54:24Z"
     },
