@@ -104,13 +104,25 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "acknowledged": true,
       "delivery": {
         "sha": "b2e56171afe22e712adbc96d146f1f2410a9e26f",
         "at": "2026-10-01T02:09:22Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "b2e56171afe22e712adbc96d146f1f2410a9e26f",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923395969",
+          "scope": [
+            "quadratus/decisions.py",
+            "docs/decisions-api.md"
+          ],
+          "at": "2026-10-01T02:17:37Z"
+        }
+      ],
       "blockers": [],
       "decisions": [
         "Vercel free tier excludes Jev (probe 2026-09-30): a paid top-up or a ts_ key is needed before the comparison run",
