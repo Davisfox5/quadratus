@@ -3,12 +3,21 @@
   "note": "One shared development record (plan on #35, comment 5922888762). Edited through tools/dev_record.py; the acceptance manifest and workflow scorecard keep their own evidence, referenced here, never copied.",
   "candidate": {
     "pr": 42,
-    "sha": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+    "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
     "gate": "merge #42 to main, then the five-run series (docs/DIRECTION.md finish line)",
     "required_receipts": [
       "ci",
       "acceptance",
       "review"
+    ],
+    "history": [
+      {
+        "previous": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+        "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+        "reason": "Mac Claude session merged #44 (3e4528a) into #42 at abf1cbe without an independent review; cloud then merged #44's Codex-review fixes (9119013, 83cf726) and kept Codex's shared-budget reproducer (f96e0c8). Receipts start over on this SHA; Codex's targeted re-review of the Jev decider on #44 and CI on f96e0c8 are the gate",
+        "by": "claude",
+        "at": "2026-10-01T02:09:21Z"
+      }
     ]
   },
   "tasks": [
@@ -98,13 +107,14 @@
       "state": "delivered",
       "acknowledged": true,
       "delivery": {
-        "sha": "3e4528a70c492c72f128f4415cdaf75a90ab8bad",
-        "at": "2026-10-01T01:50:30Z"
+        "sha": "b2e56171afe22e712adbc96d146f1f2410a9e26f",
+        "at": "2026-10-01T02:09:22Z"
       },
       "reviews": [],
       "blockers": [],
       "decisions": [
-        "Vercel free tier excludes Jev (probe 2026-09-30): a paid top-up or a ts_ key is needed before the comparison run"
+        "Vercel free tier excludes Jev (probe 2026-09-30): a paid top-up or a ts_ key is needed before the comparison run",
+        "claude: Codex's #44 review (P1 shared budget bypass, three P2) fixed in 9119013; boundary tests on the orchestrated path in tests/lifecycle/test_decider.py; Codex's reproducer tests/lifecycle/test_codex_jev_budget.py lives on the candidate only because it needs the explicit-task entry"
       ]
     },
     {
@@ -136,8 +146,26 @@
         }
       ],
       "decisions": [
-        "unblocked by davis: direct TypeSafe key obtained; live decisions verified on jev-1.13.0 (#44 at 3e4528a)"
+        "unblocked by davis: direct TypeSafe key obtained; live decisions verified on jev-1.13.0 (#44 at 3e4528a)",
+        "claude: candidate for the run is #42 at f96e0c8 (claude/direct-tier); claude/direct-tier-jev at 4f11a27 is superseded. Invocation unchanged: identical to 20261001T001902Z plus --decider jev, KIND line dropped, direct TypeSafe key in the project's gitignored .env"
       ]
+    },
+    {
+      "id": "T-grok-comparison",
+      "purpose": "comparison of Codex's published Jev run against 20260930T141209Z and 20261001T001902Z, on the #35 thread; no code, no launch, no second grade",
+      "base": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+      "owns": [
+        "analysis:#35 Jev comparison write-up"
+      ],
+      "author": "grok",
+      "reviewer": "claude",
+      "state": "claimed",
+      "claimed_at": "2026-10-01T02:09:22Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [

@@ -16,6 +16,8 @@ duplicates. Nothing here calls a vendor.
     python3 tools/dev_record.py unblock --id T7 --resolution "..." --by davis
     python3 tools/dev_record.py review --id T7 --reviewer codex --sha <sha> --verdict cleared --evidence <url>
     python3 tools/dev_record.py receipt --kind ci --sha <sha> --state passed --evidence <url>
+    python3 tools/dev_record.py candidate --sha <sha> --reason "..." --by claude
+    python3 tools/dev_record.py note --id T7 --text "..." --by claude
     python3 tools/dev_record.py ready
     python3 tools/dev_record.py render
 """
@@ -194,6 +196,32 @@ def integrate(record: dict, *, task_id: str, sha: str, candidate: str) -> dict:
     return task
 
 
+def move_candidate(record: dict, *, sha: str, reason: str, by: str) -> dict:
+    """Move the candidate SHA outside ``integrate``: a merge that happened
+    without a cleared review, a rebase, a correction. The move is refused
+    without a reason, and the previous SHA stays in the candidate's history
+    so a move nobody reviewed is visible rather than silent. Receipts are
+    bound to exact SHAs, so a moved candidate starts with none."""
+    if not reason:
+        raise RecordError("a candidate move names its reason")
+    previous = record["candidate"]["sha"]
+    if previous == sha:
+        raise RecordError(f"the candidate is already {sha[:7]}")
+    record["candidate"].setdefault("history", []).append(
+        dict(previous=previous, sha=sha, reason=reason, by=by, at=_now()))
+    record["candidate"]["sha"] = sha
+    return record["candidate"]
+
+
+def note(record: dict, *, task_id: str, text: str, by: str) -> dict:
+    """Append a dated decision to a task without changing its state."""
+    task = _task(record, task_id)
+    if not text:
+        raise RecordError("a note says something")
+    task["decisions"].append(f"{by}: {text}")
+    return task
+
+
 def receipt(record: dict, *, kind: str, sha: str, state: str, evidence: str = "") -> dict:
     """A required receipt (ci, acceptance, review) for an exact SHA. Failed,
     missing, skipped and unproven are kept distinct, never collapsed."""
@@ -275,6 +303,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     add("receipt", "--kind", "--sha", "--state", "--evidence",
         **{"--kind": dict(required=True), "--sha": dict(required=True),
            "--state": dict(required=True, choices=RECEIPT_STATES), "--evidence": dict(default="")})
+    add("candidate", "--sha", "--reason", "--by",
+        **{"--sha": dict(required=True), "--reason": dict(required=True), "--by": dict(required=True)})
+    add("note", "--id", "--text", "--by",
+        **{"--id": dict(required=True), "--text": dict(required=True), "--by": dict(required=True)})
     add("ready")
     add("render")
     args = parser.parse_args(argv)
@@ -301,6 +333,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             integrate(record, task_id=args.id, sha=args.sha, candidate=args.candidate)
         elif args.command == "receipt":
             receipt(record, kind=args.kind, sha=args.sha, state=args.state, evidence=args.evidence)
+        elif args.command == "candidate":
+            move_candidate(record, sha=args.sha, reason=args.reason, by=args.by)
+        elif args.command == "note":
+            note(record, task_id=args.id, text=args.text, by=args.by)
         elif args.command == "ready":
             print(json.dumps(readiness(record), indent=2))
             return 0

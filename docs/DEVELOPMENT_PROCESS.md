@@ -53,7 +53,10 @@ their evidence; it never copies it and never turns an UNPROVEN row green.
    stands in the way.
 
 Any direct action taken outside the tool stays visible as unqualified until
-it is reconciled into the record.
+it is reconciled into the record. A candidate that moved without
+`integrate` (a merge nobody reviewed, a rebase) is reconciled with
+`candidate --reason`, which keeps the previous SHA in the candidate's
+history and leaves the new SHA with no receipts until they are earned.
 
 ## Measurement
 

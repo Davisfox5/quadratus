@@ -151,3 +151,30 @@ def test_an_unblock_records_the_resolution_and_keeps_the_blocker_as_history():
     assert task["state"] == "delivered" and task["blockers"][0]["resolved"]["resolution"] == "key funded"
     with pytest.raises(R.RecordError, match="not blocked"):
         R.unblock(rec, task_id="T1", resolution="again", by="davis")
+
+
+def test_a_candidate_move_needs_a_reason_and_keeps_history_and_drops_receipts():
+    rec = _record()
+    R.receipt(rec, kind="ci", sha=CANDIDATE, state="passed", evidence="u")
+    assert R.readiness(rec)["receipts"]["ci"] == "passed"
+    with pytest.raises(R.RecordError, match="names its reason"):
+        R.move_candidate(rec, sha="d" * 40, reason="", by="claude")
+    with pytest.raises(R.RecordError, match="already"):
+        R.move_candidate(rec, sha=CANDIDATE, reason="r", by="claude")
+    R.move_candidate(rec, sha="d" * 40, reason="merged without review", by="claude")
+    assert rec["candidate"]["sha"] == "d" * 40
+    assert rec["candidate"]["history"][-1]["previous"] == CANDIDATE
+    assert rec["candidate"]["history"][-1]["reason"] == "merged without review"
+    assert R.readiness(rec)["receipts"]["ci"] == "missing"
+    with pytest.raises(R.RecordError, match="stale base"):
+        _claim(rec, base=CANDIDATE)
+
+
+def test_a_note_is_appended_without_changing_state():
+    rec = _record()
+    _claim(rec)
+    with pytest.raises(R.RecordError, match="says something"):
+        R.note(rec, task_id="T1", text="", by="claude")
+    R.note(rec, task_id="T1", text="base moved", by="claude")
+    assert rec["tasks"][0]["state"] == "claimed"
+    assert rec["tasks"][0]["decisions"] == ["claude: base moved"]
