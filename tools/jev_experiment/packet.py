@@ -68,6 +68,8 @@ def bind_engine(root):
 def project_sources(packet, engine, supplied=None):
     roots = {"engine": engine.resolve(), **(supplied or {})}
     projects = packet.get("projects", {"engine": {"base_sha": packet["base_sha"]}})
+    if "engine" in projects and projects["engine"]["base_sha"] != packet["base_sha"]:
+        raise ValueError("engine project base disagrees with packet base_sha")
     identities = {}
     for name, entry in projects.items():
         if name not in roots or not re.fullmatch(r"[0-9a-f]{40}", entry.get("base_sha", "")):

@@ -160,3 +160,9 @@ def test_project_refs_require_explicit_repository_and_commit(sample, tmp_path):
     sample["tasks"][0]["source_refs"] = [{"path": "absent.py"}]
     with pytest.raises(ValueError, match="source reference missing"):
         P.prepare(sample, ENGINE, {"game": project})
+
+
+def test_engine_project_cannot_disagree_with_packet_base(sample):
+    sample["projects"] = {"engine": {"base_sha": "0" * 40}}
+    with pytest.raises(ValueError, match="disagrees"):
+        P.prepare(sample, ENGINE)
