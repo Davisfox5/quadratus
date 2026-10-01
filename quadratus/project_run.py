@@ -259,7 +259,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     budget = RunBudget(run_limits, path=run_dir / 'budget.json') if run_limits else None
     if isinstance(decider, str) or decider is None:
         from .decisions import decider_from_name
-        decider = decider_from_name(decider, meter=meter)
+        decider = decider_from_name(decider, meter=meter, budget=budget)
     config = SessionConfig(
         project=project.root, project_excludes=tuple(project.exclude),
         allow_writes=allow_writes, mode=mode, integration_gate=gate,

@@ -72,3 +72,37 @@ def test_the_runner_resolves_the_decider_by_name(tmp_path, monkeypatch):
     import pytest
     with pytest.raises(ValueError, match="unknown decider"):
         _run(tmp_path, monkeypatch, DECL_T1, "luna")
+
+
+# ---- Codex review of #44 (3e4528a): per-field delegation, batch admission --
+
+def test_only_the_unstated_field_is_delegated(tmp_path, monkeypatch):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    partial = FakeDecider({"task.difficulty": "rote"})
+    _run(tmp_path / "a", monkeypatch, "KIND: backend\nSCOPE: " + json.dumps(T1) + "\nImplement add in app.py.", partial)
+    assert [d.id for d in partial.asked] == ["task.difficulty"]
+    degraded = FakeDecider({"task.kind": "backend"})
+    replay = _run(tmp_path / "b", monkeypatch, "KIND: typo complex\nSCOPE: " + json.dumps(T1) + "\nImplement add in app.py.",
+                  degraded)
+    assert [d.id for d in degraded.asked] == ["task.kind"]
+    assert [(r["decision"], r["answer"]) for r in _record(replay)] == [("task.kind", "backend")]
+
+
+def _unit_session(tmp_path, decider):
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.session import Session, SessionConfig
+    return Session("goal", ArtifactStore(tmp_path / "artifacts"), lambda *a, **k: "",
+                   config=SessionConfig(decider=decider, max_parallel_tasks=3))
+
+
+def test_a_rejected_batch_makes_no_paid_decisions(tmp_path):
+    decider = FakeDecider()
+    session = _unit_session(tmp_path, decider)
+    same = "SCOPE: " + json.dumps(T1) + "\nImplement add in app.py."
+    assert session._batch_specs([same, same], "seat") is None, "shared files reject the batch"
+    assert decider.asked == []
+    other = "SCOPE: " + json.dumps(dict(T1, permitted_paths=["README.md"])) + "\nDocument add."
+    specs = session._batch_specs([same, other], "seat")
+    assert specs is not None and len(specs) == 2
+    assert [d.id for d in decider.asked] == ["task.kind", "task.difficulty"] * 2

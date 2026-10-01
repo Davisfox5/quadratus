@@ -187,7 +187,7 @@ class JevDecider:
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None,
                  client: Any = None, meter: Any = None, timeout: float = 10.0,
-                 base_url: Optional[str] = None):
+                 base_url: Optional[str] = None, budget: Any = None):
         self.api_key = api_key if api_key is not None else os.environ.get(JEV_API_KEY_ENV, "").strip()
         gateway = self.api_key.startswith(JEV_GATEWAY_KEY_PREFIX)
         self.base_url = (base_url or os.environ.get(JEV_BASE_URL_ENV, "").strip()
@@ -196,6 +196,12 @@ class JevDecider:
                       or (JEV_GATEWAY_MODEL if gateway else JEV_DEFAULT_MODEL))
         self._client = client
         self.meter = meter
+        #: The run's shared budget (quadratus.run_budget.RunBudget), when the
+        #: run has limits: every Jev call reserves a ticket and reports its
+        #: usage, so it counts against max_calls, the token threshold and
+        #: max_cost_usd like any billed API call (Codex review of #44). A
+        #: budget stop propagates; it is never swallowed as a refusal.
+        self.budget = budget
         self.timeout = timeout
         self.calls: List[dict] = []
 
@@ -243,12 +249,24 @@ class JevDecider:
         name = decision.id.replace(".", "_")
         question = {"type": "choice", "instructions": decision.question,
                     "criteria": {answer: None for answer in decision.answers}}
+        ticket = None
+        if self.budget is not None:
+            ticket, _remaining = self.budget.reserve(transport="api", price_key=f"jev:{self.model}")
         started = time.perf_counter()
+        response, failure = None, None
         try:
             response = self._sdk_client().system_one(
                 state=decision.context or decision.question, questions={name: question}, model=self.model)
         except Exception as exc:  # noqa: BLE001 -- refused, never guessed; the caller keeps its rule
-            raise DecisionsUnavailable(f"Jev call failed: {type(exc).__name__}: {exc}") from exc
+            failure = exc
+        finally:
+            if ticket is not None:
+                usage = getattr(response, "usage", None)
+                self.budget.finish(ticket, dict(input_tokens=getattr(usage, "input_tokens", None),
+                                                output_tokens=getattr(usage, "output_tokens", None)),
+                                   price_key=f"jev:{getattr(response, 'model', None) or self.model}")
+        if failure is not None:
+            raise DecisionsUnavailable(f"Jev call failed: {type(failure).__name__}: {failure}") from failure
         seconds = round(time.perf_counter() - started, 3)
         usage = getattr(response, "usage", None)
         model = getattr(response, "model", None) or self.model
@@ -275,13 +293,13 @@ class JevDecider:
                        usage={k: record[k] for k in ("model", "host", "input_tokens", "output_tokens", "seconds")})
 
 
-def decider_from_name(name: Optional[str], *, meter: Any = None):
+def decider_from_name(name: Optional[str], *, meter: Any = None, budget: Any = None):
     """The decider an operator named: None or "rule" for the deterministic
     default, "jev" for TypeSafe's Jev. Unknown names are errors, not defaults."""
     if not name or name == "rule":
         return None
     if name == "jev":
-        return JevDecider(meter=meter)
+        return JevDecider(meter=meter, budget=budget)
     raise ValueError(f"unknown decider {name!r}: expected 'rule' or 'jev'")
 
 

@@ -172,6 +172,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
         integration_gate=gate,
         security_verdict_json=getattr(args, "security_verdict_json", False),
         progress=progress,
+        decider=_decider_for(args, meter),
     )
 
     fleet = Fleet(settings, usage_meter=meter, allow_writes=args.allow_writes)
@@ -221,6 +222,13 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
     print(_c("\n" + meter.render_report(), Fore.CYAN))
     print(_c(f"\nArtifacts, map and usage log: {state}", Fore.CYAN))
     return 0
+
+
+def _decider_for(args, meter=None):
+    """The decider named on the command line, for a projectless session (the
+    project runner resolves its own, with the run budget)."""
+    from .decisions import decider_from_name
+    return decider_from_name(getattr(args, "decider", None), meter=meter)
 
 
 def _operator(args):
