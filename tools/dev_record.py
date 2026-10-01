@@ -18,6 +18,7 @@ duplicates. Nothing here calls a vendor.
     python3 tools/dev_record.py receipt --kind ci --sha <sha> --state passed --evidence <url>
     python3 tools/dev_record.py candidate --sha <sha> --reason "..." --by claude
     python3 tools/dev_record.py note --id T7 --text "..." --by claude
+    python3 tools/dev_record.py extend --id T7 --owns docs/x.md --by claude
     python3 tools/dev_record.py ready
     python3 tools/dev_record.py render
 """
@@ -213,6 +214,26 @@ def move_candidate(record: dict, *, sha: str, reason: str, by: str) -> dict:
     return record["candidate"]
 
 
+def extend(record: dict, *, task_id: str, owns: List[str], by: str, resolve: bool = False) -> dict:
+    """Widen a task's owned scope after the fact (a delivery touched a file
+    the claim did not name). The same overlap rule as a claim applies, and
+    the extension is recorded as a decision rather than rewritten into the
+    original claim."""
+    task = _task(record, task_id)
+    added = [o for o in owns if o not in task["owns"]]
+    if not added:
+        raise RecordError(f"{task_id} already owns {', '.join(owns)}")
+    for other in record["tasks"]:
+        if other["id"] != task_id and other["state"] in ACTIVE:
+            hits = _overlap(added, other.get("owns", []))
+            if hits and not resolve:
+                raise RecordError(f"scope overlaps active task {other['id']} on {', '.join(hits)}; "
+                                  "the coordinator resolves overlaps with --resolve")
+    task["owns"].extend(added)
+    task["decisions"].append(f"{by}: scope extended to {', '.join(added)}")
+    return task
+
+
 def note(record: dict, *, task_id: str, text: str, by: str) -> dict:
     """Append a dated decision to a task without changing its state."""
     task = _task(record, task_id)
@@ -305,6 +326,9 @@ def main(argv: Optional[List[str]] = None) -> int:
            "--state": dict(required=True, choices=RECEIPT_STATES), "--evidence": dict(default="")})
     add("candidate", "--sha", "--reason", "--by",
         **{"--sha": dict(required=True), "--reason": dict(required=True), "--by": dict(required=True)})
+    add("extend", "--id", "--owns", "--by", "--resolve",
+        **{"--id": dict(required=True), "--owns": dict(nargs="+", required=True), "--by": dict(required=True),
+           "--resolve": dict(action="store_true")})
     add("note", "--id", "--text", "--by",
         **{"--id": dict(required=True), "--text": dict(required=True), "--by": dict(required=True)})
     add("ready")
@@ -335,6 +359,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             receipt(record, kind=args.kind, sha=args.sha, state=args.state, evidence=args.evidence)
         elif args.command == "candidate":
             move_candidate(record, sha=args.sha, reason=args.reason, by=args.by)
+        elif args.command == "extend":
+            extend(record, task_id=args.id, owns=args.owns, by=args.by, resolve=args.resolve)
         elif args.command == "note":
             note(record, task_id=args.id, text=args.text, by=args.by)
         elif args.command == "ready":

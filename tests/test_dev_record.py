@@ -178,3 +178,16 @@ def test_a_note_is_appended_without_changing_state():
     R.note(rec, task_id="T1", text="base moved", by="claude")
     assert rec["tasks"][0]["state"] == "claimed"
     assert rec["tasks"][0]["decisions"] == ["claude: base moved"]
+
+
+def test_a_scope_extension_obeys_the_overlap_rule_and_is_recorded():
+    rec = _record()
+    _claim(rec, "T1", owns=["quadratus/a.py"])
+    _claim(rec, "T2", owns=["docs/x.md"], author="codex")
+    with pytest.raises(R.RecordError, match="overlaps active task T2"):
+        R.extend(rec, task_id="T1", owns=["docs/x.md"], by="claude")
+    with pytest.raises(R.RecordError, match="already owns"):
+        R.extend(rec, task_id="T1", owns=["quadratus/a.py"], by="claude")
+    R.extend(rec, task_id="T1", owns=["CLAUDE.md"], by="claude")
+    assert rec["tasks"][0]["owns"] == ["quadratus/a.py", "CLAUDE.md"]
+    assert rec["tasks"][0]["decisions"] == ["claude: scope extended to CLAUDE.md"]

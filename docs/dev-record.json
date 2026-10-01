@@ -234,21 +234,41 @@
         "quadratus/session.py:_route_with_decider",
         "docs/decisions-api.md",
         "tests/test_decisions.py",
-        "tests/lifecycle/test_decider.py"
+        "tests/lifecycle/test_decider.py",
+        "CLAUDE.md"
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-01T02:41:54Z",
       "acknowledged": true,
       "delivery": {
         "sha": "93941b56005688c6245f07cd0d03e678c3413fab",
         "at": "2026-10-01T02:53:19Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "93941b56005688c6245f07cd0d03e678c3413fab",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923834389",
+          "scope": [
+            "quadratus/decision_labels.py",
+            "quadratus/decisions.py",
+            "quadratus/session.py:_route_with_decider",
+            "docs/decisions-api.md",
+            "tests/test_decisions.py",
+            "tests/lifecycle/test_decider.py",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-01T02:59:28Z"
+        }
+      ],
       "blockers": [],
       "decisions": [
-        "claude: Codex acknowledged the scope for independent review (#35 comment 5923763006)"
+        "claude: Codex acknowledged the scope for independent review (#35 comment 5923763006)",
+        "claude: scope extended to CLAUDE.md",
+        "claude: Codex calibration notes: the favicon is a development example and must not reappear as a held-out result; the frontend/backend tie-break is a declared convention, not proof the earlier backend answer was wrong; later comparisons record the actual lead and required checks/reviews, not label agreement alone"
       ],
       "acknowledged_at": "2026-10-01T02:53:18Z"
     },
@@ -264,11 +284,12 @@
       "reviewer": "codex",
       "state": "claimed",
       "claimed_at": "2026-10-01T02:41:54Z",
-      "acknowledged": false,
+      "acknowledged": true,
       "delivery": null,
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [],
+      "acknowledged_at": "2026-10-01T02:59:28Z"
     },
     {
       "id": "T-codex-harness",
