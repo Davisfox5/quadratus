@@ -20,6 +20,16 @@ names what the account can call. Text only, no image input. Price from the
 OpenRouter listing on 2026-09-30: $0.042 per million input tokens, output
 free; it is a seed on the usage sheet, stale by assumption.
 
+Access without a TypeSafe account: Vercel's AI Gateway fronts Jev behind a
+TypeSafe-compatible API (base URL `https://ai-gateway.vercel.sh/typesafe`,
+model `typesafe-ai/jev`, the gateway key as the bearer, no markup), and
+Vercel's free tier includes $5 of gateway credit a month, about 120 million
+Jev input tokens. TypeSafe's own console stopped giving new accounts free
+credit on 2026-09-27. A `vck_` key is recognised as a gateway key and the
+gateway host and model become its defaults; `TYPESAFE_BASE_URL` and
+`TYPESAFE_DEFAULT_MODEL` still override. The host is recorded on every
+call.
+
 What the engine does with it (`JevDecider`, `Session._route_with_decider`):
 
 - Only when the orchestrator's reply carried no usable KIND line (a

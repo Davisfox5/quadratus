@@ -85,6 +85,13 @@ DIFFICULTY = D.Decision(id="task.difficulty", question="How hard?", answers=("ro
                         context="Rename one variable in app.py.")
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_jev_configuration(monkeypatch):
+    """The tests choose their own key, host and model; the shell's do not leak in."""
+    for name in ("TYPESAFE_API_KEY", "TYPESAFE_BASE_URL", "TYPESAFE_DEFAULT_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_jev_asks_one_choice_question_and_returns_a_verdict_with_source_and_confidence():
     client, meter = _Client(_Answer("rote", 0.82, {"rote": 0.82, "simple": 0.15})), _Meter()
     verdict = D.JevDecider(client=client, meter=meter).decide(DIFFICULTY)
@@ -134,3 +141,21 @@ def test_decider_names():
 def test_jev_prices_are_on_the_sheet():
     from quadratus.usage import PRICES
     assert PRICES["jev:jev-latest"].input_per_mtok == 0.042 and PRICES["jev:jev-latest"].output_per_mtok == 0.0
+
+
+def test_a_vercel_gateway_key_defaults_to_the_gateway_host_and_model(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_BASE_URL", raising=False)
+    monkeypatch.delenv("TYPESAFE_DEFAULT_MODEL", raising=False)
+    gateway = D.JevDecider(api_key="vck_example")
+    assert gateway.base_url == D.JEV_GATEWAY_BASE_URL and gateway.model == "typesafe-ai/jev"
+    assert gateway.host == "vercel-gateway"
+    direct = D.JevDecider(api_key="ts_example")
+    assert direct.base_url is None and direct.model == "jev-latest" and direct.host == "typesafe"
+    explicit = D.JevDecider(api_key="vck_example", base_url="https://example.test", model="jev-1.13")
+    assert explicit.base_url == "https://example.test" and explicit.model == "jev-1.13"
+
+
+def test_the_call_record_names_the_host():
+    decider = D.JevDecider(api_key="vck_example", client=_Client(_Answer("simple")))
+    decider.decide(DIFFICULTY)
+    assert decider.calls[0]["host"] == "vercel-gateway"

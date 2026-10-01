@@ -27,7 +27,15 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
 
 JEV_API_KEY_ENV = "TYPESAFE_API_KEY"
+JEV_BASE_URL_ENV = "TYPESAFE_BASE_URL"
 JEV_DEFAULT_MODEL = "jev-latest"
+#: Vercel's AI Gateway fronts Jev behind a TypeSafe-compatible API (its
+#: docs: base URL ``/typesafe``, model ``typesafe-ai/jev``, the gateway key
+#: as the bearer). A ``vck_`` key is a gateway key, so those become the
+#: defaults for it; an explicit base URL or model still wins.
+JEV_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/typesafe"
+JEV_GATEWAY_MODEL = "typesafe-ai/jev"
+JEV_GATEWAY_KEY_PREFIX = "vck_"
 
 
 @dataclass(frozen=True)
@@ -174,9 +182,14 @@ class JevDecider:
     name = "jev"
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None,
-                 client: Any = None, meter: Any = None, timeout: float = 10.0):
+                 client: Any = None, meter: Any = None, timeout: float = 10.0,
+                 base_url: Optional[str] = None):
         self.api_key = api_key if api_key is not None else os.environ.get(JEV_API_KEY_ENV, "").strip()
-        self.model = model or os.environ.get("TYPESAFE_DEFAULT_MODEL", "").strip() or JEV_DEFAULT_MODEL
+        gateway = self.api_key.startswith(JEV_GATEWAY_KEY_PREFIX)
+        self.base_url = (base_url or os.environ.get(JEV_BASE_URL_ENV, "").strip()
+                         or (JEV_GATEWAY_BASE_URL if gateway else None))
+        self.model = (model or os.environ.get("TYPESAFE_DEFAULT_MODEL", "").strip()
+                      or (JEV_GATEWAY_MODEL if gateway else JEV_DEFAULT_MODEL))
         self._client = client
         self.meter = meter
         self.timeout = timeout
@@ -197,12 +210,19 @@ class JevDecider:
     def _sdk_client(self):
         if self._client is None:
             from typesafe_sdk import TypeSafeClient
-            self._client = TypeSafeClient(api_key=self.api_key, model=self.model, timeout=self.timeout)
+            self._client = TypeSafeClient(api_key=self.api_key, model=self.model, timeout=self.timeout,
+                                          **({"base_url": self.base_url} if self.base_url else {}))
         return self._client
+
+    @property
+    def host(self) -> str:
+        """Where calls go, for the record: "typesafe" or "vercel-gateway"."""
+        return "vercel-gateway" if (self.base_url or "").startswith(JEV_GATEWAY_BASE_URL) else "typesafe"
 
     def probe(self) -> List[str]:
         """The model names the account can call: the round trip is the fact
-        recorded, as ``quadratus --probe`` does for the CLIs."""
+        recorded, as ``quadratus --probe`` does for the CLIs. A gateway may
+        not serve the models list; a decision call is then the probe."""
         reason = self.available()
         if reason:
             raise DecisionsUnavailable(reason)
@@ -226,7 +246,7 @@ class JevDecider:
             raise DecisionsUnavailable(f"Jev call failed: {type(exc).__name__}: {exc}") from exc
         usage = getattr(response, "usage", None)
         model = getattr(response, "model", None) or self.model
-        record = dict(decision=decision.id, model=model,
+        record = dict(decision=decision.id, model=model, host=self.host,
                       input_tokens=getattr(usage, "input_tokens", None),
                       output_tokens=getattr(usage, "output_tokens", None))
         self.calls.append(record)
