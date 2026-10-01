@@ -133,4 +133,21 @@ def test_the_progress_line_at_list_end_names_the_list_not_an_orchestrator(tmp_pa
     replay = _run(tmp_path, monkeypatch, [README_TASK], max_tasks=1)
     assert replay.result.completed, replay.result.error
     assert not any("orchestrator reports the goal met" in line for line in lines), lines
-    assert any("task list ran to its end" in line for line in lines), lines
+    assert any("the goal was not judged" in line for line in lines), lines
+
+def test_explicit_progress_never_claims_an_orchestrator_judged_the_goal(tmp_path, monkeypatch):
+    from quadratus.session import Session
+
+    messages = []
+    original = Session._note
+
+    def note(session, text):
+        messages.append(text)
+        return original(session, text)
+
+    monkeypatch.setattr(Session, "_note", note)
+    replay = _run(tmp_path, monkeypatch, [README_TASK], max_tasks=1)
+    assert replay.result.completed
+    assert replay.of("orchestrator") == []
+    assert "listed tasks completed; the goal was not judged" in messages
+    assert not any("orchestrator reports the goal met" in text for text in messages)
