@@ -25,10 +25,10 @@ Coverage gaps, left open on purpose: no standard row, no complex row. Nothing wa
 
 | id | was wrong | correction | evidence | uncertainty |
 |---|---|---|---|---|
-| dev-favicon | empty capture; prose could be read as a byte copy | wait for `link[rel=icon][href=/favicon.ico]`; SVG under 20 lines; reconstruction, not a byte copy | preserved request plus `templates/index.html` head | harness widths are the ordinary desktop and mobile captures, not a pixel size I invented |
+| dev-favicon | wait on a nonvisual `link[rel=icon]`; Chrome times out | empty capture steps on `/`; DOM/endpoint assertions for href, type, and GET `/favicon.ico`; ordinary desktop/mobile captures | engine wait uses `state=visible`; Codex Chrome timeout | none remaining on the wait |
 | dev-node-status | a missing mutation script; grader was file existence | `node tests/ui/import_preview.test.js`; note must match the captured exit | script is in the 1cd9264 patch | the operator must capture the exit in the same environment |
 | dev-trial-sentence | none; kept as the schema control | no-command binds the editor; the operator may still diff | previous prepare passed | none |
-| hold-heading | capture of `/` with no steps cannot show a hidden section | seed, then click `.project-card`, wait `#btn-import-preview`, file `#import-preview-file`, wait `#import-preview-heading` | `static/js/app.js` `openProject` closes the section; `runImportPreview` opens it; heading starts `hidden` | the file step must dispatch the input `change` event; if the harness only sets `.value`, the section stays hidden |
+| hold-heading | pytest on a JS file; fixture dir used the sample id; last wait was the heading, which appears before fetch settles | `node tests/ui/import_preview.test.js`; fixture `.quadratus/capture-fixtures/t1/one-row.csv`; last wait is the settled summary | Codex: pytest exit 4; `validate_steps` with `task_id=t1`; `runImportPreview` reveals the heading before fetch completes; `set_input_files` dispatches change | none remaining on the file-step event |
 | hold-import-note | a token plus a clean diff could pass | note must say `_load_projects` is called and `_save_projects` is not | `import_preview` in the 1cd9264 patch | none |
 | hold-dotenv-guard | not-200 is already green | same assertion, 403 and `error=denied`, red on today's 404; check stays proposed | Codex baseline measurement | green-after is not claimed |
 | hold-one-assertion | the BOM test already asserts `preview_only` | add it to `test_preview_repeated_ignored_headers_keep_physical_header_width` | that test's body in the patch stops at the valid summary | none |
@@ -43,14 +43,14 @@ Coverage gaps, left open on purpose: no standard row, no complex row. Nothing wa
 Operator, temporary data directory, not a candidate-source edit:
 
 1. `POST /api/projects` with `{"name":"Preview seed"}`. A new project includes tag type `Pass`.
-2. Copy the fixture bytes below to `.quadratus/capture-fixtures/hold-heading/one-row.csv`.
+2. Copy the fixture bytes below to `.quadratus/capture-fixtures/t1/one-row.csv`. The sample id stays `hold-heading`. One-task-per-run assigns engine task id `t1`, and that is the directory the validator accepts.
 
 ```csv
 Tag Type,Start (s),End (s),Label
 Pass,1,2,seed
 ```
 
-Capture path `/`, one `.project-card`. Steps are in the task scope. Settled result: `#import-preview-summary` is `Total 1 · valid 1 · malformed 0 · duplicate 0`, and the heading text is `CSV preview`. Repeat at the harness desktop width and the harness mobile width. Keep an independent design review.
+Capture path `/`, one `.project-card`. Steps are in the task scope. Last wait is `#import-preview-summary:text-is("Total 1 · valid 1 · malformed 0 · duplicate 0")`. Independent assertion: `#import-preview-heading` is visible and reads `CSV preview`. Repeat at the harness desktop width and the harness mobile width. Keep an independent design review. The Node UI tests are a check, not that heading evidence. `set_input_files` dispatches the file input's change event.
 
 ### hold-template-get command
 

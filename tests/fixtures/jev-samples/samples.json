@@ -45,19 +45,15 @@
           "GET /favicon.ico returns 200 and Content-Type starting with image/svg+xml",
           "static/favicon.svg is valid SVG, under 20 lines, using #0f1117 and #fff",
           "templates/index.html links /favicon.ico as image/svg+xml after the stylesheet link",
+          "A DOM check finds link[rel=icon][href=/favicon.ico] with type image/svg+xml; do not wait for that head element to become visible",
           "tests/test_basic.py asserts 200 and the image/svg+xml mimetype",
           "pytest -q has no new failure",
-          "The operator capture waits for link[rel=icon][href=/favicon.ico] on /, at the harness desktop width and the harness mobile width, and an independent design review is kept"
+          "Ordinary populated desktop and mobile captures of / with an empty interaction list, plus an independent design review"
         ],
         "max_lines": 40,
         "capture": {
           "path": "/",
-          "steps": [
-            {
-              "action": "wait",
-              "selector": "link[rel=\"icon\"][href=\"/favicon.ico\"]"
-            }
-          ]
+          "steps": []
         }
       },
       "source_refs": [
@@ -86,7 +82,7 @@
           ]
         }
       ],
-      "rationale": "Development only, not a scoring item. Kind is frontend only: a rendered page is part of the acceptance, so the kind-v1 tie-break prefers frontend over backend. Difficulty is simple: one route, one asset, one link, one test. The prose is reconstructed from the preserved request; it is not claimed to be byte-identical. The capture step is a real wait for the icon link, not an empty step list.",
+      "rationale": "Development only, not a scoring item. Kind is frontend only: a rendered page is part of the acceptance, so the kind-v1 tie-break prefers frontend over backend. Difficulty is simple: one route, one asset, one link, one test. The prose is reconstructed from the preserved request; it is not claimed to be byte-identical. The icon link is not visible, so a wait on it times out in Chrome. Capture of / has an empty step list. Link presence, href, type, and the favicon response are DOM/endpoint assertions, not a visible wait.",
       "expected_default_lead": "grok:default"
     },
     {
@@ -204,6 +200,7 @@
           "No other line in templates/index.html changes",
           "After the seed and the capture steps, #import-preview-heading is visible and reads CSV preview",
           "#import-preview-summary reads Total 1 \u00b7 valid 1 \u00b7 malformed 0 \u00b7 duplicate 0",
+          "The Node UI tests pass; they do not prove the heading is visible",
           "Desktop and mobile captures are both kept, plus an independent design review"
         ],
         "max_lines": 5,
@@ -221,11 +218,15 @@
             {
               "action": "file",
               "selector": "#import-preview-file",
-              "path": ".quadratus/capture-fixtures/hold-heading/one-row.csv"
+              "path": ".quadratus/capture-fixtures/t1/one-row.csv"
             },
             {
               "action": "wait",
               "selector": "#import-preview-heading"
+            },
+            {
+              "action": "wait",
+              "selector": "#import-preview-summary:text-is(\"Total 1 \u00b7 valid 1 \u00b7 malformed 0 \u00b7 duplicate 0\")"
             }
           ]
         }
@@ -244,15 +245,12 @@
         {
           "status": "proposed",
           "argv": [
-            "python",
-            "-m",
-            "pytest",
-            "-q",
+            "node",
             "tests/ui/import_preview.test.js"
           ]
         }
       ],
-      "rationale": "The heading is user-visible and the acceptance includes the render, so the tie-break is frontend. Difficulty is rote: one specified string. Execute stays. At 1cd9264 the section is hidden until runImportPreview, and openProject closes it, so an empty capture of / cannot show the heading. The seed and the four steps are the evidence. grok:worker is skipped because execute is required; that is accepted.",
+      "rationale": "The heading is user-visible and the acceptance includes the render, so the tie-break is frontend. Difficulty is rote: one specified string. Execute stays. At 1cd9264 the section is hidden until runImportPreview, and openProject closes it, so an empty capture of / cannot show the heading. The one-task-per-run engine assigns t1, so the fixture path is .quadratus/capture-fixtures/t1/one-row.csv while the sample id stays hold-heading. The last wait is the settled summary; a heading-visible wait alone can pass before the fetch finishes. set_input_files dispatches change. Node tests are a check, not the heading evidence. grok:worker is skipped because execute is required; that is accepted.",
       "expected_default_lead": "grok:default"
     },
     {
