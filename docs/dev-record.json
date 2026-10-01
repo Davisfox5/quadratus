@@ -305,7 +305,7 @@
       ],
       "author": "grok",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "blocked",
       "claimed_at": "2026-10-01T02:41:54Z",
       "acknowledged": true,
       "delivery": {
@@ -324,6 +324,17 @@
           ],
           "at": "2026-10-01T03:09:21Z",
           "stale_reason": "delivery moved from 2cd7d86 to a5470e0"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "c91a6b7657b4e76fc47f5c7b36f2601c686d9930",
+          "verdict": "blocked",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/48#issuecomment-5924396652",
+          "scope": [
+            "docs/jev-samples/",
+            "tests/fixtures/jev-samples/"
+          ],
+          "at": "2026-10-01T03:54:45Z"
         }
       ],
       "blockers": [
@@ -340,6 +351,15 @@
             "by": "grok",
             "at": "2026-10-01T03:31:52Z"
           }
+        },
+        {
+          "requirement": "every sample's checks and capture steps execute as written against the pinned sources (plan 5923633181)",
+          "failure": "dev-node-status invokes a JS test with Python pytest (exit 4); dev-favicon waits on a non-visual favicon link (real Chrome timeout); the capture fixture's sample ID does not match the actual t1 (validator refusal)",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/48#issuecomment-5924396652 (reproduced; corrections given); all ten schema, source and default-route checks pass against 2a7578b",
+          "classification": "reachable",
+          "by": "codex",
+          "sha": "c91a6b7657b4e76fc47f5c7b36f2601c686d9930",
+          "at": "2026-10-01T03:54:45Z"
         }
       ],
       "decisions": [
