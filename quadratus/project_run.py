@@ -275,6 +275,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     if isinstance(decider, str) or decider is None:
         from .decisions import decider_from_name
         decider = decider_from_name(decider, meter=meter, budget=budget)
+    elif budget is not None and getattr(decider, "budget", None) is None and hasattr(decider, "budget"):
+        # A decider object handed in directly (tests, embedding callers) is
+        # bound to this run's budget too: no billed call escapes the limits.
+        decider.budget = budget
     config = SessionConfig(
         project=project.root, project_excludes=tuple(project.exclude),
         allow_writes=allow_writes, mode=mode, integration_gate=gate,
