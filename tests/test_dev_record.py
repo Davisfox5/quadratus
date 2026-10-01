@@ -136,3 +136,18 @@ def test_the_checked_in_record_loads_and_renders():
     rec = R.load()
     assert rec["candidate"]["sha"] and all(t["state"] in R.STATES for t in rec["tasks"])
     assert "Development record" in R.render(rec)
+
+
+def test_an_unblock_records_the_resolution_and_keeps_the_blocker_as_history():
+    rec = _record()
+    _claim(rec)
+    R.deliver(rec, task_id="T1", sha="e" * 40, exists=lambda s: True)
+    R.review(rec, task_id="T1", reviewer="codex", sha="e" * 40, verdict="blocked", evidence="u",
+             blocker=dict(requirement="r", failure="f", evidence="e", classification="reachable"))
+    with pytest.raises(R.RecordError, match="names its resolution"):
+        R.unblock(rec, task_id="T1", resolution="", by="davis")
+    R.unblock(rec, task_id="T1", resolution="key funded", by="davis")
+    task = rec["tasks"][0]
+    assert task["state"] == "delivered" and task["blockers"][0]["resolved"]["resolution"] == "key funded"
+    with pytest.raises(R.RecordError, match="not blocked"):
+        R.unblock(rec, task_id="T1", resolution="again", by="davis")

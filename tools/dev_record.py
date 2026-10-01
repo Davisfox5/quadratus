@@ -13,6 +13,7 @@ duplicates. Nothing here calls a vendor.
 
     python3 tools/dev_record.py claim  --id T7 --purpose "..." --base <sha> --owns quadratus/x.py --author claude
     python3 tools/dev_record.py deliver --id T7 --sha <sha>
+    python3 tools/dev_record.py unblock --id T7 --resolution "..." --by davis
     python3 tools/dev_record.py review --id T7 --reviewer codex --sha <sha> --verdict cleared --evidence <url>
     python3 tools/dev_record.py receipt --kind ci --sha <sha> --state passed --evidence <url>
     python3 tools/dev_record.py ready
@@ -164,6 +165,23 @@ def review(record: dict, *, task_id: str, reviewer: str, sha: str, verdict: str,
     return entry
 
 
+def unblock(record: dict, *, task_id: str, resolution: str, by: str) -> dict:
+    """A blocker was resolved: the resolution is recorded against every open
+    blocker and the task returns to claimed (or delivered, if it has a
+    delivery). The blockers stay on the record as history."""
+    task = _task(record, task_id)
+    if task["state"] != "blocked":
+        raise RecordError(f"{task_id} is {task['state']}, not blocked")
+    if not resolution:
+        raise RecordError("an unblock names its resolution")
+    for blocker in task["blockers"]:
+        if not blocker.get("resolved"):
+            blocker["resolved"] = dict(resolution=resolution, by=by, at=_now())
+    task["state"] = "delivered" if task.get("delivery") else "claimed"
+    task["decisions"].append(f"unblocked by {by}: {resolution}")
+    return task
+
+
 def integrate(record: dict, *, task_id: str, sha: str, candidate: str) -> dict:
     """Mark a task integrated into the candidate; the candidate SHA moves."""
     task = _task(record, task_id)
@@ -250,6 +268,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         **{"--id": dict(required=True), "--reviewer": dict(required=True), "--sha": dict(required=True),
            "--verdict": dict(required=True, choices=VERDICTS), "--evidence": dict(required=True),
            "--scope": dict(nargs="*")})
+    add("unblock", "--id", "--resolution", "--by",
+        **{"--id": dict(required=True), "--resolution": dict(required=True), "--by": dict(required=True)})
     add("integrate", "--id", "--sha", "--candidate",
         **{"--id": dict(required=True), "--sha": dict(required=True), "--candidate": dict(required=True)})
     add("receipt", "--kind", "--sha", "--state", "--evidence",
@@ -275,6 +295,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                evidence=args.blocker_evidence, classification=args.classification)
             review(record, task_id=args.id, reviewer=args.reviewer, sha=args.sha, verdict=args.verdict,
                    evidence=args.evidence, scope=args.scope, blocker=blocker)
+        elif args.command == "unblock":
+            unblock(record, task_id=args.id, resolution=args.resolution, by=args.by)
         elif args.command == "integrate":
             integrate(record, task_id=args.id, sha=args.sha, candidate=args.candidate)
         elif args.command == "receipt":

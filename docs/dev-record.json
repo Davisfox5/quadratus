@@ -98,8 +98,8 @@
       "state": "delivered",
       "acknowledged": true,
       "delivery": {
-        "sha": "385ee419bc31c23db513184f84db852eb80a00cf",
-        "at": "2026-10-01T01:04:00Z"
+        "sha": "3e4528a70c492c72f128f4415cdaf75a90ab8bad",
+        "at": "2026-10-01T01:50:30Z"
       },
       "reviews": [],
       "blockers": [],
@@ -116,7 +116,7 @@
       ],
       "author": "codex",
       "reviewer": "claude",
-      "state": "blocked",
+      "state": "claimed",
       "acknowledged": false,
       "delivery": null,
       "reviews": [],
@@ -127,10 +127,17 @@
           "evidence": "docs/decisions-api.md (probe 2026-09-30)",
           "classification": "reachable",
           "by": "davis",
-          "at": "2026-10-01T01:04:00Z"
+          "at": "2026-10-01T01:04:00Z",
+          "resolved": {
+            "resolution": "direct TypeSafe key obtained; live decisions verified on jev-1.13.0 (#44 at 3e4528a)",
+            "by": "davis",
+            "at": "2026-10-01T01:50:30Z"
+          }
         }
       ],
-      "decisions": []
+      "decisions": [
+        "unblocked by davis: direct TypeSafe key obtained; live decisions verified on jev-1.13.0 (#44 at 3e4528a)"
+      ]
     }
   ],
   "receipts": [
