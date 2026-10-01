@@ -1,50 +1,27 @@
 # Jev sample packet (T-grok-samples)
 
-Author: Grok. Reviewer: Codex. Base: `f96e0c88e7a18156a9582e3aa19de4c9d70ff89f`.
-Machine copy: `tests/fixtures/jev-samples/samples.json`.
+Author: Grok. Reviewer: Codex. Not frozen. No Jev call.
 
-This packet is a proposal. Answer sets are not frozen until Codex reviews them.
-No Jev call, live run, or engine edit was made to produce it. The favicon row
-is development-only: Jev already answered it on run `20261001T022457Z-6602cd28`.
+Machine copy: `tests/fixtures/jev-samples/samples.json`. Schema is `tools/jev_experiment/packet.py` `validate` on #49 at the projects-map revision. `held_out` uses an underscore. Answer sets are flat `acceptable_kinds` and `acceptable_difficulties`. `acceptable_pairs` is omitted where the cross product is the set.
 
-## How a lead was assigned
+`projects.engine` is `f96e0c88e7a18156a9582e3aa19de4c9d70ff89f`. `projects.gametape` is `1cd9264edb4429f00cde43a04a1944d0dca37f11`. No absolute path.
 
-Read from `quadratus/task_kinds.py` `route()` at the base SHA, every ladder
-seat assumed available:
+Unlabelled `route()` on that engine, for every row, is kind general, difficulty simple, lead `grok:default`. Applying an accepted pair then does this:
 
-- A non-empty `prefer` is tried first. At this SHA those pins are
-  scope/decompose → `claude:fable`, review → `openai:gpt-5.6-sol` then
-  `claude:opus`, security → Sol, test → Sol.
-- Otherwise the difficulty ladder: complex → `claude:opus`, standard →
-  `openai:gpt-5.6-sol`, simple → `grok:default`, rote → `grok:worker`.
-- `grok:worker` can only return a patch. A task that must run a command or
-  write a non-patch file skips it and climbs to `grok:default`. A rote label
-  plus `execute` therefore admits the same lead as simple. That is disclosed
-  on every row where it happens.
-- `tool_first` (perf, frontend render) is an instruction to the lead, not a
-  different seat.
-- Direct tier, survey recovery, and design-review seats are not varied here.
+| id | split | accepted pair | lead |
+|---|---|---|---|
+| dev-favicon | development | frontend + simple | grok:default |
+| dev-node-status | development | docs + rote | grok:default (execute skips the worker) |
+| dev-trial-sentence | development | docs + rote | grok:worker |
+| hold-heading | held-out | frontend + rote | grok:default (execute and a capture stay) |
+| hold-import-note | held-out | docs + simple | grok:default |
+| hold-dotenv-guard | held-out | security + simple | openai:gpt-5.6-sol |
+| hold-one-assertion | held-out | test + rote | openai:gpt-5.6-sol |
+| hold-budget-threads | held-out | concurrency + complex | claude:opus |
+| hold-import-readonly | held-out | review + simple | openai:gpt-5.6-sol |
+| hold-import-readonly | held-out | comprehend + simple | grok:default |
+| hold-list-timing | held-out | perf + simple | grok:default |
 
-Unlabelled rule default, from the same code path the live run used when KIND
-was omitted: kind `general`, difficulty `simple`, lead `grok:default`.
+dev-favicon is not a scoring item. The favicon prose has no KIND, NEEDS, SCOPE, TIER, or LEAD line; the tool injects those. Kind is frontend only under the kind-v1 tie-break.
 
-## What a later experiment may treat as a route change
-
-A label changes the admitted lead only where the `leads` map in the fixture
-says the two `route()` results differ. Kind agreement, confidence, and
-probability are not scores. The favicon row must not be a scoring item.
-
-## Split
-
-| id | split | why it is in that split |
-|---|---|---|
-| dev-favicon | development | Jev already answered this text |
-| dev-mutation-node | development | the 2026-09-14 incident the ladder comment already encodes |
-| dev-trial-sentence | development | control: rote vs simple changes the lead, no command |
-| hold-heading | held-out | same shape as the control, unseen text |
-| hold-import-note | held-out | review pin vs a ladder kind |
-| hold-dotenv-guard | held-out | security pin vs backend on the ladder |
-| hold-one-assertion | held-out | test pin: difficulty does not change the lead |
-| hold-ledger-append | held-out | test pin vs concurrency on the ladder |
-| hold-import-readonly | held-out | review pin vs docs on the ladder |
-| hold-list-timing | held-out | perf has no pin; simple vs standard changes the lead |
+dev-node-status replaces the missing mutation script with `tests/ui/import_preview.test.js` on the GameTape baseline. hold-budget-threads replaces the in-memory Ledger story with `RunBudget`. hold-dotenv-guard requires 403 and `error=denied`, because 404 already makes "not 200" green. hold-list-timing records three durations and has no millisecond cutoff. hold-import-readonly is `edits: none` with a named path and a positive line ceiling.
