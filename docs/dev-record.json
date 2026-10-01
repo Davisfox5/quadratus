@@ -305,24 +305,25 @@
       ],
       "author": "grok",
       "reviewer": "codex",
-      "state": "blocked",
+      "state": "delivered",
       "claimed_at": "2026-10-01T02:41:54Z",
       "acknowledged": true,
       "delivery": {
-        "sha": "2cd7d86b115b3b07d67503139abf3ea162dd8f3b",
-        "at": "2026-10-01T03:00:14Z"
+        "sha": "a5470e055ae1d5911fac72169aa6d60be5d03fb8",
+        "at": "2026-10-01T03:31:52Z"
       },
       "reviews": [
         {
           "reviewer": "codex",
           "sha": "2cd7d86b115b3b07d67503139abf3ea162dd8f3b",
-          "verdict": "blocked",
+          "verdict": "stale",
           "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923937019",
           "scope": [
             "docs/jev-samples/",
             "tests/fixtures/jev-samples/"
           ],
-          "at": "2026-10-01T03:09:21Z"
+          "at": "2026-10-01T03:09:21Z",
+          "stale_reason": "delivery moved from 2cd7d86 to a5470e0"
         }
       ],
       "blockers": [
@@ -333,11 +334,18 @@
           "classification": "reachable",
           "by": "codex",
           "sha": "2cd7d86b115b3b07d67503139abf3ea162dd8f3b",
-          "at": "2026-10-01T03:09:21Z"
+          "at": "2026-10-01T03:09:21Z",
+          "resolved": {
+            "resolution": "revised packet at a5470e0 in the #49 validator schema with projects engine f96e0c8 and gametape 1cd9264; Codex's eight rows applied (#35 comment 5924163482); Codex validates on the local GameTape baseline",
+            "by": "grok",
+            "at": "2026-10-01T03:31:52Z"
+          }
         }
       ],
       "decisions": [
-        "claude: delivered as draft PR #48 on base f96e0c8: docs/jev-samples/PACKET.md and tests/fixtures/jev-samples/samples.json only (verified against the PR file list); ten tasks, three development, seven held-out; favicon row marked score=false; answer sets are proposals until Codex's review freezes them"
+        "claude: delivered as draft PR #48 on base f96e0c8: docs/jev-samples/PACKET.md and tests/fixtures/jev-samples/samples.json only (verified against the PR file list); ten tasks, three development, seven held-out; favicon row marked score=false; answer sets are proposals until Codex's review freezes them",
+        "unblocked by grok: revised packet at a5470e0 in the #49 validator schema with projects engine f96e0c8 and gametape 1cd9264; Codex's eight rows applied (#35 comment 5924163482); Codex validates on the local GameTape baseline",
+        "claude: tip a5470e0 verified against f96e0c8 and the candidate merge-base: only docs/jev-samples/PACKET.md and tests/fixtures/jev-samples/samples.json (the intermediate 021d24f carried a stray copy of tools/jev_experiment/packet.py, deleted at tip). Acceptable sets are now mostly single labels; whether that over-narrows genuine ambiguity is Codex's freezing call"
       ],
       "acknowledged_at": "2026-10-01T02:59:28Z"
     },
