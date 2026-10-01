@@ -239,18 +239,18 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "reviewed",
+      "state": "delivered",
       "claimed_at": "2026-10-01T02:41:54Z",
       "acknowledged": true,
       "delivery": {
-        "sha": "93941b56005688c6245f07cd0d03e678c3413fab",
-        "at": "2026-10-01T02:53:19Z"
+        "sha": "5844fd50394a5094d0fbbb07c7469821cf2399b1",
+        "at": "2026-10-01T03:03:14Z"
       },
       "reviews": [
         {
           "reviewer": "codex",
           "sha": "93941b56005688c6245f07cd0d03e678c3413fab",
-          "verdict": "cleared",
+          "verdict": "stale",
           "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923834389",
           "scope": [
             "quadratus/decision_labels.py",
@@ -261,14 +261,16 @@
             "tests/lifecycle/test_decider.py",
             "CLAUDE.md"
           ],
-          "at": "2026-10-01T02:59:28Z"
+          "at": "2026-10-01T02:59:28Z",
+          "stale_reason": "delivery moved from 93941b5 to 5844fd5"
         }
       ],
       "blockers": [],
       "decisions": [
         "claude: Codex acknowledged the scope for independent review (#35 comment 5923763006)",
         "claude: scope extended to CLAUDE.md",
-        "claude: Codex calibration notes: the favicon is a development example and must not reappear as a held-out result; the frontend/backend tie-break is a declared convention, not proof the earlier backend answer was wrong; later comparisons record the actual lead and required checks/reviews, not label agreement alone"
+        "claude: Codex calibration notes: the favicon is a development example and must not reappear as a held-out result; the frontend/backend tie-break is a declared convention, not proof the earlier backend answer was wrong; later comparisons record the actual lead and required checks/reviews, not label agreement alone",
+        "claude: delivery moved to 5844fd5 because the retry correction (T-jev-retries) landed on the same branch; Codex's cleared review of 93941b5 is stale by rule and the combined SHA is re-reviewed once"
       ],
       "acknowledged_at": "2026-10-01T02:53:18Z"
     },
@@ -325,13 +327,17 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-01T03:01:19Z",
-      "acknowledged": false,
-      "delivery": null,
+      "acknowledged": true,
+      "delivery": {
+        "sha": "5844fd50394a5094d0fbbb07c7469821cf2399b1",
+        "at": "2026-10-01T03:03:14Z"
+      },
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [],
+      "acknowledged_at": "2026-10-01T03:03:13Z"
     }
   ],
   "receipts": [
