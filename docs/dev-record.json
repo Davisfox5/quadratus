@@ -492,6 +492,26 @@
         "candidate": "2a7578b39f68b60b2ffd25587955e8f133203a00",
         "at": "2026-10-01T03:23:35Z"
       }
+    },
+    {
+      "id": "T-jev-stage-a",
+      "purpose": "one Stage A classification-only Jev batch per #35 comment 5924506468, approved by Davis via Codex relay (comment 5924566368): frozen #48 d1feaf0, engine 2a7578b, tool b48e6c0, GameTape 1cd9264, freeze 0f284ad2; at most 60 HTTP attempts, 200k tokens, $0.02 cost stop, 300/330 s, $0.20 invoice allowance on existing credit, no retries or continuation; result reviewed by claude",
+      "base": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+      "owns": [
+        "experiment:stage-a-classification-batch"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "claimed",
+      "claimed_at": "2026-10-01T04:11:05Z",
+      "acknowledged": true,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "claude: authorization recorded: Davis 'I approve.' relayed in #35 comment 5924566368; Codex chat 01a0c4f1-158c-7b90-91bb-35a4ec800df4 holds exclusive execution; the previously consumed live coding-run allowance is unaffected; Stage B is a separate decision"
+      ],
+      "acknowledged_at": "2026-10-01T04:11:05Z"
     }
   ],
   "receipts": [
