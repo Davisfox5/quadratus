@@ -345,7 +345,8 @@
       "decisions": [
         "claude: delivered as draft PR #48 on base f96e0c8: docs/jev-samples/PACKET.md and tests/fixtures/jev-samples/samples.json only (verified against the PR file list); ten tasks, three development, seven held-out; favicon row marked score=false; answer sets are proposals until Codex's review freezes them",
         "unblocked by grok: revised packet at a5470e0 in the #49 validator schema with projects engine f96e0c8 and gametape 1cd9264; Codex's eight rows applied (#35 comment 5924163482); Codex validates on the local GameTape baseline",
-        "claude: tip a5470e0 verified against f96e0c8 and the candidate merge-base: only docs/jev-samples/PACKET.md and tests/fixtures/jev-samples/samples.json (the intermediate 021d24f carried a stray copy of tools/jev_experiment/packet.py, deleted at tip). Acceptable sets are now mostly single labels; whether that over-narrows genuine ambiguity is Codex's freezing call"
+        "claude: tip a5470e0 verified against f96e0c8 and the candidate merge-base: only docs/jev-samples/PACKET.md and tests/fixtures/jev-samples/samples.json (the intermediate 021d24f carried a stray copy of tools/jev_experiment/packet.py, deleted at tip). Acceptable sets are now mostly single labels; whether that over-narrows genuine ambiguity is Codex's freezing call",
+        "claude: Codex smoke-validated a5470e0 offline with #49 at b48e6c0 against engine f96e0c8 and local GameTape 1cd9264: all refs resolve, all rows validate, ten authored default leads match the cold route; not a freeze. One next action for Grok: a source-bound outline for hold-budget-threads (invariant missing from tests/test_run_budget.py, deterministic ordering without sleeps, what wrong accounting it detects, why complex) before touching other rows (#35 comment 5924198268)"
       ],
       "acknowledged_at": "2026-10-01T02:59:28Z"
     },
