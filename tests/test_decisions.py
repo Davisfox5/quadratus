@@ -94,9 +94,12 @@ def _no_ambient_jev_configuration(monkeypatch):
 
 def test_jev_asks_one_choice_question_and_returns_a_verdict_with_source_and_confidence():
     client, meter = _Client(_Answer("rote", 0.82, {"rote": 0.82, "simple": 0.15})), _Meter()
-    verdict = D.JevDecider(client=client, meter=meter).decide(DIFFICULTY)
+    decider = D.JevDecider(client=client, meter=meter)
+    verdict = decider.decide(DIFFICULTY)
     assert verdict.answer == "rote" and verdict.source == "jev:jev-1.13" and verdict.confidence == 0.82
     assert '"rote": 0.82' in verdict.note
+    assert verdict.usage["input_tokens"] == 120 and verdict.usage["host"] == "typesafe"
+    assert isinstance(verdict.usage["seconds"], float) and client.calls and decider.calls[0]["seconds"] >= 0
     question = client.calls[0]["questions"]["task_difficulty"]
     assert question["type"] == "choice" and set(question["criteria"]) == set(DIFFICULTY.answers)
     assert client.calls[0]["state"] == DIFFICULTY.context and client.calls[0]["model"] == "jev-latest"
@@ -159,3 +162,57 @@ def test_the_call_record_names_the_host():
     decider = D.JevDecider(api_key="vck_example", client=_Client(_Answer("simple")))
     decider.decide(DIFFICULTY)
     assert decider.calls[0]["host"] == "vercel-gateway"
+
+
+# ---- Codex review of #44 (3e4528a): budget, provenance, CLI ---------------
+
+def test_jev_calls_reserve_and_finish_the_run_budget():
+    from quadratus.run_budget import RunBudget, RunBudgetExceeded, RunLimits
+    budget = RunBudget(RunLimits(max_calls=1, max_reported_tokens=1_000_000, wall_seconds=600,
+                                 max_concurrent_workers=1))
+    decider = D.JevDecider(api_key="ts_x", client=_Client(_Answer("simple")), budget=budget)
+    decider.decide(DIFFICULTY)
+    snap = budget.snapshot()
+    assert snap["reserved_attempts"] == 1 and snap["input_tokens"] == 120 and snap["output_tokens"] == 12
+    with pytest.raises(RunBudgetExceeded, match="call_limit"):
+        decider.decide(DIFFICULTY)
+
+
+def test_a_failed_jev_call_finishes_its_ticket_and_the_budget_rule_decides():
+    """A billed call that returns no usage latches the budget (unknown_usage),
+    exactly as a provider's does; the budget stop outranks the refusal and
+    no reservation is left open."""
+    from quadratus.run_budget import RunBudget, RunBudgetExceeded, RunLimits
+
+    class Broken:
+        def system_one(self, **kw):
+            raise RuntimeError("boom")
+    budget = RunBudget(RunLimits(max_calls=5, max_reported_tokens=1_000_000, wall_seconds=600,
+                                 max_concurrent_workers=1))
+    with pytest.raises(RunBudgetExceeded, match="unknown_usage"):
+        D.JevDecider(api_key="ts_x", client=Broken(), budget=budget).decide(DIFFICULTY)
+    snap = budget.snapshot()
+    assert snap["reserved_attempts"] == 1 and snap["unknown_usage_attempts"] == 1 and not budget._active
+
+
+def test_metadata_records_which_field_was_stated():
+    from quadratus.taskmeta import parse_metadata
+    kw = dict(known_kinds={"backend", "docs"}, known_difficulties={"rote", "simple", "complex"},
+              default_kind="general", default_difficulty="simple")
+    both = parse_metadata("KIND: backend complex\nDo it.", **kw)
+    assert both.kind_stated and both.difficulty_stated
+    degraded = parse_metadata("KIND: typo complex\nDo it.", **kw)
+    assert not degraded.kind_stated and degraded.difficulty_stated and degraded.difficulty == "complex"
+    partial = parse_metadata("KIND: backend\nDo it.", **kw)
+    assert partial.kind_stated and not partial.difficulty_stated and partial.confidence == "labelled"
+    none = parse_metadata("Do it.", **kw)
+    assert not none.kind_stated and not none.difficulty_stated
+
+
+def test_the_projectless_cli_session_resolves_the_decider():
+    from types import SimpleNamespace
+
+    from quadratus.cli import _decider_for
+    assert isinstance(_decider_for(SimpleNamespace(decider="jev")), D.JevDecider)
+    assert _decider_for(SimpleNamespace(decider="rule")) is None
+    assert _decider_for(SimpleNamespace()) is None

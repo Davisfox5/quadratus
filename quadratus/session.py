@@ -3547,14 +3547,22 @@ class Session:
         label is never overridden. A refusal or an out-of-set answer keeps
         the rule's default and records why; nothing here raises."""
         decider = self.config.decider
-        if decider is None or not meta.defaulted:
+        if decider is None:
+            return meta
+        # Each field on its own provenance (Codex review of #44): a stated
+        # kind beside a defaulted difficulty, or the reverse, delegates only
+        # the field nobody stated.
+        wanted = [(key, attr, answers) for key, attr, answers, stated in (
+            ("task.kind", "kind", tuple(ROUTING), getattr(meta, "kind_stated", not meta.defaulted)),
+            ("task.difficulty", "difficulty", tuple(Complexity._COLLABORATORS),
+             getattr(meta, "difficulty_stated", not meta.defaulted))) if not stated]
+        if not wanted:
             return meta
         from .decisions import DECISIONS, Decision, DecisionsUnavailable
         task_id = task_id or f"t{len(self.history) + 1}"
         context = (meta.description or "")[:8000]
         updates, notes = {}, list(meta.notes)
-        for key, attr, answers in (("task.kind", "kind", tuple(ROUTING)),
-                                   ("task.difficulty", "difficulty", tuple(Complexity._COLLABORATORS))):
+        for key, attr, answers in wanted:
             decision = Decision(id=key, question=DECISIONS[key]["question"], answers=answers,
                                 context=context, rule=DECISIONS[key]["rule"])
             record = dict(task=task_id, decision=key, default=getattr(meta, attr))
@@ -3565,7 +3573,8 @@ class Session:
                 notes.append(f"{attr}: the decider refused ({str(exc)[:120]}); default kept")
             else:
                 record.update(answer=verdict.answer, source=verdict.source,
-                              confidence=verdict.confidence, probabilities=verdict.note)
+                              confidence=verdict.confidence, probabilities=verdict.note,
+                              usage=verdict.usage)
                 updates[attr] = verdict.answer
                 notes.append(f"{attr} {verdict.answer!r} decided by {verdict.source}"
                              + (f" (confidence {verdict.confidence:.2f})" if verdict.confidence is not None else ""))
@@ -3574,7 +3583,9 @@ class Session:
                        + (record.get("answer") or f"refused, default {record['default']}"))
         if not updates:
             return replace(meta, notes=notes)
-        return replace(meta, confidence="decided", notes=notes, **updates)
+        return replace(meta, confidence="decided", notes=notes,
+                       kind_stated=meta.kind_stated or "kind" in updates,
+                       difficulty_stated=meta.difficulty_stated or "difficulty" in updates, **updates)
 
     def next_task(self) -> Optional[TaskSpec]:
         """Ask the orchestrator what to do next, given the ledger.
@@ -4533,34 +4544,41 @@ class Session:
         """Specs for a parallel batch, or None (with the reason noted) when the
         batch cannot run in parallel; the caller then runs the first block alone."""
         from .scope import read_scope
-        specs = []
+        parsed = []
         for i, block in enumerate(blocks):
             try:
-                meta = self._route_with_decider(self._absorb_orientation(_read_metadata(block), seat),
-                                                task_id=f"t{len(self.history) + 1 + i}")
+                meta = self._absorb_orientation(_read_metadata(block), seat)
                 scope, description = read_scope(meta.description, max_lines=MAX_TASK_LINES)
-                specs.append(TaskSpec(task_id=f"t{len(self.history) + 1 + i}", description=description,
-                                      kind=meta.kind, complexity=meta.difficulty,
-                                      metadata_confidence=meta.confidence,
-                                      metadata_notes=list(meta.notes), scope=scope))
+                parsed.append((meta, scope, description))
             except (AmbiguousMetadata, ValueError) as exc:
                 self._note(f"parallel batch not run: block {i + 1} is not a valid task ({str(exc)[:120]})")
                 return None
-        if len(specs) < 2:
+        if len(parsed) < 2:
             return None
-        if len(specs) > self.config.max_parallel_tasks:
-            self._note(f"parallel batch not run: {len(specs)} tasks, the limit is {self.config.max_parallel_tasks}")
+        if len(parsed) > self.config.max_parallel_tasks:
+            self._note(f"parallel batch not run: {len(parsed)} tasks, the limit is {self.config.max_parallel_tasks}")
             return None
         seen: set = set()
-        for spec in specs:
-            paths = _literal_paths(spec.scope)
+        for i, (_, scope, _) in enumerate(parsed):
+            task_id = f"t{len(self.history) + 1 + i}"
+            paths = _literal_paths(scope)
             if paths is None:
-                self._note(f"parallel batch not run: {spec.task_id} has no exact file list")
+                self._note(f"parallel batch not run: {task_id} has no exact file list")
                 return None
             if paths & seen:
                 self._note(f"parallel batch not run: files shared between tasks: {', '.join(sorted(paths & seen))}")
                 return None
             seen |= paths
+        # Paid routing decisions only for a batch that will run (Codex review
+        # of #44): a rejected batch falls back to its first block, which is
+        # routed once there, never twice.
+        specs = []
+        for i, (meta, scope, description) in enumerate(parsed):
+            task_id = f"t{len(self.history) + 1 + i}"
+            meta = self._route_with_decider(meta, task_id=task_id)
+            specs.append(TaskSpec(task_id=task_id, description=description, kind=meta.kind,
+                                  complexity=meta.difficulty, metadata_confidence=meta.confidence,
+                                  metadata_notes=list(meta.notes), scope=scope))
         return specs
 
     def _run_batch(self, specs) -> bool:
