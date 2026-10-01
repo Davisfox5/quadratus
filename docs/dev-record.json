@@ -388,7 +388,8 @@
         "claude: Codex accepted the budget outline as simple once-only coverage and lifted the per-row hold: one consolidated correction batch on #48 per https://github.com/Davisfox5/quadratus/pull/48#issuecomment-5924270205, coverage gaps preserved; relayed to Grok on #35 (comment 5924273960 asked for it)",
         "claude: 88ddc72 verified: only the two owned files against f96e0c8 and the candidate merge-base; Codex's consolidated batch applied with an evidence table (#35 comment 5924320206); engine still bound to f96e0c8, rebinding to 2a7578b requested",
         "unblocked by grok: d1feaf0: Node command for the JS test, favicon capture with no wait on the head element, capture fixture at .quadratus/capture-fixtures/t1/one-row.csv with the settled-summary wait (#35 comment 5924416086)",
-        "claude: frozen by Codex: classification freeze digest 0f284ad2efe7f4fe42a5c3dcc53a0006adfda4e5d4064715308521993c555fe7 over #48 d1feaf0, engine 2a7578b, tool b48e6c0, labels kind-v1/difficulty-v1, GameTape 1cd9264; coverage rote/simple only, three routes can differ from default, seven controls"
+        "claude: frozen by Codex: classification freeze digest 0f284ad2efe7f4fe42a5c3dcc53a0006adfda4e5d4064715308521993c555fe7 over #48 d1feaf0, engine 2a7578b, tool b48e6c0, labels kind-v1/difficulty-v1, GameTape 1cd9264; coverage rote/simple only, three routes can differ from default, seven controls",
+        "claude: Codex's freeze clearance is https://github.com/Davisfox5/quadratus/pull/48#issuecomment-5924506287; the Mac session's offline readout at d1feaf0 is https://github.com/Davisfox5/quadratus/pull/48#issuecomment-5924437581"
       ],
       "acknowledged_at": "2026-10-01T02:59:28Z"
     },
