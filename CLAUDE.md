@@ -2,13 +2,11 @@
 
 ## Communication
 
-**Lead with a TL;DR on anything long or technical.** Plain language, bullets,
-no jargon, at the very top — what it means and what the decision is. Put the
-technical detail below it for when it's wanted. Don't make the summary an
-afterthought at the bottom; it goes first.
-
-This applies to design discussions, research findings, architecture proposals,
-and post-change reports. A short answer to a short question doesn't need one.
+**No TL;DRs. Ever.** Davis's standing instruction (2026-10-01): explain
+everything in succinct, simple, plain English. One short explanation, not
+a summary followed by the same thing again. Lead with the answer, keep it
+short, no headers or bullet walls on short replies, no closing offers.
+Technical detail only when it changes what Davis does next.
 
 ## Project context
 
