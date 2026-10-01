@@ -308,13 +308,30 @@
       ],
       "author": "codex",
       "reviewer": "claude",
-      "state": "claimed",
+      "state": "reviewed",
       "claimed_at": "2026-10-01T02:41:54Z",
       "acknowledged": true,
-      "delivery": null,
-      "reviews": [],
+      "delivery": {
+        "sha": "ec6886ecb3e219403e8b26ba00ae037c41b511d9",
+        "at": "2026-10-01T03:06:04Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "ec6886ecb3e219403e8b26ba00ae037c41b511d9",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/49#issuecomment-pending",
+          "scope": [
+            "tools/jev_experiment/",
+            "docs/jev-experiment-plan.md"
+          ],
+          "at": "2026-10-01T03:06:04Z"
+        }
+      ],
       "blockers": [],
-      "decisions": [],
+      "decisions": [
+        "claude: review of ec6886e: 12 tests pass at the SHA and on a committed merge with #47's 5844fd5; lint clean; no provider client; freeze and scoring integrity checks hold. Two gate items, not tool defects: (1) the packet schema the harness validates (tasks[], acceptable_kinds, acceptable_difficulties, scope{...}, source_refs, checks[argv], expected_default_lead, split 'held_out') is not the shape #48 delivered (samples[], acceptable.kind[{label,rationale}], permitted_paths, leads, split 'held-out'); the harness schema is the contract and #48 converts before freeze; (2) source_refs are verified in the engine repo at base_sha while the samples cite GameTape project files at baseline 1cd9264, so the packet needs a project repo and baseline for those refs. Small: counts_by_split folds refusals into not-acceptable; a refused count beside it keeps them visible"
+      ],
       "acknowledged_at": "2026-10-01T02:54:24Z"
     },
     {
