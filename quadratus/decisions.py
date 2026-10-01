@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
 
@@ -58,6 +59,9 @@ class Verdict:
     source: str
     confidence: Optional[float] = None
     note: str = ""
+    #: What the call cost, when a decider reports it: model, host, input and
+    #: output tokens, seconds. Empty for the rule.
+    usage: Optional[dict] = None
 
 
 class Decider(Protocol):
@@ -239,16 +243,18 @@ class JevDecider:
         name = decision.id.replace(".", "_")
         question = {"type": "choice", "instructions": decision.question,
                     "criteria": {answer: None for answer in decision.answers}}
+        started = time.perf_counter()
         try:
             response = self._sdk_client().system_one(
                 state=decision.context or decision.question, questions={name: question}, model=self.model)
         except Exception as exc:  # noqa: BLE001 -- refused, never guessed; the caller keeps its rule
             raise DecisionsUnavailable(f"Jev call failed: {type(exc).__name__}: {exc}") from exc
+        seconds = round(time.perf_counter() - started, 3)
         usage = getattr(response, "usage", None)
         model = getattr(response, "model", None) or self.model
         record = dict(decision=decision.id, model=model, host=self.host,
                       input_tokens=getattr(usage, "input_tokens", None),
-                      output_tokens=getattr(usage, "output_tokens", None))
+                      output_tokens=getattr(usage, "output_tokens", None), seconds=seconds)
         self.calls.append(record)
         if self.meter is not None:
             try:
@@ -265,7 +271,8 @@ class JevDecider:
         probabilities = dict(getattr(answer, "probabilities", {}) or {})
         return Verdict(decision=decision.id, answer=choice, source=f"jev:{model}",
                        confidence=getattr(answer, "confidence", None),
-                       note=json.dumps(probabilities, sort_keys=True))
+                       note=json.dumps(probabilities, sort_keys=True),
+                       usage={k: record[k] for k in ("model", "host", "input_tokens", "output_tokens", "seconds")})
 
 
 def decider_from_name(name: Optional[str], *, meter: Any = None):

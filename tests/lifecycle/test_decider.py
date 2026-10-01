@@ -20,7 +20,8 @@ class FakeDecider:
         self.asked.append(decision)
         if self.refuse:
             raise DecisionsUnavailable(self.refuse)
-        return Verdict(decision=decision.id, answer=self.answers[decision.id], source="fake:jev", confidence=0.77)
+        return Verdict(decision=decision.id, answer=self.answers[decision.id], source="fake:jev", confidence=0.77,
+                       usage=dict(model="fake", host="fake", input_tokens=300, output_tokens=0, seconds=0.2))
 
 
 def _lead(call, replay):
@@ -47,7 +48,7 @@ def test_an_unlabelled_task_is_routed_by_the_decider_and_recorded(tmp_path, monk
     record = _record(replay)
     assert [(r["decision"], r["answer"], r["source"], r["default"]) for r in record] == [
         ("task.kind", "backend", "fake:jev", "general"), ("task.difficulty", "rote", "fake:jev", "simple")]
-    assert all(r["task"] == "t1" and r["confidence"] == 0.77 for r in record)
+    assert all(r["task"] == "t1" and r["confidence"] == 0.77 and r["usage"]["seconds"] == 0.2 for r in record)
 
 
 def test_a_stated_label_is_never_sent_to_the_decider(tmp_path, monkeypatch):
