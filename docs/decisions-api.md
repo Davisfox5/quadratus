@@ -37,8 +37,17 @@ Vercel free tier covers Jev were wrong. TypeSafe's own console stopped
 giving new accounts free credit on 2026-09-27. So the choice is a paid
 Vercel top-up on the gateway key (any amount; at $0.042 per million input
 tokens a $5 top-up is about 120 million tokens, and one routing decision
-is a few hundred) or a direct TypeSafe key (`ts_`), which the decider
-sends to `api.typesafe.ai` with model `jev-latest`.
+is a few hundred) or a direct TypeSafe key, which the decider sends to
+`api.typesafe.ai` with model `jev-latest`.
+
+Direct key, live on 2026-09-30 (Davis's console, $5 credit): the key is
+spelled `apikey_<id>_<secret>` (not the `ts_` the search results claimed),
+the account's models are `jev-latest` and `jev-preview`, and `jev-latest`
+resolved to `jev-1.13.0`. Three difficulty decisions on task texts of one
+to two sentences cost 323 to 324 input tokens each and answered rote
+(0.58), simple (0.68) and complex (0.83) where those were the expected
+readings, each with the full probability map. A decision is about a
+hundredth of a cent.
 
 What the engine does with it (`JevDecider`, `Session._route_with_decider`):
 
