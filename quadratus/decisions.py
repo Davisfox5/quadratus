@@ -21,8 +21,13 @@ and is not silently abandoned).
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
-from typing import Dict, Optional, Protocol, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
+
+JEV_API_KEY_ENV = "TYPESAFE_API_KEY"
+JEV_DEFAULT_MODEL = "jev-latest"
 
 
 @dataclass(frozen=True)
@@ -148,6 +153,109 @@ class OpenAIDecisionsDecider:
         if reason:
             raise DecisionsUnavailable(reason)
         raise DecisionsUnavailable("transport not implemented: write it against the published contract")
+
+
+class JevDecider:
+    """TypeSafe AI's Jev through the ``typesafe-sdk`` package (2026-09-30):
+    ``POST /v1/systemone`` with a state and named questions; a ``choice``
+    question returns the chosen label, a confidence and per-label
+    probabilities, plus billable input tokens (output tokens are free per
+    the SDK's own usage schema). Text only: Jev has no image input.
+
+    Every call is a billed API call and is metered when a meter is given.
+    The SDK is an optional extra (``quadratus[decisions]``) and the key is
+    ``TYPESAFE_API_KEY``; without either the decider refuses with the reason
+    and the caller keeps its rule. ``client`` may be injected for tests; the
+    duck type is ``system_one(state=, questions=, model=)`` returning an
+    object with ``.model``, ``.usage.input_tokens/.output_tokens`` and
+    ``.choices[name].choice/.confidence/.probabilities``.
+    """
+
+    name = "jev"
+
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None,
+                 client: Any = None, meter: Any = None, timeout: float = 10.0):
+        self.api_key = api_key if api_key is not None else os.environ.get(JEV_API_KEY_ENV, "").strip()
+        self.model = model or os.environ.get("TYPESAFE_DEFAULT_MODEL", "").strip() or JEV_DEFAULT_MODEL
+        self._client = client
+        self.meter = meter
+        self.timeout = timeout
+        self.calls: List[dict] = []
+
+    def available(self) -> str:
+        """"" when callable, else why not. Never calls the network."""
+        if self._client is not None:
+            return ""
+        try:
+            import typesafe_sdk  # noqa: F401
+        except ImportError:
+            return "typesafe-sdk is not installed (pip install 'quadratus[decisions]')"
+        if not self.api_key:
+            return f"no {JEV_API_KEY_ENV}: Jev is a billed API, not a subscription call"
+        return ""
+
+    def _sdk_client(self):
+        if self._client is None:
+            from typesafe_sdk import TypeSafeClient
+            self._client = TypeSafeClient(api_key=self.api_key, model=self.model, timeout=self.timeout)
+        return self._client
+
+    def probe(self) -> List[str]:
+        """The model names the account can call: the round trip is the fact
+        recorded, as ``quadratus --probe`` does for the CLIs."""
+        reason = self.available()
+        if reason:
+            raise DecisionsUnavailable(reason)
+        try:
+            listed = self._sdk_client().models.list()
+        except Exception as exc:  # noqa: BLE001 -- the SDK's own error classes, reported as text
+            raise DecisionsUnavailable(f"Jev probe failed: {type(exc).__name__}: {exc}") from exc
+        return [m.name for m in getattr(listed, "models", ())]
+
+    def decide(self, decision: Decision) -> Verdict:
+        reason = self.available()
+        if reason:
+            raise DecisionsUnavailable(reason)
+        name = decision.id.replace(".", "_")
+        question = {"type": "choice", "instructions": decision.question,
+                    "criteria": {answer: None for answer in decision.answers}}
+        try:
+            response = self._sdk_client().system_one(
+                state=decision.context or decision.question, questions={name: question}, model=self.model)
+        except Exception as exc:  # noqa: BLE001 -- refused, never guessed; the caller keeps its rule
+            raise DecisionsUnavailable(f"Jev call failed: {type(exc).__name__}: {exc}") from exc
+        usage = getattr(response, "usage", None)
+        model = getattr(response, "model", None) or self.model
+        record = dict(decision=decision.id, model=model,
+                      input_tokens=getattr(usage, "input_tokens", None),
+                      output_tokens=getattr(usage, "output_tokens", None))
+        self.calls.append(record)
+        if self.meter is not None:
+            try:
+                self.meter.record(model=f"jev:{model}", prompt=decision.context, reply="",
+                                  input_tokens=record["input_tokens"], output_tokens=record["output_tokens"])
+            except Exception:  # noqa: BLE001 -- metering is observational only
+                pass
+        answer = getattr(response, "choices", {}).get(name)
+        if answer is None:
+            raise DecisionsUnavailable(f"Jev returned no answer for {decision.id}")
+        choice = getattr(answer, "choice", None)
+        if choice not in decision.answers:
+            raise DecisionsUnavailable(f"Jev answered {choice!r}, not one of {decision.answers}")
+        probabilities = dict(getattr(answer, "probabilities", {}) or {})
+        return Verdict(decision=decision.id, answer=choice, source=f"jev:{model}",
+                       confidence=getattr(answer, "confidence", None),
+                       note=json.dumps(probabilities, sort_keys=True))
+
+
+def decider_from_name(name: Optional[str], *, meter: Any = None):
+    """The decider an operator named: None or "rule" for the deterministic
+    default, "jev" for TypeSafe's Jev. Unknown names are errors, not defaults."""
+    if not name or name == "rule":
+        return None
+    if name == "jev":
+        return JevDecider(meter=meter)
+    raise ValueError(f"unknown decider {name!r}: expected 'rule' or 'jev'")
 
 
 def delegable() -> Tuple[str, ...]:

@@ -1,12 +1,45 @@
-# OpenAI Decisions API: what it is, what we know, what waits
+# Decision models: Jev wired, OpenAI Decisions API waiting
 
-TL;DR: real, announced at DevDay on 2026-09-29, exactly the shape of three
-routing decisions this engine makes. As of 2026-09-30 there is no published
-endpoint, schema, model id or pricing, and the openai package (3.22.1) has no
-decisions resource. The inventory below and `quadratus/decisions.py` are the
-prep; the transport is written the day the contract is public. Any call to it
-is a billed API call, opt-in, metered, and never a silent replacement for the
-ladder.
+TL;DR: two decision-only models fit the same three routing decisions here.
+TypeSafe AI's Jev is documented and wired (`--decider jev`,
+`quadratus[decisions]`, `TYPESAFE_API_KEY`); OpenAI's Decisions API was
+announced on 2026-09-29 with no published contract, so its transport waits.
+Either is opt-in, billed and metered, consulted only where the orchestrator
+stated no usable label, and never a silent replacement for the ladder.
+
+## Jev (TypeSafe AI), wired 2026-09-30
+
+Contract read from the vendor's own SDK (`typesafe-sdk` 0.7.2 on PyPI, MIT,
+"Production/Stable"): `POST https://api.typesafe.ai/v1/systemone` with a
+`state` (text or JSON) and named `questions` of type `noul` (yes/no
+probability), `choice` (a label from `criteria`, with `confidence` and
+per-label `probabilities`) or `score` (an ordered rubric). The response
+carries `model` and `usage.input_tokens`/`output_tokens`; the schema says
+output tokens are free. Default model alias `jev-latest`; `client.models.list()`
+names what the account can call. Text only, no image input. Price from the
+OpenRouter listing on 2026-09-30: $0.042 per million input tokens, output
+free; it is a seed on the usage sheet, stale by assumption.
+
+What the engine does with it (`JevDecider`, `Session._route_with_decider`):
+
+- Only when the orchestrator's reply carried no usable KIND line (a
+  "defaulted" or "degraded" route). A stated label is never overridden.
+- One `choice` question per decision, `task.kind` then `task.difficulty`,
+  with the task text as state; the answer must be one of the ladder's own
+  labels or it is refused.
+- Every verdict or refusal is recorded on the run (`result.json.decisions`:
+  task, decision, default, answer, source, confidence, probabilities or
+  error), in the task's own record as a routing note, and the metadata
+  confidence becomes `"decided"`.
+- A refusal (no package, no key, transport error, out-of-set answer) keeps
+  the rule's default and says why; nothing raises into the run.
+- Each call is metered under `jev:<model>` with the SDK's token counts.
+
+Not wired yet: `worker.escalate` (the lead's demanding flag), and any use of
+`noul` or `score` questions. Those wait for a live run that shows the two
+kind/difficulty decisions earning their keep.
+
+## OpenAI Decisions API, waiting
 
 ## What OpenAI said
 

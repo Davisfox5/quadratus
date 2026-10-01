@@ -454,16 +454,21 @@ Key design decisions already settled:
   committed non-hidden project sample exactly as the capture itself
   (`design_evidence._fixture`) and the lead's instructions already did. Three
   gates with three rules was the defect; there is one rule now.
-- **The OpenAI Decisions API is prepared for, not wired** (2026-09-30,
-  `docs/decisions-api.md`, `quadratus/decisions.py`). Announced at DevDay
-  on 2026-09-29: a constrained GPT-6 Luna picks one of a developer's fixed
-  answers in about 150 ms. It matches three routing decisions here
-  (difficulty, kind, worker escalation) and none of the parsers or the tier
-  admission. No endpoint, schema, model id or pricing was published and the
-  SDK has no resource, so the transport is a placeholder that refuses with
-  what is missing. When it lands: opt-in per run, billed and metered, the
-  deterministic rule stays the default and the fallback, verdict and source
-  recorded on the task.
+- **An external decider answers only what the orchestrator left
+  unlabelled** (2026-09-30, `quadratus/decisions.py`,
+  `docs/decisions-api.md`). Decision-only models (TypeSafe AI's Jev; OpenAI's
+  Decisions API) return one of a fixed answer set with probabilities, which
+  is the shape of three routing decisions here: task difficulty, task kind,
+  worker escalation. None of the parsers and not the tier admission: those
+  are rules the prompts state and the tests pin. `--decider jev` is wired
+  against the vendor SDK's contract (`typesafe-sdk`, `TYPESAFE_API_KEY`,
+  billed and metered under `jev:<model>`), consulted for kind and
+  difficulty only on a defaulted or degraded route, never overriding a
+  stated label; every verdict or refusal is on `result.json.decisions` and
+  in the task's record, and a refusal keeps the rule's default. OpenAI's
+  Decisions API (DevDay, 2026-09-29) has no published endpoint, schema,
+  model id or pricing, so its decider is a placeholder that refuses with
+  what is missing until the contract lands.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

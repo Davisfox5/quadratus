@@ -55,7 +55,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 progress=None, ask_operator=None, plan_gate=None,
                 default_scope=None, run_limits=None, forbid=(), declared_paths=(),
                 security_verdict_json=False, gates=None, extra_checks=(), capture_profile=None,
-                readiness=None):
+                readiness=None, decider=None):
     """Keep both successful and interrupted runs next to their source tree.
 
     ``extra_checks`` are further operator checks, each an argv list (or a
@@ -65,6 +65,10 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
     ``capture_profile`` is a path to the operator's preview profile
     (quadratus.preview), validated against the selected project here, before
     any model call; with it the harness captures UI tasks' renders itself.
+
+    ``decider`` names an external routing decider (``"jev"``) consulted only
+    where the orchestrator stated no usable label; ``None`` or ``"rule"`` is
+    the deterministic default. Its calls are billed API calls, metered.
 
     ``readiness`` is the operator's capability readiness probes
     (quadratus.readiness): a JSON path or list, validated here and run once
@@ -111,7 +115,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     run_limits=run_limits, policy=policy, gates=gates,
                     security_verdict_json=security_verdict_json,
                     fleet_type=Fleet, session_factory=new_session, extras=extras,
-                    capture_profile=profile, readiness=probes)
+                    capture_profile=profile, readiness=probes, decider=decider)
 
 
 #: Flags that change only how much a runner prints, never what it runs.
@@ -227,7 +231,7 @@ def _merge_extras(gates, extras):
 def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
-         extras=(), capture_profile=None, readiness=()):
+         extras=(), capture_profile=None, readiness=(), decider=None):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
@@ -253,6 +257,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     meter = UsageMeter(run_dir / 'usage.jsonl')
     delegation = DelegationLedger(path=run_dir / 'invocations.jsonl')
     budget = RunBudget(run_limits, path=run_dir / 'budget.json') if run_limits else None
+    if isinstance(decider, str) or decider is None:
+        from .decisions import decider_from_name
+        decider = decider_from_name(decider, meter=meter)
     config = SessionConfig(
         project=project.root, project_excludes=tuple(project.exclude),
         allow_writes=allow_writes, mode=mode, integration_gate=gate,
@@ -263,6 +270,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         security_verdict_json=security_verdict_json,
         capture_profile=capture_profile,
         readiness_probes=tuple(readiness or ()),
+        decider=decider,
     )
     preview = policy.resolve(default_scope.permitted_paths if default_scope else (),
                              writing=allow_writes) if policy else None
@@ -389,6 +397,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                   'calls_outside_project': sum(1 for t in traces if t.get('outside_project')),
                   'unserved_requests': sum(len(t.get('protocol_attempts') or []) for t in traces),
                   'injected_rules': sorted({r['source'] for t in traces for r in t.get('injected_rules') or []})},
+        'decisions': list(getattr(session, 'decisions', []) or []) if session else [],
         'in_flight': in_flight,
         'policy_preview': preview,
         'policy_plans': getattr(session, 'policy_plans', []),

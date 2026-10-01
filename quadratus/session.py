@@ -414,6 +414,11 @@ class SessionConfig:
     #: Operator-declared capability readiness probes (quadratus.readiness),
     #: run once before the first model call. Fixed before the run.
     readiness_probes: tuple = ()
+    #: An external decider (quadratus.decisions) consulted only where the
+    #: orchestrator stated no usable label: task kind and difficulty on a
+    #: defaulted or degraded route. The rule stays the default; a decider
+    #: that refuses leaves the rule's answer in place with the reason noted.
+    decider: Optional[object] = None
     #: Design and UI work also gets a reviewer from another vendor, briefed
     #: on design and aesthetic choices, even when the task is SIMPLE.
     design_cross_check: bool = True
@@ -980,6 +985,8 @@ class Session:
         )
         self._rotation = 0
         self.history: List[TaskSummary] = []
+        #: Every external routing verdict or refusal, for result.json.
+        self.decisions: List[dict] = []
         #: Tasks whose lead stopped at its turn limit, in order.
         self.turn_limited: List[str] = []
         self._turn_limited_in_a_row = 0
@@ -2893,6 +2900,41 @@ class Session:
             return
 
     # -- orchestration -------------------------------------------------------
+    def _route_with_decider(self, meta, task_id: Optional[str] = None):
+        """Ask the configured decider for kind and difficulty when the
+        orchestrator stated none (a defaulted or degraded route). A stated
+        label is never overridden. A refusal or an out-of-set answer keeps
+        the rule's default and records why; nothing here raises."""
+        decider = self.config.decider
+        if decider is None or not meta.defaulted:
+            return meta
+        from .decisions import DECISIONS, Decision, DecisionsUnavailable
+        task_id = task_id or f"t{len(self.history) + 1}"
+        context = (meta.description or "")[:8000]
+        updates, notes = {}, list(meta.notes)
+        for key, attr, answers in (("task.kind", "kind", tuple(ROUTING)),
+                                   ("task.difficulty", "difficulty", tuple(Complexity._COLLABORATORS))):
+            decision = Decision(id=key, question=DECISIONS[key]["question"], answers=answers,
+                                context=context, rule=DECISIONS[key]["rule"])
+            record = dict(task=task_id, decision=key, default=getattr(meta, attr))
+            try:
+                verdict = decider.decide(decision)
+            except (DecisionsUnavailable, ValueError) as exc:
+                record.update(answer=None, source=None, error=str(exc)[:300])
+                notes.append(f"{attr}: the decider refused ({str(exc)[:120]}); default kept")
+            else:
+                record.update(answer=verdict.answer, source=verdict.source,
+                              confidence=verdict.confidence, probabilities=verdict.note)
+                updates[attr] = verdict.answer
+                notes.append(f"{attr} {verdict.answer!r} decided by {verdict.source}"
+                             + (f" (confidence {verdict.confidence:.2f})" if verdict.confidence is not None else ""))
+            self.decisions.append(record)
+            self._note(f"routing decision {key} for {task_id}: "
+                       + (record.get("answer") or f"refused, default {record['default']}"))
+        if not updates:
+            return replace(meta, notes=notes)
+        return replace(meta, confidence="decided", notes=notes, **updates)
+
     def next_task(self) -> Optional[TaskSpec]:
         """Ask the orchestrator what to do next, given the ledger.
 
@@ -3027,7 +3069,7 @@ class Session:
                     f"silently drop whatever pin it meant to name."
                 ) from second
 
-        meta = self._absorb_orientation(meta, seat)
+        meta = self._route_with_decider(self._absorb_orientation(meta, seat))
 
         scope = self.config.default_scope
         if self.project and self.config.allow_writes:
@@ -3048,7 +3090,7 @@ class Session:
                     seat, reply = self._ask_seat(seat, build_with_correction)
                     if (control := parse_control(reply)) is not None:
                         raise RunStalled("Scope correction must supply a valid task, not a control reply.") from exc
-                    meta = self._absorb_orientation(_read_metadata(reply), seat)
+                    meta = self._route_with_decider(self._absorb_orientation(_read_metadata(reply), seat))
         else:
             description = meta.description.strip()
         if not description:
@@ -3736,7 +3778,8 @@ class Session:
         specs = []
         for i, block in enumerate(blocks):
             try:
-                meta = self._absorb_orientation(_read_metadata(block), seat)
+                meta = self._route_with_decider(self._absorb_orientation(_read_metadata(block), seat),
+                                                task_id=f"t{len(self.history) + 1 + i}")
                 scope, description = read_scope(meta.description, max_lines=MAX_TASK_LINES)
                 specs.append(TaskSpec(task_id=f"t{len(self.history) + 1 + i}", description=description,
                                       kind=meta.kind, complexity=meta.difficulty,
