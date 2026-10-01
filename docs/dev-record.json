@@ -350,8 +350,8 @@
       "claimed_at": "2026-10-01T02:41:54Z",
       "acknowledged": true,
       "delivery": {
-        "sha": "54a2576c47c40fa07f5b347423833f9f9cee8430",
-        "at": "2026-10-01T03:14:36Z"
+        "sha": "b48e6c028e19054f238e4f18e319bf4428130208",
+        "at": "2026-10-01T03:18:15Z"
       },
       "reviews": [
         {
@@ -369,13 +369,25 @@
         {
           "reviewer": "claude",
           "sha": "54a2576c47c40fa07f5b347423833f9f9cee8430",
-          "verdict": "cleared",
+          "verdict": "stale",
           "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923985726",
           "scope": [
             "tools/jev_experiment/",
             "docs/jev-experiment-plan.md"
           ],
-          "at": "2026-10-01T03:14:36Z"
+          "at": "2026-10-01T03:14:36Z",
+          "stale_reason": "delivery moved from 54a2576 to b48e6c0"
+        },
+        {
+          "reviewer": "claude",
+          "sha": "b48e6c028e19054f238e4f18e319bf4428130208",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5924027300",
+          "scope": [
+            "tools/jev_experiment/",
+            "docs/jev-experiment-plan.md"
+          ],
+          "at": "2026-10-01T03:18:15Z"
         }
       ],
       "blockers": [],
