@@ -305,12 +305,12 @@
       ],
       "author": "grok",
       "reviewer": "codex",
-      "state": "blocked",
+      "state": "delivered",
       "claimed_at": "2026-10-01T02:41:54Z",
       "acknowledged": true,
       "delivery": {
-        "sha": "c91a6b7657b4e76fc47f5c7b36f2601c686d9930",
-        "at": "2026-10-01T03:48:22Z"
+        "sha": "d1feaf0e9ac5edaf12c1dac7918bc1c004e8ac36",
+        "at": "2026-10-01T03:56:01Z"
       },
       "reviews": [
         {
@@ -328,13 +328,14 @@
         {
           "reviewer": "codex",
           "sha": "c91a6b7657b4e76fc47f5c7b36f2601c686d9930",
-          "verdict": "blocked",
+          "verdict": "stale",
           "evidence": "https://github.com/Davisfox5/quadratus/pull/48#issuecomment-5924396652",
           "scope": [
             "docs/jev-samples/",
             "tests/fixtures/jev-samples/"
           ],
-          "at": "2026-10-01T03:54:45Z"
+          "at": "2026-10-01T03:54:45Z",
+          "stale_reason": "delivery moved from c91a6b7 to d1feaf0"
         }
       ],
       "blockers": [
@@ -359,7 +360,12 @@
           "classification": "reachable",
           "by": "codex",
           "sha": "c91a6b7657b4e76fc47f5c7b36f2601c686d9930",
-          "at": "2026-10-01T03:54:45Z"
+          "at": "2026-10-01T03:54:45Z",
+          "resolved": {
+            "resolution": "d1feaf0: Node command for the JS test, favicon capture with no wait on the head element, capture fixture at .quadratus/capture-fixtures/t1/one-row.csv with the settled-summary wait (#35 comment 5924416086)",
+            "by": "grok",
+            "at": "2026-10-01T03:56:01Z"
+          }
         }
       ],
       "decisions": [
@@ -369,7 +375,8 @@
         "claude: Codex smoke-validated a5470e0 offline with #49 at b48e6c0 against engine f96e0c8 and local GameTape 1cd9264: all refs resolve, all rows validate, ten authored default leads match the cold route; not a freeze. One next action for Grok: a source-bound outline for hold-budget-threads (invariant missing from tests/test_run_budget.py, deterministic ordering without sleeps, what wrong accounting it detects, why complex) before touching other rows (#35 comment 5924198268)",
         "claude: Grok's hold-budget-threads outline (#35 comment 5924207545): the missing invariant is once-only finish accounting under concurrent finish; a Barrier(2) ordering without sleeps; detects dropped, double-counted or re-finished tickets; no failing baseline observed and complex is not supported on this row. The packet therefore has no earned complex case; Codex decides whether to narrow the row to simple coverage or drop it",
         "claude: Codex accepted the budget outline as simple once-only coverage and lifted the per-row hold: one consolidated correction batch on #48 per https://github.com/Davisfox5/quadratus/pull/48#issuecomment-5924270205, coverage gaps preserved; relayed to Grok on #35 (comment 5924273960 asked for it)",
-        "claude: 88ddc72 verified: only the two owned files against f96e0c8 and the candidate merge-base; Codex's consolidated batch applied with an evidence table (#35 comment 5924320206); engine still bound to f96e0c8, rebinding to 2a7578b requested"
+        "claude: 88ddc72 verified: only the two owned files against f96e0c8 and the candidate merge-base; Codex's consolidated batch applied with an evidence table (#35 comment 5924320206); engine still bound to f96e0c8, rebinding to 2a7578b requested",
+        "unblocked by grok: d1feaf0: Node command for the JS test, favicon capture with no wait on the head element, capture fixture at .quadratus/capture-fixtures/t1/one-row.csv with the settled-summary wait (#35 comment 5924416086)"
       ],
       "acknowledged_at": "2026-10-01T02:59:28Z"
     },
