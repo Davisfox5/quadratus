@@ -320,7 +320,7 @@
           "reviewer": "claude",
           "sha": "ec6886ecb3e219403e8b26ba00ae037c41b511d9",
           "verdict": "cleared",
-          "evidence": "https://github.com/Davisfox5/quadratus/pull/49#issuecomment-pending",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/49#issuecomment-5923907891",
           "scope": [
             "tools/jev_experiment/",
             "docs/jev-experiment-plan.md"
