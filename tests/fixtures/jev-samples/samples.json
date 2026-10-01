@@ -16,7 +16,7 @@
       "id": "dev-favicon",
       "split": "development",
       "project": "gametape",
-      "task_text": "Add a project-owned SVG favicon. GET /favicon.ico returns 200 with Content-Type starting with image/svg+xml, via a new route in app.py. static/favicon.svg is a small SVG using #0f1117 and #fff. templates/index.html links /favicon.ico as image/svg+xml after the stylesheet link. tests/test_basic.py gains a test that asserts status 200 and that mimetype. Run pytest -q and leave no new failure.",
+      "task_text": "Add a project-owned SVG favicon. GET /favicon.ico returns 200 with Content-Type starting with image/svg+xml, via a new route in app.py. static/favicon.svg is a valid SVG of fewer than 20 lines using #0f1117 and #fff. templates/index.html links /favicon.ico as image/svg+xml after the stylesheet link. tests/test_basic.py gains a test that asserts status 200 and that mimetype. Run pytest -q and leave no new failure. This wording is a reconstruction of the preserved request, not a byte copy of it.",
       "acceptable_kinds": [
         "frontend"
       ],
@@ -40,18 +40,24 @@
           ".env.*",
           ".quadratus/**"
         ],
-        "intended_result": "GET /favicon.ico returns 200 with a project-owned SVG, and the index page links it.",
+        "intended_result": "GET /favicon.ico returns 200 with a project-owned SVG under 20 lines, and the index page links it.",
         "acceptance": [
           "GET /favicon.ico returns 200 and Content-Type starting with image/svg+xml",
-          "static/favicon.svg exists and is a small SVG using #0f1117 and #fff",
+          "static/favicon.svg is valid SVG, under 20 lines, using #0f1117 and #fff",
           "templates/index.html links /favicon.ico as image/svg+xml after the stylesheet link",
           "tests/test_basic.py asserts 200 and the image/svg+xml mimetype",
-          "pytest -q has no new failure"
+          "pytest -q has no new failure",
+          "The operator capture waits for link[rel=icon][href=/favicon.ico] on /, at the harness desktop width and the harness mobile width, and an independent design review is kept"
         ],
         "max_lines": 40,
         "capture": {
           "path": "/",
-          "steps": []
+          "steps": [
+            {
+              "action": "wait",
+              "selector": "link[rel=\"icon\"][href=\"/favicon.ico\"]"
+            }
+          ]
         }
       },
       "source_refs": [
@@ -80,14 +86,14 @@
           ]
         }
       ],
-      "rationale": "Development only: this is the text of run 20261001T022457Z, with the harness-owned scope lines removed from the prose because the validator rejects them in task_text and the tool injects SCOPE and NEEDS. Kind is frontend only: the acceptance includes a rendered page, and the kind-v1 tie-break prefers frontend over backend. Difficulty is simple: one route, one asset, one link, one test. Not rote. Not a scoring item.",
+      "rationale": "Development only, not a scoring item. Kind is frontend only: a rendered page is part of the acceptance, so the kind-v1 tie-break prefers frontend over backend. Difficulty is simple: one route, one asset, one link, one test. The prose is reconstructed from the preserved request; it is not claimed to be byte-identical. The capture step is a real wait for the icon link, not an empty step list.",
       "expected_default_lead": "grok:default"
     },
     {
       "id": "dev-node-status",
       "split": "development",
       "project": "gametape",
-      "task_text": "Run `node tests/ui/import_preview.test.js` once. Record only the exit status in docs/import-preview-node-status.md. Do not modify the script.",
+      "task_text": "Run `node tests/ui/import_preview.test.js` once. Record only that process's exit status in docs/import-preview-node-status.md. Do not modify the script. Do not run any other command.",
       "acceptable_kinds": [
         "docs"
       ],
@@ -102,10 +108,11 @@
         "permitted_paths": [
           "docs/import-preview-node-status.md"
         ],
-        "intended_result": "A one-line note of the node script's exit status, and no other change.",
+        "intended_result": "A note of the node script's exit status, and no other change.",
         "acceptance": [
-          "The note contains the exit status from one run of the named script",
-          "tests/ui/import_preview.test.js is unchanged"
+          "The note's exit status equals the exit the operator captured from that same command",
+          "tests/ui/import_preview.test.js is unchanged",
+          "git status --porcelain shows only the new note, including untracked files"
         ],
         "max_lines": 5
       },
@@ -124,14 +131,14 @@
           ]
         }
       ],
-      "rationale": "Replaces the missing mutation_check.js row. The script exists on the GameTape baseline. The deliverable is a status note, so the kind is docs, not test. Difficulty is rote: the sentence to record is specified. Execute is required, so grok:worker cannot take it; the admitted lead climbs to grok:default. Development, because it is the capability-escalation control.",
+      "rationale": "The script exists on the GameTape baseline. The deliverable is a status note, so the kind is docs. Running Node does not make it a test: the test label is for adding or repairing tests. Difficulty is rote because the recorded sentence is specified. Execute is required, so grok:worker is skipped and the accepted pair seats grok:default. The grader compares the note with the captured exit, not file existence. Development, because it is the capability-escalation control.",
       "expected_default_lead": "grok:default"
     },
     {
       "id": "dev-trial-sentence",
       "split": "development",
       "project": "engine",
-      "task_text": "In docs/GAMETAPE_TRIAL.md, after the baseline line, add exactly this sentence: The 2026-10-01 favicon runs used replacement baseline 1cd9264 and are not this trial. Change nothing else. Do not run a command.",
+      "task_text": "In docs/GAMETAPE_TRIAL.md, after the baseline line, add exactly this sentence: The 2026-10-01 favicon runs used replacement baseline 1cd9264 and are not this trial. Change nothing else. Do not run a command. That prohibition is for the editing work; it does not stop an operator from inspecting the diff afterward.",
       "acceptable_kinds": [
         "docs"
       ],
@@ -169,14 +176,14 @@
           ]
         }
       ],
-      "rationale": "A fully specified documentation sentence. Kind docs, difficulty rote. Patch only, no command, so the rote seat grok:worker is not skipped. Development control for a difficulty that really lands on the worker.",
+      "rationale": "Passed schema control. Kind docs, difficulty rote, patch only. The no-command line binds the editing model. The operator may still inspect the diff. Unlabelled default is grok:default; the accepted docs/rote pair seats grok:worker.",
       "expected_default_lead": "grok:default"
     },
     {
       "id": "hold-heading",
       "split": "held_out",
       "project": "gametape",
-      "task_text": "Change the visible heading import-preview-heading from Import preview to CSV preview. Leave every other line in templates/index.html alone. The page at / must show CSV preview.",
+      "task_text": "Change the visible heading import-preview-heading from Import preview to CSV preview. Leave every other line in templates/index.html alone. The section starts hidden. Do not force it visible and do not edit project data to fake the evidence. The operator seeds one project named Preview seed, then the capture opens that project, uploads the one-row CSV through #import-preview-file, and waits until the heading is visible and the result has settled.",
       "acceptable_kinds": [
         "frontend"
       ],
@@ -191,21 +198,45 @@
         "permitted_paths": [
           "templates/index.html"
         ],
-        "intended_result": "The import-preview heading reads CSV preview and the rendered page shows it.",
+        "intended_result": "The import-preview heading reads CSV preview, and a real capture shows it after a seeded project and a CSV upload.",
         "acceptance": [
           "The heading text is CSV preview",
           "No other line in templates/index.html changes",
-          "A render of / shows the new heading"
+          "After the seed and the capture steps, #import-preview-heading is visible and reads CSV preview",
+          "#import-preview-summary reads Total 1 \u00b7 valid 1 \u00b7 malformed 0 \u00b7 duplicate 0",
+          "Desktop and mobile captures are both kept, plus an independent design review"
         ],
         "max_lines": 5,
         "capture": {
           "path": "/",
-          "steps": []
+          "steps": [
+            {
+              "action": "click",
+              "selector": ".project-card"
+            },
+            {
+              "action": "wait",
+              "selector": "#btn-import-preview"
+            },
+            {
+              "action": "file",
+              "selector": "#import-preview-file",
+              "path": ".quadratus/capture-fixtures/hold-heading/one-row.csv"
+            },
+            {
+              "action": "wait",
+              "selector": "#import-preview-heading"
+            }
+          ]
         }
       },
       "source_refs": [
         {
           "path": "templates/index.html",
+          "project": "gametape"
+        },
+        {
+          "path": "static/js/app.js",
           "project": "gametape"
         }
       ],
@@ -217,18 +248,18 @@
             "-m",
             "pytest",
             "-q",
-            "tests/test_import_preview.py"
+            "tests/ui/import_preview.test.js"
           ]
         }
       ],
-      "rationale": "The heading is user-visible and the acceptance includes the render, so the tie-break is frontend, not docs. Difficulty is rote: one specified string, the same shape as the definition's link-tag example. Execute and capture stay, because a rendered heading is not a patch-only edit. The worker is therefore skipped; the lead follows the capabilities rather than a contrast we wanted.",
+      "rationale": "The heading is user-visible and the acceptance includes the render, so the tie-break is frontend. Difficulty is rote: one specified string. Execute stays. At 1cd9264 the section is hidden until runImportPreview, and openProject closes it, so an empty capture of / cannot show the heading. The seed and the four steps are the evidence. grok:worker is skipped because execute is required; that is accepted.",
       "expected_default_lead": "grok:default"
     },
     {
       "id": "hold-import-note",
       "split": "held_out",
       "project": "gametape",
-      "task_text": "Read import_preview in app.py. Write docs/import-preview-readonly.md stating whether that function writes projects.json, and name the function. Do not modify app.py.",
+      "task_text": "Read import_preview in app.py. Write docs/import-preview-readonly.md. The note must say that import_preview calls _load_projects and does not call _save_projects. Do not modify app.py.",
       "acceptable_kinds": [
         "docs"
       ],
@@ -242,11 +273,13 @@
         "permitted_paths": [
           "docs/import-preview-readonly.md"
         ],
-        "intended_result": "A note that cites import_preview and says whether it writes projects.json.",
+        "intended_result": "A note that cites the call chain and says the handler does not save the project.",
         "acceptance": [
           "The note names import_preview",
-          "The note answers the write question from the source",
-          "app.py is unchanged"
+          "The note says it calls _load_projects",
+          "The note says it does not call _save_projects",
+          "app.py is unchanged",
+          "git status --porcelain shows only the new note, including untracked files"
         ],
         "max_lines": 30
       },
@@ -260,20 +293,20 @@
         {
           "status": "proposed",
           "argv": [
-            "python",
-            "-c",
-            "import pathlib; p=pathlib.Path('docs/import-preview-readonly.md'); assert p.exists() and 'import_preview' in p.read_text()"
+            "git",
+            "status",
+            "--porcelain"
           ]
         }
       ],
-      "rationale": "The source is import_preview, the read-only CSV preview added in 1cd9264, not an unrun task id. The deliverable is a document, so the kind is docs. Difficulty is simple: one function and one question, which still has to be read. Not review: nothing is being hunted as a defect beyond answering the question.",
+      "rationale": "The deliverable is a document, so the kind is docs, not review. Review would be hunting an unknown defect. Difficulty is simple: one function and one call chain. A file that only contains the token import_preview is not enough, and a clean diff is not enough. The grader checks the two call claims. Source at 1cd9264: import_preview calls _load_projects and does not call _save_projects.",
       "expected_default_lead": "grok:default"
     },
     {
       "id": "hold-dotenv-guard",
       "split": "held_out",
       "project": "gametape",
-      "task_text": "Make GET /.env return status 403 and a JSON body with error set to denied. A test that only checks the status is not 200 is already green, because the unchanged tree returns 404. The new test must require 403 and that body, and it must fail before the guard exists.",
+      "task_text": "Make GET /.env return status 403 and a JSON body with error set to denied. Use a temporary test client and a temporary data directory. Do not read credential contents. The same assertion must fail on the unchanged tree, where that path returns 404. Do not treat a non-200 status as proof. This is only the /.env path, not a general secret-protection claim. The check stays proposed until a reviewer runs it. Do not claim the new behavior is already green.",
       "acceptable_kinds": [
         "security"
       ],
@@ -289,11 +322,12 @@
           "app.py",
           "tests/test_import_preview.py"
         ],
-        "intended_result": "GET /.env is 403 with error denied, and the new assertion is red on the unchanged tree.",
+        "intended_result": "GET /.env is 403 with error denied, and that assertion is red on the unchanged tree.",
         "acceptance": [
-          "GET /.env returns 403",
-          "The JSON body has error equal to denied",
-          "On the unchanged tree the same assertion fails because the status is 404"
+          "The assertion is: status 403 and JSON error equal to denied",
+          "On the unchanged tree the same assertion fails because the status is 404",
+          "No credential file is read",
+          "The check is proposed, not a claimed green result"
         ],
         "max_lines": 40
       },
@@ -315,14 +349,14 @@
           ]
         }
       ],
-      "rationale": "Hostile-path refusal. The tie-break is security, not backend. Difficulty is simple: one response and one assertion. Codex measured GET /.env and GET /static/.env as 404 on this baseline, so not-200 cannot prove a new guard. The red condition is 403 plus the body.",
+      "rationale": "Hostile-path refusal. The tie-break is security, not backend. Difficulty is simple: one response and one assertion. Codex measured GET /.env as 404 on this baseline, so not-200 cannot prove a new guard. The red condition is the same 403 assertion. No green-after is claimed, because the guard does not exist yet.",
       "expected_default_lead": "grok:default"
     },
     {
       "id": "hold-one-assertion",
       "split": "held_out",
       "project": "gametape",
-      "task_text": "Add one pytest assertion, in tests/test_import_preview.py, that a successful preview body has preview_only set to true. Do not modify app.py. Run pytest -q on that file.",
+      "task_text": "In tests/test_import_preview.py, extend test_preview_repeated_ignored_headers_keep_physical_header_width. That test posts a one-row CSV with two ignored columns and already asserts a valid summary. It does not assert preview_only. Add assert body[\"preview_only\"] is True there. Do not add it to test_preview_bom_crlf_rows_and_does_not_save, which already has that assertion. Do not modify app.py. Run pytest -q on that file.",
       "acceptable_kinds": [
         "test"
       ],
@@ -337,12 +371,14 @@
         "permitted_paths": [
           "tests/test_import_preview.py"
         ],
-        "intended_result": "One new assertion on preview_only, and no application change.",
+        "intended_result": "The ignored-header success test asserts preview_only, and the BOM test is left as it is.",
         "acceptance": [
-          "The new assertion passes",
-          "app.py is unchanged"
+          "test_preview_repeated_ignored_headers_keep_physical_header_width asserts preview_only is True",
+          "test_preview_bom_crlf_rows_and_does_not_save is unchanged",
+          "app.py is unchanged",
+          "The new assertion passes on the current handler"
         ],
-        "max_lines": 20
+        "max_lines": 15
       },
       "source_refs": [
         {
@@ -362,19 +398,19 @@
           ]
         }
       ],
-      "rationale": "The deliverable is a test, so the kind is test and the pin is Sol at every difficulty. Difficulty is rote: the assertion is specified. Included so a pin that ignores difficulty is in the held-out set.",
+      "rationale": "The BOM test already asserts preview_only, so repeating it is not new coverage. The ignored-header test is a different successful input and, in the 1cd9264 patch, stops at the valid summary. Kind test, so the pin is Sol. Difficulty rote: the assertion and the test name are specified. This is coverage, not a red application defect.",
       "expected_default_lead": "grok:default"
     },
     {
       "id": "hold-budget-threads",
       "split": "held_out",
       "project": "engine",
-      "task_text": "Add a test that two threads calling RunBudget.reserve and finish cannot drop or double-count a reservation. The interleaving must be deterministic, with no sleep. Change quadratus/run_budget.py only if that test shows a lost update.",
+      "task_text": "Add tests/test_run_budget_threads.py. Do not modify quadratus/run_budget.py. Two sequential reserve calls, then two workers that wait on one Barrier of 2 and each finish one ticket, with usages 9 in and 1 out, and 4 in and 2 out. Use RunLimits with max_calls 4 and max_reported_tokens 100. Bound the barrier and each future.result with a timeout, and propagate worker exceptions. No sleep. After both finishes, assert two distinct tickets, reserved_attempts 2, input_tokens 13, output_tokens 3, reported_tokens 16, in_flight 0, unknown_usage_attempts 0, and stop_reason empty. Finishing either ticket again raises RuntimeError and those accounting fields stay the same. Elapsed time need not match. The barrier only lines the two finishes up. It does not force the lock's internal order, and it does not prove that every lost-update mutant fails.",
       "acceptable_kinds": [
         "concurrency"
       ],
       "acceptable_difficulties": [
-        "complex"
+        "simple"
       ],
       "required_capabilities": [
         "patch",
@@ -382,20 +418,28 @@
       ],
       "scope": {
         "permitted_paths": [
-          "quadratus/run_budget.py",
           "tests/test_run_budget_threads.py"
         ],
-        "intended_result": "A deterministic two-thread reservation test, and a fix only if it shows a lost update.",
+        "forbidden_paths": [
+          "quadratus/run_budget.py"
+        ],
+        "intended_result": "A deterministic once-only finish test, with production source unchanged.",
         "acceptance": [
-          "The test fails if a reservation is dropped or double-counted",
-          "The interleaving does not use sleep",
-          "No unrelated budget behaviour changes"
+          "The assertions listed in the instruction hold",
+          "quadratus/run_budget.py is unchanged",
+          "No sleep is used",
+          "A second finish raises RuntimeError and the accounting fields are unchanged",
+          "Worker exceptions propagate via future.result"
         ],
         "max_lines": 80
       },
       "source_refs": [
         {
           "path": "quadratus/run_budget.py",
+          "project": "engine"
+        },
+        {
+          "path": "tests/test_run_budget.py",
           "project": "engine"
         }
       ],
@@ -411,16 +455,15 @@
           ]
         }
       ],
-      "rationale": "Replaces the file-backed Ledger row. quadratus.ledger.Ledger is an in-memory list; RunBudget is the shared counter that already uses a thread lock. The failure mode is a lost update, so the tie-break is concurrency, not test. Difficulty is complex: a race is named as complex in the difficulty definitions. This is the packet's complex case.",
+      "rationale": "Accepted outline. reserve and finish already share one lock. The existing parallel test never calls finish, so once-only accounting is missing coverage, not an observed defect. Kind is concurrency because the acceptance is shared-counter accounting under two threads. Difficulty is simple: one lock, one sum, no second lock and no failing baseline. Complex is not claimed. The barrier is a deterministic setup and a final oracle, not a proof about every mutant.",
       "expected_default_lead": "grok:default"
     },
     {
       "id": "hold-import-readonly",
       "split": "held_out",
       "project": "gametape",
-      "task_text": "Report whether import_preview persists project data. Cite the function. Do not modify any file.",
+      "task_text": "Report whether import_preview persists project data. Cite import_preview and _load_projects, and say whether it calls _save_projects. Do not modify any file.",
       "acceptable_kinds": [
-        "review",
         "comprehend"
       ],
       "acceptable_difficulties": [
@@ -432,11 +475,12 @@
         "permitted_paths": [
           "app.py"
         ],
-        "intended_result": "A report, with the function named, and no source change.",
+        "intended_result": "A report of the call chain, and no source change.",
         "acceptance": [
           "The report names import_preview",
-          "The report says whether that function persists project data",
-          "The tree is unchanged"
+          "The report says it calls _load_projects",
+          "The report says it does not call _save_projects",
+          "git status --porcelain is empty, including untracked files"
         ],
         "max_lines": 20
       },
@@ -451,21 +495,21 @@
           "status": "proposed",
           "argv": [
             "git",
-            "diff",
-            "--exit-code"
+            "status",
+            "--porcelain"
           ]
         }
       ],
-      "rationale": "Review-only: edits none, named path app.py, positive max_lines. The wording avoids edit and generate verbs so the engine does not infer a write. Kind review is an audit for an unauthorized persist. Kind comprehend is an explanation of the same function. Both match the definitions. Difficulty is simple only. Review pins Sol; comprehend at simple uses the ladder.",
+      "rationale": "The question is what the function does, which is comprehend, not review. Review would be hunting an unknown defect, and this task does not ask for that, so Sol is not forced. Difficulty is simple. edits none, named path app.py, positive max_lines. A clean status is necessary but not sufficient: the grader also checks the two call claims. At 1cd9264, import_preview calls _load_projects and does not call _save_projects.",
       "expected_default_lead": "grok:default"
     },
     {
-      "id": "hold-list-timing",
+      "id": "hold-template-get",
       "split": "held_out",
       "project": "gametape",
-      "task_text": "Time a Flask test-client GET / three times. Write the exact command and the three durations into docs/list-timing.md. Do not modify application code. Do not treat a millisecond figure as pass or fail.",
+      "task_text": "Time a warm Flask test-client GET / three times. This is app.index, which only renders the template. It does not call list_projects. Write the exact command and the three durations, in seconds, into docs/template-get.md. Use a temporary data directory. One warm-up GET / is outside the timer and must return 200. Each measured GET / must return 200. Use perf_counter. Do not modify application code. Do not treat a duration as pass or fail.",
       "acceptable_kinds": [
-        "perf"
+        "docs"
       ],
       "acceptable_difficulties": [
         "simple"
@@ -476,13 +520,15 @@
       ],
       "scope": {
         "permitted_paths": [
-          "docs/list-timing.md"
+          "docs/template-get.md"
         ],
-        "intended_result": "A note with the command and three durations, and no application change.",
+        "intended_result": "A note with the command and three durations for template GET /, and no application change.",
         "acceptance": [
           "The note contains the command",
-          "The note contains three durations from that command",
-          "No application file changes"
+          "The note contains three finite nonnegative durations in seconds",
+          "Each measured response is 200",
+          "The warm-up is outside the timer",
+          "No application file changes, including untracked files"
         ],
         "max_lines": 40
       },
@@ -501,17 +547,22 @@
           "status": "proposed",
           "argv": [
             "git",
-            "diff",
-            "--exit-code",
+            "status",
+            "--porcelain",
             "--",
             "app.py",
-            "templates/index.html",
+            "templates",
             "static"
           ]
         }
       ],
-      "rationale": "Measurement only. No application edit is authorized, and there is no millisecond threshold. Kind perf, because the acceptance is a measurement. Difficulty simple: one command, three numbers, the whole task fits at once. The 200ms oracle is removed.",
+      "rationale": "The deliverable is a measurement note, not a faster program, so the kind is docs rather than perf. Difficulty is simple: one command, a warm-up, and three numbers. GET / was the wrong name when the row claimed to time the project list. app.index only renders the template. No millisecond threshold.",
       "expected_default_lead": "grok:default"
     }
-  ]
+  ],
+  "coverage_gaps": {
+    "standard": "none of the ten rows is standard",
+    "complex": "none of the ten rows is complex",
+    "note": "Not filled by promoting a simple row."
+  }
 }
