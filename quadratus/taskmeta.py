@@ -120,6 +120,9 @@ class TaskMetadata:
         confidence: How the route was arrived at. ``"labelled"`` -- the model
             stated it. ``"degraded"`` -- it stated something unrecognised and
             the default was substituted. ``"defaulted"`` -- it stated nothing.
+            ``"decided"`` -- it stated nothing usable and an operator-enabled
+            external decider (quadratus.decisions) answered; the verdict and
+            its source are in ``notes`` and on the session's decisions record.
             Three grades, all explicit; the bug being fixed was a default that
             looked exactly like a statement.
         notes: Human-readable provenance, rendered into diagnostics.
@@ -130,6 +133,12 @@ class TaskMetadata:
     description: str
     confidence: str = "labelled"
     notes: List[str] = field(default_factory=list)
+    #: Per-field provenance (Codex review of #44): ``KIND: typo complex``
+    #: degrades the kind and states the difficulty; ``KIND: backend`` states
+    #: the kind and defaults the difficulty. A decider may answer only the
+    #: field that was not stated.
+    kind_stated: bool = True
+    difficulty_stated: bool = True
 
     @property
     def defaulted(self) -> bool:
@@ -196,7 +205,7 @@ def parse_metadata(
     if not text:
         return TaskMetadata(
             kind=default_kind, difficulty=default_difficulty, description="",
-            confidence="defaulted", notes=["empty reply"],
+            confidence="defaulted", notes=["empty reply"], kind_stated=False, difficulty_stated=False,
         )
 
     lines = text.splitlines()
@@ -214,6 +223,7 @@ def parse_metadata(
             kind=default_kind, difficulty=default_difficulty, description=text,
             confidence="defaulted",
             notes=[f"no KIND label in the first {max_preface_lines} lines"],
+            kind_stated=False, difficulty_stated=False,
         )
 
     parsed = [(index, _split_label(label, known_kinds, known_difficulties))
@@ -229,6 +239,7 @@ def parse_metadata(
     index, (kind, difficulty, unknown) = parsed[0]
     notes: List[str] = []
     confidence = "labelled"
+    kind_stated, difficulty_stated = kind is not None, difficulty is not None
     if kind is None:
         # A label naming a kind that does not exist. This degrades rather than
         # failing the round -- a mislabelled task costs a routing preference,
@@ -265,6 +276,7 @@ def parse_metadata(
     return TaskMetadata(
         kind=kind, difficulty=difficulty, description=description,
         confidence=confidence, notes=notes,
+        kind_stated=kind_stated, difficulty_stated=difficulty_stated,
     )
 
 

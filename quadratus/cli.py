@@ -110,6 +110,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
                 extra_checks=getattr(args, "extra_check", None) or (),
                 capture_profile=getattr(args, "capture_profile", None),
                 readiness=getattr(args, "readiness", None),
+                decider=getattr(args, "decider", None),
                 forbid=args.forbid, declared_paths=args.declared_paths,
                 max_tasks=args.max_tasks, mode=args.mode,
                 security_verdict_json=getattr(args, "security_verdict_json", False),
@@ -171,6 +172,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
         integration_gate=gate,
         security_verdict_json=getattr(args, "security_verdict_json", False),
         progress=progress,
+        decider=_decider_for(args, meter),
     )
 
     fleet = Fleet(settings, usage_meter=meter, allow_writes=args.allow_writes)
@@ -220,6 +222,13 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
     print(_c("\n" + meter.render_report(), Fore.CYAN))
     print(_c(f"\nArtifacts, map and usage log: {state}", Fore.CYAN))
     return 0
+
+
+def _decider_for(args, meter=None):
+    """The decider named on the command line, for a projectless session (the
+    project runner resolves its own, with the run budget)."""
+    from .decisions import decider_from_name
+    return decider_from_name(getattr(args, "decider", None), meter=meter)
 
 
 def _operator(args):
@@ -349,6 +358,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             "captures UI tasks' renders itself: {\"preview\": [argv], \"origin\": "
             "\"http://127.0.0.1:PORT\", \"ready_path\": \"/\", \"ready_timeout\": 30, "
             "\"capture_timeout\": 120}. Validated before any model call."
+        ),
+    )
+    engine.add_argument(
+        "--decider", choices=("rule", "jev"), default="rule",
+        help=(
+            "Who answers a routing decision the orchestrator left unlabelled (task kind and "
+            "difficulty): 'rule' is the deterministic default; 'jev' asks TypeSafe AI's Jev "
+            "(pip install 'quadratus[decisions]', TYPESAFE_API_KEY), a billed API call that is "
+            "metered and recorded on the task. A stated label is never overridden."
         ),
     )
     engine.add_argument(

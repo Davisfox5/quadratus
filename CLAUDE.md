@@ -454,6 +454,21 @@ Key design decisions already settled:
   committed non-hidden project sample exactly as the capture itself
   (`design_evidence._fixture`) and the lead's instructions already did. Three
   gates with three rules was the defect; there is one rule now.
+- **An external decider answers only what the orchestrator left
+  unlabelled** (2026-09-30, `quadratus/decisions.py`,
+  `docs/decisions-api.md`). Decision-only models (TypeSafe AI's Jev; OpenAI's
+  Decisions API) return one of a fixed answer set with probabilities, which
+  is the shape of three routing decisions here: task difficulty, task kind,
+  worker escalation. None of the parsers and not the tier admission: those
+  are rules the prompts state and the tests pin. `--decider jev` is wired
+  against the vendor SDK's contract (`typesafe-sdk`, `TYPESAFE_API_KEY`,
+  billed and metered under `jev:<model>`), consulted for kind and
+  difficulty only on a defaulted or degraded route, never overriding a
+  stated label; every verdict or refusal is on `result.json.decisions` and
+  in the task's record, and a refusal keeps the rule's default. OpenAI's
+  Decisions API (DevDay, 2026-09-29) has no published endpoint, schema,
+  model id or pricing, so its decider is a placeholder that refuses with
+  what is missing until the contract lands.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
