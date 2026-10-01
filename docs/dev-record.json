@@ -300,15 +300,37 @@
       ],
       "author": "grok",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "blocked",
       "claimed_at": "2026-10-01T02:41:54Z",
       "acknowledged": true,
       "delivery": {
         "sha": "2cd7d86b115b3b07d67503139abf3ea162dd8f3b",
         "at": "2026-10-01T03:00:14Z"
       },
-      "reviews": [],
-      "blockers": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "2cd7d86b115b3b07d67503139abf3ea162dd8f3b",
+          "verdict": "blocked",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923937019",
+          "scope": [
+            "docs/jev-samples/",
+            "tests/fixtures/jev-samples/"
+          ],
+          "at": "2026-10-01T03:09:21Z"
+        }
+      ],
+      "blockers": [
+        {
+          "requirement": "a frozen sample set is executable against the pinned sources with reviewed, defensible answer sets (plan 5923633181)",
+          "failure": "hold-ledger-append assumes a file-backed Ledger that does not exist at the base; dev-mutation-node references a missing script; hold-list-timing authorizes code changes outside its permitted path on a machine-dependent threshold; hold-dotenv-guard's assertion may already pass on a 404; dev-favicon and hold-import-note cite other comments or an unexecuted task instead of materialized text and pinned source; hold-heading drops capture needs; hold-import-readonly's empty scope fails read_scope; acceptable sets not narrowed against the #47 definitions; packet not in the harness schema",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923937019 and #49 review 5923907891",
+          "classification": "reachable",
+          "by": "codex",
+          "sha": "2cd7d86b115b3b07d67503139abf3ea162dd8f3b",
+          "at": "2026-10-01T03:09:21Z"
+        }
+      ],
       "decisions": [
         "claude: delivered as draft PR #48 on base f96e0c8: docs/jev-samples/PACKET.md and tests/fixtures/jev-samples/samples.json only (verified against the PR file list); ten tasks, three development, seven held-out; favicon row marked score=false; answer sets are proposals until Codex's review freezes them"
       ],
