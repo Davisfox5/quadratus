@@ -22,13 +22,32 @@ free; it is a seed on the usage sheet, stale by assumption.
 
 Access without a TypeSafe account: Vercel's AI Gateway fronts Jev behind a
 TypeSafe-compatible API (base URL `https://ai-gateway.vercel.sh/typesafe`,
-model `typesafe-ai/jev`, the gateway key as the bearer, no markup), and
-Vercel's free tier includes $5 of gateway credit a month, about 120 million
-Jev input tokens. TypeSafe's own console stopped giving new accounts free
-credit on 2026-09-27. A `vck_` key is recognised as a gateway key and the
-gateway host and model become its defaults; `TYPESAFE_BASE_URL` and
-`TYPESAFE_DEFAULT_MODEL` still override. The host is recorded on every
-call.
+model `typesafe-ai/jev`, the gateway key as the bearer, no markup). A
+`vck_` key is recognised as a gateway key and the gateway host and model
+become its defaults; `TYPESAFE_BASE_URL` and `TYPESAFE_DEFAULT_MODEL` still
+override. The host is recorded on every call. The key lives in the
+project's gitignored `.env` as `TYPESAFE_API_KEY`.
+
+There is no free path, as of a live probe on 2026-09-30 from Davis's Mac
+with a gateway key: the gateway's model list answers (`jev`, alongside
+`liquid/d1`), and a decision call on either `typesafe-ai/jev` or `jev`
+returns 403 "Free tier users do not have access to this model. Upgrade to
+paid credits"; `typesafe-ai/jev-1.13` is 404. Search results claiming the
+Vercel free tier covers Jev were wrong. TypeSafe's own console stopped
+giving new accounts free credit on 2026-09-27. So the choice is a paid
+Vercel top-up on the gateway key (any amount; at $0.042 per million input
+tokens a $5 top-up is about 120 million tokens, and one routing decision
+is a few hundred) or a direct TypeSafe key, which the decider sends to
+`api.typesafe.ai` with model `jev-latest`.
+
+Direct key, live on 2026-09-30 (Davis's console, $5 credit): the key is
+spelled `apikey_<id>_<secret>` (not the `ts_` the search results claimed),
+the account's models are `jev-latest` and `jev-preview`, and `jev-latest`
+resolved to `jev-1.13.0`. Three difficulty decisions on task texts of one
+to two sentences cost 323 to 324 input tokens each and answered rote
+(0.58), simple (0.68) and complex (0.83) where those were the expected
+readings, each with the full probability map. A decision is about a
+hundredth of a cent.
 
 What the engine does with it (`JevDecider`, `Session._route_with_decider`):
 
