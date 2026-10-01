@@ -1,0 +1,19 @@
+{
+  "_note": "Template. Bind repo path, base_sha, check, capture_profile and each task's SCOPE to the real GameTape tree in the IDE before prepare. No KIND line anywhere: the jev arm decides, the rule arm takes the default.",
+  "project": {"repo": "/ABS/PATH/TO/gametape", "base_sha": "1cd9264edb4429f00cde43a04a1944d0dca37f11"},
+  "engine_sha": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+  "goal": "REQUIREMENTS:\nR1 <the feature, one sentence>\n",
+  "check": "python -m pytest -q",
+  "extra_checks": [["node", "tests/ui/import_preview.test.js"]],
+  "capture_profile": "/ABS/PATH/TO/preview-profile.json",
+  "limits": {"max_calls": 20, "max_reported_tokens": 500000, "wall_seconds": 600, "max_concurrent_workers": 2},
+  "repeats": 1,
+  "tasks": [
+    {"id": "f1-preview-errors", "goal": "REQUIREMENTS:\nR1 The import preview lists each malformed row with its line number and reason\n",
+     "text": "SCOPE: {\"intended_result\": \"...\", \"acceptance\": [\"...\"], \"permitted_paths\": [\"app.py\", \"templates/index.html\", \"static/app.js\", \"tests/test_import_preview.py\"], \"max_lines\": 80, \"capture\": {\"path\": \"/\", \"steps\": []}}\nShow a per-row error table under the import preview summary: line number and reason for every malformed row, in order, from the preview response.\nCOVERS: R1"},
+    {"id": "f2-project-search", "goal": "REQUIREMENTS:\nR1 The project list filters by a search box without a reload\n", "text": "SCOPE: {...}\nAdd a search box above the project list that filters cards by name as the user types; empty box shows all.\nCOVERS: R1"},
+    {"id": "f3-project-rename", "goal": "REQUIREMENTS:\nR1 A project can be renamed from its card and the name persists\n", "text": "SCOPE: {...}\nAdd PATCH /api/projects/<id> accepting {name}, validated non-empty and unique, persisted through _save_projects, with a rename control on the card and a test.\nCOVERS: R1"},
+    {"id": "f4-tags-export", "goal": "REQUIREMENTS:\nR1 A project's tags export as CSV\n", "text": "SCOPE: {...}\nAdd GET /api/projects/<id>/tags.csv returning the project's tags as CSV with the same columns the import preview accepts, plus a test that round-trips one row.\nCOVERS: R1"},
+    {"id": "f5-empty-state", "goal": "REQUIREMENTS:\nR1 An empty project list explains how to create the first project\n", "text": "SCOPE: {...}\nWhen there are no projects, render an empty-state panel with a one-line explanation and a button that focuses the create form; hidden once a project exists.\nCOVERS: R1"}
+  ]
+}
