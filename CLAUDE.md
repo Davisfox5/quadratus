@@ -566,6 +566,17 @@ Key design decisions already settled:
   Decisions API (DevDay, 2026-09-29) has no published endpoint, schema,
   model id or pricing, so its decider is a placeholder that refuses with
   what is missing until the contract lands.
+- **The decider is asked with definitions, never bare names**
+  (`quadratus/decision_labels.py`, 2026-10-01). The first live run sent
+  twenty label names with null criteria and got `backend` for a favicon
+  task that touched a route, an SVG, a template and a test. Every kind and
+  difficulty answer now carries a one-line definition with an example from
+  this repository, the question carries a stated tie-break for mixed work,
+  difficulty is defined by reasoning burden and dependencies rather than
+  line count, and `LABELS_VERSION` rides on every decision record. The docs
+  section is rendered from the same table and a test holds them equal.
+  Routing, stated-label precedence, admission and the budget are unchanged:
+  this changes the question, not what the engine does with the answer.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

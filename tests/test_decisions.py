@@ -216,3 +216,104 @@ def test_the_projectless_cli_session_resolves_the_decider():
     assert isinstance(_decider_for(SimpleNamespace(decider="jev")), D.JevDecider)
     assert _decider_for(SimpleNamespace(decider="rule")) is None
     assert _decider_for(SimpleNamespace()) is None
+
+
+# --- label definitions (decision_labels, 2026-10-01) ---------------------------
+
+from quadratus import decision_labels as L  # noqa: E402
+from quadratus.task_kinds import ROUTING  # noqa: E402
+
+
+def test_every_routed_kind_and_every_rung_has_a_definition_with_an_example():
+    assert set(L.KIND_DEFINITIONS) == set(ROUTING)
+    assert set(L.DIFFICULTY_DEFINITIONS) == set(DIFFICULTY_LADDER) == set(D.DECISIONS["task.difficulty"]["answers"])
+    for table in (L.KIND_DEFINITIONS, L.DIFFICULTY_DEFINITIONS):
+        for label, text in table.items():
+            assert "Example:" in text and len(text) > 60, label
+
+
+def test_the_jev_question_carries_definitions_guidance_and_the_labels_version():
+    client = _Client(_Answer("frontend"))
+    decision = D.describe("task.kind", tuple(ROUTING), context="Add the favicon route, SVG, link, and endpoint test.")
+    verdict = D.JevDecider(client=client).decide(decision)
+    question = client.calls[0]["questions"]["task_kind"]
+    assert question["criteria"] == L.KIND_DEFINITIONS and None not in question["criteria"].values()
+    assert question["instructions"].startswith(D.DECISIONS["task.kind"]["question"])
+    assert "choose frontend over backend" in question["instructions"]
+    assert verdict.usage["labels"] == L.LABELS_VERSION == decision.labels
+
+
+def test_difficulty_definitions_are_about_reasoning_not_line_count():
+    decision = D.describe("task.difficulty", tuple(DIFFICULTY_LADDER))
+    assert "Line count is not difficulty" in decision.guidance
+    for word in ("reasoning", "context", "depend"):
+        assert any(word in text for text in decision.definitions.values()), word
+
+
+def test_an_undefined_answer_is_refused_rather_than_sent_bare():
+    with pytest.raises(KeyError, match="no definition for mystery"):
+        D.describe("task.kind", ("backend", "mystery"))
+
+
+def test_a_hand_built_decision_still_sends_bare_criteria_and_no_labels_version():
+    client = _Client(_Answer("rote"))
+    verdict = D.JevDecider(client=client).decide(DIFFICULTY)
+    criteria = client.calls[0]["questions"]["task_difficulty"]["criteria"]
+    assert set(criteria) == set(DIFFICULTY.answers) and set(criteria.values()) == {None}
+    assert "labels" not in verdict.usage
+
+
+def test_the_docs_carry_the_rendered_definitions_verbatim():
+    from pathlib import Path
+    doc = (Path(__file__).resolve().parents[1] / "docs" / "decisions-api.md").read_text(encoding="utf-8")
+    assert L.render_markdown() in doc
+    assert f"`{L.LABELS_VERSION}`" in doc
+
+
+# --- SDK transport retries (Codex P1, #35 comment 5923854904) ------------------
+
+@pytest.mark.parametrize("failure", ["503", "timeout"])
+def test_the_real_sdk_makes_one_http_attempt_per_budget_reservation(failure):
+    """The real typesafe-sdk through a mock transport, no sockets, no key: a
+    503 or a timeout is one HTTP attempt, one reservation, one latched
+    unknown-usage stop. The SDK's default policy would have retried twice
+    below the reservation."""
+    httpx2 = pytest.importorskip("httpx2")
+    pytest.importorskip("typesafe_sdk")
+    from quadratus.run_budget import RunBudget, RunBudgetExceeded, RunLimits
+    attempts = []
+
+    def handler(request):
+        attempts.append(request.url.path)
+        if failure == "timeout":
+            raise httpx2.ReadTimeout("synthetic timeout", request=request)
+        return httpx2.Response(503, json={"error": "synthetic unavailable"})
+
+    budget = RunBudget(RunLimits(max_calls=1))
+    decider = D.JevDecider(api_key="offline-fixture-not-a-key", budget=budget,
+                           transport=httpx2.MockTransport(handler))
+    with pytest.raises(RunBudgetExceeded):
+        decider.decide(D.describe("task.difficulty", ("rote", "simple")))
+    assert attempts == ["/v1/systemone"], attempts
+    assert budget.snapshot()["reserved_attempts"] == 1 and budget.snapshot()["unknown_usage_attempts"] == 1
+
+
+def test_the_real_sdk_round_trip_is_one_attempt_and_one_reservation():
+    httpx2 = pytest.importorskip("httpx2")
+    pytest.importorskip("typesafe_sdk")
+    from quadratus.run_budget import RunBudget, RunLimits
+    attempts = []
+
+    def handler(request):
+        attempts.append(request.url.path)
+        return httpx2.Response(200, json={
+            "model": "jev-1.13.0", "usage": {"input_tokens": 300, "output_tokens": 0},
+            "answers": {"task_difficulty": {"type": "choice", "choice": "rote", "confidence": 0.9,
+                                            "probabilities": {"rote": 0.9, "simple": 0.1}}}})
+
+    budget = RunBudget(RunLimits(max_calls=1))
+    decider = D.JevDecider(api_key="offline-fixture-not-a-key", budget=budget,
+                           transport=httpx2.MockTransport(handler))
+    verdict = decider.decide(D.describe("task.difficulty", ("rote", "simple")))
+    assert verdict.answer == "rote" and verdict.source == "jev:jev-1.13.0" and attempts == ["/v1/systemone"]
+    assert budget.snapshot()["reserved_attempts"] == 1 and budget.snapshot()["input_tokens"] == 300

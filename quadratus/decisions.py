@@ -49,6 +49,14 @@ class Decision:
     context: str = ""
     #: Where the same decision is made today, for the record.
     rule: str = ""
+    #: One line per answer, from :mod:`quadratus.decision_labels`; a decider
+    #: sends these as the criteria rather than bare names. Empty means the
+    #: caller built the decision by hand (tests, the rule).
+    definitions: Optional[Dict[str, str]] = None
+    #: How to choose between answers when the work is mixed.
+    guidance: str = ""
+    #: Which wording the answer was judged against.
+    labels: str = ""
 
 
 @dataclass(frozen=True)
@@ -187,7 +195,7 @@ class JevDecider:
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None,
                  client: Any = None, meter: Any = None, timeout: float = 10.0,
-                 base_url: Optional[str] = None, budget: Any = None):
+                 base_url: Optional[str] = None, budget: Any = None, transport: Any = None):
         self.api_key = api_key if api_key is not None else os.environ.get(JEV_API_KEY_ENV, "").strip()
         gateway = self.api_key.startswith(JEV_GATEWAY_KEY_PREFIX)
         self.base_url = (base_url or os.environ.get(JEV_BASE_URL_ENV, "").strip()
@@ -203,6 +211,9 @@ class JevDecider:
         #: budget stop propagates; it is never swallowed as a refusal.
         self.budget = budget
         self.timeout = timeout
+        #: An httpx transport handed to the SDK client, for offline tests that
+        #: drive the real SDK without sockets. None means the SDK's own.
+        self.transport = transport
         self.calls: List[dict] = []
 
     def available(self) -> str:
@@ -218,10 +229,18 @@ class JevDecider:
         return ""
 
     def _sdk_client(self):
+        """The SDK client with transport retries off. The SDK's default
+        policy retries a failed request twice on its own, below the one
+        budget reservation that surrounds ``system_one``; with max_calls=1
+        and a 503 that is three HTTP attempts for one ticket (Codex, #35
+        comment 5923854904). Every attempt this decider makes is one
+        reservation, so the SDK makes none of its own."""
         if self._client is None:
-            from typesafe_sdk import TypeSafeClient
+            from typesafe_sdk import RetryPolicy, TypeSafeClient
             self._client = TypeSafeClient(api_key=self.api_key, model=self.model, timeout=self.timeout,
-                                          **({"base_url": self.base_url} if self.base_url else {}))
+                                          retry=RetryPolicy(max_retries=0),
+                                          **({"base_url": self.base_url} if self.base_url else {}),
+                                          **({"transport": self.transport} if self.transport is not None else {}))
         return self._client
 
     @property
@@ -247,8 +266,10 @@ class JevDecider:
         if reason:
             raise DecisionsUnavailable(reason)
         name = decision.id.replace(".", "_")
-        question = {"type": "choice", "instructions": decision.question,
-                    "criteria": {answer: None for answer in decision.answers}}
+        definitions = decision.definitions or {}
+        instructions = decision.question + (f" {decision.guidance}" if decision.guidance else "")
+        question = {"type": "choice", "instructions": instructions,
+                    "criteria": {answer: definitions.get(answer) for answer in decision.answers}}
         ticket = None
         if self.budget is not None:
             ticket, _remaining = self.budget.reserve(transport="api", price_key=f"jev:{self.model}")
@@ -287,10 +308,23 @@ class JevDecider:
         if choice not in decision.answers:
             raise DecisionsUnavailable(f"Jev answered {choice!r}, not one of {decision.answers}")
         probabilities = dict(getattr(answer, "probabilities", {}) or {})
+        usage_record = {k: record[k] for k in ("model", "host", "input_tokens", "output_tokens", "seconds")}
+        if decision.labels:
+            usage_record["labels"] = decision.labels
         return Verdict(decision=decision.id, answer=choice, source=f"jev:{model}",
                        confidence=getattr(answer, "confidence", None),
-                       note=json.dumps(probabilities, sort_keys=True),
-                       usage={k: record[k] for k in ("model", "host", "input_tokens", "output_tokens", "seconds")})
+                       note=json.dumps(probabilities, sort_keys=True), usage=usage_record)
+
+
+def describe(decision_id: str, answers: Sequence[str], *, context: str = "") -> Decision:
+    """A :class:`Decision` with its definitions, guidance and labels version
+    attached from :mod:`quadratus.decision_labels`: the shape every routing
+    call sends, so no decider is handed bare names."""
+    from .decision_labels import LABELS_VERSION, definitions_for, guidance_for
+    row = DECISIONS[decision_id]
+    return Decision(id=decision_id, question=row["question"], answers=tuple(answers), context=context,
+                    rule=row["rule"], definitions=definitions_for(decision_id, answers),
+                    guidance=guidance_for(decision_id), labels=LABELS_VERSION)
 
 
 def decider_from_name(name: Optional[str], *, meter: Any = None, budget: Any = None):

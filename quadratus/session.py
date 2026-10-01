@@ -3558,14 +3558,15 @@ class Session:
              getattr(meta, "difficulty_stated", not meta.defaulted))) if not stated]
         if not wanted:
             return meta
-        from .decisions import DECISIONS, Decision, DecisionsUnavailable
+        from .decisions import DecisionsUnavailable, describe
         task_id = task_id or f"t{len(self.history) + 1}"
         context = (meta.description or "")[:8000]
         updates, notes = {}, list(meta.notes)
         for key, attr, answers in wanted:
-            decision = Decision(id=key, question=DECISIONS[key]["question"], answers=answers,
-                                context=context, rule=DECISIONS[key]["rule"])
-            record = dict(task=task_id, decision=key, default=getattr(meta, attr))
+            # Definitions, guidance and their version ride with the question
+            # (decision_labels): the first live run sent bare label names.
+            decision = describe(key, answers, context=context)
+            record = dict(task=task_id, decision=key, default=getattr(meta, attr), labels=decision.labels)
             try:
                 verdict = decider.decide(decision)
             except (DecisionsUnavailable, ValueError) as exc:

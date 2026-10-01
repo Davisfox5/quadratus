@@ -49,6 +49,13 @@ def test_an_unlabelled_task_is_routed_by_the_decider_and_recorded(tmp_path, monk
     assert [(r["decision"], r["answer"], r["source"], r["default"]) for r in record] == [
         ("task.kind", "backend", "fake:jev", "general"), ("task.difficulty", "rote", "fake:jev", "simple")]
     assert all(r["task"] == "t1" and r["confidence"] == 0.77 and r["usage"]["seconds"] == 0.2 for r in record)
+    # The question the decider was handed carries definitions, a tie-break and
+    # its version; the record names the version (decision_labels).
+    from quadratus.decision_labels import LABELS_VERSION
+    assert all(r["labels"] == LABELS_VERSION for r in record)
+    kind, difficulty = decider.asked
+    assert set(kind.definitions) == set(kind.answers) and "frontend over backend" in kind.guidance
+    assert set(difficulty.definitions) == set(difficulty.answers) and difficulty.labels == LABELS_VERSION
 
 
 def test_a_stated_label_is_never_sent_to_the_decider(tmp_path, monkeypatch):
