@@ -3,7 +3,7 @@
   "note": "One shared development record (plan on #35, comment 5922888762). Edited through tools/dev_record.py; the acceptance manifest and workflow scorecard keep their own evidence, referenced here, never copied.",
   "candidate": {
     "pr": 42,
-    "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+    "sha": "2a7578b39f68b60b2ffd25587955e8f133203a00",
     "gate": "merge #42 to main, then the five-run series (docs/DIRECTION.md finish line)",
     "required_receipts": [
       "ci",
@@ -239,7 +239,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "reviewed",
+      "state": "integrated",
       "claimed_at": "2026-10-01T02:41:54Z",
       "acknowledged": true,
       "delivery": {
@@ -288,7 +288,12 @@
         "claude: Codex calibration notes: the favicon is a development example and must not reappear as a held-out result; the frontend/backend tie-break is a declared convention, not proof the earlier backend answer was wrong; later comparisons record the actual lead and required checks/reviews, not label agreement alone",
         "claude: delivery moved to 5844fd5 because the retry correction (T-jev-retries) landed on the same branch; Codex's cleared review of 93941b5 is stale by rule and the combined SHA is re-reviewed once"
       ],
-      "acknowledged_at": "2026-10-01T02:53:18Z"
+      "acknowledged_at": "2026-10-01T02:53:18Z",
+      "integrated": {
+        "sha": "5844fd50394a5094d0fbbb07c7469821cf2399b1",
+        "candidate": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+        "at": "2026-10-01T03:23:35Z"
+      }
     },
     {
       "id": "T-grok-samples",
@@ -407,7 +412,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "reviewed",
+      "state": "integrated",
       "claimed_at": "2026-10-01T03:01:19Z",
       "acknowledged": true,
       "delivery": {
@@ -429,7 +434,12 @@
       ],
       "blockers": [],
       "decisions": [],
-      "acknowledged_at": "2026-10-01T03:03:13Z"
+      "acknowledged_at": "2026-10-01T03:03:13Z",
+      "integrated": {
+        "sha": "5844fd50394a5094d0fbbb07c7469821cf2399b1",
+        "candidate": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+        "at": "2026-10-01T03:23:35Z"
+      }
     }
   ],
   "receipts": [
