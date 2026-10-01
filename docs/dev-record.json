@@ -239,7 +239,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-01T02:41:54Z",
       "acknowledged": true,
       "delivery": {
@@ -263,6 +263,22 @@
           ],
           "at": "2026-10-01T02:59:28Z",
           "stale_reason": "delivery moved from 93941b5 to 5844fd5"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "5844fd50394a5094d0fbbb07c7469821cf2399b1",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923904956",
+          "scope": [
+            "quadratus/decision_labels.py",
+            "quadratus/decisions.py",
+            "quadratus/session.py:_route_with_decider",
+            "docs/decisions-api.md",
+            "tests/test_decisions.py",
+            "tests/lifecycle/test_decider.py",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-01T03:06:50Z"
         }
       ],
       "blockers": [],
@@ -344,14 +360,26 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-01T03:01:19Z",
       "acknowledged": true,
       "delivery": {
         "sha": "5844fd50394a5094d0fbbb07c7469821cf2399b1",
         "at": "2026-10-01T03:03:14Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "5844fd50394a5094d0fbbb07c7469821cf2399b1",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923904956",
+          "scope": [
+            "quadratus/decisions.py:JevDecider._sdk_client",
+            "tests/test_decisions.py"
+          ],
+          "at": "2026-10-01T03:06:50Z"
+        }
+      ],
       "blockers": [],
       "decisions": [],
       "acknowledged_at": "2026-10-01T03:03:13Z"
