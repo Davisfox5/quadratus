@@ -2924,7 +2924,8 @@ class Session:
                 notes.append(f"{attr}: the decider refused ({str(exc)[:120]}); default kept")
             else:
                 record.update(answer=verdict.answer, source=verdict.source,
-                              confidence=verdict.confidence, probabilities=verdict.note)
+                              confidence=verdict.confidence, probabilities=verdict.note,
+                              usage=verdict.usage)
                 updates[attr] = verdict.answer
                 notes.append(f"{attr} {verdict.answer!r} decided by {verdict.source}"
                              + (f" (confidence {verdict.confidence:.2f})" if verdict.confidence is not None else ""))

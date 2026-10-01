@@ -94,9 +94,12 @@ def _no_ambient_jev_configuration(monkeypatch):
 
 def test_jev_asks_one_choice_question_and_returns_a_verdict_with_source_and_confidence():
     client, meter = _Client(_Answer("rote", 0.82, {"rote": 0.82, "simple": 0.15})), _Meter()
-    verdict = D.JevDecider(client=client, meter=meter).decide(DIFFICULTY)
+    decider = D.JevDecider(client=client, meter=meter)
+    verdict = decider.decide(DIFFICULTY)
     assert verdict.answer == "rote" and verdict.source == "jev:jev-1.13" and verdict.confidence == 0.82
     assert '"rote": 0.82' in verdict.note
+    assert verdict.usage["input_tokens"] == 120 and verdict.usage["host"] == "typesafe"
+    assert isinstance(verdict.usage["seconds"], float) and client.calls and decider.calls[0]["seconds"] >= 0
     question = client.calls[0]["questions"]["task_difficulty"]
     assert question["type"] == "choice" and set(question["criteria"]) == set(DIFFICULTY.answers)
     assert client.calls[0]["state"] == DIFFICULTY.context and client.calls[0]["model"] == "jev-latest"
