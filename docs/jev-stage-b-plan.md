@@ -1,6 +1,6 @@
 # Stage B: paired feature runs, Jev versus the rule (plan, 2026-10-01)
 
-TL;DR: five real GameTape feature tasks, each run twice on identical
+Seven real GameTape feature tasks, each run twice on identical
 checkouts under identical limits, once with `--decider jev` and once
 without. The two arms of a pair start together so both see the same vendor
 availability. Claude quarterbacks the runs from the IDE on Davis's Mac
@@ -25,7 +25,7 @@ cell is not a win.
 
 ## Design
 
-- Five tasks, two arms, one repeat: ten runs. The runner supports
+- Seven tasks, two arms, one repeat: fourteen runs. The runner supports
   `repeats` if a second pass is authorized later.
 - Arms differ in one flag. The jev arm omits any KIND line so Jev decides
   kind and difficulty; the rule arm omits it too and takes the engine's
@@ -37,14 +37,14 @@ cell is not a win.
   time by default (`--pairs 1`); `--pairs 2` doubles vendor load and is a
   call to make after the first pair's timings are in.
 - Limits per cell, from Codex's Stage B outline (`docs/jev-experiment-plan.md`):
-  20 calls, 500,000 reported tokens, 600 s wall, two workers. Ten cells
-  bound the series at 200 calls and 5M tokens; sequential pairs take at
-  most about 100 minutes, two pairs at a time about 50.
+  20 calls, 500,000 reported tokens, 600 s wall, two workers. Fourteen cells
+  bound the series at 280 calls and 7M tokens; sequential pairs take at
+  most about 140 minutes, two pairs at a time about 70.
 - Same `check`, `extra_checks` and `capture_profile` for every cell, read
   from the packet. The engine's own integration gate, capture and design
   review apply unchanged.
 
-## The five features (draft, bound in the IDE)
+## The seven features (draft, bound in the IDE)
 
 The texts in `tools/jev_stage_b/packet.example.json` are drafts written
 without the GameTape tree in front of me. Before `prepare`, each SCOPE gets
@@ -59,26 +59,32 @@ text may hint at a label.
 | f3-project-rename | rename endpoint, persistence, card control, test | backend plus frontend plus data; the likeliest to route standard |
 | f4-tags-export | CSV export endpoint with a round-trip test | backend/simple with a test pin question |
 | f5-empty-state | empty-state panel on the project list | frontend/rote-to-simple control |
+| f6-download-guard | path-traversal guard on video downloads | security has a pinned route (Sol); the largest possible routing swing |
+| f7-projects-migration | schema version and migration of the projects file | data kind; migration reasoning is the likeliest standard or complex |
 
-Two controls, three where a Jev label could plausibly move the lead to Sol
+Two controls, five where a Jev label could plausibly move the lead to Sol
 or Opus. The rule arm's default is general/simple → `grok:default` on all
-five, so a lead change in the jev arm is the routing effect under test.
+seven, so a lead change in the jev arm is the routing effect under test.
+The last two cover the kinds Stage A could not: security and data, the
+two categories with the strongest routing consequences.
 
 ## The OpenAI window is the binding constraint
 
 Every run spends on the ChatGPT subscription whether or not Sol leads: the
 requirements review and the final audit are Sol seats (about 28k and 43k
 reported tokens on the Stage A live run), and a Sol lead adds the lead's
-own context (about 117k on that run). Ten runs are therefore roughly 0.7M
-to 1.3M tokens on the OpenAI side, and Davis reports about 10% of the
+own context (about 117k on that run). Fourteen runs are therefore roughly 1M
+to 1.8M tokens on the OpenAI side, and Davis reports about 10% of the
 weekly window left. So:
 
 1. Ask Codex for one number before launch: what the ChatGPT window shows
    remaining. No analysis, no review.
 2. Run the first pair alone (`--only f2-project-search`, the cheapest
    control) and read `usage.jsonl` for the OpenAI-side total per cell.
-3. Extrapolate to ten cells. If the window will not hold the series, cut
-   to the three route-sensitive pairs (f1, f3, f4) and say so in the record
+3. Extrapolate to fourteen cells. If the window will not hold the series,
+   run the pairs in this order and stop where the window runs out: f6, f7,
+   f3, f1, f4, f2, f5 (largest expected routing swing first, controls
+   last), and say so in the record
    rather than running until a seat goes dark.
 4. If any seat becomes unavailable mid-series the running pair finishes
    or stops on its own limits, the next pair is not launched, and the
@@ -105,7 +111,7 @@ result with an error, never a reason to stop its sibling. `collect` reads
 Needed in the IDE before `prepare`: the GameTape repo path and baseline
 (1cd9264 or current main), `TYPESAFE_API_KEY` in the project's `.env`, the
 capture profile and check command used on run `20261001T001902Z`, Codex's
-window reading, and Davis's yes on the five features or edits to them.
+window reading, and Davis's yes on the seven features or edits to them.
 
 ## Evidence and reporting
 
