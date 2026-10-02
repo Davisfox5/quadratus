@@ -5,7 +5,7 @@ on identical checkouts, under identical limits (2026-10-01, Davis's call on
 Three commands, one manifest between them:
 
     python3 tools/jev_stage_b/pairs.py prepare --packet packet.json --out /abs/runs
-    python3 tools/jev_stage_b/pairs.py run     --out /abs/runs [--pairs 1] [--only TASK]
+    python3 tools/jev_stage_b/pairs.py run     --out /abs/runs [--pairs 1] [--only TASK] [--arm jev|rule]
     python3 tools/jev_stage_b/pairs.py collect --out /abs/runs
 
 ``prepare`` makes one detached git worktree per cell (task x arm x repeat)
@@ -18,10 +18,17 @@ of a pair start together so vendor availability is the same for both.
 ``usage.jsonl`` and renders the comparison. No provider is contacted by
 ``prepare`` or ``collect``; ``run`` is the only command that spends.
 
-The engine is unchanged: a cell is an ordinary explicit-task run
-(``run_project(tasks=[text], decider=arm)``), so every check, capture, gate
-and stop applies as it would to any run. The comparison is between arms on
-the same frozen text, never between a run and an edited version of itself.
+A cell is an ordinary run of the engine, so every check, capture, gate and
+stop applies as it would to any run. A task with a ``text`` is a listed run
+(``run_project(tasks=[text])``, one task, no planner). A task with only a
+``goal`` is a planned run: the orchestrator decomposes the goal under the
+packet's ``max_tasks``, and with ``survey_recovery`` set it continues
+through failures, each re-plan carrying a HYPOTHESIS line the harness
+records (Davis, 2026-10-02: deep features, failures logged, not stopped
+on). On a planned jev cell the orchestrator is asked not to label and the
+decider routes every task (``decider_labels="all"``); the rule cell's
+orchestrator labels as usual. The comparison is between arms on the same
+frozen goal, never between a run and an edited version of itself.
 """
 
 from __future__ import annotations
@@ -61,13 +68,24 @@ def validate_packet(packet: dict) -> None:
             raise ValueError(f"limits.{key} must be a positive number")
     seen = set()
     for task in packet["tasks"]:
-        if not task.get("id") or task["id"] in seen or not str(task.get("text", "")).strip():
-            raise ValueError("every task needs a unique id and a non-empty text")
+        if not task.get("id") or task["id"] in seen:
+            raise ValueError("every task needs a unique id")
         seen.add(task["id"])
-        if "KIND:" in task["text"]:
+        text, goal = str(task.get("text") or ""), str(task.get("goal") or packet["goal"])
+        if not text.strip() and "REQUIREMENTS:" not in goal:
+            raise ValueError(f"{task['id']}: a planned task needs a goal with a REQUIREMENTS: block")
+        if "KIND:" in text or "KIND:" in goal:
             raise ValueError(f"{task['id']}: a KIND line would pre-empt the decider; both arms must omit it")
+        paths = task.get("declared_paths") or []
+        if not isinstance(paths, list) or any(not isinstance(p, str) or not p for p in paths):
+            raise ValueError(f"{task['id']}: declared_paths must be a list of path strings")
     if int(packet.get("repeats", 1)) < 1:
         raise ValueError("repeats must be at least 1")
+    if int(packet.get("max_tasks", 1)) < 1:
+        raise ValueError("max_tasks must be at least 1")
+    recovery = packet.get("survey_recovery")
+    if recovery is not None and (not isinstance(recovery, int) or recovery < 1):
+        raise ValueError("survey_recovery must be a positive integer or null")
 
 
 def cells_for(packet: dict) -> List[dict]:
@@ -78,8 +96,10 @@ def cells_for(packet: dict) -> List[dict]:
         for repeat in range(int(packet.get("repeats", 1))):
             for position, arm in enumerate(order):
                 cells.append(dict(task=task["id"], arm=arm, repeat=repeat, position=position,
-                                  name=f"{task['id']}/{arm}-r{repeat}", text=task["text"],
-                                  goal=task.get("goal") or packet["goal"]))
+                                  name=f"{task['id']}/{arm}-r{repeat}", text=task.get("text") or "",
+                                  goal=task.get("goal") or packet["goal"],
+                                  declared_paths=list(task.get("declared_paths") or []),
+                                  entry="listed" if task.get("text") else "planned"))
     return cells
 
 
@@ -95,10 +115,14 @@ def prepare(packet: dict, out: Path, *, worktree: Callable[[Path, Path, str], No
             raise FileExistsError(f"{path} exists; a prepared cell is never reused")
         path.parent.mkdir(parents=True, exist_ok=True)
         worktree(repo, path, base)
-        (path.parent / f"{cell['arm']}-r{cell['repeat']}.tasks.json").write_text(
-            json.dumps([cell["text"]], indent=2) + "\n")
         cell["project"] = str(path)
-        cell["tasks_file"] = str(path.parent / f"{cell['arm']}-r{cell['repeat']}.tasks.json")
+        stem = path.parent / f"{cell['arm']}-r{cell['repeat']}"
+        if cell["entry"] == "listed":
+            stem.with_suffix(".tasks.json").write_text(json.dumps([cell["text"]], indent=2) + "\n")
+            cell["tasks_file"] = str(stem.with_suffix(".tasks.json"))
+        else:
+            stem.with_suffix(".goal.txt").write_text(cell["goal"])
+            cell["goal_file"] = str(stem.with_suffix(".goal.txt"))
         cell["state"] = "prepared"
     manifest = dict(format=1, packet=packet, packet_digest=_sha(packet), out=str(out),
                     prepared_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), cells=cells)
@@ -122,19 +146,42 @@ def default_launcher(cell: dict, packet: dict) -> dict:
         cell["goal"], Project.open(cell["project"]), Settings.from_env(),
         allow_writes=True, check=packet.get("check", ""), extra_checks=extra,
         capture_profile=packet.get("capture_profile"), readiness=packet.get("readiness"),
-        run_limits=limits, tasks=[cell["text"]], max_tasks=1,
+        run_limits=limits, declared_paths=tuple(cell.get("declared_paths") or ()),
         decider=cell["arm"] if cell["arm"] != "rule" else None,
         direct_tier=bool(packet.get("direct_tier", False)),
-        progress=lambda message: print(f"[{cell['name']}] {message}", flush=True))
+        progress=lambda message: print(f"[{cell['name']}] {message}", flush=True),
+        **launch_shape(cell, packet))
     return dict(run_dir=str(result.run_dir), completed=bool(result.completed))
 
 
+def launch_shape(cell: dict, packet: dict) -> dict:
+    """The run_project arguments that differ between a listed and a planned
+    cell. Listed: the one frozen text, no planner. Planned: the goal, the
+    packet's task cap, the survey allowance, and on the jev arm a decider
+    that labels every task because the orchestrator is asked not to."""
+    if cell.get("entry", "listed" if cell.get("text") else "planned") == "listed":
+        return dict(tasks=[cell["text"]], max_tasks=1)
+    from quadratus.session import SurveyConfig
+    recovery = packet.get("survey_recovery")
+    shape = dict(max_tasks=int(packet.get("max_tasks", 1)),
+                 survey=SurveyConfig(recovery_tasks=int(recovery)) if recovery else None)
+    if cell["arm"] != "rule":
+        shape["decider_labels"] = "all"
+    return shape
+
+
 def run(out: Path, *, launcher: Callable[[dict, dict], dict] = default_launcher,
-        pairs: int = 1, only: Optional[str] = None) -> dict:
-    """Launch unrun cells, both arms of a pair together, ``pairs`` pairs at a time."""
+        pairs: int = 1, only: Optional[str] = None, arm: Optional[str] = None) -> dict:
+    """Launch unrun cells, both arms of a pair together, ``pairs`` pairs at a
+    time. ``arm`` runs one arm only (rule first across the series, jev
+    later, when the OpenAI window is better spent that way); the other arm's
+    cells stay prepared for a later ``run``."""
+    if arm is not None and arm not in ARMS:
+        raise ValueError(f"arm must be one of {ARMS}")
     manifest = json.loads((out / "manifest.json").read_text())
     packet = manifest["packet"]
-    todo = [c for c in manifest["cells"] if c["state"] == "prepared" and (only is None or c["task"] == only)]
+    todo = [c for c in manifest["cells"] if c["state"] == "prepared" and (only is None or c["task"] == only)
+            and (arm is None or c["arm"] == arm)]
     groups: Dict[str, List[dict]] = {}
     for cell in todo:
         groups.setdefault(f"{cell['task']}-r{cell['repeat']}", []).append(cell)
@@ -169,18 +216,32 @@ def _read_cell(cell: dict) -> dict:
     explicit = result.get("explicit_tasks") or {}
     budget = result.get("budget") or {}
     decisions = result.get("decisions") or []
+    if explicit:
+        closed, unfinished = len(explicit.get("tasks_closed_clean", [])), len(explicit.get("tasks_unfinished", []))
+    else:
+        # A planned run: the task count and the harness's own unfinished lists.
+        unfinished = len(set(result.get("turn_limited_tasks") or []) | set(result.get("failed_tasks") or []))
+        closed = max(0, int(result.get("tasks") or 0) - unfinished)
+    survey = result.get("survey") or {}
+    def distinct(key):
+        seen = []
+        for d in decisions:
+            if d.get("decision") == key and d.get("answer") and d["answer"] not in seen:
+                seen.append(d["answer"])
+        return ",".join(seen) or None
     row.update(completed=result.get("completed"), result_error=result.get("error"),
-               closed_clean=len(explicit.get("tasks_closed_clean", [])),
-               unfinished=len(explicit.get("tasks_unfinished", [])),
+               entry="listed" if explicit else "planned", tasks=int(result.get("tasks") or 0),
+               closed_clean=closed, unfinished=unfinished,
+               recovery_used=survey.get("recovery_used"), hypotheses=len(survey.get("hypotheses") or []),
+               repeats_stopped=len(survey.get("repeats") or []), causes=survey.get("unique_causes") or [],
                checks_failed=sum(1 for c in (result.get("checks") or []) if not c.get("passed", c.get("ok", True))),
                calls=budget.get("reserved_attempts"), tokens=budget.get("reported_tokens"),
                stop=budget.get("stop_reason") or "", unknown_usage=budget.get("unknown_usage_attempts"),
-               kind=next((d.get("answer") for d in decisions if d.get("decision") == "task.kind"), None),
-               difficulty=next((d.get("answer") for d in decisions if d.get("decision") == "task.difficulty"), None),
+               kind=distinct("task.kind"), difficulty=distinct("task.difficulty"), decisions=len(decisions),
                decision_tokens=sum((d.get("usage") or {}).get("input_tokens") or 0 for d in decisions)
                + sum((d.get("usage") or {}).get("output_tokens") or 0 for d in decisions),
                source_changed=result.get("source_changed"))
-    lead = None
+    leads: List[str] = []
     inv = run_dir / "invocations.jsonl"
     if inv.exists():
         for line in inv.read_text().splitlines():
@@ -188,10 +249,10 @@ def _read_cell(cell: dict) -> dict:
                 entry = json.loads(line)
             except ValueError:
                 continue
-            if str(entry.get("role", "")).startswith("lead") and entry.get("model"):
-                lead = entry["model"]
-                break
-    row["lead"] = lead
+            if str(entry.get("role", "")).startswith("lead") and entry.get("model") and entry["model"] not in leads:
+                leads.append(entry["model"])
+    row["lead"] = leads[0] if leads else None
+    row["leads"] = leads
     return row
 
 
@@ -205,7 +266,7 @@ def collect(out: Path) -> dict:
             if set(by_arm) == set(ARMS):
                 j, r = by_arm["jev"], by_arm["rule"]
                 pairs.append(dict(task=task, repeat=repeat,
-                                  lead_changed=(j.get("lead") != r.get("lead")) if j.get("lead") and r.get("lead") else None,
+                                  lead_changed=(j.get("leads") != r.get("leads")) if j.get("leads") and r.get("leads") else None,
                                   both_completed=bool(j.get("completed")) and bool(r.get("completed")),
                                   completed=dict(jev=j.get("completed"), rule=r.get("completed")),
                                   tokens_delta=(j.get("tokens") or 0) - (r.get("tokens") or 0)
@@ -223,12 +284,17 @@ def collect(out: Path) -> dict:
 
 
 def render(summary: dict) -> str:
-    lines = ["| task | arm | r | done | closed | checks failed | lead | kind/difficulty | calls | tokens | s | stop |",
-             "|---|---|---:|---|---:|---:|---|---|---:|---:|---:|---|"]
+    lines = ["| task | arm | r | done | tasks | closed | checks failed | recovery/hyp | leads | kind/difficulty | calls | tokens | s | stop |",
+             "|---|---|---:|---|---:|---:|---:|---|---|---|---:|---:|---:|---|"]
     for r in sorted(summary["rows"], key=lambda r: (r["task"], r["repeat"], r["arm"])):
-        label = f"{r.get('kind') or '-'}/{r.get('difficulty') or '-'}" if r["arm"] == "jev" else "default"
-        lines.append(f"| {r['task']} | {r['arm']} | {r['repeat']} | {r.get('completed', r['state'])} | "
-                     f"{r.get('closed_clean', '')} | {r.get('checks_failed', '')} | {r.get('lead') or ''} | {label} | "
+        if r["arm"] == "jev":
+            label = f"{r.get('kind') or '-'}/{r.get('difficulty') or '-'}"
+        else:
+            label = "orchestrator" if r.get("entry") == "planned" else "default"
+        recovery = (f"{r['recovery_used']}/{r.get('hypotheses', 0)}" if r.get("recovery_used") is not None else "")
+        lines.append(f"| {r['task']} | {r['arm']} | {r['repeat']} | {r.get('completed', r['state'])} | {r.get('tasks', '')} | "
+                     f"{r.get('closed_clean', '')} | {r.get('checks_failed', '')} | {recovery} | "
+                     f"{'+'.join(r.get('leads') or [])} | {label} | "
                      f"{r.get('calls', '')} | {r.get('tokens', '')} | {r.get('seconds', '')} | {r.get('stop') or r.get('error') or ''} |")
     lines += ["", "| pair | lead changed | both done | jev done | rule done | tokens (jev - rule) | seconds (jev - rule) |",
               "|---|---|---|---|---|---:|---:|"]
@@ -250,6 +316,7 @@ def main(argv=None) -> int:
     r.add_argument("--out", type=Path, required=True)
     r.add_argument("--pairs", type=int, default=1, help="pairs launched together (both arms of each pair always start together)")
     r.add_argument("--only", help="run only this task id's cells")
+    r.add_argument("--arm", choices=ARMS, default=None, help="run only this arm's cells (the other arm stays prepared)")
     c = sub.add_parser("collect")
     c.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -259,7 +326,7 @@ def main(argv=None) -> int:
         manifest = prepare(json.loads(args.packet.read_text()), args.out)
         print(f"prepared {len(manifest['cells'])} cells under {args.out}")
     elif args.command == "run":
-        manifest = run(args.out, pairs=args.pairs, only=args.only)
+        manifest = run(args.out, pairs=args.pairs, only=args.only, arm=args.arm)
         print(json.dumps({c["name"]: c["state"] for c in manifest["cells"]}, indent=2))
     else:
         print(render(collect(args.out)))

@@ -104,3 +104,68 @@ def test_collect_pairs_arms_and_reports_lead_changes_and_deltas(tmp_path):
     assert jev0["kind"] == "security" and jev0["decision_tokens"] == 1520 and jev0["lead"] == "openai:gpt-5.6-sol"
     text = (out / "comparison.md").read_text()
     assert "| feat-0 | jev | 0 | True |" in text and "security/simple" in text and "faster failed cell is not a win" in text
+
+
+# ---- Davis, 2026-10-02: deep planned features, failures logged, one arm at a time
+
+def test_a_planned_task_launches_the_goal_with_the_survey_and_the_jev_arm_labels_all(tmp_path):
+    repo = _project(tmp_path)
+    packet = _packet(repo, tasks=0)
+    packet.update(max_tasks=8, survey_recovery=4,
+                  tasks=[dict(id="deep-0", goal="REQUIREMENTS:\nR1 a\nR2 b\n", declared_paths=["app.py", "tests/"])])
+    out = tmp_path / "runs"
+    manifest = P.prepare(packet, out)
+    cell = manifest["cells"][0]
+    assert cell["entry"] == "planned" and "tasks_file" not in cell
+    assert Path(cell["goal_file"]).read_text() == "REQUIREMENTS:\nR1 a\nR2 b\n"
+    from quadratus.session import SurveyConfig
+    jev, rule = (c for c in manifest["cells"] if c["arm"] == "jev"), (c for c in manifest["cells"] if c["arm"] == "rule")
+    assert P.launch_shape(next(jev), packet) == dict(max_tasks=8, survey=SurveyConfig(recovery_tasks=4), decider_labels="all")
+    assert P.launch_shape(next(rule), packet) == dict(max_tasks=8, survey=SurveyConfig(recovery_tasks=4))
+    listed = dict(entry="listed", text="SCOPE: {}\nBuild it.\nCOVERS: R1", arm="jev")
+    assert P.launch_shape(listed, packet) == dict(tasks=[listed["text"]], max_tasks=1)
+    bad = dict(packet, tasks=[dict(id="x", goal="R1 no block\n")])
+    with pytest.raises(ValueError, match="REQUIREMENTS"):
+        P.prepare(bad, tmp_path / "b")
+    bad = dict(packet, survey_recovery=0)
+    with pytest.raises(ValueError, match="survey_recovery"):
+        P.prepare(bad, tmp_path / "c")
+
+
+def test_run_can_take_one_arm_first_and_collect_reads_a_planned_result(tmp_path):
+    repo = _project(tmp_path)
+    packet = _packet(repo, tasks=0)
+    packet.update(max_tasks=6, survey_recovery=3, tasks=[dict(id="deep-0", goal="REQUIREMENTS:\nR1 a\n")])
+    out = tmp_path / "runs"
+    P.prepare(packet, out)
+
+    def planned_launcher(cell, _packet):
+        run_dir = Path(cell["project"]) / ".quadratus" / "runs" / "r"
+        run_dir.mkdir(parents=True)
+        decisions = [dict(task="t1", decision="task.kind", answer="backend", usage={}),
+                     dict(task="t2", decision="task.kind", answer="test", usage={}),
+                     dict(task="t1", decision="task.difficulty", answer="standard", usage={})] if cell["arm"] == "jev" else []
+        (run_dir / "result.json").write_text(json.dumps(dict(
+            completed=False, error="x", checks=[dict(passed=False)], source_changed=True, tasks=4,
+            turn_limited_tasks=["t2"], failed_tasks=["t3"], explicit_tasks=None,
+            survey=dict(recovery_used=2, hypotheses=[dict(task="t3"), dict(task="t4")], repeats=[], unique_causes=["cap", "checks"]),
+            budget=dict(reserved_attempts=30, reported_tokens=900_000, stop_reason="", unknown_usage_attempts=0),
+            decisions=decisions)))
+        (run_dir / "invocations.jsonl").write_text(
+            json.dumps(dict(role="lead", model="openai:gpt-5.6-sol")) + "\n" + json.dumps(dict(role="lead", model="grok:default")) + "\n")
+        return dict(run_dir=str(run_dir), completed=False)
+
+    with pytest.raises(ValueError, match="arm"):
+        P.run(out, launcher=planned_launcher, arm="codex")
+    manifest = P.run(out, launcher=planned_launcher, arm="rule")
+    assert {c["name"]: c["state"] for c in manifest["cells"]} == {"deep-0/jev-r0": "prepared", "deep-0/rule-r0": "ran"}
+    P.run(out, launcher=planned_launcher, arm="jev")
+    summary = P.collect(out)
+    jev = next(r for r in summary["rows"] if r["arm"] == "jev")
+    assert (jev["entry"], jev["tasks"], jev["closed_clean"], jev["unfinished"]) == ("planned", 4, 2, 2)
+    assert jev["recovery_used"] == 2 and jev["hypotheses"] == 2 and jev["causes"] == ["cap", "checks"]
+    assert jev["kind"] == "backend,test" and jev["difficulty"] == "standard" and jev["decisions"] == 3
+    assert jev["leads"] == ["openai:gpt-5.6-sol", "grok:default"]
+    assert summary["pairs"][0]["lead_changed"] is False
+    text = (out / "comparison.md").read_text()
+    assert "| 2/2 | openai:gpt-5.6-sol+grok:default | backend,test/standard |" in text and "| orchestrator |" in text
