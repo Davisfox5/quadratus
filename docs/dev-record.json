@@ -535,7 +535,13 @@
       "base": "2a7578b39f68b60b2ffd25587955e8f133203a00",
       "owns": [
         "tools/jev_stage_b/",
-        "docs/jev-stage-b-plan.md"
+        "docs/jev-stage-b-plan.md",
+        "quadratus/session.py",
+        "quadratus/project_run.py",
+        "quadratus/cli.py",
+        "docs/decisions-api.md",
+        "tests/lifecycle/test_decider.py",
+        "tests/lifecycle/harness.py"
       ],
       "author": "claude",
       "reviewer": "codex",
@@ -543,13 +549,15 @@
       "claimed_at": "2026-10-01T19:11:18Z",
       "acknowledged": true,
       "delivery": {
-        "sha": "4be6c1ab61da45a44f46e0ecbd2747765d355681",
-        "at": "2026-10-02T20:58:34Z"
+        "sha": "1e071807ea83761201ec29c30168c87fcfce194b",
+        "at": "2026-10-02T21:46:18Z"
       },
       "reviews": [],
       "blockers": [],
       "decisions": [
-        "claude: Davis's directive in the coordinator chat, 2026-10-01: Claude quarterbacks the Stage B live runs from the IDE on the Mac; Codex's weekly window is about 10% and is spent only on a usage reading and a light review of the runner. Execution ownership for this series therefore sits with Claude, by operator decision, as an exception to DIRECTION.md's Codex-executes rule; recorded here so the exception is visible"
+        "claude: Davis's directive in the coordinator chat, 2026-10-01: Claude quarterbacks the Stage B live runs from the IDE on the Mac; Codex's weekly window is about 10% and is spent only on a usage reading and a light review of the runner. Execution ownership for this series therefore sits with Claude, by operator decision, as an exception to DIRECTION.md's Codex-executes rule; recorded here so the exception is visible",
+        "claude: scope extended to quadratus/session.py, quadratus/project_run.py, quadratus/cli.py, docs/decisions-api.md, tests/lifecycle/test_decider.py, tests/lifecycle/harness.py",
+        "claude: Davis, 2026-10-02: go deep (four to six requirements per feature, planned runs, survey recovery 4 so breakages are logged with a HYPOTHESIS rather than stopped on), rule arm may run across the series first (--arm). Engine addition decider_labels=all so Jev labels every planned task; otherwise the orchestrator's KIND line leaves Jev nothing to decide. Delivered at 1e07180 on #50."
       ],
       "acknowledged_at": "2026-10-01T19:11:18Z"
     }
