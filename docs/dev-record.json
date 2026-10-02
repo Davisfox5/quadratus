@@ -543,8 +543,8 @@
       "claimed_at": "2026-10-01T19:11:18Z",
       "acknowledged": true,
       "delivery": {
-        "sha": "0ed43f2128544d34a6b81e99eae0beb5936d62b3",
-        "at": "2026-10-01T19:11:21Z"
+        "sha": "4be6c1ab61da45a44f46e0ecbd2747765d355681",
+        "at": "2026-10-02T20:58:34Z"
       },
       "reviews": [],
       "blockers": [],
