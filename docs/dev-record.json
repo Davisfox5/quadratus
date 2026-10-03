@@ -549,15 +549,16 @@
       "claimed_at": "2026-10-01T19:11:18Z",
       "acknowledged": true,
       "delivery": {
-        "sha": "5448403c82fea3fc4c7af253c3db23f7c77c79b9",
-        "at": "2026-10-03T04:23:37Z"
+        "sha": "e8438b951dd003308a913b86b6ecd9512dd3d39a",
+        "at": "2026-10-03T04:26:02Z"
       },
       "reviews": [],
       "blockers": [],
       "decisions": [
         "claude: Davis's directive in the coordinator chat, 2026-10-01: Claude quarterbacks the Stage B live runs from the IDE on the Mac; Codex's weekly window is about 10% and is spent only on a usage reading and a light review of the runner. Execution ownership for this series therefore sits with Claude, by operator decision, as an exception to DIRECTION.md's Codex-executes rule; recorded here so the exception is visible",
         "claude: scope extended to quadratus/session.py, quadratus/project_run.py, quadratus/cli.py, docs/decisions-api.md, tests/lifecycle/test_decider.py, tests/lifecycle/harness.py",
-        "claude: Davis, 2026-10-02: go deep (four to six requirements per feature, planned runs, survey recovery 4 so breakages are logged with a HYPOTHESIS rather than stopped on), rule arm may run across the series first (--arm). Engine addition decider_labels=all so Jev labels every planned task; otherwise the orchestrator's KIND line leaves Jev nothing to decide. Delivered at 1e07180 on #50."
+        "claude: Davis, 2026-10-02: go deep (four to six requirements per feature, planned runs, survey recovery 4 so breakages are logged with a HYPOTHESIS rather than stopped on), rule arm may run across the series first (--arm). Engine addition decider_labels=all so Jev labels every planned task; otherwise the orchestrator's KIND line leaves Jev nothing to decide. Delivered at 1e07180 on #50.",
+        "claude: Davis via Codex (#35 comment 5965492940, 2026-10-03): conditional go-ahead for the seven-feature series once the three runner gaps are fixed, independent graders are frozen, the packet is bound and Codex has reviewed the exact SHAs. Runner gaps closed at 5448403; graders, profile integrity and CLI version recording at e8438b951dd003308a913b86b6ecd9512dd3d39a. Execution stays with the Mac IDE session; nothing launched from the cloud."
       ],
       "acknowledged_at": "2026-10-01T19:11:18Z"
     }
