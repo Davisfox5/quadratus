@@ -48,15 +48,20 @@ def _fake_launcher(outcomes):
             decisions=decisions)))
         (run_dir / "invocations.jsonl").write_text("\n".join([
             json.dumps(dict(task="run", role="orchestrator", canonical_model=o.get("orchestrator", "claude:fable"), invoked=True)),
-            json.dumps(dict(task="t1", role="lead", canonical_model=o.get("lead", "grok:default"), invoked=True))]) + "\n")
-        # The run's shared trace: one lead call that wrote one file, unless
-        # the outcome says its writes were denied.
+            json.dumps(dict(task="t1", role="lead", canonical_model=o.get("lead", "grok:default"), invoked=True,
+                            invocation_id="inv-1"))]) + "\n")
+        # The run's shared trace: one lead call that wrote one project file,
+        # unless the outcome says its project writes were denied; a scratch
+        # write outside the project may sit beside either.
         denied = o.get("write_denials", 0)
+        project_file = str(Path(cell["project"]) / "app.py")
+        scratch = ["/tmp/claude-scratch/probe.txt"] if o.get("scratch_write") else []
         (run_dir / "trace.jsonl").write_text(json.dumps(dict(
             invocation_id="inv-1", task="t1", role="lead", model=o.get("lead", "grok:default"),
-            tool_calls=[dict(name="Write", outcome="denied", path="/p/app.py")] * denied
-            + ([] if denied else [dict(name="Write", outcome="success", path="/p/app.py")]),
-            files_written=[] if denied else ["app.py"])) + "\n")
+            tool_calls=[dict(name="Edit", outcome="denied", path=project_file)] * denied
+            + ([] if denied else [dict(name="Write", outcome="success", path=project_file)])
+            + [dict(name="Write", outcome="success", path=f) for f in scratch],
+            files_written=([] if denied else [project_file]) + scratch)) + "\n")
         if o.get("raise"):
             raise RuntimeError("provider down")
         return dict(run_dir=str(run_dir), completed=o.get("completed", True))
@@ -172,13 +177,13 @@ def test_run_can_take_one_arm_first_and_collect_reads_a_planned_result(tmp_path)
             budget=dict(reserved_attempts=30, reported_tokens=900_000, stop_reason="", unknown_usage_attempts=0),
             decisions=decisions)))
         (run_dir / "invocations.jsonl").write_text("\n".join([
-            json.dumps(dict(task="t1", role="lead", canonical_model="openai:gpt-5.6-sol", invoked=True)),
-            json.dumps(dict(task="t1", role="reviewer:a", canonical_model="anthropic:opus", invoked=True)),
-            json.dumps(dict(task="t2", role="lead", requested_model="grok:default", invoked=True)),
+            json.dumps(dict(task="t1", role="lead", canonical_model="openai:gpt-5.6-sol", invoked=True, invocation_id="i1")),
+            json.dumps(dict(task="t1", role="reviewer:a", canonical_model="anthropic:opus", invoked=True, invocation_id="i1r")),
+            json.dumps(dict(task="t2", role="lead", requested_model="grok:default", invoked=True, invocation_id="i2")),
             json.dumps(dict(task="t3", role="lead", canonical_model="anthropic:opus", invoked=False, selected=True))]) + "\n")
         (run_dir / "trace.jsonl").write_text("\n".join([
-            json.dumps(dict(task="t1", role="lead", model="openai:gpt-5.6-sol", tool_calls=[dict(name="Write", outcome="success")], files_written=["app.py"])),
-            json.dumps(dict(task="t2", role="lead", model="grok:default", tool_calls=[dict(name="write_file", outcome="success")], files_written=["x.py"]))]) + "\n")
+            json.dumps(dict(invocation_id="i1", task="t1", role="lead", model="openai:gpt-5.6-sol", tool_calls=[dict(name="Write", outcome="success")], files_written=["app.py"])),
+            json.dumps(dict(invocation_id="i2", task="t2", role="lead", model="grok:default", tool_calls=[dict(name="write_file", outcome="success")], files_written=["x.py"]))]) + "\n")
         return dict(run_dir=str(run_dir), completed=False)
 
     with pytest.raises(ValueError, match="arm"):
@@ -433,11 +438,11 @@ def _engine_result_launcher(errors_by_cell, calls_by_cell=None):
             decisions=[])))
         lines = [] if not calls else [
             json.dumps(dict(task="run", role="orchestrator", canonical_model="claude:fable", invoked=True)),
-            json.dumps(dict(task="t1", role="lead", canonical_model="grok:default", invoked=True))]
+            json.dumps(dict(task="t1", role="lead", canonical_model="grok:default", invoked=True, invocation_id="e1"))]
         (run_dir / "invocations.jsonl").write_text("\n".join(lines) + ("\n" if lines else ""))
         (run_dir / "trace.jsonl").write_text("" if not calls else json.dumps(dict(
-            task="t1", role="lead", model="grok:default", tool_calls=[dict(name="Write", outcome="success")],
-            files_written=["app.py"])) + "\n")
+            invocation_id="e1", task="t1", role="lead", model="grok:default",
+            tool_calls=[dict(name="Write", outcome="success")], files_written=["app.py"])) + "\n")
         return dict(run_dir=str(run_dir), completed=error is None)
     return launch
 
@@ -534,10 +539,10 @@ def test_a_lead_denied_its_project_writes_stops_the_series_and_marks_the_pair_no
     assert {c["name"]: c["state"] for c in manifest["cells"]}["feat-1/rule-r0"] == "prepared"
     summary = P.collect(out)
     rule = next(r for r in summary["rows"] if r["arm"] == "rule" and r["task"] == "feat-0")
-    assert rule["write_denials"] == 7 and rule["lead_files_written"] == 0 and rule["trace_available"]
-    assert rule["leads_denied_writes"] == [dict(task="t1", model="claude:opus", invocation_id="inv-1", denied=7)]
+    assert rule["write_denials"] == 7 and rule["lead_files_written"] == 0 and rule["trace_complete"]
+    assert rule["leads_denied_writes"] == [dict(task="t1", invocation_id="inv-1", model="claude:opus", denied=7, outside_written=0)]
     pair = summary["pairs"][0]
-    assert not pair["comparable"] and "rule lead claude:opus denied 7 write(s) on t1" in pair["not_comparable_because"]
+    assert not pair["comparable"] and "rule lead claude:opus denied 7 project write(s) on t1" in pair["not_comparable_because"]
     # The jev arm wrote normally and is not blamed.
     jev = next(r for r in summary["rows"] if r["arm"] == "jev" and r["task"] == "feat-0")
     assert jev["write_denials"] == 0 and jev["lead_files_written"] == 1
@@ -566,3 +571,52 @@ def test_the_packet_carries_the_per_call_reserve_ceiling_and_lead_turn_cap(tmp_p
     from quadratus.run_budget import RunLimits
     limits = RunLimits(**packet["limits"])
     assert limits.reserve_tokens_per_call == 100_000 and limits.max_tokens_per_call == 400_000
+
+
+# ---- Codex review of f09c832: project writes only, and every invoked lead traced
+
+def test_a_scratch_write_does_not_hide_a_denied_project_write(tmp_path):
+    """Preserved f1/rule and f3/rule lead calls had denied project Edits and
+    one successful scratchpad Write each; a collector counting all
+    files_written read them as leads that wrote. Only writes under the cell's
+    own project root count; outside writes are kept apart."""
+    repo = _project(tmp_path)
+    out = tmp_path / "runs"
+    P.prepare(_packet(repo, tasks=1), out)
+    launcher = _fake_launcher({("feat-0", "rule"): dict(lead="claude:opus", write_denials=4, scratch_write=True, completed=False)})
+    manifest = P.run(out, engine=ENGINE, launcher=launcher, versions={})
+    assert manifest["stopped"]["reason"].startswith("capability-failure: lead claude:opus on t1 was denied 4 project write(s)")
+    rule = next(r for r in P.collect(out)["rows"] if r["arm"] == "rule")
+    assert rule["lead_files_written"] == 0 and rule["outside_files_written"] == 1
+    assert rule["leads_denied_writes"][0]["outside_written"] == 1
+
+
+def test_one_traced_lead_never_vouches_for_another_invoked_lead_without_a_transcript(tmp_path):
+    repo = _project(tmp_path)
+    out = tmp_path / "runs"
+    P.prepare(_packet(repo, tasks=1), out)
+
+    def launcher(cell, _packet):
+        run_dir = Path(cell["project"]) / ".quadratus" / "runs" / "r"
+        run_dir.mkdir(parents=True)
+        (run_dir / "result.json").write_text(json.dumps(dict(completed=True, checks=[], tasks=2, budget=dict(unknown_usage_attempts=0), decisions=[])))
+        (run_dir / "invocations.jsonl").write_text("\n".join([
+            json.dumps(dict(task="run", role="orchestrator", canonical_model="claude:fable", invoked=True, invocation_id="o")),
+            json.dumps(dict(task="t1", role="lead", canonical_model="grok:default", invoked=True, invocation_id="g1")),
+            json.dumps(dict(task="t2", role="lead", canonical_model="claude:opus", invoked=True, invocation_id="c2"))]) + "\n")
+        (run_dir / "trace.jsonl").write_text("\n".join([
+            json.dumps(dict(invocation_id="g1", task="t1", role="lead", model="grok:default",
+                            tool_calls=[dict(name="write_file", outcome="success")], files_written=[str(Path(cell["project"]) / "a.py")])),
+            json.dumps(dict(invocation_id="c2", task="t2", role="lead", model="claude:opus",
+                            transcript="unavailable in this environment"))]) + "\n")
+        return dict(run_dir=str(run_dir), completed=True)
+
+    P.run(out, engine=ENGINE, launcher=launcher, versions={})
+    summary = P.collect(out)
+    for row in summary["rows"]:
+        assert row["leads_invoked"] == 2 and not row["trace_complete"]
+        assert row["lead_traces_missing"] == [dict(task="t2", invocation_id="c2", model="claude:opus",
+                                                   reason="unavailable in this environment")]
+    pair = summary["pairs"][0]
+    assert not pair["comparable"]
+    assert "jev lead claude:opus on t2 has no usable trace: unavailable in this environment" in pair["not_comparable_because"]

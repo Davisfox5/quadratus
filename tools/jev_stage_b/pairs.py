@@ -384,7 +384,7 @@ def series_stop(cell: dict, packet: dict) -> Optional[str]:
     if row.get("leads_denied_writes"):
         first = row["leads_denied_writes"][0]
         return (f"{STOP_CAPABILITY}: lead {first.get('model')} on {first.get('task')} was denied "
-                f"{first.get('denied')} project write(s) and wrote nothing in {cell['name']}")
+                f"{first.get('denied')} project write(s) and wrote nothing in the project in {cell['name']}")
     if saved:
         kind = classify_access_failure(saved)
         if kind:
@@ -651,34 +651,81 @@ def _read_cell(cell: dict) -> dict:
     row["lead"] = leads[0] if leads else None
     row["leads"] = leads
     row["per_task"] = [dict(task=t, **slot) for t, slot in sorted(per_task.items())]
-    row.update(_write_denials(run_dir))
+    row.update(_write_denials(run_dir, cell.get("project")))
     return row
 
 
-def _write_denials(run_dir: Path) -> dict:
-    """What the run's trace.jsonl says about each lead call's writes: the
-    denied file-tool calls and the files actually written. A lead with
-    denials and nothing written could not do the job it was given."""
-    out = dict(write_denials=0, leads_denied_writes=[], lead_files_written=0, trace_available=False)
-    trace = run_dir / "trace.jsonl"
-    if not trace.exists():
-        return out
-    for line in trace.read_text().splitlines():
+def _write_denials(run_dir: Path, project_root: Optional[Path] = None) -> dict:
+    """What the run's trace.jsonl says about each invoked lead call's writes,
+    judged against the cell's own project root (Codex review of f09c832):
+    a denied project write beside a successful scratch write is still a
+    lead that could not do its job, and an invoked lead with no usable
+    trace is missing evidence, never zero denials."""
+    out = dict(write_denials=0, outside_write_denials=0, leads_denied_writes=[], lead_files_written=0,
+               outside_files_written=0, lead_traces_missing=[], leads_invoked=0, trace_complete=False)
+    root = Path(project_root).resolve() if project_root else None
+
+    def in_project(path) -> bool:
+        if not path:
+            return True  # a relative or withheld path is the project's own
+        text = str(path)
+        if not text.startswith("/"):
+            return True
+        if root is None:
+            return True
         try:
-            rec = json.loads(line)
-        except ValueError:
+            return Path(text).resolve().is_relative_to(root)
+        except (OSError, ValueError):
+            return False
+
+    invoked = []
+    inv = run_dir / "invocations.jsonl"
+    if inv.exists():
+        for line in inv.read_text().splitlines():
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if str(entry.get("role", "")).startswith("lead") and entry.get("invoked"):
+                invoked.append(entry)
+    out["leads_invoked"] = len(invoked)
+    traces: Dict[str, dict] = {}
+    trace = run_dir / "trace.jsonl"
+    if trace.exists():
+        for line in trace.read_text().splitlines():
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if rec.get("invocation_id"):
+                traces[str(rec["invocation_id"])] = rec
+    for entry in invoked:
+        iid = str(entry.get("invocation_id") or "")
+        rec = traces.get(iid)
+        label = dict(task=entry.get("task"), invocation_id=iid or None,
+                     model=entry.get("canonical_model") or entry.get("resolved_model") or entry.get("requested_model"))
+        if rec is None:
+            out["lead_traces_missing"].append(dict(label, reason="no trace record"))
             continue
-        if not str(rec.get("role", "")).startswith("lead") or rec.get("tool_calls") is None:
+        if rec.get("tool_calls") is None:
+            out["lead_traces_missing"].append(dict(label, reason=str(rec.get("transcript") or rec.get("error") or "no tool calls")[:120]))
             continue
-        out["trace_available"] = True
-        denied = sum(1 for c in rec.get("tool_calls") or []
-                     if c.get("name") in WRITE_TOOLS and str(c.get("outcome") or "").startswith("denied"))
-        written = len(rec.get("files_written") or [])
-        out["write_denials"] += denied
-        out["lead_files_written"] += written
-        if denied and not written:
-            out["leads_denied_writes"].append(dict(task=rec.get("task"), model=rec.get("model"),
-                                                   invocation_id=rec.get("invocation_id"), denied=denied))
+        denied_in = denied_out = 0
+        for c in rec.get("tool_calls") or []:
+            if c.get("name") in WRITE_TOOLS and str(c.get("outcome") or "").startswith("denied"):
+                if in_project(c.get("path")):
+                    denied_in += 1
+                else:
+                    denied_out += 1
+        written_in = sum(1 for f in rec.get("files_written") or [] if in_project(f))
+        written_out = len(rec.get("files_written") or []) - written_in
+        out["write_denials"] += denied_in
+        out["outside_write_denials"] += denied_out
+        out["lead_files_written"] += written_in
+        out["outside_files_written"] += written_out
+        if denied_in and not written_in:
+            out["leads_denied_writes"].append(dict(label, denied=denied_in, outside_written=written_out))
+    out["trace_complete"] = bool(invoked) and not out["lead_traces_missing"]
     return out
 
 
@@ -702,9 +749,11 @@ def _comparability(j: dict, r: dict) -> dict:
         if str(row.get("result_error") or "").startswith("CapabilityUnavailable"):
             reasons.append(f"{row['arm']} capability: {str(row['result_error'])[:80]}")
         for lead in row.get("leads_denied_writes") or []:
-            reasons.append(f"{row['arm']} lead {lead.get('model')} denied {lead.get('denied')} write(s) on {lead.get('task')}")
-        if row.get("state") == "ran" and not row.get("trace_available"):
-            reasons.append(f"{row['arm']} no lead trace to check writes")
+            reasons.append(f"{row['arm']} lead {lead.get('model')} denied {lead.get('denied')} project write(s) on {lead.get('task')}")
+        for lead in row.get("lead_traces_missing") or []:
+            reasons.append(f"{row['arm']} lead {lead.get('model')} on {lead.get('task')} has no usable trace: {lead.get('reason')}")
+        if row.get("state") == "ran" and not row.get("leads_invoked"):
+            reasons.append(f"{row['arm']} no invoked lead to check")
         if (row.get("unknown_usage") or 0) > 0:
             reasons.append(f"{row['arm']} unknown usage {row['unknown_usage']}")
     if j.get("engine_sha") and r.get("engine_sha") and j["engine_sha"] != r["engine_sha"]:

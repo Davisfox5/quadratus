@@ -258,6 +258,27 @@ class Fleet:
                                "to the exact API model ID for this seat.")
         return alias_for(key)
 
+    def fork(self, root) -> "Fleet":
+        """A Fleet for one parallel task's copy of the project at ``root``,
+        sharing this run's budget, meter and invocation ledger, and carrying
+        the same granted check commands: a child lead denied a required
+        check, or a write, must be classified exactly as the parent's would
+        (Codex review of f09c832: the fork copied progress and accounting but
+        not ``check_commands``, so a child passed no allow rules and read a
+        denied check as an ordinary outcome)."""
+        from .project import Project
+        child = type(self)(self.settings,
+                           project=Project(root, exclude=self.project.exclude),
+                           allow_writes=self.allow_writes, usage_meter=self.usage_meter,
+                           delegation_ledger=self.delegation_ledger,
+                           **({"run_budget": self.run_budget} if self.run_budget else {}))
+        for name in ("progress", "check_commands"):
+            try:
+                setattr(child, name, getattr(self, name, None if name == "progress" else ()))
+            except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
+                pass
+        return child
+
     # -- liveness ------------------------------------------------------------
     def lead_can_run(self, key: str, command: str) -> bool:
         """Whether an editing call on ``key`` could run ``command`` unaided:
@@ -774,17 +795,8 @@ def new_session(goal, store, *, fleet=None, config=None, invariants=None, settin
     if conf.fork is None and getattr(active, "project", None) is not None and isinstance(active, Fleet):
         def fork(root):
             """A Fleet for one parallel task's copy of the project, sharing
-            this run's budget, meter and invocation ledger."""
-            from .project import Project
-            child = type(active)(active.settings,
-                                 project=Project(root, exclude=active.project.exclude),
-                                 allow_writes=active.allow_writes, usage_meter=active.usage_meter,
-                                 delegation_ledger=active.delegation_ledger,
-                                 **({"run_budget": active.run_budget} if active.run_budget else {}))
-            try:
-                child.progress = getattr(active, "progress", None)
-            except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
-                pass
+            this run's budget, meter, invocation ledger and granted checks."""
+            child = active.fork(root)
             return child.invoke, child.close
         conf = replace(conf, fork=fork)
     return Session(
