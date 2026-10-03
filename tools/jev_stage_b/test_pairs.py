@@ -115,7 +115,7 @@ def test_collect_pairs_arms_and_reports_lead_changes_and_deltas(tmp_path):
     jev0 = next(r for r in summary["rows"] if r["task"] == "feat-0" and r["arm"] == "jev")
     assert jev0["kind"] == "security" and jev0["decision_tokens"] == 1520 and jev0["lead"] == "openai:gpt-5.6-sol"
     text = (out / "comparison.md").read_text()
-    assert "| feat-0 | jev | 0 | True |" in text and "security/simple" in text and "faster failed cell is not a win" in text
+    assert "| feat-0 | jev | 0 |  | True |" in text and "security/simple" in text and "faster failed cell is not a win" in text
 
 
 # ---- Davis, 2026-10-02: deep planned features, failures logged, one arm at a time
@@ -268,3 +268,68 @@ def test_series_stop_reads_jev_drift_credential_failures_and_cell_errors(tmp_pat
     assert P.series_stop(dict(state="failed", name="y", error="OrchestratorUnavailable: both seats down"), packet).startswith("seat-fallback")
     assert P.series_stop(dict(state="failed", name="y", error="RuntimeError: disk full"), packet).startswith("cell-error")
     assert P.series_stop(dict(state="prepared", name="z"), packet) is None
+
+
+# ---- Davis via Codex (2026-10-03): frozen independent graders outside the builders' scope
+
+def _graders(tmp_path: Path) -> Path:
+    gdir = tmp_path / "graders"
+    gdir.mkdir()
+    (gdir / "grade_feat.py").write_text(
+        "import os, sys\n"
+        "project = os.environ['STAGE_B_PROJECT']\n"
+        "assert os.environ['STAGE_B_ARM'] in ('jev', 'rule')\n"
+        "sys.exit(0 if 'built' in open(os.path.join(project, 'app.py')).read() else 1)\n")
+    return gdir
+
+
+def test_prepare_freezes_graders_and_profile_and_run_refuses_a_change(tmp_path):
+    repo = _project(tmp_path)
+    gdir = _graders(tmp_path)
+    profile = tmp_path / "profile.json"
+    profile.write_text("{}")
+    packet = _packet(repo)
+    packet.update(capture_profile=str(profile),
+                  graders=dict(dir=str(gdir), tasks={"feat-0": [["python3", "grade_feat.py"]], "feat-1": [["python3", "grade_feat.py"]]}))
+    out = tmp_path / "runs"
+    manifest = P.prepare(packet, out)
+    assert set(manifest["frozen"]["graders"]) == {"grade_feat.py"} and manifest["frozen"]["capture_profile"]
+    (gdir / "grade_feat.py").write_text("import sys; sys.exit(0)\n")
+    with pytest.raises(RuntimeError, match="frozen inputs changed since prepare: grade_feat.py"):
+        P.run(out, engine=ENGINE, launcher=_fake_launcher({}), versions={})
+    inside = dict(packet, graders=dict(dir=str(repo / "graders"), tasks=packet["graders"]["tasks"]))
+    with pytest.raises(ValueError, match="outside the project"):
+        P.prepare(inside, tmp_path / "b")
+    partial = dict(packet, graders=dict(dir=str(gdir), tasks={"feat-0": [["python3", "grade_feat.py"]]}))
+    with pytest.raises(ValueError, match="missing: feat-1"):
+        P.prepare(partial, tmp_path / "c")
+
+
+def test_graders_run_after_each_cell_from_their_own_directory_and_the_grade_is_reported_apart_from_completion(tmp_path):
+    repo = _project(tmp_path)
+    gdir = _graders(tmp_path)
+    packet = _packet(repo)
+    packet["graders"] = dict(dir=str(gdir), tasks={"feat-0": [["python3", "grade_feat.py"]],
+                                                  "feat-1": [["python3", "grade_feat.py"], ["python3", "-c", "import sys; sys.exit(3)"]]})
+    out = tmp_path / "runs"
+    P.prepare(packet, out)
+    base = _fake_launcher({("feat-1", "rule"): dict(completed=True)})
+
+    def launcher(cell, pk):
+        outcome = base(cell, pk)
+        if cell["arm"] == "jev":  # only the jev cells actually build the feature
+            (Path(cell["project"]) / "app.py").write_text("built\n")
+        return outcome
+
+    manifest = P.run(out, engine=ENGINE, launcher=launcher, versions=dict(claude="1.0", codex=None, grok="0.9"))
+    assert manifest["launches"][0]["cli_versions"] == dict(claude="1.0", codex=None, grok="0.9")
+    grades = {c["name"]: (c["grade"]["passed"], c["grade"]["total"]) for c in manifest["cells"]}
+    assert grades == {"feat-0/jev-r0": (1, 1), "feat-0/rule-r0": (0, 1), "feat-1/jev-r0": (1, 2), "feat-1/rule-r0": (0, 2)}
+    failed = next(c for c in manifest["cells"] if c["name"] == "feat-1/rule-r0")["grade"]["results"][1]
+    assert failed["exit"] == 3 and failed["passed"] is False
+    summary = P.collect(out)
+    pair1 = next(p for p in summary["pairs"] if p["task"] == "feat-1")
+    # The engine claimed completion on the rule cell; the grader did not agree. Both are shown.
+    assert pair1["completed"] == dict(jev=True, rule=True) and pair1["grade"] == dict(jev="1/2", rule="0/2") and pair1["grade_delta"] == 1
+    text = (out / "comparison.md").read_text()
+    assert "| feat-1 | rule | 0 | 0/2 | True |" in text and "never the grade" in text

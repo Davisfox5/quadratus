@@ -160,6 +160,30 @@ Needed in the IDE before `prepare`: the GameTape repo path and baseline
 capture profile and check command used on run `20261001T001902Z`, Codex's
 window reading, the candidate SHA carrying `decider_labels` (the engine the cells run on), and Davis's yes on the seven goals or edits to them.
 
+## Independent graders (Davis via Codex, 2026-10-03)
+
+The engine's own completion claim is not the grade. Each feature gets a
+frozen grader: a script in a directory outside the GameTape repository
+(`graders.dir`, refused if it lies inside the project), one entry per
+feature in `graders.tasks`, written before either arm runs. `prepare`
+hashes every file in that directory and the capture profile into the
+manifest; `run` re-hashes before every launch and refuses a change. After
+each cell finishes, its graders run from the grader directory with
+`STAGE_B_PROJECT` (the cell's worktree), `STAGE_B_ARM` and
+`STAGE_B_RUN_DIR` in the environment; exit 0 is a pass, and the exit
+code, output tail and time are recorded on the cell. `collect` reports
+the grade per cell and per pair beside the engine's completion claim, so
+a cell the engine called done and the grader failed shows both.
+
+Graders are executable requirement checks: an HTTP test against the
+feature's endpoint, a browser assertion through the existing UI test
+runner, a fixture file through the migration, a traversal request against
+the download route. They read the project; they never import the
+builders' own tests as the verdict. Writing them is IDE work done before
+`prepare`, and their hashes are part of the frozen packet record on #46.
+`run` also records each vendor CLI's reported version and the engine SHA
+on every launch.
+
 ## Evidence and reporting
 
 Per cell: `result.json` (with its `survey` section: failures, causes,

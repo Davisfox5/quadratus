@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -87,6 +88,23 @@ def validate_packet(packet: dict) -> None:
         paths = task.get("declared_paths") or []
         if not isinstance(paths, list) or any(not isinstance(p, str) or not p for p in paths):
             raise ValueError(f"{task['id']}: declared_paths must be a list of path strings")
+    graders = packet.get("graders")
+    if graders is not None:
+        gdir = Path(str(graders.get("dir") or ""))
+        if not gdir.is_absolute():
+            raise ValueError("graders.dir must be an absolute path outside the project")
+        repo = Path(project["repo"]).resolve()
+        if gdir.resolve() == repo or gdir.resolve().is_relative_to(repo):
+            raise ValueError("graders.dir must lie outside the project repository: builders must not be able to edit it")
+        for tid, commands in (graders.get("tasks") or {}).items():
+            if tid not in seen:
+                raise ValueError(f"graders.tasks names an unknown task {tid!r}")
+            if not isinstance(commands, list) or not commands or any(
+                    not isinstance(c, list) or not c or any(not isinstance(a, str) for a in c) for c in commands):
+                raise ValueError(f"graders.tasks[{tid!r}] must be a non-empty list of argv lists")
+        missing = [t["id"] for t in packet["tasks"] if t["id"] not in (graders.get("tasks") or {})]
+        if missing:
+            raise ValueError(f"every task needs a grader when graders are configured; missing: {', '.join(missing)}")
     if int(packet.get("repeats", 1)) < 1:
         raise ValueError("repeats must be at least 1")
     if int(packet.get("max_tasks", 1)) < 1:
@@ -133,9 +151,85 @@ def prepare(packet: dict, out: Path, *, worktree: Callable[[Path, Path, str], No
             cell["goal_file"] = str(stem.with_suffix(".goal.txt"))
         cell["state"] = "prepared"
     manifest = dict(format=1, packet=packet, packet_digest=_sha(packet), out=str(out),
-                    prepared_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), cells=cells)
+                    prepared_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), cells=cells,
+                    frozen=frozen_inputs(packet))
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
+
+
+def _file_sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def frozen_inputs(packet: dict) -> dict:
+    """Content hashes of everything a cell is judged by that lives outside
+    the packet text: every file under ``graders.dir`` and the capture
+    profile. Written at prepare, re-read before every launch (Davis via
+    Codex, 2026-10-03: packet, grader and profile integrity)."""
+    frozen: Dict[str, object] = {}
+    graders = packet.get("graders")
+    if graders:
+        gdir = Path(graders["dir"])
+        if not gdir.is_dir():
+            raise FileNotFoundError(f"graders.dir {gdir} is not a directory")
+        files = sorted(p for p in gdir.rglob("*") if p.is_file() and "__pycache__" not in p.parts)
+        if not files:
+            raise ValueError(f"graders.dir {gdir} holds no files")
+        frozen["graders"] = {str(p.relative_to(gdir)): _file_sha(p) for p in files}
+    profile = packet.get("capture_profile")
+    if profile:
+        frozen["capture_profile"] = _file_sha(Path(profile))
+    return frozen
+
+
+def check_frozen(packet: dict, frozen: dict) -> None:
+    """Refuse a launch when a grader or the profile changed since prepare."""
+    now = frozen_inputs(packet)
+    if now != (frozen or {}):
+        changed = sorted(set((now.get("graders") or {}).items()) ^ set(((frozen or {}).get("graders") or {}).items()))
+        what = ", ".join(sorted({k for k, _ in changed})) or "capture_profile"
+        raise RuntimeError(f"frozen inputs changed since prepare: {what}; a changed grader or profile is not run")
+
+
+def grade_cell(cell: dict, packet: dict, *, timeout: Optional[int] = None) -> Optional[dict]:
+    """Run the feature's frozen graders against the cell's finished project.
+    Each runs from ``graders.dir`` (never from the project, which the
+    builders could edit) with the cell's project in ``STAGE_B_PROJECT`` and
+    the arm in ``STAGE_B_ARM``; exit 0 is a pass. The grade is the
+    independent judgement; the engine's own completion claim is reported
+    beside it, never in place of it."""
+    graders = packet.get("graders")
+    if not graders or cell.get("state") != "ran":
+        return None
+    gdir = Path(graders["dir"])
+    env = dict(os.environ, STAGE_B_PROJECT=str(cell["project"]), STAGE_B_ARM=cell["arm"],
+               STAGE_B_RUN_DIR=str(cell.get("run_dir") or ""))
+    limit = timeout or int(graders.get("timeout_seconds", 600))
+    results = []
+    for argv in graders["tasks"][cell["task"]]:
+        started = time.perf_counter()
+        try:
+            proc = subprocess.run(argv, cwd=gdir, env=env, capture_output=True, text=True, timeout=limit)
+            results.append(dict(argv=argv, exit=proc.returncode, passed=proc.returncode == 0,
+                                output_tail=(proc.stdout + proc.stderr)[-2000:],
+                                seconds=round(time.perf_counter() - started, 1)))
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            results.append(dict(argv=argv, exit=None, passed=False, output_tail=f"{type(exc).__name__}: {exc}"[:2000],
+                                seconds=round(time.perf_counter() - started, 1)))
+    return dict(passed=sum(1 for r in results if r["passed"]), total=len(results), results=results)
+
+
+def cli_versions(names=("claude", "codex", "grok")) -> dict:
+    """What each vendor CLI reports as its version at launch time, recorded
+    beside the engine SHA; None when the binary is missing or will not say."""
+    out = {}
+    for name in names:
+        try:
+            proc = subprocess.run([name, "--version"], capture_output=True, text=True, timeout=20)
+            out[name] = (proc.stdout or proc.stderr).strip().splitlines()[0][:120] if (proc.stdout or proc.stderr).strip() else None
+        except (OSError, subprocess.TimeoutExpired, IndexError):
+            out[name] = None
+    return out
 
 
 def _git_worktree(repo: Path, path: Path, base: str) -> None:
@@ -246,7 +340,8 @@ def _chain_primary() -> Optional[str]:
 
 def run(out: Path, *, launcher: Callable[[dict, dict], dict] = default_launcher,
         pairs: int = 1, only: Optional[str] = None, arm: Optional[str] = None,
-        engine: Optional[dict] = None, override_stop: Optional[str] = None) -> dict:
+        engine: Optional[dict] = None, override_stop: Optional[str] = None,
+        versions: Optional[dict] = None) -> dict:
     """Launch unrun cells, both arms of a pair together, ``pairs`` pairs at a
     time. ``arm`` runs one arm only (rule first across the series, jev
     later, when the OpenAI window is better spent that way); the other arm's
@@ -265,9 +360,13 @@ def run(out: Path, *, launcher: Callable[[dict, dict], dict] = default_launcher,
     if _sha(packet) != manifest.get("packet_digest"):
         raise RuntimeError("the manifest's packet no longer matches the digest written at prepare; "
                            "a packet changed after prepare is not run")
+    check_frozen(packet, manifest.get("frozen"))
     engine = engine if engine is not None else engine_identity()
     check_engine(packet, engine)
     manifest["engine"] = engine
+    manifest.setdefault("launches", []).append(dict(
+        at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), engine_sha=engine.get("sha"),
+        cli_versions=versions if versions is not None else cli_versions(), arm=arm, only=only))
     if manifest.get("stopped") and not override_stop:
         raise RuntimeError(f"the series stopped: {manifest['stopped']['reason']} (after {manifest['stopped']['after']}); "
                            "pass --override-stop with a reason to continue")
@@ -290,6 +389,7 @@ def run(out: Path, *, launcher: Callable[[dict, dict], dict] = default_launcher,
         except Exception as exc:  # noqa: BLE001 -- a failed cell is a result, never a torn-down sibling
             cell.update(state="failed", error=f"{type(exc).__name__}: {exc}"[:500])
         cell["seconds"] = round(time.perf_counter() - started, 1)
+        cell["grade"] = grade_cell(cell, packet)
         (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
     with ThreadPoolExecutor(max_workers=max(1, pairs) * len(ARMS)) as pool:
@@ -310,8 +410,10 @@ def run(out: Path, *, launcher: Callable[[dict, dict], dict] = default_launcher,
 
 
 def _read_cell(cell: dict) -> dict:
+    grade = cell.get("grade") or {}
     row = dict(task=cell["task"], arm=cell["arm"], repeat=cell["repeat"], state=cell["state"],
-               error=cell.get("error"), seconds=cell.get("seconds"))
+               error=cell.get("error"), seconds=cell.get("seconds"),
+               grade_passed=grade.get("passed"), grade_total=grade.get("total"))
     run_dir = Path(cell["run_dir"]) if cell.get("run_dir") else None
     if not run_dir or not (run_dir / "result.json").exists():
         return row
@@ -387,6 +489,10 @@ def _read_cell(cell: dict) -> dict:
     return row
 
 
+def _grade_text(row: dict) -> Optional[str]:
+    return f"{row['grade_passed']}/{row['grade_total']}" if row.get("grade_total") is not None else None
+
+
 def _comparability(j: dict, r: dict) -> dict:
     """Whether a pair's two cells ran under the same conditions: both ran,
     same engine, same orchestrator seat, no unknown usage, Jev not refused.
@@ -425,6 +531,9 @@ def collect(out: Path) -> dict:
                 pairs.append(dict(task=task, repeat=repeat, **_comparability(j, r),
                                   lead_changed=(j.get("leads") != r.get("leads")) if j.get("leads") and r.get("leads") else None,
                                   both_completed=bool(j.get("completed")) and bool(r.get("completed")),
+                                  grade=dict(jev=_grade_text(j), rule=_grade_text(r)),
+                                  grade_delta=((j.get("grade_passed") or 0) - (r.get("grade_passed") or 0))
+                                  if j.get("grade_total") is not None and r.get("grade_total") is not None else None,
                                   completed=dict(jev=j.get("completed"), rule=r.get("completed")),
                                   tokens_delta=(j.get("tokens") or 0) - (r.get("tokens") or 0)
                                   if j.get("tokens") is not None and r.get("tokens") is not None else None,
@@ -434,23 +543,24 @@ def collect(out: Path) -> dict:
                    stopped=manifest.get("stopped"), overrides=manifest.get("overrides", []), cells=len(rows),
                    ran=sum(r["state"] == "ran" for r in rows), failed=sum(r["state"] == "failed" for r in rows),
                    pending=sum(r["state"] == "prepared" for r in rows), rows=rows, pairs=sorted(pairs, key=lambda p: (p["task"], p["repeat"])),
-                   boundary="Paired completion, lead and resource comparison on frozen task text; no accuracy or savings "
-                            "claim beyond these cells, and a faster failed cell is not a win")
+                   boundary="Paired comparison on frozen goals: the grade column is the frozen independent graders' "
+                            "verdict, 'engine done' is the engine's own completion claim and never the grade; no "
+                            "accuracy or savings claim beyond these cells, and a faster failed cell is not a win")
     (out / "comparison.json").write_text(json.dumps(summary, indent=2) + "\n")
     (out / "comparison.md").write_text(render(summary))
     return summary
 
 
 def render(summary: dict) -> str:
-    lines = ["| task | arm | r | done | tasks | closed | checks failed | recovery/hyp | leads | kind/difficulty | calls | tokens | s | stop |",
-             "|---|---|---:|---|---:|---:|---:|---|---|---|---:|---:|---:|---|"]
+    lines = ["| task | arm | r | grade | engine done | tasks | closed | checks failed | recovery/hyp | leads | kind/difficulty | calls | tokens | s | stop |",
+             "|---|---|---:|---|---|---:|---:|---:|---|---|---|---:|---:|---:|---|"]
     for r in sorted(summary["rows"], key=lambda r: (r["task"], r["repeat"], r["arm"])):
         if r["arm"] == "jev":
             label = f"{r.get('kind') or '-'}/{r.get('difficulty') or '-'}"
         else:
             label = "orchestrator" if r.get("entry") == "planned" else "default"
         recovery = (f"{r['recovery_used']}/{r.get('hypotheses', 0)}" if r.get("recovery_used") is not None else "")
-        lines.append(f"| {r['task']} | {r['arm']} | {r['repeat']} | {r.get('completed', r['state'])} | {r.get('tasks', '')} | "
+        lines.append(f"| {r['task']} | {r['arm']} | {r['repeat']} | {_grade_text(r) or ''} | {r.get('completed', r['state'])} | {r.get('tasks', '')} | "
                      f"{r.get('closed_clean', '')} | {r.get('checks_failed', '')} | {recovery} | "
                      f"{'+'.join(r.get('leads') or [])} | {label} | "
                      f"{r.get('calls', '')} | {r.get('tokens', '')} | {r.get('seconds', '')} | {r.get('stop') or r.get('error') or ''} |")
@@ -461,11 +571,12 @@ def render(summary: dict) -> str:
             for t in r["per_task"]:
                 lines.append(f"| {r['task']} | {r['arm']} | {t['task']} | {t.get('lead') or ''} | "
                              f"{t.get('kind') or ''} | {t.get('difficulty') or ''} |")
-    lines += ["", "| pair | comparable | lead changed | both done | jev done | rule done | tokens (jev - rule) | seconds (jev - rule) | start gap s |",
-              "|---|---|---|---|---|---|---:|---:|---:|"]
+    lines += ["", "| pair | comparable | grade jev | grade rule | lead changed | both engine done | jev done | rule done | tokens (jev - rule) | seconds (jev - rule) | start gap s |",
+              "|---|---|---|---|---|---|---|---|---:|---:|---:|"]
     for p in summary["pairs"]:
         comparable = "yes" if p["comparable"] else "no: " + "; ".join(p["not_comparable_because"])
-        lines.append(f"| {p['task']} r{p['repeat']} | {comparable} | {p['lead_changed']} | {p['both_completed']} | "
+        lines.append(f"| {p['task']} r{p['repeat']} | {comparable} | {p['grade']['jev'] or ''} | {p['grade']['rule'] or ''} | "
+                     f"{p['lead_changed']} | {p['both_completed']} | "
                      f"{p['completed']['jev']} | {p['completed']['rule']} | {p['tokens_delta']} | {p['seconds_delta']} | "
                      f"{p['start_gap_seconds'] if p['start_gap_seconds'] is not None else ''} |")
     if summary.get("stopped"):

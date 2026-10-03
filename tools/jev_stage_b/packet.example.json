@@ -15,6 +15,90 @@
     ]
   ],
   "capture_profile": "/ABS/PATH/TO/preview-profile.json",
+  "graders": {
+    "_note": "Frozen independent graders, one script per feature, in a directory outside the GameTape repo so no builder can edit them. Each runs from this directory with STAGE_B_PROJECT, STAGE_B_ARM and STAGE_B_RUN_DIR in the environment; exit 0 is a pass. Written and hashed before either arm runs.",
+    "dir": "/ABS/PATH/TO/stage-b-graders",
+    "timeout_seconds": 600,
+    "tasks": {
+      "f1-preview-errors": [
+        [
+          "python3",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f1.py"
+        ]
+      ],
+      "f2-project-search": [
+        [
+          "python3",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f2.py"
+        ]
+      ],
+      "f3-project-rename": [
+        [
+          "python3",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f3.py"
+        ]
+      ],
+      "f4-tags-export": [
+        [
+          "python3",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f4.py"
+        ]
+      ],
+      "f5-empty-state": [
+        [
+          "python3",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f5.py"
+        ]
+      ],
+      "f6-download-guard": [
+        [
+          "python3",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f6.py"
+        ]
+      ],
+      "f7-projects-migration": [
+        [
+          "python3",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f7.py"
+        ]
+      ]
+    }
+  },
   "limits": {
     "max_calls": 90,
     "max_reported_tokens": 2500000,
