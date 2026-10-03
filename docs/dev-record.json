@@ -706,7 +706,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-03T16:39:28Z",
       "acknowledged": false,
       "delivery": {
@@ -737,6 +737,17 @@
           ],
           "at": "2026-10-03T21:11:34Z",
           "stale_reason": "reviewed 17a2b5f but the delivery is 10bb9b4"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "17a2b5f2ae5fbbf7587a111c0ef7cfc31510372c",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973516204",
+          "scope": [
+            "quadratus/run_budget.py",
+            "tests/test_run_budget.py"
+          ],
+          "at": "2026-10-03T21:12:28Z"
         }
       ],
       "blockers": [],
