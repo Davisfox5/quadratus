@@ -630,7 +630,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-03T16:39:28Z",
       "acknowledged": false,
       "delivery": {
@@ -651,6 +651,19 @@
           ],
           "at": "2026-10-03T20:37:59Z",
           "stale_reason": "delivery moved from f09c832 to 10bb9b4"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "10bb9b46657bcea7f8bc95e9b3b97255b8c6f317",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973482710",
+          "scope": [
+            "quadratus/cli_providers.py",
+            "quadratus/runtime.py",
+            "tests/test_cli_providers.py",
+            "tests/test_runtime.py"
+          ],
+          "at": "2026-10-03T21:07:17Z"
         }
       ],
       "blockers": [
@@ -712,7 +725,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "blocked",
       "claimed_at": "2026-10-03T16:39:28Z",
       "acknowledged": false,
       "delivery": {
@@ -730,6 +743,16 @@
           ],
           "at": "2026-10-03T20:37:59Z",
           "stale_reason": "delivery moved from f09c832 to 10bb9b4"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "10bb9b46657bcea7f8bc95e9b3b97255b8c6f317",
+          "verdict": "blocked",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973482710",
+          "scope": [
+            "tools/jev_stage_b/"
+          ],
+          "at": "2026-10-03T21:07:17Z"
         }
       ],
       "blockers": [
@@ -741,6 +764,15 @@
           "by": "codex",
           "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
           "at": "2026-10-03T20:37:59Z"
+        },
+        {
+          "requirement": "Lead writes are judged against the cell's project after resolving relative paths, traversal and symlinks; a trace record with a parser error is unusable evidence",
+          "failure": "pairs.py:668-677 returns in-project for every non-absolute path, so a successful ../scratch/probe.txt or a symlinked scratch-link/probe.txt beside a denied absolute project Edit reads as a project write (no stop, comparable); pairs.py:710-712 checks only for absent tool_calls, so a trace_call exception record (empty tool_calls plus error) reads as trace_complete with zero denials",
+          "evidence": "Codex offline probes with the real Claude parser and shareable() in comment 5973482710",
+          "classification": "reachable",
+          "by": "codex",
+          "sha": "10bb9b46657bcea7f8bc95e9b3b97255b8c6f317",
+          "at": "2026-10-03T21:07:17Z"
         }
       ],
       "decisions": [
