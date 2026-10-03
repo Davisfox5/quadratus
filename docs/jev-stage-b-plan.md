@@ -182,7 +182,10 @@ the download route. They read the project; they never import the
 builders' own tests as the verdict. Writing them is IDE work done before
 `prepare`, and their hashes are part of the frozen packet record on #46.
 `run` also records each vendor CLI's reported version and the engine SHA
-on every launch.
+on every launch. A browser grader that provokes an HTTP error on purpose
+(the duplicate-name 400 in f3) names it as `expected_http`; the shared
+collector excuses Chromium's resource diagnostic for exactly that URL and
+status, only when the response was observed, and nothing else.
 
 ## Bound on the Mac (2026-10-03)
 

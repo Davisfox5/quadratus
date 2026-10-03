@@ -55,6 +55,28 @@ STOP_JEV_DRIFT = "jev-model-drift"    # Jev answered as a model other than the p
 STOP_CREDENTIAL = "credential-failure"  # a decider refusal naming the key or an auth status, or a sign-in failure
 STOP_CELL_ERROR = "cell-error"        # a cell raised before the engine produced a result
 STOP_INTERRUPTED = "interrupted-cell"  # a cell was still "running" when a later run began: its launch never finished
+STOP_INTEGRITY = "integrity-failure"   # a frozen input or the engine checkout changed at a launch or grading boundary
+
+#: How the engine's own saved terminal error is classified (Codex review of
+#: e3deaed, P1 #1): run_project catches the session's exception, writes it
+#: to result.json and returns normally, so a seat or access failure never
+#: reaches the launcher as an exception. Feature failures, stalls and budget
+#: stops stay what they are; only these shapes are access failures.
+SEAT_ERROR_MARKS = ("OrchestratorUnavailable", "Unavailable")
+CREDENTIAL_ERROR_MARKS = ("not signed in", "sign in", "signed out", "unauthenticated", "unauthorized",
+                          "401", "403", "api_key", "credential", "login")
+
+
+def classify_access_failure(text: Optional[str]) -> Optional[str]:
+    """STOP_SEAT, STOP_CREDENTIAL or None for an error message."""
+    if not text:
+        return None
+    if any(mark in text for mark in SEAT_ERROR_MARKS):
+        return STOP_SEAT
+    low = text.lower()
+    if any(mark in low for mark in CREDENTIAL_ERROR_MARKS):
+        return STOP_CREDENTIAL
+    return None
 
 #: One run per series directory. The lock holds the pid and start time; a
 #: stale lock (a crashed run) is reported, never silently taken over.
@@ -322,14 +344,27 @@ def launch_shape(cell: dict, packet: dict) -> dict:
 def series_stop(cell: dict, packet: dict) -> Optional[str]:
     """The stop rule a finished cell trips, or None. Read from the cell's
     own record; the next batch is not launched past a stop."""
+    if cell.get("state") == "integrity-failed" or cell.get("integrity"):
+        return f"{STOP_INTEGRITY}: {cell.get('integrity') or cell.get('error')}"[:300]
     if cell.get("state") == "failed":
         text = str(cell.get("error") or "")
-        if "Unavailable" in text or "sign" in text.lower() and "in" in text.lower():
-            return f"{STOP_SEAT}: {text[:160]}"
-        return f"{STOP_CELL_ERROR}: {text[:160]}"
+        kind = classify_access_failure(text)
+        return f"{kind or STOP_CELL_ERROR}: {text[:160]}"
     if cell.get("state") != "ran":
         return None
     row = _read_cell(cell)
+    # The engine's saved terminal error (result.json), which the launcher
+    # never sees as an exception. An access-shaped one stops the series; an
+    # error saved before any model call was answered is a cell error, not a
+    # feature result; everything else (a stall, a budget stop, unmet
+    # requirements) is the cell's own outcome.
+    saved = row.get("result_error")
+    if saved:
+        kind = classify_access_failure(saved)
+        if kind:
+            return f"{kind}: engine saved {saved[:160]} in {cell['name']}"
+        if not row.get("orchestrators") and not row.get("leads") and not (row.get("calls") or 0):
+            return f"{STOP_CELL_ERROR}: engine saved {saved[:160]} before any call was answered in {cell['name']}"
     if (row.get("unknown_usage") or 0) > 0:
         return f"{STOP_UNKNOWN_USAGE}: {row['unknown_usage']} attempt(s) in {cell['name']}"
     primary = _chain_primary()
@@ -422,9 +457,25 @@ def _run_locked(out: Path, *, launcher, pairs, only, arm, engine, override_stop,
     if _sha(packet) != manifest.get("packet_digest"):
         raise RuntimeError("the manifest's packet no longer matches the digest written at prepare; "
                            "a packet changed after prepare is not run")
-    check_frozen(packet, manifest.get("frozen"))
-    engine = engine if engine is not None else engine_identity()
-    check_engine(packet, engine)
+    # ``engine`` is a dict (a fixed identity, tests) or a callable that reads
+    # the checkout afresh; the default re-reads at every boundary (Codex review
+    # of e3deaed, P1 #2: a once-per-run check left every later cell unguarded).
+    identify = engine if callable(engine) else (lambda: engine) if engine is not None else engine_identity
+
+    def integrity() -> tuple:
+        """(problem or None, engine identity now). Never raises: a failed
+        check is recorded on the cell, never a crash mid-series."""
+        try:
+            check_frozen(packet, manifest.get("frozen"))
+            ident = identify()
+            check_engine(packet, ident)
+        except Exception as exc:  # noqa: BLE001 -- the problem is the record
+            return f"{type(exc).__name__}: {exc}"[:400], None
+        return None, ident
+
+    problem, engine = integrity()
+    if problem:
+        raise RuntimeError(problem)
     manifest["engine"] = engine
     manifest.setdefault("launches", []).append(dict(
         at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), engine_sha=engine.get("sha"),
@@ -444,7 +495,14 @@ def _run_locked(out: Path, *, launcher, pairs, only, arm, engine, override_stop,
     def launch(cell):
         cell["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         started = time.perf_counter()
-        cell["engine_sha"] = engine.get("sha")
+        # Boundary 1: this cell's own launch. The identity recorded on the
+        # row is the one established now, not the first launch's copied in.
+        problem, ident = integrity()
+        if problem:
+            cell.update(state="integrity-failed", error=f"{STOP_INTEGRITY}: {problem}")
+            save()
+            return
+        cell["engine_sha"] = ident.get("sha")
         cell["state"] = "running"
         save()  # durable before the launch: a crash here leaves "running", which the next run marks interrupted
         try:
@@ -455,7 +513,21 @@ def _run_locked(out: Path, *, launcher, pairs, only, arm, engine, override_stop,
         cell["seconds"] = round(time.perf_counter() - started, 1)
         cell["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         save()
+        # Boundary 2: before grading, the grader bytes and the engine must be
+        # what prepare froze and what this cell launched on. The cell's own
+        # outcome is kept; the grade is withheld, recorded as withheld.
+        problem, ident = integrity()
+        if not problem and ident.get("sha") != cell["engine_sha"]:
+            problem = f"engine checkout moved from {cell['engine_sha'][:12]} to {str(ident.get('sha'))[:12]} during the cell"
+        if problem:
+            cell.update(integrity=f"before grading: {problem}", grade=None, grade_withheld=problem[:300])
+            save()
+            return
         cell["grade"] = grade_cell(cell, packet)
+        # Boundary 3: after grading, so a grader changed while it ran is caught.
+        problem, _ = integrity()
+        if problem:
+            cell.update(integrity=f"after grading: {problem}", grade_unverified=True)
         save()
 
     with ThreadPoolExecutor(max_workers=max(1, pairs) * len(ARMS)) as pool:
@@ -478,8 +550,9 @@ def _run_locked(out: Path, *, launcher, pairs, only, arm, engine, override_stop,
 def _read_cell(cell: dict) -> dict:
     grade = cell.get("grade") or {}
     row = dict(task=cell["task"], arm=cell["arm"], repeat=cell["repeat"], state=cell["state"],
-               error=cell.get("error"), seconds=cell.get("seconds"),
-               grade_passed=grade.get("passed"), grade_total=grade.get("total"))
+               error=cell.get("error"), seconds=cell.get("seconds"), integrity=cell.get("integrity"),
+               grade_passed=grade.get("passed"), grade_total=grade.get("total"),
+               grade_withheld=cell.get("grade_withheld"), grade_unverified=bool(cell.get("grade_unverified")))
     run_dir = Path(cell["run_dir"]) if cell.get("run_dir") else None
     if not run_dir or not (run_dir / "result.json").exists():
         return row
@@ -567,6 +640,11 @@ def _comparability(j: dict, r: dict) -> dict:
     for row in (j, r):
         if row["state"] != "ran":
             reasons.append(f"{row['arm']} {row['state']}")
+        if row.get("integrity"):
+            reasons.append(f"{row['arm']} integrity: {row['integrity'][:80]}")
+        access = classify_access_failure(row.get("result_error"))
+        if access:
+            reasons.append(f"{row['arm']} {access}: {str(row['result_error'])[:80]}")
         if (row.get("unknown_usage") or 0) > 0:
             reasons.append(f"{row['arm']} unknown usage {row['unknown_usage']}")
     if j.get("engine_sha") and r.get("engine_sha") and j["engine_sha"] != r["engine_sha"]:
@@ -609,6 +687,7 @@ def collect(out: Path) -> dict:
                    stopped=manifest.get("stopped"), overrides=manifest.get("overrides", []), cells=len(rows),
                    ran=sum(r["state"] == "ran" for r in rows), failed=sum(r["state"] == "failed" for r in rows),
                    interrupted=sum(r["state"] == "interrupted" for r in rows),
+                   integrity_failed=sum(1 for r in rows if r["state"] == "integrity-failed" or r.get("integrity")),
                    pending=sum(r["state"] == "prepared" for r in rows), rows=rows, pairs=sorted(pairs, key=lambda p: (p["task"], p["repeat"])),
                    boundary="Paired comparison on frozen goals: the grade column is the frozen independent graders' "
                             "verdict, 'engine done' is the engine's own completion claim and never the grade; no "

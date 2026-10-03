@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -160,15 +161,22 @@ def page_factory(browser):
         context = browser.new_context(viewport={"width": 1280, "height": 800})
         page = context.new_page()
         page.set_default_timeout(5000)  # a missing element fails fast; nothing here legitimately takes longer
-        errors = []
+        errors, http_errors, responses = [], [], []
 
         def on_console(message):
-            if message.type == "error" and not any(s in message.text for s in IGNORED_CONSOLE):
-                errors.append(f"console: {message.text}")
+            if message.type != "error" or any(s in message.text for s in IGNORED_CONSOLE):
+                return
+            location = getattr(message, "location", None) or {}
+            url = location.get("url") if isinstance(location, dict) else None
+            sort_console_error(message.text, url, errors, http_errors)
 
         page.on("console", on_console)
         page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
+        page.on("response", lambda r: responses.append(dict(method=r.request.method, url=r.url, status=r.status))
+                if r.status >= 400 else None)
         page.grader_errors = errors
+        page.grader_http_errors = http_errors
+        page.grader_responses = responses
         pages.append((context, page))
         return page
 
@@ -177,5 +185,40 @@ def page_factory(browser):
         context.close()
 
 
-def no_console_errors(page):
-    assert page.grader_errors == [], page.grader_errors
+_RESOURCE_STATUS = re.compile(r"Failed to load resource: the server responded with a status of (\d{3})")
+
+
+def sort_console_error(text, url, errors, http_errors):
+    """Chromium reports every HTTP error response as a console error
+    ("Failed to load resource: the server responded with a status of 400").
+    Those are kept apart, with the resource URL and status, so a grader that
+    deliberately provokes one can excuse exactly that response and nothing
+    else; every other console error stays an error."""
+    match = _RESOURCE_STATUS.search(text)
+    if match:
+        http_errors.append(dict(text=f"console: {text}", url=url, status=int(match.group(1))))
+    else:
+        errors.append(f"console: {text}")
+
+
+def unexpected_console_errors(errors, http_errors, responses, expected_http=()):
+    """Everything that fails the page, given ``expected_http``: (method,
+    url fragment, status) triples the grader provoked on purpose. Each one
+    must have been observed as a real response (request evidence, Codex
+    review of e3deaed P1 #3); only Chromium's resource diagnostic for a
+    matching URL and status is excused. Returns (missing_expected, failures)."""
+    observed = [(m, frag, st) for m, frag, st in expected_http
+                if any(r["method"] == m and frag in r["url"] and r["status"] == st for r in responses)]
+    missing = [f"{m} {frag} -> {st}" for m, frag, st in expected_http if (m, frag, st) not in observed]
+    # Only an expectation the responses bear out excuses anything.
+    excused = [e for e in http_errors
+               if any(frag in (e.get("url") or "") and e["status"] == st for _, frag, st in observed)]
+    failures = list(errors) + [e["text"] for e in http_errors if e not in excused]
+    return missing, failures
+
+
+def no_console_errors(page, expected_http=()):
+    missing, failures = unexpected_console_errors(page.grader_errors, page.grader_http_errors,
+                                                  page.grader_responses, expected_http)
+    assert not missing, f"expected responses never observed: {missing}; seen {page.grader_responses}"
+    assert failures == [], failures

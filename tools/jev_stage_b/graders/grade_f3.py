@@ -88,7 +88,10 @@ def test_R3_inline_rename_control_enter_saves_escape_cancels_and_errors_show(liv
     assert shown, "the server's error text must be shown"
     assert len(patches) == 2
     assert page.evaluate("() => document.querySelector('.project-card .name').textContent.trim()") == "One renamed"
-    no_console_errors(page)
+    # The duplicate name must come back as a 400 from PATCH /api/projects/<id>;
+    # Chromium logs that response as a console error, and only that one is
+    # excused, with the response itself required as evidence.
+    no_console_errors(page, expected_http=(("PATCH", "/api/projects/", 400),))
 
 
 def test_R4_rename_changes_nothing_but_the_name(application, client):

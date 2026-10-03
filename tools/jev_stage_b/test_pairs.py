@@ -402,3 +402,102 @@ def test_each_arm_may_have_its_own_capture_profile_and_both_are_frozen(tmp_path)
     rule.write_text('{"origin": "http://127.0.0.1:52099"}')
     with pytest.raises(RuntimeError, match="frozen inputs changed"):
         P.run(out, engine=ENGINE, launcher=_fake_launcher({}))
+
+
+# ---- Codex review of e3deaed (2026-10-03): three reproduced blockers
+
+def _engine_result_launcher(errors_by_cell, calls_by_cell=None):
+    """Writes result.json the way run_project does when the session raised:
+    the error saved, the launcher returning normally (project_run catches it)."""
+    calls_by_cell = calls_by_cell or {}
+
+    def launch(cell, _packet):
+        run_dir = Path(cell["project"]) / ".quadratus" / "runs" / "r"
+        run_dir.mkdir(parents=True)
+        error = errors_by_cell.get((cell["task"], cell["arm"]))
+        calls = calls_by_cell.get((cell["task"], cell["arm"]), 0 if error else 6)
+        (run_dir / "result.json").write_text(json.dumps(dict(
+            completed=error is None, error=error, checks=[], tasks=0 if error else 1, source_changed=error is None,
+            budget=dict(reserved_attempts=calls, reported_tokens=0, stop_reason="", unknown_usage_attempts=0),
+            decisions=[])))
+        lines = [] if not calls else [
+            json.dumps(dict(task="run", role="orchestrator", canonical_model="claude:fable", invoked=True)),
+            json.dumps(dict(task="t1", role="lead", canonical_model="grok:default", invoked=True))]
+        (run_dir / "invocations.jsonl").write_text("\n".join(lines) + ("\n" if lines else ""))
+        return dict(run_dir=str(run_dir), completed=error is None)
+    return launch
+
+
+def test_an_engine_saved_seat_failure_stops_the_series_and_marks_the_pair_non_comparable(tmp_path):
+    repo = _project(tmp_path)
+    out = tmp_path / "runs"
+    P.prepare(_packet(repo, tasks=2), out)
+    launcher = _engine_result_launcher({("feat-0", "rule"): "OrchestratorUnavailable: both seats are down"})
+    manifest = P.run(out, engine=ENGINE, launcher=launcher, versions={})
+    states = {c["name"]: c["state"] for c in manifest["cells"]}
+    assert states["feat-0/rule-r0"] == "ran" and states["feat-1/jev-r0"] == "prepared"
+    assert manifest["stopped"]["reason"].startswith("seat-fallback: engine saved OrchestratorUnavailable")
+    pair = P.collect(out)["pairs"][0]
+    assert not pair["comparable"] and any("seat-fallback" in r for r in pair["not_comparable_because"])
+    # A sign-in failure the engine saved is a credential stop; a stall with
+    # calls behind it, or a budget stop, is the cell's own outcome.
+    assert P.classify_access_failure("RuntimeError: grok: Not signed in") == "credential-failure"
+    assert P.classify_access_failure("RunStalled: the orchestrator named the same task twice") is None
+    out2 = tmp_path / "runs2"
+    P.prepare(_packet(repo, tasks=2), out2)
+    manifest = P.run(out2, engine=ENGINE, versions={}, launcher=_engine_result_launcher(
+        {("feat-0", "jev"): "RunStalled: the orchestrator named the same task twice"}, {("feat-0", "jev"): 5}))
+    assert "stopped" not in manifest and all(c["state"] == "ran" for c in manifest["cells"])
+    # An error saved before any call was answered is a cell error, not a feature result.
+    out3 = tmp_path / "runs3"
+    P.prepare(_packet(repo, tasks=1), out3)
+    manifest = P.run(out3, engine=ENGINE, versions={}, launcher=_engine_result_launcher(
+        {("feat-0", "jev"): "ValueError: declared_paths names a missing file"}))
+    assert manifest["stopped"]["reason"].startswith("cell-error: engine saved ValueError")
+
+
+def test_frozen_inputs_and_the_engine_are_rechecked_at_every_launch_and_grading_boundary(tmp_path):
+    repo = _project(tmp_path)
+    gdir = _graders(tmp_path)
+    packet = _packet(repo, tasks=3)
+    packet["graders"] = dict(dir=str(gdir), tasks={f"feat-{i}": [["python3", "grade_feat.py"]] for i in range(3)})
+    out = tmp_path / "runs"
+    P.prepare(packet, out)
+    base = _fake_launcher({})
+
+    def tampering_launcher(cell, pk):
+        outcome = base(cell, pk)
+        (Path(cell["project"]) / "app.py").write_text("built\n")
+        if cell["name"] == "feat-0/rule-r0":  # a builder-side process rewrites the grader mid-series
+            (gdir / "grade_feat.py").write_text("import sys; sys.exit(0)\n")
+        return outcome
+
+    manifest = P.run(out, engine=ENGINE, launcher=tampering_launcher, versions={})
+    cells = {c["name"]: c for c in manifest["cells"]}
+    tampered = cells["feat-0/rule-r0"]
+    assert tampered["state"] == "ran" and tampered["grade"] is None  # its outcome kept, its grade withheld
+    assert tampered["integrity"].startswith("before grading: RuntimeError: frozen inputs changed since prepare: grade_feat.py")
+    sibling = cells["feat-0/jev-r0"]
+    assert sibling["state"] in ("ran", "integrity-failed")  # launched together; whichever boundary it hit is recorded
+    assert all(cells[n]["state"] == "prepared" for n in ("feat-1/rule-r0", "feat-1/jev-r0", "feat-2/jev-r0"))
+    assert manifest["stopped"]["reason"].startswith("integrity-failure:")
+    summary = P.collect(out)
+    assert summary["integrity_failed"] >= 1
+    pair = next(p for p in summary["pairs"] if p["task"] == "feat-0")
+    assert not pair["comparable"] and any("integrity" in r for r in pair["not_comparable_because"])
+    # The engine identity is read at each boundary: a checkout that moves
+    # between launches fails the next cell's integrity check, and the row
+    # carries the SHA established at its own launch.
+    out2 = tmp_path / "runs2"
+    P.prepare(_packet(repo, tasks=2), out2)
+    seen = []
+
+    def moving_engine():
+        seen.append(1)
+        return dict(ENGINE, sha=("e" if len(seen) <= 4 else "f") * 40)
+
+    manifest = P.run(out2, engine=moving_engine, launcher=_fake_launcher({}), versions={})
+    states = {c["name"]: c["state"] for c in manifest["cells"]}
+    assert states["feat-0/jev-r0"] == "ran" and states["feat-0/rule-r0"] == "ran"
+    assert any(s == "integrity-failed" for s in states.values()) or manifest["stopped"]["reason"].startswith("integrity-failure")
+    assert all(c["engine_sha"] == "e" * 40 for c in manifest["cells"] if c["state"] == "ran")
