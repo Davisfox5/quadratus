@@ -1,0 +1,769 @@
+{
+  "packet_digest": "006894d640356b14f3b1bac18605e255bb98e68c666156acc7507125e0358e40",
+  "engine": {
+    "root": "/Users/davisfox/Documents/GitHub/quadratus",
+    "sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+    "dirty": false
+  },
+  "stopped": {
+    "reason": "integrity-failure: before grading: RuntimeError: the engine checkout /Users/davisfox/Documents/GitHub/quadratus has uncommitted changes; a cell must run on one SHA",
+    "after": "f5-empty-state/jev-r0",
+    "also": [],
+    "at": "2026-10-03T13:15:34Z"
+  },
+  "overrides": [],
+  "cells": 14,
+  "ran": 10,
+  "failed": 0,
+  "interrupted": 0,
+  "integrity_failed": 1,
+  "pending": 4,
+  "rows": [
+    {
+      "task": "f1-preview-errors",
+      "arm": "jev",
+      "repeat": 0,
+      "state": "ran",
+      "error": null,
+      "seconds": 849.1,
+      "integrity": null,
+      "grade_passed": 2,
+      "grade_total": 4,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "jev_models": [
+        "jev-1.13.0"
+      ],
+      "decision_errors": [],
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "started_at": "2026-10-03T11:49:17Z",
+      "completed": false,
+      "result_error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+      "entry": "planned",
+      "tasks": 0,
+      "closed_clean": 0,
+      "unfinished": 0,
+      "recovery_used": 0,
+      "hypotheses": 0,
+      "repeats_stopped": 0,
+      "causes": [],
+      "checks_failed": 0,
+      "calls": 6,
+      "tokens": 4020087,
+      "stop": "reported_token_threshold",
+      "unknown_usage": 0,
+      "kind": "backend",
+      "difficulty": "standard",
+      "decisions": 2,
+      "decision_tokens": 3754,
+      "source_changed": true,
+      "orchestrators": [
+        "claude:fable"
+      ],
+      "lead": "openai:gpt-5.6-sol",
+      "leads": [
+        "openai:gpt-5.6-sol"
+      ],
+      "per_task": [
+        {
+          "task": "t1",
+          "lead": "openai:gpt-5.6-sol",
+          "kind": "backend",
+          "difficulty": "standard"
+        }
+      ]
+    },
+    {
+      "task": "f1-preview-errors",
+      "arm": "rule",
+      "repeat": 0,
+      "state": "ran",
+      "error": null,
+      "seconds": 1133.1,
+      "integrity": null,
+      "grade_passed": 2,
+      "grade_total": 4,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "jev_models": [],
+      "decision_errors": [],
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "started_at": "2026-10-03T11:49:17Z",
+      "completed": false,
+      "result_error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+      "entry": "planned",
+      "tasks": 1,
+      "closed_clean": 1,
+      "unfinished": 0,
+      "recovery_used": 0,
+      "hypotheses": 0,
+      "repeats_stopped": 0,
+      "causes": [],
+      "checks_failed": 0,
+      "calls": 8,
+      "tokens": 4213187,
+      "stop": "reported_token_threshold",
+      "unknown_usage": 0,
+      "kind": null,
+      "difficulty": null,
+      "decisions": 0,
+      "decision_tokens": 0,
+      "source_changed": true,
+      "orchestrators": [
+        "claude:fable"
+      ],
+      "lead": "grok:default",
+      "leads": [
+        "grok:default",
+        "claude:opus"
+      ],
+      "per_task": [
+        {
+          "task": "t1",
+          "lead": "grok:default"
+        },
+        {
+          "task": "t2",
+          "lead": "claude:opus"
+        }
+      ]
+    },
+    {
+      "task": "f2-project-search",
+      "arm": "rule",
+      "repeat": 0,
+      "state": "ran",
+      "error": null,
+      "seconds": 902.6,
+      "integrity": null,
+      "grade_passed": 4,
+      "grade_total": 5,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "jev_models": [],
+      "decision_errors": [],
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "started_at": "2026-10-03T12:08:25Z",
+      "completed": false,
+      "result_error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+      "entry": "planned",
+      "tasks": 0,
+      "closed_clean": 0,
+      "unfinished": 0,
+      "recovery_used": 0,
+      "hypotheses": 0,
+      "repeats_stopped": 0,
+      "causes": [],
+      "checks_failed": 0,
+      "calls": 6,
+      "tokens": 2548169,
+      "stop": "reported_token_threshold",
+      "unknown_usage": 0,
+      "kind": null,
+      "difficulty": null,
+      "decisions": 0,
+      "decision_tokens": 0,
+      "source_changed": true,
+      "orchestrators": [
+        "claude:fable"
+      ],
+      "lead": "grok:default",
+      "leads": [
+        "grok:default"
+      ],
+      "per_task": [
+        {
+          "task": "t1",
+          "lead": "grok:default"
+        }
+      ]
+    },
+    {
+      "task": "f2-project-search",
+      "arm": "jev",
+      "repeat": 0,
+      "state": "ran",
+      "error": null,
+      "seconds": 1050.0,
+      "integrity": null,
+      "grade_passed": 4,
+      "grade_total": 5,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "jev_models": [
+        "jev-1.13.0"
+      ],
+      "decision_errors": [],
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "started_at": "2026-10-03T12:08:25Z",
+      "completed": false,
+      "result_error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+      "entry": "planned",
+      "tasks": 0,
+      "closed_clean": 0,
+      "unfinished": 0,
+      "recovery_used": 0,
+      "hypotheses": 0,
+      "repeats_stopped": 0,
+      "causes": [],
+      "checks_failed": 0,
+      "calls": 8,
+      "tokens": 2790804,
+      "stop": "reported_token_threshold",
+      "unknown_usage": 0,
+      "kind": "frontend",
+      "difficulty": "simple",
+      "decisions": 2,
+      "decision_tokens": 3782,
+      "source_changed": true,
+      "orchestrators": [
+        "claude:fable"
+      ],
+      "lead": "grok:default",
+      "leads": [
+        "grok:default"
+      ],
+      "per_task": [
+        {
+          "task": "t1",
+          "lead": "grok:default",
+          "kind": "frontend",
+          "difficulty": "simple"
+        }
+      ]
+    },
+    {
+      "task": "f3-project-rename",
+      "arm": "jev",
+      "repeat": 0,
+      "state": "ran",
+      "error": null,
+      "seconds": 1105.7,
+      "integrity": null,
+      "grade_passed": 3,
+      "grade_total": 5,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "jev_models": [
+        "jev-1.13.0"
+      ],
+      "decision_errors": [],
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "started_at": "2026-10-03T12:26:06Z",
+      "completed": false,
+      "result_error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+      "entry": "planned",
+      "tasks": 1,
+      "closed_clean": 1,
+      "unfinished": 0,
+      "recovery_used": 0,
+      "hypotheses": 0,
+      "repeats_stopped": 0,
+      "causes": [],
+      "checks_failed": 0,
+      "calls": 14,
+      "tokens": 2645558,
+      "stop": "reported_token_threshold",
+      "unknown_usage": 0,
+      "kind": "backend,frontend",
+      "difficulty": "simple,standard",
+      "decisions": 4,
+      "decision_tokens": 8100,
+      "source_changed": true,
+      "orchestrators": [
+        "claude:fable"
+      ],
+      "lead": "grok:default",
+      "leads": [
+        "grok:default",
+        "openai:gpt-5.6-sol"
+      ],
+      "per_task": [
+        {
+          "task": "t1",
+          "lead": "grok:default",
+          "kind": "backend",
+          "difficulty": "simple"
+        },
+        {
+          "task": "t2",
+          "lead": "openai:gpt-5.6-sol",
+          "kind": "frontend",
+          "difficulty": "standard"
+        }
+      ]
+    },
+    {
+      "task": "f3-project-rename",
+      "arm": "rule",
+      "repeat": 0,
+      "state": "ran",
+      "error": null,
+      "seconds": 868.3,
+      "integrity": null,
+      "grade_passed": 2,
+      "grade_total": 5,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "jev_models": [],
+      "decision_errors": [],
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "started_at": "2026-10-03T12:26:06Z",
+      "completed": false,
+      "result_error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+      "entry": "planned",
+      "tasks": 1,
+      "closed_clean": 1,
+      "unfinished": 0,
+      "recovery_used": 0,
+      "hypotheses": 0,
+      "repeats_stopped": 0,
+      "causes": [],
+      "checks_failed": 0,
+      "calls": 12,
+      "tokens": 2825410,
+      "stop": "reported_token_threshold",
+      "unknown_usage": 0,
+      "kind": null,
+      "difficulty": null,
+      "decisions": 0,
+      "decision_tokens": 0,
+      "source_changed": true,
+      "orchestrators": [
+        "claude:fable"
+      ],
+      "lead": "grok:default",
+      "leads": [
+        "grok:default",
+        "claude:opus"
+      ],
+      "per_task": [
+        {
+          "task": "t1",
+          "lead": "grok:default"
+        },
+        {
+          "task": "t2",
+          "lead": "claude:opus"
+        }
+      ]
+    },
+    {
+      "task": "f4-tags-export",
+      "arm": "rule",
+      "repeat": 0,
+      "state": "ran",
+      "error": null,
+      "seconds": 775.7,
+      "integrity": null,
+      "grade_passed": 1,
+      "grade_total": 6,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "jev_models": [],
+      "decision_errors": [],
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "started_at": "2026-10-03T12:44:36Z",
+      "completed": false,
+      "result_error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+      "entry": "planned",
+      "tasks": 0,
+      "closed_clean": 0,
+      "unfinished": 0,
+      "recovery_used": 0,
+      "hypotheses": 0,
+      "repeats_stopped": 0,
+      "causes": [],
+      "checks_failed": 0,
+      "calls": 8,
+      "tokens": 2651907,
+      "stop": "reported_token_threshold",
+      "unknown_usage": 0,
+      "kind": null,
+      "difficulty": null,
+      "decisions": 0,
+      "decision_tokens": 0,
+      "source_changed": false,
+      "orchestrators": [
+        "claude:fable"
+      ],
+      "lead": "claude:opus",
+      "leads": [
+        "claude:opus"
+      ],
+      "per_task": [
+        {
+          "task": "t1",
+          "lead": "claude:opus"
+        }
+      ]
+    },
+    {
+      "task": "f4-tags-export",
+      "arm": "jev",
+      "repeat": 0,
+      "state": "ran",
+      "error": null,
+      "seconds": 841.2,
+      "integrity": null,
+      "grade_passed": 5,
+      "grade_total": 6,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "jev_models": [
+        "jev-1.13.0"
+      ],
+      "decision_errors": [],
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "started_at": "2026-10-03T12:44:36Z",
+      "completed": false,
+      "result_error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+      "entry": "planned",
+      "tasks": 1,
+      "closed_clean": 1,
+      "unfinished": 0,
+      "recovery_used": 0,
+      "hypotheses": 0,
+      "repeats_stopped": 0,
+      "causes": [],
+      "checks_failed": 0,
+      "calls": 16,
+      "tokens": 2678813,
+      "stop": "reported_token_threshold",
+      "unknown_usage": 0,
+      "kind": "backend,test",
+      "difficulty": "standard",
+      "decisions": 4,
+      "decision_tokens": 7450,
+      "source_changed": true,
+      "orchestrators": [
+        "claude:fable"
+      ],
+      "lead": "openai:gpt-5.6-sol",
+      "leads": [
+        "openai:gpt-5.6-sol"
+      ],
+      "per_task": [
+        {
+          "task": "t1",
+          "lead": "openai:gpt-5.6-sol",
+          "kind": "backend",
+          "difficulty": "standard"
+        },
+        {
+          "task": "t2",
+          "lead": "openai:gpt-5.6-sol",
+          "kind": "test",
+          "difficulty": "standard"
+        }
+      ]
+    },
+    {
+      "task": "f5-empty-state",
+      "arm": "jev",
+      "repeat": 0,
+      "state": "ran",
+      "error": null,
+      "seconds": 1007.5,
+      "integrity": "before grading: RuntimeError: the engine checkout /Users/davisfox/Documents/GitHub/quadratus has uncommitted changes; a cell must run on one SHA",
+      "grade_passed": null,
+      "grade_total": null,
+      "grade_withheld": "RuntimeError: the engine checkout /Users/davisfox/Documents/GitHub/quadratus has uncommitted changes; a cell must run on one SHA",
+      "grade_unverified": false,
+      "jev_models": [
+        "jev-1.13.0"
+      ],
+      "decision_errors": [],
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "started_at": "2026-10-03T12:58:46Z",
+      "completed": false,
+      "result_error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+      "entry": "planned",
+      "tasks": 0,
+      "closed_clean": 0,
+      "unfinished": 0,
+      "recovery_used": 0,
+      "hypotheses": 0,
+      "repeats_stopped": 0,
+      "causes": [],
+      "checks_failed": 0,
+      "calls": 6,
+      "tokens": 4248009,
+      "stop": "reported_token_threshold",
+      "unknown_usage": 0,
+      "kind": "frontend",
+      "difficulty": "simple",
+      "decisions": 2,
+      "decision_tokens": 3612,
+      "source_changed": true,
+      "orchestrators": [
+        "claude:fable"
+      ],
+      "lead": "grok:default",
+      "leads": [
+        "grok:default"
+      ],
+      "per_task": [
+        {
+          "task": "t1",
+          "lead": "grok:default",
+          "kind": "frontend",
+          "difficulty": "simple"
+        }
+      ]
+    },
+    {
+      "task": "f5-empty-state",
+      "arm": "rule",
+      "repeat": 0,
+      "state": "ran",
+      "error": null,
+      "seconds": 562.3,
+      "integrity": null,
+      "grade_passed": 4,
+      "grade_total": 4,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "jev_models": [],
+      "decision_errors": [],
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "started_at": "2026-10-03T12:58:46Z",
+      "completed": false,
+      "result_error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+      "entry": "planned",
+      "tasks": 0,
+      "closed_clean": 0,
+      "unfinished": 0,
+      "recovery_used": 0,
+      "hypotheses": 0,
+      "repeats_stopped": 0,
+      "causes": [],
+      "checks_failed": 0,
+      "calls": 4,
+      "tokens": 2547662,
+      "stop": "reported_token_threshold",
+      "unknown_usage": 0,
+      "kind": null,
+      "difficulty": null,
+      "decisions": 0,
+      "decision_tokens": 0,
+      "source_changed": true,
+      "orchestrators": [
+        "claude:fable"
+      ],
+      "lead": "grok:default",
+      "leads": [
+        "grok:default"
+      ],
+      "per_task": [
+        {
+          "task": "t1",
+          "lead": "grok:default"
+        }
+      ]
+    },
+    {
+      "task": "f6-download-guard",
+      "arm": "rule",
+      "repeat": 0,
+      "state": "prepared",
+      "error": null,
+      "seconds": null,
+      "integrity": null,
+      "grade_passed": null,
+      "grade_total": null,
+      "grade_withheld": null,
+      "grade_unverified": false
+    },
+    {
+      "task": "f6-download-guard",
+      "arm": "jev",
+      "repeat": 0,
+      "state": "prepared",
+      "error": null,
+      "seconds": null,
+      "integrity": null,
+      "grade_passed": null,
+      "grade_total": null,
+      "grade_withheld": null,
+      "grade_unverified": false
+    },
+    {
+      "task": "f7-projects-migration",
+      "arm": "jev",
+      "repeat": 0,
+      "state": "prepared",
+      "error": null,
+      "seconds": null,
+      "integrity": null,
+      "grade_passed": null,
+      "grade_total": null,
+      "grade_withheld": null,
+      "grade_unverified": false
+    },
+    {
+      "task": "f7-projects-migration",
+      "arm": "rule",
+      "repeat": 0,
+      "state": "prepared",
+      "error": null,
+      "seconds": null,
+      "integrity": null,
+      "grade_passed": null,
+      "grade_total": null,
+      "grade_withheld": null,
+      "grade_unverified": false
+    }
+  ],
+  "pairs": [
+    {
+      "task": "f1-preview-errors",
+      "repeat": 0,
+      "comparable": true,
+      "not_comparable_because": [],
+      "start_gap_seconds": 0.0,
+      "lead_changed": true,
+      "both_completed": false,
+      "grade": {
+        "jev": "2/4",
+        "rule": "2/4"
+      },
+      "grade_delta": 0,
+      "completed": {
+        "jev": false,
+        "rule": false
+      },
+      "tokens_delta": -193100,
+      "seconds_delta": -283.9999999999999
+    },
+    {
+      "task": "f2-project-search",
+      "repeat": 0,
+      "comparable": true,
+      "not_comparable_because": [],
+      "start_gap_seconds": 0.0,
+      "lead_changed": false,
+      "both_completed": false,
+      "grade": {
+        "jev": "4/5",
+        "rule": "4/5"
+      },
+      "grade_delta": 0,
+      "completed": {
+        "jev": false,
+        "rule": false
+      },
+      "tokens_delta": 242635,
+      "seconds_delta": 147.39999999999998
+    },
+    {
+      "task": "f3-project-rename",
+      "repeat": 0,
+      "comparable": true,
+      "not_comparable_because": [],
+      "start_gap_seconds": 0.0,
+      "lead_changed": true,
+      "both_completed": false,
+      "grade": {
+        "jev": "3/5",
+        "rule": "2/5"
+      },
+      "grade_delta": 1,
+      "completed": {
+        "jev": false,
+        "rule": false
+      },
+      "tokens_delta": -179852,
+      "seconds_delta": 237.4000000000001
+    },
+    {
+      "task": "f4-tags-export",
+      "repeat": 0,
+      "comparable": true,
+      "not_comparable_because": [],
+      "start_gap_seconds": 0.0,
+      "lead_changed": true,
+      "both_completed": false,
+      "grade": {
+        "jev": "5/6",
+        "rule": "1/6"
+      },
+      "grade_delta": 4,
+      "completed": {
+        "jev": false,
+        "rule": false
+      },
+      "tokens_delta": 26906,
+      "seconds_delta": 65.5
+    },
+    {
+      "task": "f5-empty-state",
+      "repeat": 0,
+      "comparable": false,
+      "not_comparable_because": [
+        "jev integrity: before grading: RuntimeError: the engine checkout /Users/davisfox/Documents/GitH"
+      ],
+      "start_gap_seconds": 0.0,
+      "lead_changed": false,
+      "both_completed": false,
+      "grade": {
+        "jev": null,
+        "rule": "4/4"
+      },
+      "grade_delta": null,
+      "completed": {
+        "jev": false,
+        "rule": false
+      },
+      "tokens_delta": 1700347,
+      "seconds_delta": 445.20000000000005
+    },
+    {
+      "task": "f6-download-guard",
+      "repeat": 0,
+      "comparable": false,
+      "not_comparable_because": [
+        "jev prepared",
+        "rule prepared"
+      ],
+      "start_gap_seconds": null,
+      "lead_changed": null,
+      "both_completed": false,
+      "grade": {
+        "jev": null,
+        "rule": null
+      },
+      "grade_delta": null,
+      "completed": {
+        "jev": null,
+        "rule": null
+      },
+      "tokens_delta": null,
+      "seconds_delta": null
+    },
+    {
+      "task": "f7-projects-migration",
+      "repeat": 0,
+      "comparable": false,
+      "not_comparable_because": [
+        "jev prepared",
+        "rule prepared"
+      ],
+      "start_gap_seconds": null,
+      "lead_changed": null,
+      "both_completed": false,
+      "grade": {
+        "jev": null,
+        "rule": null
+      },
+      "grade_delta": null,
+      "completed": {
+        "jev": null,
+        "rule": null
+      },
+      "tokens_delta": null,
+      "seconds_delta": null
+    }
+  ],
+  "boundary": "Paired comparison on frozen goals: the grade column is the frozen independent graders' verdict, 'engine done' is the engine's own completion claim and never the grade; no accuracy or savings claim beyond these cells, and a faster failed cell is not a win"
+}

@@ -1,0 +1,79 @@
+{
+  "purpose": "pre-launch sign-in liveness, one minimal call per vendor CLI; outside the series' cells and bounds; reported apart from coding-cell usage",
+  "at": "2026-10-03T11:40Z to 11:46Z",
+  "calls": [
+    {
+      "vendor": "claude",
+      "argv": [
+        "claude",
+        "-p",
+        "Reply with exactly: ok",
+        "--model",
+        "haiku",
+        "--max-turns",
+        "1"
+      ],
+      "answer": "ok",
+      "reported_usage": "not captured (text output)",
+      "billing": "Claude Max subscription, no invoice"
+    },
+    {
+      "vendor": "codex",
+      "argv": [
+        "codex",
+        "exec",
+        "--skip-git-repo-check",
+        "-c",
+        "model_reasoning_effort=low",
+        "Reply with exactly: ok"
+      ],
+      "answer": "ERROR 400: gpt-6.1-sol (the CLI config default) is not supported with a ChatGPT account; no answer",
+      "reported_usage": "none",
+      "billing": "ChatGPT subscription, no invoice"
+    },
+    {
+      "vendor": "codex",
+      "argv": [
+        "codex",
+        "exec",
+        "--skip-git-repo-check",
+        "-m",
+        "gpt-5.6-sol",
+        "-c",
+        "model_reasoning_effort=low",
+        "Reply with exactly: ok"
+      ],
+      "answer": "ok",
+      "reported_usage": {
+        "tokens_used": 6240
+      },
+      "billing": "ChatGPT subscription, no invoice"
+    },
+    {
+      "vendor": "grok",
+      "argv": [
+        "grok",
+        "-p",
+        "Reply with exactly: ok",
+        "--effort",
+        "low",
+        "--output-format",
+        "json"
+      ],
+      "answer": "ok",
+      "reported_usage": {
+        "model": "grok-4.6-build",
+        "input_tokens": 17469,
+        "output_tokens": 12,
+        "reasoning_tokens": 11,
+        "total_tokens": 17609,
+        "cli_cost_estimate_usd": 0.01192516
+      },
+      "billing": "SuperGrok subscription; the CLI's cost field is its own estimate, not an invoice"
+    }
+  ],
+  "typesafe": {
+    "calls": "two free model listings (probe), no decision requests, no cost"
+  },
+  "note": "The Codex CLI's configured default model (gpt-6.1-sol) is never used by the engine, which names every OpenAI seat explicitly."
+}

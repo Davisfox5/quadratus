@@ -1,0 +1,1948 @@
+{
+  "series": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951",
+  "packet_digest": "006894d640356b14f3b1bac18605e255bb98e68c666156acc7507125e0358e40",
+  "frozen_inputs_digest": "61c9f0cd60f53b4a7ef49156091239c9579b5db2acc128162d0980a6ba5a95a5",
+  "frozen": {
+    "graders": {
+      "baseline/SOURCE.txt": "29f8ecb682d635a6856a6b7eecb8d044fe25b3cde7ef27952539316aeb7c9b39",
+      "baseline/tests/test_basic.py": "1151a478d85f92bdec50ac46ec1d8c7005d0150f0c949b07534614d5f06441a5",
+      "baseline/tests/test_bulk_edit.py": "b59108656393e0af5d6f745d562cfbdfd6ad2b74672eda52ee5be715e6c00ed7",
+      "baseline/tests/test_import_preview.py": "4160c5ff7af2f543a9386a97a543b2463e83c0106236ebcf04c1bcab536a0389",
+      "baseline/tests/ui/bulk_coverage.test.js": "4e2824bc70426040e8c262ee685d341236af851d4ac4607fb364a8b97f466834",
+      "baseline/tests/ui/bulk_keyboard.test.js": "0f1cdc6936dc514482d3ce6ea0a32b5c0a7aae7b45f9ded426b8d0b883e42fd6",
+      "baseline/tests/ui/bulk_serialization.test.js": "a00d1cabe06d26d187ffcc91225231854749b34f7c0a677062199e6163a9bdfe",
+      "baseline/tests/ui/fake_dom.js": "465533e3378ca44e1cebb97f6a3be2fd3c4237f63a446046084a1bc1deda530d",
+      "baseline/tests/ui/import_preview.test.js": "aa3e11073e56fb2a9319987b964736f904f081c0b79b3f318c1af504a01aaea3",
+      "baseline/tests/ui/load_app.js": "e97ddc72c31ca82b79aabcd241e6857d56463c084d9cb1a8275c5f87339e35a2",
+      "baseline/tests/ui/load_app.test.js": "599b8cc5d1fc2f0dc868526fd3ff61121d72c427c5a9d594fa8ff8fd256f5ac5",
+      "baseline/tests/ui/mutation_check.js": "6a8fc01ad23925225aa50f7e78dd78bc68ba10c4c3c658622db7b9f13c60fee7",
+      "conftest.py": "e4bec399c6074907723a437038a2affd6ca94c4f56febbeb9dda68d3a43170f1",
+      "grade_f1.py": "26a37bd6bdc8b9f962a33ac0e111b705dc3887e6c0ac37307095c240e58c0057",
+      "grade_f2.py": "a2753537f55ba94e4d768ce7ac914d78ab89139e84e95b291762ff8b37515961",
+      "grade_f3.py": "e7a24d8b4a0990f1cac85d4c2bcc83da47efbae9fc3e888e167d0e5df44f7cf1",
+      "grade_f4.py": "6a99fedba6d098751b16dbe5b121ca4ce11aa8c5ea9c39dadbd9df8137d223ab",
+      "grade_f5.py": "1705f10b684c94322c7d41ca23b75231d9a6033556f40606f8dda139ef140f73",
+      "grade_f6.py": "4ea6d746183d89f18bc2063cb048b01749dc102c3ec96b3ad834ba97c0c8f411",
+      "grade_f7.py": "7011f4fe2294fce7bc438d3b70587333dcceae461dd9b7fee86733dd3ba17009",
+      "serve.py": "b156049c35267f2f43830e4cb7636548d929cbe1d2f4e0df0b07e9adbc5bc220",
+      "support.py": "ab927f85f585c1518b9774ec5ccbdfae77da7a295082063ebd5979cf0c7da8b1"
+    },
+    "capture_profile:jev": "e7f6ca8a436f7a7b10f7a21e59edcc9709904863f6d17d75ba2680e23834ba86",
+    "capture_profile:rule": "07f9c882cd72447107280a037530af2059379e19c770431bf1fdfdd1e1a47775"
+  },
+  "graders_unchanged_at_packet_time": true,
+  "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+  "engine": {
+    "root": "/Users/davisfox/Documents/GitHub/quadratus",
+    "sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+    "dirty": false
+  },
+  "launches": [
+    {
+      "at": "2026-10-03T11:49:17Z",
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "cli_versions": {
+        "claude": "2.1.269 (Claude Code)",
+        "codex": "codex-cli 0.154.0",
+        "grok": "grok 1.0.30 (04b7ffed98c6)"
+      },
+      "arm": null,
+      "only": null
+    }
+  ],
+  "prepared_at": "2026-10-03T11:36:17Z",
+  "stopped": {
+    "reason": "integrity-failure: before grading: RuntimeError: the engine checkout /Users/davisfox/Documents/GitHub/quadratus has uncommitted changes; a cell must run on one SHA",
+    "after": "f5-empty-state/jev-r0",
+    "also": [],
+    "at": "2026-10-03T13:15:34Z"
+  },
+  "overrides": [],
+  "hold": {
+    "requested_by": "Codex via Davis (chat relay), citing Davis's existing conditional authorization and stop requirements",
+    "requested_at": "2026-10-03T13:06:35Z",
+    "reason": "The claude:opus lead seat cannot perform its granted editing work: project Edit/Write repeatedly denied by the Claude CLI in permissionMode default (reported #35 comment 5969425308). A seat/capability-access blocker under the frozen settings.",
+    "instruction": "hold all subsequent cell launches; preserve active f5 outcomes at a safe boundary; publish terminal evidence; no override, relaunch, replacement, permission change, engine edit, bound change, or f6/f7 launch",
+    "mechanism": "after the first f5 cell is graded, a hold-marker line is appended to docs/jev-stage-b-plan.md in the engine checkout; the runner's integrity check then refuses the next launch; the second f5 cell's in-runner grade is withheld by that check and graded once post hoc with the frozen grader bytes' SHA-256 shown unchanged"
+  },
+  "bounds": {
+    "limits": {
+      "max_calls": 90,
+      "max_reported_tokens": 2500000,
+      "wall_seconds": 3600,
+      "max_concurrent_workers": 2
+    },
+    "max_tasks": 10,
+    "survey_recovery": 4,
+    "repeats": 1,
+    "jev_model": "jev-1.13.0"
+  },
+  "gametape_base": "1cd9264edb4429f00cde43a04a1944d0dca37f11",
+  "totals": {
+    "cells": 14,
+    "executed": 10,
+    "failed": 0,
+    "interrupted": 0,
+    "integrity_failed": 0,
+    "unlaunched": 4,
+    "reported_tokens": 31169606,
+    "attempts": 88,
+    "seconds": 9095.5,
+    "api_price_counterfactual_usd": 159.77,
+    "jev_decision_tokens": 26698,
+    "jev_decisions": 14
+  },
+  "usage_by_model": {
+    "claude:fable": {
+      "calls": 15,
+      "input_tokens": 3690545,
+      "output_tokens": 63241,
+      "seconds": 1009.4
+    },
+    "openai:gpt-5.6-sol": {
+      "calls": 18,
+      "input_tokens": 1782496,
+      "output_tokens": 18647,
+      "seconds": 731.0
+    },
+    "claude:opus": {
+      "calls": 24,
+      "input_tokens": 18917413,
+      "output_tokens": 383447,
+      "seconds": 4657.8
+    },
+    "grok:default": {
+      "calls": 12,
+      "input_tokens": 5815637,
+      "output_tokens": 170522,
+      "seconds": 2493.8
+    },
+    "openai:gpt-5.6-luna": {
+      "calls": 3,
+      "input_tokens": 103595,
+      "output_tokens": 4156,
+      "seconds": 100.1
+    },
+    "claude:sonnet": {
+      "calls": 2,
+      "input_tokens": 188693,
+      "output_tokens": 4516,
+      "seconds": 41.0
+    }
+  },
+  "comparability": [
+    {
+      "task": "f1-preview-errors",
+      "comparable_as_jev_vs_rule_evidence": false,
+      "reasons": [
+        "an assigned lead (claude:opus) was denied every project Edit/Write: rule t2 (3 denials), rule t2 (4 denials)"
+      ],
+      "grade": {
+        "jev": 2,
+        "rule": 2,
+        "total": 4
+      },
+      "tasks_closed": {
+        "jev": 0,
+        "rule": 1
+      }
+    },
+    {
+      "task": "f2-project-search",
+      "comparable_as_jev_vs_rule_evidence": true,
+      "reasons": [],
+      "grade": {
+        "jev": 4,
+        "rule": 4,
+        "total": 5
+      },
+      "tasks_closed": {
+        "jev": 0,
+        "rule": 0
+      }
+    },
+    {
+      "task": "f3-project-rename",
+      "comparable_as_jev_vs_rule_evidence": false,
+      "reasons": [
+        "an assigned lead (claude:opus) was denied every project Edit/Write: rule t2 (3 denials), rule t2 (4 denials), rule t2 (4 denials), rule t2 (3 denials)"
+      ],
+      "grade": {
+        "jev": 3,
+        "rule": 2,
+        "total": 5
+      },
+      "tasks_closed": {
+        "jev": 1,
+        "rule": 1
+      }
+    },
+    {
+      "task": "f4-tags-export",
+      "comparable_as_jev_vs_rule_evidence": false,
+      "reasons": [
+        "an assigned lead (claude:opus) was denied every project Edit/Write: rule t1 (3 denials), rule t1 (3 denials), rule t1 (4 denials), rule t1 (3 denials)"
+      ],
+      "grade": {
+        "jev": 5,
+        "rule": 1,
+        "total": 6
+      },
+      "tasks_closed": {
+        "jev": 1,
+        "rule": 0
+      }
+    },
+    {
+      "task": "f5-empty-state",
+      "comparable_as_jev_vs_rule_evidence": false,
+      "reasons": [
+        "a grade was withheld by the hold's integrity check"
+      ],
+      "grade": {
+        "jev": null,
+        "rule": 4,
+        "total": 4
+      },
+      "tasks_closed": {
+        "jev": 0,
+        "rule": 0
+      }
+    },
+    {
+      "task": "f6-download-guard",
+      "comparable_as_jev_vs_rule_evidence": false,
+      "reasons": [
+        "not both executed"
+      ],
+      "grade": {
+        "jev": null,
+        "rule": null,
+        "total": null
+      },
+      "tasks_closed": {
+        "jev": null,
+        "rule": null
+      }
+    },
+    {
+      "task": "f7-projects-migration",
+      "comparable_as_jev_vs_rule_evidence": false,
+      "reasons": [
+        "not both executed"
+      ],
+      "grade": {
+        "jev": null,
+        "rule": null,
+        "total": null
+      },
+      "tasks_closed": {
+        "jev": null,
+        "rule": null
+      }
+    }
+  ],
+  "cells": [
+    {
+      "name": "f1-preview-errors/jev-r0",
+      "task": "f1-preview-errors",
+      "arm": "jev",
+      "state": "ran",
+      "started_at": "2026-10-03T11:49:17Z",
+      "finished_at": "2026-10-03T12:03:26Z",
+      "seconds": 849.1,
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "error": null,
+      "integrity": null,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f1-preview-errors/jev-r0",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f1-preview-errors/jev-r0/.quadratus/runs/20261003T114917Z-e599b988",
+      "grade": {
+        "passed": 2,
+        "total": 4,
+        "requirements": {
+          "R1": "pass",
+          "R2": "fail",
+          "R3": "fail",
+          "R4": "pass"
+        }
+      },
+      "engine": {
+        "run_id": "20261003T114917Z-e599b988",
+        "completed": false,
+        "error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+        "stop_reason": "reported_token_threshold",
+        "attempts": 6,
+        "reported_tokens": 4020087,
+        "input_tokens": 3950338,
+        "output_tokens": 69749,
+        "unknown_usage_attempts": 0,
+        "tasks": 0,
+        "failed_tasks": [],
+        "turn_limited_tasks": [],
+        "checks": [],
+        "design_checks": [],
+        "requirements_status": {},
+        "audits": [],
+        "survey": {
+          "unique_causes": [],
+          "recovered": [],
+          "open": [],
+          "repeats": [],
+          "allowance_spent": null
+        },
+        "hypotheses": [],
+        "api_price_counterfactual_usd": 21.6786
+      },
+      "jev_decisions": [
+        {
+          "task": "t1",
+          "decision": "task.kind",
+          "answer": "backend",
+          "confidence": 0.98,
+          "probabilities": "{\"architect\": 0.0, \"backend\": 0.99, \"bulk\": 0.0, \"comprehend\": 0.0, \"concurrency\": 0.0, \"data\": 0.0, \"debug\": 0.0, \"decompose\": 0.0, \"docs\": 0.0, \"frontend\": 0.0, \"general\": 0.01, \"glue\": 0.0, \"iac\": 0.0, \"mobile\": 0.0, \"perf\": 0.0, \"refactor\": 0.0, \"review\": 0.0, \"scope\": 0.0, \"security\": 0.0, \"test\": 0.0}",
+          "model": "jev-1.13.0",
+          "input_tokens": 2092,
+          "output_tokens": 168,
+          "error": null
+        },
+        {
+          "task": "t1",
+          "decision": "task.difficulty",
+          "answer": "standard",
+          "confidence": 0.54,
+          "probabilities": "{\"complex\": 0.01, \"rote\": 0.0, \"simple\": 0.33, \"standard\": 0.66}",
+          "model": "jev-1.13.0",
+          "input_tokens": 1445,
+          "output_tokens": 49,
+          "error": null
+        }
+      ],
+      "calls": [
+        {
+          "task": "run",
+          "role": "orchestrator",
+          "model": "claude:fable",
+          "resolved": "claude-fable-5-1",
+          "input_tokens": 231806,
+          "output_tokens": 4137,
+          "seconds": 55.5
+        },
+        {
+          "task": "plan",
+          "role": "requirements-review",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 17484,
+          "output_tokens": 6,
+          "seconds": 8.5
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 256606,
+          "output_tokens": 1889,
+          "seconds": 64.7
+        },
+        {
+          "task": "t1",
+          "role": "collaborator",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 3440905,
+          "output_tokens": 63500,
+          "seconds": 719.3
+        }
+      ],
+      "claude_lead_calls": []
+    },
+    {
+      "name": "f1-preview-errors/rule-r0",
+      "task": "f1-preview-errors",
+      "arm": "rule",
+      "state": "ran",
+      "started_at": "2026-10-03T11:49:17Z",
+      "finished_at": "2026-10-03T12:08:10Z",
+      "seconds": 1133.1,
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "error": null,
+      "integrity": null,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f1-preview-errors/rule-r0",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f1-preview-errors/rule-r0/.quadratus/runs/20261003T114917Z-22462685",
+      "grade": {
+        "passed": 2,
+        "total": 4,
+        "requirements": {
+          "R1": "pass",
+          "R2": "fail",
+          "R3": "fail",
+          "R4": "pass"
+        }
+      },
+      "engine": {
+        "run_id": "20261003T114917Z-22462685",
+        "completed": false,
+        "error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+        "stop_reason": "reported_token_threshold",
+        "attempts": 8,
+        "reported_tokens": 4213187,
+        "input_tokens": 4128017,
+        "output_tokens": 85170,
+        "unknown_usage_attempts": 0,
+        "tasks": 1,
+        "failed_tasks": [],
+        "turn_limited_tasks": [],
+        "checks": [
+          true
+        ],
+        "design_checks": [],
+        "requirements_status": {
+          "R1": "covered by t1"
+        },
+        "audits": [],
+        "survey": {
+          "unique_causes": [],
+          "recovered": [],
+          "open": [],
+          "repeats": [],
+          "allowance_spent": null
+        },
+        "hypotheses": [],
+        "api_price_counterfactual_usd": 23.4656
+      },
+      "jev_decisions": [],
+      "calls": [
+        {
+          "task": "run",
+          "role": "orchestrator",
+          "model": "claude:fable",
+          "resolved": "claude-fable-5-1",
+          "input_tokens": 230708,
+          "output_tokens": 4513,
+          "seconds": 79.5
+        },
+        {
+          "task": "plan",
+          "role": "requirements-review",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 17461,
+          "output_tokens": 218,
+          "seconds": 11.4
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "model": "grok:default",
+          "resolved": null,
+          "input_tokens": 622437,
+          "output_tokens": 17755,
+          "seconds": 280.4
+        },
+        {
+          "task": "t1",
+          "role": "closeout",
+          "model": "grok:default",
+          "resolved": null,
+          "input_tokens": 10083,
+          "output_tokens": 875,
+          "seconds": 13.1
+        },
+        {
+          "task": "run",
+          "role": "orchestrator",
+          "model": "claude:fable",
+          "resolved": "claude-fable-5-1",
+          "input_tokens": 345387,
+          "output_tokens": 5755,
+          "seconds": 98.3
+        },
+        {
+          "task": "t2",
+          "role": "lead",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 1044320,
+          "output_tokens": 24315,
+          "seconds": 272.9
+        },
+        {
+          "task": "t2",
+          "role": "worker:format-1",
+          "model": "openai:gpt-5.6-luna",
+          "resolved": null,
+          "input_tokens": 22768,
+          "output_tokens": 544,
+          "seconds": 20.8
+        },
+        {
+          "task": "t2",
+          "role": "lead",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 1834853,
+          "output_tokens": 31195,
+          "seconds": 350.6
+        }
+      ],
+      "claude_lead_calls": [
+        {
+          "task": "t2",
+          "role": "lead",
+          "invocation": "3cab41762c0b46c1b682d06d3892805c",
+          "model": "claude:opus",
+          "denied_edits": 3,
+          "files_written": 0,
+          "denied_paths": [
+            ".quadratus/capture-fixtures/t2/malformed.csv",
+            "templates/index.html"
+          ]
+        },
+        {
+          "task": "t2",
+          "role": "lead",
+          "invocation": "c39e29271e1b4fbe8e81002e2dabe71f",
+          "model": "claude:opus",
+          "denied_edits": 4,
+          "files_written": 1,
+          "denied_paths": [
+            ".quadratus/capture-fixtures/t2/malformed.csv",
+            "static/js/app.js",
+            "templates/index.html"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "f2-project-search/rule-r0",
+      "task": "f2-project-search",
+      "arm": "rule",
+      "state": "ran",
+      "started_at": "2026-10-03T12:08:25Z",
+      "finished_at": "2026-10-03T12:23:28Z",
+      "seconds": 902.6,
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "error": null,
+      "integrity": null,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f2-project-search/rule-r0",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f2-project-search/rule-r0/.quadratus/runs/20261003T120825Z-e841d40d",
+      "grade": {
+        "passed": 4,
+        "total": 5,
+        "requirements": {
+          "R1": "pass",
+          "R2": "pass",
+          "R3": "fail",
+          "R4": "pass",
+          "R5": "pass"
+        }
+      },
+      "engine": {
+        "run_id": "20261003T120825Z-e841d40d",
+        "completed": false,
+        "error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+        "stop_reason": "reported_token_threshold",
+        "attempts": 6,
+        "reported_tokens": 2548169,
+        "input_tokens": 2480626,
+        "output_tokens": 67543,
+        "unknown_usage_attempts": 0,
+        "tasks": 0,
+        "failed_tasks": [],
+        "turn_limited_tasks": [],
+        "checks": [],
+        "design_checks": [],
+        "requirements_status": {},
+        "audits": [],
+        "survey": {
+          "unique_causes": [],
+          "recovered": [],
+          "open": [],
+          "repeats": [],
+          "allowance_spent": null
+        },
+        "hypotheses": [],
+        "api_price_counterfactual_usd": 11.0592
+      },
+      "jev_decisions": [],
+      "calls": [
+        {
+          "task": "run",
+          "role": "orchestrator",
+          "model": "claude:fable",
+          "resolved": "claude-fable-5-1",
+          "input_tokens": 272544,
+          "output_tokens": 6470,
+          "seconds": 109.9
+        },
+        {
+          "task": "plan",
+          "role": "requirements-review",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 20290,
+          "output_tokens": 204,
+          "seconds": 10.7
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "model": "grok:default",
+          "resolved": null,
+          "input_tokens": 648445,
+          "output_tokens": 17818,
+          "seconds": 261.9
+        },
+        {
+          "task": "t1",
+          "role": "collaborator",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 881886,
+          "output_tokens": 17422,
+          "seconds": 245.9
+        },
+        {
+          "task": "t1",
+          "role": "revision",
+          "model": "grok:default",
+          "resolved": null,
+          "input_tokens": 572975,
+          "output_tokens": 25000,
+          "seconds": 261.9
+        },
+        {
+          "task": "t1",
+          "role": "recheck",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 84486,
+          "output_tokens": 629,
+          "seconds": 11.9
+        }
+      ],
+      "claude_lead_calls": []
+    },
+    {
+      "name": "f2-project-search/jev-r0",
+      "task": "f2-project-search",
+      "arm": "jev",
+      "state": "ran",
+      "started_at": "2026-10-03T12:08:25Z",
+      "finished_at": "2026-10-03T12:25:55Z",
+      "seconds": 1050.0,
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "error": null,
+      "integrity": null,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f2-project-search/jev-r0",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f2-project-search/jev-r0/.quadratus/runs/20261003T120825Z-321860d7",
+      "grade": {
+        "passed": 4,
+        "total": 5,
+        "requirements": {
+          "R1": "pass",
+          "R2": "pass",
+          "R3": "fail",
+          "R4": "pass",
+          "R5": "pass"
+        }
+      },
+      "engine": {
+        "run_id": "20261003T120825Z-321860d7",
+        "completed": false,
+        "error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+        "stop_reason": "reported_token_threshold",
+        "attempts": 8,
+        "reported_tokens": 2790804,
+        "input_tokens": 2716870,
+        "output_tokens": 73934,
+        "unknown_usage_attempts": 0,
+        "tasks": 0,
+        "failed_tasks": [],
+        "turn_limited_tasks": [],
+        "checks": [
+          true
+        ],
+        "design_checks": [],
+        "requirements_status": {},
+        "audits": [],
+        "survey": {
+          "unique_causes": [],
+          "recovered": [],
+          "open": [],
+          "repeats": [],
+          "allowance_spent": null
+        },
+        "hypotheses": [],
+        "api_price_counterfactual_usd": 11.4691
+      },
+      "jev_decisions": [
+        {
+          "task": "t1",
+          "decision": "task.kind",
+          "answer": "frontend",
+          "confidence": 1.0,
+          "probabilities": "{\"architect\": 0.0, \"backend\": 0.0, \"bulk\": 0.0, \"comprehend\": 0.0, \"concurrency\": 0.0, \"data\": 0.0, \"debug\": 0.0, \"decompose\": 0.0, \"docs\": 0.0, \"frontend\": 1.0, \"general\": 0.0, \"glue\": 0.0, \"iac\": 0.0, \"mobile\": 0.0, \"perf\": 0.0, \"refactor\": 0.0, \"review\": 0.0, \"scope\": 0.0, \"security\": 0.0, \"test\": 0.0}",
+          "model": "jev-1.13.0",
+          "input_tokens": 2106,
+          "output_tokens": 168,
+          "error": null
+        },
+        {
+          "task": "t1",
+          "decision": "task.difficulty",
+          "answer": "simple",
+          "confidence": 0.54,
+          "probabilities": "{\"complex\": 0.0, \"rote\": 0.02, \"simple\": 0.65, \"standard\": 0.33}",
+          "model": "jev-1.13.0",
+          "input_tokens": 1459,
+          "output_tokens": 49,
+          "error": null
+        }
+      ],
+      "calls": [
+        {
+          "task": "run",
+          "role": "orchestrator",
+          "model": "claude:fable",
+          "resolved": "claude-fable-5-1",
+          "input_tokens": 210814,
+          "output_tokens": 4719,
+          "seconds": 74.8
+        },
+        {
+          "task": "plan",
+          "role": "requirements-review",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 20277,
+          "output_tokens": 28,
+          "seconds": 15.7
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "model": "grok:default",
+          "resolved": null,
+          "input_tokens": 534980,
+          "output_tokens": 19271,
+          "seconds": 231.2
+        },
+        {
+          "task": "t1",
+          "role": "collaborator",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 784910,
+          "output_tokens": 15543,
+          "seconds": 214.8
+        },
+        {
+          "task": "t1",
+          "role": "revision",
+          "model": "grok:default",
+          "resolved": null,
+          "input_tokens": 820275,
+          "output_tokens": 31797,
+          "seconds": 454.8
+        },
+        {
+          "task": "t1",
+          "role": "design-review",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 342049,
+          "output_tokens": 2359,
+          "seconds": 42.9
+        }
+      ],
+      "claude_lead_calls": []
+    },
+    {
+      "name": "f3-project-rename/jev-r0",
+      "task": "f3-project-rename",
+      "arm": "jev",
+      "state": "ran",
+      "started_at": "2026-10-03T12:26:06Z",
+      "finished_at": "2026-10-03T12:44:32Z",
+      "seconds": 1105.7,
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "error": null,
+      "integrity": null,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f3-project-rename/jev-r0",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f3-project-rename/jev-r0/.quadratus/runs/20261003T122606Z-57397da3",
+      "grade": {
+        "passed": 3,
+        "total": 5,
+        "requirements": {
+          "R1": "fail",
+          "R2": "pass",
+          "R3": "fail",
+          "R4": "pass",
+          "R5": "pass"
+        }
+      },
+      "engine": {
+        "run_id": "20261003T122606Z-57397da3",
+        "completed": false,
+        "error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+        "stop_reason": "reported_token_threshold",
+        "attempts": 14,
+        "reported_tokens": 2645558,
+        "input_tokens": 2589395,
+        "output_tokens": 56163,
+        "unknown_usage_attempts": 0,
+        "tasks": 1,
+        "failed_tasks": [],
+        "turn_limited_tasks": [],
+        "checks": [
+          true,
+          true
+        ],
+        "design_checks": [],
+        "requirements_status": {
+          "R1": "covered by t1",
+          "R2": "covered by t1",
+          "R4": "covered by t1",
+          "R5": "covered by t1"
+        },
+        "audits": [],
+        "survey": {
+          "unique_causes": [],
+          "recovered": [],
+          "open": [],
+          "repeats": [],
+          "allowance_spent": null
+        },
+        "hypotheses": [],
+        "api_price_counterfactual_usd": 12.9287
+      },
+      "jev_decisions": [
+        {
+          "task": "t1",
+          "decision": "task.kind",
+          "answer": "backend",
+          "confidence": 0.97,
+          "probabilities": "{\"architect\": 0.0, \"backend\": 0.98, \"bulk\": 0.0, \"comprehend\": 0.0, \"concurrency\": 0.01, \"data\": 0.0, \"debug\": 0.0, \"decompose\": 0.0, \"docs\": 0.0, \"frontend\": 0.0, \"general\": 0.0, \"glue\": 0.0, \"iac\": 0.0, \"mobile\": 0.0, \"perf\": 0.0, \"refactor\": 0.0, \"review\": 0.0, \"scope\": 0.0, \"security\": 0.01, \"test\": 0.0}",
+          "model": "jev-1.13.0",
+          "input_tokens": 2114,
+          "output_tokens": 168,
+          "error": null
+        },
+        {
+          "task": "t1",
+          "decision": "task.difficulty",
+          "answer": "simple",
+          "confidence": 0.6,
+          "probabilities": "{\"complex\": 0.0, \"rote\": 0.0, \"simple\": 0.71, \"standard\": 0.29}",
+          "model": "jev-1.13.0",
+          "input_tokens": 1467,
+          "output_tokens": 49,
+          "error": null
+        },
+        {
+          "task": "t2",
+          "decision": "task.kind",
+          "answer": "frontend",
+          "confidence": 1.0,
+          "probabilities": "{\"architect\": 0.0, \"backend\": 0.0, \"bulk\": 0.0, \"comprehend\": 0.0, \"concurrency\": 0.0, \"data\": 0.0, \"debug\": 0.0, \"decompose\": 0.0, \"docs\": 0.0, \"frontend\": 1.0, \"general\": 0.0, \"glue\": 0.0, \"iac\": 0.0, \"mobile\": 0.0, \"perf\": 0.0, \"refactor\": 0.0, \"review\": 0.0, \"scope\": 0.0, \"security\": 0.0, \"test\": 0.0}",
+          "model": "jev-1.13.0",
+          "input_tokens": 2366,
+          "output_tokens": 168,
+          "error": null
+        },
+        {
+          "task": "t2",
+          "decision": "task.difficulty",
+          "answer": "standard",
+          "confidence": 0.88,
+          "probabilities": "{\"complex\": 0.01, \"rote\": 0.0, \"simple\": 0.08, \"standard\": 0.91}",
+          "model": "jev-1.13.0",
+          "input_tokens": 1719,
+          "output_tokens": 49,
+          "error": null
+        }
+      ],
+      "calls": [
+        {
+          "task": "run",
+          "role": "orchestrator",
+          "model": "claude:fable",
+          "resolved": "claude-fable-5-1",
+          "input_tokens": 207630,
+          "output_tokens": 3472,
+          "seconds": 51.9
+        },
+        {
+          "task": "plan",
+          "role": "requirements-review",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 17502,
+          "output_tokens": 6,
+          "seconds": 5.8
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "model": "grok:default",
+          "resolved": null,
+          "input_tokens": 353910,
+          "output_tokens": 10413,
+          "seconds": 273.0
+        },
+        {
+          "task": "t1",
+          "role": "closeout",
+          "model": "grok:default",
+          "resolved": null,
+          "input_tokens": 10676,
+          "output_tokens": 801,
+          "seconds": 10.0
+        },
+        {
+          "task": "run",
+          "role": "orchestrator",
+          "model": "claude:fable",
+          "resolved": "claude-fable-5-1",
+          "input_tokens": 214634,
+          "output_tokens": 3578,
+          "seconds": 50.4
+        },
+        {
+          "task": "t2",
+          "role": "lead",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 343087,
+          "output_tokens": 2793,
+          "seconds": 91.4
+        },
+        {
+          "task": "t2",
+          "role": "collaborator",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 744514,
+          "output_tokens": 27401,
+          "seconds": 393.8
+        },
+        {
+          "task": "t2",
+          "role": "revision",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 244319,
+          "output_tokens": 2925,
+          "seconds": 138.8
+        },
+        {
+          "task": "t2",
+          "role": "recheck",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 163992,
+          "output_tokens": 543,
+          "seconds": 16.5
+        },
+        {
+          "task": "t2",
+          "role": "design-review",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 281465,
+          "output_tokens": 3797,
+          "seconds": 51.1
+        }
+      ],
+      "claude_lead_calls": []
+    },
+    {
+      "name": "f3-project-rename/rule-r0",
+      "task": "f3-project-rename",
+      "arm": "rule",
+      "state": "ran",
+      "started_at": "2026-10-03T12:26:06Z",
+      "finished_at": "2026-10-03T12:40:34Z",
+      "seconds": 868.3,
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "error": null,
+      "integrity": null,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f3-project-rename/rule-r0",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f3-project-rename/rule-r0/.quadratus/runs/20261003T122606Z-3a03f56f",
+      "grade": {
+        "passed": 2,
+        "total": 5,
+        "requirements": {
+          "R1": "fail",
+          "R2": "pass",
+          "R3": "fail",
+          "R4": "pass",
+          "R5": "fail"
+        }
+      },
+      "engine": {
+        "run_id": "20261003T122606Z-3a03f56f",
+        "completed": false,
+        "error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+        "stop_reason": "reported_token_threshold",
+        "attempts": 12,
+        "reported_tokens": 2825410,
+        "input_tokens": 2751952,
+        "output_tokens": 73458,
+        "unknown_usage_attempts": 0,
+        "tasks": 1,
+        "failed_tasks": [],
+        "turn_limited_tasks": [],
+        "checks": [
+          true
+        ],
+        "design_checks": [],
+        "requirements_status": {
+          "R1": "covered by t1",
+          "R2": "covered by t1",
+          "R4": "covered by t1"
+        },
+        "audits": [],
+        "survey": {
+          "unique_causes": [],
+          "recovered": [],
+          "open": [],
+          "repeats": [],
+          "allowance_spent": null
+        },
+        "hypotheses": [],
+        "api_price_counterfactual_usd": 15.5488
+      },
+      "jev_decisions": [],
+      "calls": [
+        {
+          "task": "run",
+          "role": "orchestrator",
+          "model": "claude:fable",
+          "resolved": "claude-fable-5-1",
+          "input_tokens": 154044,
+          "output_tokens": 2489,
+          "seconds": 31.8
+        },
+        {
+          "task": "plan",
+          "role": "requirements-review",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 20295,
+          "output_tokens": 6,
+          "seconds": 6.6
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "model": "grok:default",
+          "resolved": null,
+          "input_tokens": 184312,
+          "output_tokens": 11070,
+          "seconds": 147.2
+        },
+        {
+          "task": "t1",
+          "role": "closeout",
+          "model": "grok:default",
+          "resolved": null,
+          "input_tokens": 10199,
+          "output_tokens": 1481,
+          "seconds": 22.9
+        },
+        {
+          "task": "run",
+          "role": "orchestrator",
+          "model": "claude:fable",
+          "resolved": "claude-fable-5-1",
+          "input_tokens": 159075,
+          "output_tokens": 3456,
+          "seconds": 59.4
+        },
+        {
+          "task": "t2",
+          "role": "lead",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 504510,
+          "output_tokens": 13216,
+          "seconds": 138.2
+        },
+        {
+          "task": "t2",
+          "role": "worker:format-1",
+          "model": "openai:gpt-5.6-luna",
+          "resolved": null,
+          "input_tokens": 41097,
+          "output_tokens": 1495,
+          "seconds": 33.6
+        },
+        {
+          "task": "t2",
+          "role": "lead",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 483770,
+          "output_tokens": 11052,
+          "seconds": 123.1
+        },
+        {
+          "task": "t2",
+          "role": "worker:code-2",
+          "model": "claude:sonnet",
+          "resolved": "claude-sonnet-5",
+          "input_tokens": 94288,
+          "output_tokens": 2351,
+          "seconds": 20.8
+        },
+        {
+          "task": "t2",
+          "role": "lead",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 348148,
+          "output_tokens": 10551,
+          "seconds": 104.1
+        },
+        {
+          "task": "t2",
+          "role": "worker:code-3",
+          "model": "claude:sonnet",
+          "resolved": "claude-sonnet-5",
+          "input_tokens": 94405,
+          "output_tokens": 2165,
+          "seconds": 20.2
+        },
+        {
+          "task": "t2",
+          "role": "lead",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 657809,
+          "output_tokens": 14126,
+          "seconds": 153.9
+        }
+      ],
+      "claude_lead_calls": [
+        {
+          "task": "t2",
+          "role": "lead",
+          "invocation": "bbffbeafb92f4823b965149a76d6af53",
+          "model": "claude:opus",
+          "denied_edits": 3,
+          "files_written": 0,
+          "denied_paths": [
+            "static/css/style.css",
+            "static/js/app.js"
+          ]
+        },
+        {
+          "task": "t2",
+          "role": "lead",
+          "invocation": "72bc43138d6644e1bc783c501d0e656a",
+          "model": "claude:opus",
+          "denied_edits": 4,
+          "files_written": 0,
+          "denied_paths": [
+            "static/css/style.css",
+            "static/js/app.js"
+          ]
+        },
+        {
+          "task": "t2",
+          "role": "lead",
+          "invocation": "862843c90e61475ea4c60be726b564d5",
+          "model": "claude:opus",
+          "denied_edits": 4,
+          "files_written": 0,
+          "denied_paths": [
+            "static/css/style.css",
+            "static/js/app.js"
+          ]
+        },
+        {
+          "task": "t2",
+          "role": "lead",
+          "invocation": "9ad05bde71bb4988ada8d265a9b91313",
+          "model": "claude:opus",
+          "denied_edits": 3,
+          "files_written": 1,
+          "denied_paths": [
+            "static/css/style.css",
+            "static/js/app.js"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "f4-tags-export/rule-r0",
+      "task": "f4-tags-export",
+      "arm": "rule",
+      "state": "ran",
+      "started_at": "2026-10-03T12:44:36Z",
+      "finished_at": "2026-10-03T12:57:32Z",
+      "seconds": 775.7,
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "error": null,
+      "integrity": null,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f4-tags-export/rule-r0",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f4-tags-export/rule-r0/.quadratus/runs/20261003T124436Z-f9125ef0",
+      "grade": {
+        "passed": 1,
+        "total": 6,
+        "requirements": {
+          "R1": "fail",
+          "R2": "fail",
+          "R3": "fail",
+          "R4": "fail",
+          "R5": "fail",
+          "R6": "pass"
+        }
+      },
+      "engine": {
+        "run_id": "20261003T124436Z-f9125ef0",
+        "completed": false,
+        "error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+        "stop_reason": "reported_token_threshold",
+        "attempts": 8,
+        "reported_tokens": 2651907,
+        "input_tokens": 2586670,
+        "output_tokens": 65237,
+        "unknown_usage_attempts": 0,
+        "tasks": 0,
+        "failed_tasks": [],
+        "turn_limited_tasks": [],
+        "checks": [],
+        "design_checks": [],
+        "requirements_status": {},
+        "audits": [],
+        "survey": {
+          "unique_causes": [],
+          "recovered": [],
+          "open": [],
+          "repeats": [],
+          "allowance_spent": null
+        },
+        "hypotheses": [],
+        "api_price_counterfactual_usd": 16.5344
+      },
+      "jev_decisions": [],
+      "calls": [
+        {
+          "task": "run",
+          "role": "orchestrator",
+          "model": "claude:fable",
+          "resolved": "claude-fable-5-1",
+          "input_tokens": 274211,
+          "output_tokens": 5899,
+          "seconds": 82.0
+        },
+        {
+          "task": "plan",
+          "role": "requirements-review",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 41277,
+          "output_tokens": 321,
+          "seconds": 17.4
+        },
+        {
+          "task": "run",
+          "role": "orchestrator",
+          "model": "claude:fable",
+          "resolved": "claude-fable-5-1",
+          "input_tokens": 154146,
+          "output_tokens": 3116,
+          "seconds": 51.4
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 483875,
+          "output_tokens": 15677,
+          "seconds": 163.6
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 631407,
+          "output_tokens": 17668,
+          "seconds": 182.7
+        },
+        {
+          "task": "t1",
+          "role": "worker:format-1",
+          "model": "openai:gpt-5.6-luna",
+          "resolved": null,
+          "input_tokens": 39730,
+          "output_tokens": 2117,
+          "seconds": 45.7
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 537932,
+          "output_tokens": 13445,
+          "seconds": 154.2
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 424092,
+          "output_tokens": 6994,
+          "seconds": 78.2
+        }
+      ],
+      "claude_lead_calls": [
+        {
+          "task": "t1",
+          "role": "lead",
+          "invocation": "20bc172df9e649c0ab3b03308c43d56b",
+          "model": "claude:opus",
+          "denied_edits": 3,
+          "files_written": 0,
+          "denied_paths": [
+            "app.py",
+            "tests/test_export_manifest.py"
+          ]
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "invocation": "5bf5df2f3f58440d9eaa260b714710b9",
+          "model": "claude:opus",
+          "denied_edits": 3,
+          "files_written": 0,
+          "denied_paths": [
+            "app.py",
+            "tests/test_export_manifest.py"
+          ]
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "invocation": "9f20f3bc97a94fa283561de62ad96166",
+          "model": "claude:opus",
+          "denied_edits": 4,
+          "files_written": 0,
+          "denied_paths": [
+            "app.py",
+            "tests/test_export_manifest.py"
+          ]
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "invocation": "3b78d76688ed4197893210e5b5ceb2db",
+          "model": "claude:opus",
+          "denied_edits": 3,
+          "files_written": 0,
+          "denied_paths": [
+            "app.py",
+            "tests/test_export_manifest.py"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "f4-tags-export/jev-r0",
+      "task": "f4-tags-export",
+      "arm": "jev",
+      "state": "ran",
+      "started_at": "2026-10-03T12:44:36Z",
+      "finished_at": "2026-10-03T12:58:37Z",
+      "seconds": 841.2,
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "error": null,
+      "integrity": null,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f4-tags-export/jev-r0",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f4-tags-export/jev-r0/.quadratus/runs/20261003T124436Z-6d259913",
+      "grade": {
+        "passed": 5,
+        "total": 6,
+        "requirements": {
+          "R1": "pass",
+          "R2": "pass",
+          "R3": "pass",
+          "R4": "fail",
+          "R5": "pass",
+          "R6": "pass"
+        }
+      },
+      "engine": {
+        "run_id": "20261003T124436Z-6d259913",
+        "completed": false,
+        "error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+        "stop_reason": "reported_token_threshold",
+        "attempts": 16,
+        "reported_tokens": 2678813,
+        "input_tokens": 2636917,
+        "output_tokens": 41896,
+        "unknown_usage_attempts": 0,
+        "tasks": 1,
+        "failed_tasks": [],
+        "turn_limited_tasks": [],
+        "checks": [
+          true
+        ],
+        "design_checks": [],
+        "requirements_status": {
+          "R1": "covered by t1",
+          "R2": "covered by t1",
+          "R3": "covered by t1",
+          "R4": "covered by t1",
+          "R6": "covered by t1"
+        },
+        "audits": [],
+        "survey": {
+          "unique_causes": [],
+          "recovered": [],
+          "open": [],
+          "repeats": [],
+          "allowance_spent": null
+        },
+        "hypotheses": [],
+        "api_price_counterfactual_usd": 14.8196
+      },
+      "jev_decisions": [
+        {
+          "task": "t1",
+          "decision": "task.kind",
+          "answer": "backend",
+          "confidence": 1.0,
+          "probabilities": "{\"architect\": 0.0, \"backend\": 1.0, \"bulk\": 0.0, \"comprehend\": 0.0, \"concurrency\": 0.0, \"data\": 0.0, \"debug\": 0.0, \"decompose\": 0.0, \"docs\": 0.0, \"frontend\": 0.0, \"general\": 0.0, \"glue\": 0.0, \"iac\": 0.0, \"mobile\": 0.0, \"perf\": 0.0, \"refactor\": 0.0, \"review\": 0.0, \"scope\": 0.0, \"security\": 0.0, \"test\": 0.0}",
+          "model": "jev-1.13.0",
+          "input_tokens": 2358,
+          "output_tokens": 168,
+          "error": null
+        },
+        {
+          "task": "t1",
+          "decision": "task.difficulty",
+          "answer": "standard",
+          "confidence": 0.66,
+          "probabilities": "{\"complex\": 0.0, \"rote\": 0.0, \"simple\": 0.25, \"standard\": 0.75}",
+          "model": "jev-1.13.0",
+          "input_tokens": 1711,
+          "output_tokens": 49,
+          "error": null
+        },
+        {
+          "task": "t2",
+          "decision": "task.kind",
+          "answer": "test",
+          "confidence": 1.0,
+          "probabilities": "{\"architect\": 0.0, \"backend\": 0.0, \"bulk\": 0.0, \"comprehend\": 0.0, \"concurrency\": 0.0, \"data\": 0.0, \"debug\": 0.0, \"decompose\": 0.0, \"docs\": 0.0, \"frontend\": 0.0, \"general\": 0.0, \"glue\": 0.0, \"iac\": 0.0, \"mobile\": 0.0, \"perf\": 0.0, \"refactor\": 0.0, \"review\": 0.0, \"scope\": 0.0, \"security\": 0.0, \"test\": 1.0}",
+          "model": "jev-1.13.0",
+          "input_tokens": 1797,
+          "output_tokens": 168,
+          "error": null
+        },
+        {
+          "task": "t2",
+          "decision": "task.difficulty",
+          "answer": "standard",
+          "confidence": 0.53,
+          "probabilities": "{\"complex\": 0.0, \"rote\": 0.01, \"simple\": 0.34, \"standard\": 0.65}",
+          "model": "jev-1.13.0",
+          "input_tokens": 1150,
+          "output_tokens": 49,
+          "error": null
+        }
+      ],
+      "calls": [
+        {
+          "task": "run",
+          "role": "orchestrator",
+          "model": "claude:fable",
+          "resolved": "claude-fable-5-1",
+          "input_tokens": 377357,
+          "output_tokens": 4217,
+          "seconds": 99.2
+        },
+        {
+          "task": "plan",
+          "role": "requirements-review",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 17495,
+          "output_tokens": 6,
+          "seconds": 7.1
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 271713,
+          "output_tokens": 5386,
+          "seconds": 158.9
+        },
+        {
+          "task": "t1",
+          "role": "collaborator",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 448923,
+          "output_tokens": 9795,
+          "seconds": 136.3
+        },
+        {
+          "task": "t1",
+          "role": "revision",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 137815,
+          "output_tokens": 1634,
+          "seconds": 56.9
+        },
+        {
+          "task": "t1",
+          "role": "recheck",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 107612,
+          "output_tokens": 1572,
+          "seconds": 23.7
+        },
+        {
+          "task": "t1",
+          "role": "revision",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 83085,
+          "output_tokens": 464,
+          "seconds": 26.3
+        },
+        {
+          "task": "t1",
+          "role": "recheck",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 158685,
+          "output_tokens": 1078,
+          "seconds": 19.3
+        },
+        {
+          "task": "t1",
+          "role": "closeout",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 22250,
+          "output_tokens": 586,
+          "seconds": 21.3
+        },
+        {
+          "task": "run",
+          "role": "orchestrator",
+          "model": "claude:fable",
+          "resolved": "claude-fable-5-1",
+          "input_tokens": 297440,
+          "output_tokens": 3850,
+          "seconds": 55.5
+        },
+        {
+          "task": "t2",
+          "role": "lead",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 211329,
+          "output_tokens": 2163,
+          "seconds": 76.5
+        },
+        {
+          "task": "t2",
+          "role": "collaborator",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 496197,
+          "output_tokens": 10711,
+          "seconds": 152.5
+        }
+      ],
+      "claude_lead_calls": []
+    },
+    {
+      "name": "f5-empty-state/jev-r0",
+      "task": "f5-empty-state",
+      "arm": "jev",
+      "state": "ran",
+      "started_at": "2026-10-03T12:58:46Z",
+      "finished_at": "2026-10-03T13:15:34Z",
+      "seconds": 1007.5,
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "error": null,
+      "integrity": "before grading: RuntimeError: the engine checkout /Users/davisfox/Documents/GitHub/quadratus has uncommitted changes; a cell must run on one SHA",
+      "grade_withheld": "RuntimeError: the engine checkout /Users/davisfox/Documents/GitHub/quadratus has uncommitted changes; a cell must run on one SHA",
+      "grade_unverified": false,
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f5-empty-state/jev-r0",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f5-empty-state/jev-r0/.quadratus/runs/20261003T125846Z-fd635af7",
+      "grade": null,
+      "engine": {
+        "run_id": "20261003T125846Z-fd635af7",
+        "completed": false,
+        "error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+        "stop_reason": "reported_token_threshold",
+        "attempts": 6,
+        "reported_tokens": 4248009,
+        "input_tokens": 4171333,
+        "output_tokens": 76676,
+        "unknown_usage_attempts": 0,
+        "tasks": 0,
+        "failed_tasks": [],
+        "turn_limited_tasks": [],
+        "checks": [],
+        "design_checks": [],
+        "requirements_status": {},
+        "audits": [],
+        "survey": {
+          "unique_causes": [],
+          "recovered": [],
+          "open": [],
+          "repeats": [],
+          "allowance_spent": null
+        },
+        "hypotheses": [],
+        "api_price_counterfactual_usd": 19.9612
+      },
+      "jev_decisions": [
+        {
+          "task": "t1",
+          "decision": "task.kind",
+          "answer": "frontend",
+          "confidence": 1.0,
+          "probabilities": "{\"architect\": 0.0, \"backend\": 0.0, \"bulk\": 0.0, \"comprehend\": 0.0, \"concurrency\": 0.0, \"data\": 0.0, \"debug\": 0.0, \"decompose\": 0.0, \"docs\": 0.0, \"frontend\": 1.0, \"general\": 0.0, \"glue\": 0.0, \"iac\": 0.0, \"mobile\": 0.0, \"perf\": 0.0, \"refactor\": 0.0, \"review\": 0.0, \"scope\": 0.0, \"security\": 0.0, \"test\": 0.0}",
+          "model": "jev-1.13.0",
+          "input_tokens": 2021,
+          "output_tokens": 168,
+          "error": null
+        },
+        {
+          "task": "t1",
+          "decision": "task.difficulty",
+          "answer": "simple",
+          "confidence": 0.34,
+          "probabilities": "{\"complex\": 0.0, \"rote\": 0.0, \"simple\": 0.51, \"standard\": 0.49}",
+          "model": "jev-1.13.0",
+          "input_tokens": 1374,
+          "output_tokens": 49,
+          "error": null
+        }
+      ],
+      "calls": [
+        {
+          "task": "run",
+          "role": "orchestrator",
+          "model": "claude:fable",
+          "resolved": "claude-fable-5-1",
+          "input_tokens": 198790,
+          "output_tokens": 3552,
+          "seconds": 44.7
+        },
+        {
+          "task": "plan",
+          "role": "requirements-review",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 20092,
+          "output_tokens": 6,
+          "seconds": 6.3
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "model": "grok:default",
+          "resolved": null,
+          "input_tokens": 1146535,
+          "output_tokens": 18835,
+          "seconds": 285.7
+        },
+        {
+          "task": "t1",
+          "role": "collaborator",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 2802521,
+          "output_tokens": 54066,
+          "seconds": 669.9
+        }
+      ],
+      "claude_lead_calls": []
+    },
+    {
+      "name": "f5-empty-state/rule-r0",
+      "task": "f5-empty-state",
+      "arm": "rule",
+      "state": "ran",
+      "started_at": "2026-10-03T12:58:46Z",
+      "finished_at": "2026-10-03T13:08:08Z",
+      "seconds": 562.3,
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "error": null,
+      "integrity": null,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f5-empty-state/rule-r0",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f5-empty-state/rule-r0/.quadratus/runs/20261003T125846Z-62dfa605",
+      "grade": {
+        "passed": 4,
+        "total": 4,
+        "requirements": {
+          "R1": "pass",
+          "R2": "pass",
+          "R3": "pass",
+          "R4": "pass"
+        }
+      },
+      "engine": {
+        "run_id": "20261003T125846Z-62dfa605",
+        "completed": false,
+        "error": "RunBudgetExceeded: Run stopped: reported_token_threshold",
+        "stop_reason": "reported_token_threshold",
+        "attempts": 4,
+        "reported_tokens": 2547662,
+        "input_tokens": 2511440,
+        "output_tokens": 36222,
+        "unknown_usage_attempts": 0,
+        "tasks": 0,
+        "failed_tasks": [],
+        "turn_limited_tasks": [],
+        "checks": [],
+        "design_checks": [],
+        "requirements_status": {},
+        "audits": [],
+        "survey": {
+          "unique_causes": [],
+          "recovered": [],
+          "open": [],
+          "repeats": [],
+          "allowance_spent": null
+        },
+        "hypotheses": [],
+        "api_price_counterfactual_usd": 12.3023
+      },
+      "jev_decisions": [],
+      "calls": [
+        {
+          "task": "run",
+          "role": "orchestrator",
+          "model": "claude:fable",
+          "resolved": "claude-fable-5-1",
+          "input_tokens": 361959,
+          "output_tokens": 4018,
+          "seconds": 65.1
+        },
+        {
+          "task": "plan",
+          "role": "requirements-review",
+          "model": "openai:gpt-5.6-sol",
+          "resolved": null,
+          "input_tokens": 20119,
+          "output_tokens": 6,
+          "seconds": 6.7
+        },
+        {
+          "task": "t1",
+          "role": "lead",
+          "model": "grok:default",
+          "resolved": null,
+          "input_tokens": 900810,
+          "output_tokens": 15406,
+          "seconds": 251.7
+        },
+        {
+          "task": "t1",
+          "role": "collaborator",
+          "model": "claude:opus",
+          "resolved": "claude-opus-5",
+          "input_tokens": 1228552,
+          "output_tokens": 16792,
+          "seconds": 238.4
+        }
+      ],
+      "claude_lead_calls": []
+    },
+    {
+      "name": "f6-download-guard/rule-r0",
+      "task": "f6-download-guard",
+      "arm": "rule",
+      "state": "prepared",
+      "started_at": null,
+      "finished_at": null,
+      "seconds": null,
+      "engine_sha": null,
+      "error": null,
+      "integrity": null,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f6-download-guard/rule-r0",
+      "run_dir": null,
+      "grade": null
+    },
+    {
+      "name": "f6-download-guard/jev-r0",
+      "task": "f6-download-guard",
+      "arm": "jev",
+      "state": "prepared",
+      "started_at": null,
+      "finished_at": null,
+      "seconds": null,
+      "engine_sha": null,
+      "error": null,
+      "integrity": null,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f6-download-guard/jev-r0",
+      "run_dir": null,
+      "grade": null
+    },
+    {
+      "name": "f7-projects-migration/jev-r0",
+      "task": "f7-projects-migration",
+      "arm": "jev",
+      "state": "prepared",
+      "started_at": null,
+      "finished_at": null,
+      "seconds": null,
+      "engine_sha": null,
+      "error": null,
+      "integrity": null,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f7-projects-migration/jev-r0",
+      "run_dir": null,
+      "grade": null
+    },
+    {
+      "name": "f7-projects-migration/rule-r0",
+      "task": "f7-projects-migration",
+      "arm": "rule",
+      "state": "prepared",
+      "started_at": null,
+      "finished_at": null,
+      "seconds": null,
+      "engine_sha": null,
+      "error": null,
+      "integrity": null,
+      "grade_withheld": null,
+      "grade_unverified": false,
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f7-projects-migration/rule-r0",
+      "run_dir": null,
+      "grade": null
+    }
+  ],
+  "preflight_liveness_ledger": {
+    "purpose": "pre-launch sign-in liveness, one minimal call per vendor CLI; outside the series' cells and bounds; reported apart from coding-cell usage",
+    "at": "2026-10-03T11:40Z to 11:46Z",
+    "calls": [
+      {
+        "vendor": "claude",
+        "argv": [
+          "claude",
+          "-p",
+          "Reply with exactly: ok",
+          "--model",
+          "haiku",
+          "--max-turns",
+          "1"
+        ],
+        "answer": "ok",
+        "reported_usage": "not captured (text output)",
+        "billing": "Claude Max subscription, no invoice"
+      },
+      {
+        "vendor": "codex",
+        "argv": [
+          "codex",
+          "exec",
+          "--skip-git-repo-check",
+          "-c",
+          "model_reasoning_effort=low",
+          "Reply with exactly: ok"
+        ],
+        "answer": "ERROR 400: gpt-6.1-sol (the CLI config default) is not supported with a ChatGPT account; no answer",
+        "reported_usage": "none",
+        "billing": "ChatGPT subscription, no invoice"
+      },
+      {
+        "vendor": "codex",
+        "argv": [
+          "codex",
+          "exec",
+          "--skip-git-repo-check",
+          "-m",
+          "gpt-5.6-sol",
+          "-c",
+          "model_reasoning_effort=low",
+          "Reply with exactly: ok"
+        ],
+        "answer": "ok",
+        "reported_usage": {
+          "tokens_used": 6240
+        },
+        "billing": "ChatGPT subscription, no invoice"
+      },
+      {
+        "vendor": "grok",
+        "argv": [
+          "grok",
+          "-p",
+          "Reply with exactly: ok",
+          "--effort",
+          "low",
+          "--output-format",
+          "json"
+        ],
+        "answer": "ok",
+        "reported_usage": {
+          "model": "grok-4.6-build",
+          "input_tokens": 17469,
+          "output_tokens": 12,
+          "reasoning_tokens": 11,
+          "total_tokens": 17609,
+          "cli_cost_estimate_usd": 0.01192516
+        },
+        "billing": "SuperGrok subscription; the CLI's cost field is its own estimate, not an invoice"
+      }
+    ],
+    "typesafe": {
+      "calls": "two free model listings (probe), no decision requests, no cost"
+    },
+    "note": "The Codex CLI's configured default model (gpt-6.1-sol) is never used by the engine, which names every OpenAI seat explicitly."
+  },
+  "caveats": [
+    "Every executed cell ended on reported_token_threshold (2,500,000, applied after a response returns); no cell completed its feature by the engine's own judgement.",
+    "claude:opus leads ran in Claude CLI permissionMode default and were denied every project Edit/Write (CLAUDE_SPEC has no write_args); pairs where the rule arm assigned an Opus lead are not comparable as Jev-versus-rule evidence. Grok and Sol leads wrote normally.",
+    "f3 R1 failed on both arms on a grader substring assertion stricter than the goal's wording; both frozen totals stand, the one-point gap is R5 (Codex, #35 5969338718).",
+    "f5 jev grade withheld by the hold's integrity check (engine checkout dirtied on purpose after the rule cell was graded); not graded post hoc during preservation.",
+    "f6 and f7 (4 cells) were prepared and never launched; the hold stopped the series before their batch.",
+    "API-price figures are the engine's counterfactual at list prices; every call ran on subscriptions; Jev calls are the only metered spend."
+  ]
+}

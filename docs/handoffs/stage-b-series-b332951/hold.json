@@ -1,0 +1,7 @@
+{
+  "requested_by": "Codex via Davis (chat relay), citing Davis's existing conditional authorization and stop requirements",
+  "requested_at": "2026-10-03T13:06:35Z",
+  "reason": "The claude:opus lead seat cannot perform its granted editing work: project Edit/Write repeatedly denied by the Claude CLI in permissionMode default (reported #35 comment 5969425308). A seat/capability-access blocker under the frozen settings.",
+  "instruction": "hold all subsequent cell launches; preserve active f5 outcomes at a safe boundary; publish terminal evidence; no override, relaunch, replacement, permission change, engine edit, bound change, or f6/f7 launch",
+  "mechanism": "after the first f5 cell is graded, a hold-marker line is appended to docs/jev-stage-b-plan.md in the engine checkout; the runner's integrity check then refuses the next launch; the second f5 cell's in-runner grade is withheld by that check and graded once post hoc with the frozen grader bytes' SHA-256 shown unchanged"
+}
