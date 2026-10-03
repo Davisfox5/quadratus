@@ -39,9 +39,9 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-import threading
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -387,7 +387,7 @@ def run(out: Path, *, launcher: Callable[[dict, dict], dict] = default_launcher,
             pass
         raise RuntimeError(f"another run holds {lock} ({held or 'unreadable'}); a series runs from one process. "
                            "If that process is gone, remove the lock by hand after checking the manifest "
-                           "for cells left 'running'")
+                           "for cells left 'running'") from None
     with os.fdopen(fd, "w") as handle:
         handle.write(f"pid={os.getpid()} at={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")
     try:

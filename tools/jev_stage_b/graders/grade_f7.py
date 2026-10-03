@@ -5,7 +5,6 @@ import os
 import re
 
 import pytest
-
 from conftest import seed_project
 from support import run_baseline_regressions
 

@@ -3,7 +3,6 @@ import logging
 import os
 
 import pytest
-
 from support import run_baseline_regressions
 
 
