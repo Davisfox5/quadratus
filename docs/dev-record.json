@@ -549,8 +549,8 @@
       "claimed_at": "2026-10-01T19:11:18Z",
       "acknowledged": true,
       "delivery": {
-        "sha": "e3deaed44da2417978799ff4933f057fcf28b4db",
-        "at": "2026-10-03T04:47:05Z"
+        "sha": "3a1eef9dba318f4b5fbeb69af6dccff927f91fdb",
+        "at": "2026-10-03T11:18:17Z"
       },
       "reviews": [],
       "blockers": [],
@@ -559,7 +559,8 @@
         "claude: scope extended to quadratus/session.py, quadratus/project_run.py, quadratus/cli.py, docs/decisions-api.md, tests/lifecycle/test_decider.py, tests/lifecycle/harness.py",
         "claude: Davis, 2026-10-02: go deep (four to six requirements per feature, planned runs, survey recovery 4 so breakages are logged with a HYPOTHESIS rather than stopped on), rule arm may run across the series first (--arm). Engine addition decider_labels=all so Jev labels every planned task; otherwise the orchestrator's KIND line leaves Jev nothing to decide. Delivered at 1e07180 on #50.",
         "claude: Davis via Codex (#35 comment 5965492940, 2026-10-03): conditional go-ahead for the seven-feature series once the three runner gaps are fixed, independent graders are frozen, the packet is bound and Codex has reviewed the exact SHAs. Runner gaps closed at 5448403; graders, profile integrity and CLI version recording at e8438b951dd003308a913b86b6ecd9512dd3d39a. Execution stays with the Mac IDE session; nothing launched from the cloud.",
-        "claude: Mac IDE session delivered graders, the bound packet.stage-b.json, run lock and per-arm profiles at ef0c602 (#35 comment 5965636603). CI red on ruff only; fixed at e3deaed (baseline copies excluded from lint, grade_f6/f7 imports sorted, lock error chained). The import sort changes grade_f6.py and grade_f7.py, so the frozen digest quoted at ef0c602 is superseded; nothing was prepared, so prepare at e3deaed or later writes the digest that counts."
+        "claude: Mac IDE session delivered graders, the bound packet.stage-b.json, run lock and per-arm profiles at ef0c602 (#35 comment 5965636603). CI red on ruff only; fixed at e3deaed (baseline copies excluded from lint, grade_f6/f7 imports sorted, lock error chained). The import sort changes grade_f6.py and grade_f7.py, so the frozen digest quoted at ef0c602 is superseded; nothing was prepared, so prepare at e3deaed or later writes the digest that counts.",
+        "claude: Codex focused review of e3deaed (#50 comment 5968618736): not cleared, three P1 blockers reproduced (engine-saved seat failures not stopping the series; frozen inputs checked once per run; f3 grader rejecting its own expected 400). All three fixed at 3a1eef9 with regressions; returned to Codex for focused verification of those paths. Nothing launched."
       ],
       "acknowledged_at": "2026-10-01T19:11:18Z"
     }
