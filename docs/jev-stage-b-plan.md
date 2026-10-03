@@ -67,7 +67,7 @@ cell is not a win.
   from the packet. The engine's own integration gate, capture and design
   review apply unchanged.
 
-## The seven features (draft, bound in the IDE)
+## The seven features (drafts; the bound goals are in packet.stage-b.json)
 
 The goals in `tools/jev_stage_b/packet.example.json` are drafts written
 without the GameTape tree in front of me. Each carries four to six
@@ -183,6 +183,52 @@ builders' own tests as the verdict. Writing them is IDE work done before
 `prepare`, and their hashes are part of the frozen packet record on #46.
 `run` also records each vendor CLI's reported version and the engine SHA
 on every launch.
+
+## Bound on the Mac (2026-10-03)
+
+The committed packet is `tools/jev_stage_b/packet.stage-b.json`: GameTape
+at `/Users/davisfox/Documents/GitHub/sports-video-tagger`, base `1cd9264`,
+the Stage A base. The seven goals are rewritten against that tree so that
+every requirement names the exact endpoint, DOM id, response shape or file
+shape a grader checks; `packet.example.json` keeps the drafts. The check
+is the project's pytest run under a separate interpreter outside both
+repos (`/Users/davisfox/Documents/GitHub/stage-b/venv`, Flask, openpyxl,
+pytest, Playwright), and the extra check is the five baseline Node UI
+tests by name, since the engine refuses a glob. `engine_sha` is the one
+placeholder: the launch step copies the packet into the series directory
+with the engine checkout's HEAD filled in, and `prepare` reads that copy,
+so the engine binding is the SHA Codex reviewed, never a hand-typed one.
+
+**One grader argv per requirement.** `graders.tasks[<feature>]` lists one
+`pytest -k R<n>` invocation per requirement, so a cell's grade is
+requirements passed over requirements total, and `comparison.md` shows
+which requirement failed, not only how many. The graders live in
+`tools/jev_stage_b/graders/` (the engine repo, outside the GameTape repo):
+`conftest.py` imports the cell's `app.py` fresh with its data directories
+on a temp dir, or serves it through the grader-owned `serve.py` on a free
+loopback port and drives real Chromium through Playwright, recording
+console errors and page errors. The last requirement of every feature
+runs the baseline tests frozen under `graders/baseline/tests` (copied from
+`1cd9264`) against the cell's `app.py`, `templates/` and `static/` in a
+temp tree, so the builders' own edits to `tests/` never decide a grade.
+Run against the untouched baseline before freezing, every feature
+requirement fails and every regression requirement passes, and no grader
+errors on its fixtures; that is the finite verification the graders get
+before either arm runs.
+
+**Per-arm capture profiles.** Both arms of a pair run at once and a
+capture profile pins one loopback port, so the packet names
+`capture_profiles` (one per arm, ports 52055 and 52056, both hashed into
+the frozen inputs) and the launcher picks the cell's arm's profile.
+
+**One run per series, and a launch that never finished is never
+retried.** `run` takes `run.lock` in the series directory (pid and time)
+and refuses while another holds it; a stale lock is removed by hand after
+reading the manifest. Each cell is written to the manifest as `running`
+before its launch and as `ran` or `failed` with `finished_at` after, with
+atomic manifest writes; a later `run` marks any cell still `running` as
+`interrupted`, keeps it, never launches it again, and `collect` reports
+the pair as not comparable.
 
 ## Evidence and reporting
 

@@ -41,6 +41,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+import threading
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -53,6 +54,11 @@ STOP_UNKNOWN_USAGE = "unknown-usage"  # a cell reported attempts whose usage the
 STOP_JEV_DRIFT = "jev-model-drift"    # Jev answered as a model other than the packet's jev_model
 STOP_CREDENTIAL = "credential-failure"  # a decider refusal naming the key or an auth status, or a sign-in failure
 STOP_CELL_ERROR = "cell-error"        # a cell raised before the engine produced a result
+STOP_INTERRUPTED = "interrupted-cell"  # a cell was still "running" when a later run began: its launch never finished
+
+#: One run per series directory. The lock holds the pid and start time; a
+#: stale lock (a crashed run) is reported, never silently taken over.
+LOCK_NAME = "run.lock"
 
 
 def _sha(value) -> str:
@@ -88,6 +94,10 @@ def validate_packet(packet: dict) -> None:
         paths = task.get("declared_paths") or []
         if not isinstance(paths, list) or any(not isinstance(p, str) or not p for p in paths):
             raise ValueError(f"{task['id']}: declared_paths must be a list of path strings")
+    per_arm = packet.get("capture_profiles")
+    if per_arm is not None and (not isinstance(per_arm, dict) or set(per_arm) != set(ARMS)
+                                or any(not isinstance(v, str) or not Path(v).is_absolute() for v in per_arm.values())):
+        raise ValueError(f"capture_profiles must name one absolute profile per arm {ARMS}")
     graders = packet.get("graders")
     if graders is not None:
         gdir = Path(str(graders.get("dir") or ""))
@@ -179,7 +189,18 @@ def frozen_inputs(packet: dict) -> dict:
     profile = packet.get("capture_profile")
     if profile:
         frozen["capture_profile"] = _file_sha(Path(profile))
+    per_arm = packet.get("capture_profiles") or {}
+    for arm, path in sorted(per_arm.items()):
+        frozen[f"capture_profile:{arm}"] = _file_sha(Path(path))
     return frozen
+
+
+def profile_for(cell: dict, packet: dict) -> Optional[str]:
+    """The capture profile a cell runs with. Two arms of a pair run at the
+    same time, and a profile pins one loopback port, so each arm may have
+    its own (``capture_profiles``); otherwise the one ``capture_profile``."""
+    per_arm = packet.get("capture_profiles") or {}
+    return per_arm.get(cell["arm"]) or packet.get("capture_profile")
 
 
 def check_frozen(packet: dict, frozen: dict) -> None:
@@ -273,7 +294,7 @@ def default_launcher(cell: dict, packet: dict) -> dict:
     result = run_project(
         cell["goal"], Project.open(cell["project"]), Settings.from_env(),
         allow_writes=True, check=packet.get("check", ""), extra_checks=extra,
-        capture_profile=packet.get("capture_profile"), readiness=packet.get("readiness"),
+        capture_profile=profile_for(cell, packet), readiness=packet.get("readiness"),
         run_limits=limits, declared_paths=tuple(cell.get("declared_paths") or ()),
         decider=cell["arm"] if cell["arm"] != "rule" else None,
         direct_tier=bool(packet.get("direct_tier", False)),
@@ -355,8 +376,49 @@ def run(out: Path, *, launcher: Callable[[dict, dict], dict] = default_launcher,
     their reason, which is recorded too."""
     if arm is not None and arm not in ARMS:
         raise ValueError(f"arm must be one of {ARMS}")
+    lock = out / LOCK_NAME
+    try:
+        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError:
+        held = ""
+        try:
+            held = lock.read_text().strip()
+        except OSError:
+            pass
+        raise RuntimeError(f"another run holds {lock} ({held or 'unreadable'}); a series runs from one process. "
+                           "If that process is gone, remove the lock by hand after checking the manifest "
+                           "for cells left 'running'")
+    with os.fdopen(fd, "w") as handle:
+        handle.write(f"pid={os.getpid()} at={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")
+    try:
+        return _run_locked(out, launcher=launcher, pairs=pairs, only=only, arm=arm, engine=engine,
+                           override_stop=override_stop, versions=versions)
+    finally:
+        try:
+            lock.unlink()
+        except OSError:
+            pass
+
+
+def _run_locked(out: Path, *, launcher, pairs, only, arm, engine, override_stop, versions) -> dict:
     manifest = json.loads((out / "manifest.json").read_text())
     packet = manifest["packet"]
+    writing = threading.Lock()
+
+    def save():
+        # Atomic, so a reader (a grader, the operator, a sibling thread) never sees a half-written manifest.
+        with writing:
+            tmp = out / "manifest.json.tmp"
+            tmp.write_text(json.dumps(manifest, indent=2) + "\n")
+            os.replace(tmp, out / "manifest.json")
+
+    # A cell still "running" from an earlier process never finished its
+    # launch (Davis via Codex, 2026-10-03: an interrupted launch cannot
+    # silently retry). It is marked, kept, and never launched again.
+    for cell in manifest["cells"]:
+        if cell.get("state") == "running":
+            cell.update(state="interrupted", error=f"{STOP_INTERRUPTED}: launch started {cell.get('started_at')} "
+                                                   "and never recorded an outcome; not relaunched")
     if _sha(packet) != manifest.get("packet_digest"):
         raise RuntimeError("the manifest's packet no longer matches the digest written at prepare; "
                            "a packet changed after prepare is not run")
@@ -383,14 +445,18 @@ def run(out: Path, *, launcher: Callable[[dict, dict], dict] = default_launcher,
         cell["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         started = time.perf_counter()
         cell["engine_sha"] = engine.get("sha")
+        cell["state"] = "running"
+        save()  # durable before the launch: a crash here leaves "running", which the next run marks interrupted
         try:
             outcome = launcher(cell, packet)
             cell.update(outcome, state="ran")
         except Exception as exc:  # noqa: BLE001 -- a failed cell is a result, never a torn-down sibling
             cell.update(state="failed", error=f"{type(exc).__name__}: {exc}"[:500])
         cell["seconds"] = round(time.perf_counter() - started, 1)
+        cell["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        save()
         cell["grade"] = grade_cell(cell, packet)
-        (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        save()
 
     with ThreadPoolExecutor(max_workers=max(1, pairs) * len(ARMS)) as pool:
         batches = list(groups.values())
@@ -405,7 +471,7 @@ def run(out: Path, *, launcher: Callable[[dict, dict], dict] = default_launcher,
                                            also=[f"{n}: {w}" for n, w in tripped[1:]],
                                            at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
                 break
-    (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    save()
     return manifest
 
 
@@ -542,6 +608,7 @@ def collect(out: Path) -> dict:
     summary = dict(packet_digest=manifest["packet_digest"], engine=manifest.get("engine"),
                    stopped=manifest.get("stopped"), overrides=manifest.get("overrides", []), cells=len(rows),
                    ran=sum(r["state"] == "ran" for r in rows), failed=sum(r["state"] == "failed" for r in rows),
+                   interrupted=sum(r["state"] == "interrupted" for r in rows),
                    pending=sum(r["state"] == "prepared" for r in rows), rows=rows, pairs=sorted(pairs, key=lambda p: (p["task"], p["repeat"])),
                    boundary="Paired comparison on frozen goals: the grade column is the frozen independent graders' "
                             "verdict, 'engine done' is the engine's own completion claim and never the grade; no "
@@ -581,7 +648,8 @@ def render(summary: dict) -> str:
                      f"{p['start_gap_seconds'] if p['start_gap_seconds'] is not None else ''} |")
     if summary.get("stopped"):
         lines += ["", f"Series stopped: {summary['stopped']['reason']} (after {summary['stopped']['after']})."]
-    lines += ["", f"Cells {summary['cells']}: ran {summary['ran']}, failed {summary['failed']}, pending {summary['pending']}. "
+    lines += ["", f"Cells {summary['cells']}: ran {summary['ran']}, failed {summary['failed']}, "
+              f"interrupted {summary.get('interrupted', 0)}, pending {summary['pending']}. "
               f"Packet {summary['packet_digest'][:12]}. {summary['boundary']}", ""]
     return "\n".join(lines)
 

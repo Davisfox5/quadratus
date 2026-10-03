@@ -333,3 +333,72 @@ def test_graders_run_after_each_cell_from_their_own_directory_and_the_grade_is_r
     assert pair1["completed"] == dict(jev=True, rule=True) and pair1["grade"] == dict(jev="1/2", rule="0/2") and pair1["grade_delta"] == 1
     text = (out / "comparison.md").read_text()
     assert "| feat-1 | rule | 0 | 0/2 | True |" in text and "never the grade" in text
+
+
+def test_one_run_per_series_and_a_cell_is_running_on_disk_before_its_launch_finishes(tmp_path):
+    repo = _project(tmp_path)
+    out = tmp_path / "runs"
+    P.prepare(_packet(repo, tasks=1), out)
+    (out / P.LOCK_NAME).write_text("pid=1 at=earlier\n")
+    with pytest.raises(RuntimeError, match="another run holds"):
+        P.run(out, engine=ENGINE, launcher=_fake_launcher({}))
+    (out / P.LOCK_NAME).unlink()
+    seen = {}
+
+    def launcher(cell, packet):
+        on_disk = json.loads((out / "manifest.json").read_text())
+        seen[cell["name"]] = next(c["state"] for c in on_disk["cells"] if c["name"] == cell["name"])
+        assert (out / P.LOCK_NAME).exists()
+        return _fake_launcher({})(cell, packet)
+
+    manifest = P.run(out, engine=ENGINE, launcher=launcher)
+    assert seen == {"feat-0/jev-r0": "running", "feat-0/rule-r0": "running"}
+    assert all(c["state"] == "ran" and c["finished_at"] for c in manifest["cells"])
+    assert not (out / P.LOCK_NAME).exists()
+
+
+def test_a_cell_left_running_by_a_dead_process_is_marked_interrupted_and_never_relaunched(tmp_path):
+    repo = _project(tmp_path)
+    out = tmp_path / "runs"
+    P.prepare(_packet(repo, tasks=2), out)
+    manifest = json.loads((out / "manifest.json").read_text())
+    victim = next(c for c in manifest["cells"] if c["name"] == "feat-0/jev-r0")
+    victim.update(state="running", started_at="2026-10-03T00:00:00Z")
+    (out / "manifest.json").write_text(json.dumps(manifest))
+    launched = []
+
+    def launcher(cell, packet):
+        launched.append(cell["name"])
+        return _fake_launcher({})(cell, packet)
+
+    manifest = P.run(out, engine=ENGINE, launcher=launcher)
+    states = {c["name"]: c["state"] for c in manifest["cells"]}
+    assert states["feat-0/jev-r0"] == "interrupted" and "feat-0/jev-r0" not in launched
+    assert "not relaunched" in next(c for c in manifest["cells"] if c["name"] == "feat-0/jev-r0")["error"]
+    assert states["feat-0/rule-r0"] == "ran" and states["feat-1/jev-r0"] == "ran" and states["feat-1/rule-r0"] == "ran"
+    # A second run finds nothing to do and still does not touch the interrupted cell.
+    again = P.run(out, engine=ENGINE, launcher=launcher)
+    assert {c["name"]: c["state"] for c in again["cells"]} == states and len(launched) == 3
+    summary = P.collect(out)
+    assert summary["interrupted"] == 1
+    pair = next(p for p in summary["pairs"] if p["task"] == "feat-0")
+    assert pair["comparable"] is False and "jev interrupted" in pair["not_comparable_because"]
+    assert "interrupted 1" in P.render(summary)
+
+
+def test_each_arm_may_have_its_own_capture_profile_and_both_are_frozen(tmp_path):
+    repo = _project(tmp_path)
+    jev, rule = tmp_path / "jev.json", tmp_path / "rule.json"
+    jev.write_text('{"origin": "http://127.0.0.1:52055"}')
+    rule.write_text('{"origin": "http://127.0.0.1:52056"}')
+    packet = dict(_packet(repo, tasks=1), capture_profiles=dict(jev=str(jev), rule=str(rule)))
+    with pytest.raises(ValueError, match="one absolute profile per arm"):
+        P.validate_packet(dict(packet, capture_profiles=dict(jev=str(jev))))
+    out = tmp_path / "runs"
+    manifest = P.prepare(packet, out)
+    assert set(manifest["frozen"]) == {"capture_profile:jev", "capture_profile:rule"}
+    cells = {c["arm"]: c for c in manifest["cells"]}
+    assert P.profile_for(cells["jev"], packet) == str(jev) and P.profile_for(cells["rule"], packet) == str(rule)
+    rule.write_text('{"origin": "http://127.0.0.1:52099"}')
+    with pytest.raises(RuntimeError, match="frozen inputs changed"):
+        P.run(out, engine=ENGINE, launcher=_fake_launcher({}))
