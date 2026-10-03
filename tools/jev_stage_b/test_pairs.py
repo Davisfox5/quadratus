@@ -41,7 +41,8 @@ def _fake_launcher(outcomes):
             explicit_tasks=dict(tasks_closed_clean=["t1"] if o.get("completed", True) else [], tasks_unfinished=[] if o.get("completed", True) else ["t1"]),
             budget=dict(reserved_attempts=o.get("calls", 6), reported_tokens=o.get("tokens", 300_000), stop_reason="", unknown_usage_attempts=0),
             decisions=decisions)))
-        (run_dir / "invocations.jsonl").write_text(json.dumps(dict(role="lead", model=o.get("lead", "grok:default"))) + "\n")
+        (run_dir / "invocations.jsonl").write_text(json.dumps(dict(
+            task="t1", role="lead", canonical_model=o.get("lead", "grok:default"), invoked=True)) + "\n")
         if o.get("raise"):
             raise RuntimeError("provider down")
         return dict(run_dir=str(run_dir), completed=o.get("completed", True))
@@ -151,8 +152,11 @@ def test_run_can_take_one_arm_first_and_collect_reads_a_planned_result(tmp_path)
             survey=dict(recovery_used=2, hypotheses=[dict(task="t3"), dict(task="t4")], repeats=[], unique_causes=["cap", "checks"]),
             budget=dict(reserved_attempts=30, reported_tokens=900_000, stop_reason="", unknown_usage_attempts=0),
             decisions=decisions)))
-        (run_dir / "invocations.jsonl").write_text(
-            json.dumps(dict(role="lead", model="openai:gpt-5.6-sol")) + "\n" + json.dumps(dict(role="lead", model="grok:default")) + "\n")
+        (run_dir / "invocations.jsonl").write_text("\n".join([
+            json.dumps(dict(task="t1", role="lead", canonical_model="openai:gpt-5.6-sol", invoked=True)),
+            json.dumps(dict(task="t1", role="reviewer:a", canonical_model="anthropic:opus", invoked=True)),
+            json.dumps(dict(task="t2", role="lead", requested_model="grok:default", invoked=True)),
+            json.dumps(dict(task="t3", role="lead", canonical_model="anthropic:opus", invoked=False, selected=True))]) + "\n")
         return dict(run_dir=str(run_dir), completed=False)
 
     with pytest.raises(ValueError, match="arm"):
@@ -165,7 +169,10 @@ def test_run_can_take_one_arm_first_and_collect_reads_a_planned_result(tmp_path)
     assert (jev["entry"], jev["tasks"], jev["closed_clean"], jev["unfinished"]) == ("planned", 4, 2, 2)
     assert jev["recovery_used"] == 2 and jev["hypotheses"] == 2 and jev["causes"] == ["cap", "checks"]
     assert jev["kind"] == "backend,test" and jev["difficulty"] == "standard" and jev["decisions"] == 3
-    assert jev["leads"] == ["openai:gpt-5.6-sol", "grok:default"]
+    assert jev["leads"] == ["openai:gpt-5.6-sol", "grok:default"]  # t3's lead was selected, never invoked
+    assert jev["per_task"] == [dict(task="t1", lead="openai:gpt-5.6-sol", kind="backend", difficulty="standard"),
+                               dict(task="t2", lead="grok:default", kind="test")]
     assert summary["pairs"][0]["lead_changed"] is False
     text = (out / "comparison.md").read_text()
     assert "| 2/2 | openai:gpt-5.6-sol+grok:default | backend,test/standard |" in text and "| orchestrator |" in text
+    assert "| deep-0 | jev | t2 | grok:default | test |  |" in text

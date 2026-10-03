@@ -241,7 +241,10 @@ def _read_cell(cell: dict) -> dict:
                decision_tokens=sum((d.get("usage") or {}).get("input_tokens") or 0 for d in decisions)
                + sum((d.get("usage") or {}).get("output_tokens") or 0 for d in decisions),
                source_changed=result.get("source_changed"))
-    leads: List[str] = []
+    # Per task, because a planned run's two arms need not decompose alike:
+    # the lead that was actually invoked (the ledger's canonical model, never
+    # a selected-but-unreached one) and the decider's labels for that task.
+    per_task: Dict[str, dict] = {}
     inv = run_dir / "invocations.jsonl"
     if inv.exists():
         for line in inv.read_text().splitlines():
@@ -249,10 +252,22 @@ def _read_cell(cell: dict) -> dict:
                 entry = json.loads(line)
             except ValueError:
                 continue
-            if str(entry.get("role", "")).startswith("lead") and entry.get("model") and entry["model"] not in leads:
-                leads.append(entry["model"])
+            model = entry.get("canonical_model") or entry.get("resolved_model") or entry.get("requested_model")
+            if not str(entry.get("role", "")).startswith("lead") or not model or not entry.get("invoked", True):
+                continue
+            per_task.setdefault(str(entry.get("task") or "?"), dict(lead=model))
+    for d in decisions:
+        slot = per_task.setdefault(str(d.get("task") or "?"), dict(lead=None))
+        field = {"task.kind": "kind", "task.difficulty": "difficulty"}.get(d.get("decision"))
+        if field and d.get("answer"):
+            slot[field] = d["answer"]
+    leads: List[str] = []
+    for slot in per_task.values():
+        if slot.get("lead") and slot["lead"] not in leads:
+            leads.append(slot["lead"])
     row["lead"] = leads[0] if leads else None
     row["leads"] = leads
+    row["per_task"] = [dict(task=t, **slot) for t, slot in sorted(per_task.items())]
     return row
 
 
@@ -296,6 +311,13 @@ def render(summary: dict) -> str:
                      f"{r.get('closed_clean', '')} | {r.get('checks_failed', '')} | {recovery} | "
                      f"{'+'.join(r.get('leads') or [])} | {label} | "
                      f"{r.get('calls', '')} | {r.get('tokens', '')} | {r.get('seconds', '')} | {r.get('stop') or r.get('error') or ''} |")
+    planned = [r for r in summary["rows"] if r.get("per_task")]
+    if planned:
+        lines += ["", "| task | arm | engine task | lead | kind | difficulty |", "|---|---|---|---|---|---|"]
+        for r in sorted(planned, key=lambda r: (r["task"], r["repeat"], r["arm"])):
+            for t in r["per_task"]:
+                lines.append(f"| {r['task']} | {r['arm']} | {t['task']} | {t.get('lead') or ''} | "
+                             f"{t.get('kind') or ''} | {t.get('difficulty') or ''} |")
     lines += ["", "| pair | lead changed | both done | jev done | rule done | tokens (jev - rule) | seconds (jev - rule) |",
               "|---|---|---|---|---|---:|---:|"]
     for p in summary["pairs"]:

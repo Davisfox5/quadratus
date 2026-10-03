@@ -170,7 +170,12 @@ and design verdicts under the cell's `.quadratus/runs/<id>`. Series:
 `comparison.md`. The report separates the five route-sensitive pairs from
 the two controls, gives both arms' task counts, closed-clean counts,
 failed checks, recovery used and hypotheses logged, every lead that ran,
-calls, tokens and seconds, and the per-pair deltas. The reliability
+calls, tokens and seconds, and the per-pair deltas. Because the two arms
+of a planned feature need not decompose alike (the jev arm's orchestrator
+prompt lacks the KIND instruction), the comparison also lists each
+engine task with the lead that was invoked and the decider's labels for
+it, so lead attribution is read per task and `lead_changed` at feature
+level is a summary, not the finding. The reliability
 reading lists each distinct failure cause across all cells with the task
 it hit and whether a repair recovered it. Jev decision tokens are reported apart from the
 work. Recorded on `#46` as T-jev-stage-b with the authorization comment
