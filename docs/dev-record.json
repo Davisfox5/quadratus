@@ -630,18 +630,18 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "blocked",
+      "state": "delivered",
       "claimed_at": "2026-10-03T16:39:28Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
-        "at": "2026-10-03T17:02:46Z"
+        "sha": "10bb9b46657bcea7f8bc95e9b3b97255b8c6f317",
+        "at": "2026-10-03T21:00:13Z"
       },
       "reviews": [
         {
           "reviewer": "codex",
           "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
-          "verdict": "blocked",
+          "verdict": "stale",
           "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973256274",
           "scope": [
             "quadratus/cli_providers.py",
@@ -649,7 +649,8 @@
             "tests/test_cli_providers.py",
             "tests/test_runtime.py"
           ],
-          "at": "2026-10-03T20:37:59Z"
+          "at": "2026-10-03T20:37:59Z",
+          "stale_reason": "delivery moved from f09c832 to 10bb9b4"
         }
       ],
       "blockers": [
@@ -664,7 +665,8 @@
         }
       ],
       "decisions": [
-        "claude: Delivered at f09c832 on #50 (e734779 plus a guard for attribute-less fake views). Live verification on claude 2.1.288 in the cloud container through ClaudeCLIProvider.in_directory(allow_writes=True) with granted_commands=('python3 -V',): argv carries --permission-mode acceptEdits --allowedTools 'Bash(python3 -V)' 'Bash(python3 -V:*)'; the Write landed, python3 -V ran, python3 -c was denied and recorded as a permission_denied tool failure (54,048 in / 538 out, haiku). Mac verification on claude 2.1.269 still owed before the rerun."
+        "claude: Delivered at f09c832 on #50 (e734779 plus a guard for attribute-less fake views). Live verification on claude 2.1.288 in the cloud container through ClaudeCLIProvider.in_directory(allow_writes=True) with granted_commands=('python3 -V',): argv carries --permission-mode acceptEdits --allowedTools 'Bash(python3 -V)' 'Bash(python3 -V:*)'; the Write landed, python3 -V ran, python3 -c was denied and recorded as a permission_denied tool failure (54,048 in / 538 out, haiku). Mac verification on claude 2.1.269 still owed before the rerun.",
+        "claude: Codex blocker (fork loses check_commands) fixed at 10bb9b46657bcea7f8bc95e9b3b97255b8c6f317: Fleet.fork(root) carries check_commands and progress with the shared budget, meter and ledger; new_session's fork closure uses it; test_a_forked_fleet_carries_the_granted_check_commands. Full suite 2900 passed locally."
       ]
     },
     {
@@ -677,24 +679,25 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "reviewed",
+      "state": "delivered",
       "claimed_at": "2026-10-03T16:39:28Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
-        "at": "2026-10-03T17:02:47Z"
+        "sha": "10bb9b46657bcea7f8bc95e9b3b97255b8c6f317",
+        "at": "2026-10-03T21:00:14Z"
       },
       "reviews": [
         {
           "reviewer": "codex",
           "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
-          "verdict": "cleared",
+          "verdict": "stale",
           "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973256274",
           "scope": [
             "quadratus/run_budget.py",
             "tests/test_run_budget.py"
           ],
-          "at": "2026-10-03T20:37:41Z"
+          "at": "2026-10-03T20:37:41Z",
+          "stale_reason": "delivery moved from f09c832 to 10bb9b4"
         }
       ],
       "blockers": [],
@@ -709,23 +712,24 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "blocked",
+      "state": "delivered",
       "claimed_at": "2026-10-03T16:39:28Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
-        "at": "2026-10-03T17:02:47Z"
+        "sha": "10bb9b46657bcea7f8bc95e9b3b97255b8c6f317",
+        "at": "2026-10-03T21:00:14Z"
       },
       "reviews": [
         {
           "reviewer": "codex",
           "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
-          "verdict": "blocked",
+          "verdict": "stale",
           "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973256274",
           "scope": [
             "tools/jev_stage_b/"
           ],
-          "at": "2026-10-03T20:37:59Z"
+          "at": "2026-10-03T20:37:59Z",
+          "stale_reason": "delivery moved from f09c832 to 10bb9b4"
         }
       ],
       "blockers": [
@@ -739,7 +743,9 @@
           "at": "2026-10-03T20:37:59Z"
         }
       ],
-      "decisions": []
+      "decisions": [
+        "claude: Codex blockers fixed at 10bb9b46657bcea7f8bc95e9b3b97255b8c6f317: lead writes judged against the cell's project root (denied and successful paths both; outside-project activity reported apart), and every invoked lead joined to its trace by invocation_id with missing or unusable records listed and the pair non-comparable; tests reproduce Codex's scratch-write and unavailable-transcript cases."
+      ]
     }
   ],
   "receipts": [
