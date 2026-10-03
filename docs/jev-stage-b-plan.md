@@ -160,6 +160,42 @@ Needed in the IDE before `prepare`: the GameTape repo path and baseline
 capture profile and check command used on run `20261001T001902Z`, Codex's
 window reading, the candidate SHA carrying `decider_labels` (the engine the cells run on), and Davis's yes on the seven goals or edits to them.
 
+## After series b332951: the three fixes (Davis, 2026-10-03: fix and rerun)
+
+The first series (ten cells executed, held before f6 and f7) was
+access-confounded and every cell ended on the token threshold. Three
+fixes, each a recorded task with its own Codex review, before the rerun:
+
+- **The Claude write grant** (`T-claude-write-grant`). `CLAUDE_SPEC` had
+  no `write_args`, so a Claude lead with writes launched in permissionMode
+  default and `claude -p` denied every project Edit/Write; ten Opus lead
+  calls spent their budgets on denials. A granted call now sends
+  `--permission-mode acceptEdits` plus one exact `--allowedTools Bash(...)`
+  rule per check the harness will run (and its `:*` prefix form); nothing
+  else is allowed. A denied file tool on a granted call is now a
+  `CapabilityUnavailable` stop, like a denied check, not a budget burn.
+  Verified live on claude 2.1.288: default denies Write, acceptEdits
+  writes, `Bash(python3 -V)` grants that command and denies `python3 -c`.
+- **The per-call token reserve and ceiling** (`T-call-token-cap`). The
+  2.5M threshold was post-return only and single agentic calls ran 0.5M
+  to 3.4M. `RunLimits.reserve_tokens_per_call` refuses to start a call
+  unless that much budget remains (`reported_token_reserve`);
+  `max_tokens_per_call` names a call that reported more than it
+  (`call_token_ceiling`, post-return, recorded in `oversized_calls`). The
+  packet sets 500,000 and 1,500,000 under the unchanged 2.5M threshold.
+  `lead_max_turns` is a packet field, null in this series: no CLI's capped
+  envelope has been probed for a value.
+- **Capability-aware comparability** (`T-runner-tool-denials`). The runner
+  reads each lead call's denied file-tool calls and files written from
+  the run's `trace.jsonl`; a lead denied its writes that wrote nothing,
+  or an engine-saved `CapabilityUnavailable`, is a `capability-failure`
+  series stop and makes the pair non-comparable, with the lead, task and
+  invocation named. A ran cell with no lead trace to check is reported as
+  such.
+
+The rerun is the same seven features, same bounds otherwise, fresh
+worktrees, a new series directory and a new freeze on the fixed SHA.
+
 ## Independent graders (Davis via Codex, 2026-10-03)
 
 The engine's own completion claim is not the grade. Each feature gets a

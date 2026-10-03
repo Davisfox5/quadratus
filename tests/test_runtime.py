@@ -359,3 +359,15 @@ def test_the_meter_is_not_attached_twice(built, tmp_path):
     )
     session.next_task()
     assert len(meter.records) == 1
+
+
+# ---- 2026-10-03: a denied write on a granted call is a capability failure
+
+def test_a_denied_file_tool_counts_only_when_writes_were_granted():
+    from quadratus.runtime import _relevant_denials
+    failures = [dict(kind="permission_denied", tool="Write", status="denied", path="/p/app.py"),
+                dict(kind="permission_denied", command="ls -la", status="denied"),
+                dict(kind="permission_denied", command="python -m pytest -q", status="denied")]
+    assert _relevant_denials(failures, ("python -m pytest -q",)) == ["python -m pytest -q"]
+    assert _relevant_denials(failures, ("python -m pytest -q",), writes_granted=True) == [
+        "Write /p/app.py", "python -m pytest -q"]

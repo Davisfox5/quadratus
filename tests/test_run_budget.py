@@ -242,3 +242,40 @@ def test_unspecified_transport_timeout_is_bounded_and_restored():
     assert p.generate('bounded') == 'answer'
     assert p.calls == [5]
     assert p.timeout is None
+
+
+# ---- 2026-10-03: the per-call reserve and ceiling (Stage B series b332951)
+
+def test_a_call_cannot_start_unless_the_remaining_budget_covers_the_reserve():
+    b = RunBudget(RunLimits(max_reported_tokens=1_000, reserve_tokens_per_call=400))
+    first, _ = b.reserve()
+    b.finish(first, {'input_tokens': 600, 'output_tokens': 50})  # 350 left: under the 400 reserve
+    with pytest.raises(RunBudgetExceeded, match='reported_token_reserve'):
+        b.reserve()
+    snap = b.snapshot()
+    assert snap['stop_reason'] == 'reported_token_reserve' and snap['reserved_attempts'] == 1
+    # Without a reserve the old post-return rule alone applies.
+    c = RunBudget(RunLimits(max_reported_tokens=1_000))
+    t, _ = c.reserve()
+    c.finish(t, {'input_tokens': 900, 'output_tokens': 50})
+    c.reserve()
+
+
+def test_an_oversized_call_is_named_after_it_returns():
+    b = RunBudget(RunLimits(max_reported_tokens=10_000_000, max_tokens_per_call=1_000))
+    t, _ = b.reserve()
+    with pytest.raises(RunBudgetExceeded, match='call_token_ceiling'):
+        b.finish(t, {'input_tokens': 2_500, 'output_tokens': 100})
+    snap = b.snapshot()
+    assert snap['oversized_calls'] == [dict(attempt=1, reported_tokens=2_600, ceiling=1_000)]
+    assert 'reserve_tokens_per_call' in snap['reserve_boundary']
+    with pytest.raises(RunBudgetExceeded):
+        b.reserve()
+
+
+@pytest.mark.parametrize('field,value', [('reserve_tokens_per_call', -1), ('reserve_tokens_per_call', True),
+                                       ('reserve_tokens_per_call', 2_000_000), ('max_tokens_per_call', 0),
+                                       ('max_tokens_per_call', 1.5)])
+def test_reserve_and_ceiling_reject_invalid_values(field, value):
+    with pytest.raises(ValueError):
+        RunLimits(max_reported_tokens=1_000_000, **{field: value})

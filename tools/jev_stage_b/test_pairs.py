@@ -49,6 +49,14 @@ def _fake_launcher(outcomes):
         (run_dir / "invocations.jsonl").write_text("\n".join([
             json.dumps(dict(task="run", role="orchestrator", canonical_model=o.get("orchestrator", "claude:fable"), invoked=True)),
             json.dumps(dict(task="t1", role="lead", canonical_model=o.get("lead", "grok:default"), invoked=True))]) + "\n")
+        # The run's shared trace: one lead call that wrote one file, unless
+        # the outcome says its writes were denied.
+        denied = o.get("write_denials", 0)
+        (run_dir / "trace.jsonl").write_text(json.dumps(dict(
+            invocation_id="inv-1", task="t1", role="lead", model=o.get("lead", "grok:default"),
+            tool_calls=[dict(name="Write", outcome="denied", path="/p/app.py")] * denied
+            + ([] if denied else [dict(name="Write", outcome="success", path="/p/app.py")]),
+            files_written=[] if denied else ["app.py"])) + "\n")
         if o.get("raise"):
             raise RuntimeError("provider down")
         return dict(run_dir=str(run_dir), completed=o.get("completed", True))
@@ -168,6 +176,9 @@ def test_run_can_take_one_arm_first_and_collect_reads_a_planned_result(tmp_path)
             json.dumps(dict(task="t1", role="reviewer:a", canonical_model="anthropic:opus", invoked=True)),
             json.dumps(dict(task="t2", role="lead", requested_model="grok:default", invoked=True)),
             json.dumps(dict(task="t3", role="lead", canonical_model="anthropic:opus", invoked=False, selected=True))]) + "\n")
+        (run_dir / "trace.jsonl").write_text("\n".join([
+            json.dumps(dict(task="t1", role="lead", model="openai:gpt-5.6-sol", tool_calls=[dict(name="Write", outcome="success")], files_written=["app.py"])),
+            json.dumps(dict(task="t2", role="lead", model="grok:default", tool_calls=[dict(name="write_file", outcome="success")], files_written=["x.py"]))]) + "\n")
         return dict(run_dir=str(run_dir), completed=False)
 
     with pytest.raises(ValueError, match="arm"):
@@ -424,6 +435,9 @@ def _engine_result_launcher(errors_by_cell, calls_by_cell=None):
             json.dumps(dict(task="run", role="orchestrator", canonical_model="claude:fable", invoked=True)),
             json.dumps(dict(task="t1", role="lead", canonical_model="grok:default", invoked=True))]
         (run_dir / "invocations.jsonl").write_text("\n".join(lines) + ("\n" if lines else ""))
+        (run_dir / "trace.jsonl").write_text("" if not calls else json.dumps(dict(
+            task="t1", role="lead", model="grok:default", tool_calls=[dict(name="Write", outcome="success")],
+            files_written=["app.py"])) + "\n")
         return dict(run_dir=str(run_dir), completed=error is None)
     return launch
 
@@ -501,3 +515,54 @@ def test_frozen_inputs_and_the_engine_are_rechecked_at_every_launch_and_grading_
     assert states["feat-0/jev-r0"] == "ran" and states["feat-0/rule-r0"] == "ran"
     assert any(s == "integrity-failed" for s in states.values()) or manifest["stopped"]["reason"].startswith("integrity-failure")
     assert all(c["engine_sha"] == "e" * 40 for c in manifest["cells"] if c["state"] == "ran")
+
+
+# ---- Davis, 2026-10-03: fix and rerun. A lead denied its writes is a capability stop
+
+def test_a_lead_denied_its_project_writes_stops_the_series_and_marks_the_pair_non_comparable(tmp_path):
+    """Stage B series b332951: ten Opus lead calls were denied every project
+    Edit/Write, every cell saved a token-threshold stop, and the runner read
+    the pairs as comparable (Codex 5969458776). The trace's denied file-tool
+    calls now count, and so does an engine-saved CapabilityUnavailable."""
+    repo = _project(tmp_path)
+    out = tmp_path / "runs"
+    P.prepare(_packet(repo, tasks=2), out)
+    launcher = _fake_launcher({("feat-0", "rule"): dict(lead="claude:opus", write_denials=7, completed=False)})
+    manifest = P.run(out, engine=ENGINE, launcher=launcher, versions={})
+    assert manifest["stopped"]["reason"].startswith(
+        "capability-failure: lead claude:opus on t1 was denied 7 project write(s) and wrote nothing")
+    assert {c["name"]: c["state"] for c in manifest["cells"]}["feat-1/rule-r0"] == "prepared"
+    summary = P.collect(out)
+    rule = next(r for r in summary["rows"] if r["arm"] == "rule" and r["task"] == "feat-0")
+    assert rule["write_denials"] == 7 and rule["lead_files_written"] == 0 and rule["trace_available"]
+    assert rule["leads_denied_writes"] == [dict(task="t1", model="claude:opus", invocation_id="inv-1", denied=7)]
+    pair = summary["pairs"][0]
+    assert not pair["comparable"] and "rule lead claude:opus denied 7 write(s) on t1" in pair["not_comparable_because"]
+    # The jev arm wrote normally and is not blamed.
+    jev = next(r for r in summary["rows"] if r["arm"] == "jev" and r["task"] == "feat-0")
+    assert jev["write_denials"] == 0 and jev["lead_files_written"] == 1
+    # The engine's own capability stop, saved in result.json, is the same stop.
+    out2 = tmp_path / "runs2"
+    P.prepare(_packet(repo, tasks=1), out2)
+    manifest = P.run(out2, engine=ENGINE, versions={}, launcher=_engine_result_launcher(
+        {("feat-0", "jev"): "CapabilityUnavailable: claude:opus was denied a write it was granted: Write /p/app.py"},
+        {("feat-0", "jev"): 2}))
+    assert manifest["stopped"]["reason"].startswith("capability-failure: engine saved CapabilityUnavailable")
+    assert not P.collect(out2)["pairs"][0]["comparable"]
+
+
+def test_the_packet_carries_the_per_call_reserve_ceiling_and_lead_turn_cap(tmp_path):
+    repo = _project(tmp_path)
+    packet = _packet(repo)
+    packet["limits"].update(reserve_tokens_per_call=100_000, max_tokens_per_call=400_000)
+    packet["lead_max_turns"] = 20
+    P.validate_packet(packet)
+    bad = dict(packet, limits=dict(packet["limits"], reserve_tokens_per_call=-1))
+    with pytest.raises(ValueError, match="reserve_tokens_per_call"):
+        P.validate_packet(bad)
+    bad = dict(packet, lead_max_turns=0)
+    with pytest.raises(ValueError, match="lead_max_turns"):
+        P.validate_packet(bad)
+    from quadratus.run_budget import RunLimits
+    limits = RunLimits(**packet["limits"])
+    assert limits.reserve_tokens_per_call == 100_000 and limits.max_tokens_per_call == 400_000

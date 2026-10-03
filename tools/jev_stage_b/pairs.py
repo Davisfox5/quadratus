@@ -56,6 +56,13 @@ STOP_CREDENTIAL = "credential-failure"  # a decider refusal naming the key or an
 STOP_CELL_ERROR = "cell-error"        # a cell raised before the engine produced a result
 STOP_INTERRUPTED = "interrupted-cell"  # a cell was still "running" when a later run began: its launch never finished
 STOP_INTEGRITY = "integrity-failure"   # a frozen input or the engine checkout changed at a launch or grading boundary
+STOP_CAPABILITY = "capability-failure"  # a lead granted writes was denied them, or the engine saved CapabilityUnavailable
+
+#: The file tools a lead needs; a denial of any of them on a lead call is
+#: read from the run's trace.jsonl (Codex 5969458776: the terminal error
+#: and the invocation identity said nothing about ten denied Opus leads).
+WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit", "write_file", "edit_file", "apply_patch",
+               "search_replace", "create_file")
 
 #: How the engine's own saved terminal error is classified (Codex review of
 #: e3deaed, P1 #1): run_project catches the session's exception, writes it
@@ -103,6 +110,16 @@ def validate_packet(packet: dict) -> None:
     for key in ("max_calls", "max_reported_tokens", "wall_seconds"):
         if not isinstance(limits.get(key), (int, float)) or limits[key] <= 0:
             raise ValueError(f"limits.{key} must be a positive number")
+    try:
+        # The engine's own validation, at prepare rather than at the first
+        # launch: reserve_tokens_per_call, max_tokens_per_call and the rest.
+        from quadratus.run_budget import RunLimits
+        RunLimits(**limits)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"limits: {exc}") from exc
+    turns = packet.get("lead_max_turns")
+    if turns is not None and (type(turns) is not int or turns < 1):
+        raise ValueError("lead_max_turns must be a positive integer or null")
     seen = set()
     for task in packet["tasks"]:
         if not task.get("id") or task["id"] in seen:
@@ -313,8 +330,11 @@ def default_launcher(cell: dict, packet: dict) -> dict:
     from quadratus.run_budget import RunLimits
     limits = RunLimits(**packet["limits"])
     extra = packet.get("extra_checks") or ()
+    settings = Settings.from_env()
+    if packet.get("lead_max_turns"):
+        settings.lead_max_turns = int(packet["lead_max_turns"])
     result = run_project(
-        cell["goal"], Project.open(cell["project"]), Settings.from_env(),
+        cell["goal"], Project.open(cell["project"]), settings,
         allow_writes=True, check=packet.get("check", ""), extra_checks=extra,
         capture_profile=profile_for(cell, packet), readiness=packet.get("readiness"),
         run_limits=limits, declared_paths=tuple(cell.get("declared_paths") or ()),
@@ -359,6 +379,12 @@ def series_stop(cell: dict, packet: dict) -> Optional[str]:
     # feature result; everything else (a stall, a budget stop, unmet
     # requirements) is the cell's own outcome.
     saved = row.get("result_error")
+    if saved and str(saved).startswith("CapabilityUnavailable"):
+        return f"{STOP_CAPABILITY}: engine saved {str(saved)[:160]} in {cell['name']}"
+    if row.get("leads_denied_writes"):
+        first = row["leads_denied_writes"][0]
+        return (f"{STOP_CAPABILITY}: lead {first.get('model')} on {first.get('task')} was denied "
+                f"{first.get('denied')} project write(s) and wrote nothing in {cell['name']}")
     if saved:
         kind = classify_access_failure(saved)
         if kind:
@@ -625,7 +651,35 @@ def _read_cell(cell: dict) -> dict:
     row["lead"] = leads[0] if leads else None
     row["leads"] = leads
     row["per_task"] = [dict(task=t, **slot) for t, slot in sorted(per_task.items())]
+    row.update(_write_denials(run_dir))
     return row
+
+
+def _write_denials(run_dir: Path) -> dict:
+    """What the run's trace.jsonl says about each lead call's writes: the
+    denied file-tool calls and the files actually written. A lead with
+    denials and nothing written could not do the job it was given."""
+    out = dict(write_denials=0, leads_denied_writes=[], lead_files_written=0, trace_available=False)
+    trace = run_dir / "trace.jsonl"
+    if not trace.exists():
+        return out
+    for line in trace.read_text().splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not str(rec.get("role", "")).startswith("lead") or rec.get("tool_calls") is None:
+            continue
+        out["trace_available"] = True
+        denied = sum(1 for c in rec.get("tool_calls") or []
+                     if c.get("name") in WRITE_TOOLS and str(c.get("outcome") or "").startswith("denied"))
+        written = len(rec.get("files_written") or [])
+        out["write_denials"] += denied
+        out["lead_files_written"] += written
+        if denied and not written:
+            out["leads_denied_writes"].append(dict(task=rec.get("task"), model=rec.get("model"),
+                                                   invocation_id=rec.get("invocation_id"), denied=denied))
+    return out
 
 
 def _grade_text(row: dict) -> Optional[str]:
@@ -645,6 +699,12 @@ def _comparability(j: dict, r: dict) -> dict:
         access = classify_access_failure(row.get("result_error"))
         if access:
             reasons.append(f"{row['arm']} {access}: {str(row['result_error'])[:80]}")
+        if str(row.get("result_error") or "").startswith("CapabilityUnavailable"):
+            reasons.append(f"{row['arm']} capability: {str(row['result_error'])[:80]}")
+        for lead in row.get("leads_denied_writes") or []:
+            reasons.append(f"{row['arm']} lead {lead.get('model')} denied {lead.get('denied')} write(s) on {lead.get('task')}")
+        if row.get("state") == "ran" and not row.get("trace_available"):
+            reasons.append(f"{row['arm']} no lead trace to check writes")
         if (row.get("unknown_usage") or 0) > 0:
             reasons.append(f"{row['arm']} unknown usage {row['unknown_usage']}")
     if j.get("engine_sha") and r.get("engine_sha") and j["engine_sha"] != r["engine_sha"]:

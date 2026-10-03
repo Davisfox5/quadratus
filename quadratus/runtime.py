@@ -374,6 +374,9 @@ class Fleet:
             raise ProviderError("Project sessions require CLI transport with filesystem access.")
         if allow_writes and not provider.restricted:
             view = provider.in_directory(self.project.root, allow_writes=True)
+            # The checks the harness itself will run are the commands this
+            # granted call may run unapproved (CLAUDE_SPEC.allowed_tools_flag).
+            view.granted_commands = tuple(getattr(self, "check_commands", ()) or ())
             if lead_turns:
                 view.max_turns = lead_turns
             if lead_tool:
@@ -394,16 +397,17 @@ class Fleet:
                 # ordinary continuation (Codex review of 3a55d82). A refusal
                 # never reaches here, so it keeps its precedence.
                 denied = _relevant_denials(getattr(view, "last_tool_failures", None),
-                                           getattr(self, "check_commands", ()) or ())
+                                           getattr(self, "check_commands", ()) or (), writes_granted=True)
                 if denied:
                     from .session import CapabilityUnavailable
                     raise CapabilityUnavailable(
                         f"{model_key} reached its turn limit after being denied a command the harness "
-                        "itself requires: " + "; ".join(c[:160] for c in denied[:3])
-                        + ". Declare it as a check or a capture profile. Work preserved.") from exc
+                        "itself requires or a write it was granted: " + "; ".join(c[:160] for c in denied[:3])
+                        + ". Declare the command as a check or a capture profile; a denied write is the "
+                        "transport's permission mode. Work preserved.") from exc
                 raise
             denied = _relevant_denials(getattr(view, "last_tool_failures", None),
-                                       getattr(self, "check_commands", ()) or ())
+                                       getattr(self, "check_commands", ()) or (), writes_granted=True)
             if denied:
                 # After the one invocation, never replayed or rerouted; the
                 # edits stay for inspection (Codex, Run 18).
@@ -856,9 +860,12 @@ def _looks_like_request(reply: str) -> bool:
     return any(_is_request_line(line.strip()) for line in (reply or "").splitlines())
 
 
-def _relevant_denials(failures, checks) -> List[str]:
+def _relevant_denials(failures, checks, *, writes_granted: bool = False) -> List[str]:
     """Denied commands the harness itself named: a configured check exactly,
-    or the harness's own capture command. Other denials (exploration) are
+    or the harness's own capture command. With ``writes_granted``, a denied
+    file tool as well: a call granted writes that cannot write has lost the
+    capability the grant exists for (Stage B, 2026-10-03), and burning its
+    turns on retries is not a model outcome. Other denials (exploration) are
     only recorded in the ledger."""
     out = []
     for entry in failures if isinstance(failures, list) else ():
@@ -867,6 +874,8 @@ def _relevant_denials(failures, checks) -> List[str]:
         command = entry.get("command")
         if isinstance(command, str) and (command in checks or _is_capture_invocation(command)):
             out.append(command)
+        elif writes_granted and entry.get("tool") and not command:
+            out.append(f"{entry['tool']} {entry.get('path') or ''}".strip())
     return out
 
 

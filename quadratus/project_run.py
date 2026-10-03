@@ -317,6 +317,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                        **({'run_budget': budget} if budget else {}))
     try:
         fleet.progress = progress  # one live line per call as it ends
+        # The checks are the commands a granted editing call may run
+        # unapproved and the denials that count as a capability failure.
+        fleet.check_commands = tuple(shlex.join(g['argv']) for g in plan if g.get('argv'))
     except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
         pass
     in_flight = {}
