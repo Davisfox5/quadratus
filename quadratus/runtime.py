@@ -376,7 +376,10 @@ class Fleet:
             view = provider.in_directory(self.project.root, allow_writes=True)
             # The checks the harness itself will run are the commands this
             # granted call may run unapproved (CLAUDE_SPEC.allowed_tools_flag).
-            view.granted_commands = tuple(getattr(self, "check_commands", ()) or ())
+            try:
+                view.granted_commands = tuple(getattr(self, "check_commands", ()) or ())
+            except AttributeError:  # a fake view without attributes (tests)
+                pass
             if lead_turns:
                 view.max_turns = lead_turns
             if lead_tool:
