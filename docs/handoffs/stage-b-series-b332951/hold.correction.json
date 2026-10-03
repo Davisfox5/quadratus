@@ -1,0 +1,6 @@
+{
+  "corrects": "hold.json field 'mechanism', last clause",
+  "at": "2026-10-03T13:20:50Z",
+  "correction": "The post-hoc grade of the second f5 cell promised there was not run: Codex's preservation guidance (#35 comment 5969458776) excludes new grading during this step. The f5 jev grade stays withheld; grading it later is a separate decision. hold.json is left unchanged as raw evidence.",
+  "mechanism_restated": "An uncommitted marker line appended to docs/jev-stage-b-plan.md made the engine checkout dirty; the runner's integrity check then refused the next launch (f6) and withheld the in-flight f5 jev cell's grade before grading, recorded the stop at 2026-10-03T13:15:34Z, and exited. The marker was removed at 13:18:35Z after exit. Underlying reason: claude:opus leads could not perform granted edits (Claude CLI permissionMode default denied every project Edit/Write)."
+}
