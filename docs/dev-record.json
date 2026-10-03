@@ -580,6 +580,23 @@
         "claude: Mac session added the collector's Chromium positive and negative cases as a committed test at b332951 (0f4156a plus one test file; collector and grade_f3 unchanged). That is the single SHA handed to Codex for the narrow collector verification. Lint clean, 17 passed and 4 browser cases skipped in the cloud container. CI pending."
       ],
       "acknowledged_at": "2026-10-01T19:11:18Z"
+    },
+    {
+      "id": "T-jev-stage-b",
+      "purpose": "Stage B execution: seven GameTape feature pairs (rule and jev arms), 14 cells once, on #50 at b332951 (not the candidate: the engine addition decider_labels lives on #50, which is reviewed and cleared by Codex but not yet integrated into #42), from the Mac IDE session under Davis's authorization (#35 comment 5965492940, relayed by Codex); series dir /Users/davisfox/Documents/GitHub/stage-b/series-b332951, packet digest 006894d640356b14f3b1bac18605e255bb98e68c666156acc7507125e0358e40, prepared 2026-10-03T11:36:17Z; results and receipt recorded here",
+      "base": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "owns": [
+        "stage-b-results/"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-03T11:37:16Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
