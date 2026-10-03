@@ -662,21 +662,26 @@ def _write_denials(run_dir: Path, project_root: Optional[Path] = None) -> dict:
     lead that could not do its job, and an invoked lead with no usable
     trace is missing evidence, never zero denials."""
     out = dict(write_denials=0, outside_write_denials=0, leads_denied_writes=[], lead_files_written=0,
-               outside_files_written=0, lead_traces_missing=[], leads_invoked=0, trace_complete=False)
+               outside_files_written=0, uncertain_files_written=0, lead_traces_missing=[], leads_invoked=0,
+               trace_complete=False)
     root = Path(project_root).resolve() if project_root else None
 
-    def in_project(path) -> bool:
-        if not path:
-            return True  # a relative or withheld path is the project's own
+    def place(path, cwd) -> Optional[bool]:
+        """True inside the project, False outside, None unknown. A relative
+        path is resolved against the call's recorded cwd (the project root
+        when none was recorded), traversal and symlinks followed, before
+        containment is tested (Codex re-review of 10bb9b4: a relative
+        ../scratch write, or one through a project symlink, is not a
+        project write). A withheld path proves nothing either way."""
+        if not path or root is None:
+            return None
         text = str(path)
-        if not text.startswith("/"):
-            return True
-        if root is None:
-            return True
+        base = Path(cwd) if cwd else root
         try:
-            return Path(text).resolve().is_relative_to(root)
-        except (OSError, ValueError):
-            return False
+            candidate = Path(text) if text.startswith("/") else base / text
+            return candidate.resolve().is_relative_to(root)
+        except (OSError, ValueError, RuntimeError):
+            return None
 
     invoked = []
     inv = run_dir / "invocations.jsonl"
@@ -707,24 +712,39 @@ def _write_denials(run_dir: Path, project_root: Optional[Path] = None) -> dict:
         if rec is None:
             out["lead_traces_missing"].append(dict(label, reason="no trace record"))
             continue
-        if rec.get("tool_calls") is None:
-            out["lead_traces_missing"].append(dict(label, reason=str(rec.get("transcript") or rec.get("error") or "no tool calls")[:120]))
+        if rec.get("tool_calls") is None or rec.get("error"):
+            # No tool calls, or the parser failed on the transcript: an empty
+            # list beside an error is not an observation of zero denials.
+            out["lead_traces_missing"].append(dict(label, reason=str(
+                rec.get("error") or rec.get("transcript") or "no tool calls")[:120]))
             continue
+        cwd = rec.get("cwd")
         denied_in = denied_out = 0
         for c in rec.get("tool_calls") or []:
             if c.get("name") in WRITE_TOOLS and str(c.get("outcome") or "").startswith("denied"):
-                if in_project(c.get("path")):
-                    denied_in += 1
-                else:
+                # A denied write with no usable path counts against the
+                # project: it is the grant that failed, wherever it aimed.
+                if place(c.get("path"), cwd) is False:
                     denied_out += 1
-        written_in = sum(1 for f in rec.get("files_written") or [] if in_project(f))
-        written_out = len(rec.get("files_written") or []) - written_in
+                else:
+                    denied_in += 1
+        written_in = written_out = written_unknown = 0
+        for f in rec.get("files_written") or []:
+            where = place(f, cwd)
+            if where is True:
+                written_in += 1
+            elif where is False:
+                written_out += 1
+            else:
+                written_unknown += 1
         out["write_denials"] += denied_in
         out["outside_write_denials"] += denied_out
         out["lead_files_written"] += written_in
         out["outside_files_written"] += written_out
+        out["uncertain_files_written"] += written_unknown
         if denied_in and not written_in:
-            out["leads_denied_writes"].append(dict(label, denied=denied_in, outside_written=written_out))
+            out["leads_denied_writes"].append(dict(label, denied=denied_in, outside_written=written_out,
+                                                   uncertain_written=written_unknown))
     out["trace_complete"] = bool(invoked) and not out["lead_traces_missing"]
     return out
 

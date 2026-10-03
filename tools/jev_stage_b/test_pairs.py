@@ -540,7 +540,8 @@ def test_a_lead_denied_its_project_writes_stops_the_series_and_marks_the_pair_no
     summary = P.collect(out)
     rule = next(r for r in summary["rows"] if r["arm"] == "rule" and r["task"] == "feat-0")
     assert rule["write_denials"] == 7 and rule["lead_files_written"] == 0 and rule["trace_complete"]
-    assert rule["leads_denied_writes"] == [dict(task="t1", invocation_id="inv-1", model="claude:opus", denied=7, outside_written=0)]
+    assert rule["leads_denied_writes"] == [dict(task="t1", invocation_id="inv-1", model="claude:opus", denied=7,
+                                                outside_written=0, uncertain_written=0)]
     pair = summary["pairs"][0]
     assert not pair["comparable"] and "rule lead claude:opus denied 7 project write(s) on t1" in pair["not_comparable_because"]
     # The jev arm wrote normally and is not blamed.
@@ -620,3 +621,75 @@ def test_one_traced_lead_never_vouches_for_another_invoked_lead_without_a_transc
     pair = summary["pairs"][0]
     assert not pair["comparable"]
     assert "jev lead claude:opus on t2 has no usable trace: unavailable in this environment" in pair["not_comparable_because"]
+
+
+# ---- Codex re-review of 10bb9b4: relative and symlinked scratch writes, parser errors
+
+def test_relative_and_symlinked_scratch_writes_are_resolved_before_containment(tmp_path):
+    repo = _project(tmp_path)
+    out = tmp_path / "runs"
+    P.prepare(_packet(repo, tasks=1), out)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    (scratch / "probe.txt").write_text("x")
+
+    def launcher(cell, _packet):
+        project = Path(cell["project"])
+        (project / "scratch-link").symlink_to(scratch)  # a project symlink pointing outside
+        run_dir = project / ".quadratus" / "runs" / "r"
+        run_dir.mkdir(parents=True)
+        (run_dir / "result.json").write_text(json.dumps(dict(completed=False, checks=[], tasks=1, budget=dict(unknown_usage_attempts=0), decisions=[])))
+        (run_dir / "invocations.jsonl").write_text(json.dumps(dict(
+            task="t1", role="lead", canonical_model="claude:opus", invoked=True, invocation_id="L")) + "\n")
+        (run_dir / "trace.jsonl").write_text(json.dumps(dict(
+            invocation_id="L", task="t1", role="lead", model="claude:opus", cwd=str(project),
+            tool_calls=[dict(name="Edit", outcome="denied", path=str(project / "app.py")),
+                        dict(name="Write", outcome="success"), dict(name="Write", outcome="success")],
+            files_written=["../scratch/probe.txt", "scratch-link/probe.txt", "notes.md"])) + "\n")
+        return dict(run_dir=str(run_dir), completed=False)
+
+    manifest = P.run(out, engine=ENGINE, launcher=launcher, versions={})
+    row = next(r for r in P.collect(out)["rows"] if r["arm"] == "jev")
+    # The two scratch writes resolve outside the project; notes.md is a real project write.
+    assert row["lead_files_written"] == 1 and row["outside_files_written"] == 2 and row["uncertain_files_written"] == 0
+    assert row["leads_denied_writes"] == []  # one project write happened, so the lead could write
+    # Without that one project file the same lead is a capability stop.
+    out2 = tmp_path / "runs2"
+    P.prepare(_packet(repo, tasks=1), out2)
+
+    def launcher2(cell, pk):
+        r = launcher(cell, pk)
+        trace = Path(r["run_dir"]) / "trace.jsonl"
+        rec = json.loads(trace.read_text())
+        rec["files_written"] = ["../scratch/probe.txt", "scratch-link/probe.txt"]
+        trace.write_text(json.dumps(rec) + "\n")
+        return r
+
+    manifest = P.run(out2, engine=ENGINE, launcher=launcher2, versions={})
+    assert manifest["stopped"]["reason"].startswith("capability-failure: lead claude:opus on t1 was denied 1 project write(s)")
+    row = next(r for r in P.collect(out2)["rows"] if r["arm"] == "jev")
+    assert row["leads_denied_writes"][0]["outside_written"] == 2
+
+
+def test_a_trace_record_with_a_parser_error_is_unusable_evidence_even_with_an_empty_tool_list(tmp_path):
+    repo = _project(tmp_path)
+    out = tmp_path / "runs"
+    P.prepare(_packet(repo, tasks=1), out)
+
+    def launcher(cell, _packet):
+        run_dir = Path(cell["project"]) / ".quadratus" / "runs" / "r"
+        run_dir.mkdir(parents=True)
+        (run_dir / "result.json").write_text(json.dumps(dict(completed=True, checks=[], tasks=1, budget=dict(unknown_usage_attempts=0), decisions=[])))
+        (run_dir / "invocations.jsonl").write_text(json.dumps(dict(
+            task="t1", role="lead", canonical_model="claude:opus", invoked=True, invocation_id="E")) + "\n")
+        # The real trace_call exception shape: the empty schema plus an error.
+        (run_dir / "trace.jsonl").write_text(json.dumps(dict(
+            invocation_id="E", task="t1", role="lead", model="claude:opus", transcript="native-private/claude/x.jsonl",
+            tool_calls=[], files_written=[], files_not_written=[], error="AttributeError: 'str' object has no attribute 'get'")) + "\n")
+        return dict(run_dir=str(run_dir), completed=True)
+
+    P.run(out, engine=ENGINE, launcher=launcher, versions={})
+    summary = P.collect(out)
+    row = summary["rows"][0]
+    assert not row["trace_complete"] and row["lead_traces_missing"][0]["reason"].startswith("AttributeError")
+    assert not summary["pairs"][0]["comparable"]
