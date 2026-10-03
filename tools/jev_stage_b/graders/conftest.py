@@ -201,19 +201,39 @@ def sort_console_error(text, url, errors, http_errors):
         errors.append(f"console: {text}")
 
 
+def _path(url):
+    from urllib.parse import urlsplit
+    return urlsplit(url or "").path
+
+
 def unexpected_console_errors(errors, http_errors, responses, expected_http=()):
     """Everything that fails the page, given ``expected_http``: (method,
-    url fragment, status) triples the grader provoked on purpose. Each one
-    must have been observed as a real response (request evidence, Codex
-    review of e3deaed P1 #3); only Chromium's resource diagnostic for a
-    matching URL and status is excused. Returns (missing_expected, failures)."""
-    observed = [(m, frag, st) for m, frag, st in expected_http
-                if any(r["method"] == m and frag in r["url"] and r["status"] == st for r in responses)]
-    missing = [f"{m} {frag} -> {st}" for m, frag, st in expected_http if (m, frag, st) not in observed]
-    # Only an expectation the responses bear out excuses anything.
-    excused = [e for e in http_errors
-               if any(frag in (e.get("url") or "") and e["status"] == st for _, frag, st in observed)]
-    failures = list(errors) + [e["text"] for e in http_errors if e not in excused]
+    exact URL path, status) triples the grader provoked on purpose, one per
+    expected occurrence. Rules (Codex reviews of e3deaed P1 #3 and 3a1eef9
+    P2): each expectation must have been observed as a real response, and
+    is consumed by exactly one; every other error response (any method, any
+    path, any status, including a different method at the same path) fails;
+    Chromium's resource diagnostic is excused once per consumed response at
+    that exact path and status, and any further diagnostic fails. Returns
+    (missing_expected, failures)."""
+    pool = list(responses)
+    consumed, missing = [], []
+    for method, path, status in expected_http:
+        hit = next((r for r in pool if r["method"] == method and _path(r["url"]) == path and r["status"] == status), None)
+        if hit is None:
+            missing.append(f"{method} {path} -> {status}")
+        else:
+            pool.remove(hit)
+            consumed.append(hit)
+    failures = list(errors)
+    failures += [f"unexpected HTTP error response: {r['method']} {r['url']} -> {r['status']}" for r in pool]
+    allowance = [(_path(r["url"]), r["status"]) for r in consumed]
+    for entry in http_errors:
+        key = (_path(entry.get("url")), entry["status"])
+        if key in allowance:
+            allowance.remove(key)  # one diagnostic per consumed response
+        else:
+            failures.append(entry["text"])
     return missing, failures
 
 

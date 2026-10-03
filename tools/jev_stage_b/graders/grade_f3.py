@@ -54,6 +54,7 @@ def test_R3_inline_rename_control_enter_saves_escape_cancels_and_errors_show(liv
     live = live_factory([{"name": "One"}, {"name": "Two"}])
     page = page_factory()
     _open(live, page)
+    one_id = next(p["id"] for p in live.api("/api/projects") if p["name"] == "One")
     patches = []
     page.on("request", lambda req: patches.append(req.url) if req.method == "PATCH" else None)
     page.evaluate("() => { window.__graderMarker = 'kept'; }")
@@ -88,10 +89,12 @@ def test_R3_inline_rename_control_enter_saves_escape_cancels_and_errors_show(liv
     assert shown, "the server's error text must be shown"
     assert len(patches) == 2
     assert page.evaluate("() => document.querySelector('.project-card .name').textContent.trim()") == "One renamed"
-    # The duplicate name must come back as a 400 from PATCH /api/projects/<id>;
-    # Chromium logs that response as a console error, and only that one is
-    # excused, with the response itself required as evidence.
-    no_console_errors(page, expected_http=(("PATCH", "/api/projects/", 400),))
+    # The duplicate name must come back as one 400 from PATCH on exactly this
+    # project's URL; Chromium logs that response as a console error, and only
+    # that one occurrence is excused, with the response itself as evidence.
+    # Any other error response in the interaction (a broken refresh, a GET
+    # that 400s) still fails.
+    no_console_errors(page, expected_http=(("PATCH", f"/api/projects/{one_id}", 400),))
 
 
 def test_R4_rename_changes_nothing_but_the_name(application, client):
