@@ -221,3 +221,35 @@ def test_a_bounded_jev_run_completes_and_reconciles_its_ledger(tmp_path, monkeyp
     record = _record(replay)
     assert [(r["decision"], r["answer"], r["usage"]["input_tokens"]) for r in record] == [
         ("task.kind", "backend", 300), ("task.difficulty", "rote", 310)]
+
+
+# ---- Stage B (2026-10-02): a decider that labels every planned task -------
+
+def test_decider_labels_all_asks_the_orchestrator_not_to_label(tmp_path, monkeypatch):
+    """A planned run's orchestrator states KIND on nearly every task, which
+    would leave a decider nothing to decide. With decider_labels="all" the
+    prompt asks it to leave the line out, and the decider routes the task;
+    a label it states anyway is still kept, never overridden."""
+    decider = FakeDecider({"task.kind": "backend", "task.difficulty": "standard"})
+    from tests.lifecycle.test_lifecycle_matrix import DECL_T2
+    plan = [UNLABELLED, DECL_T2]
+    script = Script(orchestrator=lambda c, r: plan.pop(0) if plan else "DONE")
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, decider=decider,
+                   decider_labels="all")
+    assert replay.result.completed, replay.result.error
+    prompts = [c.prompt for c in replay.of("orchestrator")]
+    assert prompts and all("Do not begin your reply with a KIND line" in p for p in prompts)
+    assert all("begin your reply with a single line 'KIND:" not in p for p in prompts)
+    assert [(r["task"], r["decision"], r["answer"]) for r in _record(replay)] == [
+        ("t1", "task.kind", "backend"), ("t1", "task.difficulty", "standard")]
+
+
+def test_decider_labels_unstated_keeps_the_kind_request(tmp_path, monkeypatch):
+    replay = _run(tmp_path, monkeypatch, DECL_T1, FakeDecider())
+    prompts = [c.prompt for c in replay.of("orchestrator")]
+    assert prompts and all("begin your reply with a single line 'KIND:" in p for p in prompts)
+    import pytest
+
+    from quadratus.project_run import run_project
+    with pytest.raises(ValueError, match="decider_labels"):
+        run_project("x", tmp_path / "project", None, decider_labels="some")

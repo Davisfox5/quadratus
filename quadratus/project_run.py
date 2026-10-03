@@ -55,7 +55,8 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 progress=None, ask_operator=None, plan_gate=None,
                 default_scope=None, run_limits=None, forbid=(), declared_paths=(),
                 security_verdict_json=False, gates=None, extra_checks=(), capture_profile=None,
-                readiness=None, survey=None, direct_tier=False, tasks=None, decider=None):
+                readiness=None, survey=None, direct_tier=False, tasks=None, decider=None,
+                decider_labels="unstated"):
     """Keep both successful and interrupted runs next to their source tree.
 
     ``tasks`` is an operator-written task list (explicit-task entry): each
@@ -76,6 +77,9 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
     ``decider`` names an external routing decider (``"jev"``) consulted only
     where the orchestrator stated no usable label; ``None`` or ``"rule"`` is
     the deterministic default. Its calls are billed API calls, metered.
+    ``decider_labels`` is ``"unstated"`` (the decider fills in only what the
+    orchestrator left out) or ``"all"`` (the orchestrator is asked not to
+    label, so the decider routes every planned task).
 
     ``readiness`` is the operator's capability readiness probes
     (quadratus.readiness): a JSON path or list, validated here and run once
@@ -86,6 +90,8 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
 
     if not goal.strip():
         raise ValueError('Describe the project change to make.')
+    if decider_labels not in ('unstated', 'all'):
+        raise ValueError("decider_labels must be 'unstated' or 'all'")
     if max_tasks < 1:
         raise ValueError('max_tasks must be at least 1')
     if tasks is not None:
@@ -129,7 +135,8 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     security_verdict_json=security_verdict_json,
                     fleet_type=Fleet, session_factory=new_session, extras=extras,
                     capture_profile=profile, readiness=probes, survey=survey, direct_tier=direct_tier,
-                    tasks=list(tasks) if tasks is not None else None, decider=decider)
+                    tasks=list(tasks) if tasks is not None else None, decider=decider,
+                    decider_labels=decider_labels)
 
 
 #: Flags that change only how much a runner prints, never what it runs.
@@ -246,7 +253,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
          extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False, tasks=None,
-         decider=None):
+         decider=None, decider_labels="unstated"):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
@@ -292,6 +299,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         survey=survey,
         direct_tier=direct_tier,
         decider=decider,
+        decider_labels=decider_labels,
     )
     preview = policy.resolve(default_scope.permitted_paths if default_scope else (),
                              writing=allow_writes) if policy else None
@@ -309,6 +317,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                        **({'run_budget': budget} if budget else {}))
     try:
         fleet.progress = progress  # one live line per call as it ends
+        # The checks are the commands a granted editing call may run
+        # unapproved and the denials that count as a capability failure.
+        fleet.check_commands = tuple(shlex.join(g['argv']) for g in plan if g.get('argv'))
     except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
         pass
     in_flight = {}

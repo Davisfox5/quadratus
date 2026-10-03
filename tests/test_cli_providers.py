@@ -844,3 +844,42 @@ def test_a_codex_401_is_a_named_vendor_wide_sign_in_failure():
     with pytest.raises(ProviderError) as caught:
         _extract_codex_result(stream)
     assert getattr(caught.value, "auth_invalid", False) and "sign-in was rejected" in str(caught.value)
+
+
+# ---- 2026-10-03: the Claude write grant (Stage B series b332951) ----------
+
+def test_claude_write_grant_is_accept_edits_plus_exact_allow_rules_for_the_checks(monkeypatch):
+    """A lead with writes launched in permissionMode default, and claude -p
+    denied every project Edit/Write there (ten Opus lead calls in Stage B).
+    Granted writes now send acceptEdits, and each check the harness will run
+    becomes an exact Bash allow rule plus its ``:*`` prefix form; nothing
+    else is allowed. Verified live on claude 2.1.288."""
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/claude")
+    view = ClaudeCLIProvider(model="opus").in_directory("/tmp/p", allow_writes=True)
+    view.granted_commands = ("python -m pytest -q", "node tests/ui/a.test.js")
+    argv = view._build_argv("p", "s")
+    assert argv[argv.index("--permission-mode") + 1] == "acceptEdits"
+    at = argv.index("--allowedTools")
+    assert argv[at + 1:at + 5] == ["Bash(python -m pytest -q)", "Bash(python -m pytest -q:*)",
+                                   "Bash(node tests/ui/a.test.js)", "Bash(node tests/ui/a.test.js:*)"]
+    assert "--disallowed-tools" not in argv[:at] or "Edit" not in argv
+    # No checks: the grant still lands, with no allow rules at all.
+    bare = ClaudeCLIProvider(model="opus").in_directory("/tmp/p", allow_writes=True)._build_argv("p", "s")
+    assert "acceptEdits" in bare and "--allowedTools" not in bare
+    # Read-only and restricted calls are unchanged.
+    ro = ClaudeCLIProvider(model="opus")._build_argv("p", "s")
+    assert "acceptEdits" not in ro and "--allowedTools" not in ro
+    assert "Bash Edit Write NotebookEdit" in ro
+
+
+def test_claude_denials_record_denied_file_tools_with_their_path():
+    envelope = json.dumps({"result": "waiting", "type": "result", "permission_denials": [
+        {"tool_name": "Write", "tool_input": {"file_path": "/p/app.py", "content": "SECRET"}},
+        {"tool_name": "Edit", "tool_input": {"file_path": "/p/static/app.js", "old_string": "a", "new_string": "b"}},
+        {"tool_name": "Bash", "tool_input": {"command": "python -m pytest -q"}},
+        {"tool_name": "Read", "tool_input": {"file_path": "/p/x"}}]})
+    out = cli_providers._extract_claude_denials(envelope)
+    assert out == [dict(kind="permission_denied", tool="Write", status="denied", path="/p/app.py"),
+                   dict(kind="permission_denied", tool="Edit", status="denied", path="/p/static/app.js"),
+                   dict(kind="permission_denied", command="python -m pytest -q", status="denied")]
+    assert "SECRET" not in json.dumps(out)

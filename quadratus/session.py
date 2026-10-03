@@ -490,6 +490,13 @@ class SessionConfig:
     #: defaulted or degraded route. The rule stays the default; a decider
     #: that refuses leaves the rule's answer in place with the reason noted.
     decider: Optional[object] = None
+    #: Which routing labels the decider answers: ``"unstated"`` (the default)
+    #: fills in only what the orchestrator left out; ``"all"`` asks the
+    #: orchestrator not to label at all, so every planned task is routed by
+    #: the decider (Stage B, 2026-10-02: a planned run's orchestrator states
+    #: KIND on nearly every task, which would leave a decider with nothing to
+    #: decide). A label the orchestrator states anyway is still kept.
+    decider_labels: str = "unstated"
     #: Design and UI work also gets a reviewer from another vendor, briefed
     #: on design and aesthetic choices, even when the task is SIMPLE.
     design_cross_check: bool = True
@@ -3344,6 +3351,13 @@ class Session:
             return
 
     # -- orchestration -------------------------------------------------------
+    def _kind_request(self) -> str:
+        """The labelling instruction: the orchestrator labels, unless a decider
+        is configured to label everything (SessionConfig.decider_labels)."""
+        if self.config.decider is not None and self.config.decider_labels == "all":
+            return _DECIDER_LABELS_REQUEST
+        return _KIND_REQUEST
+
     def _survey_request(self) -> str:
         """The HYPOTHESIS instruction, on a survey run after an unfinished
         task or a task that left a finding."""
@@ -3620,7 +3634,7 @@ class Session:
                     "goal is met. To read a full artifact behind a summary "
                     "first, reply with exactly 'FETCH: <artifact-id>' and "
                     "nothing else. " + _ASK_SPARINGLY
-                    + f"\n\n{_SIZE_CEILING}\n\n{_KIND_REQUEST}\n\n{_NEEDS_REQUEST}"
+                    + f"\n\n{_SIZE_CEILING}\n\n{self._kind_request()}\n\n{_NEEDS_REQUEST}"
                     + ("\n\n" + (_COVERS_REQUEST if self.memory.ledger.requirements
                                   else _REQUIREMENTS_REQUEST + " " + _COVERS_REQUEST)
                        if self.config.requirements_ledger else "")
@@ -6630,6 +6644,20 @@ _KIND_REQUEST = (
     "is routed as general/simple. In those same lines no line may begin with ASK:, "
     "FETCH:, CONSULT or WORKER, and no line may be the bare word DONE, because each is "
     "read as that control verb rather than as your task."
+)
+
+
+#: The same slot when a decider labels every task (decider_labels="all"):
+#: the orchestrator is asked to leave the label out, and the harness's
+#: decider answers kind and difficulty from the task text. The same
+#: control-verb rules on the first lines still apply.
+_DECIDER_LABELS_REQUEST = (
+    "Do not begin your reply with a KIND line: this run's routing decider labels each "
+    "task's kind and difficulty from the task text you write, so write the task on the "
+    "first line. In the first "
+    f"{MAX_PREFACE_LINES} lines no line may begin with ASK:, FETCH:, CONSULT or WORKER, and "
+    "no line may be the bare word DONE, because each is read as that control verb rather "
+    "than as your task."
 )
 
 

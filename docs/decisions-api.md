@@ -53,6 +53,10 @@ What the engine does with it (`JevDecider`, `Session._route_with_decider`):
 
 - Only when the orchestrator's reply carried no usable KIND line (a
   "defaulted" or "degraded" route). A stated label is never overridden.
+  With `--decider-labels all` (`SessionConfig.decider_labels`, Stage B,
+  2026-10-02) the orchestrator is asked not to write a KIND line at all,
+  so the decider routes every planned task; a label it states anyway is
+  still kept. The default, `unstated`, is the behaviour above.
 - One `choice` question per decision, `task.kind` then `task.difficulty`,
   with the task text as state; the answer must be one of the ladder's own
   labels or it is refused. Every answer is sent with its definition and the

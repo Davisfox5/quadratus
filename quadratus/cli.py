@@ -112,6 +112,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
                 capture_profile=getattr(args, "capture_profile", None),
                 readiness=getattr(args, "readiness", None),
                 decider=getattr(args, "decider", None),
+                decider_labels=getattr(args, "decider_labels", "unstated"),
                 forbid=args.forbid, declared_paths=args.declared_paths,
                 max_tasks=args.max_tasks, mode=args.mode,
                 security_verdict_json=getattr(args, "security_verdict_json", False),
@@ -178,6 +179,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
         security_verdict_json=getattr(args, "security_verdict_json", False),
         progress=progress,
         decider=_decider_for(args, meter),
+        decider_labels=getattr(args, "decider_labels", "unstated"),
     )
 
     fleet = Fleet(settings, usage_meter=meter, allow_writes=args.allow_writes)
@@ -386,6 +388,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             "difficulty): 'rule' is the deterministic default; 'jev' asks TypeSafe AI's Jev "
             "(pip install 'quadratus[decisions]', TYPESAFE_API_KEY), a billed API call that is "
             "metered and recorded on the task. A stated label is never overridden."
+        ),
+    )
+    engine.add_argument(
+        "--decider-labels", choices=("unstated", "all"), default="unstated",
+        help=(
+            "With --decider jev: 'unstated' (default) fills in only the labels the orchestrator "
+            "left out; 'all' asks the orchestrator not to write a KIND line, so the decider "
+            "routes every planned task. A label the orchestrator states anyway is kept."
         ),
     )
     engine.add_argument(
