@@ -1,0 +1,899 @@
+{
+  "version": 1,
+  "note": "One shared development record (plan on #35, comment 5922888762). Edited through tools/dev_record.py; the acceptance manifest and workflow scorecard keep their own evidence, referenced here, never copied.",
+  "candidate": {
+    "pr": 42,
+    "sha": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+    "gate": "merge #42 to main, then the five-run series (docs/DIRECTION.md finish line)",
+    "required_receipts": [
+      "ci",
+      "acceptance",
+      "review"
+    ],
+    "history": [
+      {
+        "previous": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+        "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+        "reason": "Mac Claude session merged #44 (3e4528a) into #42 at abf1cbe without an independent review; cloud then merged #44's Codex-review fixes (9119013, 83cf726) and kept Codex's shared-budget reproducer (f96e0c8). Receipts start over on this SHA; Codex's targeted re-review of the Jev decider on #44 and CI on f96e0c8 are the gate",
+        "by": "claude",
+        "at": "2026-10-01T02:09:21Z"
+      }
+    ]
+  },
+  "tasks": [
+    {
+      "id": "T-direct-tier",
+      "purpose": "direct execution tier (#42)",
+      "base": "155d524",
+      "owns": [
+        "quadratus/session.py",
+        "quadratus/contract.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "integrated",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "5cdd1e5822d24017c4e1c7831303d89762846b05",
+        "at": "2026-09-30T15:13:00Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "5cdd1e5822d24017c4e1c7831303d89762846b05",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/42#issuecomment-5914126205",
+          "scope": [
+            "quadratus/session.py"
+          ],
+          "at": "2026-09-30T15:17:00Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [
+        "live confirmation passed: run 20261001T001902Z-537183f7 (#35 comment 5922171568)"
+      ],
+      "integrated": {
+        "sha": "5cdd1e5822d24017c4e1c7831303d89762846b05",
+        "candidate": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+        "at": "2026-10-01T00:40:00Z"
+      }
+    },
+    {
+      "id": "T-explicit-wording",
+      "purpose": "explicit-list closure wording (#45)",
+      "base": "5cdd1e5",
+      "owns": [
+        "quadratus/session.py"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "integrated",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "a4edac4",
+        "at": "2026-10-01T00:25:00Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "a4edac4",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/42#issuecomment-5922303618",
+          "scope": [
+            "quadratus/session.py"
+          ],
+          "at": "2026-10-01T00:38:00Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [],
+      "integrated": {
+        "sha": "a4edac4",
+        "candidate": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+        "at": "2026-10-01T00:40:00Z"
+      }
+    },
+    {
+      "id": "T-jev-decider",
+      "purpose": "Jev routing decider (#44)",
+      "base": "main",
+      "owns": [
+        "quadratus/decisions.py",
+        "docs/decisions-api.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "integrated",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "b2e56171afe22e712adbc96d146f1f2410a9e26f",
+        "at": "2026-10-01T02:09:22Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "b2e56171afe22e712adbc96d146f1f2410a9e26f",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923395969",
+          "scope": [
+            "quadratus/decisions.py",
+            "docs/decisions-api.md"
+          ],
+          "at": "2026-10-01T02:17:37Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [
+        "Vercel free tier excludes Jev (probe 2026-09-30): a paid top-up or a ts_ key is needed before the comparison run",
+        "claude: Codex's #44 review (P1 shared budget bypass, three P2) fixed in 9119013; boundary tests on the orchestrated path in tests/lifecycle/test_decider.py; Codex's reproducer tests/lifecycle/test_codex_jev_budget.py lives on the candidate only because it needs the explicit-task entry",
+        "claude: backlog from the live run: the choice question sends bare label names with null criteria, so Jev classified a four-file favicon task (route + SVG + template + test) as backend; give each kind and difficulty label a one-line criterion before any routing-quality claim"
+      ],
+      "integrated": {
+        "sha": "b2e56171afe22e712adbc96d146f1f2410a9e26f",
+        "candidate": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+        "at": "2026-10-01T02:41:54Z"
+      }
+    },
+    {
+      "id": "T-jev-live-run",
+      "purpose": "one live run with --decider jev on candidate 248ce9f (branch claude/direct-tier-jev)",
+      "base": "248ce9f4505cec962481a19e36c7a6fd565073ef",
+      "owns": [
+        "live-run:jev-comparison"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "integrated",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+        "at": "2026-10-01T02:31:05Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923533394",
+          "scope": [
+            "live-run:jev-comparison"
+          ],
+          "at": "2026-10-01T02:31:05Z"
+        }
+      ],
+      "blockers": [
+        {
+          "requirement": "a Jev key with credit",
+          "failure": "decision call returns 403 on the free tier",
+          "evidence": "docs/decisions-api.md (probe 2026-09-30)",
+          "classification": "reachable",
+          "by": "davis",
+          "at": "2026-10-01T01:04:00Z",
+          "resolved": {
+            "resolution": "direct TypeSafe key obtained; live decisions verified on jev-1.13.0 (#44 at 3e4528a)",
+            "by": "davis",
+            "at": "2026-10-01T01:50:30Z"
+          }
+        }
+      ],
+      "decisions": [
+        "unblocked by davis: direct TypeSafe key obtained; live decisions verified on jev-1.13.0 (#44 at 3e4528a)",
+        "claude: candidate for the run is #42 at f96e0c8 (claude/direct-tier); claude/direct-tier-jev at 4f11a27 is superseded. Invocation unchanged: identical to 20261001T001902Z plus --decider jev, KIND line dropped, direct TypeSafe key in the project's gitignored .env",
+        "claude: run 20261001T022457Z-6602cd28 started on f96e0c8 (#35 comment 5923488989); live Jev decisions kind=backend (0.78, previously stated frontend) and difficulty=simple (0.63), 1,310 in / 217 out tokens, 0.588 s",
+        "claude: run 20261001T022457Z-6602cd28 PASSED with fresh independent grade: Jev answered kind=backend (0.78) and difficulty=simple (0.63), no refusal; lead stayed grok:default so routing did not change; overhead 1,527 tokens, 0.639 s, about $0.000055; whole run 6 calls, 326,126 tokens, 150.3 s. Integration established; usefulness and savings not"
+      ],
+      "acknowledged_at": "2026-10-01T02:26:21Z",
+      "integrated": {
+        "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+        "candidate": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+        "at": "2026-10-01T02:41:54Z"
+      }
+    },
+    {
+      "id": "T-grok-comparison",
+      "purpose": "comparison of Codex's published Jev run against 20260930T141209Z and 20261001T001902Z, on the #35 thread; no code, no launch, no second grade",
+      "base": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+      "owns": [
+        "analysis:#35 Jev comparison write-up"
+      ],
+      "author": "grok",
+      "reviewer": "claude",
+      "state": "reviewed",
+      "claimed_at": "2026-10-01T02:09:22Z",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+        "at": "2026-10-01T02:54:24Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923763006",
+          "scope": [
+            "analysis:#35 Jev comparison write-up"
+          ],
+          "at": "2026-10-01T02:54:24Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [
+        "claude: delivery is the write-up relayed in #35 comment 5923763006 (Grok CLI, 31,671 tokens, no Jev call); arithmetic re-checked against Codex's tables (1,527 tokens, 0.639 s, $0.000055, +20.7% whole-run, +28.8% task tokens, 13.761 s unexplained wall residual). Caveat on the verdict's last sentence, as Codex also noted: the native-accounting gap is not attributable to Jev, which is weaker than 'not a Jev effect'; causality is unresolved. Its test design for a later sample (frozen labels, cells where default and label pick different leads, a no-Jev arm, outcome or cost scored, agreement not scored) is adopted as input to T-grok-samples and T-codex-harness"
+      ],
+      "acknowledged_at": "2026-10-01T02:54:23Z"
+    },
+    {
+      "id": "T-jev-labels",
+      "purpose": "explicit definitions and examples for every task.kind and task.difficulty answer, a stated tie-break for mixed work, one definition source for the Jev question and the docs, version pinned in evidence; no new categories, no confidence cutoff, routing and admission unchanged (#35 comment 5923633181)",
+      "base": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+      "owns": [
+        "quadratus/decision_labels.py",
+        "quadratus/decisions.py",
+        "quadratus/session.py:_route_with_decider",
+        "docs/decisions-api.md",
+        "tests/test_decisions.py",
+        "tests/lifecycle/test_decider.py",
+        "CLAUDE.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "integrated",
+      "claimed_at": "2026-10-01T02:41:54Z",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "5844fd50394a5094d0fbbb07c7469821cf2399b1",
+        "at": "2026-10-01T03:03:14Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "93941b56005688c6245f07cd0d03e678c3413fab",
+          "verdict": "stale",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923834389",
+          "scope": [
+            "quadratus/decision_labels.py",
+            "quadratus/decisions.py",
+            "quadratus/session.py:_route_with_decider",
+            "docs/decisions-api.md",
+            "tests/test_decisions.py",
+            "tests/lifecycle/test_decider.py",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-01T02:59:28Z",
+          "stale_reason": "delivery moved from 93941b5 to 5844fd5"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "5844fd50394a5094d0fbbb07c7469821cf2399b1",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923904956",
+          "scope": [
+            "quadratus/decision_labels.py",
+            "quadratus/decisions.py",
+            "quadratus/session.py:_route_with_decider",
+            "docs/decisions-api.md",
+            "tests/test_decisions.py",
+            "tests/lifecycle/test_decider.py",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-01T03:06:50Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [
+        "claude: Codex acknowledged the scope for independent review (#35 comment 5923763006)",
+        "claude: scope extended to CLAUDE.md",
+        "claude: Codex calibration notes: the favicon is a development example and must not reappear as a held-out result; the frontend/backend tie-break is a declared convention, not proof the earlier backend answer was wrong; later comparisons record the actual lead and required checks/reviews, not label agreement alone",
+        "claude: delivery moved to 5844fd5 because the retry correction (T-jev-retries) landed on the same branch; Codex's cleared review of 93941b5 is stale by rule and the combined SHA is re-reviewed once"
+      ],
+      "acknowledged_at": "2026-10-01T02:53:18Z",
+      "integrated": {
+        "sha": "5844fd50394a5094d0fbbb07c7469821cf2399b1",
+        "candidate": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+        "at": "2026-10-01T03:23:35Z"
+      }
+    },
+    {
+      "id": "T-grok-samples",
+      "purpose": "about ten executable sample tasks from repository work across rote/simple/standard/complex and mixed cases, with acceptance checks, permitted paths, capabilities, defensible kind/difficulty answer sets and rule-default versus alternative leads; development and held-out cases kept distinct; answer sets frozen before any Jev call (#35 comment 5923633181)",
+      "base": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+      "owns": [
+        "docs/jev-samples/",
+        "tests/fixtures/jev-samples/"
+      ],
+      "author": "grok",
+      "reviewer": "codex",
+      "state": "reviewed",
+      "claimed_at": "2026-10-01T02:41:54Z",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "d1feaf0e9ac5edaf12c1dac7918bc1c004e8ac36",
+        "at": "2026-10-01T03:56:01Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "2cd7d86b115b3b07d67503139abf3ea162dd8f3b",
+          "verdict": "stale",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923937019",
+          "scope": [
+            "docs/jev-samples/",
+            "tests/fixtures/jev-samples/"
+          ],
+          "at": "2026-10-01T03:09:21Z",
+          "stale_reason": "delivery moved from 2cd7d86 to a5470e0"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "c91a6b7657b4e76fc47f5c7b36f2601c686d9930",
+          "verdict": "stale",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/48#issuecomment-5924396652",
+          "scope": [
+            "docs/jev-samples/",
+            "tests/fixtures/jev-samples/"
+          ],
+          "at": "2026-10-01T03:54:45Z",
+          "stale_reason": "delivery moved from c91a6b7 to d1feaf0"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "d1feaf0e9ac5edaf12c1dac7918bc1c004e8ac36",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5924506468",
+          "scope": [
+            "docs/jev-samples/",
+            "tests/fixtures/jev-samples/"
+          ],
+          "at": "2026-10-01T04:05:23Z"
+        }
+      ],
+      "blockers": [
+        {
+          "requirement": "a frozen sample set is executable against the pinned sources with reviewed, defensible answer sets (plan 5923633181)",
+          "failure": "hold-ledger-append assumes a file-backed Ledger that does not exist at the base; dev-mutation-node references a missing script; hold-list-timing authorizes code changes outside its permitted path on a machine-dependent threshold; hold-dotenv-guard's assertion may already pass on a 404; dev-favicon and hold-import-note cite other comments or an unexecuted task instead of materialized text and pinned source; hold-heading drops capture needs; hold-import-readonly's empty scope fails read_scope; acceptable sets not narrowed against the #47 definitions; packet not in the harness schema",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923937019 and #49 review 5923907891",
+          "classification": "reachable",
+          "by": "codex",
+          "sha": "2cd7d86b115b3b07d67503139abf3ea162dd8f3b",
+          "at": "2026-10-01T03:09:21Z",
+          "resolved": {
+            "resolution": "revised packet at a5470e0 in the #49 validator schema with projects engine f96e0c8 and gametape 1cd9264; Codex's eight rows applied (#35 comment 5924163482); Codex validates on the local GameTape baseline",
+            "by": "grok",
+            "at": "2026-10-01T03:31:52Z"
+          }
+        },
+        {
+          "requirement": "every sample's checks and capture steps execute as written against the pinned sources (plan 5923633181)",
+          "failure": "dev-node-status invokes a JS test with Python pytest (exit 4); dev-favicon waits on a non-visual favicon link (real Chrome timeout); the capture fixture's sample ID does not match the actual t1 (validator refusal)",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/48#issuecomment-5924396652 (reproduced; corrections given); all ten schema, source and default-route checks pass against 2a7578b",
+          "classification": "reachable",
+          "by": "codex",
+          "sha": "c91a6b7657b4e76fc47f5c7b36f2601c686d9930",
+          "at": "2026-10-01T03:54:45Z",
+          "resolved": {
+            "resolution": "d1feaf0: Node command for the JS test, favicon capture with no wait on the head element, capture fixture at .quadratus/capture-fixtures/t1/one-row.csv with the settled-summary wait (#35 comment 5924416086)",
+            "by": "grok",
+            "at": "2026-10-01T03:56:01Z"
+          }
+        }
+      ],
+      "decisions": [
+        "claude: delivered as draft PR #48 on base f96e0c8: docs/jev-samples/PACKET.md and tests/fixtures/jev-samples/samples.json only (verified against the PR file list); ten tasks, three development, seven held-out; favicon row marked score=false; answer sets are proposals until Codex's review freezes them",
+        "unblocked by grok: revised packet at a5470e0 in the #49 validator schema with projects engine f96e0c8 and gametape 1cd9264; Codex's eight rows applied (#35 comment 5924163482); Codex validates on the local GameTape baseline",
+        "claude: tip a5470e0 verified against f96e0c8 and the candidate merge-base: only docs/jev-samples/PACKET.md and tests/fixtures/jev-samples/samples.json (the intermediate 021d24f carried a stray copy of tools/jev_experiment/packet.py, deleted at tip). Acceptable sets are now mostly single labels; whether that over-narrows genuine ambiguity is Codex's freezing call",
+        "claude: Codex smoke-validated a5470e0 offline with #49 at b48e6c0 against engine f96e0c8 and local GameTape 1cd9264: all refs resolve, all rows validate, ten authored default leads match the cold route; not a freeze. One next action for Grok: a source-bound outline for hold-budget-threads (invariant missing from tests/test_run_budget.py, deterministic ordering without sleeps, what wrong accounting it detects, why complex) before touching other rows (#35 comment 5924198268)",
+        "claude: Grok's hold-budget-threads outline (#35 comment 5924207545): the missing invariant is once-only finish accounting under concurrent finish; a Barrier(2) ordering without sleeps; detects dropped, double-counted or re-finished tickets; no failing baseline observed and complex is not supported on this row. The packet therefore has no earned complex case; Codex decides whether to narrow the row to simple coverage or drop it",
+        "claude: Codex accepted the budget outline as simple once-only coverage and lifted the per-row hold: one consolidated correction batch on #48 per https://github.com/Davisfox5/quadratus/pull/48#issuecomment-5924270205, coverage gaps preserved; relayed to Grok on #35 (comment 5924273960 asked for it)",
+        "claude: 88ddc72 verified: only the two owned files against f96e0c8 and the candidate merge-base; Codex's consolidated batch applied with an evidence table (#35 comment 5924320206); engine still bound to f96e0c8, rebinding to 2a7578b requested",
+        "unblocked by grok: d1feaf0: Node command for the JS test, favicon capture with no wait on the head element, capture fixture at .quadratus/capture-fixtures/t1/one-row.csv with the settled-summary wait (#35 comment 5924416086)",
+        "claude: frozen by Codex: classification freeze digest 0f284ad2efe7f4fe42a5c3dcc53a0006adfda4e5d4064715308521993c555fe7 over #48 d1feaf0, engine 2a7578b, tool b48e6c0, labels kind-v1/difficulty-v1, GameTape 1cd9264; coverage rote/simple only, three routes can differ from default, seven controls",
+        "claude: Codex's freeze clearance is https://github.com/Davisfox5/quadratus/pull/48#issuecomment-5924506287; the Mac session's offline readout at d1feaf0 is https://github.com/Davisfox5/quadratus/pull/48#issuecomment-5924437581"
+      ],
+      "acknowledged_at": "2026-10-01T02:59:28Z"
+    },
+    {
+      "id": "T-codex-harness",
+      "purpose": "reproducible offline experiment harness and comparison packet: versions, hashes, requests/answers, default and selected lead, call ledger, grade; a bounded classification/comparison proposal with limits, repetition count and stop rules for Davis (#35 comment 5923633181)",
+      "base": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+      "owns": [
+        "tools/jev_experiment/",
+        "docs/jev-experiment-plan.md"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "reviewed",
+      "claimed_at": "2026-10-01T02:41:54Z",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "b48e6c028e19054f238e4f18e319bf4428130208",
+        "at": "2026-10-01T03:18:15Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "ec6886ecb3e219403e8b26ba00ae037c41b511d9",
+          "verdict": "stale",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/49#issuecomment-5923907891",
+          "scope": [
+            "tools/jev_experiment/",
+            "docs/jev-experiment-plan.md"
+          ],
+          "at": "2026-10-01T03:06:04Z",
+          "stale_reason": "delivery moved from ec6886e to 54a2576"
+        },
+        {
+          "reviewer": "claude",
+          "sha": "54a2576c47c40fa07f5b347423833f9f9cee8430",
+          "verdict": "stale",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923985726",
+          "scope": [
+            "tools/jev_experiment/",
+            "docs/jev-experiment-plan.md"
+          ],
+          "at": "2026-10-01T03:14:36Z",
+          "stale_reason": "delivery moved from 54a2576 to b48e6c0"
+        },
+        {
+          "reviewer": "claude",
+          "sha": "b48e6c028e19054f238e4f18e319bf4428130208",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5924027300",
+          "scope": [
+            "tools/jev_experiment/",
+            "docs/jev-experiment-plan.md"
+          ],
+          "at": "2026-10-01T03:18:15Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [
+        "claude: review of ec6886e: 12 tests pass at the SHA and on a committed merge with #47's 5844fd5; lint clean; no provider client; freeze and scoring integrity checks hold. Two gate items, not tool defects: (1) the packet schema the harness validates (tasks[], acceptable_kinds, acceptable_difficulties, scope{...}, source_refs, checks[argv], expected_default_lead, split 'held_out') is not the shape #48 delivered (samples[], acceptable.kind[{label,rationale}], permitted_paths, leads, split 'held-out'); the harness schema is the contract and #48 converts before freeze; (2) source_refs are verified in the engine repo at base_sha while the samples cite GameTape project files at baseline 1cd9264, so the packet needs a project repo and baseline for those refs. Small: counts_by_split folds refusals into not-acceptable; a refused count beside it keeps them visible",
+        "claude: review of 54a2576: 13 tests pass at the SHA and on a committed merge with #47's 5844fd5; lint clean; projects map binds refs to committed blobs at the declared baseline, dirty checkouts ignored, missing roots and refs refused; refused count added. Small, non-blocking: when a packet declares projects, nothing checks that projects.engine.base_sha equals the top-level base_sha, so the two can disagree silently; refuse the mismatch or derive one from the other"
+      ],
+      "acknowledged_at": "2026-10-01T02:54:24Z"
+    },
+    {
+      "id": "T-jev-retries",
+      "purpose": "SDK transport retries off for Jev calls so every HTTP attempt is one budget reservation (Codex P1, #35 comment 5923854904); transport-level 503/timeout regression; call limit unchanged, injected-client fixtures and refusal semantics kept; delivered on #47's branch for re-review",
+      "base": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+      "owns": [
+        "quadratus/decisions.py:JevDecider._sdk_client",
+        "tests/test_decisions.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "integrated",
+      "claimed_at": "2026-10-01T03:01:19Z",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "5844fd50394a5094d0fbbb07c7469821cf2399b1",
+        "at": "2026-10-01T03:03:14Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "5844fd50394a5094d0fbbb07c7469821cf2399b1",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5923904956",
+          "scope": [
+            "quadratus/decisions.py:JevDecider._sdk_client",
+            "tests/test_decisions.py"
+          ],
+          "at": "2026-10-01T03:06:50Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [],
+      "acknowledged_at": "2026-10-01T03:03:13Z",
+      "integrated": {
+        "sha": "5844fd50394a5094d0fbbb07c7469821cf2399b1",
+        "candidate": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+        "at": "2026-10-01T03:23:35Z"
+      }
+    },
+    {
+      "id": "T-jev-stage-a",
+      "purpose": "one Stage A classification-only Jev batch per #35 comment 5924506468, approved by Davis via Codex relay (comment 5924566368): frozen #48 d1feaf0, engine 2a7578b, tool b48e6c0, GameTape 1cd9264, freeze 0f284ad2; at most 60 HTTP attempts, 200k tokens, $0.02 cost stop, 300/330 s, $0.20 invoice allowance on existing credit, no retries or continuation; result reviewed by claude",
+      "base": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+      "owns": [
+        "experiment:stage-a-classification-batch"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "reviewed",
+      "claimed_at": "2026-10-01T04:11:05Z",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+        "at": "2026-10-01T04:27:39Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5924736888",
+          "scope": [
+            "experiment:stage-a-classification-batch"
+          ],
+          "at": "2026-10-01T04:27:39Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [
+        "claude: authorization recorded: Davis 'I approve.' relayed in #35 comment 5924566368; Codex chat 01a0c4f1-158c-7b90-91bb-35a4ec800df4 holds exclusive execution; the previously consumed live coding-run allowance is unaffected; Stage B is a separate decision",
+        "claude: terminal receipt (#35 comment 5924736888): 60/60 HTTP attempts = 60 reservations = 30 task/repetition pairs, model jev-1.13.0, no refusal, missing observation, unknown usage, drift or overshoot; every task gave the same label pair 3/3. Against frozen sets: development 6/9 (2/3 tasks), held-out 15/21 (5/7 tasks), 21/30 overall; the offline router picked an accepted lead on 27/30 vs 21/30 for the default; three anticipated lead changes happened plus one unintended (hold-budget-threads to Sol). Disagreements 3/3 each: dev-node-status docs/simple vs docs/rote; hold-budget-threads test/standard vs concurrency/simple; hold-template-get perf/simple vs docs/simple. Usage 71,766 tokens, 14.2 s, about $0.0027 estimated. Re-checked here from the posted table: 30 rows, 21 accepted, leads grok:default 18 / grok:worker 3 / Sol 9, disagreements exactly those three tasks. Both allowances remain consumed; Stage B not authorized",
+        "claude: Mac session cross-check (#35 comment 5924762066): all ten selected leads reproduce offline through the engine at 2a7578b; arithmetic reconciles. Reading: kind answers confident (P>=0.93 on 7/10), difficulty answers not (P<0.70 on 7/10), and both lead moves against the accepted set were below 0.70. Hypothesis only, post hoc on ten rote/simple rows: a P>=0.70 floor keeping the rule default below it would have given 10/10 accepted leads; to be pre-registered in any Stage B packet, not adopted from this run. Recommendation carried: keep kind delegation, hold difficulty delegation pending standard/complex rows"
+      ],
+      "acknowledged_at": "2026-10-01T04:11:05Z"
+    },
+    {
+      "id": "T-jev-stage-b-prep",
+      "purpose": "Stage B pair runner and plan: five GameTape feature tasks, each run with and without Jev on identical checkouts and limits, both arms of a pair launched together, results collected into one paired comparison; drafts bound to the real tree in the IDE before any run (Davis, 2026-10-01)",
+      "base": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+      "owns": [
+        "tools/jev_stage_b/",
+        "docs/jev-stage-b-plan.md",
+        "quadratus/session.py",
+        "quadratus/project_run.py",
+        "quadratus/cli.py",
+        "docs/decisions-api.md",
+        "tests/lifecycle/test_decider.py",
+        "tests/lifecycle/harness.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "reviewed",
+      "claimed_at": "2026-10-01T19:11:18Z",
+      "acknowledged": true,
+      "delivery": {
+        "sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+        "at": "2026-10-03T11:31:46Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5968770462",
+          "scope": [
+            "tools/jev_stage_b/pairs.py",
+            "tools/jev_stage_b/graders",
+            "quadratus/session.py",
+            "quadratus/project_run.py",
+            "quadratus/cli.py"
+          ],
+          "at": "2026-10-03T11:35:48Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [
+        "claude: Davis's directive in the coordinator chat, 2026-10-01: Claude quarterbacks the Stage B live runs from the IDE on the Mac; Codex's weekly window is about 10% and is spent only on a usage reading and a light review of the runner. Execution ownership for this series therefore sits with Claude, by operator decision, as an exception to DIRECTION.md's Codex-executes rule; recorded here so the exception is visible",
+        "claude: scope extended to quadratus/session.py, quadratus/project_run.py, quadratus/cli.py, docs/decisions-api.md, tests/lifecycle/test_decider.py, tests/lifecycle/harness.py",
+        "claude: Davis, 2026-10-02: go deep (four to six requirements per feature, planned runs, survey recovery 4 so breakages are logged with a HYPOTHESIS rather than stopped on), rule arm may run across the series first (--arm). Engine addition decider_labels=all so Jev labels every planned task; otherwise the orchestrator's KIND line leaves Jev nothing to decide. Delivered at 1e07180 on #50.",
+        "claude: Davis via Codex (#35 comment 5965492940, 2026-10-03): conditional go-ahead for the seven-feature series once the three runner gaps are fixed, independent graders are frozen, the packet is bound and Codex has reviewed the exact SHAs. Runner gaps closed at 5448403; graders, profile integrity and CLI version recording at e8438b951dd003308a913b86b6ecd9512dd3d39a. Execution stays with the Mac IDE session; nothing launched from the cloud.",
+        "claude: Mac IDE session delivered graders, the bound packet.stage-b.json, run lock and per-arm profiles at ef0c602 (#35 comment 5965636603). CI red on ruff only; fixed at e3deaed (baseline copies excluded from lint, grade_f6/f7 imports sorted, lock error chained). The import sort changes grade_f6.py and grade_f7.py, so the frozen digest quoted at ef0c602 is superseded; nothing was prepared, so prepare at e3deaed or later writes the digest that counts.",
+        "claude: Codex focused review of e3deaed (#50 comment 5968618736): not cleared, three P1 blockers reproduced (engine-saved seat failures not stopping the series; frozen inputs checked once per run; f3 grader rejecting its own expected 400). All three fixed at 3a1eef9 with regressions; returned to Codex for focused verification of those paths. Nothing launched.",
+        "claude: Codex verification of 3a1eef9 (#50 comment 5968713717): saved-failure and integrity fixes verified; one P2 left, the expected-HTTP excuse matched a URL fragment. Fixed at 0f4156aca14b81b4ed20a214d03470438dd69b1e: exact path, one occurrence, every other error response fails. Returned for the narrow collector verification. Nothing launched.",
+        "claude: Mac session added the collector's Chromium positive and negative cases as a committed test at b332951 (0f4156a plus one test file; collector and grade_f3 unchanged). That is the single SHA handed to Codex for the narrow collector verification. Lint clean, 17 passed and 4 browser cases skipped in the cloud container. CI pending."
+      ],
+      "acknowledged_at": "2026-10-01T19:11:18Z"
+    },
+    {
+      "id": "T-jev-stage-b",
+      "purpose": "Stage B execution: seven GameTape feature pairs (rule and jev arms), 14 cells once, on #50 at b332951 (not the candidate: the engine addition decider_labels lives on #50, which is reviewed and cleared by Codex but not yet integrated into #42), from the Mac IDE session under Davis's authorization (#35 comment 5965492940, relayed by Codex); series dir /Users/davisfox/Documents/GitHub/stage-b/series-b332951, packet digest 006894d640356b14f3b1bac18605e255bb98e68c666156acc7507125e0358e40, prepared 2026-10-03T11:36:17Z; results and receipt recorded here",
+      "base": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "owns": [
+        "stage-b-results/"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-03T11:37:16Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "058e6ca41a8823176d2a89da2658b9c2addb5b2b",
+        "at": "2026-10-03T13:22:28Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "claude: Freeze from b332951 (Mac session, #35 comment 5968792049): packet digest 006894d640356b14f3b1bac18605e255bb98e68c666156acc7507125e0358e40; frozen inputs digest (22 grader files + 2 capture profiles) 61c9f0cd60f53b4a7ef49156091239c9579b5db2acc128162d0980a6ba5a95a5; prepared 2026-10-03T11:36:17Z; 14 cells prepared on GameTape 1cd9264 worktrees; jev_model jev-1.13.0; bounds 90 calls / 2.5M tokens / 3600 s / 2 workers per cell, max_tasks 10, survey_recovery 4, repeats 1, --pairs 1.",
+        "claude: Launched 2026-10-03T11:49:17Z from the Mac IDE session (#35 comment 5968876087) under Davis's authorization 5965492940 and Codex's clearance of b332951 (5968770462), all four CI jobs green on that head. Engine b332951 clean; CLI versions claude 2.1.269, codex-cli 0.154.0, grok 1.0.30; sign-in liveness one minimal call each; TypeSafe probe clean. run --pairs 1, seven pairs in packet order, launcher pid 16103 holding run.lock, log series-b332951/run.log. First pair f1-preview-errors running on both arms. Execution allowance: this is the one authorized pass of 14 cells; no override of a series stop without posting first.",
+        "claude: Pre-launch liveness calls recorded apart from the cells in series-b332951/preflight-liveness-ledger.json (#35 comment 5968903714): claude haiku ok; codex first attempt 400 because the CLI config's default gpt-6.1-sol is not a ChatGPT-account model, second with -m gpt-5.6-sol ok (6,240 tokens); grok ok (17,609 tokens, CLI estimate $0.0119, not an invoice); two free TypeSafe listings. None counted against the series bounds. Mac session: no override of a series stop, no relaunch of a terminal or interrupted cell, no replacement, no extension of the seven-pair allowance; any exception is a new direct human decision.",
+        "claude: Cell f1-preview-errors/jev-r0 finished 12:03:26Z (#35 comment 5968984562): RunBudgetExceeded on reported_token_threshold, 4,020,087 reported tokens against 2.5M, 6 attempts, 0 unknown usage, 0 tasks closed, stop during t1's draft. Jev: kind backend P0.98, difficulty standard P0.54 (jev-1.13.0). Lead Sol; the t1 draft collaborator claude:opus consumed 3,440,905 in / 63,500 out over 719 s, overshooting the threshold by ~1.5M on its own (threshold is checked after each return). Independent grade 2/4: R1 and R4 pass, R2 and R3 (the UI half) fail. Engine API-price counterfactual $21.68 (not a bill). Preserved as is; rule sibling still running on t2 (lead spread to opus). Series not stopped.",
+        "claude: Pair 1 f1-preview-errors complete (#35 comment 5969017323): both arms RunBudgetExceeded on reported_token_threshold, both graded 2/4 (R1, R4 pass; R2, R3 UI fail). Rule arm 20261003T114917Z-22462685: 1,133 s, 8 attempts, 4,213,187 tokens; t1 lead grok:default closed clean with the integration check passing in 280 s; t2 lead spread to claude:opus (1.04M then 1.83M input per call), second call crossed the threshold; 1 task closed. Jev arm: 849 s, 4,020,087 tokens, 0 closed. Same grade and same missing requirements; the arms differ in route (rule: grok then opus; jev: sol plus opus collaborator). One pair, one repeat: observation, not finding. Engine observation: the threshold is checked after each return and single agentic calls ran 1.0M to 3.4M tokens, so both cells overshot by 1.5M to 1.7M in one call; most cells may end on budget before the feature completes. Bounds unchanged. Series continued to pair 2 (f2-project-search) on its own.",
+        "claude: Pair 2 f2-project-search complete (#35 comment 5969155198): both arms RunBudgetExceeded on reported_token_threshold, both graded 4/5 with R3 (URL hash) failing on both because the orchestrator put R3 in a later task and the budget ended each run inside t1. Rule arm 20261003T120825Z-e841d40d: 903 s, 6 attempts, 2,548,169 tokens, t1 lead grok:default plus opus collaborator, threshold crossed as the collaborator returned, 0 closed. Jev arm 20261003T120825Z-321860d7: 1,050 s, 8 attempts, 2,790,804 tokens; Jev labelled frontend P1.00 / simple P0.54, same grok:default seat as the rule's label; got one step further (integration check passed, design review ran) before the stop; 0 closed. Tally after two pairs: grades 2/4 vs 2/4 and 4/5 vs 4/5; closed 1 vs 0 then 0 vs 0; every cell ended on the threshold; Jev agreed with the rule on pair 2, routed higher on pair 1. Bounds frozen; pair 3 f3-project-rename running.",
+        "claude: Pair 3 f3-project-rename complete (#35 comment 5969303135): rule 2/5, jev 3/5, both RunBudgetExceeded on reported_token_threshold, both closed t1 (the PATCH endpoint) clean on grok:default. Rule arm 20261003T122606Z-3a03f56f: 868 s, 12 attempts, 2,825,410 tokens; t2 (card control) spread to claude:opus alone, four lead calls, no rename control in the tree. Grader caveat on the rule arm, reported not corrected: R1 fails on wording only (duplicate message 'Another project already has that name' does name the rule; the grader looked for 'second', 'duplicate' or 'exists'); frozen grade stands at 2/5 with this note. Jev arm 20261003T122606Z-57397da3: 1,106 s, 14 attempts, 2,645,558 tokens; Jev t1 backend P0.97 / simple P0.60 -> grok; t2 frontend P1.00 / standard P0.88 -> sol with opus collaborator, revision, recheck, passing check and design review, then the threshold; a .rename-btn exists but blanks the name on save (R3, R5 fail). Tally after three pairs: jev 2/4, 4/5, 3/5 vs rule 2/4, 4/5, 2/5; closed jev 0,0,1 vs rule 1,0,1; six of six cells on the threshold. Pair 4 f4-tags-export running.",
+        "claude: Codex read-only correction on the f3 wording caveat (#35 comment 5969338718): the overstrict substring check is valid, but it hit BOTH arms (jev 'Project name is already in use', rule 'Another project already has that name'; both name the rule). Per-requirement: jev R1 fail(wording), R2 pass, R3 fail, R4 pass, R5 pass = 3/5; rule R1 fail(wording), R2 pass, R3 fail, R4 pass, R5 fail = 2/5. The one-point difference is R5 (the rule tree has no .rename-btn; jev's exists), not R1. Both R3 fail, so neither arm has a working rename interaction. Frozen totals preserved, shared R1 caveat attached, no rescoring. grade_f3.py SHA256 e7a24d8b4a0990f1cac85d4c2bcc83da47efbae9fc3e888e167d0e5df44f7cf1 matches reviewed, active and manifest-frozen bytes. Evidence: work/pr50-b332951-review/f3-wording-caveat/evidence.json. This supersedes the earlier note's reading that the caveat applied to the rule arm only.",
+        "claude: Pair 4 f4-tags-export complete (#35 comment 5969425308): rule 1/6 (20261003T124436Z-f9125ef0, 776 s, 8 attempts, 2,651,907 tokens, t1 spread to claude:opus, four calls, every project write denied, nothing on disk, 0 closed); jev 5/6 (20261003T124436Z-6d259913, 841 s, 16 attempts, 2,678,813 tokens; t1 backend P1.00/standard P0.66 -> sol+opus collaborator, closed clean; t2 test P1.00/standard P0.53 -> sol, then threshold; R4 card anchor absent). CONFOUND found by the Mac session: every claude:opus LEAD call ran the Claude CLI in permissionMode default and every Edit/Write on a project file was denied ('This command requires approval'); CLAUDE_SPEC carries no write_args (codex has --sandbox workspace-write, grok --always-approve), so a Claude lead with a write grant launches with no permission flag and claude 2.1.269 -p refuses project edits. Affected: f1 rule t2, f3 rule t2, f4 rule t1 (rule-arm Opus leads from the orchestrator's labels plus load spreading); Jev's labels never produced an Opus lead, so the Jev arm never hit it. Grade gaps on f3 and f4 are mostly this fault, not the labeller; any pair where the rule arm lands an Opus lead is not a valid Jev-vs-rule comparison. Neither earlier live run had a Claude lead, so the path was never exercised before today. Series continues as frozen (executor); stopping is Davis's call. Engine fix (write grant for the Claude seat, e.g. --permission-mode acceptEdits plus allow rules, verified live) is a separate later task. Tally after four pairs: jev 2/4, 4/5, 3/5, 5/6 vs rule 2/4, 4/5, 2/5, 1/6; closed jev 0,0,1,1 vs rule 1,0,1,0; eight of eight cells on the threshold. Pair 5 f5-empty-state running.",
+        "claude: HOLD (Codex via Davis, acknowledged by the Mac session, #35 comment 5969451531): no further cell launches; f6 and f7 will not start. Applied through the runner's own frozen-input integrity check (a hold marker line appended to docs/jev-stage-b-plan.md in the engine checkout makes it dirty after the first f5 cell is graded), so the in-flight f5 pair is not cut off; the second f5 cell's in-runner grade will be withheld by that check and graded once out of band with the grader SHA-256 shown unchanged, labelled post-hoc. Nothing overridden, relaunched, replaced, re-permissioned or edited in the frozen engine; bounds unchanged. Terminal packet to follow with every cell's state, grades, engine outcome, calls by role and model, usage, Jev decisions, stop record, comparability with the Opus-lead write denial marked, liveness ledger apart, and all frozen identities.",
+        "claude: Codex read-only verification of the capability failure (#35 comment 5969458776): confirmed from the preserved native transcripts (rule f1 2, f3 4, f4 4 claude:opus lead invocations, permissionMode default, project Edit/Write denied, no project files written). Frozen code: CLISpec.write_args defaults empty (cli_providers.py:996), CLAUDE_SPEC supplies none, the writable agentic path appends spec.write_args at 2161. Runner gap for the record: _read_cell, series_stop and _comparability read the terminal error shape and invocation identity, not tool_failures or the trace's denied writes, so all three cells saved RunBudgetExceeded and evaluate as no stop and comparable=true; those machine flags are insufficient. Reporting caveat: f1, f3 and f4 are non-comparable as Jev-vs-rule quality or efficiency evidence because an assigned rule lead lacked the required write capability; raw flags and grades preserved; no inference that other pairs are unaffected. Guidance adopted: f6/f7 not launched; f5 outcomes preserved under original bounds; executed, interrupted and unlaunched counts reported separately; terminal series reported as access/capability-confounded; f3 wording caveat kept; no permission or engine change, grader edit, regrade, replacement, relaunch or new experiment during preservation. Follow-up engine tasks after close: (1) a write grant for the Claude seat, verified live; (2) the runner's comparability to consume per-call tool_failures and denied writes.",
+        "claude: Mac session adjustment after Codex's verification (#35 comment 5969464609): the post-hoc grade proposed for the f5 cell whose in-runner grade the hold withholds is NOT run during preservation; it stays 'withheld' in the terminal packet and grading it later is a separate decision. f1, f3, f4 reported non-comparable on Codex's evidence basis with the runner's raw comparable=true flags preserved beside the caveat. Executed, interrupted and unlaunched counted separately. Both f5 cells still running under original bounds; f6, f7 prepared and will not launch.",
+        "claude: TERMINAL PACKET (Mac session, #35 comment 5969546239; files series-b332951/terminal-packet.json and .md beside cells/manifest.json, cells/comparison.{json,md}, hold.json, preflight-liveness-ledger.json, run.log and each cell's .quadratus/runs/<id>/). Series held and stopped 13:15:34Z by the hold (integrity-failure after f5-empty-state/jev-r0); access/capability-confounded. Identities: engine b332951 (clean at launch, hold marker removed after exit), GameTape 1cd9264, packet digest 006894d6..., frozen inputs 61c9f0cd..., CLIs claude 2.1.269 / codex-cli 0.154.0 / grok 1.0.30, launched 11:49:17Z. Counts: 14 cells, executed 10, failed 0, interrupted 0, integrity-failed 0, unlaunched 4 (f6, f7 both arms). Executed: 88 attempts, 31,169,606 reported tokens, 9,095.5 s, API-price counterfactual $159.77 (subscriptions, not a bill); Jev 14 decisions, 26,698 tokens (~$0.001), the only metered spend. Every executed cell ended on reported_token_threshold; none completed its feature. Grades jev/rule (closed jev/rule; comparable): f1 2/4 vs 2/4 (0/1; no, rule Opus lead denied 7 writes), f2 4/5 vs 4/5 (0/0; yes), f3 3/5 vs 2/5 (1/1; no, 11 denials; shared R1 wording caveat, gap is R5), f4 5/6 vs 1/6 (1/0; no, 11 denials), f5 withheld vs 4/4 (0/0; no, jev grade withheld by the hold; rule 562 s, 2,547,662 tokens, the series' only full grade), f6/f7 not executed. Runner comparable=true flags on f1/f3/f4 preserved beside the evidence table. Usage by model: opus 24 calls 18.9M in (61% of input), grok 12 calls 5.8M, fable 15 calls 3.7M, sol 18 calls 1.8M, luna 3, sonnet 2. Jev: kind backend x4, frontend x3, test x1; difficulty standard x4 (P0.53-0.88), simple x4 (P0.54-0.60); no refusal, no drift; the jev arm never got an Opus lead. No cell reached capture, a design verdict on a closed task, or the audit; survey sections empty (no re-plan reached). Established: (1) claude:opus as a writing lead cannot write (no write grant in CLAUDE_SPEC; CLI permissionMode default denies project edits), never exercised before; (2) the 2.5M post-return threshold is binding against 0.5M-3.4M agentic calls, ten of ten cells; (3) the one clean pair tied 4/5 with identical routes. Nothing here is Jev-vs-rule quality or savings evidence. Nothing relaunched, re-graded, replaced or edited.",
+        "claude: Terminal packet v2 (Mac session, #35 comment 5969573098, #46 comment 5969573271) committed docs-only at 058e6ca on #50: docs/handoffs/stage-b-series-b332951/ (terminal-packet.md/.json, manifest, comparison, packet, hold.json raw, hold.correction.json, liveness ledger, generator script); transcripts and run dirs stay local. Codex readback corrections applied: Jev 14 decisions = 7 kind (backend 3, frontend 3, test 1) + 7 difficulty (standard 4, simple 3); confidence and selected-label probability recorded separately per decision with the full distribution (lowest difficulty confidence f5 t1 simple 0.34, P0.51); 9,095.5 s is the sum of cell durations, wall span 1:26:17; hold.json's promised post-hoc grade was not run (hold.correction.json); f2: no Opus-lead confound found in the narrow review, not certified unaffected; costs: $159.77 is the API list-price counterfactual only, Jev ~$0.0011 estimated, no invoice verified, budget api_cost_usd is 0 because the CLI transport is outside that boundary; per-call model identities, selected/invoked, cached tokens, turns and per-Claude-lead denial counts added. Counts, identities and grades unchanged.",
+        "claude: AUTHORIZATION (Davis, direct, cloud session claude.ai/code/session_01GENoE71CKeM77qGCZagG1C, 2026-10-03 after the Stage B summary): verbatim 'Sure. Fix those and rerun the whole site' in answer to a three-sentence summary naming two failure points (Claude leads unable to write project files; the token cap firing only after a call returns) and the two decisions (fix now; rerun after). Read as: fix both and rerun the whole seven-pair series. Scope kept: same seven features, one repeat, existing frozen graders and GameTape base 1cd9264, fresh series and freeze on the cleared SHA, original per-cell bounds plus the opt-in per-call reserve and ceiling, subscriptions and existing TypeSafe credit only; no terminal-cell replay, replacement, larger bounds or blanket permission bypass. Fixes delivered at f09c832 (T-claude-write-grant, T-call-token-cap, T-runner-tool-denials); Codex focused review in progress (#35 comment 5972859005); Mac session executes after clearance, green CI and its own provider check.",
+        "claude: Codex watcher (relayed into the coordinator session, 2026-10-03 ~20:40Z): the original human authorization is Davis's own message in this session, verbatim 'Sure. Fix those and rerun the whole site', sent in reply to the coordinator's three-sentence summary of the first series; recorded on this task earlier today. The Mac IDE Quadratus window is reported absent from VS Code; executor identity preserved, no new execution session created. Codex usage: 89% of the weekly window remaining. f09c832 not cleared; corrections routed to the owning tasks.",
+        "claude: Executor handoff (#35 comment 5973566008, 21:17Z): the Codex watcher reopened the existing Quadratus VS Code workspace, verified the restored Mac Claude session is the same 4f0b0070-a14c-4380-b92c-f86af94fd2cf, and delivered the clearance of 17a2b5f plus the coordinator's handoff there; no new execution session. Gates before launch: four CI jobs green on 17a2b5f; the provider check (write, granted check, denied ungranted command) with version and usage recorded apart; a new immutable freeze and fresh GameTape worktrees on 17a2b5f. Authorization on this task stands; no repeat approval asked.",
+        "claude: BLOCKER (Codex watcher relay, 2026-10-03 ~21:35Z): the Mac executor session 4f0b0070-a14c-4380-b92c-f86af94fd2cf completed the provider proof on claude 2.1.269 at 2026-10-03T21:27:03Z against engine 17a2b5f: project write landed, granted python3 -V succeeded, ungranted python3 -c denied; ledger /Users/davisfox/Documents/GitHub/stage-b/provider-proof-17a2b5f/provider-proof-ledger.json, passed=true. Its own permission classifier then refused posting the #35 acknowledgment ([External System Writes]) and the freeze/preparation ([Create Unsafe Agents]). Nothing frozen or launched; the old series stays terminal; Davis notified at 21:29Z; the session is idle and blocked with its acknowledgment draft preserved. Coordinator does not post for it, reroute, retry or bypass; waits for a genuine permission change by Davis in that session. Gates otherwise complete: Codex scoped clearance, four CI jobs green, authorization on record."
+      ]
+    },
+    {
+      "id": "T-claude-write-grant",
+      "purpose": "Engine: a Claude seat with a write grant launches with --permission-mode acceptEdits plus an exact --allowedTools Bash(<cmd>) rule per granted check command (CLAUDE_SPEC had no write_args; claude 2.1.269 -p in default mode denied every project Edit/Write across 10 Opus lead calls in Stage B series b332951). Verified live on claude 2.1.288 in the cloud container: default mode denies Write; acceptEdits writes; Bash(python3 -V) grants exactly that command and denies python3 -c. Davis, 2026-10-03: fix and rerun.",
+      "base": "058e6ca41a8823176d2a89da2658b9c2addb5b2b",
+      "owns": [
+        "quadratus/cli_providers.py",
+        "quadratus/runtime.py",
+        "tests/test_cli_providers.py",
+        "tests/test_runtime.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "reviewed",
+      "claimed_at": "2026-10-03T16:39:28Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "17a2b5f2ae5fbbf7587a111c0ef7cfc31510372c",
+        "at": "2026-10-03T21:12:01Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
+          "verdict": "stale",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973256274",
+          "scope": [
+            "quadratus/cli_providers.py",
+            "quadratus/runtime.py",
+            "tests/test_cli_providers.py",
+            "tests/test_runtime.py"
+          ],
+          "at": "2026-10-03T20:37:59Z",
+          "stale_reason": "delivery moved from f09c832 to 10bb9b4"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "10bb9b46657bcea7f8bc95e9b3b97255b8c6f317",
+          "verdict": "stale",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973482710",
+          "scope": [
+            "quadratus/cli_providers.py",
+            "quadratus/runtime.py",
+            "tests/test_cli_providers.py",
+            "tests/test_runtime.py"
+          ],
+          "at": "2026-10-03T21:07:17Z",
+          "stale_reason": "delivery moved from 10bb9b4 to 17a2b5f"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "17a2b5f2ae5fbbf7587a111c0ef7cfc31510372c",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973516204",
+          "scope": [
+            "quadratus/cli_providers.py",
+            "quadratus/runtime.py",
+            "tests/test_cli_providers.py",
+            "tests/test_runtime.py"
+          ],
+          "at": "2026-10-03T21:12:01Z"
+        }
+      ],
+      "blockers": [
+        {
+          "requirement": "Every granted editing call, including a parallel child's, carries the gate plan's commands as allow rules and maps a denied required check or write to CapabilityUnavailable",
+          "failure": "new_session's fork copies progress and shared accounting but not check_commands: parent commands ('python -m pytest -q',), child commands empty; through the real Fleet._invoke with a fake transport denying that command the parent raises CapabilityUnavailable and the child returns normally",
+          "evidence": "runtime.py:380 and 775-788 at f09c832; Codex offline reproduction in comment 5973256274",
+          "classification": "reachable",
+          "by": "codex",
+          "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
+          "at": "2026-10-03T20:37:59Z"
+        }
+      ],
+      "decisions": [
+        "claude: Delivered at f09c832 on #50 (e734779 plus a guard for attribute-less fake views). Live verification on claude 2.1.288 in the cloud container through ClaudeCLIProvider.in_directory(allow_writes=True) with granted_commands=('python3 -V',): argv carries --permission-mode acceptEdits --allowedTools 'Bash(python3 -V)' 'Bash(python3 -V:*)'; the Write landed, python3 -V ran, python3 -c was denied and recorded as a permission_denied tool failure (54,048 in / 538 out, haiku). Mac verification on claude 2.1.269 still owed before the rerun.",
+        "claude: Codex blocker (fork loses check_commands) fixed at 10bb9b46657bcea7f8bc95e9b3b97255b8c6f317: Fleet.fork(root) carries check_commands and progress with the shared budget, meter and ledger; new_session's fork closure uses it; test_a_forked_fleet_carries_the_granted_check_commands. Full suite 2900 passed locally."
+      ]
+    },
+    {
+      "id": "T-call-token-cap",
+      "purpose": "Engine: the reported-token threshold is post-return only, and single agentic lead or collaborator calls ran 0.5M to 3.4M tokens in Stage B, so ten of ten cells overshot by up to 1.7M in one call. Add a pre-call reservation (no attempt starts unless the remaining token budget covers a per-call reserve) and a per-call ceiling that names an oversized call, both opt-in on RunLimits and settable from the Stage B packet; lead turn caps settable from the packet. Davis, 2026-10-03: fix and rerun.",
+      "base": "058e6ca41a8823176d2a89da2658b9c2addb5b2b",
+      "owns": [
+        "quadratus/run_budget.py",
+        "tests/test_run_budget.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "reviewed",
+      "claimed_at": "2026-10-03T16:39:28Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "17a2b5f2ae5fbbf7587a111c0ef7cfc31510372c",
+        "at": "2026-10-03T21:11:59Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
+          "verdict": "stale",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973256274",
+          "scope": [
+            "quadratus/run_budget.py",
+            "tests/test_run_budget.py"
+          ],
+          "at": "2026-10-03T20:37:41Z",
+          "stale_reason": "delivery moved from f09c832 to 10bb9b4"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "17a2b5f2ae5fbbf7587a111c0ef7cfc31510372c",
+          "verdict": "stale",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973516204",
+          "scope": [
+            "quadratus/run_budget.py",
+            "tests/test_run_budget.py"
+          ],
+          "at": "2026-10-03T21:11:34Z",
+          "stale_reason": "reviewed 17a2b5f but the delivery is 10bb9b4"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "17a2b5f2ae5fbbf7587a111c0ef7cfc31510372c",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973516204",
+          "scope": [
+            "quadratus/run_budget.py",
+            "tests/test_run_budget.py"
+          ],
+          "at": "2026-10-03T21:12:28Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": []
+    },
+    {
+      "id": "T-runner-tool-denials",
+      "purpose": "Stage B runner: comparability and series stops read per-call tool failures and denied writes (invocations.jsonl diagnostics and traces), not only the terminal error shape; a cell whose lead was denied project writes is a capability stop and its pair non-comparable (Codex 5969458776). Davis, 2026-10-03: fix and rerun.",
+      "base": "058e6ca41a8823176d2a89da2658b9c2addb5b2b",
+      "owns": [
+        "tools/jev_stage_b/"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "reviewed",
+      "claimed_at": "2026-10-03T16:39:28Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "17a2b5f2ae5fbbf7587a111c0ef7cfc31510372c",
+        "at": "2026-10-03T21:08:50Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
+          "verdict": "stale",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973256274",
+          "scope": [
+            "tools/jev_stage_b/"
+          ],
+          "at": "2026-10-03T20:37:59Z",
+          "stale_reason": "delivery moved from f09c832 to 10bb9b4"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "10bb9b46657bcea7f8bc95e9b3b97255b8c6f317",
+          "verdict": "stale",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973482710",
+          "scope": [
+            "tools/jev_stage_b/"
+          ],
+          "at": "2026-10-03T21:07:17Z",
+          "stale_reason": "delivery moved from 10bb9b4 to 17a2b5f"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "17a2b5f2ae5fbbf7587a111c0ef7cfc31510372c",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973516204",
+          "scope": [
+            "tools/jev_stage_b/"
+          ],
+          "at": "2026-10-03T21:11:17Z"
+        }
+      ],
+      "blockers": [
+        {
+          "requirement": "A lead denied its project writes is a capability stop and a non-comparable pair; every invoked lead has trace evidence or the pair is non-comparable",
+          "failure": "pairs.py:674-680 counts files_written including scratch writes outside the project, so a denied project Edit beside a successful scratch Write yields leads_denied_writes=[] (reproduced on preserved f1/rule c39e2927 and f3/rule 9ad05bde); pairs.py:671-673 sets one global trace_available on the first traced lead, so an invoked lead with transcript 'unavailable in this environment' is read as zero denials and the pair as comparable",
+          "evidence": "Codex synthetic cells and the preserved series b332951 lead calls in comment 5973256274",
+          "classification": "reachable",
+          "by": "codex",
+          "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
+          "at": "2026-10-03T20:37:59Z"
+        },
+        {
+          "requirement": "Lead writes are judged against the cell's project after resolving relative paths, traversal and symlinks; a trace record with a parser error is unusable evidence",
+          "failure": "pairs.py:668-677 returns in-project for every non-absolute path, so a successful ../scratch/probe.txt or a symlinked scratch-link/probe.txt beside a denied absolute project Edit reads as a project write (no stop, comparable); pairs.py:710-712 checks only for absent tool_calls, so a trace_call exception record (empty tool_calls plus error) reads as trace_complete with zero denials",
+          "evidence": "Codex offline probes with the real Claude parser and shareable() in comment 5973482710",
+          "classification": "reachable",
+          "by": "codex",
+          "sha": "10bb9b46657bcea7f8bc95e9b3b97255b8c6f317",
+          "at": "2026-10-03T21:07:17Z"
+        }
+      ],
+      "decisions": [
+        "claude: Codex blockers fixed at 10bb9b46657bcea7f8bc95e9b3b97255b8c6f317: lead writes judged against the cell's project root (denied and successful paths both; outside-project activity reported apart), and every invoked lead joined to its trace by invocation_id with missing or unusable records listed and the pair non-comparable; tests reproduce Codex's scratch-write and unavailable-transcript cases.",
+        "claude: Codex re-review blockers (10bb9b4) fixed at 17a2b5f2ae5fbbf7587a111c0ef7cfc31510372c: relative write paths resolved against the call's cwd with traversal and symlinks followed before containment; withheld paths uncertain; a trace record with error is unusable evidence even with empty tool_calls. Only tools/jev_stage_b changed; 23 runner tests pass."
+      ]
+    }
+  ],
+  "receipts": [
+    {
+      "kind": "ci",
+      "sha": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+      "state": "unproven",
+      "evidence": "CI queued on push 2026-10-01T00:40Z; confirm on the Actions tab",
+      "at": "2026-10-01T00:40:00Z"
+    },
+    {
+      "kind": "acceptance",
+      "sha": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+      "state": "passed",
+      "evidence": "tests/test_workflow_acceptance.py in CI; docs/workflow-acceptance-manifest.json",
+      "at": "2026-10-01T00:40:00Z"
+    },
+    {
+      "kind": "review",
+      "sha": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+      "state": "passed",
+      "evidence": "Codex review of 5cdd1e5 (#42 comment 5922197548); #45 merged with both tests",
+      "at": "2026-10-01T00:40:00Z"
+    },
+    {
+      "kind": "ci",
+      "sha": "312c35604a934a5d6d275cbc56205a40cee8d73d",
+      "state": "passed",
+      "evidence": "GitHub Actions test (3.11, 3.12) success on 312c356",
+      "at": "2026-10-01T01:33:14Z"
+    },
+    {
+      "kind": "ci",
+      "sha": "f96e0c88e7a18156a9582e3aa19de4c9d70ff89f",
+      "state": "passed",
+      "evidence": "https://github.com/Davisfox5/quadratus/actions/runs/36804136112",
+      "at": "2026-10-01T02:26:05Z"
+    },
+    {
+      "kind": "review",
+      "sha": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+      "state": "passed",
+      "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5924150971",
+      "at": "2026-10-01T03:30:13Z"
+    },
+    {
+      "kind": "ci",
+      "sha": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+      "state": "passed",
+      "evidence": "https://github.com/Davisfox5/quadratus/actions/runs/36810297868",
+      "at": "2026-10-01T03:42:53Z"
+    },
+    {
+      "kind": "acceptance",
+      "sha": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+      "state": "passed",
+      "evidence": "https://github.com/Davisfox5/quadratus/pull/35#issuecomment-5924506468 (acceptance 9 passed, inventory 109 passed / 1 skipped; inventory 9 PASS / 35 UNPROVEN, whole-workflow acceptance not claimed)",
+      "at": "2026-10-01T04:05:23Z"
+    },
+    {
+      "kind": "ci",
+      "sha": "17a2b5f2ae5fbbf7587a111c0ef7cfc31510372c",
+      "state": "passed",
+      "evidence": "https://github.com/Davisfox5/quadratus/pull/50 check suites on 17a2b5f, four jobs green 2026-10-03T21:27Z",
+      "at": "2026-10-03T21:27:36Z"
+    }
+  ]
+}
