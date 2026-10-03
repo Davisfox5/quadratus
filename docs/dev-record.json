@@ -615,6 +615,61 @@
         "claude: TERMINAL PACKET (Mac session, #35 comment 5969546239; files series-b332951/terminal-packet.json and .md beside cells/manifest.json, cells/comparison.{json,md}, hold.json, preflight-liveness-ledger.json, run.log and each cell's .quadratus/runs/<id>/). Series held and stopped 13:15:34Z by the hold (integrity-failure after f5-empty-state/jev-r0); access/capability-confounded. Identities: engine b332951 (clean at launch, hold marker removed after exit), GameTape 1cd9264, packet digest 006894d6..., frozen inputs 61c9f0cd..., CLIs claude 2.1.269 / codex-cli 0.154.0 / grok 1.0.30, launched 11:49:17Z. Counts: 14 cells, executed 10, failed 0, interrupted 0, integrity-failed 0, unlaunched 4 (f6, f7 both arms). Executed: 88 attempts, 31,169,606 reported tokens, 9,095.5 s, API-price counterfactual $159.77 (subscriptions, not a bill); Jev 14 decisions, 26,698 tokens (~$0.001), the only metered spend. Every executed cell ended on reported_token_threshold; none completed its feature. Grades jev/rule (closed jev/rule; comparable): f1 2/4 vs 2/4 (0/1; no, rule Opus lead denied 7 writes), f2 4/5 vs 4/5 (0/0; yes), f3 3/5 vs 2/5 (1/1; no, 11 denials; shared R1 wording caveat, gap is R5), f4 5/6 vs 1/6 (1/0; no, 11 denials), f5 withheld vs 4/4 (0/0; no, jev grade withheld by the hold; rule 562 s, 2,547,662 tokens, the series' only full grade), f6/f7 not executed. Runner comparable=true flags on f1/f3/f4 preserved beside the evidence table. Usage by model: opus 24 calls 18.9M in (61% of input), grok 12 calls 5.8M, fable 15 calls 3.7M, sol 18 calls 1.8M, luna 3, sonnet 2. Jev: kind backend x4, frontend x3, test x1; difficulty standard x4 (P0.53-0.88), simple x4 (P0.54-0.60); no refusal, no drift; the jev arm never got an Opus lead. No cell reached capture, a design verdict on a closed task, or the audit; survey sections empty (no re-plan reached). Established: (1) claude:opus as a writing lead cannot write (no write grant in CLAUDE_SPEC; CLI permissionMode default denies project edits), never exercised before; (2) the 2.5M post-return threshold is binding against 0.5M-3.4M agentic calls, ten of ten cells; (3) the one clean pair tied 4/5 with identical routes. Nothing here is Jev-vs-rule quality or savings evidence. Nothing relaunched, re-graded, replaced or edited.",
         "claude: Terminal packet v2 (Mac session, #35 comment 5969573098, #46 comment 5969573271) committed docs-only at 058e6ca on #50: docs/handoffs/stage-b-series-b332951/ (terminal-packet.md/.json, manifest, comparison, packet, hold.json raw, hold.correction.json, liveness ledger, generator script); transcripts and run dirs stay local. Codex readback corrections applied: Jev 14 decisions = 7 kind (backend 3, frontend 3, test 1) + 7 difficulty (standard 4, simple 3); confidence and selected-label probability recorded separately per decision with the full distribution (lowest difficulty confidence f5 t1 simple 0.34, P0.51); 9,095.5 s is the sum of cell durations, wall span 1:26:17; hold.json's promised post-hoc grade was not run (hold.correction.json); f2: no Opus-lead confound found in the narrow review, not certified unaffected; costs: $159.77 is the API list-price counterfactual only, Jev ~$0.0011 estimated, no invoice verified, budget api_cost_usd is 0 because the CLI transport is outside that boundary; per-call model identities, selected/invoked, cached tokens, turns and per-Claude-lead denial counts added. Counts, identities and grades unchanged."
       ]
+    },
+    {
+      "id": "T-claude-write-grant",
+      "purpose": "Engine: a Claude seat with a write grant launches with --permission-mode acceptEdits plus an exact --allowedTools Bash(<cmd>) rule per granted check command (CLAUDE_SPEC had no write_args; claude 2.1.269 -p in default mode denied every project Edit/Write across 10 Opus lead calls in Stage B series b332951). Verified live on claude 2.1.288 in the cloud container: default mode denies Write; acceptEdits writes; Bash(python3 -V) grants exactly that command and denies python3 -c. Davis, 2026-10-03: fix and rerun.",
+      "base": "058e6ca41a8823176d2a89da2658b9c2addb5b2b",
+      "owns": [
+        "quadratus/cli_providers.py",
+        "quadratus/runtime.py",
+        "tests/test_cli_providers.py",
+        "tests/test_runtime.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-03T16:39:28Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
+    },
+    {
+      "id": "T-call-token-cap",
+      "purpose": "Engine: the reported-token threshold is post-return only, and single agentic lead or collaborator calls ran 0.5M to 3.4M tokens in Stage B, so ten of ten cells overshot by up to 1.7M in one call. Add a pre-call reservation (no attempt starts unless the remaining token budget covers a per-call reserve) and a per-call ceiling that names an oversized call, both opt-in on RunLimits and settable from the Stage B packet; lead turn caps settable from the packet. Davis, 2026-10-03: fix and rerun.",
+      "base": "058e6ca41a8823176d2a89da2658b9c2addb5b2b",
+      "owns": [
+        "quadratus/run_budget.py",
+        "tests/test_run_budget.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-03T16:39:28Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
+    },
+    {
+      "id": "T-runner-tool-denials",
+      "purpose": "Stage B runner: comparability and series stops read per-call tool failures and denied writes (invocations.jsonl diagnostics and traces), not only the terminal error shape; a cell whose lead was denied project writes is a capability stop and its pair non-comparable (Codex 5969458776). Davis, 2026-10-03: fix and rerun.",
+      "base": "058e6ca41a8823176d2a89da2658b9c2addb5b2b",
+      "owns": [
+        "tools/jev_stage_b/"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-03T16:39:28Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
