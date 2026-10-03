@@ -596,7 +596,9 @@
       "delivery": null,
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: Freeze from b332951 (Mac session, #35 comment 5968792049): packet digest 006894d640356b14f3b1bac18605e255bb98e68c666156acc7507125e0358e40; frozen inputs digest (22 grader files + 2 capture profiles) 61c9f0cd60f53b4a7ef49156091239c9579b5db2acc128162d0980a6ba5a95a5; prepared 2026-10-03T11:36:17Z; 14 cells prepared on GameTape 1cd9264 worktrees; jev_model jev-1.13.0; bounds 90 calls / 2.5M tokens / 3600 s / 2 workers per cell, max_tasks 10, survey_recovery 4, repeats 1, --pairs 1."
+      ]
     }
   ],
   "receipts": [
