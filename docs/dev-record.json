@@ -725,12 +725,12 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "blocked",
+      "state": "delivered",
       "claimed_at": "2026-10-03T16:39:28Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "10bb9b46657bcea7f8bc95e9b3b97255b8c6f317",
-        "at": "2026-10-03T21:00:14Z"
+        "sha": "17a2b5f2ae5fbbf7587a111c0ef7cfc31510372c",
+        "at": "2026-10-03T21:08:50Z"
       },
       "reviews": [
         {
@@ -747,12 +747,13 @@
         {
           "reviewer": "codex",
           "sha": "10bb9b46657bcea7f8bc95e9b3b97255b8c6f317",
-          "verdict": "blocked",
+          "verdict": "stale",
           "evidence": "https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973482710",
           "scope": [
             "tools/jev_stage_b/"
           ],
-          "at": "2026-10-03T21:07:17Z"
+          "at": "2026-10-03T21:07:17Z",
+          "stale_reason": "delivery moved from 10bb9b4 to 17a2b5f"
         }
       ],
       "blockers": [
@@ -776,7 +777,8 @@
         }
       ],
       "decisions": [
-        "claude: Codex blockers fixed at 10bb9b46657bcea7f8bc95e9b3b97255b8c6f317: lead writes judged against the cell's project root (denied and successful paths both; outside-project activity reported apart), and every invoked lead joined to its trace by invocation_id with missing or unusable records listed and the pair non-comparable; tests reproduce Codex's scratch-write and unavailable-transcript cases."
+        "claude: Codex blockers fixed at 10bb9b46657bcea7f8bc95e9b3b97255b8c6f317: lead writes judged against the cell's project root (denied and successful paths both; outside-project activity reported apart), and every invoked lead joined to its trace by invocation_id with missing or unusable records listed and the pair non-comparable; tests reproduce Codex's scratch-write and unavailable-transcript cases.",
+        "claude: Codex re-review blockers (10bb9b4) fixed at 17a2b5f2ae5fbbf7587a111c0ef7cfc31510372c: relative write paths resolved against the call's cwd with traversal and symlinks followed before containment; withheld paths uncertain; a trace record with error is unusable evidence even with empty tool_calls. Only tools/jev_stage_b changed; 23 runner tests pass."
       ]
     }
   ],
