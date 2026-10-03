@@ -5,6 +5,7 @@
     "base_sha": "1cd9264edb4429f00cde43a04a1944d0dca37f11"
   },
   "engine_sha": "<the candidate SHA carrying decider_labels; set after #50 integrates>",
+  "jev_model": "jev-1.13.0",
   "goal": "REQUIREMENTS:\nR1 <the feature, one sentence>\n",
   "check": "python -m pytest -q",
   "extra_checks": [

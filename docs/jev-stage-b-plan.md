@@ -181,10 +181,28 @@ it hit and whether a repair recovered it. Jev decision tokens are reported apart
 work. Recorded on `#46` as T-jev-stage-b with the authorization comment
 and the terminal receipt.
 
-## Stop rules
+## Stop rules (enforced by the runner, 2026-10-03)
 
-Any cell's budget stop is that cell's result, not a series stop. The series
-stops before the next pair on: a seat reported unavailable, unknown usage
-on any cell, Jev's resolved model changing from `jev-1.13.0`, a credential
-failure, or a change to the packet after `prepare`. Nothing is retried,
+Any cell's budget stop is that cell's result, not a series stop. After
+each batch `run` reads the finished cells and stops the series before the
+next launch on: an orchestrator call answered by a model other than the
+chain's primary (a seat fallback) or a cell that raised
+`OrchestratorUnavailable`; unknown usage on any cell; Jev answering as a
+model other than the packet's `jev_model` (`jev-1.13.0`); a decider
+refusal naming the key or an auth status; or any cell that raised before
+the engine produced a result. The stop is written to `manifest.json`
+(`stopped`: reason, the cell, the time) and a later `run` refuses until
+an operator passes `--override-stop "<reason>"`, which is recorded under
+`overrides`. Before any launch, `run` re-hashes the manifest's packet
+against the digest `prepare` wrote and refuses a changed packet, and it
+reads the importable engine's checkout: a dirty tree or a HEAD other than
+the packet's `engine_sha` is refused, and the SHA is recorded on the
+manifest and on every cell. These were plan text only until Codex and
+the Mac session read the runner (#35, 2026-10-03). Nothing is retried,
 re-labelled or replaced after seeing a result.
+
+`collect` marks each pair `comparable` or not, with reasons: an arm that
+did not run, unknown usage, different engine SHAs, different orchestrator
+seats between the arms, or Jev refusals on the jev arm. It also records
+the gap between the two arms' start times, which is hours by design when
+the rule arm runs first; a non-comparable pair is still reported.

@@ -8,6 +8,10 @@ import pytest
 
 from tools.jev_stage_b import pairs as P
 
+#: A clean engine checkout at a known SHA, so the offline tests never depend
+#: on the state of the checkout they run from.
+ENGINE = dict(root="/engine", sha="e" * 40, dirty=False)
+
 
 def _project(tmp_path: Path) -> Path:
     repo = tmp_path / "gametape"
@@ -39,10 +43,12 @@ def _fake_launcher(outcomes):
         (run_dir / "result.json").write_text(json.dumps(dict(
             completed=o.get("completed", True), error=None, checks=[dict(passed=True)], source_changed=True,
             explicit_tasks=dict(tasks_closed_clean=["t1"] if o.get("completed", True) else [], tasks_unfinished=[] if o.get("completed", True) else ["t1"]),
-            budget=dict(reserved_attempts=o.get("calls", 6), reported_tokens=o.get("tokens", 300_000), stop_reason="", unknown_usage_attempts=0),
+            budget=dict(reserved_attempts=o.get("calls", 6), reported_tokens=o.get("tokens", 300_000), stop_reason="",
+                        unknown_usage_attempts=o.get("unknown_usage", 0)),
             decisions=decisions)))
-        (run_dir / "invocations.jsonl").write_text(json.dumps(dict(
-            task="t1", role="lead", canonical_model=o.get("lead", "grok:default"), invoked=True)) + "\n")
+        (run_dir / "invocations.jsonl").write_text("\n".join([
+            json.dumps(dict(task="run", role="orchestrator", canonical_model=o.get("orchestrator", "claude:fable"), invoked=True)),
+            json.dumps(dict(task="t1", role="lead", canonical_model=o.get("lead", "grok:default"), invoked=True))]) + "\n")
         if o.get("raise"):
             raise RuntimeError("provider down")
         return dict(run_dir=str(run_dir), completed=o.get("completed", True))
@@ -79,11 +85,16 @@ def test_run_launches_both_arms_of_a_pair_and_a_failed_cell_never_stops_its_sibl
     repo = _project(tmp_path)
     out = tmp_path / "runs"
     P.prepare(_packet(repo), out)
-    manifest = P.run(out, launcher=_fake_launcher({("feat-1", "jev"): {"raise": True}}))
+    manifest = P.run(out, engine=ENGINE, launcher=_fake_launcher({("feat-1", "jev"): {"raise": True}}))
     states = {c["name"]: c["state"] for c in manifest["cells"]}
     assert states == {"feat-0/jev-r0": "ran", "feat-0/rule-r0": "ran", "feat-1/rule-r0": "ran", "feat-1/jev-r0": "failed"}
     assert "provider down" in next(c for c in manifest["cells"] if c["state"] == "failed")["error"]
-    again = P.run(out, launcher=_fake_launcher({}))  # nothing left to run; nothing re-run
+    # A cell error is a series stop (plan, stop rules): recorded, and the next
+    # run refuses until an operator overrides it. Nothing is re-run either way.
+    assert manifest["stopped"]["reason"].startswith("cell-error: RuntimeError: provider down")
+    with pytest.raises(RuntimeError, match="series stopped"):
+        P.run(out, engine=ENGINE, launcher=_fake_launcher({}))
+    again = P.run(out, engine=ENGINE, launcher=_fake_launcher({}), override_stop="test: nothing left")
     assert {c["name"]: c["state"] for c in again["cells"]} == states
 
 
@@ -91,7 +102,7 @@ def test_collect_pairs_arms_and_reports_lead_changes_and_deltas(tmp_path):
     repo = _project(tmp_path)
     out = tmp_path / "runs"
     P.prepare(_packet(repo), out)
-    P.run(out, launcher=_fake_launcher({
+    P.run(out, engine=ENGINE, launcher=_fake_launcher({
         ("feat-0", "jev"): dict(kind="security", difficulty="simple", lead="openai:gpt-5.6-sol", tokens=320_000),
         ("feat-0", "rule"): dict(lead="grok:default", tokens=300_000),
         ("feat-1", "jev"): dict(completed=False, tokens=100_000),
@@ -160,10 +171,10 @@ def test_run_can_take_one_arm_first_and_collect_reads_a_planned_result(tmp_path)
         return dict(run_dir=str(run_dir), completed=False)
 
     with pytest.raises(ValueError, match="arm"):
-        P.run(out, launcher=planned_launcher, arm="codex")
-    manifest = P.run(out, launcher=planned_launcher, arm="rule")
+        P.run(out, engine=ENGINE, launcher=planned_launcher, arm="codex")
+    manifest = P.run(out, engine=ENGINE, launcher=planned_launcher, arm="rule")
     assert {c["name"]: c["state"] for c in manifest["cells"]} == {"deep-0/jev-r0": "prepared", "deep-0/rule-r0": "ran"}
-    P.run(out, launcher=planned_launcher, arm="jev")
+    P.run(out, engine=ENGINE, launcher=planned_launcher, arm="jev")
     summary = P.collect(out)
     jev = next(r for r in summary["rows"] if r["arm"] == "jev")
     assert (jev["entry"], jev["tasks"], jev["closed_clean"], jev["unfinished"]) == ("planned", 4, 2, 2)
@@ -176,3 +187,84 @@ def test_run_can_take_one_arm_first_and_collect_reads_a_planned_result(tmp_path)
     text = (out / "comparison.md").read_text()
     assert "| 2/2 | openai:gpt-5.6-sol+grok:default | backend,test/standard |" in text and "| orchestrator |" in text
     assert "| deep-0 | jev | t2 | grok:default | test |  |" in text
+
+
+# ---- Codex and the Mac session on #35 (2026-10-03): the runner's own controls
+
+def test_run_refuses_a_changed_packet_a_dirty_or_wrong_engine_and_records_the_engine(tmp_path):
+    repo = _project(tmp_path)
+    out = tmp_path / "runs"
+    P.prepare(_packet(repo), out)
+    with pytest.raises(RuntimeError, match="uncommitted"):
+        P.run(out, engine=dict(ENGINE, dirty=True), launcher=_fake_launcher({}))
+    packet_sha = dict(_packet(repo), engine_sha="f" * 40)
+    out2 = tmp_path / "runs2"
+    P.prepare(packet_sha, out2)
+    with pytest.raises(RuntimeError, match="engine_sha"):
+        P.run(out2, engine=ENGINE, launcher=_fake_launcher({}))
+    manifest = json.loads((out / "manifest.json").read_text())
+    manifest["packet"]["limits"]["max_calls"] = 999
+    (out / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(RuntimeError, match="digest"):
+        P.run(out, engine=ENGINE, launcher=_fake_launcher({}))
+    manifest["packet"]["limits"]["max_calls"] = 20
+    (out / "manifest.json").write_text(json.dumps(manifest))
+    manifest = P.run(out, engine=ENGINE, launcher=_fake_launcher({}))
+    assert manifest["engine"] == ENGINE and all(c["engine_sha"] == "e" * 40 for c in manifest["cells"])
+    assert "stopped" not in manifest
+
+
+def test_a_tripped_stop_rule_ends_the_series_before_the_next_pair_and_an_override_is_recorded(tmp_path):
+    repo = _project(tmp_path)
+    out = tmp_path / "runs"
+    P.prepare(_packet(repo, tasks=3), out)
+    launcher = _fake_launcher({("feat-0", "rule"): dict(orchestrator="openai:gpt-6-astra")})
+    manifest = P.run(out, engine=ENGINE, launcher=launcher)
+    states = {c["name"]: c["state"] for c in manifest["cells"]}
+    assert states["feat-0/jev-r0"] == "ran" and states["feat-0/rule-r0"] == "ran"
+    assert states["feat-1/rule-r0"] == "prepared" and states["feat-2/jev-r0"] == "prepared"
+    assert manifest["stopped"]["reason"].startswith("seat-fallback: orchestrator answered by openai:gpt-6-astra")
+    assert manifest["stopped"]["after"] == "feat-0/rule-r0"
+    with pytest.raises(RuntimeError, match="series stopped"):
+        P.run(out, engine=ENGINE, launcher=_fake_launcher({}))
+    manifest = P.run(out, engine=ENGINE, launcher=_fake_launcher({("feat-1", "jev"): dict(unknown_usage=2)}),
+                     override_stop="Davis: Astra seat accepted for this series")
+    assert manifest["overrides"][0]["reason"].startswith("Davis") and "stopped" in manifest["overrides"][0]
+    assert manifest["stopped"]["reason"].startswith("unknown-usage: 2 attempt(s) in feat-1/jev-r0")
+    assert {c["name"]: c["state"] for c in manifest["cells"]}["feat-2/jev-r0"] == "prepared"
+    summary = P.collect(out)
+    pair0 = next(p for p in summary["pairs"] if p["task"] == "feat-0")
+    pair1 = next(p for p in summary["pairs"] if p["task"] == "feat-1")
+    assert not pair0["comparable"] and pair0["not_comparable_because"] == [
+        "orchestrator seats differ: jev claude:fable, rule openai:gpt-6-astra"]
+    assert not pair1["comparable"] and "jev unknown usage 2" in pair1["not_comparable_because"]
+    assert pair0["start_gap_seconds"] is not None
+    text = (out / "comparison.md").read_text()
+    assert "no: orchestrator seats differ" in text and "Series stopped: unknown-usage" in text
+
+
+def test_series_stop_reads_jev_drift_credential_failures_and_cell_errors(tmp_path):
+    repo = _project(tmp_path)
+    packet = dict(_packet(repo), jev_model="jev-1.13.0")
+    out = tmp_path / "runs"
+    P.prepare(packet, out)
+
+    def launcher(cell, _packet):
+        run_dir = Path(cell["project"]) / ".quadratus" / "runs" / "r"
+        run_dir.mkdir(parents=True)
+        decisions = [dict(decision="task.kind", answer="docs", usage=dict(model="jev-1.14.0", input_tokens=1, output_tokens=1))]
+        (run_dir / "result.json").write_text(json.dumps(dict(completed=True, checks=[], tasks=1, budget=dict(unknown_usage_attempts=0),
+                                                             decisions=decisions if cell["arm"] == "jev" else [])))
+        return dict(run_dir=str(run_dir), completed=True)
+
+    manifest = P.run(out, engine=ENGINE, launcher=launcher)
+    assert manifest["stopped"]["reason"].startswith("jev-model-drift: jev-1.14.0 (packet names jev-1.13.0)")
+    cell = dict(state="ran", name="x/jev-r0", arm="jev", task="x", repeat=0,
+                run_dir=str(Path(manifest["cells"][0]["project"]) / ".quadratus" / "runs" / "r"))
+    credential = Path(cell["run_dir"]) / "result.json"
+    credential.write_text(json.dumps(dict(completed=True, checks=[], tasks=1, budget={},
+                                          decisions=[dict(decision="task.kind", answer=None, error="no TYPESAFE_API_KEY: Jev is a billed API")])))
+    assert P.series_stop(cell, packet).startswith("credential-failure: no TYPESAFE_API_KEY")
+    assert P.series_stop(dict(state="failed", name="y", error="OrchestratorUnavailable: both seats down"), packet).startswith("seat-fallback")
+    assert P.series_stop(dict(state="failed", name="y", error="RuntimeError: disk full"), packet).startswith("cell-error")
+    assert P.series_stop(dict(state="prepared", name="z"), packet) is None
