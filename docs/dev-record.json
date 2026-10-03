@@ -628,13 +628,18 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-03T16:39:28Z",
       "acknowledged": false,
-      "delivery": null,
+      "delivery": {
+        "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
+        "at": "2026-10-03T17:02:46Z"
+      },
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: Delivered at f09c832 on #50 (e734779 plus a guard for attribute-less fake views). Live verification on claude 2.1.288 in the cloud container through ClaudeCLIProvider.in_directory(allow_writes=True) with granted_commands=('python3 -V',): argv carries --permission-mode acceptEdits --allowedTools 'Bash(python3 -V)' 'Bash(python3 -V:*)'; the Write landed, python3 -V ran, python3 -c was denied and recorded as a permission_denied tool failure (54,048 in / 538 out, haiku). Mac verification on claude 2.1.269 still owed before the rerun."
+      ]
     },
     {
       "id": "T-call-token-cap",
@@ -646,10 +651,13 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-03T16:39:28Z",
       "acknowledged": false,
-      "delivery": null,
+      "delivery": {
+        "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
+        "at": "2026-10-03T17:02:47Z"
+      },
       "reviews": [],
       "blockers": [],
       "decisions": []
@@ -663,10 +671,13 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-03T16:39:28Z",
       "acknowledged": false,
-      "delivery": null,
+      "delivery": {
+        "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
+        "at": "2026-10-03T17:02:47Z"
+      },
       "reviews": [],
       "blockers": [],
       "decisions": []
