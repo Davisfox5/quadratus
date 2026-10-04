@@ -177,14 +177,41 @@ def test_timeout_is_retried_then_surfaces(claude, monkeypatch):
     claude.max_retries = 2
     attempts = []
 
-    def fake_run(*a, **k):
-        attempts.append(1)
+    def fake_run(argv, **k):
+        attempts.append(argv[argv.index("--session-id") + 1])
         raise subprocess.TimeoutExpired(cmd="claude", timeout=1)
 
     monkeypatch.setattr(cli_providers, "_launch", fake_run)
     with pytest.raises(ProviderError):
         claude.generate("question")
     assert len(attempts) == 2
+    assert attempts[0] != attempts[1]
+    assert claude.last_session_id == attempts[-1]
+    assert claude.last_usage is None
+
+
+def test_empty_timeout_preserves_trace_identity_without_inventing_usage(claude, monkeypatch, tmp_path):
+    from uuid import UUID
+
+    from quadratus.trace import locate, session_roots
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    claude.max_retries = 1
+    transcript = None
+
+    def fake_run(argv, **kwargs):
+        nonlocal transcript
+        sid = argv[argv.index("--session-id") + 1]
+        assert str(UUID(sid)) == sid
+        transcript = tmp_path / "projects" / "test-project" / f"{sid}.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text(json.dumps({"type": "assistant", "sessionId": sid}) + "\n")
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=1, output="")
+
+    monkeypatch.setattr(cli_providers, "_launch", fake_run)
+    with pytest.raises(ProviderError, match="timed out"):
+        claude.generate("question")
+    assert locate("claude", claude.last_session_id, session_roots()) == transcript
+    assert claude.last_usage is None
 
 
 def test_rate_limit_text_is_retryable(claude):

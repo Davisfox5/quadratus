@@ -59,6 +59,7 @@ import signal
 import subprocess
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -988,6 +989,8 @@ class CLISpec:
     model_flag: Optional[str] = None
     #: Extra args requesting machine-readable output.
     output_args: List[str] = field(default_factory=list)
+    #: Allocate trace identity before launch, including calls with no stdout.
+    session_id_flag: Optional[str] = None
     #: Args that make the agent read-only (no file writes, no shell).
     readonly_args: List[str] = field(default_factory=list)
     #: Args added when the caller *has* opted into writes. Some CLIs need an
@@ -1257,6 +1260,7 @@ CLAUDE_SPEC = CLISpec(
     system_flag="--system-prompt",
     model_flag="--model",
     output_args=["--output-format", "json"],
+    session_id_flag="--session-id",
     readonly_args=["--disallowed-tools", "Bash Edit Write NotebookEdit"],
     # The write grant (2026-10-03). Without it a lead with writes launched in
     # permissionMode default, and claude -p denies every project Edit/Write
@@ -2423,6 +2427,9 @@ class CLIProvider(LLMProvider):
         self.last_tool_failures = []
         composed = self._compose_prompt(prompt, system, history)
         argv = self._build_argv(composed, system)
+        if self.spec.session_id_flag:
+            self.last_session_id = str(uuid.uuid4())
+            argv += [self.spec.session_id_flag, self.last_session_id]
         env = {**os.environ, **self.spec.env}
         if getattr(self, "_native_fanout_denied", None):
             env.update(self.spec.native_fanout_off_env)

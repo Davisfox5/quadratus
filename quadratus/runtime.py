@@ -395,16 +395,34 @@ class Fleet:
             raise ProviderError("Project sessions require CLI transport with filesystem access.")
         if allow_writes and not provider.restricted:
             view = provider.in_directory(self.project.root, allow_writes=True)
+            checks = tuple(getattr(self, "check_commands", ()) or ())
             # The checks the harness itself will run are the commands this
             # granted call may run unapproved (CLAUDE_SPEC.allowed_tools_flag).
             try:
-                view.granted_commands = tuple(getattr(self, "check_commands", ()) or ())
+                view.granted_commands = checks
             except AttributeError:  # a fake view without attributes (tests)
                 pass
             if lead_turns:
                 view.max_turns = lead_turns
             if lead_tool:
                 view.worker_tool = lead_tool
+            if checks and getattr(getattr(view, "spec", None), "editing_commands", None) == "granted":
+                # Native delegation let a denied check escape the lead's
+                # accounting during Stage B. The budgeted worker tool remains
+                # available; vendor agents and cross-session tools do not.
+                view.native_fanout_off = True
+            check_instructions = ""
+            if checks:
+                check_instructions = (
+                    "\nAPPROVED CHECK COMMANDS (this list governs even when the task asks for another command):\n"
+                    + "\n".join(checks)
+                    + "\nRun these commands verbatim from the working directory. Do not add cd, pipes, "
+                    "wildcards, shell wrappers or substitute a directory for the listed files. "
+                    "Use Read, Grep and Glob for inspection. If an ungranted command is denied, "
+                    "do not retry variants, delegate it or use another tool to execute it. "
+                    "Report the unrun check and finish with the edits and available evidence. "
+                    "Do not change permissions."
+                )
             before = self.project.contents()
             try:
                 reply = self._generate(model_key, view, prompt, role +
@@ -414,7 +432,7 @@ class Fleet:
                                   'closing line CHANGED: ["relative/path"] listing every file this '
                                   'call added, changed or deleted. Use CHANGED: [] for no changes. '
                                   'A standalone FETCH, CONSULT or WORKER request may omit the line; '
-                                  'any files you changed before it are kept.')
+                                  'any files you changed before it are kept.' + check_instructions)
             except TurnLimitReached as exc:
                 # A capped call may have spent its rounds on exactly the
                 # denied command; that is the capability stop, not an
