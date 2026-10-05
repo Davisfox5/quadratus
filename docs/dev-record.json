@@ -850,14 +850,28 @@
       ],
       "author": "codex",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-04T23:41:15Z",
       "acknowledged": false,
       "delivery": {
         "sha": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
         "at": "2026-10-04T23:41:34Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
+          "verdict": "cleared",
+          "evidence": "Claude independent review of #51 at b1ff751 against base 17a2b5f. Diff read in full (cli_providers.py, runtime.py, two test files, 86 insertions): CLISpec.session_id_flag set to --session-id on CLAUDE_SPEC with a UUID allocated before launch so an empty-stdout timeout still names its transcript; the pre-existing stdout session_id parse overwrites it with the same id; granted editing views get an APPROVED CHECK COMMANDS block appended to the editing prompt that forbids variants, delegation and permission changes; native_fanout_off is set on a granted editing view whenever checks exist, using the native_fanout_off_args/env machinery already present at 17a2b5f, with the budgeted harness worker tool untouched; five new tests cover these. Focused tests 106 passed, ruff clean. Full suite in this container: 675 passed, 10 skipped, 1 failed; the failure is tests/test_browser.py::test_a_clean_page_reports_clean, Playwright BrowserType.launch cannot find /opt/pw-browsers/chromium_headless_shell-1243 here, browser code is not in the diff, and all four exact-head CI jobs on #51 passed. Codex's own focused reviewer clearance (#35 comment 5985703656, #51 comment 5985701933) was refused by the record as self-review and is kept as a note. No blocker.",
+          "scope": [
+            "quadratus/cli_providers.py",
+            "quadratus/runtime.py",
+            "tests/test_cli_providers.py",
+            "tests/test_runtime.py"
+          ],
+          "at": "2026-10-05T00:20:55Z"
+        }
+      ],
       "blockers": [],
       "decisions": [
         "claude: Candidate b1ff751 on #51 verified to exist (open, head b1ff751, base claude/jev-stage-b; touches cli_providers.py, runtime.py and their tests). Codex reports 237 focused tests passed, 1 skipped, Ruff and diff checks clean. Separate bounded provider proof on the Mac (claude 2.1.269, two Haiku calls, max 8 turns / 120 s each, no experiment cells): write landed, the exact granted five-file node check ran, ungranted python3 -c was denied, both allocated UUID transcripts found; reported input 48,962 / output 856, outside series accounting; ledger /Users/davisfox/Documents/GitHub/stage-b/provider-proof-b1ff751/provider-proof-ledger.json SHA256 3f893d003572015d47e8957e45255f4bb54db090244fc68913a651fb4f89af7b. The standalone proof script hit a cleanup-only AttributeError after both recorded calls; provider cleanup succeeded, no call retried. Awaiting focused Codex clearance and exact-head CI before any freeze.",
