@@ -4503,6 +4503,30 @@ class Session:
             return
         harness = evidence == "harness"
         if harness:
+            missing = self._missing_own_fixtures(spec)
+            if missing and not is_review_only(spec):
+                # The lead was told to write the capture-only sample and did
+                # not (series rule-3572b72 f1 t3: three tasks closed clean,
+                # the capture exited 2 on a declared fixture that was never
+                # written, no fix call was spent, and the run ended on that
+                # debt). A missing fixture is the lead's own omission, so it
+                # gets the one design-fix call a bad render gets, before the
+                # capture runs rather than after it fails.
+                record["missing_fixtures"] = list(missing)
+                self._note(f"task {spec.task_id}: declared capture fixture(s) missing; one fix call "
+                           f"({', '.join(missing)[:120]})")
+                self._count("design_fix")
+                self._edit(lead, (
+                    f"Task: {spec.description}\n\nThe harness cannot capture this task yet: the capture "
+                    "declares an upload of " + ", ".join(missing) + ", and no such regular file exists in "
+                    "the project. Write it now as a valid, non-secret sample of what that input accepts. "
+                    "It is harness state, not project source: it needs no CHANGED entry and stays for "
+                    "later captures. Do not start servers or run capture commands: the harness captures "
+                    "the declared page after your fix and the checks. Change nothing else."
+                    + _design_fix_delivery(self._interim_edits_note())),
+                    role="design-fix", capped=(spec, task))
+                self._run_integration_gate(lead, spec, task)
+                self._stage("design")
             failure = self._harness_capture(spec)
             if failure:
                 self._hand_off_preview(spec, task, record, failure)
@@ -5616,6 +5640,20 @@ class Session:
                 "(--capture-profile) so the harness captures, or run this task on a seat that can. "
                 "No call was made.")
         return ""
+
+    def _missing_own_fixtures(self, spec) -> List[str]:
+        """The capture-only samples this task's file steps declare under its
+        own ``.quadratus/capture-fixtures/<task id>/`` that are not regular
+        files in the project. A committed sample elsewhere is checked by the
+        capture itself, as before."""
+        steps = (getattr(getattr(spec, "scope", None), "capture", None) or {}).get("steps") or []
+        own = f".quadratus/capture-fixtures/{spec.task_id}/"
+        missing = []
+        for step in steps:
+            path = str(step.get("path", "")) if step.get("action") == "file" else ""
+            if path.startswith(own) and self.project and not (Path(self.project) / path).is_file():
+                missing.append(path)
+        return missing
 
     def _harness_capture(self, spec) -> str:
         """Run the operator's preview and capture this task's declared state;

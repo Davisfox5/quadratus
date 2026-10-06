@@ -678,6 +678,17 @@ Key design decisions already settled:
   headroom. 250k lets a fix cycle finish; the 2.5M threshold and the 1.5M
   per-call ceiling still bound the overshoot. The ruling was to keep
   getting results without burning every token, not to remove the bound.
+- **A declared capture fixture the lead never wrote buys the one design-fix
+  call, before the capture** (series rule-3572b72 f1 t3, 2026-10-06). The
+  lead prompt already says the capture-only sample under
+  `.quadratus/capture-fixtures/<task id>/` "does not exist yet and you must
+  write it"; t3's lead did not, the capture exited 2 on the missing file,
+  and that path spent no fix call (a bad render gets one; a failed capture
+  got none), so three clean tasks ended as `DesignUnverified`.
+  `_missing_own_fixtures` checks the declared own-fixture paths before the
+  harness runs; a missing one gets the design-fix call that names the file,
+  then the gate and the capture as usual. A committed sample elsewhere is
+  still checked by the capture itself; review-only tasks spend nothing.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
