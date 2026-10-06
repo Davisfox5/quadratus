@@ -120,6 +120,17 @@ def acknowledge(record: dict, *, task_id: str) -> dict:
     return task
 
 
+def _same_commit(a: str, b: str) -> bool:
+    """One commit named two ways: an abbreviation (at least seven hex digits)
+    matches the full SHA it begins. Exact-string comparison marked a review
+    stale with the reason "reviewed 7590b13 but the delivery is 7590b13"
+    (2026-10-06)."""
+    a, b = a.strip().lower(), b.strip().lower()
+    if len(a) < 7 or len(b) < 7:
+        return a == b
+    return a.startswith(b) or b.startswith(a)
+
+
 def deliver(record: dict, *, task_id: str, sha: str, exists: Callable[[str], bool] = commit_exists_on_origin) -> dict:
     """Record a delivery. The commit must exist on origin. A new delivery
     marks every review of an earlier SHA stale; their evidence stays."""
@@ -129,9 +140,9 @@ def deliver(record: dict, *, task_id: str, sha: str, exists: Callable[[str], boo
     previous = task.get("delivery")
     task["delivery"] = dict(sha=sha, at=_now())
     task["state"] = "delivered"
-    if previous and previous["sha"] != sha:
+    if previous and not _same_commit(previous["sha"], sha):
         for review in task["reviews"]:
-            if review["sha"] != sha and review["verdict"] != "stale":
+            if not _same_commit(review["sha"], sha) and review["verdict"] != "stale":
                 review["verdict"] = "stale"
                 review["stale_reason"] = f"delivery moved from {review['sha'][:7]} to {sha[:7]}"
     return task
@@ -152,7 +163,7 @@ def review(record: dict, *, task_id: str, reviewer: str, sha: str, verdict: str,
     delivery = task.get("delivery")
     entry = dict(reviewer=reviewer, sha=sha, verdict=verdict, evidence=evidence,
                  scope=list(scope or task["owns"]), at=_now())
-    if delivery is None or delivery["sha"] != sha:
+    if delivery is None or not _same_commit(delivery["sha"], sha):
         entry["verdict"] = "stale"
         entry["stale_reason"] = (f"reviewed {sha[:7]} but the delivery is "
                                  f"{delivery['sha'][:7] if delivery else 'absent'}")
@@ -206,7 +217,7 @@ def move_candidate(record: dict, *, sha: str, reason: str, by: str) -> dict:
     if not reason:
         raise RecordError("a candidate move names its reason")
     previous = record["candidate"]["sha"]
-    if previous == sha:
+    if _same_commit(previous, sha):
         raise RecordError(f"the candidate is already {sha[:7]}")
     record["candidate"].setdefault("history", []).append(
         dict(previous=previous, sha=sha, reason=reason, by=by, at=_now()))
@@ -262,7 +273,7 @@ def readiness(record: dict) -> dict:
     required = record["candidate"].get("required_receipts", ["ci", "acceptance", "review"])
     latest: Dict[str, dict] = {}
     for r in record.get("receipts", []):
-        if r["sha"] == sha:
+        if _same_commit(r["sha"], sha):
             latest[r["kind"]] = r
     receipts = {kind: (latest[kind]["state"] if kind in latest else "missing") for kind in required}
     blockers = [dict(task=t["id"], blockers=t["blockers"]) for t in record["tasks"] if t["state"] == "blocked"]

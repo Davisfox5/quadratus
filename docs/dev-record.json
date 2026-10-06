@@ -1419,7 +1419,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-06T12:39:53Z",
       "acknowledged": false,
       "delivery": {
@@ -1439,6 +1439,18 @@
           ],
           "at": "2026-10-06T20:52:50Z",
           "stale_reason": "reviewed 7590b13 but the delivery is 7590b13"
+        },
+        {
+          "reviewer": "davis",
+          "sha": "7590b13b0e8743b49cca609548d56ee911c83584",
+          "verdict": "cleared",
+          "evidence": "Davis, 2026-10-06 (cloud session): review of a7cde45..7590b13 bypassed by operator ruling after the Codex platform rejected the request as a possible cybersecurity risk, conditional on Claude finding no such risk; Claude read the diff (session.py _write_fixture_bound only: dir_fd + O_NOFOLLOW opens, private temp name under the task folder, link-publish after a complete write, every error path fails closed; no new capability, nothing outside the project) and found none. Not a Codex clearance. The earlier entry of 20:52:50Z for this ruling was marked stale by an exact-string SHA comparison (abbreviated delivery vs full review SHA), fixed in tools/dev_record.py; that entry stays as recorded. CI green and local suite green at 7590b13.",
+          "scope": [
+            "quadratus/session.py",
+            "tests/test_missing_fixture_fix.py",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-06T21:09:06Z"
         }
       ],
       "blockers": [],
@@ -1464,7 +1476,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-06T12:53:32Z",
       "acknowledged": false,
       "delivery": {
@@ -1484,6 +1496,18 @@
           ],
           "at": "2026-10-06T20:52:50Z",
           "stale_reason": "reviewed 7590b13 but the delivery is 7590b13"
+        },
+        {
+          "reviewer": "davis",
+          "sha": "7590b13b0e8743b49cca609548d56ee911c83584",
+          "verdict": "cleared",
+          "evidence": "Davis, 2026-10-06 (cloud session): review of a7cde45..7590b13 bypassed by operator ruling after the Codex platform rejected the request as a possible cybersecurity risk, conditional on Claude finding no such risk; Claude read the diff (session.py _write_fixture_bound only: dir_fd + O_NOFOLLOW opens, private temp name under the task folder, link-publish after a complete write, every error path fails closed; no new capability, nothing outside the project) and found none. Not a Codex clearance. The earlier entry of 20:52:50Z for this ruling was marked stale by an exact-string SHA comparison (abbreviated delivery vs full review SHA), fixed in tools/dev_record.py; that entry stays as recorded. CI green and local suite green at 7590b13.",
+          "scope": [
+            "quadratus/design_evidence.py",
+            "quadratus/session.py",
+            "tests/test_declaration_recapture.py"
+          ],
+          "at": "2026-10-06T21:09:06Z"
         }
       ],
       "blockers": [],
@@ -1505,7 +1529,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-06T13:44:42Z",
       "acknowledged": false,
       "delivery": {
@@ -1527,6 +1551,20 @@
           ],
           "at": "2026-10-06T20:52:50Z",
           "stale_reason": "reviewed 7590b13 but the delivery is 7590b13"
+        },
+        {
+          "reviewer": "davis",
+          "sha": "7590b13b0e8743b49cca609548d56ee911c83584",
+          "verdict": "cleared",
+          "evidence": "Davis, 2026-10-06 (cloud session): review of a7cde45..7590b13 bypassed by operator ruling after the Codex platform rejected the request as a possible cybersecurity risk, conditional on Claude finding no such risk; Claude read the diff (session.py _write_fixture_bound only: dir_fd + O_NOFOLLOW opens, private temp name under the task folder, link-publish after a complete write, every error path fails closed; no new capability, nothing outside the project) and found none. Not a Codex clearance. The earlier entry of 20:52:50Z for this ruling was marked stale by an exact-string SHA comparison (abbreviated delivery vs full review SHA), fixed in tools/dev_record.py; that entry stays as recorded. CI green and local suite green at 7590b13.",
+          "scope": [
+            "quadratus/runtime.py",
+            "quadratus/session.py",
+            "tests/test_recapture_round.py",
+            "tests/test_review_seat_cap.py",
+            "tests/test_missing_fixture_fix.py"
+          ],
+          "at": "2026-10-06T21:09:07Z"
         }
       ],
       "blockers": [],

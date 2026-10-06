@@ -191,3 +191,14 @@ def test_a_scope_extension_obeys_the_overlap_rule_and_is_recorded():
     R.extend(rec, task_id="T1", owns=["CLAUDE.md"], by="claude")
     assert rec["tasks"][0]["owns"] == ["quadratus/a.py", "CLAUDE.md"]
     assert rec["tasks"][0]["decisions"] == ["claude: scope extended to CLAUDE.md"]
+
+
+def test_an_abbreviated_sha_names_the_same_delivery(tmp_path):
+    """A review recorded with the full SHA of a delivery recorded by its
+    abbreviation is live, not stale (2026-10-06: three reviews of 7590b13
+    were marked 'reviewed 7590b13 but the delivery is 7590b13')."""
+    from tools import dev_record as dr
+    assert dr._same_commit("7590b13", "7590b13b0e8743b49cca609548d56ee911c83584")
+    assert dr._same_commit("7590b13b0e8743b49cca609548d56ee911c83584", "7590B13")
+    assert not dr._same_commit("7590b13", "a7cde45d924ebe94554617fe0c8a64c72139ef3d")
+    assert not dr._same_commit("759", "7590b13")
