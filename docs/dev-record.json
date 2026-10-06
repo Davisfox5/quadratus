@@ -1133,14 +1133,27 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-06T07:38:27Z",
       "acknowledged": false,
       "delivery": {
         "sha": "8a308f4",
         "at": "2026-10-06T07:38:28Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "8a308f4",
+          "verdict": "cleared",
+          "evidence": "#53 comment 6011753333: scoped offline clearance, 55 checks; CI green on 8a308f4",
+          "scope": [
+            "quadratus/scope.py",
+            "tests/test_scope_declaration_lint.py",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-06T09:20:29Z"
+        }
+      ],
       "blockers": [],
       "decisions": [
         "claude: Codex scoped offline clearance of 8a308f4 (#53 comment 6011753333, 55 checks); CI green on 8a308f4 (test 3.11 and 3.12)."
