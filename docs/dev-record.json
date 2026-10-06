@@ -923,7 +923,8 @@
         "claude: Repairs delivered at 2fc3e7d4c9893c76f8b0f437032258c448b90285 on branch claude/engine-repairs-2 (stacked on #51 b1ff751): the four defects this series reproduced, one commit, 62 new or touched tests passing, ruff clean, full suite 675 passed / 10 skipped offline with only the two Playwright browser-launch tests failing for lack of a Chromium binary in this container (CI has one). Awaiting Codex review, exact-head CI, a bounded Mac provider proof of the codex workspace-write review copy, then a rule-only rerun on the repaired head.",
         "claude: CI on 2fc3e7d failed one test (test_closeout: the closeout's temporary directory must stay empty, and the new disposable-copy TMPDIR scratch dir was created there). Fixed at c3abcf0f25c8e8cf9cb22372cd9a72ae5121c3ea: the closeout keeps the plain read-only view; only the Fleet's project snapshot is disposable. The four repair tasks now deliver at c3abcf0; #52 head moved.",
         "claude: CI green on #52 at c3abcf0f25c8e8cf9cb22372cd9a72ae5121c3ea: all four jobs success (2026-10-06T04:37Z). Local full suite on the same head: 2920 passed, 46 skipped; the nine failures are the Playwright browser-launch tests and the wheel-build test, which need a Chromium binary and a build backend this container lacks and which pass in CI. Waiting on Codex's review of #52, then the Mac provider proof of the codex review-copy sandbox, then the rule-only rerun.",
-        "claude: Davis, via the Codex executor (#35 comment 6009847383): 'Why not? Why does this keep stalling? Set checks and keep working until it is fully done.' Codex resumed its reviewer on #52 exact c3abcf0 (all four CI jobs success) with five-minute checks active through the repair, review, proof and run loop until the seven rule workflows complete, all 35 frozen requirements pass and the capture, reviewer and audit gates are satisfied, or an external blocker needs Davis. Lanes unchanged: Claude cloud owns repairs and #46; Codex owns Mac execution. Order after clearance: bounded codex disposable-copy proof (pytest and a TMPDIR write succeed inside the copy, a write outside is denied), then a fresh freeze and one seven-cell rule-only series on the cleared SHA; no Jev or TypeSafe; earlier series stay terminal. f6 artifact 857222c39a15.txt ends 'Verdict: accept the code change.' then 'It implements the specified guard faithfully and I found no correctness defect in it.'; the new parser reads that line as VERDICT ACCEPT, so the fix covers the real text. Artifact preserved under series-rule-b1ff751-20261006T020730Z/cells/f6-download-guard/rule-r0/.quadratus/runs/20261006T030515Z-c883fabc/artifacts/."
+        "claude: Davis, via the Codex executor (#35 comment 6009847383): 'Why not? Why does this keep stalling? Set checks and keep working until it is fully done.' Codex resumed its reviewer on #52 exact c3abcf0 (all four CI jobs success) with five-minute checks active through the repair, review, proof and run loop until the seven rule workflows complete, all 35 frozen requirements pass and the capture, reviewer and audit gates are satisfied, or an external blocker needs Davis. Lanes unchanged: Claude cloud owns repairs and #46; Codex owns Mac execution. Order after clearance: bounded codex disposable-copy proof (pytest and a TMPDIR write succeed inside the copy, a write outside is denied), then a fresh freeze and one seven-cell rule-only series on the cleared SHA; no Jev or TypeSafe; earlier series stay terminal. f6 artifact 857222c39a15.txt ends 'Verdict: accept the code change.' then 'It implements the specified guard faithfully and I found no correctness defect in it.'; the new parser reads that line as VERDICT ACCEPT, so the fix covers the real text. Artifact preserved under series-rule-b1ff751-20261006T020730Z/cells/f6-download-guard/rule-r0/.quadratus/runs/20261006T030515Z-c883fabc/artifacts/.",
+        "claude: Codex review of #52 at c3abcf0: NOT CLEARED, three findings, all fixed at 9b8c056d6fd146569d6e170503ab2e2e88dfd2b5: (P1) the codex copy policy now switches off /tmp, $TMPDIR and configured writable_roots so the copy is the only writable root; (P2) the recapture fires only when every BLOCKING line is the blind-render line, so an independent blocker is never replaced; (P2) the argv test filters the prompt file by basename, portable to macOS temp paths. The cap derivation, plain closeout and verdict parsing passed review. Codex also read the real f6 artifact (SHA256 857222c39a158abab23527475fc2e8675b20bc46ffb64f4131ef4bb3125d1607): it carries a genuine UNRESOLVED line (a pytest result asserted without its command, R4 to R6 not established) and ends 'Verdict: accept the code change.'; the new parser gives finding_stands=true, which is correct, so f6 rule was a real validation finding and stays unresolved. All four repair tasks now deliver at 9b8c056."
       ]
     },
     {
@@ -939,8 +940,8 @@
       "claimed_at": "2026-10-06T02:02:43Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "c3abcf0f25c8e8cf9cb22372cd9a72ae5121c3ea",
-        "at": "2026-10-06T04:18:15Z"
+        "sha": "9b8c056d6fd146569d6e170503ab2e2e88dfd2b5",
+        "at": "2026-10-06T05:26:26Z"
       },
       "reviews": [],
       "blockers": [],
@@ -961,8 +962,8 @@
       "claimed_at": "2026-10-06T02:02:43Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "c3abcf0f25c8e8cf9cb22372cd9a72ae5121c3ea",
-        "at": "2026-10-06T04:18:13Z"
+        "sha": "9b8c056d6fd146569d6e170503ab2e2e88dfd2b5",
+        "at": "2026-10-06T05:26:25Z"
       },
       "reviews": [],
       "blockers": [],
@@ -979,15 +980,37 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "blocked",
       "claimed_at": "2026-10-06T02:02:43Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "c3abcf0f25c8e8cf9cb22372cd9a72ae5121c3ea",
-        "at": "2026-10-06T04:18:14Z"
+        "sha": "9b8c056d6fd146569d6e170503ab2e2e88dfd2b5",
+        "at": "2026-10-06T05:26:26Z"
       },
-      "reviews": [],
-      "blockers": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "c3abcf0f25c8e8cf9cb22372cd9a72ae5121c3ea",
+          "verdict": "stale",
+          "evidence": "Codex focused review of #52 at c3abcf0 (#52 comment 6009945380): NOT CLEARED.",
+          "scope": [
+            "quadratus/design_evidence.py"
+          ],
+          "at": "2026-10-06T05:26:26Z",
+          "stale_reason": "reviewed c3abcf0 but the delivery is 9b8c056"
+        }
+      ],
+      "blockers": [
+        {
+          "requirement": "a render redeclaration never clears an independent design finding",
+          "failure": "the recapture fired on the blind-render substring and the second review replaced a verdict that also named an independent BLOCKING finding",
+          "evidence": "offline reproduction mixed-design-verdict.json: open_findings empty after APPROVED with no source edit",
+          "classification": "reachable in normal execution",
+          "by": "codex",
+          "sha": "c3abcf0f25c8e8cf9cb22372cd9a72ae5121c3ea",
+          "at": "2026-10-06T05:26:26Z"
+        }
+      ],
       "decisions": [
         "claude: Third reproduction, same feature, third different lead (series b1ff751 jev Sol, rule grok; series rule-b1ff751 rule grok): the capture profile renders the app root at the fixed target and the empty-state feature only appears when the project has no clips or no projects, which the profile's steps never set up. The reviewer is right that the renders show nothing changed; the defect is that the capture scope request lets a lead declare steps that do not reach the state its change affects, and the harness verifies the capture ran rather than that it shows the change. Fix candidates: require the lead's capture declaration to name the state it demonstrates and include the steps that produce it; or let the design reviewer return 'not demonstrated' as a capture defect routed back to the lead for a recapture instead of a BLOCKING design finding that closes the task open. Now evidenced enough to fix on Davis's go."
       ]
@@ -1002,15 +1025,38 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "blocked",
       "claimed_at": "2026-10-06T02:56:39Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "c3abcf0f25c8e8cf9cb22372cd9a72ae5121c3ea",
-        "at": "2026-10-06T04:18:14Z"
+        "sha": "9b8c056d6fd146569d6e170503ab2e2e88dfd2b5",
+        "at": "2026-10-06T05:26:25Z"
       },
-      "reviews": [],
-      "blockers": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "c3abcf0f25c8e8cf9cb22372cd9a72ae5121c3ea",
+          "verdict": "stale",
+          "evidence": "Codex focused review of #52 at c3abcf0 (#52 comment 6009945380; #35 comment 6009957672): NOT CLEARED.",
+          "scope": [
+            "quadratus/cli_providers.py",
+            "quadratus/runtime.py"
+          ],
+          "at": "2026-10-06T05:26:26Z",
+          "stale_reason": "reviewed c3abcf0 but the delivery is 9b8c056"
+        }
+      ],
+      "blockers": [
+        {
+          "requirement": "an ungranted reviewer's writes stay inside its disposable copy",
+          "failure": "codex workspace-write adds /tmp and $TMPDIR and keeps configured writable_roots, so the reviewer could write beside its copy; the test filtered /tmp/quadratus-prompt-* and failed on macOS /var/folders temp paths",
+          "evidence": "offline argv probe (work/pr52-c3abcf0-review/copy-argv.json); focused suite 184 passed / 9 skipped / 1 failed",
+          "classification": "reachable in normal execution",
+          "by": "codex",
+          "sha": "c3abcf0f25c8e8cf9cb22372cd9a72ae5121c3ea",
+          "at": "2026-10-06T05:26:26Z"
+        }
+      ],
       "decisions": []
     }
   ],
