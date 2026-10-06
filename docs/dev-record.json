@@ -912,7 +912,8 @@
         "claude: Freeze (Codex, #35 comment 6007891327): series /Users/davisfox/Documents/GitHub/stage-b/series-rule-b1ff751-20261006T020730Z on clean engine b1ff751 (#51 CI green), GameTape base 1cd9264, fresh detached worktrees. Packet canonical digest 21f46b3195711338be9e86e59cc5526db5d6891cd8b72ebfbd37db2ab8a25cc5 (file SHA256 942402dc0beb07142683746a1fb5e61a683858d0dcd0bda329c3ef33fb5076ff); frozen grader and profile digest 61c9f0cd60f53b4a7ef49156091239c9579b5db2acc128162d0980a6ba5a95a5; same seven goals, graders, profiles and packet bytes as series b1ff751. Prepare creates 14 templates; only the seven rule cells are authorized, the seven Jev templates never launch. Launch once: pairs.py run --arm rule --pairs 1; no Jev decider, no TypeSafe, no API keys or overrides; CLIs claude 2.1.269, codex 0.154.0, grok 1.0.30. Bounds unchanged. Purpose is engine-error discovery; per-cell receipts name stops and causes with evidence hashes.",
         "claude: Cell f1-preview-errors/rule-r0 (Codex, #35 comment 6008006902): ran, independent grade 4/4, engine complete False, 2,817,430 reported tokens, 6 calls, 621.9 s, stop call_token_ceiling. Named cause: the t2 lead claude:opus ran 36 model turns in one call and reported 2,092,420 input tokens (2,073,704 cached) plus 22,001 output, past the 1.5M post-return ceiling; t1 (grok lead) closed clean first. Evidence cell-f1-preview-errors.json SHA256 6c6251599953ec970de4f98f07620db81a62572dcbc793197281fb546874d877.",
         "claude: Cell f2-project-search/rule-r0 (Codex, #35 comment 6008187626): ran, independent grade 4/5 (R3 failed: a Playwright wait_for_selector timeout in the search UI grader, the same requirement both arms missed in series b1ff751), engine complete False, 2,196,306 reported tokens, 9 calls, 1004.3 s, stop reported_token_reserve after t1 closed clean under a grok:default lead. Named cause: reported-token headroom exhausted before another call; no oversized call, no unknown usage. Evidence cell-f2-project-search.json SHA256 01756f6550f9cdbb7c9068cf937bd3fd96c0aa5e9ec99ba1b5db0313b12db882.",
-        "claude: Cell f3-project-rename/rule-r0 (Codex, #35 comment 6008283486): ran, independent grade 5/5 (the first f3 cell in any series to pass all five), engine complete False, 2,111,546 reported tokens, 6 calls, 536.8 s, stop call_token_ceiling. Named cause: the t2 lead claude:opus, 27 turns, 1,510,139 input (1,492,985 cached) plus 21,302 output, over the 1.5M ceiling by 10k; t1 (grok lead) closed clean first. Second reproduction of the vendor-neutral lead-ceiling defect filed on T-grok-call-ceiling. Evidence cell-f3-project-rename.json SHA256 889c6a2e13582d8f0b8d9b3dd4b19c6c9b2231e4cff74b28152a32dcb37fc99b."
+        "claude: Cell f3-project-rename/rule-r0 (Codex, #35 comment 6008283486): ran, independent grade 5/5 (the first f3 cell in any series to pass all five), engine complete False, 2,111,546 reported tokens, 6 calls, 536.8 s, stop call_token_ceiling. Named cause: the t2 lead claude:opus, 27 turns, 1,510,139 input (1,492,985 cached) plus 21,302 output, over the 1.5M ceiling by 10k; t1 (grok lead) closed clean first. Second reproduction of the vendor-neutral lead-ceiling defect filed on T-grok-call-ceiling. Evidence cell-f3-project-rename.json SHA256 889c6a2e13582d8f0b8d9b3dd4b19c6c9b2231e4cff74b28152a32dcb37fc99b.",
+        "claude: Cell f4-tags-export/rule-r0 (Codex, #35 comment 6008392620): ran, independent grade 6/6, engine complete False, 1,893,794 reported tokens, 8 calls, 596.8 s, stop FindingsOpen. Named cause: the t2 design review (Sol) returned BLOCKING 'the required pytest command cannot run because the review environment has no writable temporary directory'; the capture itself verified with desktop and mobile screenshots. Both Sol seats on t2 (collaborator and design-review) logged the same command failure: python -m pytest -q raised FileNotFoundError, no usable temporary directory in /var/folders/.../T, /tmp, /var/tmp, /usr/tmp or the review copy's own quadratus-review-* dir. Same failure was visible in series b1ff751 f3 (chunk 7/7). Filed as T-review-tmpdir. Evidence cell-f4-tags-export.json SHA256 e2aa5196549262a0a30efd7965463148294e739b806bab5a3a3d96cc7f2f8c51."
       ]
     },
     {
@@ -962,6 +963,24 @@
       "reviewer": "codex",
       "state": "claimed",
       "claimed_at": "2026-10-06T02:02:43Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
+    },
+    {
+      "id": "T-review-tmpdir",
+      "purpose": "Engine defect, reproduced twice (series b1ff751 f3 rule t2; series rule-b1ff751 f4 rule t2): an OpenAI review seat (collaborator, design-review) running under codex --sandbox read-only cannot run the project's pytest because Python finds no writable temporary directory: the macOS per-user temp dir, /tmp, /var/tmp and the engine's own quadratus-review-* copy are all unwritable inside that sandbox. The reviewer then blocks on 'cannot run the required check' and the cell closes FindingsOpen with the graders passing. Fix: give restricted codex review seats a writable scratch TMPDIR inside their source copy (codex sandbox writable root or workspace-write scoped to the copy) so a reviewer can execute the check it is told to run, without widening write access to the project.",
+      "base": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
+      "owns": [
+        "quadratus/cli_providers.py",
+        "quadratus/runtime.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-06T02:56:39Z",
       "acknowledged": false,
       "delivery": null,
       "reviews": [],
