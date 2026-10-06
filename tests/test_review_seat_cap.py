@@ -19,7 +19,13 @@ from quadratus.artifacts import ArtifactStore
 from quadratus.config import Settings
 from quadratus.delegation import invocation, invocation_context
 from quadratus.providers import TurnLimitReached
-from quadratus.runtime import LEAD_CAPPED_ROLES, REVIEW_CAPPED_ROLES, Fleet
+from quadratus.runtime import (
+    DECLARATION_MAX_TURNS,
+    DECLARATION_ROLES,
+    LEAD_CAPPED_ROLES,
+    REVIEW_CAPPED_ROLES,
+    Fleet,
+)
 from quadratus.session import Complexity, Session, SessionConfig, TaskSpec
 
 from .test_session import Recorder
@@ -294,3 +300,23 @@ def test_the_scope_block_states_the_measured_rule_and_the_stop_line():
     assert "compact named cases" in text
     assert "Expected size: about 100 changed lines" in text
     assert "Expected size" not in TaskScope(permitted_paths=["app.py"]).render()
+
+
+# -- declaration-only roles are bound well under the review cap -----------------------
+
+
+@pytest.mark.parametrize("role", sorted(DECLARATION_ROLES))
+@pytest.mark.parametrize("lead_cap, expected", [(20, DECLARATION_MAX_TURNS), (4, 4), (None, DECLARATION_MAX_TURNS)])
+def test_a_declaration_role_gets_the_small_cap_never_above_the_lead_cap(monkeypatch, tmp_path, role, lead_cap, expected):
+    # Series rule-3572b72 f5: a capture-redeclare call ran 12 rounds and
+    # 403k tokens and returned no line. One line needs a few reads, not an
+    # errand.
+    views = []
+    monkeypatch.setattr(Fleet, "_generate",
+                        lambda self, key, provider, prompt, system, **kw: views.append(provider) or "ok")
+    (tmp_path / "a.py").write_text("x = 1\n")
+    fleet = Fleet(Settings(backend="cli", lead_max_turns=lead_cap), project=tmp_path)
+    with invocation("t1", role):
+        fleet.invoke("grok:default", "p")
+    assert views[0].max_turns == expected
+    assert DECLARATION_MAX_TURNS < 20

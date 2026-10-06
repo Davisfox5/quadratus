@@ -140,6 +140,13 @@ LEAD_CAPPED_ROLES = frozenset({"lead", "revision", "gate-fix", "design-fix"})
 #: audit, which the session already counts as nothing met. The orchestrator,
 #: closeout and workers stay uncapped.
 REVIEW_CAPPED_ROLES = frozenset({"collaborator", "recheck", "design-review", "verifier", "auditor"})
+#: Roles whose whole answer is one declared line (a CAPTURE: line, FIXTURE:
+#: blocks). They may read the copy to find a selector, not explore it: series
+#: rule-3572b72 f5's capture-redeclare ran 12 rounds and 403k tokens and
+#: returned no line at all. Bound well under the review cap, and never
+#: above the operator's lead cap where that is smaller.
+DECLARATION_ROLES = frozenset({"capture-redeclare", "fixture-supply"})
+DECLARATION_MAX_TURNS = 6
 
 
 class Fleet:
@@ -385,9 +392,12 @@ class Fleet:
         # design-fix ran past the operator's 14 rounds) and every review seat
         # (REVIEW_CAPPED_ROLES); closeout, workers and the orchestrator stay
         # uncapped.
+        role_name = (invocation_context.get() or {}).get("role")
         lead_turns = (self.settings.lead_max_turns
-                      if (invocation_context.get() or {}).get("role") in (LEAD_CAPPED_ROLES | REVIEW_CAPPED_ROLES)
-                      else None)
+                      if role_name in (LEAD_CAPPED_ROLES | REVIEW_CAPPED_ROLES) else None)
+        if role_name in DECLARATION_ROLES:
+            lead_turns = min([DECLARATION_MAX_TURNS, *([self.settings.lead_max_turns]
+                                                       if self.settings.lead_max_turns else [])])
         # The in-session worker tool, served by the session's WorkerBridge for
         # this lead call only. Set on a per-call view, never on the provider.
         lead_tool = ((invocation_context.get() or {}).get("worker_tool")

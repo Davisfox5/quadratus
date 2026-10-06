@@ -55,10 +55,12 @@ def _run(tmp_path, monkeypatch, *, supply=SUPPLY, capture=CAPTURE, present=False
     monkeypatch.setattr(fleet, "provider_for", lambda key: provider)
     prompts = []
 
+    supplies = list(supply) if isinstance(supply, list) else [supply]
+
     def generate(model_key, provider, prompt, role):
         prompts.append((model_key, prompt))
-        if "The harness cannot capture this task yet" in prompt:
-            return supply
+        if "The harness cannot capture this task yet" in prompt or "carried no FIXTURE block" in prompt:
+            return supplies.pop(0) if len(supplies) > 1 else supplies[0]
         return "APPROVED"
     monkeypatch.setattr(fleet, "_generate", generate)
 
@@ -105,10 +107,12 @@ def test_a_missing_declared_fixture_is_supplied_by_the_lead_and_written_by_the_h
     assert not any("without clean rendered evidence" in f for f in session.open_findings)
 
 
-def test_a_reply_without_the_block_gets_no_second_round_and_the_capture_fails_as_before(tmp_path, monkeypatch):
+def test_a_reply_without_the_block_is_re_asked_once_then_the_capture_fails_as_before(tmp_path, monkeypatch):
     session, prompts, captures = _run(tmp_path, monkeypatch, supply="I would write a,b first.")
     asks = [p for _, p in prompts if "The harness cannot capture this task yet" in p]
-    assert len(asks) == 1 and len(captures) == 1
+    reasks = [p for _, p in prompts if "carried no FIXTURE block" in p]
+    assert len(asks) == 1 and len(reasks) == 1 and len(captures) == 1
+    assert session.design_checks[-1]["fixture_reasked"] is True
     record = session.design_checks[-1]
     assert record["fixtures_written"] == [] and "no FIXTURE block" in record["fixture_problems"][0]
     assert record["verified"] is False and "not a regular file" in record["problem"]
@@ -152,3 +156,12 @@ def test_a_review_only_task_gets_the_round_too_since_it_edits_nothing(tmp_path, 
 ])
 def test_fixture_blocks_are_parsed_as_written(reply, expected):
     assert _parse_fixture_blocks(reply) == expected
+
+
+def test_a_missing_block_supplied_on_the_re_ask_is_written(tmp_path, monkeypatch):
+    session, prompts, captures = _run(tmp_path, monkeypatch, supply=["Sure, I can do that.", SUPPLY])
+    assert len([p for _, p in prompts if "carried no FIXTURE block" in p]) == 1
+    assert (tmp_path / "project" / FIXTURE).is_file() and len(captures) == 1
+    record = session.design_checks[-1]
+    assert record["fixture_reasked"] is True and record["fixtures_written"] == [FIXTURE]
+    assert record["verified"] is True

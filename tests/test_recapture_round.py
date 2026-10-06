@@ -47,11 +47,13 @@ def _run(tmp_path, monkeypatch, reviews, lead_reply, *, capture_failure=""):
     provider = SimpleNamespace(restricted=False, in_directory=lambda *a, **k: view)
     monkeypatch.setattr(fleet, "provider_for", lambda key: provider)
     prompts, reviews = [], list(reviews)
+    lead_replies = list(lead_reply) if isinstance(lead_reply, list) else [lead_reply]
 
     def generate(model_key, provider, prompt, role):
         prompts.append((model_key, prompt))
-        if "Reply with exactly one line" in prompt and "CAPTURE:" in prompt:
-            return lead_reply
+        if "CAPTURE:" in prompt and ("Reply with exactly one line" in prompt
+                                     or "carried no CAPTURE: line" in prompt):
+            return lead_replies.pop(0) if len(lead_replies) > 1 else lead_replies[0]
         return reviews.pop(0)
     monkeypatch.setattr(fleet, "_generate", generate)
 
@@ -174,3 +176,29 @@ def test_a_failed_recapture_is_recorded_unverified(tmp_path, monkeypatch):
 def test_the_capture_line_parses_like_a_scope_capture(reply, capture, why):
     got, reason = _parse_capture_line(reply, "t6")
     assert got == capture and why in reason
+
+
+# -- series rule-3572b72 f5: a reply with no line gets one strict re-ask ----------------
+
+def test_a_reply_with_no_capture_line_is_re_asked_once(tmp_path, monkeypatch):
+    session, spec, prompts, captures = _run(
+        tmp_path, monkeypatch, [BLIND, "APPROVED"],
+        ["I looked at the page; the empty state needs a project with no clips.", "CAPTURE: " + json.dumps(REACHED)])
+    asks = [p for _, p in prompts if "carried no CAPTURE: line" in p]
+    assert len(asks) == 1 and "exactly one line and nothing else" in asks[0]
+    assert captures == [DECLARED, REACHED] and spec.scope.capture == REACHED
+    record = session.design_checks[0]
+    assert record["recapture_reasked"] is True and record["recapture"]["verified"] is True
+
+
+def test_a_second_reply_with_no_line_keeps_the_verdict(tmp_path, monkeypatch):
+    session, spec, prompts, captures = _run(tmp_path, monkeypatch, [BLIND], ["narration only", "still narration"])
+    assert len([p for _, p in prompts if "carried no CAPTURE: line" in p]) == 1
+    assert captures == [DECLARED]
+    assert session.design_checks[0]["recapture"]["problem"] == "no CAPTURE: line in the reply"
+    assert [f for f in session.open_findings if "do not show the changed interface" in f]
+
+
+def test_capture_none_is_a_declaration_and_is_not_re_asked(tmp_path, monkeypatch):
+    _, _, prompts, _ = _run(tmp_path, monkeypatch, [BLIND], "CAPTURE: none\nNo route shows it.")
+    assert not any("carried no CAPTURE: line" in p for _, p in prompts)
