@@ -111,7 +111,12 @@ def test_an_independent_blocker_beside_the_blind_line_blocks_the_recapture(tmp_p
 @pytest.mark.parametrize("verdict, blind", [
     (BLIND, True),
     ("blocking: The Renders Do Not Show The Changed Interface", True),
+    ("- **BLOCKING:** the renders do not show the changed interface.", True),
     (BLIND + "\nBLOCKING: contrast is too low", False),
+    (BLIND + "; BLOCKING: the delete action silently removes saved projects", False),
+    (BLIND + "\nUNRESOLVED: the empty state is never reachable", False),
+    (BLIND + "\n- BLOCKING: contrast", False),
+    (BLIND + " and the header overlaps the toolbar", False),
     ("APPROVED", False),
     ("", False),
     ("The renders do not show the changed interface, but the layout is fine.", False),
@@ -119,6 +124,14 @@ def test_an_independent_blocker_beside_the_blind_line_blocks_the_recapture(tmp_p
 def test_only_a_verdict_that_is_nothing_but_the_blind_line_is_blind(verdict, blind):
     from quadratus.session import _renders_blind
     assert _renders_blind(verdict) is blind
+
+
+def test_a_second_clause_on_the_blind_line_blocks_the_recapture(tmp_path, monkeypatch):
+    """Codex re-review of 9b8c056: one line, two findings."""
+    mixed = BLIND + "; BLOCKING: the delete action silently removes saved projects without confirmation."
+    session, spec, prompts, captures = _run(tmp_path, monkeypatch, [mixed], "CAPTURE: " + json.dumps(REACHED))
+    assert captures == [DECLARED]
+    assert any("delete action" in f for f in session.open_findings)
 
 
 def test_a_second_blind_render_is_the_open_finding_it_was(tmp_path, monkeypatch):

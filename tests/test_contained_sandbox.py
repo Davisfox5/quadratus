@@ -377,3 +377,63 @@ def test_a_disposable_call_gets_a_temp_dir_inside_the_copy(monkeypatch, tmp_path
         pass
     assert seen['env']['TMPDIR'] == str(copy_dir / '.quadratus-tmp')
     assert (copy_dir / '.quadratus-tmp').is_dir()
+
+
+# -- the operator cannot widen or move the copy policy (Codex re-review of 9b8c056) --
+
+@pytest.mark.parametrize('override', [
+    '-c sandbox_workspace_write.exclude_slash_tmp=false',
+    '-c sandbox_workspace_write.exclude_tmpdir_env_var=false',
+    "-c sandbox_workspace_write.writable_roots=['/tmp/outside']",
+    '--config sandbox_workspace_write.exclude_slash_tmp=false',
+    '-csandbox_mode=danger-full-access',
+    '--config=sandbox_mode=workspace-write',
+    '-c "sandbox_workspace_write.exclude_slash_tmp" = false',
+    '--add-dir /tmp/outside-copy',
+    '--add-dir=/tmp/outside-copy',
+    '--sandbox danger-full-access',
+    '-s workspace-write',
+    '--full-auto',
+    '--dangerously-bypass-approvals-and-sandbox',
+    '--yolo',
+    '--cd /tmp/elsewhere',
+    '-C /tmp/elsewhere',
+    '-c sandbox_workspace_write.exclude_slash_tmp=true',   # agreeing, and still not the operator's to restate
+    '--',
+])
+def test_an_operator_override_of_the_copy_boundary_is_refused_before_dispatch(monkeypatch, override):
+    from quadratus.cli_providers import NativeControlOverride
+    _binary_on_path(monkeypatch)
+    monkeypatch.delenv('QUADRATUS_CONTAINED', raising=False)
+    monkeypatch.setenv('QUADRATUS_CLI_ARGS_OPENAI', override)
+    provider = CodexCLIProvider(model='gpt-6-astra').for_seat('gpt-6-astra', effort='high', restricted=False)
+    view = provider.in_directory('/tmp/quadratus-review-x', allow_writes=False, disposable=True)
+    with pytest.raises(NativeControlOverride, match='disposable source copy'):
+        view._build_argv('P', 'S')
+
+
+@pytest.mark.parametrize('override', ['-c model_reasoning_effort=high', '--profile fast', '-c features.x=false'])
+def test_an_unrelated_operator_override_still_reaches_a_copy_call(monkeypatch, override):
+    _binary_on_path(monkeypatch)
+    monkeypatch.delenv('QUADRATUS_CONTAINED', raising=False)
+    monkeypatch.setenv('QUADRATUS_CLI_ARGS_OPENAI', override)
+    provider = CodexCLIProvider(model='gpt-6-astra').for_seat('gpt-6-astra', effort='high', restricted=False)
+    argv = provider.in_directory('/tmp/quadratus-review-x', allow_writes=False, disposable=True)._build_argv('P', 'S')
+    assert override.split()[-1] in argv or override.split('=')[-1] in ' '.join(argv)
+
+
+def test_a_granted_call_keeps_the_operators_sandbox_override(monkeypatch):
+    """The refusal is the copy's, not a new rule for grants (Codex: preserve granted behaviour)."""
+    _binary_on_path(monkeypatch)
+    monkeypatch.delenv('QUADRATUS_CONTAINED', raising=False)
+    monkeypatch.setenv('QUADRATUS_CLI_ARGS_OPENAI', '--add-dir /tmp/elsewhere')
+    provider = CodexCLIProvider(model='gpt-6-astra').for_seat('gpt-6-astra', effort='high', restricted=False)
+    argv = provider.in_directory('/tmp/project', allow_writes=True)._build_argv('P', 'S')
+    assert '--add-dir' in argv
+
+
+def test_the_boundary_check_names_only_keys_never_values():
+    from quadratus.cli_providers import codex_copy_boundary_conflicts
+    found = codex_copy_boundary_conflicts(['-c', 'sandbox_workspace_write.writable_roots=["/Users/secret"]'])
+    assert found == ['-c sandbox_workspace_write.writable_roots=…']
+    assert codex_copy_boundary_conflicts(['-c', 'model=gpt-6-astra', '--profile', 'x']) == []

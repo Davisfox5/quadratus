@@ -700,13 +700,18 @@ def _renders_blind(verdict: str) -> bool:
 
     A reviewer that also names an independent blocker ("BLOCKING: the delete
     action silently removes saved projects") has judged the work, and a
-    recapture must not clear that judgement (Codex review of c3abcf0 on
-    #52): only a verdict whose every BLOCKING: line is the blind-render line
-    buys the recapture; any other finding leaves the verdict to stand.
+    recapture must not clear that judgement (Codex reviews of c3abcf0 and
+    9b8c056 on #52). The reviewer is told to reply with exactly the one line
+    and judge nothing else, so that is what qualifies: the whole response,
+    after harmless formatting is stripped (bold, a list marker, trailing
+    punctuation, case), must equal "BLOCKING: " plus the phrase. A second
+    clause on the same line, a second line of any kind, or any other
+    content means the verdict stands as written.
     """
-    lines = [line.strip() for line in (verdict or "").splitlines() if line.strip()]
-    blocking = [line for line in lines if line.upper().startswith("BLOCKING:")]
-    return bool(blocking) and all(_RENDERS_BLIND in line.lower() for line in blocking)
+    text = (verdict or "").replace("**", "").replace("`", "").strip()
+    text = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", text)
+    text = text.rstrip(" .!").lower()
+    return text == f"blocking: {_RENDERS_BLIND}"
 
 
 _CAPTURE_LINE = re.compile(r"^\s*CAPTURE\s*:\s*(.*\S)\s*$", re.IGNORECASE)

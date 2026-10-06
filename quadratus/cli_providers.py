@@ -82,6 +82,7 @@ __all__ = [
     "CODEX_NATIVE_DELEGATION_OVERRIDE",
     "cli_provider_classes",
     "codex_override_conflicts",
+    "codex_copy_boundary_conflicts",
     "native_delegation_mode",
     "NativeControlOverride",
 ]
@@ -1067,6 +1068,10 @@ class CLISpec:
     #: that re-enables native delegation is a configuration error, not a
     #: preference, and a refusal cannot be mistaken for a bounded run.
     override_conflicts: Optional[Callable[[Sequence[str]], List[str]]] = None
+    #: Operator arguments that would widen or move the policy of an ungranted
+    #: call in a disposable copy (``copy_args``); such a call refuses them
+    #: before dispatch. None where the vendor has no copy policy.
+    copy_boundary_conflicts: Optional[Callable[[Sequence[str]], List[str]]] = None
     #: Optional run-wide denial request for other vendors' native helpers.
     #: This is not proof their CLI honors it; see the Grok specification.
     native_fanout_off_args: List[str] = field(default_factory=list)
@@ -1494,6 +1499,58 @@ def codex_override_conflicts(args: Sequence[str]) -> List[str]:
     return conflicts
 
 
+#: Operator flags that move or widen the sandbox boundary of a codex call:
+#: refused on an ungranted call in a disposable copy (Codex review of 9b8c056
+#: on #52), where the copy must stay the only writable root. ``--cd`` rebases
+#: the working directory the policy is anchored to; the rest change the mode
+#: or add roots. Each is listed in every spelling clap accepts for it.
+CODEX_COPY_BOUNDARY_FLAGS = (
+    "--sandbox", "-s", "--add-dir", "--full-auto", "--yolo",
+    "--dangerously-bypass-approvals-and-sandbox", "--cd", "-C",
+)
+#: ``-c`` keys (and their tables) that do the same through configuration.
+CODEX_COPY_BOUNDARY_KEYS = ("sandbox_mode", "sandbox_workspace_write", "sandbox", "cwd")
+
+
+def codex_copy_boundary_conflicts(args: Sequence[str]) -> List[str]:
+    """Operator arguments that would widen or move a disposable copy's policy.
+
+    ``copy_args`` makes the copy the only writable root; the operator's
+    ``QUADRATUS_CLI_ARGS_OPENAI`` lands after it and would win. So on an
+    ungranted call in a disposable copy any flag or ``-c`` key that touches
+    the sandbox mode, its writable roots, extra directories or the working
+    directory is a refusal before dispatch, whatever its value: an agreeing
+    override is as much of a surprise as a widening one, and the control is
+    not the operator's to restate. A bare ``--`` hides what follows and is
+    refused for the same reason as in :func:`codex_override_conflicts`.
+    """
+    tokens = list(args)
+    conflicts: List[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            conflicts.append(token)
+            index += 1
+            continue
+        name = token.split("=", 1)[0]
+        if name in CODEX_COPY_BOUNDARY_FLAGS or (
+                len(name) == 2 and name[0] == "-" and name[1] in "sC" and token != name):
+            conflicts.append(name)
+            index += 1 if "=" in token or name in ("--full-auto", "--yolo",
+                                                   "--dangerously-bypass-approvals-and-sandbox") else 2
+            continue
+        payload, span = _config_override_value(tokens, index)
+        if span:
+            key = _override_key(payload) if payload is not None else ""
+            if key in CODEX_COPY_BOUNDARY_KEYS or any(key.startswith(f"{k}.") for k in CODEX_COPY_BOUNDARY_KEYS):
+                conflicts.append(f"{name[:8]} {key}=…")
+            index += span
+            continue
+        index += 1
+    return conflicts
+
+
 def _override_key(payload: str) -> str:
     return re.sub(r"""[\s"']""", "", payload.partition("=")[0])
 
@@ -1593,6 +1650,7 @@ CODEX_SPEC = CLISpec(
     # still needs a live probe, so observed children remain in the telemetry.
     control_args=list(CODEX_NATIVE_DELEGATION_CONTROL),
     override_conflicts=codex_override_conflicts,
+    copy_boundary_conflicts=codex_copy_boundary_conflicts,
     # Summary-only form: codex exec has no tool allowlist and no turn cap in
     # this spec, so the bound is ``--sandbox read-only`` plus the native
     # controls plus the caller's 60 s / one-attempt limits. Stated, not
@@ -2302,6 +2360,17 @@ class CLIProvider(LLMProvider):
             self._native_fanout_denied = denied
         else:
             self._native_fanout_denied = []
+        if (getattr(self, "_disposable", False) and not self._allow_writes
+                and spec.copy_args and spec.copy_boundary_conflicts is not None):
+            # The copy is the only writable root, and the operator's
+            # arguments land last; an override of the boundary is refused
+            # before the call rather than out-ordered by it.
+            conflicts = spec.copy_boundary_conflicts(extra)
+            if conflicts:
+                raise NativeControlOverride(
+                    f"{self.label}: QUADRATUS_CLI_ARGS_{spec.vendor.upper()} would widen or move the "
+                    f"sandbox of an ungranted call in a disposable source copy ({'; '.join(conflicts)}). "
+                    "The copy is the only writable root there; remove the override, not the control.")
         if spec.override_conflicts is not None:
             conflicts = spec.override_conflicts(extra)
             if conflicts:
