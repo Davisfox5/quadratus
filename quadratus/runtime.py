@@ -573,7 +573,9 @@ class Fleet:
                 "not a new review or an assertion that the entire project goal is complete.")
         with tempfile.TemporaryDirectory(prefix="quadratus-closeout-") as directory:
             if hasattr(view, 'in_directory'):
-                view = view.in_directory(directory, allow_writes=False, disposable=True)
+                # A summary call with no tools: the plain read-only view, and
+                # the directory stays empty (tests/test_closeout.py).
+                view = view.in_directory(directory, allow_writes=False)
             return self._generate(key, view, prompt, role)
 
     @staticmethod
