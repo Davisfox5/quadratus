@@ -691,9 +691,14 @@ Key design decisions already settled:
   copy) for `FIXTURE <path>:` plus a fenced block per file; the harness
   validates the path against the declaration and the size against
   `MAX_FIXTURE_BYTES` and writes it. An unexpected path is never written;
-  a missing or oversized block leaves the capture to fail as before. No
-  write grant changes, and a committed sample elsewhere is still checked
-  by the capture itself.
+  a missing, oversized or duplicated block, or a reply whose fence
+  swallowed the next header, leaves the capture to fail as before. The
+  write is confined before it happens (`_confined_fixture_target`): exactly
+  `.quadratus/capture-fixtures/<task id>/<name>`, no symlink at any
+  component, the resolved target inside the resolved project (Codex review
+  of 351d3ba: four linked layouts had written outside the project before
+  the capture's reader could refuse them). No write grant changes, and a
+  committed sample elsewhere is still checked by the capture itself.
 - **A final wait that was visible at load is a declaration defect and
   gets a redeclaration, never a design-fix** (series rule-3572b72 f2 t1,
   2026-10-06). The qualifier rightly refused both renders because the
@@ -714,11 +719,16 @@ Key design decisions already settled:
   parser recorded "no CAPTURE: line" and the blocking verdict stood.
   `runtime.DECLARATION_ROLES` (capture-redeclare, fixture-supply) now take
   `DECLARATION_MAX_TURNS` (6), never above the operator's lead cap, and
-  `_capture_declaration` reads the last `CAPTURE:` marker on any line, with
-  the JSON object decoded from where it starts. A reply with no marker
-  still stands as the verdict it was: one bounded declaration round and
-  no second call because parsing failed (Codex, terminal audit of
-  rule-3572b72), so there is no re-ask.
+  `_capture_declaration` reads the one `CAPTURE:` marker wherever it sits
+  on its line, with the JSON object decoded from where it starts; two
+  markers, or a second object after the first, are a choice the harness
+  never makes and are refused without a call (Codex review of 351d3ba). A
+  reply with no marker still stands as the verdict it was: one bounded
+  declaration round and no second call because parsing failed (Codex,
+  terminal audit of rule-3572b72), so there is no re-ask. The one
+  redeclaration is shared by both routes that can ask for it (the capture
+  check and the blind review): after it is spent, a blind review stays
+  unverified, and the first receipt is kept as written.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

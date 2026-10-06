@@ -200,17 +200,46 @@ def test_a_reply_with_no_marker_at_all_keeps_the_verdict_with_no_second_call(tmp
 
 
 @pytest.mark.parametrize("reply, expected", [
-    ("CAPTURE: none", None),
-    ("I think CAPTURE: none. Nothing shows it.", None),
-    ('prose CAPTURE: {"path": "/x", "steps": []} trailing words', {"path": "/x", "steps": []}),
-    ('CAPTURE: {"path": "/a", "steps": []}\nlater CAPTURE: {"path": "/b", "steps": []}', {"path": "/b", "steps": []}),
-    ("the word capture: appears but with no object", "unparsed"),
+    ("CAPTURE: none", "none"),
+    ("I think CAPTURE: none. Nothing shows it.", "none"),
+    ('prose CAPTURE: {"path": "/x", "steps": []} trailing words', "/x"),
+    ("the word capture: appears but with no object", "no CAPTURE"),
+    ("CAPTURE:   ", "nothing after"),
+    # Codex review of 351d3ba: two markers or two objects are a choice the
+    # harness never makes; a later invalid correction is not silently dropped.
+    ('CAPTURE: {"path": "/a", "steps": []}\nlater CAPTURE: {"path": "/b", "steps": []}', "markers"),
+    ('CAPTURE: {"path": "/first", "steps": []} CAPTURE: none', "markers"),
+    ('CAPTURE: {"path": "/a", "steps": []}\nCorrection.CAPTURE: invalid', "markers"),
+    ('CAPTURE: {"path": "/a", "steps": []} {"path": "/b", "steps": []}', "more than one object"),
 ])
-def test_the_declaration_is_read_wherever_the_marker_sits(reply, expected):
+def test_exactly_one_declaration_is_read_wherever_the_marker_sits(reply, expected):
     capture, why = _parse_capture_line(reply, "t6")
-    if expected == "unparsed":
-        assert capture is None and ("did not parse" in why or "no CAPTURE" in why)
-    elif expected is None:
+    if expected == "none":
         assert capture is None and "no page and steps" in why
+    elif expected.startswith("/"):
+        assert capture["path"] == expected
     else:
-        assert capture["path"] == expected["path"]
+        assert capture is None and expected in why
+
+
+def test_the_one_redeclaration_is_shared_by_both_routes(tmp_path, monkeypatch):
+    # Codex review of 351d3ba: the capture-check route redeclared and passed,
+    # then a blind review bought a second declaration, a third capture and a
+    # second review. One allowance per design check; the verdict then stands.
+    from quadratus.session import Session as S
+    calls = []
+    original = S._recapture_declared
+
+    def counting(self, spec, lead, task, record, verdict, **kw):
+        calls.append(kw.get("source", "reviewer"))
+        return original(self, spec, lead, task, record, verdict, **kw)
+    monkeypatch.setattr(S, "_recapture_declared", counting)
+    session, spec, prompts, captures = _run(tmp_path, monkeypatch, [BLIND, BLIND],
+                                            "CAPTURE: " + json.dumps(REACHED))
+    record = session.design_checks[0]
+    record["recapture_spent"] = True   # as the capture-check route would have left it
+    assert len([p for _, p in prompts if "Reply with exactly one line" in p and "CAPTURE:" in p]) == 1
+    assert len(captures) == 2
+    # a second ask on the same record is refused without a call
+    assert original(session, spec, LEAD, None, record, BLIND) is None
+    assert "spent" in record["recapture_blocked"]

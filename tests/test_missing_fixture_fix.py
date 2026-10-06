@@ -43,7 +43,7 @@ SUPPLY = f"FIXTURE {FIXTURE}:\n```csv\nstart,end\n1,abc\n```\n"
 
 def _run(tmp_path, monkeypatch, *, supply=SUPPLY, capture=CAPTURE, present=False, review_only=False):
     root = tmp_path / "project"
-    (root / "templates").mkdir(parents=True)
+    (root / "templates").mkdir(parents=True, exist_ok=True)
     (root / "templates" / "index.html").write_text("<button id=preview>Import preview</button>\n")
     if present:
         (root / FIXTURE).parent.mkdir(parents=True)
@@ -153,4 +153,45 @@ def test_a_review_only_task_gets_the_round_too_since_it_edits_nothing(tmp_path, 
     ("FIXTURE a.csv:\nnot fenced", {}),
 ])
 def test_fixture_blocks_are_parsed_as_written(reply, expected):
-    assert _parse_fixture_blocks(reply) == expected
+    found, problems = _parse_fixture_blocks(reply)
+    assert found == expected and problems == []
+
+
+def test_duplicate_blocks_for_one_path_keep_nothing_and_an_unclosed_fence_is_malformed():
+    # Codex review of 351d3ba: the first of two different blocks for the same
+    # declared fixture was written and the task reached APPROVED.
+    found, problems = _parse_fixture_blocks("FIXTURE a.csv:\n```\n1\n```\nFIXTURE a.csv:\n```\n2\n```")
+    assert found == {} and problems == ["a.csv: more than one FIXTURE block for the same path"]
+    found, problems = _parse_fixture_blocks("FIXTURE a.csv:\n```\n1\nFIXTURE b.csv:\n```\n2\n```")
+    assert found == {} and "malformed" in problems[0]
+
+
+def test_a_duplicate_block_in_the_supply_round_is_a_problem_not_a_write(tmp_path, monkeypatch):
+    twice = f"FIXTURE {FIXTURE}:\n```\na,b\n```\nFIXTURE {FIXTURE}:\n```\nc,d\n```\n"
+    session, _, captures = _run(tmp_path, monkeypatch, supply=twice)
+    assert not (tmp_path / "project" / FIXTURE).exists() and len(captures) == 1
+    record = session.design_checks[-1]
+    assert record["fixtures_written"] == [] and "more than one FIXTURE block" in record["fixture_problems"][0]
+    assert record["verified"] is False
+
+
+@pytest.mark.parametrize("link_at", [".quadratus", ".quadratus/capture-fixtures",
+                                     ".quadratus/capture-fixtures/t6", FIXTURE])
+def test_a_symlink_anywhere_on_the_fixture_path_refuses_the_write(tmp_path, monkeypatch, link_at):
+    # Codex review of 351d3ba: four linked layouts wrote the bytes outside
+    # the project before the capture's reader could refuse them.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    root = tmp_path / "project"
+    (root / "templates").mkdir(parents=True)
+    link = root / link_at
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if link_at == FIXTURE:
+        link.symlink_to(outside / "escaped.csv")
+    else:
+        link.symlink_to(outside)
+    session, _, captures = _run(tmp_path, monkeypatch)
+    assert not any(outside.iterdir()), "nothing written outside the project"
+    record = session.design_checks[-1]
+    assert record["fixtures_written"] == [] and "symlink" in record["fixture_problems"][0]
+    assert record["verified"] is False and len(captures) == 1

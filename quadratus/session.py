@@ -715,24 +715,29 @@ def _renders_blind(verdict: str) -> bool:
 
 
 _CAPTURE_LINE = re.compile(r"^\s*CAPTURE\s*:\s*(.*\S)\s*$", re.IGNORECASE)
-#: The same marker wherever it sits on a line: series rule-3572b72 f5's lead
-#: wrote prose and then ``load.CAPTURE: {"path": "/", ...}`` on the same
-#: line, and a line-anchored read saw no declaration at all.
-_CAPTURE_ANYWHERE = re.compile(r"CAPTURE\s*:\s*(\{.*|none\b.*)", re.IGNORECASE)
+#: The marker wherever it sits on a line: series rule-3572b72 f5's lead wrote
+#: prose and then ``load.CAPTURE: {"path": "/", ...}`` on the same line, and a
+#: line-anchored read saw no declaration at all. Upper case, as the prompt
+#: spells it, so prose about "the capture:" is not a marker.
+_CAPTURE_MARKER = re.compile(r"CAPTURE\s*:")
 
 
 def _capture_declaration(reply: str):
-    """The last CAPTURE: declaration in ``reply``, or None: the line's tail
-    after the marker (``none ...`` or a JSON object text, which the caller
-    parses). A marker buried after prose counts; one with nothing usable
-    after it does not."""
-    found = None
-    for raw in (reply or "").splitlines():
-        text = raw.replace("`", "")
-        match = _CAPTURE_LINE.match(text) or _CAPTURE_ANYWHERE.search(text)
-        if match:
-            found = match.group(1)
-    return found
+    """``(tail, "")`` for the one CAPTURE: marker in ``reply``, where tail is
+    the rest of its line after the marker, or ``(None, why)``. Two or more
+    markers are a choice the harness never makes (Codex review of 351d3ba:
+    a first object followed by ``CAPTURE: none``, or a later invalid
+    correction, must not silently select the first)."""
+    text = (reply or "").replace("`", "")
+    markers = list(_CAPTURE_MARKER.finditer(text))
+    if not markers:
+        return None, "no CAPTURE: line in the reply"
+    if len(markers) > 1:
+        return None, f"{len(markers)} CAPTURE: markers in the reply; one declaration is read, never a choice"
+    tail = text[markers[0].end():].split("\n", 1)[0].strip()
+    if not tail:
+        return None, "the CAPTURE: marker has nothing after it"
+    return tail, ""
 
 
 def _parse_capture_line(reply: str, task_id: str):
@@ -743,14 +748,18 @@ def _parse_capture_line(reply: str, task_id: str):
     missing or malformed line both return None with the reason; the caller
     keeps the reviewer's verdict in that case.
     """
-    line = _capture_declaration(reply)
+    line, why = _capture_declaration(reply)
     if line is None:
-        return None, "no CAPTURE: line in the reply"
-    if re.match(r"none\b", line.strip(), re.IGNORECASE):
+        return None, why
+    if re.match(r"none\b", line, re.IGNORECASE):
         return None, "the lead declared that no page and steps reach the changed state"
     try:
         from .preview import validate_capture
-        capture = validate_capture(json.JSONDecoder().raw_decode(line.strip())[0])
+        obj, end = json.JSONDecoder().raw_decode(line)
+        trailing = line[end:].strip()
+        if trailing and ("{" in trailing or "}" in trailing or "[" in trailing):
+            return None, "more than one object after the CAPTURE: marker"
+        capture = validate_capture(obj)
     except (ValueError, TypeError) as exc:
         return None, f"the CAPTURE line did not parse ({str(exc)[:120]})"
     for step in capture["steps"]:
@@ -774,16 +783,67 @@ _FIXTURE_BLOCK = re.compile(r"^[ \t]*FIXTURE[ \t]+(\S+?):?[ \t]*\n[ \t]*```[^\n]
                             re.MULTILINE | re.DOTALL)
 
 
-def _parse_fixture_blocks(reply: str) -> Dict[str, str]:
-    """``{path: content}`` for every ``FIXTURE <path>:`` line followed by one
-    fenced block. The path is taken as written; the caller matches it against
-    the declared fixtures, so an unexpected path is ignored, never written."""
+_FIXTURE_HEADER = re.compile(r"^[ \t]*FIXTURE[ \t]+\S+", re.MULTILINE)
+
+
+def _parse_fixture_blocks(reply: str):
+    """``({path: content}, problems)`` for every ``FIXTURE <path>:`` line
+    followed by one fenced block. The path is taken as written; the caller
+    matches it against the declared fixtures, so an unexpected path is
+    ignored, never written. A path given twice is a problem for that path
+    and nothing is kept for it; a block whose content holds another FIXTURE
+    header (an unclosed fence swallowed the next block) makes the whole
+    reply malformed (Codex review of 351d3ba)."""
     found: Dict[str, str] = {}
+    problems: List[str] = []
+    duplicates = set()
     for match in _FIXTURE_BLOCK.finditer(reply or ""):
         path = match.group(1).strip().strip("`'\"")
-        if path not in found:
-            found[path] = match.group(2)
-    return found
+        content = match.group(2)
+        if _FIXTURE_HEADER.search(content):
+            return {}, ["malformed reply: a fenced block holds another FIXTURE header (an unclosed fence)"]
+        if path in found or path in duplicates:
+            duplicates.add(path)
+            found.pop(path, None)
+            continue
+        found[path] = content
+    for path in sorted(duplicates):
+        problems.append(f"{path}: more than one FIXTURE block for the same path")
+    return found, problems
+
+
+def _confined_fixture_target(root, path: str, task_id: str):
+    """The exact task-owned file to write for ``path``, or ``(None, why)``.
+
+    Checked before any write (Codex review of 351d3ba: the later reader
+    refuses links, but a write through a linked ``.quadratus``,
+    ``capture-fixtures``, task folder or target had already landed outside
+    the project): the path is exactly ``.quadratus/capture-fixtures/<task
+    id>/<name>`` with a plain name, no existing component on the way is a
+    symlink, and the resolved target stays inside the resolved project root.
+    """
+    parts = PurePosixPath(path).parts
+    if (len(parts) != 4 or parts[:2] != (".quadratus", "capture-fixtures") or parts[2] != task_id
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", task_id)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", parts[3])):
+        return None, f"{path}: not this task's own fixture path"
+    base = Path(root)
+    current = base
+    for part in parts:
+        current = current / part
+        if current.is_symlink():
+            return None, f"{path}: {current.relative_to(base).as_posix()} is a symlink"
+        if current.exists() and not current.is_dir() and current != base / Path(path):
+            return None, f"{path}: {current.relative_to(base).as_posix()} is not a directory"
+    target = base / Path(path)
+    if target.exists() and not target.is_file():
+        return None, f"{path}: the target exists and is not a regular file"
+    try:
+        if not target.parent.resolve().is_relative_to(base.resolve()):
+            return None, f"{path}: resolves outside the project"
+    except OSError as exc:
+        return None, f"{path}: cannot be resolved ({exc})"
+    return target, ""
 
 
 def _capture_fixture_note(spec) -> str:
@@ -4719,6 +4779,15 @@ class Session:
         the state it needs, so it redeclares; the same validator and fixture
         rules as a SCOPE capture apply, and the recapture is bounded to one.
         """
+        if record.get("recapture_spent"):
+            # One redeclaration per design check, whichever route asks first
+            # (Codex review of 351d3ba: the capture-check route succeeded, a
+            # blind review then bought a second declaration, a third capture
+            # and a second review). The first receipt stays as written.
+            self._note(f"task {spec.task_id}: the one redeclaration is spent; the verdict stands")
+            record["recapture_blocked"] = f"{source} asked again after the one redeclaration was spent"
+            return None
+        record["recapture_spent"] = True
         current = spec.scope.capture or {}
         self._count("recapture")
         self._note(f"task {spec.task_id}: renders do not show the change; one recapture declaration")
@@ -5703,9 +5772,12 @@ class Session:
             reply = self._invoke_model(lead, prompt)
         task.record("assistant", f"[{lead}] {reply}")
         task.keep(reply, kind="fixture-supply", author=lead)
-        supplied = _parse_fixture_blocks(reply)
-        written, problems = [], []
+        supplied, problems = _parse_fixture_blocks(reply)
+        written = []
+        flagged = {p.split(":", 1)[0] for p in problems}
         for path in missing:
+            if path in flagged:
+                continue
             content = supplied.get(path)
             if content is None:
                 problems.append(f"{path}: no FIXTURE block in the reply")
@@ -5714,9 +5786,21 @@ class Session:
             if len(data) > MAX_FIXTURE_BYTES:
                 problems.append(f"{path}: {len(data):,} bytes exceeds {MAX_FIXTURE_BYTES:,}")
                 continue
-            target = Path(self.project) / path
+            target, why = _confined_fixture_target(self.project, path, spec.task_id)
+            if target is None:
+                problems.append(why)
+                continue
             target.parent.mkdir(parents=True, exist_ok=True)
+            # Re-checked after mkdir: nothing on the way may have become a
+            # link, and the file written must be the plain file named.
+            target, why = _confined_fixture_target(self.project, path, spec.task_id)
+            if target is None:
+                problems.append(why)
+                continue
             target.write_bytes(data)
+            if target.is_symlink() or not target.resolve().is_relative_to(Path(self.project).resolve()):
+                problems.append(f"{path}: written target is not a plain file inside the project")
+                continue
             written.append(path)
         record["fixtures_written"] = written
         if problems:
