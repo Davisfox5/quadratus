@@ -1423,8 +1423,8 @@
       "claimed_at": "2026-10-06T12:39:53Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "ada4c75",
-        "at": "2026-10-06T14:18:48Z"
+        "sha": "cc045a1",
+        "at": "2026-10-06T14:28:10Z"
       },
       "reviews": [],
       "blockers": [],
@@ -1432,7 +1432,8 @@
         "claude: Codex handoff (#35 comment 6016440223) named the mechanism: the built-in policy deny_write ('.quadratus/**', policy.py default, rendered as the scope's Never change line) contradicts the capture note's 'you must write .quadratus/capture-fixtures/<task>/...'; the Opus lead of f1 t2 wrote its sample anyway, the Sol lead of t3 obeyed the ban. 92419ad (design-fix asking the lead to write under the denied path) superseded by 5745785: the note says not to create the sample; before the harness captures, _missing_own_fixtures lists missing own-fixture paths and _supply_fixtures asks the lead once (role fixture-supply, read-only copy) for FIXTURE <path>: plus a fenced block per file; the harness validates path and size (MAX_FIXTURE_BYTES) and writes it; unexpected paths never written; a missing or oversized block leaves the capture to fail as before. No write grant changes.",
         "claude: Codex saved-trace readback of f1 t3 (#35 comment 6016536418, report SHA256 4a06b27fef9038c5ac4650a5bcc483e8b673a6de22b882afd3d8e0b826118805; lead trace ed02dcdefd423e5634ad58f85c4b26e3855dbdcbc25c3450bca3b9d5132a34ed): no attempt by the Sol lead, revision or close-out to write .quadratus/capture-fixtures/t3/malformed.csv and no permission-denied result; an observed omission, whether a write would have been permitted untested. The actual lead prompt both instructed writing the fixture and said Never change .quadratus/** with only source and test paths permitted: the instruction and boundary conflict is the thing to resolve, which 5745785 does by keeping the write harness-owned under the declared task's fixture folder with no grant expansion.",
         "claude: Codex review of 351d3ba BLOCKED (#53 comment 6018021261, probe SHA256 61c3c1ea61f09617dad8eb19659ad8a5d8a92ea218ad74ebabc9bf5db53171ab): P1 fixture writes followed symlinks at .quadratus, capture-fixtures, the task folder or the target and landed outside the project; P4 duplicate FIXTURE blocks kept the first and an unclosed fence swallowed the next header. Fixed at 6844b97: _confined_fixture_target refuses linked components and out-of-root targets before any write (re-checked after mkdir and after the write); duplicates keep nothing and are recorded; a swallowed header makes the reply malformed.",
-        "claude: Codex residual review of 6844b97 BLOCKED (#53 comment 6018223640): P1 a link swapped in after the pathname check still redirected the write (outside the project, or over a project source file inside it); P2 a complete block followed by a partial duplicate header kept the first body. Fixed at ada4c75: _write_fixture_bound opens each component O_NOFOLLOW relative to the previous directory handle and creates the file O_EXCL; every FIXTURE header is counted and a partial duplicate keeps nothing. The shared one-declaration allowance was cleared in that review."
+        "claude: Codex residual review of 6844b97 BLOCKED (#53 comment 6018223640): P1 a link swapped in after the pathname check still redirected the write (outside the project, or over a project source file inside it); P2 a complete block followed by a partial duplicate header kept the first body. Fixed at ada4c75: _write_fixture_bound opens each component O_NOFOLLOW relative to the previous directory handle and creates the file O_EXCL; every FIXTURE header is counted and a partial duplicate keeps nothing. The shared one-declaration allowance was cleared in that review.",
+        "claude: Codex residual review of ada4c75 BLOCKED (#53 comment 6018397772): operation-time containment cleared; P2 a write failing part-way left a partial sample the capture accepted and the flow reached APPROVED; P2 a malformed later header escaped duplicate accounting. Fixed at cc045a1: the inode this call created is unlinked on a failed write, supply problems stop the design check unverified before capture or review, and every header-shaped line counts."
       ]
     },
     {
@@ -1450,8 +1451,8 @@
       "claimed_at": "2026-10-06T12:53:32Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "ada4c75",
-        "at": "2026-10-06T14:18:49Z"
+        "sha": "cc045a1",
+        "at": "2026-10-06T14:28:11Z"
       },
       "reviews": [],
       "blockers": [],
@@ -1477,8 +1478,8 @@
       "claimed_at": "2026-10-06T13:44:42Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "ada4c75",
-        "at": "2026-10-06T14:18:50Z"
+        "sha": "cc045a1",
+        "at": "2026-10-06T14:28:12Z"
       },
       "reviews": [],
       "blockers": [],
@@ -1487,7 +1488,8 @@
         "claude: aa02c51 NOT launch-cleared (Codex, #35 comment 6017653660): it added a second _invoke_model on parser failure in _recapture_declared and _supply_fixtures (an automatic retry excluded by the mandate and the audit handoff 6017593352), and the delivery note wrongly excluded f3 from the next scope. Both corrected at 351d3ba before this comment was read: re-asks, their tests and their documented authority removed; one bounded declaration round and an honest unverified stop; the mid-line marker parsed without another call; f3 included in the next unfinished cycle alongside f1, f2, f4 and f5. Audit SHA256 075ee1212ee7bd42b480e571e337c33d13fe594750dd85422be7bf1213685597 acknowledged.",
         "claude: CI green on 351d3ba (all four jobs); local lifecycle 553 passed on it, unit half in progress. #53 head 351d3ba ready for Codex's narrowed review of 5745785, 00e0ba3 and 351d3ba.",
         "claude: Codex review of 351d3ba BLOCKED (#53 comment 6018021261): P2 the capture-check route and the blind-review route each spent a declaration (two declarations, three captures, two reviews, APPROVED); P3 the parser selected the first of two markers or two objects. Fixed at 6844b97: one redeclaration per design check shared by both routes with the first receipt kept; exactly one CAPTURE: marker is read and two markers or a second object are refused without a call.",
-        "claude: Codex residual review of 6844b97 BLOCKED (#53 comment 6018223640): P2 a second object on the next line, a lower-case correction, or a quoted upper-case example beside the real line still selected the first. Fixed at ada4c75: _capture_candidates reads the whole reply (upper-case marker with any tail, any-case marker with an object or none, a JSON-object line naming a path); two candidates are refused without a call."
+        "claude: Codex residual review of 6844b97 BLOCKED (#53 comment 6018223640): P2 a second object on the next line, a lower-case correction, or a quoted upper-case example beside the real line still selected the first. Fixed at ada4c75: _capture_candidates reads the whole reply (upper-case marker with any tail, any-case marker with an object or none, a JSON-object line naming a path); two candidates are refused without a call.",
+        "claude: Codex residual review of ada4c75 BLOCKED (#53 comment 6018397772): P2 a bare JSON line was itself selected as a declaration and malformed later markers were dropped. Fixed at cc045a1: a declaration must be marker-backed; a marker with any other tail or none, and any object line outside the marker lines, is a conflict only; one declaration with nothing conflicting is read."
       ]
     }
   ],
