@@ -431,7 +431,7 @@
   },
   "limits": {
     "max_calls": 90,
-    "max_reported_tokens": 2500000,
+    "max_reported_tokens": 4000000,
     "wall_seconds": 3600,
     "max_concurrent_workers": 2,
     "reserve_tokens_per_call": 250000,

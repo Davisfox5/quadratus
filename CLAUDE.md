@@ -656,6 +656,14 @@ Key design decisions already settled:
   operator's reserve. It never raises a reserve, every other call reserves
   the operator's figure in full, and the post-return threshold is unchanged;
   the snapshot counts `shaped_reservations`.
+- **The Stage B cell budget is 4M and the reserve 250k** (Davis,
+  2026-10-06: "the reserve and the overall token count are now in play").
+  On engine 3f9c548 the cells that finished (f6, and f7 on 2ffa7f6) used
+  about 0.8M; the cells that reached a review cycle stopped at 2.0M to
+  2.3M with the cycle unfinished, and finishing them needs one revision,
+  one recheck and a close-out more, about 0.3M to 1.0M on the measured
+  sizes. 4M covers that with the 1.5M per-call ceiling still bounding a
+  single call. The reserve history follows.
 - **The Stage B reserve is 250k, not 500k** (Davis, 2026-10-06, after
   f1 to f4 of series rule-3f9c548 all stopped on `reported_token_reserve`
   with their work unfinished). The reserve says what the next call is
