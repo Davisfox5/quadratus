@@ -197,12 +197,41 @@ def test_an_ordinary_reply_beginning_unfinished_is_read_like_any_other(store):
     assert not any("turn cap" in f for f in session.open_findings)
 
 
-def test_an_ordinary_unfinished_reply_without_findings_is_a_critique_not_a_cap(store):
+def test_a_reply_with_no_verdict_is_an_unfinished_review_not_a_cap(store):
+    # Codex review of cd8c5b0: a reply that arrived is not a review that
+    # finished. Recorded as unverified; the text still reaches the lead.
     rec = WordyReviewer("UNFINISHED: did not reach a verdict")
     session, _ = _run(store, rec)
-    assert any("Revise your work" in c["prompt"] for c in rec.calls), \
-        "not NO FINDINGS, so the lead answers it like any other note"
+    assert any("Revise your work" in c["prompt"] for c in rec.calls)
+    assert any("ended without a verdict" in f and "unfinished review" in f for f in session.open_findings)
     assert not any("turn cap" in f for f in session.open_findings)
+
+
+@pytest.mark.parametrize("review", ["NO FINDINGS", "No findings.",
+                                    "Minor: rename x.\nREVIEW: COMPLETE",
+                                    "Minor: rename x.\n- **Review: complete**",
+                                    "BLOCKING: the escaping drops surrogate pairs",
+                                    "notes\n- **BLOCKING:** malformed numbers accepted"])
+def test_the_three_verdict_forms_count_as_a_finished_review(store, review):
+    rec = WordyReviewer(review)
+    session, _ = _run(store, rec)
+    assert not any("unfinished review" in f for f in session.open_findings)
+
+
+def test_reviewers_are_told_the_completion_line(store):
+    rec = WordyReviewer("NO FINDINGS")
+    _run(store, rec)
+    prompt = next(c["prompt"] for c in rec.calls if "contributing an independent read" in c["prompt"])
+    assert "REVIEW: COMPLETE" in prompt and "unfinished review" in prompt
+
+
+def test_a_capped_recheck_keeps_multiline_and_mixed_format_findings(store):
+    rec = CappedSeat("recheck", review="BLOCKING:\nThe escaping drops surrogate pairs.\n"
+                                       "Reproduce with a non-BMP character.\n"
+                                       "- **BLOCKING:** the parser accepts malformed numbers")
+    session, _ = _run(store, rec)
+    kept = [f for f in session.open_findings if "not re-checked" in f]
+    assert kept and "non-BMP character" in kept[0] and "malformed numbers" in kept[0]
 
 
 def test_a_finished_recheck_is_unchanged(store):

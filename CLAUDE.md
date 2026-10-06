@@ -626,6 +626,16 @@ Key design decisions already settled:
   Review copies also get the editing call's exact check guidance (#51) plus
   the fact that the copy has no `.git`: f1's reviewers ran `node --test
   tests/ui/` in place of the five listed files, and `git status`.
+  The cap is a transport fact tracked beside the loop, never read back from
+  the reply (Codex review of 0983dac: a prefix filter dropped an ordinary
+  reply with a BLOCKING line as if capped), and a capped recheck keeps the
+  reviewer's whole original finding on the record as unverified. **A reply
+  that arrived is not a review that finished**: a collaborator's reply
+  counts as a verdict only as NO FINDINGS, at least one BLOCKING finding,
+  or a closing `REVIEW: COMPLETE` line, which the prompt asks for; anything
+  else is recorded as an unfinished review (unverified) and still reaches
+  the lead as a note. A marker as written, like the verifier's VERDICT
+  line, never a reading of the prose.
 - **The lead is told what the harness measures, not only the estimate**
   (series rule-2ffa7f6 f3, f4 and f7, 2026-10-06). The decomposition prompt
   already tells the orchestrator that test lines count in full, and it

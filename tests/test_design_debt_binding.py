@@ -56,6 +56,8 @@ class DesignOrchestrated(Orchestrated):
                 (Path(root) / target).parent.mkdir(exist_ok=True)
                 (Path(root) / target).write_text("<button>go</button>\n")
                 return f'Wrote it\nCHANGED: ["{target}"]'
+            if "contributing an independent read" in prompt:
+                return "NO FINDINGS"
             return "Looked.\nCHANGED: []"
         return invoke
 

@@ -1244,6 +1244,29 @@ def _security_finding_stands(verdict: str) -> bool:
     return True
 
 
+#: The line a reviewer ends with once it has read the whole work and
+#: reported everything. A review is complete when it says NO FINDINGS,
+#: names at least one BLOCKING finding, or carries this line; anything else
+#: is a reply that arrived, not a review that finished (Codex review of
+#: cd8c5b0: "UNFINISHED: did not reach a verdict" closed the task with
+#: review=True). A marker as written, never a reading of the prose; the
+#: verifier's VERDICT line is the same device.
+_REVIEW_COMPLETE = "REVIEW: COMPLETE"
+
+
+def _review_complete(text: str) -> bool:
+    """Whether a collaborator's reply carries a verdict in one of the three
+    forms the prompt names."""
+    body = (text or "").strip()
+    if body.upper().rstrip(".") == "NO FINDINGS" or _has_blocking_finding(body):
+        return True
+    for line in body.splitlines():
+        bare = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", line.replace("**", "").replace("`", "").strip())
+        if bare.rstrip(" .!").upper() == _REVIEW_COMPLETE:
+            return True
+    return False
+
+
 def _has_blocking_finding(text: str) -> bool:
     """Only a finding's explicit prefix controls the recheck loop."""
     return any(re.match(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?BLOCKING\s*:",
@@ -3046,6 +3069,15 @@ class Session:
                 # happened to begin UNFINISHED: was dropped as if capped).
                 capped.add(peer)
                 note = self._capped_review(spec, peer, "review", exc)
+            else:
+                if not _review_complete(note):
+                    # A reply arrived; a review did not finish. Recorded as
+                    # unverified; the text still reaches the lead as a note.
+                    self._open_finding("unverified", f"Task {spec.task_id}: review by {peer} ended "
+                                                     "without a verdict (no NO FINDINGS, no BLOCKING "
+                                                     f"finding, no {_REVIEW_COMPLETE} line); recorded as "
+                                                     "an unfinished review.")
+                    self._note(f"task {spec.task_id}: review by {peer} gave no verdict; recorded as unverified")
             task.record("assistant", f"[{labels[peer]}] {note}")
             task.keep(note, kind=f"review:{peer}", author=peer)
             notes.append((peer, note))
@@ -6219,7 +6251,10 @@ class Session:
             "Start each finding that must be fixed before this work is acceptable "
             "on its own line with 'BLOCKING:' -- you will be asked to re-check exactly those "
             "against the revision. If you genuinely find nothing worth changing, "
-            "reply exactly 'NO FINDINGS' and nothing else; do not write 'BLOCKING: none'."
+            "reply exactly 'NO FINDINGS' and nothing else; do not write 'BLOCKING: none'. "
+            f"Otherwise end your reply with exactly one line, {_REVIEW_COMPLETE}, once you have "
+            "read the whole work and reported everything. A reply with no BLOCKING finding and "
+            "no such line is recorded as an unfinished review."
             + _review_subject_note(spec)
             + (_DESIGN_REVIEW_LENS + (self._design_note or "")
                if self._collaboration_applicable(spec) else "")
@@ -6307,8 +6342,9 @@ class Session:
                 # the generic no-verdict fact survived), beside the cap fact.
                 capped = self._capped_review(spec, peer, 'recheck', exc)
                 task.record("assistant", f"[{shown} recheck] {capped}")
-                standing = "\n".join(line.strip() for line in note.splitlines()
-                                     if line.strip().startswith("BLOCKING:")) or note.strip()
+                # The whole finding as the reviewer wrote it: continuation
+                # lines and every marker form (Codex review of cd8c5b0).
+                standing = note.strip()
                 self._open_finding("unverified", f"Task {spec.task_id}: not re-checked after the "
                                                  f"revision (reviewer capped): {standing}")
                 task.record("user", "A blocking finding was not re-checked against the revision "

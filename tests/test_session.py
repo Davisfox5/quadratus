@@ -35,6 +35,8 @@ class Recorder:
             return self._next.pop(0) if self._next else "DONE"
         if "The task is finished" in prompt:
             return self._closeout
+        if "contributing an independent read" in prompt:
+            return f"[{model}] output\nREVIEW: COMPLETE"
         return f"[{model}] output"
 
     def models(self):

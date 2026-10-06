@@ -34,6 +34,8 @@ class Script:
             return self.orchestrator.pop(0) if self.orchestrator else "DONE"
         if "The task is finished" in prompt:
             return "SUMMARY: done\nREASONING: done"
+        if "contributing an independent read" in prompt:
+            return "NO FINDINGS"
         return "work"
 
 

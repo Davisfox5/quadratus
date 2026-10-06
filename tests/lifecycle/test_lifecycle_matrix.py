@@ -66,7 +66,7 @@ class Script:
         handler = self.overrides.get(call.role) or getattr(self, "_" + call.role.split(":")[0].replace("-", "_"),
                                                            None)
         if handler is None:
-            return "No blocking findings."
+            return "No blocking findings.\nREVIEW: COMPLETE"
         return handler(call, replay)
 
     def _orchestrator(self, call, replay):
@@ -131,7 +131,7 @@ def test_the_whole_task_lifecycle_in_every_request_layout(tmp_path, monkeypatch,
     def collaborator(call, replay):
         if call.vendor == "codex":
             return "BLOCKING: nothing tests negative numbers."
-        return "No blocking findings."
+        return "No blocking findings.\nREVIEW: COMPLETE"
 
     def revision(call, replay):
         old = Path(call.cwd, "tests/test_app.py").read_text()
@@ -202,7 +202,7 @@ def test_an_undeclared_edit_is_recorded_and_still_measured(tmp_path, monkeypatch
 
 
 def _blocking_from_codex(call, replay):
-    return "BLOCKING: nothing tests negative numbers." if call.vendor == "codex" else "No blocking findings."
+    return "BLOCKING: nothing tests negative numbers." if call.vendor == "codex" else "No blocking findings.\nREVIEW: COMPLETE"
 
 
 def test_a_revision_is_told_which_files_are_already_recorded(tmp_path, monkeypatch):
@@ -1119,7 +1119,7 @@ def test_a_later_non_ui_tasks_reviewers_get_no_earlier_renders(tmp_path, monkeyp
         copies.setdefault(call.task, []).append(
             sorted(p.relative_to(call.cwd).as_posix() for p in Path(call.cwd, ".quadratus").rglob("*")
                    if p.is_file()))
-        return "No blocking findings."
+        return "No blocking findings.\nREVIEW: COMPLETE"
 
     script = _design_script("Renders refreshed.\nCHANGED: []")
     script.overrides.update(orchestrator=orchestrator, lead=lead, collaborator=collaborator)
