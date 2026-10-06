@@ -82,7 +82,8 @@ def locked(path: Path = RECORD_PATH, timeout: Optional[float] = None) -> Iterato
                 break
             except OSError:
                 if time.monotonic() >= deadline:
-                    raise RecordError(f"{path.name} is locked by another process; retry when its command finishes")
+                    raise RecordError(f"{path.name} is locked by another process; "
+                                      "retry when its command finishes") from None
                 time.sleep(0.05)
         try:
             yield
