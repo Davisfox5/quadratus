@@ -414,7 +414,7 @@ def test_a_review_only_lead_may_write_its_own_fixture_and_is_told_to(tmp_path, m
                   record_complete=False)
     prompt = _lead_prompts(replay)[0]
     assert "uploads .quadratus/capture-fixtures/t1/sample.csv into #csv" in prompt
-    assert "you must write it before you finish" in prompt and "needs no CHANGED entry" in prompt
+    assert "do not create it" in prompt and "harness asks you for its content" in prompt and "needs no CHANGED entry" in prompt
     assert (replay.project / ".quadratus/capture-fixtures/t1/sample.csv").read_text() == "a,b\n1,2\n"
     task = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t1")
     assert task["closed_as"] == "closed", "writing the fixture is not a scope failure"

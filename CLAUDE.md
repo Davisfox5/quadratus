@@ -678,17 +678,22 @@ Key design decisions already settled:
   headroom. 250k lets a fix cycle finish; the 2.5M threshold and the 1.5M
   per-call ceiling still bound the overshoot. The ruling was to keep
   getting results without burning every token, not to remove the bound.
-- **A declared capture fixture the lead never wrote buys the one design-fix
-  call, before the capture** (series rule-3572b72 f1 t3, 2026-10-06). The
-  lead prompt already says the capture-only sample under
-  `.quadratus/capture-fixtures/<task id>/` "does not exist yet and you must
-  write it"; t3's lead did not, the capture exited 2 on the missing file,
-  and that path spent no fix call (a bad render gets one; a failed capture
-  got none), so three clean tasks ended as `DesignUnverified`.
-  `_missing_own_fixtures` checks the declared own-fixture paths before the
-  harness runs; a missing one gets the design-fix call that names the file,
-  then the gate and the capture as usual. A committed sample elsewhere is
-  still checked by the capture itself; review-only tasks spend nothing.
+- **A capture-only sample is dictated by the lead and written by the
+  harness** (series rule-3572b72 f1 t3, 2026-10-06). The built-in policy
+  tells every builder "never change `.quadratus/**`" while the capture note
+  said "you must write `.quadratus/capture-fixtures/<task id>/…`". The
+  Opus lead of t2 wrote its sample anyway; the Sol lead of t3 obeyed the
+  ban, the capture exited 2 on the missing file, and that path spent no
+  call, so three clean tasks ended as `DesignUnverified`. The note now says
+  not to create it. Before the harness captures, `_missing_own_fixtures`
+  lists the declared own-fixture paths that do not exist and
+  `_supply_fixtures` asks the lead once (role `fixture-supply`, read-only
+  copy) for `FIXTURE <path>:` plus a fenced block per file; the harness
+  validates the path against the declaration and the size against
+  `MAX_FIXTURE_BYTES` and writes it. An unexpected path is never written;
+  a missing or oversized block leaves the capture to fail as before. No
+  write grant changes, and a committed sample elsewhere is still checked
+  by the capture itself.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

@@ -747,6 +747,22 @@ def _parse_capture_line(reply: str, task_id: str):
     return capture, ""
 
 
+_FIXTURE_BLOCK = re.compile(r"^[ \t]*FIXTURE[ \t]+(\S+?):?[ \t]*\n[ \t]*```[^\n]*\n(.*?)\n?[ \t]*```",
+                            re.MULTILINE | re.DOTALL)
+
+
+def _parse_fixture_blocks(reply: str) -> Dict[str, str]:
+    """``{path: content}`` for every ``FIXTURE <path>:`` line followed by one
+    fenced block. The path is taken as written; the caller matches it against
+    the declared fixtures, so an unexpected path is ignored, never written."""
+    found: Dict[str, str] = {}
+    for match in _FIXTURE_BLOCK.finditer(reply or ""):
+        path = match.group(1).strip().strip("`'\"")
+        if path not in found:
+            found[path] = match.group(2)
+    return found
+
+
 def _capture_fixture_note(spec) -> str:
     """The files the declared capture uploads, stated to the lead as the
     harness's own rule. Diagnostic run 20260930T020711Z: t2, a review-only
@@ -764,10 +780,11 @@ def _capture_fixture_note(spec) -> str:
             continue
         path, selector = step.get("path", ""), step.get("selector", "")
         if path.startswith(own):
-            lines.append(f"The capture uploads {path} into {selector}: that file does not exist yet and "
-                         "you must write it before you finish, as a valid, non-secret sample of what "
-                         "that input accepts. It is harness state, not project source: it needs no "
-                         "CHANGED entry and stays for later captures.")
+            lines.append(f"The capture uploads {path} into {selector}: that file does not exist yet. "
+                         "It is harness state, not project source, and the repository policy refuses "
+                         "writes under .quadratus/, so do not create it: after your checks pass the "
+                         "harness asks you for its content (a valid, non-secret sample of what that "
+                         "input accepts) and writes it itself. It needs no CHANGED entry.")
         else:
             lines.append(f"The capture uploads the committed file {path} into {selector}: it must "
                          "remain a regular file at that path; do not move, rename or delete it.")
@@ -1505,7 +1522,7 @@ class Session:
             # design-fix is the task's own lead editing its work (map G11): it
             # carries the lead's packet, like every other editing role.
             role = ('lead' if context.get('role') in ('lead', 'revision', 'gate-fix', 'security-fix', 'design-fix',
-                                                       'capture-redeclare')
+                                                       'capture-redeclare', 'fixture-supply')
                     else 'verifier'
                     if context.get('role') == 'verifier' else 'reviewer')
             prompt += '\n\n' + self._role_packet(spec, role)
@@ -4504,29 +4521,15 @@ class Session:
         harness = evidence == "harness"
         if harness:
             missing = self._missing_own_fixtures(spec)
-            if missing and not is_review_only(spec):
-                # The lead was told to write the capture-only sample and did
-                # not (series rule-3572b72 f1 t3: three tasks closed clean,
-                # the capture exited 2 on a declared fixture that was never
-                # written, no fix call was spent, and the run ended on that
-                # debt). A missing fixture is the lead's own omission, so it
-                # gets the one design-fix call a bad render gets, before the
-                # capture runs rather than after it fails.
+            if missing:
+                # The policy refuses builder writes under .quadratus/** and the
+                # capture note said "you must write it" (series rule-3572b72
+                # f1 t3: the Opus lead of t2 wrote its sample anyway, the Sol
+                # lead of t3 obeyed the ban, the capture exited 2 and no call
+                # was spent). The sample is harness state, so the harness
+                # writes it: one bounded round asks the lead for the content.
                 record["missing_fixtures"] = list(missing)
-                self._note(f"task {spec.task_id}: declared capture fixture(s) missing; one fix call "
-                           f"({', '.join(missing)[:120]})")
-                self._count("design_fix")
-                self._edit(lead, (
-                    f"Task: {spec.description}\n\nThe harness cannot capture this task yet: the capture "
-                    "declares an upload of " + ", ".join(missing) + ", and no such regular file exists in "
-                    "the project. Write it now as a valid, non-secret sample of what that input accepts. "
-                    "It is harness state, not project source: it needs no CHANGED entry and stays for "
-                    "later captures. Do not start servers or run capture commands: the harness captures "
-                    "the declared page after your fix and the checks. Change nothing else."
-                    + _design_fix_delivery(self._interim_edits_note())),
-                    role="design-fix", capped=(spec, task))
-                self._run_integration_gate(lead, spec, task)
-                self._stage("design")
+                self._supply_fixtures(spec, lead, task, record, missing)
             failure = self._harness_capture(spec)
             if failure:
                 self._hand_off_preview(spec, task, record, failure)
@@ -5640,6 +5643,48 @@ class Session:
                 "(--capture-profile) so the harness captures, or run this task on a seat that can. "
                 "No call was made.")
         return ""
+
+    def _supply_fixtures(self, spec, lead, task, record, missing) -> None:
+        """One bounded round: the lead replies with the content of each
+        missing capture-only sample and the harness writes it under the
+        task's own .quadratus/capture-fixtures/<task id>/ folder. No write
+        grant changes; what the lead cannot write, it dictates."""
+        from .design_evidence import MAX_FIXTURE_BYTES
+        self._count("fixture_supply")
+        self._note(f"task {spec.task_id}: declared capture fixture(s) missing; one supply round "
+                   f"({', '.join(missing)[:120]})")
+        prompt = (
+            f"Task: {spec.description}\n\nThe harness cannot capture this task yet: the capture declares "
+            "an upload of " + ", ".join(missing) + ", and no such file exists. The repository policy "
+            "refuses writes under .quadratus/, so the harness writes it from what you reply. For each "
+            "path, reply with the line\nFIXTURE <path>:\nfollowed by one fenced block holding the "
+            "complete file content, a valid non-secret sample of what that input accepts (at most "
+            f"{MAX_FIXTURE_BYTES:,} bytes). Reply with nothing else. Do not change files: this call "
+            "supplies content, it does not edit."
+        )
+        with invocation(spec.task_id, "fixture-supply"):
+            reply = self._invoke_model(lead, prompt)
+        task.record("assistant", f"[{lead}] {reply}")
+        task.keep(reply, kind="fixture-supply", author=lead)
+        written, problems = [], []
+        supplied = _parse_fixture_blocks(reply)
+        for path in missing:
+            content = supplied.get(path)
+            if content is None:
+                problems.append(f"{path}: no FIXTURE block in the reply")
+                continue
+            data = content.encode("utf-8")
+            if len(data) > MAX_FIXTURE_BYTES:
+                problems.append(f"{path}: {len(data):,} bytes exceeds {MAX_FIXTURE_BYTES:,}")
+                continue
+            target = Path(self.project) / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            written.append(path)
+        record["fixtures_written"] = written
+        if problems:
+            record["fixture_problems"] = problems
+            self._note(f"task {spec.task_id}: fixture supply incomplete ({'; '.join(problems)[:160]})")
 
     def _missing_own_fixtures(self, spec) -> List[str]:
         """The capture-only samples this task's file steps declare under its

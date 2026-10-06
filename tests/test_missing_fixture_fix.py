@@ -1,11 +1,14 @@
-"""A declared capture fixture the lead never wrote buys one design-fix call.
+"""A declared capture fixture the lead could not write is supplied, not written.
 
-Series rule-3572b72 f1 t3 (2026-10-06): the lead was told to write the
-capture-only sample under .quadratus/capture-fixtures/t3/ and did not. The
-capture exited 2 on the missing file, no fix call was spent (a bad render
-gets one; a failed capture got none), and the run ended on that debt with
-three tasks closed clean. The missing sample is checked before the capture
-runs; the lead gets the one design-fix call to write it.
+Series rule-3572b72 f1 t3 (2026-10-06): the built-in policy tells every
+builder "never change .quadratus/**" while the capture note said "you must
+write .quadratus/capture-fixtures/t3/malformed.csv". The Opus lead of t2
+wrote its sample anyway; the Sol lead of t3 obeyed the ban, the capture
+exited 2 on the missing file, no call was spent, and the run ended on that
+debt with three tasks closed clean. The sample is harness state, so the
+harness writes it: one bounded round asks the lead for the content
+(FIXTURE <path>: and a fenced block), validates the size, and writes the
+file under the task's own fixture folder. No write grant changes.
 """
 
 from dataclasses import replace
@@ -18,7 +21,7 @@ from quadratus.config import Settings
 from quadratus.memory import TaskMemory
 from quadratus.project import Project
 from quadratus.runtime import Fleet
-from quadratus.session import Session, SessionConfig
+from quadratus.session import Session, SessionConfig, _parse_fixture_blocks
 from tests.test_design_fix_delivery import _postdate
 from tests.test_preferences_in_product import _fake_evidence, _ui
 
@@ -35,7 +38,10 @@ def cli_environment(monkeypatch):
         monkeypatch.delenv(f'QUADRATUS_CLI_ARGS_{vendor}', raising=False)
 
 
-def _run(tmp_path, monkeypatch, *, fix_writes=True, capture=CAPTURE, present=False, review_only=False):
+SUPPLY = f"FIXTURE {FIXTURE}:\n```csv\nstart,end\n1,abc\n```\n"
+
+
+def _run(tmp_path, monkeypatch, *, supply=SUPPLY, capture=CAPTURE, present=False, review_only=False):
     root = tmp_path / "project"
     (root / "templates").mkdir(parents=True)
     (root / "templates" / "index.html").write_text("<button id=preview>Import preview</button>\n")
@@ -52,10 +58,7 @@ def _run(tmp_path, monkeypatch, *, fix_writes=True, capture=CAPTURE, present=Fal
     def generate(model_key, provider, prompt, role):
         prompts.append((model_key, prompt))
         if "The harness cannot capture this task yet" in prompt:
-            if fix_writes:
-                (root / FIXTURE).parent.mkdir(parents=True, exist_ok=True)
-                (root / FIXTURE).write_text("a,b\n1\n")
-            return "Wrote the sample.\nCHANGED: []"
+            return supply
         return "APPROVED"
     monkeypatch.setattr(fleet, "_generate", generate)
 
@@ -88,27 +91,43 @@ def _run(tmp_path, monkeypatch, *, fix_writes=True, capture=CAPTURE, present=Fal
     return session, prompts, captures
 
 
-def test_a_missing_declared_fixture_buys_one_fix_call_before_the_capture(tmp_path, monkeypatch):
+def test_a_missing_declared_fixture_is_supplied_by_the_lead_and_written_by_the_harness(tmp_path, monkeypatch):
     session, prompts, captures = _run(tmp_path, monkeypatch)
-    fixes = [p for _, p in prompts if "The harness cannot capture this task yet" in p]
-    assert len(fixes) == 1 and FIXTURE in fixes[0] and "needs no CHANGED entry" in fixes[0]
-    assert len(captures) == 1, "the capture ran once, after the fixture existed"
+    asks = [p for _, p in prompts if "The harness cannot capture this task yet" in p]
+    assert len(asks) == 1 and FIXTURE in asks[0] and "FIXTURE <path>:" in asks[0]
+    assert "refuses writes under .quadratus/" in asks[0] and "does not edit" in asks[0]
+    assert len(captures) == 1, "the capture ran once, after the harness wrote the sample"
+    root = tmp_path / "project"
+    assert (root / FIXTURE).read_text() == "start,end\n1,abc"
     record = session.design_checks[-1]
-    assert record["missing_fixtures"] == [FIXTURE] and record["verified"] is True
-    assert record["final_review"]["verdict"] == "APPROVED"
+    assert record["missing_fixtures"] == [FIXTURE] and record["fixtures_written"] == [FIXTURE]
+    assert record["verified"] is True and record["final_review"]["verdict"] == "APPROVED"
     assert not any("without clean rendered evidence" in f for f in session.open_findings)
 
 
-def test_a_lead_that_still_does_not_write_it_gets_no_second_call(tmp_path, monkeypatch):
-    session, prompts, captures = _run(tmp_path, monkeypatch, fix_writes=False)
-    fixes = [p for _, p in prompts if "The harness cannot capture this task yet" in p]
-    assert len(fixes) == 1 and len(captures) == 1
+def test_a_reply_without_the_block_gets_no_second_round_and_the_capture_fails_as_before(tmp_path, monkeypatch):
+    session, prompts, captures = _run(tmp_path, monkeypatch, supply="I would write a,b first.")
+    asks = [p for _, p in prompts if "The harness cannot capture this task yet" in p]
+    assert len(asks) == 1 and len(captures) == 1
     record = session.design_checks[-1]
+    assert record["fixtures_written"] == [] and "no FIXTURE block" in record["fixture_problems"][0]
     assert record["verified"] is False and "not a regular file" in record["problem"]
     assert any("without clean rendered evidence" in f for f in session.open_findings)
 
 
-def test_a_present_fixture_or_a_committed_sample_spends_no_fix_call(tmp_path, monkeypatch):
+def test_an_unexpected_path_is_never_written_and_an_oversized_sample_is_refused(tmp_path, monkeypatch):
+    elsewhere = "FIXTURE app.py:\n```\nprint(1)\n```\n"
+    session, _, _ = _run(tmp_path, monkeypatch, supply=elsewhere)
+    assert not (tmp_path / "project" / "app.py").exists()
+    assert session.design_checks[-1]["fixtures_written"] == []
+    big = f"FIXTURE {FIXTURE}:\n```\n" + "x" * 1_000_001 + "\n```\n"
+    session, _, _ = _run(tmp_path / "b", monkeypatch, supply=big)
+    record = session.design_checks[-1]
+    assert record["fixtures_written"] == [] and "exceeds" in record["fixture_problems"][0]
+    assert not (tmp_path / "b" / "project" / FIXTURE).exists()
+
+
+def test_a_present_fixture_or_a_committed_sample_spends_no_round(tmp_path, monkeypatch):
     _, prompts, captures = _run(tmp_path, monkeypatch, present=True)
     assert not any("cannot capture this task yet" in p for _, p in prompts) and len(captures) == 1
     committed = {"path": "/index.html", "steps": [{"action": "file", "selector": "#f", "path": "tests/fixtures/x.csv"},
@@ -118,7 +137,18 @@ def test_a_present_fixture_or_a_committed_sample_spends_no_fix_call(tmp_path, mo
     assert session._missing_own_fixtures(session._active_spec) == []
 
 
-def test_a_review_only_task_spends_no_fix_call(tmp_path, monkeypatch):
+def test_a_review_only_task_gets_the_round_too_since_it_edits_nothing(tmp_path, monkeypatch):
     session, prompts, captures = _run(tmp_path, monkeypatch, review_only=True)
-    assert not any("cannot capture this task yet" in p for _, p in prompts)
-    assert session.design_checks[-1]["verified"] is False
+    assert any("cannot capture this task yet" in p for _, p in prompts) and len(captures) == 1
+    assert session.design_checks[-1]["fixtures_written"] == [FIXTURE]
+
+
+@pytest.mark.parametrize("reply, expected", [
+    ("FIXTURE a/b.csv:\n```\nx,y\n```", {"a/b.csv": "x,y"}),
+    ("FIXTURE `a/b.csv`\n```csv\nx,y\n1,2\n```\ntrailing", {"a/b.csv": "x,y\n1,2"}),
+    ("FIXTURE one.csv:\n```\n1\n```\nFIXTURE two.csv:\n```\n2\n```", {"one.csv": "1", "two.csv": "2"}),
+    ("no blocks here", {}),
+    ("FIXTURE a.csv:\nnot fenced", {}),
+])
+def test_fixture_blocks_are_parsed_as_written(reply, expected):
+    assert _parse_fixture_blocks(reply) == expected
