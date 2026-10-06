@@ -1282,14 +1282,27 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-06T11:00:43Z",
       "acknowledged": false,
       "delivery": {
         "sha": "3572b72",
         "at": "2026-10-06T11:39:29Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "3572b72",
+          "verdict": "cleared",
+          "evidence": "#53 comment 6015523535: scoped offline clearance, 80 focused checks; 64k stated as an empirical allowance, passed only where argv enforces one turn",
+          "scope": [
+            "quadratus/run_budget.py",
+            "quadratus/providers.py",
+            "tests/test_run_budget.py"
+          ],
+          "at": "2026-10-06T11:44:32Z"
+        }
+      ],
       "blockers": [],
       "decisions": [
         "claude: Codex review of 961d2da BLOCKED on P2 (#53 comment 6015406345): summary_only did not establish the claimed call shape (codex summary has no turn flag, grok keeps read tools, no CLI output cap; saved close-outs reported 1,465 and 1,629 output tokens). Fixed at 3572b72: CLISpec.summary_turn_capped reads the enforced '<max_turns_flag> 1' pair (claude, grok true; codex false); the 64k allowance is passed only then, codex close-outs reserve the operator's figure in full; constant, snapshot shape_boundary and docs restate it as a measured allowance (largest saved close-out 24,006), not a hard bound; per-provider tests replace the mocked flip. Packet commits unchanged."
@@ -1311,7 +1324,19 @@
         "sha": "bf56b0e",
         "at": "2026-10-06T11:05:50Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "3572b72",
+          "verdict": "stale",
+          "evidence": "#53 comments 6015406345 and 6015523535: packet comparison changes exactly reserve 500k to 250k; Davis's authorization receipt read and hashed",
+          "scope": [
+            "tools/jev_stage_b/packet.stage-b.json"
+          ],
+          "at": "2026-10-06T11:44:32Z",
+          "stale_reason": "reviewed 3572b72 but the delivery is bf56b0e"
+        }
+      ],
       "blockers": [],
       "decisions": []
     },
@@ -1331,7 +1356,19 @@
         "sha": "961d2da",
         "at": "2026-10-06T11:18:23Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "3572b72",
+          "verdict": "stale",
+          "evidence": "#53 comments 6015406345 and 6015523535: packet comparison changes exactly max_reported_tokens 2.5M to 4M; Davis's authorization receipt read and hashed",
+          "scope": [
+            "tools/jev_stage_b/packet.stage-b.json"
+          ],
+          "at": "2026-10-06T11:44:32Z",
+          "stale_reason": "reviewed 3572b72 but the delivery is 961d2da"
+        }
+      ],
       "blockers": [],
       "decisions": []
     }
