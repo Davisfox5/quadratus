@@ -1309,6 +1309,26 @@
       "reviews": [],
       "blockers": [],
       "decisions": []
+    },
+    {
+      "id": "T-cell-budget-4m",
+      "purpose": "Davis, 2026-10-06: the reserve and the overall token count are now in play. Stage B packet max_reported_tokens 2.5M to 4M on #53 (961d2da): on engine 3f9c548 the cells that finished used about 0.8M, the cells that reached a review cycle stopped at 2.0M to 2.3M with the cycle unfinished, and finishing them needs about 0.3M to 1.0M more on measured sizes. Per-call ceiling 1.5M, 90 calls, 3600 s, 2 workers unchanged; reserve 250k (T-reserve-250k). The 3600 s wall may become the next binding limit.",
+      "base": "3f9c5483890268486018906b56bab75f739730a6",
+      "owns": [
+        "tools/jev_stage_b/packet.stage-b.json"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-06T11:18:22Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "961d2da",
+        "at": "2026-10-06T11:18:23Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
