@@ -1264,6 +1264,28 @@
       ],
       "blockers": [],
       "decisions": []
+    },
+    {
+      "id": "T-reserve-shape",
+      "purpose": "Engine defect from series rule-3f9c548 f3 (Codex handoff lane 2): the pre-call reserve is one size for every call, so a finished task's one-turn close-out (about 20k tokens) was refused on 163k of headroom because the operator's reserve for an agentic call is 500k; f1's second recheck and f4's revision stopped the same way. Fix on #53: a summary_only provider passes expected_tokens=SUMMARY_CALL_RESERVE_TOKENS (64k, three times the largest measured close-out) and RunBudget.reserve asks the smaller of that and the operator's reserve; never raises a reserve, every other call reserves the operator's figure in full, post-return threshold unchanged, snapshot counts shaped reservations. No packet bound change.",
+      "base": "3f9c5483890268486018906b56bab75f739730a6",
+      "owns": [
+        "quadratus/run_budget.py",
+        "quadratus/providers.py",
+        "tests/test_run_budget.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-06T11:00:43Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "ed49238",
+        "at": "2026-10-06T11:00:44Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
