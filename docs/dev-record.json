@@ -924,7 +924,8 @@
         "claude: CI on 2fc3e7d failed one test (test_closeout: the closeout's temporary directory must stay empty, and the new disposable-copy TMPDIR scratch dir was created there). Fixed at c3abcf0f25c8e8cf9cb22372cd9a72ae5121c3ea: the closeout keeps the plain read-only view; only the Fleet's project snapshot is disposable. The four repair tasks now deliver at c3abcf0; #52 head moved.",
         "claude: CI green on #52 at c3abcf0f25c8e8cf9cb22372cd9a72ae5121c3ea: all four jobs success (2026-10-06T04:37Z). Local full suite on the same head: 2920 passed, 46 skipped; the nine failures are the Playwright browser-launch tests and the wheel-build test, which need a Chromium binary and a build backend this container lacks and which pass in CI. Waiting on Codex's review of #52, then the Mac provider proof of the codex review-copy sandbox, then the rule-only rerun.",
         "claude: Davis, via the Codex executor (#35 comment 6009847383): 'Why not? Why does this keep stalling? Set checks and keep working until it is fully done.' Codex resumed its reviewer on #52 exact c3abcf0 (all four CI jobs success) with five-minute checks active through the repair, review, proof and run loop until the seven rule workflows complete, all 35 frozen requirements pass and the capture, reviewer and audit gates are satisfied, or an external blocker needs Davis. Lanes unchanged: Claude cloud owns repairs and #46; Codex owns Mac execution. Order after clearance: bounded codex disposable-copy proof (pytest and a TMPDIR write succeed inside the copy, a write outside is denied), then a fresh freeze and one seven-cell rule-only series on the cleared SHA; no Jev or TypeSafe; earlier series stay terminal. f6 artifact 857222c39a15.txt ends 'Verdict: accept the code change.' then 'It implements the specified guard faithfully and I found no correctness defect in it.'; the new parser reads that line as VERDICT ACCEPT, so the fix covers the real text. Artifact preserved under series-rule-b1ff751-20261006T020730Z/cells/f6-download-guard/rule-r0/.quadratus/runs/20261006T030515Z-c883fabc/artifacts/.",
-        "claude: Codex review of #52 at c3abcf0: NOT CLEARED, three findings, all fixed at 9b8c056d6fd146569d6e170503ab2e2e88dfd2b5: (P1) the codex copy policy now switches off /tmp, $TMPDIR and configured writable_roots so the copy is the only writable root; (P2) the recapture fires only when every BLOCKING line is the blind-render line, so an independent blocker is never replaced; (P2) the argv test filters the prompt file by basename, portable to macOS temp paths. The cap derivation, plain closeout and verdict parsing passed review. Codex also read the real f6 artifact (SHA256 857222c39a158abab23527475fc2e8675b20bc46ffb64f4131ef4bb3125d1607): it carries a genuine UNRESOLVED line (a pytest result asserted without its command, R4 to R6 not established) and ends 'Verdict: accept the code change.'; the new parser gives finding_stands=true, which is correct, so f6 rule was a real validation finding and stays unresolved. All four repair tasks now deliver at 9b8c056."
+        "claude: Codex review of #52 at c3abcf0: NOT CLEARED, three findings, all fixed at 9b8c056d6fd146569d6e170503ab2e2e88dfd2b5: (P1) the codex copy policy now switches off /tmp, $TMPDIR and configured writable_roots so the copy is the only writable root; (P2) the recapture fires only when every BLOCKING line is the blind-render line, so an independent blocker is never replaced; (P2) the argv test filters the prompt file by basename, portable to macOS temp paths. The cap derivation, plain closeout and verdict parsing passed review. Codex also read the real f6 artifact (SHA256 857222c39a158abab23527475fc2e8675b20bc46ffb64f4131ef4bb3125d1607): it carries a genuine UNRESOLVED line (a pytest result asserted without its command, R4 to R6 not established) and ends 'Verdict: accept the code change.'; the new parser gives finding_stands=true, which is correct, so f6 rule was a real validation finding and stays unresolved. All four repair tasks now deliver at 9b8c056.",
+        "claude: Codex re-review of #52 at 9b8c056 (#52 comment 6010009436; #35 comment 6010013242): NOT CLEARED, two residuals, both fixed at d866a83ea8e3372552a66304bb37e5384e598027. (P1) an ungranted call in a disposable copy now refuses before dispatch any QUADRATUS_CLI_ARGS_OPENAI argument that touches the sandbox mode, writable roots, extra directories or the working directory, in every clap spelling, agreeing values included; granted calls keep the operator's override; only keys are named. (P2) the blind-render guard qualifies only a reply whose whole text, after stripping bold, a list marker, trailing punctuation and case, is the one blind line; any second clause, line or content leaves the verdict standing. The macOS temp-path fix was confirmed (71 focused tests on the Mac's normal temp dir). All four repair tasks deliver at d866a83."
       ]
     },
     {
@@ -940,8 +941,8 @@
       "claimed_at": "2026-10-06T02:02:43Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "9b8c056d6fd146569d6e170503ab2e2e88dfd2b5",
-        "at": "2026-10-06T05:26:26Z"
+        "sha": "d866a83ea8e3372552a66304bb37e5384e598027",
+        "at": "2026-10-06T05:32:14Z"
       },
       "reviews": [],
       "blockers": [],
@@ -962,8 +963,8 @@
       "claimed_at": "2026-10-06T02:02:43Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "9b8c056d6fd146569d6e170503ab2e2e88dfd2b5",
-        "at": "2026-10-06T05:26:25Z"
+        "sha": "d866a83ea8e3372552a66304bb37e5384e598027",
+        "at": "2026-10-06T05:32:13Z"
       },
       "reviews": [],
       "blockers": [],
@@ -980,12 +981,12 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "blocked",
+      "state": "delivered",
       "claimed_at": "2026-10-06T02:02:43Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "9b8c056d6fd146569d6e170503ab2e2e88dfd2b5",
-        "at": "2026-10-06T05:26:26Z"
+        "sha": "d866a83ea8e3372552a66304bb37e5384e598027",
+        "at": "2026-10-06T05:32:14Z"
       },
       "reviews": [
         {
@@ -1025,12 +1026,12 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "blocked",
+      "state": "delivered",
       "claimed_at": "2026-10-06T02:56:39Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "9b8c056d6fd146569d6e170503ab2e2e88dfd2b5",
-        "at": "2026-10-06T05:26:25Z"
+        "sha": "d866a83ea8e3372552a66304bb37e5384e598027",
+        "at": "2026-10-06T05:32:13Z"
       },
       "reviews": [
         {
