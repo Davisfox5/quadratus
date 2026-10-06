@@ -645,6 +645,17 @@ Key design decisions already settled:
   exact stop line and "compact named cases", so the seat writing the tests
   knows the bound it is writing against. The estimate rules and the stop
   itself are unchanged.
+- **A summary-only call reserves its own shape** (series rule-3f9c548 f3,
+  2026-10-06). The pre-call reserve was one size for every call, so a
+  finished task's 20k close-out was refused on 160k of headroom because the
+  operator's reserve for an agentic call is 500k. The close-out is bounded
+  by construction (one turn, no tools, a 32,000-byte prompt, 1,024 output
+  tokens; the largest measured was about 22k), so a `summary_only` provider
+  passes `expected_tokens=SUMMARY_CALL_RESERVE_TOKENS` (64k, three times the
+  largest measured) and `RunBudget.reserve` asks the smaller of that and the
+  operator's reserve. It never raises a reserve, every other call reserves
+  the operator's figure in full, and the post-return threshold is unchanged;
+  the snapshot counts `shaped_reservations`.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
