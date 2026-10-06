@@ -908,7 +908,9 @@
       "delivery": null,
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: Freeze (Codex, #35 comment 6007891327): series /Users/davisfox/Documents/GitHub/stage-b/series-rule-b1ff751-20261006T020730Z on clean engine b1ff751 (#51 CI green), GameTape base 1cd9264, fresh detached worktrees. Packet canonical digest 21f46b3195711338be9e86e59cc5526db5d6891cd8b72ebfbd37db2ab8a25cc5 (file SHA256 942402dc0beb07142683746a1fb5e61a683858d0dcd0bda329c3ef33fb5076ff); frozen grader and profile digest 61c9f0cd60f53b4a7ef49156091239c9579b5db2acc128162d0980a6ba5a95a5; same seven goals, graders, profiles and packet bytes as series b1ff751. Prepare creates 14 templates; only the seven rule cells are authorized, the seven Jev templates never launch. Launch once: pairs.py run --arm rule --pairs 1; no Jev decider, no TypeSafe, no API keys or overrides; CLIs claude 2.1.269, codex 0.154.0, grok 1.0.30. Bounds unchanged. Purpose is engine-error discovery; per-cell receipts name stops and causes with evidence hashes."
+      ]
     },
     {
       "id": "T-verdict-as-finding",
