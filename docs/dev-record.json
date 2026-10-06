@@ -909,7 +909,8 @@
       "reviews": [],
       "blockers": [],
       "decisions": [
-        "claude: Freeze (Codex, #35 comment 6007891327): series /Users/davisfox/Documents/GitHub/stage-b/series-rule-b1ff751-20261006T020730Z on clean engine b1ff751 (#51 CI green), GameTape base 1cd9264, fresh detached worktrees. Packet canonical digest 21f46b3195711338be9e86e59cc5526db5d6891cd8b72ebfbd37db2ab8a25cc5 (file SHA256 942402dc0beb07142683746a1fb5e61a683858d0dcd0bda329c3ef33fb5076ff); frozen grader and profile digest 61c9f0cd60f53b4a7ef49156091239c9579b5db2acc128162d0980a6ba5a95a5; same seven goals, graders, profiles and packet bytes as series b1ff751. Prepare creates 14 templates; only the seven rule cells are authorized, the seven Jev templates never launch. Launch once: pairs.py run --arm rule --pairs 1; no Jev decider, no TypeSafe, no API keys or overrides; CLIs claude 2.1.269, codex 0.154.0, grok 1.0.30. Bounds unchanged. Purpose is engine-error discovery; per-cell receipts name stops and causes with evidence hashes."
+        "claude: Freeze (Codex, #35 comment 6007891327): series /Users/davisfox/Documents/GitHub/stage-b/series-rule-b1ff751-20261006T020730Z on clean engine b1ff751 (#51 CI green), GameTape base 1cd9264, fresh detached worktrees. Packet canonical digest 21f46b3195711338be9e86e59cc5526db5d6891cd8b72ebfbd37db2ab8a25cc5 (file SHA256 942402dc0beb07142683746a1fb5e61a683858d0dcd0bda329c3ef33fb5076ff); frozen grader and profile digest 61c9f0cd60f53b4a7ef49156091239c9579b5db2acc128162d0980a6ba5a95a5; same seven goals, graders, profiles and packet bytes as series b1ff751. Prepare creates 14 templates; only the seven rule cells are authorized, the seven Jev templates never launch. Launch once: pairs.py run --arm rule --pairs 1; no Jev decider, no TypeSafe, no API keys or overrides; CLIs claude 2.1.269, codex 0.154.0, grok 1.0.30. Bounds unchanged. Purpose is engine-error discovery; per-cell receipts name stops and causes with evidence hashes.",
+        "claude: Cell f1-preview-errors/rule-r0 (Codex, #35 comment 6008006902): ran, independent grade 4/4, engine complete False, 2,817,430 reported tokens, 6 calls, 621.9 s, stop call_token_ceiling. Named cause: the t2 lead claude:opus ran 36 model turns in one call and reported 2,092,420 input tokens (2,073,704 cached) plus 22,001 output, past the 1.5M post-return ceiling; t1 (grok lead) closed clean first. Evidence cell-f1-preview-errors.json SHA256 6c6251599953ec970de4f98f07620db81a62572dcbc793197281fb546874d877."
       ]
     },
     {
@@ -944,7 +945,9 @@
       "delivery": null,
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: Reproduced on the rule arm with a Claude lead, not grok: series rule-b1ff751 f1/rule-r0, Opus lead on t2, 36 turns, 2.09M input of which 2.07M cached, stopped by the 1.5M ceiling. The defect is vendor-neutral: an unrestricted agentic lead re-sends its context every turn, the packet sets lead_max_turns null, and the ceiling counts cached input at full weight. Fix candidates: a default lead turn cap in the packet (lead_max_turns), and/or metering cached input separately so the ceiling measures new work rather than re-sent context. Retitle in effect: T-lead-call-ceiling."
+      ]
     },
     {
       "id": "T-design-capture-blind",
