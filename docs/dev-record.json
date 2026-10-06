@@ -1286,12 +1286,14 @@
       "claimed_at": "2026-10-06T11:00:43Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "ed49238",
-        "at": "2026-10-06T11:00:44Z"
+        "sha": "3572b72",
+        "at": "2026-10-06T11:39:29Z"
       },
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: Codex review of 961d2da BLOCKED on P2 (#53 comment 6015406345): summary_only did not establish the claimed call shape (codex summary has no turn flag, grok keeps read tools, no CLI output cap; saved close-outs reported 1,465 and 1,629 output tokens). Fixed at 3572b72: CLISpec.summary_turn_capped reads the enforced '<max_turns_flag> 1' pair (claude, grok true; codex false); the 64k allowance is passed only then, codex close-outs reserve the operator's figure in full; constant, snapshot shape_boundary and docs restate it as a measured allowance (largest saved close-out 24,006), not a hard bound; per-provider tests replace the mocked flip. Packet commits unchanged."
+      ]
     },
     {
       "id": "T-reserve-250k",
