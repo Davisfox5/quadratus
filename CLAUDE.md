@@ -700,10 +700,13 @@ Key design decisions already settled:
   `O_NOFOLLOW` relative to the handle of the directory before it, the file
   created `O_EXCL`, so a link swapped in after the check is refused and an
   unexpectedly present file is never overwritten; Codex reviews of 351d3ba
-  and 6844b97). A write that fails part-way removes the inode this call
-  created and nothing else, and any supply problem stops the design check
-  unverified before a capture or review can run on it (Codex review of
-  ada4c75). Every line that starts like a `FIXTURE` header is accounted
+  and 6844b97). A write that fails part-way discards its bytes through this
+  call's own descriptor and deletes nothing by pathname (a name can change
+  hands between any check and an unlink; Codex review of cc045a1); the
+  empty placeholder is refused by the capture's reader and counts as
+  missing, and any supply problem stops the design check unverified before
+  a capture or review can run on it (Codex review of ada4c75). Every line
+  that starts like a `FIXTURE` header is accounted
   for, well-formed or not, so a trailing or malformed duplicate keeps
   nothing for its path. No write grant changes, and a committed sample
   elsewhere is still checked by the capture itself.

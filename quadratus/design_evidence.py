@@ -230,6 +230,10 @@ def _fixture(root: Path, relative: str, task_id: Optional[str] = None) -> Path:
         raise ValueError(f"file step path is not a regular file in the project: {relative!r}")
     if own and current.stat().st_size > MAX_FIXTURE_BYTES:
         raise ValueError(f"capture fixture is larger than {MAX_FIXTURE_BYTES:,} bytes: {relative!r}")
+    if own and current.stat().st_size == 0:
+        # A discarded partial write leaves an empty placeholder
+        # (session._write_fixture_bound); an empty sample is no sample.
+        raise ValueError(f"capture fixture is empty: {relative!r}")
     return current.resolve()
 
 

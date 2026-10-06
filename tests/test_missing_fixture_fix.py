@@ -203,21 +203,47 @@ def test_a_failed_write_removes_the_partial_file_it_created(tmp_path, monkeypatc
         raise OSError(28, "No space left on device")
     monkeypatch.setattr(os, "write", short_then_full)
     why = _write_fixture_bound(root, ".quadratus/capture-fixtures/t6/x.csv", b"start,end\n1,abc\n")
-    assert "partial file was removed" in why
-    assert not (root / ".quadratus" / "capture-fixtures" / "t6" / "x.csv").exists()
+    # Codex review of cc045a1: nothing is deleted by pathname; the bytes are
+    # discarded through the owned descriptor and the empty placeholder is
+    # refused by the reader and counts as missing.
+    assert "discarded through this call's own descriptor" in why and "not usable evidence" in why
+    placeholder = root / ".quadratus" / "capture-fixtures" / "t6" / "x.csv"
+    assert placeholder.is_file() and placeholder.stat().st_size == 0
+    from quadratus.design_evidence import _fixture
+    with pytest.raises(ValueError, match="empty"):
+        _fixture(root, ".quadratus/capture-fixtures/t6/x.csv", "t6")
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.session import Session, SessionConfig
+    session = Session("g", ArtifactStore(tmp_path / "a"), lambda *a, **k: "", config=SessionConfig(project=root))
+    spec = _ui()
+    spec.scope = replace(spec.scope, capture={"path": "/", "steps": [
+        {"action": "file", "selector": "#f", "path": ".quadratus/capture-fixtures/t6/x.csv"}]})
+    assert session._missing_own_fixtures(spec) == [".quadratus/capture-fixtures/t6/x.csv"]
+
+
+def test_a_denied_discard_is_reported_as_such(tmp_path, monkeypatch):
+    import os
+
+    from quadratus.session import _write_fixture_bound
+    root = tmp_path / "project"
+    root.mkdir()
+    monkeypatch.setattr(os, "write", lambda fd, data: (_ for _ in ()).throw(OSError(28, "No space left on device")))
+    monkeypatch.setattr(os, "ftruncate", lambda fd, length: (_ for _ in ()).throw(PermissionError(13, "denied")))
+    why = _write_fixture_bound(root, ".quadratus/capture-fixtures/t6/x.csv", b"a,b\n")
+    assert "could not be discarded" in why and "not usable evidence" in why
 
 
 def test_a_failed_supply_stops_before_capture_and_review(tmp_path, monkeypatch):
     # Codex review of ada4c75: a problem was recorded and the flow still
     # captured and reached APPROVED on a partial sample.
     monkeypatch.setattr("quadratus.session._write_fixture_bound",
-                        lambda root, path, data: "the write failed and the partial file was removed (OSError: 28)")
+                        lambda root, path, data: "the write failed; the partial bytes were discarded through this call's own descriptor; the placeholder is not usable evidence (OSError: 28)")
     session, prompts, captures = _run(tmp_path, monkeypatch)
     assert captures == [], "no capture against a failed supply"
     assert not any("Reply exactly APPROVED" in p for _, p in prompts)
     record = session.design_checks[-1]
     assert record["verified"] is False and "could not be supplied" in record["problem"]
-    assert record["fixtures_written"] == [] and "partial file was removed" in record["fixture_problems"][0]
+    assert record["fixtures_written"] == [] and "partial bytes were discarded" in record["fixture_problems"][0]
     assert any("without clean rendered evidence" in f for f in session.open_findings)
 
 

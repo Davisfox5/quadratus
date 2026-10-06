@@ -879,24 +879,24 @@ def _write_fixture_bound(root, path: str, data: bytes) -> str:
         fd = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
                      0o644, dir_fd=fds[-1])
         fds.append(fd)
-        created = os.fstat(fd)
         try:
             view = memoryview(data)
             while view:
                 view = view[os.write(fd, view):]
         except OSError as exc:
-            # The file this call created must not survive as a partial
-            # sample the capture's reader would accept (Codex review of
-            # ada4c75: a short write then ENOSPC left five bytes and the
-            # flow reached APPROVED). Only the inode we created is removed;
-            # a concurrent replacement is left alone.
+            # The partial bytes must not survive as a sample the capture's
+            # reader would accept (Codex review of ada4c75), and nothing is
+            # deleted by pathname, since a name can change hands between
+            # any check and an unlink (Codex review of cc045a1). The bytes
+            # are discarded through this call's own descriptor, which is
+            # the one inode it created; the empty placeholder that remains
+            # is refused by the reader and counts as missing.
             try:
-                current = os.stat(parts[-1], dir_fd=fds[-2], follow_symlinks=False)
-                if (current.st_ino, current.st_dev) == (created.st_ino, created.st_dev):
-                    os.unlink(parts[-1], dir_fd=fds[-2])
-            except OSError:
-                pass
-            return f"the write failed and the partial file was removed ({exc.__class__.__name__}: {exc})"
+                os.ftruncate(fd, 0)
+                discarded = "the partial bytes were discarded through this call's own descriptor"
+            except OSError as inner:
+                discarded = f"the partial bytes could not be discarded ({inner.__class__.__name__}: {inner})"
+            return f"the write failed; {discarded}; the placeholder is not usable evidence ({exc.__class__.__name__}: {exc})"
         return ""
     except FileExistsError:
         return "the target already exists; nothing is overwritten"
@@ -5921,7 +5921,12 @@ class Session:
         missing = []
         for step in steps:
             path = str(step.get("path", "")) if step.get("action") == "file" else ""
-            if path.startswith(own) and self.project and not (Path(self.project) / path).is_file():
+            if not (path.startswith(own) and self.project):
+                continue
+            target = Path(self.project) / path
+            # An empty own fixture is a discarded partial write (see
+            # _write_fixture_bound), never a sample: it counts as missing.
+            if not target.is_file() or target.is_symlink() or target.stat().st_size == 0:
                 missing.append(path)
         return missing
 
