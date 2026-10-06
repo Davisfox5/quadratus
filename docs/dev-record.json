@@ -946,7 +946,8 @@
         "claude: Series rule-3f9c548 cell f1-preview-errors (receipt #6013832902, evidence SHA256 9f801fb952457730cdfd89a3e8a94b9cfcca93064e4ef23b5e1add94c448d344): 4/4 (was 3/4 on 2ffa7f6), engine complete false, reported_token_reserve after 10 calls and 2,188,015 tokens in 1024 s. t1 (grok lead) closed clean inside its bound for the first time in any series: 56 changed lines (24 code, 32 test) against max 60. t2 (Opus lead, 18 turns, 754k) reached review: one collaborator (210k), two revisions (9 and 11 turns), one recheck ok; the second recheck could not start under the 500k reserve. No turn cap fired on any seat; no scope failure; no design review reached. The remaining limit in this cell is budget shape, not a defect: orchestrator calls of 187k to 203k, one 754k lead draft and two revisions spend 2.19M before the fix cycle closes.",
         "claude: Series rule-3f9c548 cell f2-project-search (receipt #6014178292, evidence SHA256 a0760b42951fc669d3ddfd177c3947792cbccad1c9d8b4bd39983ce338a2ba78): 4/5 (same as the two prior series), engine complete false, reported_token_reserve after 11 calls and 2,078,900 tokens in 1253 s. t1 (grok lead, 9 turns, 478k) closed clean at 84 to 90 code lines against max 80 (inside the 1.5x stop): collaborator Opus 17 turns at 378k (under the 20-round cap, no cap fired), one revision, harness capture verified, design review by Opus APPROVED. t2 (Sol lead) closed clean. t3 was selected and could not start under the reserve. R3 (query restored from the URL hash on load) failed in the grader: a hidden project card was the first match, the same miss as in series rule-b1ff751 and rule-2ffa7f6; the orchestrator had planned a third task that the budget did not reach. No engine defect in this cell; the reserve stop is the budget shape again.",
         "claude: Series rule-3f9c548 cell f3-project-rename (receipt #6014433683, evidence SHA256 8c09aec300f55364222d8b5262c85f11e191374f379e52aad0160d163d4f88d7): 5/5, engine complete false, reported_token_reserve after 19 calls and 2,336,719 tokens in 966 s. Four tasks closed clean (grok, Opus, Sol, Sol); t2 had one collaborator (170k), one revision, recheck ok, harness capture verified, design review by Sol APPROVED. Every scope report inside its bound; no cap fired; no findings. t5's Sol lead ran (394k) and its close-out, a one-turn tool-less call of about 10k to 20k tokens in this series, could not start because the 500k pre-call reserve is the same for every call. Candidate repair (lane 2, no bound change): size the reserve by the call's shape, so a summary-only close-out or a recheck reserves what such a call has measured, not a full agentic call's 500k; the per-cell threshold stays as frozen. Would have let f3 close t5 and likely f1 run its second recheck.",
-        "claude: Series rule-3f9c548 cell f4-tags-export (receipt #6014671793, evidence SHA256 37987e15f091be006e9bf3ebf6b7f8d192b03411921660e99135880ba1dd098f): 6/6, engine complete false, reported_token_reserve after 10 calls and 2,171,860 tokens in 949 s. t1 (Opus lead, 12 turns) failed on scope at 174 changed lines (66 code, 108 test) against max 100, past the 150 stop, with the new size statement in its scope block: the lead was told tests count in full and still wrote 108 test lines. Recovery t2 (Sol) closed clean; t3 (grok lead, 13 turns, 637k) drafted inside 72/60, collaborator Opus 13 turns at 370k (under the cap), and the revision could not start under the reserve. No cap fired. Observation across f1 to f4 on this engine: first-task scope held in f1 and f3 and broke in f4; the stop is reached by one Opus lead writing a full test module in one draft, so the remaining lever is on the orchestrator's split (tests as their own earlier task when the named scenarios are many), which the decomposition prompt already asks for at a third of max_lines."
+        "claude: Series rule-3f9c548 cell f4-tags-export (receipt #6014671793, evidence SHA256 37987e15f091be006e9bf3ebf6b7f8d192b03411921660e99135880ba1dd098f): 6/6, engine complete false, reported_token_reserve after 10 calls and 2,171,860 tokens in 949 s. t1 (Opus lead, 12 turns) failed on scope at 174 changed lines (66 code, 108 test) against max 100, past the 150 stop, with the new size statement in its scope block: the lead was told tests count in full and still wrote 108 test lines. Recovery t2 (Sol) closed clean; t3 (grok lead, 13 turns, 637k) drafted inside 72/60, collaborator Opus 13 turns at 370k (under the cap), and the revision could not start under the reserve. No cap fired. Observation across f1 to f4 on this engine: first-task scope held in f1 and f3 and broke in f4; the stop is reached by one Opus lead writing a full test module in one draft, so the remaining lever is on the orchestrator's split (tests as their own earlier task when the named scenarios are many), which the decomposition prompt already asks for at a third of max_lines.",
+        "claude: Davis ruling (relayed on #35 comment 6014889572): fix errors from f1 to f4 as they come in, not after the terminal packet, and adjust the reserve so runs reach a result without burning every token. Delivered on #53: ed49238 (summary-only close-out reserves 64k) and bf56b0e (packet reserve 500k to 250k). Codex asked to finish the cell in flight, not replay f1 to f4, and freeze a continuation series on bf56b0e for the remaining features (or finish the series on 3f9c548 and freeze the next one on bf56b0e right after), stating which."
       ]
     },
     {
@@ -1282,6 +1283,26 @@
       "delivery": {
         "sha": "ed49238",
         "at": "2026-10-06T11:00:44Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
+    },
+    {
+      "id": "T-reserve-250k",
+      "purpose": "Davis, 2026-10-06, after f1 to f4 of series rule-3f9c548 all stopped on reported_token_reserve with work unfinished: adjust the token reserve so the runs reach a result without burning every token, and apply fixes as Codex runs rather than after the terminal packet. Stage B packet reserve_tokens_per_call 500,000 to 250,000 on #53 (bf56b0e); the 2.5M threshold, 1.5M per-call ceiling, 90 calls, 3600 s, 2 workers, max_tasks 10, survey 4, repeats 1 unchanged.",
+      "base": "3f9c5483890268486018906b56bab75f739730a6",
+      "owns": [
+        "tools/jev_stage_b/packet.stage-b.json"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-06T11:05:49Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "bf56b0e",
+        "at": "2026-10-06T11:05:50Z"
       },
       "reviews": [],
       "blockers": [],
