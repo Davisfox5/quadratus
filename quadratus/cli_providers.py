@@ -1106,6 +1106,21 @@ class CLISpec:
     #: as close as the CLI documents) summary call. Sent only when a provider
     #: view carries ``summary_only=True``; see ``CLIProvider._build_argv``.
     summary_only_args: List[str] = field(default_factory=list)
+
+    def summary_turn_capped(self) -> bool:
+        """Whether a summary-only call is held to one model turn by argv.
+
+        True where ``summary_only_args`` carries ``<max_turns_flag> 1``
+        (claude, grok). False for codex, whose summary call has no turn flag:
+        the empty directory and the prompt's wording ask for one turn but do
+        not enforce it (Codex review of 961d2da on #53). The budget's
+        summary-shaped reserve is gated on this, never on the request.
+        """
+        args = list(self.summary_only_args)
+        flag = self.max_turns_flag
+        return bool(flag) and any(args[i] == flag and args[i + 1] == "1"
+                                  for i in range(len(args) - 1))
+
     #: The flag that caps agentic turns in one call, for a lead's turn limit
     #: (``Settings.lead_max_turns``). Empty where the CLI has none (codex):
     #: there the call is bounded by time and attempts only.

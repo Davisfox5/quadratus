@@ -1,5 +1,6 @@
 """Run controls are enforced at real provider attempts, not reporting callbacks."""
 
+import dataclasses
 import json
 from concurrent.futures import ThreadPoolExecutor
 
@@ -296,25 +297,48 @@ def test_a_shape_never_raises_the_reserve_and_the_threshold_is_unchanged():
         c.finish(shaped, {'input_tokens': 300_000, 'output_tokens': 0})  # and still stops past 1M
 
 
-def test_only_a_summary_only_provider_passes_the_shape(monkeypatch):
-    from quadratus.cli_providers import ClaudeCLIProvider
-    seen = []
+class _Control:
+    limits = RunLimits(max_reported_tokens=1_000_000, reserve_tokens_per_call=500_000)
 
-    class Control:
-        limits = RunLimits(max_reported_tokens=1_000_000, reserve_tokens_per_call=500_000)
+    def __init__(self):
+        self.seen = []
 
-        def reserve(self, **kw):
-            seen.append(kw)
-            raise RunBudgetExceeded('Run stopped: reported_token_reserve')
+    def reserve(self, **kw):
+        self.seen.append(kw)
+        raise RunBudgetExceeded('Run stopped: reported_token_reserve')
+
+
+@pytest.mark.parametrize("cls, model, capped", [
+    ("ClaudeCLIProvider", "opus", True),      # --tools '' --max-turns 1
+    ("GrokCLIProvider", "default", True),     # --max-turns 1 (read tools stay)
+    ("CodexCLIProvider", "gpt-5.6-sol", False),  # no turn flag at all
+])
+def test_the_shape_is_passed_only_where_the_argv_enforces_one_turn(monkeypatch, cls, model, capped):
+    # Codex review of 961d2da: the request for a summary is not a bound; the
+    # CLI's own argv is. Codex's summary call has no turn flag, so it keeps
+    # the operator's full reserve.
+    import quadratus.cli_providers as cp
     monkeypatch.setattr('shutil.which', lambda _: '/unused/cli')
-    provider = ClaudeCLIProvider(model='opus')
-    provider.run_budget = Control()
+    provider = getattr(cp, cls)(model=model)
+    assert provider.spec.summary_turn_capped() is capped
+    control = _Control()
+    provider.run_budget = control
     with pytest.raises(RunBudgetExceeded):
         provider._observed_call('p', None, 1, 1)
     provider.summary_only = True
     with pytest.raises(RunBudgetExceeded):
         provider._observed_call('p', None, 1, 1)
-    assert seen == [{}, {'expected_tokens': 64_000}]
+    assert control.seen == [{}, {'expected_tokens': 64_000} if capped else {}]
+
+
+def test_the_turn_cap_is_read_from_the_summary_argv_pair():
+    from quadratus.cli_providers import CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC
+    assert CLAUDE_SPEC.summary_turn_capped() and GROK_SPEC.summary_turn_capped()
+    assert not CODEX_SPEC.summary_turn_capped()
+    loose = dataclasses.replace(CLAUDE_SPEC, summary_only_args=["--max-turns", "2"])
+    assert not loose.summary_turn_capped()
+    none = dataclasses.replace(CLAUDE_SPEC, summary_only_args=["--tools", ""])
+    assert not none.summary_turn_capped()
 
 
 def test_an_oversized_call_is_named_after_it_returns():

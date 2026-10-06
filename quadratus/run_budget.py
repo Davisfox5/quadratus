@@ -49,13 +49,19 @@ class APICostRate:
 #: reported input over 36 turns on f1 and 1,510,139 over 27 on f3, because
 #: the CLI re-sends the whole conversation every turn and reports cached
 #: input at full weight. A seed, like every other number here.
-#: What a summary-only call reserves: the close-out is one turn with no
-#: tools, a prompt bounded at 32,000 bytes and at most 1,024 output tokens
-#: (runtime.Fleet._closeout), and the largest one measured across three
-#: series was about 22k reported tokens (series rule-3f9c548 f3: a 394k lead
-#: finished its task and the 500k reserve refused the 20k close-out that
-#: would have closed it). Three times the largest measured; the operator's
-#: reserve still applies when it is smaller.
+#: What a one-turn summary call reserves: a measured allowance, not a hard
+#: bound. The close-out's prompt is bounded at 32,000 bytes
+#: (runtime.Fleet._closeout) and, on the CLIs whose argv carries
+#: ``--max-turns 1`` (claude, grok; CLISpec.summary_turn_capped), the call
+#: is one model turn. Nothing caps its output tokens at the CLI: the view's
+#: ``max_tokens`` is a Python attribute the argv does not emit, and saved
+#: close-outs reported 1,465 and 1,629 output tokens. The largest close-out
+#: measured across three series totalled 24,006 reported tokens (series
+#: rule-3f9c548 f3: a 394k lead finished its task and the 500k reserve
+#: refused the close-out that would have closed it). 64k is about 2.7 times
+#: that largest measurement; the operator's reserve applies when it is
+#: smaller, and a CLI without an enforced turn cap (codex) reserves the
+#: operator's figure in full (Codex review of 961d2da on #53).
 SUMMARY_CALL_RESERVE_TOKENS = 64_000
 
 TURN_CONTEXT_TOKENS = 60_000
@@ -166,9 +172,12 @@ class RunBudget:
                                  'max_tokens_per_call stops the run after it returns'),
             'oversized_calls': list(self._oversized),
             'shaped_reservations': self._shaped,
-            'shape_boundary': ('a summary-only call (one turn, no tools, bounded prompt and output) '
-                               'reserves min(reserve_tokens_per_call, SUMMARY_CALL_RESERVE_TOKENS); '
-                               'every other call reserves reserve_tokens_per_call in full'),
+            'shape_boundary': ('a summary-only call whose CLI argv enforces one model turn reserves '
+                               'min(reserve_tokens_per_call, SUMMARY_CALL_RESERVE_TOKENS), a measured '
+                               'allowance (largest saved close-out 24,006 reported tokens), not a hard '
+                               'bound: output tokens are not capped at the CLI; every other call, '
+                               'including a summary call on a CLI with no turn flag, reserves '
+                               'reserve_tokens_per_call in full'),
             'input_boundary': 'normalized provider input includes cached input; do not add it again',
             'wall_boundary': 'attempt timeout plus required external process supervisor',
         }
@@ -201,10 +210,12 @@ class RunBudget:
     def reserve(self, *, transport="cli", price_key="", expected_tokens=None):
         """Atomically authorize one attempt and return its ID and time remaining.
 
-        ``expected_tokens`` names a call whose size is bounded by construction
-        (a summary-only close-out); the reserve asked of the remaining budget
-        is then the smaller of the operator's reserve and that bound. It never
-        raises the reserve, and the post-return threshold is unchanged.
+        ``expected_tokens`` names a measured allowance for a call the transport
+        holds to one model turn (a summary-only close-out on a CLI whose argv
+        enforces the cap); the reserve asked of the remaining budget is then
+        the smaller of the operator's reserve and that allowance. It is not a
+        hard size bound. It never raises the reserve, and the post-return
+        threshold is unchanged.
         """
         with self._lock:
             self._check()

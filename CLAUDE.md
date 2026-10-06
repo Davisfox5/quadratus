@@ -649,13 +649,18 @@ Key design decisions already settled:
   2026-10-06). The pre-call reserve was one size for every call, so a
   finished task's 20k close-out was refused on 160k of headroom because the
   operator's reserve for an agentic call is 500k. The close-out is bounded
-  by construction (one turn, no tools, a 32,000-byte prompt, 1,024 output
-  tokens; the largest measured was about 22k), so a `summary_only` provider
-  passes `expected_tokens=SUMMARY_CALL_RESERVE_TOKENS` (64k, three times the
-  largest measured) and `RunBudget.reserve` asks the smaller of that and the
-  operator's reserve. It never raises a reserve, every other call reserves
-  the operator's figure in full, and the post-return threshold is unchanged;
-  the snapshot counts `shaped_reservations`.
+  in one respect only: a 32,000-byte prompt and, where the CLI argv carries
+  `--max-turns 1` (claude, grok; `CLISpec.summary_turn_capped`), one model
+  turn. Nothing caps its output at the CLI (the view's `max_tokens` is not
+  emitted in argv; saved close-outs reported up to 1,629 output tokens), and
+  codex's summary call has no turn flag at all. So the 64k
+  (`SUMMARY_CALL_RESERVE_TOKENS`) is a measured allowance, about 2.7 times
+  the largest saved close-out (24,006), not a hard bound, and it is passed
+  only where the one-turn cap is enforced; codex close-outs reserve the
+  operator's figure in full (Codex review of 961d2da). It never raises a
+  reserve, every other call reserves the operator's figure in full, the
+  post-return threshold is unchanged, and the snapshot counts
+  `shaped_reservations`.
 - **The Stage B cell budget is 4M and the reserve 250k** (Davis,
   2026-10-06: "the reserve and the overall token count are now in play").
   On engine 3f9c548 the cells that finished (f6, and f7 on 2ffa7f6) used

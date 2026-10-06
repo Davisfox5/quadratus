@@ -303,10 +303,14 @@ class LLMProvider:
         if worker_control is not None:
             worker_control.reserve()
         control = getattr(self, 'run_budget', None)
-        # A summary-only call is bounded by construction, so it reserves its
-        # own shape rather than a full agentic call's headroom.
+        # A summary-only call reserves a measured allowance instead of a full
+        # agentic call's headroom, and only where the CLI argv enforces one
+        # model turn (CLISpec.summary_turn_capped): the request alone is not
+        # a bound (Codex review of 961d2da on #53).
         shape = {}
-        if getattr(self, 'summary_only', False):
+        spec = getattr(self, 'spec', None)
+        if (getattr(self, 'summary_only', False) and spec is not None
+                and getattr(spec, 'summary_turn_capped', lambda: False)()):
             from .run_budget import SUMMARY_CALL_RESERVE_TOKENS
             shape = dict(expected_tokens=SUMMARY_CALL_RESERVE_TOKENS)
         if control is not None and control.limits.max_cost_usd is not None:
