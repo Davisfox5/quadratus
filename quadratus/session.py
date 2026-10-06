@@ -696,7 +696,17 @@ _RENDERS_BLIND = "the renders do not show the changed interface"
 
 
 def _renders_blind(verdict: str) -> bool:
-    return _RENDERS_BLIND in (verdict or "").lower()
+    """Whether the verdict is the blind-render reply and nothing else.
+
+    A reviewer that also names an independent blocker ("BLOCKING: the delete
+    action silently removes saved projects") has judged the work, and a
+    recapture must not clear that judgement (Codex review of c3abcf0 on
+    #52): only a verdict whose every BLOCKING: line is the blind-render line
+    buys the recapture; any other finding leaves the verdict to stand.
+    """
+    lines = [line.strip() for line in (verdict or "").splitlines() if line.strip()]
+    blocking = [line for line in lines if line.upper().startswith("BLOCKING:")]
+    return bool(blocking) and all(_RENDERS_BLIND in line.lower() for line in blocking)
 
 
 _CAPTURE_LINE = re.compile(r"^\s*CAPTURE\s*:\s*(.*\S)\s*$", re.IGNORECASE)

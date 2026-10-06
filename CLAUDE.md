@@ -589,13 +589,16 @@ Key design decisions already settled:
     `--sandbox read-only` Python found no writable temp dir, so a reviewer
     told to run pytest could not and blocked the task with every grader
     passing. `CLISpec.copy_args` (codex: workspace-write) applies only to an
-    ungranted call in a copy the Fleet deletes, and `TMPDIR` points inside
-    the copy. The project root is still reached only with a write grant.
+    ungranted call in a copy the Fleet deletes, with `/tmp`, `$TMPDIR` and
+    configured roots switched off so the copy is the only writable root,
+    and `TMPDIR` points inside the copy. The project root is still reached
+    only with a write grant.
   - *A render that misses the change is a capture defect, not a design
     one.* The dispatched capture never reached the empty state (f5, three
     leads). The reviewer's exact reply buys one `CAPTURE:` redeclaration
     from the lead, one recapture and one more review; a second miss is the
-    open finding it was.
+    open finding it was, and a verdict that names any other blocker gets
+    no recapture at all.
   - *The verifier ends with a VERDICT line.* An accepting security report
     was filed as the open finding because a marker appeared somewhere in its
     prose. `VERDICT: ACCEPT` or `REJECT` decides; ACCEPT still loses to a

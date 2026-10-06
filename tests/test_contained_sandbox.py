@@ -315,6 +315,19 @@ def test_a_codex_reviewer_in_a_disposable_copy_may_write_inside_it(monkeypatch):
     assert argv[argv.index('--sandbox') + 1] == 'workspace-write'
 
 
+def test_the_copy_policy_writes_nowhere_but_the_copy(monkeypatch):
+    """workspace-write adds /tmp and $TMPDIR and keeps configured roots by
+    default (Codex review of c3abcf0): all three are switched off, so the
+    working directory, the copy, is the only writable root."""
+    argv = _in_copy(CodexCLIProvider, 'gpt-6-astra', monkeypatch, disposable=True)
+    overrides = [argv[i + 1] for i, a in enumerate(argv) if a == '-c']
+    assert 'sandbox_workspace_write.exclude_slash_tmp=true' in overrides
+    assert 'sandbox_workspace_write.exclude_tmpdir_env_var=true' in overrides
+    assert 'sandbox_workspace_write.writable_roots=[]' in overrides
+    granted = _in_copy(CodexCLIProvider, 'gpt-6-astra', monkeypatch, disposable=False, writes=True)
+    assert not [a for a in granted if a.startswith('sandbox_workspace_write.')], "a grant keeps its own policy"
+
+
 def test_an_ungranted_codex_seat_outside_a_copy_keeps_read_only(monkeypatch):
     argv = _in_copy(CodexCLIProvider, 'gpt-6-astra', monkeypatch, disposable=False)
     assert argv[argv.index('--sandbox') + 1] == 'read-only'
@@ -330,8 +343,9 @@ def test_disposable_never_widens_a_granted_call(monkeypatch):
 
 @pytest.mark.parametrize('cls, model', [(ClaudeCLIProvider, 'opus'), (GrokCLIProvider, 'default')])
 def test_the_other_vendors_argv_is_unchanged_by_the_copy(cls, model, monkeypatch):
-    def flags(argv):   # grok writes its prompt to a fresh file per call
-        return [a for a in argv if not a.startswith('/tmp/quadratus-prompt-')]
+    def flags(argv):   # grok writes its prompt to a fresh file per call, under the host's temp dir
+        import os
+        return [a for a in argv if not os.path.basename(a).startswith('quadratus-prompt-')]
     assert (flags(_in_copy(cls, model, monkeypatch, disposable=True))
             == flags(_in_copy(cls, model, monkeypatch, disposable=False)))
 

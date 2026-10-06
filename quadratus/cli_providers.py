@@ -1538,7 +1538,15 @@ CODEX_SPEC = CLISpec(
     readonly_args=["--sandbox", "read-only"],
     # A disposable source copy is its own containment: workspace-write there
     # lets a reviewer run the check it is told to run (see ``copy_args``).
-    copy_args=["--sandbox", "workspace-write"],
+    # Its writable roots are the copy alone (Codex review of c3abcf0 on #52):
+    # workspace-write adds /tmp and $TMPDIR by default and keeps any
+    # writable_roots from the operator's config, so each is switched off
+    # here. The scratch TMPDIR the provider sets lives under the copy, which
+    # is the working directory, so it stays writable without its own root.
+    copy_args=["--sandbox", "workspace-write",
+               "-c", "sandbox_workspace_write.exclude_slash_tmp=true",
+               "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+               "-c", "sandbox_workspace_write.writable_roots=[]"],
     write_args=["--sandbox", "workspace-write"],
     # codex exposes no effort flag; the config override is the documented
     # route, and it is validated rather than ignored -- a deliberately
