@@ -156,13 +156,53 @@ def test_a_capped_review_alone_buys_no_revision_round(store):
     assert not any("Revise your work" in c["prompt"] for c in rec.calls)
 
 
-def test_a_capped_recheck_buys_no_fix_round(store):
+def test_a_capped_recheck_buys_no_fix_round_and_keeps_the_named_blocker(store):
     rec = CappedSeat("recheck")
     session, _ = _run(store, rec)
     assert rec.capped == 1
     fixes = [c for c in rec.calls if "blocking findings remain unresolved" in c["prompt"].lower()]
     assert fixes == []
     assert any("recheck by" in f and "did not finish within its turn cap" in f for f in session.open_findings)
+    # Codex review of 0983dac: the reviewer's own finding is the unresolved
+    # defect; the cap fact alone would retire it from the record.
+    assert any("not re-checked" in f and "BLOCKING: the escaping drops surrogate pairs" in f
+               for f in session.open_findings)
+    closeout = next(c["prompt"] for c in rec.calls if "The task is finished" in c["prompt"])
+    assert "not re-checked against the revision" in closeout and "surrogate pairs" in closeout
+
+
+class WordyReviewer(Recorder):
+    """An ordinary, completed review whose text happens to begin UNFINISHED:."""
+
+    def __init__(self, review):
+        super().__init__()
+        self.review = review
+
+    def __call__(self, model, prompt, system=None):
+        if "contributing an independent read" in prompt:
+            self.calls.append({"model": model, "prompt": prompt})
+            return self.review
+        if "Check only your BLOCKING findings" in prompt:
+            self.calls.append({"model": model, "prompt": prompt})
+            return "RESOLVED"
+        return super().__call__(model, prompt, system)
+
+
+def test_an_ordinary_reply_beginning_unfinished_is_read_like_any_other(store):
+    # Codex review of 0983dac: the cap is a transport fact, never a prefix.
+    rec = WordyReviewer("UNFINISHED: only partly reviewed\nBLOCKING: the escaping drops surrogate pairs")
+    session, _ = _run(store, rec)
+    assert any("Revise your work" in c["prompt"] for c in rec.calls), "the named blocker is a critique"
+    assert any("Check only your BLOCKING" in c["prompt"] for c in rec.calls)
+    assert not any("turn cap" in f for f in session.open_findings)
+
+
+def test_an_ordinary_unfinished_reply_without_findings_is_a_critique_not_a_cap(store):
+    rec = WordyReviewer("UNFINISHED: did not reach a verdict")
+    session, _ = _run(store, rec)
+    assert any("Revise your work" in c["prompt"] for c in rec.calls), \
+        "not NO FINDINGS, so the lead answers it like any other note"
+    assert not any("turn cap" in f for f in session.open_findings)
 
 
 def test_a_finished_recheck_is_unchanged(store):

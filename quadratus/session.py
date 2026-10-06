@@ -3035,11 +3035,16 @@ class Session:
         notes: List[tuple] = []
         if self._tier(spec) != "direct":
             self._stage("review")
+        capped: set = set()
         for peer in collaborators:
             try:
                 with invocation(spec.task_id, "collaborator"):
                     note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
             except TurnLimitReached as exc:
+                # The cap is a transport fact kept here, never read back from
+                # the text (Codex review of 0983dac: an ordinary reply that
+                # happened to begin UNFINISHED: was dropped as if capped).
+                capped.add(peer)
                 note = self._capped_review(spec, peer, "review", exc)
             task.record("assistant", f"[{labels[peer]}] {note}")
             task.keep(note, kind=f"review:{peer}", author=peer)
@@ -3065,11 +3070,13 @@ class Session:
         # Clean reviews cost nothing further: a reviewer with nothing to say
         # says NO FINDINGS, and a revision round against empty critiques would
         # be the most avoidable spend in the loop.
-        # A capped review (UNFINISHED:) is no critique either: it carries no
-        # finding to answer, so it buys no revision.
+        # A capped review is no critique either: it carries no finding to
+        # answer, so it buys no revision. Decided by the recorded cap, not by
+        # the reply's wording: a model's own "UNFINISHED:" is an ordinary
+        # reply, read for findings like any other.
         notes = [
             (p, n) for p, n in notes
-            if n.strip().upper().rstrip(".") != "NO FINDINGS" and not n.startswith("UNFINISHED:")
+            if n.strip().upper().rstrip(".") != "NO FINDINGS" and p not in capped
         ]
         self._edge("review", True)
         if notes:
@@ -6294,9 +6301,19 @@ class Session:
                 )
             except TurnLimitReached as exc:
                 # No verdict either way: the finding is neither resolved nor
-                # confirmed, so it does not buy another fix round; it goes to
-                # the record as unverified, with the reviewer named.
-                task.record("assistant", f"[{shown} recheck] {self._capped_review(spec, peer, 'recheck', exc)}")
+                # confirmed, so it does not buy another fix round. The
+                # reviewer's original finding stays on the record as the
+                # specific unresolved defect (Codex review of 0983dac: only
+                # the generic no-verdict fact survived), beside the cap fact.
+                capped = self._capped_review(spec, peer, 'recheck', exc)
+                task.record("assistant", f"[{shown} recheck] {capped}")
+                standing = "\n".join(line.strip() for line in note.splitlines()
+                                     if line.strip().startswith("BLOCKING:")) or note.strip()
+                self._open_finding("unverified", f"Task {spec.task_id}: not re-checked after the "
+                                                 f"revision (reviewer capped): {standing}")
+                task.record("user", "A blocking finding was not re-checked against the revision "
+                                    "(the reviewer stopped at its turn cap) -- carry it into the "
+                                    f"summary as an open question:\n[{shown}] {standing}")
                 continue
             task.record("assistant", f"[{shown} recheck] {verdict}")
             if not _resolved_verdict(verdict):
