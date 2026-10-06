@@ -105,6 +105,19 @@ def commit_exists_on_origin(sha: str, repo: Optional[Path] = None) -> bool:
     return out.returncode == 0 and any(line.strip().startswith("origin/") for line in out.stdout.splitlines())
 
 
+def commit_contains(candidate: str, sha: str, repo: Optional[Path] = None) -> bool:
+    """Whether ``sha`` is an ancestor of (or equal to) ``candidate``. A
+    candidate that does not contain the reviewed delivery has not integrated
+    it, whatever else is on origin."""
+    cwd = str(repo or Path(__file__).resolve().parent.parent)
+    try:
+        out = subprocess.run(["git", "merge-base", "--is-ancestor", sha, candidate], cwd=cwd,
+                             check=False, capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return out.returncode == 0
+
+
 def _task(record: dict, task_id: str) -> dict:
     for task in record["tasks"]:
         if task["id"] == task_id:
@@ -244,12 +257,15 @@ def unblock(record: dict, *, task_id: str, resolution: str, by: str) -> dict:
 
 
 def integrate(record: dict, *, task_id: str, sha: str, candidate: str,
-              exists: Callable[[str], bool] = commit_exists_on_origin) -> dict:
+              exists: Callable[[str], bool] = commit_exists_on_origin,
+              contains: Callable[[str, str], bool] = commit_contains) -> dict:
     """Mark a task integrated into the candidate; the candidate SHA moves.
-    The integrated SHA must be the delivery the cleared review covered, and
-    the new candidate must exist on origin: a typo here would otherwise mark
-    unreviewed code integrated or point the record at a commit nobody can
-    fetch."""
+    The integrated SHA must be the delivery the cleared review covered, the
+    new candidate must exist on origin, and the candidate must contain that
+    delivery: otherwise a typo marks unreviewed code integrated, points the
+    record at a commit nobody can fetch, or names a candidate (the current
+    one, say) that never took the work in while its receipts make ``ready``
+    say true."""
     task = _task(record, task_id)
     if task["state"] != "reviewed":
         raise RecordError(f"{task_id} is {task['state']}, not reviewed; integration needs a cleared "
@@ -259,6 +275,9 @@ def integrate(record: dict, *, task_id: str, sha: str, candidate: str,
         raise RecordError(f"{sha[:7]} is not the reviewed delivery of {task_id} ({delivered[:7]})")
     if not exists(candidate):
         raise RecordError(f"candidate {candidate[:7]} is not on origin; push it first")
+    if not contains(candidate, delivered):
+        raise RecordError(f"candidate {candidate[:7]} does not contain the reviewed delivery "
+                          f"{delivered[:7]}; integrate it first")
     task["state"] = "integrated"
     task["integrated"] = dict(sha=sha, candidate=candidate, at=_now())
     record["candidate"]["sha"] = candidate
@@ -441,7 +460,7 @@ def _apply(args: argparse.Namespace, record: dict) -> None:
         unblock(record, task_id=args.id, resolution=args.resolution, by=args.by)
     elif args.command == "integrate":
         integrate(record, task_id=args.id, sha=args.sha, candidate=args.candidate,
-                  exists=commit_exists_on_origin)
+                  exists=commit_exists_on_origin, contains=commit_contains)
     elif args.command == "receipt":
         receipt(record, kind=args.kind, sha=args.sha, state=args.state, evidence=args.evidence)
     elif args.command == "candidate":

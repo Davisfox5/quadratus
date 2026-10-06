@@ -36,8 +36,10 @@ their evidence; it never copies it and never turns an UNPROVEN row green.
    the task owns; a scope covering part of them is recorded as partial and
    does not clear the task.
 3. A delivery is a commit on origin (`deliver`), nothing local. So is the
-   candidate `integrate` moves to, and the integrated SHA is the delivery
-   the cleared review covered.
+   candidate `integrate` moves to; the integrated SHA is the delivery the
+   cleared review covered, and the new candidate must contain it (the
+   delivery is an ancestor of the candidate), since a candidate on origin
+   that never took the work in is not an integration.
 4. When a shared setting or handoff is faulty, inventory all its consumers
    and deliver one bounded correction for the shared cause. Review the change
    and its relevant neighbours; repeat a cleared review only for a concrete

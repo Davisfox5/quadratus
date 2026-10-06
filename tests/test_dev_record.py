@@ -112,7 +112,7 @@ def test_a_valid_independently_reviewed_candidate_qualifies():
     _claim(rec)
     R.deliver(rec, task_id="T1", sha="e" * 40, exists=lambda s: True)
     R.review(rec, task_id="T1", reviewer="codex", sha="e" * 40, verdict="cleared", evidence="u")
-    R.integrate(rec, task_id="T1", sha="e" * 40, candidate="n" * 40, exists=lambda s: True)
+    R.integrate(rec, task_id="T1", sha="e" * 40, candidate="n" * 40, exists=lambda s: True, contains=lambda c, s: True)
     for kind in ("ci", "acceptance", "review"):
         R.receipt(rec, kind=kind, sha="n" * 40, state="passed", evidence="x")
     r = R.readiness(rec)
@@ -130,7 +130,7 @@ def test_a_reviewed_but_unintegrated_task_keeps_the_candidate_open():
     R.review(rec, task_id="T1", reviewer="codex", sha="e" * 40, verdict="cleared", evidence="u")
     r = R.readiness(rec)
     assert rec["tasks"][0]["state"] == "reviewed" and r["open_tasks"] == ["T1"] and not r["ready"]
-    R.integrate(rec, task_id="T1", sha="e" * 40, candidate="n" * 40, exists=lambda s: True)
+    R.integrate(rec, task_id="T1", sha="e" * 40, candidate="n" * 40, exists=lambda s: True, contains=lambda c, s: True)
     assert not R.readiness(rec)["open_tasks"]
 
 
@@ -140,11 +140,16 @@ def test_integration_takes_only_the_reviewed_delivery_and_a_candidate_on_origin(
     R.deliver(rec, task_id="T1", sha="e" * 40, exists=lambda s: True)
     R.review(rec, task_id="T1", reviewer="codex", sha="e" * 40, verdict="cleared", evidence="u")
     with pytest.raises(R.RecordError, match="not the reviewed delivery"):
-        R.integrate(rec, task_id="T1", sha="f" * 40, candidate="n" * 40, exists=lambda s: True)
+        R.integrate(rec, task_id="T1", sha="f" * 40, candidate="n" * 40, exists=lambda s: True, contains=lambda c, s: True)
     with pytest.raises(R.RecordError, match="not on origin"):
-        R.integrate(rec, task_id="T1", sha="e" * 40, candidate="n" * 40, exists=lambda s: False)
+        R.integrate(rec, task_id="T1", sha="e" * 40, candidate="n" * 40, exists=lambda s: False,
+                    contains=lambda c, s: True)
+    with pytest.raises(R.RecordError, match="does not contain the reviewed delivery"):
+        R.integrate(rec, task_id="T1", sha="e" * 40, candidate=CANDIDATE, exists=lambda s: True,
+                    contains=lambda c, s: False)
     assert rec["tasks"][0]["state"] == "reviewed" and rec["candidate"]["sha"] == CANDIDATE
-    R.integrate(rec, task_id="T1", sha="e" * 40, candidate="n" * 40, exists=lambda s: s == "n" * 40)
+    R.integrate(rec, task_id="T1", sha="e" * 40, candidate="n" * 40, exists=lambda s: s == "n" * 40,
+                contains=lambda c, s: (c, s) == ("n" * 40, "e" * 40))
     assert rec["tasks"][0]["state"] == "integrated" and rec["candidate"]["sha"] == "n" * 40
 
 
