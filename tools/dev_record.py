@@ -26,14 +26,19 @@ duplicates. Nothing here calls a vendor.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import json
+import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, Iterator, List, Optional, Tuple
 
 RECORD_PATH = Path(__file__).resolve().parent.parent / "docs" / "dev-record.json"
+LOCK_TIMEOUT = 30.0  # seconds a command waits for another process to finish its update
 
 STATES = ("queued", "claimed", "delivered", "reviewed", "integrated", "blocked", "deferred")
 ACTIVE = ("claimed", "delivered", "reviewed", "blocked")
@@ -54,7 +59,35 @@ def load(path: Path = RECORD_PATH) -> dict:
 
 
 def save(record: dict, path: Path = RECORD_PATH) -> None:
-    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    """Write the record atomically: a reader never sees a half-written file."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+@contextlib.contextmanager
+def locked(path: Path = RECORD_PATH, timeout: Optional[float] = None) -> Iterator[None]:
+    """Hold an exclusive cross-process lock for one load/validate/save
+    transaction. Two agents running mutating commands at the same moment
+    would otherwise both load the same snapshot, both pass validation and
+    the last writer would silently discard the other, which defeats the
+    rule that competing claims cannot both succeed. A second process waits
+    up to ``timeout`` seconds, then is refused rather than left hanging."""
+    deadline = time.monotonic() + (LOCK_TIMEOUT if timeout is None else timeout)
+    lock_path = path.with_name(path.name + ".lock")
+    with open(lock_path, "a+") as handle:
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise RecordError(f"{path.name} is locked by another process; retry when its command finishes")
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def commit_exists_on_origin(sha: str, repo: Optional[Path] = None) -> bool:
@@ -84,6 +117,20 @@ def _overlap(a: List[str], b: List[str]) -> List[str]:
         x, y = x.rstrip("/"), y.rstrip("/")
         return x == y or y.startswith(x + "/") or x.startswith(y + "/")
     return sorted({y for x in a for y in b if covers(x, y)})
+
+
+def _coverage(scope: List[str], owns: List[str]) -> Tuple[List[str], List[str]]:
+    """How a review scope relates to a task's owned scope: the entries that
+    lie outside it, and the owned paths no entry covers. An entry is inside
+    when it is an owned path or lies under one; an owned path is covered
+    when an entry names it. A directory above an owned path is outside,
+    because it claims review of files the task does not own."""
+    def within(inner: str, outer: str) -> bool:
+        inner, outer = inner.rstrip("/"), outer.rstrip("/")
+        return inner == outer or inner.startswith(outer + "/")
+    outside = sorted(s for s in scope if not any(within(s, o) for o in owns))
+    uncovered = sorted(o for o in owns if not any(within(o, s) for s in scope))
+    return outside, uncovered
 
 
 def claim(record: dict, *, task_id: str, purpose: str, base: str, owns: List[str], author: str,
@@ -141,7 +188,10 @@ def review(record: dict, *, task_id: str, reviewer: str, sha: str, verdict: str,
            scope: Optional[List[str]] = None, blocker: Optional[dict] = None) -> dict:
     """Bind a review to the exact reviewed commit and scope. Self-review is
     not an independent receipt. A review of a SHA other than the current
-    delivery is recorded stale on arrival."""
+    delivery is recorded stale on arrival. A scope naming anything outside
+    the task's owned files is refused; a scope covering only part of them is
+    recorded as partial and leaves the task unreviewed, because a cleared
+    review of some owned files is not a cleared review of the task."""
     task = _task(record, task_id)
     if verdict not in VERDICTS:
         raise RecordError(f"verdict must be one of {VERDICTS}")
@@ -149,9 +199,16 @@ def review(record: dict, *, task_id: str, reviewer: str, sha: str, verdict: str,
         raise RecordError(f"{reviewer} authored {task_id}; self-review is not an independent receipt")
     if not evidence:
         raise RecordError("a review names its evidence (a comment URL, a report path)")
+    scope = list(scope or task["owns"])
+    outside, uncovered = _coverage(scope, task["owns"])
+    if outside:
+        raise RecordError(f"scope {', '.join(outside)} is outside what {task_id} owns "
+                          f"({', '.join(task['owns'])}); extend the task first or review what it owns")
     delivery = task.get("delivery")
-    entry = dict(reviewer=reviewer, sha=sha, verdict=verdict, evidence=evidence,
-                 scope=list(scope or task["owns"]), at=_now())
+    entry = dict(reviewer=reviewer, sha=sha, verdict=verdict, evidence=evidence, scope=scope, at=_now())
+    if uncovered:
+        entry["coverage"] = "partial"
+        entry["uncovered"] = uncovered
     if delivery is None or delivery["sha"] != sha:
         entry["verdict"] = "stale"
         entry["stale_reason"] = (f"reviewed {sha[:7]} but the delivery is "
@@ -162,7 +219,7 @@ def review(record: dict, *, task_id: str, reviewer: str, sha: str, verdict: str,
                               "evidence and a classification (reachable, invariant or future)")
         task["blockers"].append(dict(blocker, by=reviewer, sha=sha, at=_now()))
         task["state"] = "blocked"
-    elif entry["verdict"] == "cleared":
+    elif entry["verdict"] == "cleared" and not uncovered:
         task["state"] = "reviewed"
     task["reviews"].append(entry)
     return entry
@@ -185,12 +242,22 @@ def unblock(record: dict, *, task_id: str, resolution: str, by: str) -> dict:
     return task
 
 
-def integrate(record: dict, *, task_id: str, sha: str, candidate: str) -> dict:
-    """Mark a task integrated into the candidate; the candidate SHA moves."""
+def integrate(record: dict, *, task_id: str, sha: str, candidate: str,
+              exists: Callable[[str], bool] = commit_exists_on_origin) -> dict:
+    """Mark a task integrated into the candidate; the candidate SHA moves.
+    The integrated SHA must be the delivery the cleared review covered, and
+    the new candidate must exist on origin: a typo here would otherwise mark
+    unreviewed code integrated or point the record at a commit nobody can
+    fetch."""
     task = _task(record, task_id)
     if task["state"] != "reviewed":
         raise RecordError(f"{task_id} is {task['state']}, not reviewed; integration needs a cleared "
                           "independent review of the delivered SHA")
+    delivered = task["delivery"]["sha"]
+    if sha != delivered:
+        raise RecordError(f"{sha[:7]} is not the reviewed delivery of {task_id} ({delivered[:7]})")
+    if not exists(candidate):
+        raise RecordError(f"candidate {candidate[:7]} is not on origin; push it first")
     task["state"] = "integrated"
     task["integrated"] = dict(sha=sha, candidate=candidate, at=_now())
     record["candidate"]["sha"] = candidate
@@ -256,8 +323,10 @@ def receipt(record: dict, *, kind: str, sha: str, state: str, evidence: str = ""
 def readiness(record: dict) -> dict:
     """Whether the candidate is ready to integrate: every required receipt
     recorded for the candidate's exact SHA and passed; every active task
-    either integrated or not blocking. Preserves what is failed, missing,
-    skipped or unproven, distinctly."""
+    integrated. A task that is claimed, delivered or reviewed is still open:
+    a cleared review that has not been integrated is work the candidate
+    does not yet carry. Preserves what is failed, missing, skipped or
+    unproven, distinctly."""
     sha = record["candidate"]["sha"]
     required = record["candidate"].get("required_receipts", ["ci", "acceptance", "review"])
     latest: Dict[str, dict] = {}
@@ -266,7 +335,7 @@ def readiness(record: dict) -> dict:
             latest[r["kind"]] = r
     receipts = {kind: (latest[kind]["state"] if kind in latest else "missing") for kind in required}
     blockers = [dict(task=t["id"], blockers=t["blockers"]) for t in record["tasks"] if t["state"] == "blocked"]
-    open_tasks = [t["id"] for t in record["tasks"] if t["state"] in ("claimed", "delivered")]
+    open_tasks = [t["id"] for t in record["tasks"] if t["state"] in ("claimed", "delivered", "reviewed")]
     stale = [dict(task=t["id"], reviews=[r for r in t["reviews"] if r["verdict"] == "stale"])
              for t in record["tasks"] if any(r["verdict"] == "stale" for r in t["reviews"])]
     ready = all(state == "passed" for state in receipts.values()) and not blockers and not open_tasks
@@ -335,46 +404,51 @@ def main(argv: Optional[List[str]] = None) -> int:
     add("render")
     args = parser.parse_args(argv)
     path = Path(args.record)
-    record = load(path)
+    if args.command in ("ready", "render"):
+        record = load(path)
+        print(json.dumps(readiness(record), indent=2) if args.command == "ready" else render(record))
+        return 0
     try:
-        if args.command == "claim":
-            claim(record, task_id=args.id, purpose=args.purpose, base=args.base, owns=args.owns,
-                  author=args.author, reviewer=args.reviewer, resolve=args.resolve)
-        elif args.command == "ack":
-            acknowledge(record, task_id=args.id)
-        elif args.command == "deliver":
-            deliver(record, task_id=args.id, sha=args.sha)
-        elif args.command == "review":
-            blocker = None
-            if args.verdict == "blocked":
-                blocker = dict(requirement=args.requirement, failure=args.failure,
-                               evidence=args.blocker_evidence, classification=args.classification)
-            review(record, task_id=args.id, reviewer=args.reviewer, sha=args.sha, verdict=args.verdict,
-                   evidence=args.evidence, scope=args.scope, blocker=blocker)
-        elif args.command == "unblock":
-            unblock(record, task_id=args.id, resolution=args.resolution, by=args.by)
-        elif args.command == "integrate":
-            integrate(record, task_id=args.id, sha=args.sha, candidate=args.candidate)
-        elif args.command == "receipt":
-            receipt(record, kind=args.kind, sha=args.sha, state=args.state, evidence=args.evidence)
-        elif args.command == "candidate":
-            move_candidate(record, sha=args.sha, reason=args.reason, by=args.by)
-        elif args.command == "extend":
-            extend(record, task_id=args.id, owns=args.owns, by=args.by, resolve=args.resolve)
-        elif args.command == "note":
-            note(record, task_id=args.id, text=args.text, by=args.by)
-        elif args.command == "ready":
-            print(json.dumps(readiness(record), indent=2))
-            return 0
-        elif args.command == "render":
-            print(render(record))
-            return 0
+        with locked(path):
+            record = load(path)
+            _apply(args, record)
+            save(record, path)
     except RecordError as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
-    save(record, path)
     print(render(record))
     return 0
+
+
+def _apply(args: argparse.Namespace, record: dict) -> None:
+    """One mutating command against a loaded record, inside the lock."""
+    if args.command == "claim":
+        claim(record, task_id=args.id, purpose=args.purpose, base=args.base, owns=args.owns,
+              author=args.author, reviewer=args.reviewer, resolve=args.resolve)
+    elif args.command == "ack":
+        acknowledge(record, task_id=args.id)
+    elif args.command == "deliver":
+        deliver(record, task_id=args.id, sha=args.sha, exists=commit_exists_on_origin)
+    elif args.command == "review":
+        blocker = None
+        if args.verdict == "blocked":
+            blocker = dict(requirement=args.requirement, failure=args.failure,
+                           evidence=args.blocker_evidence, classification=args.classification)
+        review(record, task_id=args.id, reviewer=args.reviewer, sha=args.sha, verdict=args.verdict,
+               evidence=args.evidence, scope=args.scope, blocker=blocker)
+    elif args.command == "unblock":
+        unblock(record, task_id=args.id, resolution=args.resolution, by=args.by)
+    elif args.command == "integrate":
+        integrate(record, task_id=args.id, sha=args.sha, candidate=args.candidate,
+                  exists=commit_exists_on_origin)
+    elif args.command == "receipt":
+        receipt(record, kind=args.kind, sha=args.sha, state=args.state, evidence=args.evidence)
+    elif args.command == "candidate":
+        move_candidate(record, sha=args.sha, reason=args.reason, by=args.by)
+    elif args.command == "extend":
+        extend(record, task_id=args.id, owns=args.owns, by=args.by, resolve=args.resolve)
+    elif args.command == "note":
+        note(record, task_id=args.id, text=args.text, by=args.by)
 
 
 if __name__ == "__main__":
