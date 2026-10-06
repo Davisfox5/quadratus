@@ -1423,8 +1423,8 @@
       "claimed_at": "2026-10-06T12:39:53Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "cc045a1",
-        "at": "2026-10-06T14:28:10Z"
+        "sha": "a7cde45",
+        "at": "2026-10-06T14:35:04Z"
       },
       "reviews": [],
       "blockers": [],
@@ -1433,7 +1433,8 @@
         "claude: Codex saved-trace readback of f1 t3 (#35 comment 6016536418, report SHA256 4a06b27fef9038c5ac4650a5bcc483e8b673a6de22b882afd3d8e0b826118805; lead trace ed02dcdefd423e5634ad58f85c4b26e3855dbdcbc25c3450bca3b9d5132a34ed): no attempt by the Sol lead, revision or close-out to write .quadratus/capture-fixtures/t3/malformed.csv and no permission-denied result; an observed omission, whether a write would have been permitted untested. The actual lead prompt both instructed writing the fixture and said Never change .quadratus/** with only source and test paths permitted: the instruction and boundary conflict is the thing to resolve, which 5745785 does by keeping the write harness-owned under the declared task's fixture folder with no grant expansion.",
         "claude: Codex review of 351d3ba BLOCKED (#53 comment 6018021261, probe SHA256 61c3c1ea61f09617dad8eb19659ad8a5d8a92ea218ad74ebabc9bf5db53171ab): P1 fixture writes followed symlinks at .quadratus, capture-fixtures, the task folder or the target and landed outside the project; P4 duplicate FIXTURE blocks kept the first and an unclosed fence swallowed the next header. Fixed at 6844b97: _confined_fixture_target refuses linked components and out-of-root targets before any write (re-checked after mkdir and after the write); duplicates keep nothing and are recorded; a swallowed header makes the reply malformed.",
         "claude: Codex residual review of 6844b97 BLOCKED (#53 comment 6018223640): P1 a link swapped in after the pathname check still redirected the write (outside the project, or over a project source file inside it); P2 a complete block followed by a partial duplicate header kept the first body. Fixed at ada4c75: _write_fixture_bound opens each component O_NOFOLLOW relative to the previous directory handle and creates the file O_EXCL; every FIXTURE header is counted and a partial duplicate keeps nothing. The shared one-declaration allowance was cleared in that review.",
-        "claude: Codex residual review of ada4c75 BLOCKED (#53 comment 6018397772): operation-time containment cleared; P2 a write failing part-way left a partial sample the capture accepted and the flow reached APPROVED; P2 a malformed later header escaped duplicate accounting. Fixed at cc045a1: the inode this call created is unlinked on a failed write, supply problems stop the design check unverified before capture or review, and every header-shaped line counts."
+        "claude: Codex residual review of ada4c75 BLOCKED (#53 comment 6018397772): operation-time containment cleared; P2 a write failing part-way left a partial sample the capture accepted and the flow reached APPROVED; P2 a malformed later header escaped duplicate accounting. Fixed at cc045a1: the inode this call created is unlinked on a failed write, supply problems stop the design check unverified before capture or review, and every header-shaped line counts.",
+        "claude: Codex residual review of cc045a1 BLOCKED on one P2 (#53 comment 6018555686, probe SHA256 a75edd53b88e96bf799f61fd2614760b9d2fcfdd3d6f9b36b70fc661bb9faa2e): the stat-then-unlink cleanup could delete a replacement installed between the two operations, and a denied unlink was reported as a removal. Fixed at a7cde45: the partial bytes are discarded with ftruncate on the owned descriptor, nothing is deleted by pathname, the receipt reports a denied discard honestly, and an empty own fixture is refused by the reader and counts as missing. Everything else in that review cleared."
       ]
     },
     {
@@ -1451,8 +1452,8 @@
       "claimed_at": "2026-10-06T12:53:32Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "cc045a1",
-        "at": "2026-10-06T14:28:11Z"
+        "sha": "a7cde45",
+        "at": "2026-10-06T14:35:05Z"
       },
       "reviews": [],
       "blockers": [],
@@ -1478,8 +1479,8 @@
       "claimed_at": "2026-10-06T13:44:42Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "cc045a1",
-        "at": "2026-10-06T14:28:12Z"
+        "sha": "a7cde45",
+        "at": "2026-10-06T14:35:06Z"
       },
       "reviews": [],
       "blockers": [],
