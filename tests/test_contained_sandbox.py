@@ -398,6 +398,11 @@ def test_a_disposable_call_gets_a_temp_dir_inside_the_copy(monkeypatch, tmp_path
     '--yolo',
     '--cd /tmp/elsewhere',
     '-C /tmp/elsewhere',
+    '-C/tmp/outside-copy',
+    '-sdanger-full-access',
+    '-sworkspace-write',
+    '-s=read-only',
+    '--cd=/tmp/elsewhere',
     '-c sandbox_workspace_write.exclude_slash_tmp=true',   # agreeing, and still not the operator's to restate
     '--',
 ])
@@ -436,4 +441,5 @@ def test_the_boundary_check_names_only_keys_never_values():
     from quadratus.cli_providers import codex_copy_boundary_conflicts
     found = codex_copy_boundary_conflicts(['-c', 'sandbox_workspace_write.writable_roots=["/Users/secret"]'])
     assert found == ['-c sandbox_workspace_write.writable_roots=…']
+    assert codex_copy_boundary_conflicts(['-C/Users/secret', '-sdanger-full-access']) == ['-C', '-s']
     assert codex_copy_boundary_conflicts(['-c', 'model=gpt-6-astra', '--profile', 'x']) == []

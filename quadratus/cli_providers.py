@@ -1533,13 +1533,23 @@ def codex_copy_boundary_conflicts(args: Sequence[str]) -> List[str]:
             conflicts.append(token)
             index += 1
             continue
-        name = token.split("=", 1)[0]
-        if name in CODEX_COPY_BOUNDARY_FLAGS or (
-                len(name) == 2 and name[0] == "-" and name[1] in "sC" and token != name):
-            conflicts.append(name)
-            index += 1 if "=" in token or name in ("--full-auto", "--yolo",
-                                                   "--dangerously-bypass-approvals-and-sandbox") else 2
+        if token.startswith("--"):
+            name = token.split("=", 1)[0]
+            if name in CODEX_COPY_BOUNDARY_FLAGS:
+                conflicts.append(name)
+                index += 1 if "=" in token or name in ("--full-auto", "--yolo",
+                                                       "--dangerously-bypass-approvals-and-sandbox") else 2
+                continue
+        elif len(token) >= 2 and token[0] == "-" and token[1] in "sC":
+            # A short option in every clap form: ``-s read-only``, ``-s=x``
+            # and the attached ``-sdanger-full-access`` / ``-C/tmp/outside``
+            # (Codex review of d866a83: the attached form slipped past a
+            # check that split on ``=`` only). Only the flag is reported.
+            conflicts.append(token[:2])
+            index += 2 if len(token) == 2 else 1
             continue
+        else:
+            name = token
         payload, span = _config_override_value(tokens, index)
         if span:
             key = _override_key(payload) if payload is not None else ""
