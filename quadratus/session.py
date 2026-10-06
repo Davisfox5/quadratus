@@ -747,6 +747,15 @@ def _parse_capture_line(reply: str, task_id: str):
     return capture, ""
 
 
+def _declaration_only(records) -> bool:
+    """Every typed problem on the evidence is a capture-declaration problem
+    (design_evidence.CAPTURE_DECLARATION): nothing about the page or the
+    source is reported, so a redeclaration is the whole remedy."""
+    from .design_evidence import CAPTURE_DECLARATION
+    kinds = [r.get("kind") for r in (records or [])]
+    return bool(kinds) and all(k == CAPTURE_DECLARATION for k in kinds)
+
+
 _FIXTURE_BLOCK = re.compile(r"^[ \t]*FIXTURE[ \t]+(\S+?):?[ \t]*\n[ \t]*```[^\n]*\n(.*?)\n?[ \t]*```",
                             re.MULTILINE | re.DOTALL)
 
@@ -4551,9 +4560,23 @@ class Session:
             self.design_checks.append(record)
             task.keep(json.dumps(record), kind="design-evidence")
             return
-        if not ok and harness and is_review_only(spec):
+        if not ok and harness and _declaration_only(records) and not is_review_only(spec):
+            # The declared steps cannot show the change (a final wait on an
+            # element present at load): the declaration is the defect, not
+            # the source, so the remedy is the one redeclaration the blind
+            # review gets, never a design-fix (series rule-3572b72 f2 t1: a
+            # fix call on sound source ran to the 20-round cap at 961k).
+            record["first_problem"] = problem
+            redone = self._recapture_declared(spec, lead, task, record, problem, source="the capture check")
+            if redone is not None:
+                ok, problem, shots, records = redone
+                record["recapture"] = dict(capture=spec.scope.capture, verified=ok, problem=problem,
+                                           screenshots=shots)
+        if not ok and harness and (is_review_only(spec) or _declaration_only(records)):
             # A harness recapture of an unchanged tree measures the same page;
-            # an audit's problem stands as found, with no fix call spent.
+            # an audit's problem stands as found, with no fix call spent. A
+            # declaration still wrong after its one redeclaration is the same:
+            # no source edit can mend a wait selector.
             pass
         elif not ok and harness:
             record["first_problem"] = problem
@@ -4667,7 +4690,7 @@ class Session:
         self.design_checks.append(record)
         task.keep(json.dumps(record), kind="design-evidence")
 
-    def _recapture_declared(self, spec, lead, task, record, verdict):
+    def _recapture_declared(self, spec, lead, task, record, verdict, *, source="the design reviewer from another vendor"):
         """Ask the lead for the page and steps that reach the changed state,
         recapture once, and return ``(ok, problem, shots, records)``; None
         when the lead gave no usable new declaration (the verdict stands).
@@ -4687,8 +4710,8 @@ class Session:
         self._note(f"task {spec.task_id}: renders do not show the change; one recapture declaration")
         prompt = (
             f"Task: {spec.description}\n\nThe harness captured {current.get('path')} after "
-            f"{len(current.get('steps') or [])} declared interaction step(s) and the design reviewer "
-            f"from another vendor replied: {verdict.strip()[:200]}\n\nThe interface this task changed "
+            f"{len(current.get('steps') or [])} declared interaction step(s) and {source} "
+            f"replied: {verdict.strip()[:300]}\n\nThe interface this task changed "
             "does not appear in those renders, so the declared page or steps do not reach the state "
             "where it shows. Reply with exactly one line\n"
             'CAPTURE: {"path": "/route", "steps": [...]}\n'

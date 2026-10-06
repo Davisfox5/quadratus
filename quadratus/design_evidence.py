@@ -420,14 +420,28 @@ def _step_problem(view: str, requested, done) -> Optional[str]:
                     f"failed: {str(got.get('error'))[:160]}")
     if len(done) != len(requested):
         return f"the {view} render ran {len(done)} of {len(requested)} interaction steps"
-    last = requested[-1] if requested else None
-    if last and last["action"] == "wait" and done[-1].get("visible_before_steps") is True:
-        # Codex, Run 15: the final wait named an element present at load, so
-        # the capture passed whether or not the feature produced anything.
-        # Insufficient evidence, not proof the feature failed: a valid flow
-        # can update a region that was already showing. The selector can
-        # name the new state itself, which keeps the step vocabulary as is.
-        return (f"the {view} render's final wait ({last['selector'][:80]}) was already visible before "
+    return None
+
+
+#: The record kind for a capture whose declared steps cannot show the change:
+#: the declaration, not the page or the source, is what needs changing.
+CAPTURE_DECLARATION = "capture.declaration"
+
+
+def _final_wait_problem(view: str, requested, done) -> Optional[str]:
+    """The final wait named an element present at load (Codex, Run 15), so
+    the capture passed whether or not the feature produced anything.
+    Insufficient evidence, not proof the feature failed: a valid flow can
+    update a region that was already showing. The selector can name the new
+    state itself, which keeps the step vocabulary as is. Reported under its
+    own kind (series rule-3572b72 f2 t1: a design-fix call was spent on
+    source that was not the problem and hit the turn cap at 961k tokens)."""
+    if not (isinstance(requested, list) and requested and isinstance(done, list) and done):
+        return None
+    last = requested[-1]
+    if (isinstance(last, dict) and last.get("action") == "wait" and isinstance(done[-1], dict)
+            and done[-1].get("visible_before_steps") is True):
+        return (f"the {view} render's final wait ({str(last.get('selector'))[:80]}) was already visible before "
                 "any step ran, so seeing it is not evidence of the change; wait on a state only the "
                 "result creates, which the selector can name (for example [data-state=done] or "
                 "#results tr)")
@@ -544,6 +558,10 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
         problem = _step_problem(name, requested, view.get("steps"))
         if problem:
             add("integrity", problem)
+            continue
+        problem = _final_wait_problem(name, requested, view.get("steps"))
+        if problem:
+            add(CAPTURE_DECLARATION, problem)
     for name, viewport in VIEWPORTS.items():
         shot = folder / name / "page.png"
         if shot.is_symlink():

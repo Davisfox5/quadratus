@@ -694,6 +694,18 @@ Key design decisions already settled:
   a missing or oversized block leaves the capture to fail as before. No
   write grant changes, and a committed sample elsewhere is still checked
   by the capture itself.
+- **A final wait that was visible at load is a declaration defect and
+  gets a redeclaration, never a design-fix** (series rule-3572b72 f2 t1,
+  2026-10-06). The qualifier rightly refused both renders because the
+  declared final wait (`#project-search`) was visible before any step ran,
+  and the engine spent its one design-fix call asking the lead to fix the
+  source, which was sound; the call ran to the 20-round cap at 961k tokens
+  and the run ended `DesignUnverified`. `check_records` now reports that
+  case under `CAPTURE_DECLARATION`, and `_check_design` answers a record
+  set that is only that kind with the one `_recapture_declared` round the
+  blind review gets (the prompt names the capture check as the source).
+  Still wrong after the redeclaration, or `CAPTURE: none`, stays unverified
+  with no fix call spent; a page problem beside it still gets the fix.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
