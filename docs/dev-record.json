@@ -938,14 +938,25 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-06T02:02:43Z",
       "acknowledged": false,
       "delivery": {
         "sha": "2ffa7f608261fb08ff1669a33efc6463b624a5d5",
         "at": "2026-10-06T05:36:24Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "2ffa7f608261fb08ff1669a33efc6463b624a5d5",
+          "verdict": "cleared",
+          "evidence": "Codex scoped offline clearance of #52 at 2ffa7f6 (#52 comment 6010116199; #35 comment 6010119188): no remaining finding in the repair scope; 101 tests passed (70 existing plus 31 narrow independent checks), Ruff and diff clean; attached, separated and equals -C and -s forms refuse before dispatch; granted-call overrides and plain read-only preserved; mixed-verdict recovery and the earlier cap, verdict, profile, check and source-identity passes retained; the real f6 UNRESOLVED validation finding preserved. Not a live qualification: the Mac copy proof and the fresh series follow once exact-head CI is green.",
+          "scope": [
+            "quadratus/session.py"
+          ],
+          "at": "2026-10-06T05:39:35Z"
+        }
+      ],
       "blockers": [],
       "decisions": [
         "claude: Second reproduction on the same feature (series rule-b1ff751 f6 rule): the security verifier's full markdown report, this time headed '## Verification report' rather than '## Verdict', was filed as an open finding and closed the task FindingsOpen with 5/5 graders. The security excursion's verifier reply is treated as finding text whenever it is non-empty; nothing parses an accept/reject verdict out of it. Fix: require the cross-family verifier to end with a VERDICT line (ACCEPT or REJECT plus findings) and parse that line, filing findings only on REJECT; an unparseable reply is 'unverified', not an open finding. Now evidenced enough to fix on Davis's go."
@@ -960,14 +971,25 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-06T02:02:43Z",
       "acknowledged": false,
       "delivery": {
         "sha": "2ffa7f608261fb08ff1669a33efc6463b624a5d5",
         "at": "2026-10-06T05:36:22Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "2ffa7f608261fb08ff1669a33efc6463b624a5d5",
+          "verdict": "cleared",
+          "evidence": "Codex scoped offline clearance of #52 at 2ffa7f6 (#52 comment 6010116199; #35 comment 6010119188): no remaining finding in the repair scope; 101 tests passed (70 existing plus 31 narrow independent checks), Ruff and diff clean; attached, separated and equals -C and -s forms refuse before dispatch; granted-call overrides and plain read-only preserved; mixed-verdict recovery and the earlier cap, verdict, profile, check and source-identity passes retained; the real f6 UNRESOLVED validation finding preserved. Not a live qualification: the Mac copy proof and the fresh series follow once exact-head CI is green.",
+          "scope": [
+            "quadratus/cli_providers.py"
+          ],
+          "at": "2026-10-06T05:39:35Z"
+        }
+      ],
       "blockers": [],
       "decisions": [
         "claude: Reproduced on the rule arm with a Claude lead, not grok: series rule-b1ff751 f1/rule-r0, Opus lead on t2, 36 turns, 2.09M input of which 2.07M cached, stopped by the 1.5M ceiling. The defect is vendor-neutral: an unrestricted agentic lead re-sends its context every turn, the packet sets lead_max_turns null, and the ceiling counts cached input at full weight. Fix candidates: a default lead turn cap in the packet (lead_max_turns), and/or metering cached input separately so the ceiling measures new work rather than re-sent context. Retitle in effect: T-lead-call-ceiling."
@@ -982,7 +1004,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-06T02:02:43Z",
       "acknowledged": false,
       "delivery": {
@@ -1000,6 +1022,16 @@
           ],
           "at": "2026-10-06T05:26:26Z",
           "stale_reason": "reviewed c3abcf0 but the delivery is 9b8c056"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "2ffa7f608261fb08ff1669a33efc6463b624a5d5",
+          "verdict": "cleared",
+          "evidence": "Codex scoped offline clearance of #52 at 2ffa7f6 (#52 comment 6010116199; #35 comment 6010119188): no remaining finding in the repair scope; 101 tests passed (70 existing plus 31 narrow independent checks), Ruff and diff clean; attached, separated and equals -C and -s forms refuse before dispatch; granted-call overrides and plain read-only preserved; mixed-verdict recovery and the earlier cap, verdict, profile, check and source-identity passes retained; the real f6 UNRESOLVED validation finding preserved. Not a live qualification: the Mac copy proof and the fresh series follow once exact-head CI is green.",
+          "scope": [
+            "quadratus/design_evidence.py"
+          ],
+          "at": "2026-10-06T05:39:35Z"
         }
       ],
       "blockers": [
@@ -1027,7 +1059,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-06T02:56:39Z",
       "acknowledged": false,
       "delivery": {
@@ -1046,6 +1078,17 @@
           ],
           "at": "2026-10-06T05:26:26Z",
           "stale_reason": "reviewed c3abcf0 but the delivery is 9b8c056"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "2ffa7f608261fb08ff1669a33efc6463b624a5d5",
+          "verdict": "cleared",
+          "evidence": "Codex scoped offline clearance of #52 at 2ffa7f6 (#52 comment 6010116199; #35 comment 6010119188): no remaining finding in the repair scope; 101 tests passed (70 existing plus 31 narrow independent checks), Ruff and diff clean; attached, separated and equals -C and -s forms refuse before dispatch; granted-call overrides and plain read-only preserved; mixed-verdict recovery and the earlier cap, verdict, profile, check and source-identity passes retained; the real f6 UNRESOLVED validation finding preserved. Not a live qualification: the Mac copy proof and the fresh series follow once exact-head CI is green.",
+          "scope": [
+            "quadratus/cli_providers.py",
+            "quadratus/runtime.py"
+          ],
+          "at": "2026-10-06T05:39:35Z"
         }
       ],
       "blockers": [
