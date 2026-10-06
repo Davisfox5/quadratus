@@ -1163,12 +1163,40 @@
       "claimed_at": "2026-10-06T08:04:33Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "0983dac",
-        "at": "2026-10-06T08:25:31Z"
+        "sha": "cd8c5b0",
+        "at": "2026-10-06T08:41:51Z"
       },
-      "reviews": [],
-      "blockers": [],
-      "decisions": []
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "0983dac",
+          "verdict": "stale",
+          "evidence": "#53 comment 6012570782",
+          "scope": [
+            "quadratus/runtime.py",
+            "quadratus/session.py",
+            "tests/test_review_seat_cap.py",
+            "tests/test_turn_limit.py",
+            "tests/lifecycle/test_dependency_identity.py"
+          ],
+          "at": "2026-10-06T08:41:47Z",
+          "stale_reason": "delivery moved from 0983dac to cd8c5b0"
+        }
+      ],
+      "blockers": [
+        {
+          "requirement": "capped reviews recorded without reading reply text; capped recheck keeps the named blocker",
+          "failure": "P1 the UNFINISHED: prefix filter dropped ordinary replies, including a following BLOCKING line, as clean reviews; P2 a capped recheck retired the reviewer's original finding from outstanding findings and typed facts",
+          "evidence": "3 independent failing reproductions in work/pr53-0983dac-review/",
+          "classification": "defect",
+          "by": "codex",
+          "sha": "0983dac",
+          "at": "2026-10-06T08:41:47Z"
+        }
+      ],
+      "decisions": [
+        "claude: cd8c5b0: capped peers tracked in a set, reply text no longer read for a prefix; a capped recheck files the original BLOCKING lines as an unverified finding and an open question for the close-out, still no fix round. Three regression tests added."
+      ]
     },
     {
       "id": "T-scope-size-rule",
@@ -1183,8 +1211,8 @@
       "claimed_at": "2026-10-06T08:04:33Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "0983dac",
-        "at": "2026-10-06T08:25:32Z"
+        "sha": "cd8c5b0",
+        "at": "2026-10-06T08:41:51Z"
       },
       "reviews": [],
       "blockers": [],
