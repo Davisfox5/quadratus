@@ -1317,12 +1317,12 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-06T11:05:49Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "bf56b0e",
-        "at": "2026-10-06T11:05:50Z"
+        "sha": "3572b72",
+        "at": "2026-10-06T11:44:44Z"
       },
       "reviews": [
         {
@@ -1335,6 +1335,16 @@
           ],
           "at": "2026-10-06T11:44:32Z",
           "stale_reason": "reviewed 3572b72 but the delivery is bf56b0e"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "3572b72",
+          "verdict": "cleared",
+          "evidence": "#53 comments 6015406345 and 6015523535: packet comparison on the head changes exactly the two authorized limits; Davis's authorization receipt read and hashed",
+          "scope": [
+            "tools/jev_stage_b/packet.stage-b.json"
+          ],
+          "at": "2026-10-06T11:44:44Z"
         }
       ],
       "blockers": [],
@@ -1349,12 +1359,12 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-06T11:18:22Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "961d2da",
-        "at": "2026-10-06T11:18:23Z"
+        "sha": "3572b72",
+        "at": "2026-10-06T11:44:45Z"
       },
       "reviews": [
         {
@@ -1367,6 +1377,16 @@
           ],
           "at": "2026-10-06T11:44:32Z",
           "stale_reason": "reviewed 3572b72 but the delivery is 961d2da"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "3572b72",
+          "verdict": "cleared",
+          "evidence": "#53 comments 6015406345 and 6015523535: packet comparison on the head changes exactly the two authorized limits; Davis's authorization receipt read and hashed",
+          "scope": [
+            "tools/jev_stage_b/packet.stage-b.json"
+          ],
+          "at": "2026-10-06T11:44:45Z"
         }
       ],
       "blockers": [],
