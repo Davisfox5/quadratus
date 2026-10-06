@@ -603,6 +603,15 @@ Key design decisions already settled:
     was filed as the open finding because a marker appeared somewhere in its
     prose. `VERDICT: ACCEPT` or `REJECT` decides; ACCEPT still loses to a
     prefixed `BLOCKING:` with content; no line falls back to the scan.
+- **An elided call is not a signature** (series rule-2ffa7f6, f6, 2026-10-06).
+  `scope.declared_signatures` collects every backticked `name(args)` for a
+  `def`-declared name so a mid-description revision is caught before
+  dispatch. It also collected `_serve_guarded(...)`, a reference to the
+  function, as a second signature; the correction round then named `(...)`
+  as the contradiction, the orchestrator could not act on that, and the cell
+  stalled on three calls with no lead invoked. An argument list that is only
+  `...` or `…` says nothing about the parameters and is skipped; a real
+  second signature beside an elision is still refused.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

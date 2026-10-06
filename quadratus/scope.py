@@ -356,6 +356,7 @@ def is_test_path(path: str) -> bool:
 
 _DEFINED = re.compile(r"\bdef\s+([A-Za-z_][\w.]*)\s*\(")
 _DEFINED_WITH_ARGS = re.compile(r"\bdef\s+([A-Za-z_][\w.]*)\s*\(([^()]*)\)")
+_ELIDED = frozenset({"...", "\u2026"})
 _QUOTED = re.compile(r"`\s*(?:def\s+)?([A-Za-z_][\w.]*)\s*\(([^()`]*)\)\s*:?\s*`")
 
 
@@ -388,7 +389,18 @@ def declared_signatures(description: str, *fields: Sequence[str]) -> Dict[str, L
     def note(name: str, args: str) -> None:
         if name not in declared:
             return
-        normalised = ", ".join(a.strip() for a in args.split(",") if a.strip())
+        parts = [a.strip() for a in args.split(",") if a.strip()]
+        if parts and all(a in _ELIDED for a in parts):
+            # ``_serve_guarded(...)`` is a reference to the function, not a
+            # signature: f6-download-guard on 2ffa7f6 stalled because the
+            # description wrote ``def _serve_guarded(directory, name)`` and
+            # later said each route "calls `_serve_guarded(...)`", and this
+            # check reported the ellipsis as a second signature. The
+            # correction then named ``(...)`` as the contradiction, which the
+            # orchestrator could not act on. An elision says nothing about
+            # the parameters, so it is not collected.
+            return
+        normalised = ", ".join(parts)
         forms = found.setdefault(name, [])
         if normalised not in forms:
             forms.append(normalised)
