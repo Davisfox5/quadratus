@@ -178,27 +178,39 @@ def test_the_capture_line_parses_like_a_scope_capture(reply, capture, why):
     assert got == capture and why in reason
 
 
-# -- series rule-3572b72 f5: a reply with no line gets one strict re-ask ----------------
+# -- series rule-3572b72 f5: the marker after prose on the same line is the declaration ---
 
-def test_a_reply_with_no_capture_line_is_re_asked_once(tmp_path, monkeypatch):
-    session, spec, prompts, captures = _run(
-        tmp_path, monkeypatch, [BLIND, "APPROVED"],
-        ["I looked at the page; the empty state needs a project with no clips.", "CAPTURE: " + json.dumps(REACHED)])
-    asks = [p for _, p in prompts if "carried no CAPTURE: line" in p]
-    assert len(asks) == 1 and "exactly one line and nothing else" in asks[0]
+def test_a_capture_marker_after_prose_on_the_same_line_is_read(tmp_path, monkeypatch):
+    # The saved f5 reply held "load.CAPTURE: {...}" after a sentence; the
+    # line-anchored read recorded "no CAPTURE: line" and the verdict stood.
+    reply = ("The empty state shows when a project has no clips, so the steps must create one before the "
+             "wait.CAPTURE: " + json.dumps(REACHED) + " which reaches it.")
+    session, spec, prompts, captures = _run(tmp_path, monkeypatch, [BLIND, "APPROVED"], reply)
     assert captures == [DECLARED, REACHED] and spec.scope.capture == REACHED
-    record = session.design_checks[0]
-    assert record["recapture_reasked"] is True and record["recapture"]["verified"] is True
+    assert session.design_checks[0]["recapture"]["verified"] is True
+    assert len([p for _, p in prompts if "Reply with exactly one line" in p and "CAPTURE:" in p]) == 1, \
+        "one bounded declaration round, never a re-ask"
 
 
-def test_a_second_reply_with_no_line_keeps_the_verdict(tmp_path, monkeypatch):
-    session, spec, prompts, captures = _run(tmp_path, monkeypatch, [BLIND], ["narration only", "still narration"])
-    assert len([p for _, p in prompts if "carried no CAPTURE: line" in p]) == 1
+def test_a_reply_with_no_marker_at_all_keeps_the_verdict_with_no_second_call(tmp_path, monkeypatch):
+    session, spec, prompts, captures = _run(tmp_path, monkeypatch, [BLIND], "narration only, no declaration")
+    assert len([p for _, p in prompts if "CAPTURE:" in p and "Reply with exactly one line" in p]) == 1
     assert captures == [DECLARED]
     assert session.design_checks[0]["recapture"]["problem"] == "no CAPTURE: line in the reply"
-    assert [f for f in session.open_findings if "do not show the changed interface" in f]
 
 
-def test_capture_none_is_a_declaration_and_is_not_re_asked(tmp_path, monkeypatch):
-    _, _, prompts, _ = _run(tmp_path, monkeypatch, [BLIND], "CAPTURE: none\nNo route shows it.")
-    assert not any("carried no CAPTURE: line" in p for _, p in prompts)
+@pytest.mark.parametrize("reply, expected", [
+    ("CAPTURE: none", None),
+    ("I think CAPTURE: none. Nothing shows it.", None),
+    ('prose CAPTURE: {"path": "/x", "steps": []} trailing words', {"path": "/x", "steps": []}),
+    ('CAPTURE: {"path": "/a", "steps": []}\nlater CAPTURE: {"path": "/b", "steps": []}', {"path": "/b", "steps": []}),
+    ("the word capture: appears but with no object", "unparsed"),
+])
+def test_the_declaration_is_read_wherever_the_marker_sits(reply, expected):
+    capture, why = _parse_capture_line(reply, "t6")
+    if expected == "unparsed":
+        assert capture is None and ("did not parse" in why or "no CAPTURE" in why)
+    elif expected is None:
+        assert capture is None and "no page and steps" in why
+    else:
+        assert capture["path"] == expected["path"]

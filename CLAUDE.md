@@ -706,16 +706,19 @@ Key design decisions already settled:
   blind review gets (the prompt names the capture check as the source).
   Still wrong after the redeclaration, or `CAPTURE: none`, stays unverified
   with no fix call spent; a page problem beside it still gets the fix.
-- **A one-line answer is bounded like one, and a missing line is re-asked
-  once** (series rule-3572b72 f5, 2026-10-06). The recapture round from
-  the earlier f5 fix fired, and the grok lead's capture-redeclare call ran
-  12 rounds and 403k tokens in the read-only copy and returned no
-  `CAPTURE:` line, so the blocking verdict stood. `runtime.DECLARATION_ROLES`
-  (capture-redeclare, fixture-supply) now take `DECLARATION_MAX_TURNS` (6),
-  never above the operator's lead cap; a reply with no `CAPTURE:` line or
-  no `FIXTURE` block gets one strict re-ask that quotes the failure and
-  asks for the line and nothing else, and a second miss stands as before.
-  `CAPTURE: none` is a declaration and is not re-asked.
+- **A one-line answer is bounded like one, and the marker is read wherever
+  it sits** (series rule-3572b72 f5, 2026-10-06). The recapture round from
+  the earlier f5 fix fired, the grok lead's capture-redeclare call ran 12
+  rounds and 403k tokens in the read-only copy, and its reply held
+  `load.CAPTURE: {...}` after a sentence on the same line; the line-anchored
+  parser recorded "no CAPTURE: line" and the blocking verdict stood.
+  `runtime.DECLARATION_ROLES` (capture-redeclare, fixture-supply) now take
+  `DECLARATION_MAX_TURNS` (6), never above the operator's lead cap, and
+  `_capture_declaration` reads the last `CAPTURE:` marker on any line, with
+  the JSON object decoded from where it starts. A reply with no marker
+  still stands as the verdict it was: one bounded declaration round and
+  no second call because parsing failed (Codex, terminal audit of
+  rule-3572b72), so there is no re-ask.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

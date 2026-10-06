@@ -715,6 +715,24 @@ def _renders_blind(verdict: str) -> bool:
 
 
 _CAPTURE_LINE = re.compile(r"^\s*CAPTURE\s*:\s*(.*\S)\s*$", re.IGNORECASE)
+#: The same marker wherever it sits on a line: series rule-3572b72 f5's lead
+#: wrote prose and then ``load.CAPTURE: {"path": "/", ...}`` on the same
+#: line, and a line-anchored read saw no declaration at all.
+_CAPTURE_ANYWHERE = re.compile(r"CAPTURE\s*:\s*(\{.*|none\b.*)", re.IGNORECASE)
+
+
+def _capture_declaration(reply: str):
+    """The last CAPTURE: declaration in ``reply``, or None: the line's tail
+    after the marker (``none ...`` or a JSON object text, which the caller
+    parses). A marker buried after prose counts; one with nothing usable
+    after it does not."""
+    found = None
+    for raw in (reply or "").splitlines():
+        text = raw.replace("`", "")
+        match = _CAPTURE_LINE.match(text) or _CAPTURE_ANYWHERE.search(text)
+        if match:
+            found = match.group(1)
+    return found
 
 
 def _parse_capture_line(reply: str, task_id: str):
@@ -725,18 +743,14 @@ def _parse_capture_line(reply: str, task_id: str):
     missing or malformed line both return None with the reason; the caller
     keeps the reviewer's verdict in that case.
     """
-    line = None
-    for raw in (reply or "").splitlines():
-        match = _CAPTURE_LINE.match(raw.replace("`", ""))
-        if match:
-            line = match.group(1)
+    line = _capture_declaration(reply)
     if line is None:
         return None, "no CAPTURE: line in the reply"
-    if line.strip().lower().rstrip(".") == "none":
+    if re.match(r"none\b", line.strip(), re.IGNORECASE):
         return None, "the lead declared that no page and steps reach the changed state"
     try:
         from .preview import validate_capture
-        capture = validate_capture(json.loads(line))
+        capture = validate_capture(json.JSONDecoder().raw_decode(line.strip())[0])
     except (ValueError, TypeError) as exc:
         return None, f"the CAPTURE line did not parse ({str(exc)[:120]})"
     for step in capture["steps"]:
@@ -4726,22 +4740,6 @@ class Session:
         task.record("assistant", f"[{lead}] {reply}")
         task.keep(reply, kind="capture-redeclare", author=lead)
         capture, why = _parse_capture_line(reply, spec.task_id)
-        if capture is None and why == "no CAPTURE: line in the reply":
-            # One strict re-ask, quoting the failure (series rule-3572b72 f5:
-            # 12 rounds of narration and no line). A second miss stands.
-            self._note(f"task {spec.task_id}: the recapture reply carried no CAPTURE: line; one re-ask")
-            retry = ("Your previous reply carried no CAPTURE: line, so nothing was declared. Reply "
-                     "with exactly one line and nothing else, either\n"
-                     'CAPTURE: {"path": "/route", "steps": [...]}\n'
-                     "or\nCAPTURE: none\n"
-                     "No preamble, no explanation, no tool use beyond reading a selector you need. "
-                     "The rules are unchanged: " + _CAPTURE_SCOPE_REQUEST)
-            with invocation(spec.task_id, "capture-redeclare"):
-                reply = self._invoke_model(lead, retry)
-            task.record("assistant", f"[{lead}] {reply}")
-            task.keep(reply, kind="capture-redeclare", author=lead)
-            capture, why = _parse_capture_line(reply, spec.task_id)
-            record["recapture_reasked"] = True
         if capture is None:
             self._note(f"task {spec.task_id}: no usable recapture declaration ({why})")
             record["recapture"] = dict(declared=None, problem=why)
@@ -5706,21 +5704,6 @@ class Session:
         task.record("assistant", f"[{lead}] {reply}")
         task.keep(reply, kind="fixture-supply", author=lead)
         supplied = _parse_fixture_blocks(reply)
-        if any(path not in supplied for path in missing):
-            # One strict re-ask for the blocks that are missing, quoting the
-            # expected form; a second miss leaves the capture to fail.
-            absent = [path for path in missing if path not in supplied]
-            self._note(f"task {spec.task_id}: fixture supply reply lacked {len(absent)} block(s); one re-ask")
-            retry = ("Your previous reply carried no FIXTURE block for " + ", ".join(absent)
-                     + ". Reply with nothing but, for each of those paths, the line\nFIXTURE <path>:\n"
-                     "followed by one fenced block holding the complete file content. No preamble, no "
-                     "explanation, no tool use beyond reading what the input accepts.")
-            with invocation(spec.task_id, "fixture-supply"):
-                reply = self._invoke_model(lead, retry)
-            task.record("assistant", f"[{lead}] {reply}")
-            task.keep(reply, kind="fixture-supply", author=lead)
-            supplied = {**supplied, **_parse_fixture_blocks(reply)}
-            record["fixture_reasked"] = True
         written, problems = [], []
         for path in missing:
             content = supplied.get(path)
