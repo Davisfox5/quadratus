@@ -3036,8 +3036,11 @@ class Session:
         if self._tier(spec) != "direct":
             self._stage("review")
         for peer in collaborators:
-            with invocation(spec.task_id, "collaborator"):
-                note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
+            try:
+                with invocation(spec.task_id, "collaborator"):
+                    note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
+            except TurnLimitReached as exc:
+                note = self._capped_review(spec, peer, "review", exc)
             task.record("assistant", f"[{labels[peer]}] {note}")
             task.keep(note, kind=f"review:{peer}", author=peer)
             notes.append((peer, note))
@@ -3062,9 +3065,11 @@ class Session:
         # Clean reviews cost nothing further: a reviewer with nothing to say
         # says NO FINDINGS, and a revision round against empty critiques would
         # be the most avoidable spend in the loop.
+        # A capped review (UNFINISHED:) is no critique either: it carries no
+        # finding to answer, so it buys no revision.
         notes = [
             (p, n) for p, n in notes
-            if n.strip().upper().rstrip(".") != "NO FINDINGS"
+            if n.strip().upper().rstrip(".") != "NO FINDINGS" and not n.startswith("UNFINISHED:")
         ]
         self._edge("review", True)
         if notes:
@@ -3370,18 +3375,29 @@ class Session:
             if self._required("security_verdict", self._live_security_verdict()) == "json":
                 self._verify_security_json(spec, task, draft, excursion.worker, verifier)
             else:
-                with invocation(spec.task_id, "verifier"):
-                    verdict = self._invoke_model(
-                        verifier, self._verifier_prompt(spec, draft, verifier)
-                    )
-                task.record("assistant", f"[{verifier}] {verdict}")
-                task.keep(verdict, kind=f"verify:{verifier}", author=verifier)
+                verdict = None
+                try:
+                    with invocation(spec.task_id, "verifier"):
+                        verdict = self._invoke_model(
+                            verifier, self._verifier_prompt(spec, draft, verifier)
+                        )
+                except TurnLimitReached as exc:
+                    # No verdict: the verification edge stays unset, as for any
+                    # other interrupted verifier, and the record says so.
+                    capped = self._capped_review(spec, verifier, "verification", exc)
+                    task.record("assistant", f"[{verifier}] {capped}")
+                    task.keep(capped, kind=f"verify:{verifier}", author=verifier)
+                if verdict is not None:
+                    task.record("assistant", f"[{verifier}] {verdict}")
+                    task.keep(verdict, kind=f"verify:{verifier}", author=verifier)
                 # A finding is a marker as written, not the word in prose (map
                 # G7): the old substring test read "no BLOCKING findings" as
                 # one. Semantics taken from the reviewed helper on 90cc5d9.
                 # An explicit VERDICT line decides (series b1ff751 f6 and
                 # rule-b1ff751 f6: an accepting report filed as the finding).
-                if _security_finding_stands(verdict):
+                if verdict is None:
+                    pass
+                elif _security_finding_stands(verdict):
                     self._open_finding("security", verdict)
                     self._edge("verification", False)
                 else:
@@ -4730,7 +4746,11 @@ class Session:
         from .runtime import EvidenceNotDelivered
         try:
             with invocation(spec.task_id, "design-review"):
-                verdict = self._invoke_model(reviewer, prompt)
+                verdict = self._invoke_model(reviewer, prompt + self._review_turn_budget_note(reviewer))
+        except TurnLimitReached as exc:
+            # Neither APPROVED nor a BLOCKING line: the caller files it as a
+            # review that gave no verdict (unverified), not as a design defect.
+            return self._capped_review(spec, reviewer, "design review", exc)
         except EvidenceNotDelivered as exc:
             self._edge("delivered", False)
             return f"BLOCKING: the renders could not be handed to the reviewer ({str(exc)[:300]})"
@@ -6196,6 +6216,7 @@ class Session:
             + _review_subject_note(spec)
             + (_DESIGN_REVIEW_LENS + (self._design_note or "")
                if self._collaboration_applicable(spec) else "")
+            + self._review_turn_budget_note(peer)
         )
 
     def _revision_prompt(self, spec: TaskSpec, draft: str, notes: List[str]) -> str:
@@ -6257,22 +6278,60 @@ class Session:
         """
         unresolved: List[tuple] = []
         for peer, note in blocking:
-            verdict = self._invoke_model(
-                peer,
-                self._role_packet(spec, 'reviewer') + '\n\n' +
-                f"Task: {spec.description}\n\n"
-                f"You reviewed this work and raised these findings:\n{note}\n\n"
-                f"The revised work:\n{revision}\n\n"
-                "Check only your BLOCKING findings against the revision. Do "
-                "not raise new findings. Reply exactly 'RESOLVED' if every "
-                "blocking finding is addressed, otherwise 'UNRESOLVED: <what "
-                "specifically remains>'.",
-            )
             shown = (labels or {}).get(peer, peer)
+            try:
+                verdict = self._invoke_model(
+                    peer,
+                    self._role_packet(spec, 'reviewer') + '\n\n' +
+                    f"Task: {spec.description}\n\n"
+                    f"You reviewed this work and raised these findings:\n{note}\n\n"
+                    f"The revised work:\n{revision}\n\n"
+                    "Check only your BLOCKING findings against the revision. Do "
+                    "not raise new findings. Reply exactly 'RESOLVED' if every "
+                    "blocking finding is addressed, otherwise 'UNRESOLVED: <what "
+                    "specifically remains>'."
+                    + self._review_turn_budget_note(peer),
+                )
+            except TurnLimitReached as exc:
+                # No verdict either way: the finding is neither resolved nor
+                # confirmed, so it does not buy another fix round; it goes to
+                # the record as unverified, with the reviewer named.
+                task.record("assistant", f"[{shown} recheck] {self._capped_review(spec, peer, 'recheck', exc)}")
+                continue
             task.record("assistant", f"[{shown} recheck] {verdict}")
             if not _resolved_verdict(verdict):
                 unresolved.append((peer, verdict.strip()))
         return unresolved
+
+    def _capped_review(self, spec: TaskSpec, peer: str, what: str, exc: TurnLimitReached) -> str:
+        """A review seat that hit its turn cap gave no verdict.
+
+        Series rule-2ffa7f6 f3 and f5: uncapped collaborators spent 15 to 20
+        rounds and up to 1.18M tokens. Capping them (runtime.REVIEW_CAPPED_ROLES)
+        means a review can now stop short; its narration is never read as
+        findings, and the task is recorded as not fully reviewed rather than
+        as reviewed clean or as blocked on a finding nobody made.
+        """
+        rounds = f"{exc.turns} rounds" if exc.turns else "its turn cap"
+        text = f"UNFINISHED: the {what} stopped at {rounds} before giving a verdict."
+        self._open_finding("unverified", f"Task {spec.task_id}: {what} by {peer} did not finish "
+                                         f"within its turn cap ({rounds}); no verdict.")
+        self._note(f"task {spec.task_id}: {what} by {peer} capped at {rounds}; recorded as unverified")
+        return text
+
+    def _review_turn_budget_note(self, peer: str) -> str:
+        """The reviewer's round budget in words, when a cap applies to its CLI."""
+        limit = self.config.lead_max_turns
+        if not limit:
+            return ""
+        from .cli_providers import CLI_SPECS
+        spec = CLI_SPECS.get(peer.partition(":")[0])
+        if spec is None or not spec.max_turns_flag:
+            return ""
+        return (f"\n\nThis call has at most {limit} tool rounds. At round {limit} it stops and the "
+                "review is recorded as unfinished, with nothing you wrote read as a finding. The work "
+                "is in this prompt; read the files it names, run any approved check once, and write "
+                "the verdict well inside the budget.")
 
     def _fix_prompt(self, spec: TaskSpec, revision: str, unresolved: List[tuple]) -> str:
         remaining = "\n\n".join(f"[{p}]\n{v}" for p, v in unresolved)
@@ -6482,6 +6541,7 @@ class Session:
             "verify it. End your reply with exactly one line, VERDICT: ACCEPT or "
             "VERDICT: REJECT; that line is read as your decision, and a REJECT must "
             "name at least one BLOCKING: or UNRESOLVED: finding above it."
+            + self._review_turn_budget_note(verifier)
         )
 
     def _mechanical_close_out(self, lead: str, spec: TaskSpec, task: TaskMemory):

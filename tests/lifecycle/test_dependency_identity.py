@@ -181,15 +181,21 @@ def test_a_gate_fix_denied_the_harness_command_at_the_cap_is_a_capability_stop(t
     assert len(replay.of("gate-fix")) == 1 and H.gate_results(replay) == []
 
 
-def test_reviewers_closeout_and_the_orchestrator_are_not_capped(tmp_path, monkeypatch):
+def test_review_seats_share_the_cap_and_closeout_and_the_orchestrator_do_not(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, Script(), files=FILES)
     assert H.ended_at_cap(replay, 1)
-    for role in ("orchestrator", "collaborator", "recheck"):
-        assert all(_turns_flag(c) is None for c in replay.of(role)), role
+    assert all(_turns_flag(c) is None for c in replay.of("orchestrator"))
     # The close-out keeps its own one-turn, tool-less summary form.
     assert all(_turns_flag(c) == "1" for c in replay.of("closeout"))
     assert replay.of("collaborator") and replay.of("closeout")
-    assert all(_turns_flag(c) == str(CAP) for c in replay.of("lead") + replay.of("revision"))
+    # Review seats joined the capped set after series rule-2ffa7f6 f3 and f5
+    # (runtime.REVIEW_CAPPED_ROLES): the same cap as the lead's editing calls.
+    for role in ("lead", "revision", "collaborator", "recheck"):
+        # codex has no turn flag (CODEX_SPEC.max_turns_flag is empty), so
+        # only the vendors that take one can show the cap on their argv.
+        calls = [c for c in replay.of(role) if Path(c.argv[0]).name != "codex"]
+        assert calls or role == "recheck", role       # this replay's only recheck is codex
+        assert all(_turns_flag(c) == str(CAP) for c in calls), role
 
 
 # == C. the capture-steps line ==========================================================

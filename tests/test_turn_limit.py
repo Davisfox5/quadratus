@@ -105,18 +105,21 @@ def test_a_summary_call_keeps_its_own_single_turn(tmp_path):
 
 
 @pytest.mark.parametrize("project", [True, False])
-def test_the_fleet_limits_lead_calls_only(monkeypatch, tmp_path, project):
+def test_the_fleet_limits_lead_and_review_calls_only(monkeypatch, tmp_path, project):
     views = []
     monkeypatch.setattr(Fleet, "_generate",
                         lambda self, key, provider, prompt, system, **kw: views.append(provider) or "ok")
     (tmp_path / "a.py").write_text("x = 1\n")
     fleet = Fleet(Settings(backend="cli", lead_max_turns=16), project=tmp_path if project else None)
-    for role in ("lead", "verifier", "orchestrator"):
+    # Review seats joined the capped set after series rule-2ffa7f6 f3 and f5
+    # (uncapped collaborators at 15 to 20 rounds and up to 1.18M tokens).
+    for role in ("lead", "collaborator", "recheck", "design-review", "verifier", "orchestrator"):
         with invocation("t1", role):
             fleet.invoke("grok:default", "p")
-    lead, verifier, orchestrator = views
+    lead, collaborator, recheck, design_review, verifier, orchestrator = views
     assert lead.max_turns == 16
-    assert verifier.max_turns is None and orchestrator.max_turns is None
+    assert collaborator.max_turns == recheck.max_turns == design_review.max_turns == verifier.max_turns == 16
+    assert orchestrator.max_turns is None
     assert fleet.provider_for("grok:default").max_turns is None, "the shared provider is never marked"
 
 

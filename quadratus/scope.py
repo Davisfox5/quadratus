@@ -221,9 +221,17 @@ class TaskScope:
         if self.review_only:
             parts.append("Declared review-only: report findings; do not change project source.")
         if self.max_lines:
+            # The lead is told what the harness measures, not only the
+            # estimate (series rule-2ffa7f6 f3, f4 and f7: first tasks of 85
+            # to 100 lines landed at 135 to 236, with 112 to 171 of them in
+            # tests the lead wrote against a bound it read as code).
+            stop = int(self.max_lines * _OVERRUN_TOLERANCE)
             parts.append(
-                f"Expected size: about {self.max_lines} changed lines. If the "
-                f"work genuinely needs substantially more, say so and stop "
+                f"Expected size: about {self.max_lines} changed lines, counting added and removed "
+                f"lines in every file, tests in full. The harness measures the diff after each "
+                f"editing call and stops the task past {stop} changed lines with the work kept "
+                f"but unfinished. Write tests as compact named cases, not one fixture per case. "
+                f"If the work genuinely needs substantially more, say so and stop "
                 f"rather than delivering the larger change -- an undersized "
                 f"task quietly growing into a whole feature is the specific "
                 f"failure this bound exists to catch."

@@ -612,6 +612,29 @@ Key design decisions already settled:
   stalled on three calls with no lead invoked. An argument list that is only
   `...` or `…` says nothing about the parameters and is skipped; a real
   second signature beside an elision is still refused.
+- **Review seats share the lead's turn cap, and a capped review is no
+  verdict** (series rule-2ffa7f6 f3 and f5, 2026-10-06). Every editing call
+  was bound by the derived 20-round cap while the Opus collaborators ran 15
+  to 20 rounds uncapped at 0.87M to 1.18M tokens, and both cells stopped on
+  the token threshold. `runtime.REVIEW_CAPPED_ROLES` (collaborator,
+  recheck, design-review, verifier) now takes `Settings.lead_max_turns` too;
+  closeout, workers and the orchestrator stay uncapped. A reviewer that hits
+  the cap has given no verdict: its narration is never read as findings, the
+  task carries an `unverified` fact naming the reviewer, a capped recheck
+  buys no fix round, a capped design review is "gave no verdict" rather than
+  a design defect, and a capped verifier leaves the verification edge unset.
+  Review copies also get the editing call's exact check guidance (#51) plus
+  the fact that the copy has no `.git`: f1's reviewers ran `node --test
+  tests/ui/` in place of the five listed files, and `git status`.
+- **The lead is told what the harness measures, not only the estimate**
+  (series rule-2ffa7f6 f3, f4 and f7, 2026-10-06). The decomposition prompt
+  already tells the orchestrator that test lines count in full, and it
+  sized first tasks at 85 to 100 lines; the leads then wrote 112 to 171
+  test lines beside 23 to 65 code lines and every first task stopped past
+  the 1.5x line. `TaskScope.render()` now states the counting rule, the
+  exact stop line and "compact named cases", so the seat writing the tests
+  knows the bound it is writing against. The estimate rules and the stop
+  itself are unchanged.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

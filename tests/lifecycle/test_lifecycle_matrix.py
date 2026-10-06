@@ -827,7 +827,17 @@ def test_an_operator_extra_check_runs_beside_the_check_and_stays_out_of_prompts(
     plan = json.loads((replay.result.run_dir / "gate-plan.json").read_text())
     assert [(g["id"], g["argv"]) for g in plan] == [("check", plan[0]["argv"]),
                                                      ("extra-1", ["node", "--test", EXAMINER])]
-    assert not any(EXAMINER in c.prompt for c in replay.calls), "the gate plan never reaches a model"
+    # The plan reaches a model only as the approved command list: the granted
+    # editing call's (#51) and, since series rule-2ffa7f6 f1, the review
+    # copy's (runtime.REVIEW_CAPPED_ROLES). Never the orchestrator's or the
+    # close-out's, and never outside that block.
+    for c in replay.calls:
+        if EXAMINER in c.prompt:
+            assert c.role in ("lead", "revision", "gate-fix", "design-fix", "collaborator", "recheck",
+                              "design-review", "verifier", "auditor"), c.role
+            assert "APPROVED CHECK COMMANDS" in c.prompt, c.role
+            body, _, block = c.prompt.partition("APPROVED CHECK COMMANDS")
+            assert EXAMINER not in body, "the gate plan is named only in the approved command list"
 
 
 def test_a_failing_extra_check_fails_the_gate_even_with_pytest_passing(tmp_path, monkeypatch, real_runners):
