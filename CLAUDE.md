@@ -577,6 +577,29 @@ Key design decisions already settled:
   section is rendered from the same table and a test holds them equal.
   Routing, stated-label precedence, admission and the budget are unchanged:
   this changes the question, not what the engine does with the answer.
+- **Four repairs from the rule-only series on b1ff751** (2026-10-06, seven
+  cells, 34 of 35 requirements passed, one engine-complete). Each was
+  reproduced at least twice before it was touched.
+  - *A per-call ceiling implies a lead turn cap.* Claude leads ran 27 and 36
+    turns in one call, re-sending ~58k of context per turn, and the 1.5M
+    post-return ceiling fired after the spend. `run_budget.lead_turns_for`
+    derives a cap (1.5M → 20 rounds) when the operator set none, and the
+    lead is told its round budget. The ceiling's arithmetic is unchanged.
+  - *A disposable source copy is its own containment.* Under codex
+    `--sandbox read-only` Python found no writable temp dir, so a reviewer
+    told to run pytest could not and blocked the task with every grader
+    passing. `CLISpec.copy_args` (codex: workspace-write) applies only to an
+    ungranted call in a copy the Fleet deletes, and `TMPDIR` points inside
+    the copy. The project root is still reached only with a write grant.
+  - *A render that misses the change is a capture defect, not a design
+    one.* The dispatched capture never reached the empty state (f5, three
+    leads). The reviewer's exact reply buys one `CAPTURE:` redeclaration
+    from the lead, one recapture and one more review; a second miss is the
+    open finding it was.
+  - *The verifier ends with a VERDICT line.* An accepting security report
+    was filed as the open finding because a marker appeared somewhere in its
+    prose. `VERDICT: ACCEPT` or `REJECT` decides; ACCEPT still loses to a
+    prefixed `BLOCKING:` with content; no line falls back to the scan.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

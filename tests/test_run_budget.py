@@ -279,3 +279,35 @@ def test_an_oversized_call_is_named_after_it_returns():
 def test_reserve_and_ceiling_reject_invalid_values(field, value):
     with pytest.raises(ValueError):
         RunLimits(max_reported_tokens=1_000_000, **{field: value})
+
+
+# -- a per-call ceiling implies a lead turn cap (series rule-b1ff751 f1 and f3, 2026-10-06) --
+
+def test_a_lead_turn_cap_is_derived_from_the_ceiling():
+    from quadratus.run_budget import MIN_LEAD_TURNS, lead_turns_for
+    assert lead_turns_for(None) is None and lead_turns_for(0) is None
+    assert lead_turns_for(1_500_000) == 20      # 36 and 27 turns ran 2.09M and 1.51M
+    assert lead_turns_for(100_000) == MIN_LEAD_TURNS
+
+
+def test_project_run_derives_the_cap_only_when_the_operator_set_none(tmp_path, monkeypatch):
+    from quadratus.project_run import run_project
+    from quadratus.session import Session
+
+    (tmp_path / 'app.py').write_text('x\n')
+    seen = {}
+
+    def run(self, **kwargs):
+        seen['config'] = self.config.lead_max_turns
+        seen['fleet'] = self.invoke.__self__.settings.lead_max_turns
+        return None
+    monkeypatch.setattr(Session, 'run', run)
+    run_project('g', tmp_path, Settings(backend='cli'), allow_writes=True,
+                run_limits=RunLimits(max_reported_tokens=2_500_000, max_tokens_per_call=1_500_000))
+    assert seen == dict(config=20, fleet=20)
+    run_project('g', tmp_path, Settings(backend='cli', lead_max_turns=12), allow_writes=True,
+                run_limits=RunLimits(max_reported_tokens=2_500_000, max_tokens_per_call=1_500_000))
+    assert seen == dict(config=12, fleet=12)
+    run_project('g', tmp_path, Settings(backend='cli'), allow_writes=True,
+                run_limits=RunLimits(max_reported_tokens=2_500_000))
+    assert seen == dict(config=None, fleet=None)

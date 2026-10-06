@@ -993,6 +993,16 @@ class CLISpec:
     session_id_flag: Optional[str] = None
     #: Args that make the agent read-only (no file writes, no shell).
     readonly_args: List[str] = field(default_factory=list)
+    #: Args for an ungranted call that runs inside a disposable source copy
+    #: (``runtime.Fleet._invoke``'s snapshot): the copy is the containment
+    #: and is deleted when the call returns, so a vendor whose read-only mode
+    #: also denies its own temporary directory may use a mode that writes
+    #: inside the copy. Codex: under ``--sandbox read-only`` Python found no
+    #: writable temp dir (the macOS per-user dir, /tmp, /var/tmp and the copy
+    #: itself all refused), so a reviewer told to run the project's pytest
+    #: could not, and blocked the task on "cannot run the required check"
+    #: (series b1ff751 f3 and rule-b1ff751 f4). Empty means ``readonly_args``.
+    copy_args: List[str] = field(default_factory=list)
     #: Args added when the caller *has* opted into writes. Some CLIs need an
     #: explicit approval mode or a non-interactive run stalls waiting for a
     #: confirmation nobody is there to give.
@@ -1526,6 +1536,9 @@ CODEX_SPEC = CLISpec(
     model_flag="--model",
     output_args=["--json"],
     readonly_args=["--sandbox", "read-only"],
+    # A disposable source copy is its own containment: workspace-write there
+    # lets a reviewer run the check it is told to run (see ``copy_args``).
+    copy_args=["--sandbox", "workspace-write"],
     write_args=["--sandbox", "workspace-write"],
     # codex exposes no effort flag; the config override is the documented
     # route, and it is validated rather than ignored -- a deliberately
@@ -2059,6 +2072,9 @@ class CLIProvider(LLMProvider):
         #: runtime.Fleet. None sends no flag. A proxy for spend, not a
         #: token ceiling: an 11-turn grok lead still reported 365,138 tokens.
         self.max_turns: Optional[int] = kwargs.pop("max_turns", None)
+        #: Whether this view runs in a disposable source copy; set only by
+        #: ``in_directory(..., disposable=True)`` on an ungranted call.
+        self._disposable: bool = False
         #: The in-session worker tool for this view (``WorkerBridge.spec()``),
         #: set per lead call by runtime.Fleet. None attaches nothing.
         self.worker_tool: Optional[dict] = kwargs.pop("worker_tool", None)
@@ -2155,11 +2171,16 @@ class CLIProvider(LLMProvider):
             _ = self.workdir
         return super().for_model(model)
 
-    def in_directory(self, workdir, *, allow_writes=False):
+    def in_directory(self, workdir, *, allow_writes=False, disposable=False):
+        """A per-call view running in ``workdir``. ``disposable`` marks a
+        source copy the Fleet deletes when the call returns; an ungranted
+        call there may use ``CLISpec.copy_args`` and gets a temp dir inside
+        the copy, since nothing it writes can reach the project."""
         view = copy.copy(self)
         view._workdir = str(workdir)
         view._owned_workdir = None
         view._allow_writes = allow_writes
+        view._disposable = bool(disposable and not allow_writes)
         return view
 
     # -- invocation ----------------------------------------------------------
@@ -2199,9 +2220,12 @@ class CLIProvider(LLMProvider):
                 # tmpfs are the only writable paths either way.
                 argv += list(spec.contained_sandbox_args)
             else:
-                argv += list(
-                    spec.readonly_args if not self._allow_writes else spec.write_args
-                )
+                if self._allow_writes:
+                    argv += list(spec.write_args)
+                elif getattr(self, "_disposable", False) and spec.copy_args:
+                    argv += list(spec.copy_args)
+                else:
+                    argv += list(spec.readonly_args)
                 if self._allow_writes and spec.allowed_tools_flag:
                     rules = []
                     for command in getattr(self, "granted_commands", ()) or ():
@@ -2431,6 +2455,14 @@ class CLIProvider(LLMProvider):
             self.last_session_id = str(uuid.uuid4())
             argv += [self.spec.session_id_flag, self.last_session_id]
         env = {**os.environ, **self.spec.env}
+        if getattr(self, "_disposable", False):
+            # Python's tempfile tries TMPDIR first: pointed inside the copy,
+            # a sandbox that allows writes under the working directory lets a
+            # reviewer's pytest start (series rule-b1ff751 f4: no usable
+            # temporary directory under the vendor's read-only mode).
+            scratch = os.path.join(self.workdir, ".quadratus-tmp")
+            os.makedirs(scratch, exist_ok=True)
+            env["TMPDIR"] = scratch
         if getattr(self, "_native_fanout_denied", None):
             env.update(self.spec.native_fanout_off_env)
         if self.worker_tool_attached and self.spec.worker_tool_style == "claude":

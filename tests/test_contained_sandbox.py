@@ -295,3 +295,71 @@ def test_the_launcher_asserts_containment_before_any_provider_is_built():
     assert "os.environ['QUADRATUS_CONTAINED'] = '1'" in text
     assert text.index('/.dockerenv') < text.index('QUADRATUS_CONTAINED')
     assert json  # the module's own import stays used by the rest of the file
+
+
+# -- a disposable source copy is its own containment (series rule-b1ff751 f4, 2026-10-06) --
+
+def _in_copy(cls, model, monkeypatch, *, disposable, writes=False):
+    _binary_on_path(monkeypatch)
+    monkeypatch.delenv('QUADRATUS_CONTAINED', raising=False)
+    provider = cls(model=model).for_seat(model, effort='high', restricted=False)
+    return provider.in_directory('/tmp/quadratus-review-x', allow_writes=writes,
+                                 disposable=disposable)._build_argv('P', 'S')
+
+
+def test_a_codex_reviewer_in_a_disposable_copy_may_write_inside_it(monkeypatch):
+    """Under read-only, Python found no writable temporary directory and the
+    reviewer could not run the project's pytest; it blocked the task on
+    "cannot run the required check" with every grader passing."""
+    argv = _in_copy(CodexCLIProvider, 'gpt-6-astra', monkeypatch, disposable=True)
+    assert argv[argv.index('--sandbox') + 1] == 'workspace-write'
+
+
+def test_an_ungranted_codex_seat_outside_a_copy_keeps_read_only(monkeypatch):
+    argv = _in_copy(CodexCLIProvider, 'gpt-6-astra', monkeypatch, disposable=False)
+    assert argv[argv.index('--sandbox') + 1] == 'read-only'
+
+
+def test_disposable_never_widens_a_granted_call(monkeypatch):
+    """The flag describes the copy, not a grant: with writes it is dropped."""
+    _binary_on_path(monkeypatch)
+    provider = CodexCLIProvider(model='gpt-6-astra').for_seat('gpt-6-astra', effort='high', restricted=False)
+    view = provider.in_directory('/tmp/x', allow_writes=True, disposable=True)
+    assert view._disposable is False
+
+
+@pytest.mark.parametrize('cls, model', [(ClaudeCLIProvider, 'opus'), (GrokCLIProvider, 'default')])
+def test_the_other_vendors_argv_is_unchanged_by_the_copy(cls, model, monkeypatch):
+    def flags(argv):   # grok writes its prompt to a fresh file per call
+        return [a for a in argv if not a.startswith('/tmp/quadratus-prompt-')]
+    assert (flags(_in_copy(cls, model, monkeypatch, disposable=True))
+            == flags(_in_copy(cls, model, monkeypatch, disposable=False)))
+
+
+def test_only_codex_declares_copy_args():
+    assert {vendor: bool(spec.copy_args) for vendor, spec in CLI_SPECS.items()} == {
+        'claude': False, 'openai': True, 'grok': False}
+
+
+def test_a_disposable_call_gets_a_temp_dir_inside_the_copy(monkeypatch, tmp_path):
+    import subprocess
+
+    from quadratus.cli_providers import CodexCLIProvider
+    _binary_on_path(monkeypatch)
+    seen = {}
+
+    def launch(argv, **kwargs):
+        seen['env'] = dict(kwargs['env'])
+        seen['cwd'] = kwargs.get('cwd')
+        return subprocess.CompletedProcess(argv, 0, '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n', '')
+    monkeypatch.setattr('quadratus.cli_providers._launch', launch)
+    copy_dir = tmp_path / 'quadratus-review-abc'
+    copy_dir.mkdir()
+    provider = CodexCLIProvider(model='gpt-6-astra').for_seat('gpt-6-astra', effort='high', restricted=False)
+    view = provider.in_directory(str(copy_dir), allow_writes=False, disposable=True)
+    try:
+        view.generate('P')
+    except Exception:  # noqa: BLE001 -- the envelope shape is not under test
+        pass
+    assert seen['env']['TMPDIR'] == str(copy_dir / '.quadratus-tmp')
+    assert (copy_dir / '.quadratus-tmp').is_dir()

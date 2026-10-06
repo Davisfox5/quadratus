@@ -499,7 +499,7 @@ class Fleet:
                 raise EvidenceNotDelivered(
                     "design evidence was not all delivered to the review copy: "
                     + ", ".join(str(p) for p in declared if p not in copied))
-            view = provider.in_directory(directory, allow_writes=False)
+            view = provider.in_directory(directory, allow_writes=False, disposable=True)
             if verifying:
                 view.native_fanout_off = True
             if lead_turns:
@@ -573,7 +573,7 @@ class Fleet:
                 "not a new review or an assertion that the entire project goal is complete.")
         with tempfile.TemporaryDirectory(prefix="quadratus-closeout-") as directory:
             if hasattr(view, 'in_directory'):
-                view = view.in_directory(directory, allow_writes=False)
+                view = view.in_directory(directory, allow_writes=False, disposable=True)
             return self._generate(key, view, prompt, role)
 
     @staticmethod

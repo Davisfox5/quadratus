@@ -44,6 +44,37 @@ class APICostRate:
                 raise ValueError('API rates must be nonnegative and finite')
 
 
+#: Tokens one agentic lead turn costs once its context has grown, measured
+#: on Claude leads in Stage B series rule-b1ff751 (2026-10-06): 2,092,420
+#: reported input over 36 turns on f1 and 1,510,139 over 27 on f3, because
+#: the CLI re-sends the whole conversation every turn and reports cached
+#: input at full weight. A seed, like every other number here.
+TURN_CONTEXT_TOKENS = 60_000
+#: The share of a per-call ceiling a derived turn cap plans to use; the
+#: rest is headroom for the turns that read more than the average.
+TURN_CAP_MARGIN = 0.8
+#: Fewer rounds than this and a lead cannot read, edit and check at all
+#: (Run 14: leads capped at 14 spent every round reading).
+MIN_LEAD_TURNS = 8
+
+
+def lead_turns_for(max_tokens_per_call) -> int | None:
+    """A lead turn cap derived from a per-call token ceiling, or None.
+
+    Both Stage B series on b1ff751 ended Claude-led cells on the post-return
+    ceiling: with no turn cap the lead ran 27 to 36 turns, each re-sending
+    its context, and the one call reported 1.5M to 2.1M tokens. The ceiling
+    fired correctly and could only fire after the fact. A turn cap is the
+    control that acts before the spend, and the lead is told its round
+    budget so it plans against it (``Session._round_budget``). An operator
+    who sets ``Settings.lead_max_turns`` keeps that; this applies only when
+    none was set and a ceiling was.
+    """
+    if not max_tokens_per_call:
+        return None
+    return max(MIN_LEAD_TURNS, int(max_tokens_per_call * TURN_CAP_MARGIN // TURN_CONTEXT_TOKENS))
+
+
 @dataclass(frozen=True)
 class RunLimits:
     max_calls: int = 24

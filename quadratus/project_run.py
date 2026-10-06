@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import fcntl
 import json
 import re
@@ -286,6 +287,17 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # A decider object handed in directly (tests, embedding callers) is
         # bound to this run's budget too: no billed call escapes the limits.
         decider.budget = budget
+    if getattr(settings, 'lead_max_turns', None) is None and run_limits is not None:
+        # A per-call ceiling with no turn cap stops a lead only after the
+        # oversized call returns (both Stage B series on b1ff751); the cap
+        # derived here acts before it, and the operator's own value wins.
+        from .run_budget import lead_turns_for
+        derived = lead_turns_for(getattr(run_limits, 'max_tokens_per_call', None))
+        if derived:
+            settings = dataclasses.replace(settings, lead_max_turns=derived)
+            if progress:
+                progress(f'Lead turn cap: {derived} rounds, derived from max_tokens_per_call '
+                         f'{run_limits.max_tokens_per_call:,}')
     config = SessionConfig(
         project=project.root, project_excludes=tuple(project.exclude),
         allow_writes=allow_writes, mode=mode, integration_gate=gate,
