@@ -1119,6 +1119,28 @@
       "decisions": [
         "claude: Live proof PASSED on the Mac (Codex, #35 comment 6010342708), on exact 2ffa7f6 after all four CI jobs succeeded and the scoped clearance: codex-cli 0.154.0, wire model gpt-5.6-sol, one invocation, no retry, fallback or children. Raw trace inspected independently: fixture pytest exit 0 (1 passed), TMPDIR scratch write exit 0 inside the copy, outside-copy /tmp sentinel write exit 1 with PermissionError Operation not permitted, sentinel absent, source fixture unchanged; a conflicting attached -C override refused before dispatch; the effective sandbox policy excludes /tmp and TMPDIR roots so only the copy is writable. Ledger /Users/davisfox/Documents/GitHub/stage-b/provider-proof-2ffa7f6/provider-proof-ledger.json SHA256 7cde65efcd9abb5a46d482d33fa96b6af0aec35f0822fbf128b1ffbbf4a02254; raw trace SHA256 93765972c6f0e43953a57b88fecfbfcb48eead2b25c034ef435cd765151f7fa8; independent-verification.json SHA256 84e88ba28c2abac61533f6f55edb5806c0bbf6ecf7e86426811f764a40f30129. Usage 35,702 input (28,288 cached), 358 output, 29.1 s; subscription transport, invoice cost null; outside series accounting."
       ]
+    },
+    {
+      "id": "T-scope-elision",
+      "purpose": "Engine defect from series rule-2ffa7f6 f6-download-guard: the scope lint read the backticked reference _serve_guarded(...) as a second signature next to def _serve_guarded(directory, name), the correction named (...) as the contradiction, and the cell stalled on RunStalled after three calls with no lead invoked. Fix on #53 (claude/engine-repairs-3 atop 2ffa7f6): declared_signatures skips an argument list that is only an elision marker; a real second signature beside an elision is still refused.",
+      "base": "2ffa7f608261fb08ff1669a33efc6463b624a5d5",
+      "owns": [
+        "quadratus/scope.py",
+        "tests/test_scope_declaration_lint.py",
+        "CLAUDE.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-06T07:38:27Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "8a308f4",
+        "at": "2026-10-06T07:38:28Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
