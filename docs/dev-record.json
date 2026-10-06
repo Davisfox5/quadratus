@@ -1142,7 +1142,9 @@
       },
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: Codex scoped offline clearance of 8a308f4 (#53 comment 6011753333, 55 checks); CI green on 8a308f4 (test 3.11 and 3.12)."
+      ]
     },
     {
       "id": "T-review-seat-cap",
@@ -1157,10 +1159,13 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-06T08:04:33Z",
       "acknowledged": false,
-      "delivery": null,
+      "delivery": {
+        "sha": "0983dac",
+        "at": "2026-10-06T08:25:31Z"
+      },
       "reviews": [],
       "blockers": [],
       "decisions": []
@@ -1174,10 +1179,13 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-06T08:04:33Z",
       "acknowledged": false,
-      "delivery": null,
+      "delivery": {
+        "sha": "0983dac",
+        "at": "2026-10-06T08:25:32Z"
+      },
       "reviews": [],
       "blockers": [],
       "decisions": []
