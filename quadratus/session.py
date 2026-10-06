@@ -717,27 +717,55 @@ def _renders_blind(verdict: str) -> bool:
 _CAPTURE_LINE = re.compile(r"^\s*CAPTURE\s*:\s*(.*\S)\s*$", re.IGNORECASE)
 #: The marker wherever it sits on a line: series rule-3572b72 f5's lead wrote
 #: prose and then ``load.CAPTURE: {"path": "/", ...}`` on the same line, and a
-#: line-anchored read saw no declaration at all. Upper case, as the prompt
-#: spells it, so prose about "the capture:" is not a marker.
-_CAPTURE_MARKER = re.compile(r"CAPTURE\s*:")
+#: line-anchored read saw no declaration at all. Any case (the old contract),
+#: and a marker is a candidate only when something declarable follows it.
+_CAPTURE_MARKER = re.compile(r"CAPTURE\s*:", re.IGNORECASE)
+
+
+def _capture_candidates(reply: str) -> List[str]:
+    """Every declaration candidate in ``reply``, as the text that follows it
+    on its line: a marker (any case) followed by ``{`` or ``none``, and any
+    other line that starts with a JSON object naming a capture ``path``. The
+    harness reads exactly one; two are a choice it never makes (Codex reviews
+    of 351d3ba and 6844b97: a first object with a ``CAPTURE: none`` beside
+    it, a later lower-case correction, an object on the next line, or a
+    quoted example beside the real line must not silently select one)."""
+    text = (reply or "").replace("`", "")
+    candidates: List[str] = []
+    marker_lines = set()
+    for index, line in enumerate(text.splitlines()):
+        for match in _CAPTURE_MARKER.finditer(line):
+            tail = line[match.end():].strip()
+            spelled = match.group(0).startswith("CAPTURE")   # the prompt's own spelling
+            # An upper-case marker with anything after it is a declaration,
+            # valid or not (a later ``CAPTURE: invalid`` is a correction the
+            # harness must not drop); a lower-case one in prose counts only
+            # when something declarable follows it.
+            if tail and (spelled or tail.startswith("{") or re.match(r"none\b", tail, re.IGNORECASE)):
+                candidates.append(tail)
+                marker_lines.add(index)
+    for index, line in enumerate(text.splitlines()):
+        stripped = line.strip()
+        if index in marker_lines or not stripped.startswith("{"):
+            continue
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(stripped)
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and "path" in obj:
+            candidates.append(stripped)
+    return candidates
 
 
 def _capture_declaration(reply: str):
-    """``(tail, "")`` for the one CAPTURE: marker in ``reply``, where tail is
-    the rest of its line after the marker, or ``(None, why)``. Two or more
-    markers are a choice the harness never makes (Codex review of 351d3ba:
-    a first object followed by ``CAPTURE: none``, or a later invalid
-    correction, must not silently select the first)."""
-    text = (reply or "").replace("`", "")
-    markers = list(_CAPTURE_MARKER.finditer(text))
-    if not markers:
+    """``(tail, "")`` for the one declaration candidate in ``reply``, or
+    ``(None, why)``."""
+    candidates = _capture_candidates(reply)
+    if not candidates:
         return None, "no CAPTURE: line in the reply"
-    if len(markers) > 1:
-        return None, f"{len(markers)} CAPTURE: markers in the reply; one declaration is read, never a choice"
-    tail = text[markers[0].end():].split("\n", 1)[0].strip()
-    if not tail:
-        return None, "the CAPTURE: marker has nothing after it"
-    return tail, ""
+    if len(candidates) > 1:
+        return None, f"{len(candidates)} capture declarations in the reply; one is read, never a choice"
+    return candidates[0], ""
 
 
 def _parse_capture_line(reply: str, task_id: str):
@@ -783,33 +811,84 @@ _FIXTURE_BLOCK = re.compile(r"^[ \t]*FIXTURE[ \t]+(\S+?):?[ \t]*\n[ \t]*```[^\n]
                             re.MULTILINE | re.DOTALL)
 
 
-_FIXTURE_HEADER = re.compile(r"^[ \t]*FIXTURE[ \t]+\S+", re.MULTILINE)
+_FIXTURE_HEADER = re.compile(r"^[ \t]*FIXTURE[ \t]+(\S+?):?[ \t]*$", re.MULTILINE)
 
 
 def _parse_fixture_blocks(reply: str):
     """``({path: content}, problems)`` for every ``FIXTURE <path>:`` line
     followed by one fenced block. The path is taken as written; the caller
     matches it against the declared fixtures, so an unexpected path is
-    ignored, never written. A path given twice is a problem for that path
-    and nothing is kept for it; a block whose content holds another FIXTURE
-    header (an unclosed fence swallowed the next block) makes the whole
-    reply malformed (Codex review of 351d3ba)."""
-    found: Dict[str, str] = {}
-    problems: List[str] = []
-    duplicates = set()
-    for match in _FIXTURE_BLOCK.finditer(reply or ""):
+    ignored, never written. Every header is accounted for, complete or not:
+    a path with more than one header, or a header with no complete block
+    (an unclosed or missing fence), is a problem for that path and nothing
+    is kept for it; a block whose content holds another header (an unclosed
+    fence swallowed the next block) makes the whole reply malformed (Codex
+    reviews of 351d3ba and 6844b97)."""
+    text = reply or ""
+    headers: Dict[str, int] = {}
+    for match in _FIXTURE_HEADER.finditer(text):
+        path = match.group(1).strip().strip("`'\"")
+        headers[path] = headers.get(path, 0) + 1
+    blocks: Dict[str, List[str]] = {}
+    for match in _FIXTURE_BLOCK.finditer(text):
         path = match.group(1).strip().strip("`'\"")
         content = match.group(2)
         if _FIXTURE_HEADER.search(content):
             return {}, ["malformed reply: a fenced block holds another FIXTURE header (an unclosed fence)"]
-        if path in found or path in duplicates:
-            duplicates.add(path)
-            found.pop(path, None)
-            continue
-        found[path] = content
-    for path in sorted(duplicates):
-        problems.append(f"{path}: more than one FIXTURE block for the same path")
+        blocks.setdefault(path, []).append(content)
+    found: Dict[str, str] = {}
+    problems: List[str] = []
+    for path in sorted(set(headers) | set(blocks)):
+        count, bodies = headers.get(path, 0), blocks.get(path, [])
+        if count == 1 and len(bodies) == 1:
+            found[path] = bodies[0]
+        elif count > 1 or len(bodies) > 1:
+            problems.append(f"{path}: more than one FIXTURE header for the same path")
+        else:
+            problems.append(f"{path}: a FIXTURE header with no complete fenced block")
     return found, problems
+
+
+def _write_fixture_bound(root, path: str, data: bytes) -> str:
+    """Write ``data`` at ``path`` through directory handles, or say why not.
+
+    Every component is opened with ``O_NOFOLLOW`` relative to the handle of
+    the directory before it, so a link swapped in after the pathname check
+    is refused at the operation itself, and the file is created with
+    ``O_EXCL`` so an unexpectedly present target (a project file reached
+    through a redirected parent) is never overwritten (Codex review of
+    6844b97: a path check, however repeated, cannot protect a pathname the
+    write re-resolves).
+    """
+    parts = PurePosixPath(path).parts
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fds: List[int] = []
+    try:
+        fds.append(os.open(str(root), flags))
+        for part in parts[:-1]:
+            try:
+                fd = os.open(part, flags, dir_fd=fds[-1])
+            except FileNotFoundError:
+                os.mkdir(part, 0o755, dir_fd=fds[-1])
+                fd = os.open(part, flags, dir_fd=fds[-1])
+            fds.append(fd)
+        fd = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                     0o644, dir_fd=fds[-1])
+        fds.append(fd)
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        return ""
+    except FileExistsError:
+        return "the target already exists; nothing is overwritten"
+    except (OSError, ValueError) as exc:
+        return f"the write was refused at the operation ({exc.__class__.__name__}: {exc})"
+    finally:
+        for fd in reversed(fds):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def _confined_fixture_target(root, path: str, task_id: str):
@@ -5790,16 +5869,9 @@ class Session:
             if target is None:
                 problems.append(why)
                 continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            # Re-checked after mkdir: nothing on the way may have become a
-            # link, and the file written must be the plain file named.
-            target, why = _confined_fixture_target(self.project, path, spec.task_id)
-            if target is None:
-                problems.append(why)
-                continue
-            target.write_bytes(data)
-            if target.is_symlink() or not target.resolve().is_relative_to(Path(self.project).resolve()):
-                problems.append(f"{path}: written target is not a plain file inside the project")
+            why = _write_fixture_bound(self.project, path, data)
+            if why:
+                problems.append(f"{path}: {why}")
                 continue
             written.append(path)
         record["fixtures_written"] = written

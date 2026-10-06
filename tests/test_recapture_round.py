@@ -204,13 +204,18 @@ def test_a_reply_with_no_marker_at_all_keeps_the_verdict_with_no_second_call(tmp
     ("I think CAPTURE: none. Nothing shows it.", "none"),
     ('prose CAPTURE: {"path": "/x", "steps": []} trailing words', "/x"),
     ("the word capture: appears but with no object", "no CAPTURE"),
-    ("CAPTURE:   ", "nothing after"),
+    ("CAPTURE:   ", "no CAPTURE"),
     # Codex review of 351d3ba: two markers or two objects are a choice the
     # harness never makes; a later invalid correction is not silently dropped.
-    ('CAPTURE: {"path": "/a", "steps": []}\nlater CAPTURE: {"path": "/b", "steps": []}', "markers"),
-    ('CAPTURE: {"path": "/first", "steps": []} CAPTURE: none', "markers"),
-    ('CAPTURE: {"path": "/a", "steps": []}\nCorrection.CAPTURE: invalid', "markers"),
+    ('CAPTURE: {"path": "/a", "steps": []}\nlater CAPTURE: {"path": "/b", "steps": []}', "declarations"),
+    ('CAPTURE: {"path": "/first", "steps": []} CAPTURE: none', "declarations"),
+    ('CAPTURE: {"path": "/a", "steps": []}\nCorrection.CAPTURE: invalid', "declarations"),
     ('CAPTURE: {"path": "/a", "steps": []} {"path": "/b", "steps": []}', "more than one object"),
+    # Codex review of 6844b97: ambiguity across lines and case is a choice too.
+    ('CAPTURE: {"path": "/first", "steps": []}\n{"path": "/second", "steps": []}', "declarations"),
+    ('CAPTURE: {"path": "/first", "steps": []}\nCorrection.capture: none', "declarations"),
+    ('the prompt showed CAPTURE: {"path": "/route", "steps": []}\ncapture: {"path": "/real", "steps": []}', "declarations"),
+    ("the capture: wait on the result row, then\nCAPTURE: none", "none"),
 ])
 def test_exactly_one_declaration_is_read_wherever_the_marker_sits(reply, expected):
     capture, why = _parse_capture_line(reply, "t6")

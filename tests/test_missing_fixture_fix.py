@@ -150,7 +150,6 @@ def test_a_review_only_task_gets_the_round_too_since_it_edits_nothing(tmp_path, 
     ("FIXTURE `a/b.csv`\n```csv\nx,y\n1,2\n```\ntrailing", {"a/b.csv": "x,y\n1,2"}),
     ("FIXTURE one.csv:\n```\n1\n```\nFIXTURE two.csv:\n```\n2\n```", {"one.csv": "1", "two.csv": "2"}),
     ("no blocks here", {}),
-    ("FIXTURE a.csv:\nnot fenced", {}),
 ])
 def test_fixture_blocks_are_parsed_as_written(reply, expected):
     found, problems = _parse_fixture_blocks(reply)
@@ -161,9 +160,42 @@ def test_duplicate_blocks_for_one_path_keep_nothing_and_an_unclosed_fence_is_mal
     # Codex review of 351d3ba: the first of two different blocks for the same
     # declared fixture was written and the task reached APPROVED.
     found, problems = _parse_fixture_blocks("FIXTURE a.csv:\n```\n1\n```\nFIXTURE a.csv:\n```\n2\n```")
-    assert found == {} and problems == ["a.csv: more than one FIXTURE block for the same path"]
+    assert found == {} and problems == ["a.csv: more than one FIXTURE header for the same path"]
     found, problems = _parse_fixture_blocks("FIXTURE a.csv:\n```\n1\nFIXTURE b.csv:\n```\n2\n```")
     assert found == {} and "malformed" in problems[0]
+
+
+def test_a_partial_trailing_duplicate_header_keeps_nothing():
+    # Codex review of 6844b97: a complete block followed by the same header
+    # with an unclosed or missing fence returned the first body.
+    found, problems = _parse_fixture_blocks("FIXTURE a.csv:\n```\n1\n```\nFIXTURE a.csv:\n```\n2")
+    assert found == {} and "more than one FIXTURE header" in problems[0]
+    found, problems = _parse_fixture_blocks("FIXTURE a.csv:\n```\n1\n```\nFIXTURE a.csv:\nnot fenced")
+    assert found == {} and "more than one FIXTURE header" in problems[0]
+    found, problems = _parse_fixture_blocks("FIXTURE a.csv:\nnot fenced at all")
+    assert found == {} and "no complete fenced block" in problems[0]
+
+
+def test_the_bound_write_refuses_links_at_the_operation_and_never_overwrites(tmp_path):
+    from quadratus.session import _write_fixture_bound
+    root = tmp_path / "project"
+    (root / ".quadratus" / "capture-fixtures").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / ".quadratus" / "capture-fixtures" / "t6").symlink_to(outside)
+    why = _write_fixture_bound(root, ".quadratus/capture-fixtures/t6/x.csv", b"a,b\n")
+    assert "refused at the operation" in why and not any(outside.iterdir())
+    (root / ".quadratus" / "capture-fixtures" / "t6").unlink()
+    (root / ".quadratus" / "capture-fixtures" / "t6").mkdir()
+    (root / ".quadratus" / "capture-fixtures" / "t6" / "x.csv").write_text("existing")
+    why = _write_fixture_bound(root, ".quadratus/capture-fixtures/t6/x.csv", b"a,b\n")
+    assert "already exists" in why
+    assert (root / ".quadratus" / "capture-fixtures" / "t6" / "x.csv").read_text() == "existing"
+    assert _write_fixture_bound(root, ".quadratus/capture-fixtures/t6/y.csv", b"a,b\n") == ""
+    assert (root / ".quadratus" / "capture-fixtures" / "t6" / "y.csv").read_bytes() == b"a,b\n"
+    (root / ".quadratus" / "capture-fixtures" / "t6" / "link.csv").symlink_to(outside / "escaped.csv")
+    why = _write_fixture_bound(root, ".quadratus/capture-fixtures/t6/link.csv", b"a,b\n")
+    assert why and not (outside / "escaped.csv").exists()
 
 
 def test_a_duplicate_block_in_the_supply_round_is_a_problem_not_a_write(tmp_path, monkeypatch):
@@ -171,7 +203,7 @@ def test_a_duplicate_block_in_the_supply_round_is_a_problem_not_a_write(tmp_path
     session, _, captures = _run(tmp_path, monkeypatch, supply=twice)
     assert not (tmp_path / "project" / FIXTURE).exists() and len(captures) == 1
     record = session.design_checks[-1]
-    assert record["fixtures_written"] == [] and "more than one FIXTURE block" in record["fixture_problems"][0]
+    assert record["fixtures_written"] == [] and "more than one FIXTURE header" in record["fixture_problems"][0]
     assert record["verified"] is False
 
 

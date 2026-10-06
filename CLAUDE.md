@@ -693,12 +693,16 @@ Key design decisions already settled:
   `MAX_FIXTURE_BYTES` and writes it. An unexpected path is never written;
   a missing, oversized or duplicated block, or a reply whose fence
   swallowed the next header, leaves the capture to fail as before. The
-  write is confined before it happens (`_confined_fixture_target`): exactly
+  write is confined before it happens (`_confined_fixture_target`: exactly
   `.quadratus/capture-fixtures/<task id>/<name>`, no symlink at any
-  component, the resolved target inside the resolved project (Codex review
-  of 351d3ba: four linked layouts had written outside the project before
-  the capture's reader could refuse them). No write grant changes, and a
-  committed sample elsewhere is still checked by the capture itself.
+  component, the resolved target inside the resolved project) and at the
+  operation itself (`_write_fixture_bound`: every component opened
+  `O_NOFOLLOW` relative to the handle of the directory before it, the file
+  created `O_EXCL`, so a link swapped in after the check is refused and an
+  unexpectedly present file is never overwritten; Codex reviews of 351d3ba
+  and 6844b97). Every `FIXTURE` header is accounted for, so a trailing
+  partial duplicate keeps nothing for its path. No write grant changes,
+  and a committed sample elsewhere is still checked by the capture itself.
 - **A final wait that was visible at load is a declaration defect and
   gets a redeclaration, never a design-fix** (series rule-3572b72 f2 t1,
   2026-10-06). The qualifier rightly refused both renders because the
@@ -719,10 +723,12 @@ Key design decisions already settled:
   parser recorded "no CAPTURE: line" and the blocking verdict stood.
   `runtime.DECLARATION_ROLES` (capture-redeclare, fixture-supply) now take
   `DECLARATION_MAX_TURNS` (6), never above the operator's lead cap, and
-  `_capture_declaration` reads the one `CAPTURE:` marker wherever it sits
-  on its line, with the JSON object decoded from where it starts; two
-  markers, or a second object after the first, are a choice the harness
-  never makes and are refused without a call (Codex review of 351d3ba). A
+  `_capture_candidates` reads the whole reply for declaration candidates
+  (an upper-case `CAPTURE:` with anything after it, any-case `capture:`
+  followed by `{` or `none`, or a line that is a JSON object naming a
+  `path`), wherever they sit; exactly one is read, and two are a choice the
+  harness never makes, refused without a call (Codex reviews of 351d3ba
+  and 6844b97). A
   reply with no marker still stands as the verdict it was: one bounded
   declaration round and no second call because parsing failed (Codex,
   terminal audit of rule-3572b72), so there is no re-ask. The one
