@@ -1414,12 +1414,14 @@
       "claimed_at": "2026-10-06T12:39:53Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "92419ad",
-        "at": "2026-10-06T12:39:58Z"
+        "sha": "5745785",
+        "at": "2026-10-06T12:44:34Z"
       },
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: Codex handoff (#35 comment 6016440223) named the mechanism: the built-in policy deny_write ('.quadratus/**', policy.py default, rendered as the scope's Never change line) contradicts the capture note's 'you must write .quadratus/capture-fixtures/<task>/...'; the Opus lead of f1 t2 wrote its sample anyway, the Sol lead of t3 obeyed the ban. 92419ad (design-fix asking the lead to write under the denied path) superseded by 5745785: the note says not to create the sample; before the harness captures, _missing_own_fixtures lists missing own-fixture paths and _supply_fixtures asks the lead once (role fixture-supply, read-only copy) for FIXTURE <path>: plus a fenced block per file; the harness validates path and size (MAX_FIXTURE_BYTES) and writes it; unexpected paths never written; a missing or oversized block leaves the capture to fail as before. No write grant changes."
+      ]
     }
   ],
   "receipts": [
