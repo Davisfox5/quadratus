@@ -1143,6 +1143,44 @@
       "reviews": [],
       "blockers": [],
       "decisions": []
+    },
+    {
+      "id": "T-review-seat-cap",
+      "purpose": "Engine defect from series rule-2ffa7f6 f3 and f5 (Codex handoff lanes 1 and 2): every editing call was bound by the derived 20-round cap while the Opus collaborators ran 15 to 20 rounds uncapped at 0.87M to 1.18M tokens and both cells stopped on the token threshold; f1's reviewer ran node --test tests/ui/ (a directory for the five listed files) and git status in a copy with no .git; f7's auditor ran bare pytest and ls. Fix on #53: runtime.REVIEW_CAPPED_ROLES (collaborator, recheck, design-review, verifier, auditor) take Settings.lead_max_turns; a capped review is no verdict (UNFINISHED, an unverified fact naming the reviewer, no revision or fix round bought, design review 'gave no verdict', verification edge unset); review copies get the editing call's exact APPROVED CHECK COMMANDS guidance plus the no-.git fact; reviewers with a capped CLI are told their round budget. No packet bound changes.",
+      "base": "2ffa7f608261fb08ff1669a33efc6463b624a5d5",
+      "owns": [
+        "quadratus/runtime.py",
+        "quadratus/session.py",
+        "tests/test_review_seat_cap.py",
+        "tests/test_turn_limit.py",
+        "tests/lifecycle/test_dependency_identity.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-06T08:04:33Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
+    },
+    {
+      "id": "T-scope-size-rule",
+      "purpose": "Engine defect from series rule-2ffa7f6 f3, f4 and f7 (Codex handoff lane 3): first tasks sized at 85 to 100 lines landed at 135 to 236 changed lines, 112 to 171 of them in tests the lead wrote against a bound it read as code; the decomposition prompt already tells the orchestrator tests count in full, but TaskScope.render() told the lead only 'about N changed lines'. Fix on #53: the scope block states the counting rule (added and removed lines in every file, tests in full), the exact stop line (1.5x) and compact named cases. Estimate rules, the stop and acceptance rules unchanged.",
+      "base": "2ffa7f608261fb08ff1669a33efc6463b624a5d5",
+      "owns": [
+        "quadratus/scope.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-06T08:04:33Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
