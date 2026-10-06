@@ -1163,8 +1163,8 @@
       "claimed_at": "2026-10-06T08:04:33Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "cd8c5b0",
-        "at": "2026-10-06T08:41:51Z"
+        "sha": "3f9c548",
+        "at": "2026-10-06T09:15:29Z"
       },
       "reviews": [
         {
@@ -1195,7 +1195,8 @@
         }
       ],
       "decisions": [
-        "claude: cd8c5b0: capped peers tracked in a set, reply text no longer read for a prefix; a capped recheck files the original BLOCKING lines as an unverified finding and an open question for the close-out, still no fix round. Three regression tests added."
+        "claude: cd8c5b0: capped peers tracked in a set, reply text no longer read for a prefix; a capped recheck files the original BLOCKING lines as an unverified finding and an open question for the close-out, still no fix round. Three regression tests added.",
+        "claude: Codex re-review of cd8c5b0 BLOCKED (#53 comment 6012684237): P1 a successful reply with no verdict ('UNFINISHED: did not reach a verdict') still closed the task with review=True and no record; P2 the capped-recheck record kept only literal BLOCKING: lines, losing continuation lines and bullet/bold markers. Fixed at 3f9c548: the collaborator prompt asks for a closing REVIEW: COMPLETE line; a reply that is not NO FINDINGS, carries no BLOCKING finding and has no such line is recorded as an unfinished review (unverified) and still reaches the lead; the capped-recheck record keeps the whole original note. Test fakes answering reviews in prose now carry the completion line or NO FINDINGS; no fixture regenerated."
       ]
     },
     {
@@ -1211,8 +1212,8 @@
       "claimed_at": "2026-10-06T08:04:33Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "cd8c5b0",
-        "at": "2026-10-06T08:41:51Z"
+        "sha": "3f9c548",
+        "at": "2026-10-06T09:15:30Z"
       },
       "reviews": [],
       "blockers": [],
