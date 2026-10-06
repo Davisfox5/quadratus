@@ -3,7 +3,7 @@
   "note": "One shared development record (plan on #35, comment 5922888762). Edited through tools/dev_record.py; the acceptance manifest and workflow scorecard keep their own evidence, referenced here, never copied.",
   "candidate": {
     "pr": 42,
-    "sha": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+    "sha": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
     "gate": "merge #42 to main, then the five-run series (docs/DIRECTION.md finish line)",
     "required_receipts": [
       "ci",
@@ -17,6 +17,13 @@
         "reason": "Mac Claude session merged #44 (3e4528a) into #42 at abf1cbe without an independent review; cloud then merged #44's Codex-review fixes (9119013, 83cf726) and kept Codex's shared-budget reproducer (f96e0c8). Receipts start over on this SHA; Codex's targeted re-review of the Jev decider on #44 and CI on f96e0c8 are the gate",
         "by": "claude",
         "at": "2026-10-01T02:09:21Z"
+      },
+      {
+        "previous": "2a7578b39f68b60b2ffd25587955e8f133203a00",
+        "sha": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
+        "reason": "Davis, 2026-10-06: Jev off, keep rule routing, continue the runs to catch further engine errors. b1ff751 (#51, atop #50 atop #42) is the engine every Stage B cell ran on; CI green on all four jobs, Codex focused clearance and Claude independent review recorded on T-stage-b-timeout-fix. Gate: rule-arm continuation series on this SHA; acceptance receipt still owed on this head.",
+        "by": "claude",
+        "at": "2026-10-06T02:02:43Z"
       }
     ]
   },
@@ -632,7 +639,8 @@
         "claude: Series b1ff751 pair f5-empty-state (Codex, #35 comment 5986540132). jev-r0: ran, independent grade 4/4, engine complete False, 1,531,842 reported tokens, 10 attempts, 696.9 s, stop FindingsOpen. rule-r0: ran, grade 4/4, engine complete False, 1,607,763 reported tokens, 7 attempts, 791.3 s, stop FindingsOpen. Both arms closed t1 with the same open finding: design review BLOCKING, the renders do not show the changed interface; work preserved. Both under the token reserve; no oversized calls; no unknown usage. Runner comparability True, no reasons. No overrides or replacement cells. Evidence /Users/davisfox/Documents/GitHub/stage-b/series-b1ff751/pair-f5-empty-state.json SHA256 060f97c083c29c3b7482102f12a70dcb474992fb41ede721e90cde5b8aedf79a. Five pairs comparable, grades tied in each. Series continues to pair 6.",
         "claude: Series b1ff751 pair f6-download-guard (Codex, #35 comment 5986603737). rule-r0: ran, independent grade 5/5, engine complete False, 702,729 reported tokens, 6 attempts, 386.3 s, stop FindingsOpen; the one open finding is the Opus verifier's own verdict text ('Accept the code ... no security hole, scope violation, or unsafe recommendation'), an accepting verdict filed as an open finding, which is an engine finding-parse defect rather than unresolved work. jev-r0: ran, grade 5/5, engine complete True, 1,013,284 reported tokens, 9 attempts, 457.4 s, no stop; first engine-complete cell of any Stage B series. This was a security task (verifier and auditor seats appear, cross-vendor). Both under the reserve; no unknown usage. Runner comparability True, no reasons. No overrides or replacement cells. Evidence /Users/davisfox/Documents/GitHub/stage-b/series-b1ff751/pair-f6-download-guard.json SHA256 35395cacb08d0126323746750f811be6ae4a2838e55129e182a85a613db3b427. Six pairs comparable, grades tied in each. Series continues to pair 7.",
         "claude: Series b1ff751 pair f7-projects-migration (Codex, #35 comment 5986689218). jev-r0: ran, independent grade 2/6, engine complete False, 208,169 reported tokens, 7 attempts, 108.8 s, stop RunStalled: task scope still invalid after the one correction (the declaration gave _write_projects_file two signatures); no lead was ever invoked, so the 2/6 is the untouched base passing two requirements. rule-r0: ran, grade 6/6, engine complete True, 1,416,297 reported tokens, 13 attempts, 621.8 s, leads grok:default on t1 and Sol on t2. Runner comparability False: jev no invoked lead to check. No overrides or replacement cells. Evidence /Users/davisfox/Documents/GitHub/stage-b/series-b1ff751/pair-f7-projects-migration.json SHA256 085c32927650f6028859948c371bc1aef0b8e6b98073293f2b7299d1b3b9be8b.",
-        "claude: Series b1ff751 terminal packet (Codex, #35 comment 5986690455; full evidence SHA256 02a47838aaedff4512b86de82ee391f3f4fc7349cf75a245f5e75c41e12a9fef across continuation comments 5986689428 through 5986690268). Cells 14: ran 14, failed 0, interrupted 0, pending 0; no series stop fired; no overrides, replacements or replays; the seven-pair allowance is spent. Pairs comparable: six of seven (f7 excluded, jev arm never invoked a lead). Grades jev vs rule: f1 4/4 vs 4/4; f2 4/5 vs 4/5; f3 4/5 vs 4/5; f4 6/6 vs 6/6; f5 4/4 vs 4/4; f6 5/5 vs 5/5; f7 2/6 vs 6/6 (not comparable). Engine-complete cells: f6 jev and f7 rule only. Reported tokens jev vs rule on comparable pairs: f1 2.29M vs 2.07M; f2 4.57M vs 2.18M; f3 2.08M vs 1.75M; f4 3.98M vs 2.34M; f5 1.53M vs 1.61M; f6 1.01M vs 0.70M; jev higher in five of six. Stops: four jev and three rule cells on reported_token_reserve, two jev on call_token_ceiling (single grok design-fix call 2.7M in f2; grok lead 1.9M in f4), three FindingsOpen (f3 rule, f5 both), one RunStalled (f7 jev). Packet digest 21f46b3195711338be9e86e59cc5526db5d6891cd8b72ebfbd37db2ab8a25cc5; frozen inputs unchanged; terminal-packet.json SHA256 c275fd032dfc73ea0ba839e4090ef70315dcf347b95f8735c85a332fedd0c9ec, terminal-packet.shared.json SHA256 44a45df125f91a2ea885049ba4632dac4de7fe5bb83a56d3790dad07050b04b9, both under /Users/davisfox/Documents/GitHub/stage-b/series-b1ff751/. Codex caveats carried: one repeat, independent planning per arm, comparability is a control check not identity, post-return token boundaries can overshoot, counterfactual prices are not invoices, no repeatable savings claim. Engine defects seen in this series for follow-up: an accepting verifier verdict filed as an open finding (f6 rule); a grok agentic call reporting 1.9M to 2.7M tokens in one attempt despite the ceiling (f2, f4 jev); design review blocking on captures that did not show the change (f5 both)."
+        "claude: Series b1ff751 terminal packet (Codex, #35 comment 5986690455; full evidence SHA256 02a47838aaedff4512b86de82ee391f3f4fc7349cf75a245f5e75c41e12a9fef across continuation comments 5986689428 through 5986690268). Cells 14: ran 14, failed 0, interrupted 0, pending 0; no series stop fired; no overrides, replacements or replays; the seven-pair allowance is spent. Pairs comparable: six of seven (f7 excluded, jev arm never invoked a lead). Grades jev vs rule: f1 4/4 vs 4/4; f2 4/5 vs 4/5; f3 4/5 vs 4/5; f4 6/6 vs 6/6; f5 4/4 vs 4/4; f6 5/5 vs 5/5; f7 2/6 vs 6/6 (not comparable). Engine-complete cells: f6 jev and f7 rule only. Reported tokens jev vs rule on comparable pairs: f1 2.29M vs 2.07M; f2 4.57M vs 2.18M; f3 2.08M vs 1.75M; f4 3.98M vs 2.34M; f5 1.53M vs 1.61M; f6 1.01M vs 0.70M; jev higher in five of six. Stops: four jev and three rule cells on reported_token_reserve, two jev on call_token_ceiling (single grok design-fix call 2.7M in f2; grok lead 1.9M in f4), three FindingsOpen (f3 rule, f5 both), one RunStalled (f7 jev). Packet digest 21f46b3195711338be9e86e59cc5526db5d6891cd8b72ebfbd37db2ab8a25cc5; frozen inputs unchanged; terminal-packet.json SHA256 c275fd032dfc73ea0ba839e4090ef70315dcf347b95f8735c85a332fedd0c9ec, terminal-packet.shared.json SHA256 44a45df125f91a2ea885049ba4632dac4de7fe5bb83a56d3790dad07050b04b9, both under /Users/davisfox/Documents/GitHub/stage-b/series-b1ff751/. Codex caveats carried: one repeat, independent planning per arm, comparability is a control check not identity, post-return token boundaries can overshoot, counterfactual prices are not invoices, no repeatable savings claim. Engine defects seen in this series for follow-up: an accepting verifier verdict filed as an open finding (f6 rule); a grok agentic call reporting 1.9M to 2.7M tokens in one attempt despite the ceiling (f2, f4 jev); design review blocking on captures that did not show the change (f5 both).",
+        "claude: Operator ruling (Davis, chat, 2026-10-06): Jev is switched off. Rule-based routing stays the default and no further run uses --decider jev; the Jev code remains opt-in and is not removed. Reason: six comparable Stage B pairs on engine b1ff751 showed no grade difference and Jev used more tokens in five of six. T-jev-stage-b closes on that ruling. Next: runs continue on the repaired engine, rule arm only, to surface further engine errors; Codex executes on the Mac and posts on #35; each failure that names an engine cause becomes a task here."
       ]
     },
     {
@@ -884,6 +892,74 @@
         "claude: Candidate b1ff751 on #51 verified to exist (open, head b1ff751, base claude/jev-stage-b; touches cli_providers.py, runtime.py and their tests). Codex reports 237 focused tests passed, 1 skipped, Ruff and diff checks clean. Separate bounded provider proof on the Mac (claude 2.1.269, two Haiku calls, max 8 turns / 120 s each, no experiment cells): write landed, the exact granted five-file node check ran, ungranted python3 -c was denied, both allocated UUID transcripts found; reported input 48,962 / output 856, outside series accounting; ledger /Users/davisfox/Documents/GitHub/stage-b/provider-proof-b1ff751/provider-proof-ledger.json SHA256 3f893d003572015d47e8957e45255f4bb54db090244fc68913a651fb4f89af7b. The standalone proof script hit a cleanup-only AttributeError after both recorded calls; provider cleanup succeeded, no call retried. Awaiting focused Codex clearance and exact-head CI before any freeze.",
         "claude: All four exact-head CI jobs on b1ff751 (#51) completed success (checked 2026-10-04T23:58Z via the commit's check runs). Claude independent review in progress: diff read (CLISpec.session_id_flag with --session-id on CLAUDE_SPEC and a UUID allocated before launch; granted-view check instructions appended to the editing prompt; native_fanout_off set on granted editing views when checks exist; 5 new tests), focused tests 106 passed, ruff clean; the full suite showed 1 failure in 686 on this container and the failing test is being identified against the 17a2b5f base before a verdict."
       ]
+    },
+    {
+      "id": "T-rule-runs",
+      "purpose": "Continuation runs after the Jev ruling (Davis, 2026-10-06: continue the runs so we can catch the other errors that arise): rule arm only, --decider off, engine b1ff751, the same seven GameTape features on fresh 1cd9264 worktrees, one repeat, bounds unchanged (90 calls / 2.5M reported tokens / 3600 s / 2 workers, reserve 500k, ceiling 1.5M, max_tasks 10, survey_recovery 4), same frozen graders, no TypeSafe calls. Purpose is error discovery: every cell that stops on an engine cause gets that cause named on #35 and filed as a task here; grades are recorded but no comparison is claimed. Codex executes on the Mac and posts per-cell and terminal receipts on #35; Claude cloud records on #46.",
+      "base": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
+      "owns": [
+        "stage-b-results/"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "claimed",
+      "claimed_at": "2026-10-06T02:02:43Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
+    },
+    {
+      "id": "T-verdict-as-finding",
+      "purpose": "Engine defect from series b1ff751 f6-download-guard/rule-r0: the Opus verifier's accepting verdict ('Accept the code ... no security hole') was filed as an open finding and the cell closed FindingsOpen with a 5/5 grade. Parse a security verifier verdict as accept/reject before treating its text as a finding. Backlog until a continuation run reproduces or Davis orders the fix.",
+      "base": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
+      "owns": [
+        "quadratus/session.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-06T02:02:43Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
+    },
+    {
+      "id": "T-grok-call-ceiling",
+      "purpose": "Engine defect from series b1ff751 f2 and f4 jev cells: a single grok:default agentic call reported 1.9M to 2.7M tokens in one attempt, past the 1.5M post-return ceiling and the 2.5M cell threshold, because the grok CLI re-sends the conversation each turn and nothing bounds turns on a grok lead. Candidate fix: a turn or effort cap on unrestricted grok seats so one call cannot spend a cell. Backlog until a rule-arm continuation run reproduces.",
+      "base": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
+      "owns": [
+        "quadratus/cli_providers.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-06T02:02:43Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
+    },
+    {
+      "id": "T-design-capture-blind",
+      "purpose": "Engine defect from series b1ff751 f5-empty-state, both arms: design review returned BLOCKING 'the renders do not show the changed interface' while the frozen graders passed 4/4, so the capture profile or the capture steps did not reach the changed state. Find whether the capture ran the right steps against the right page and make the lead's capture request show the change it claims. Backlog until a continuation run reproduces.",
+      "base": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
+      "owns": [
+        "quadratus/design_evidence.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-06T02:02:43Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
