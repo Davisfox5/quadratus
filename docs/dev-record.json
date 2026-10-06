@@ -1449,7 +1449,8 @@
       "reviews": [],
       "blockers": [],
       "decisions": [
-        "claude: CI green on 00e0ba3 (all four jobs); local lifecycle 553 passed on it, unit half in progress. Earlier commits in the lane also green: 92419ad, 5745785 (local full run 553 lifecycle and 2461 unit)."
+        "claude: CI green on 00e0ba3 (all four jobs); local lifecycle 553 passed on it, unit half in progress. Earlier commits in the lane also green: 92419ad, 5745785 (local full run 553 lifecycle and 2461 unit).",
+        "claude: Local full run on 00e0ba3: lifecycle 553 passed, unit 2461 passed; CI green on 92419ad, 5745785 and 00e0ba3. Ready for Codex's narrowed review of 5745785 and 00e0ba3."
       ]
     }
   ],
