@@ -656,6 +656,15 @@ Key design decisions already settled:
   operator's reserve. It never raises a reserve, every other call reserves
   the operator's figure in full, and the post-return threshold is unchanged;
   the snapshot counts `shaped_reservations`.
+- **The Stage B reserve is 250k, not 500k** (Davis, 2026-10-06, after
+  f1 to f4 of series rule-3f9c548 all stopped on `reported_token_reserve`
+  with their work unfinished). The reserve says what the next call is
+  expected to cost; on this engine the calls that follow a draft measure
+  128k to 378k (revision, collaborator, design review) and 20k to 42k
+  (close-out, recheck), and a 500k reserve refused them on 160k to 300k of
+  headroom. 250k lets a fix cycle finish; the 2.5M threshold and the 1.5M
+  per-call ceiling still bound the overshoot. The ruling was to keep
+  getting results without burning every token, not to remove the bound.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

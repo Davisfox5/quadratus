@@ -434,7 +434,7 @@
     "max_reported_tokens": 2500000,
     "wall_seconds": 3600,
     "max_concurrent_workers": 2,
-    "reserve_tokens_per_call": 500000,
+    "reserve_tokens_per_call": 250000,
     "max_tokens_per_call": 1500000
   },
   "max_tasks": 10,
