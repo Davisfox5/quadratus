@@ -107,20 +107,20 @@ def test_a_missing_declared_fixture_is_supplied_by_the_lead_and_written_by_the_h
     assert not any("without clean rendered evidence" in f for f in session.open_findings)
 
 
-def test_a_reply_without_the_block_gets_no_second_round_and_the_capture_fails_as_before(tmp_path, monkeypatch):
+def test_a_reply_without_the_block_gets_no_second_round_and_no_capture(tmp_path, monkeypatch):
     session, prompts, captures = _run(tmp_path, monkeypatch, supply="I would write a,b first.")
     asks = [p for _, p in prompts if "The harness cannot capture this task yet" in p]
-    assert len(asks) == 1 and len(captures) == 1, "one bounded round, never a re-ask"
+    assert len(asks) == 1 and captures == [], "one bounded round, never a re-ask, nothing to capture against"
     record = session.design_checks[-1]
     assert record["fixtures_written"] == [] and "no FIXTURE block" in record["fixture_problems"][0]
-    assert record["verified"] is False and "not a regular file" in record["problem"]
+    assert record["verified"] is False and "could not be supplied" in record["problem"]
     assert any("without clean rendered evidence" in f for f in session.open_findings)
 
 
 def test_an_unexpected_path_is_never_written_and_an_oversized_sample_is_refused(tmp_path, monkeypatch):
     elsewhere = "FIXTURE app.py:\n```\nprint(1)\n```\n"
-    session, _, _ = _run(tmp_path, monkeypatch, supply=elsewhere)
-    assert not (tmp_path / "project" / "app.py").exists()
+    session, _, captures = _run(tmp_path, monkeypatch, supply=elsewhere)
+    assert not (tmp_path / "project" / "app.py").exists() and captures == []
     assert session.design_checks[-1]["fixtures_written"] == []
     big = f"FIXTURE {FIXTURE}:\n```\n" + "x" * 1_000_001 + "\n```\n"
     session, _, _ = _run(tmp_path / "b", monkeypatch, supply=big)
@@ -176,6 +176,51 @@ def test_a_partial_trailing_duplicate_header_keeps_nothing():
     assert found == {} and "no complete fenced block" in problems[0]
 
 
+def test_a_malformed_later_header_still_counts_as_a_duplicate():
+    # Codex review of ada4c75: "FIXTURE a.csv: corrected content follows"
+    # after a valid block escaped the duplicate accounting.
+    found, problems = _parse_fixture_blocks("FIXTURE a.csv:\n```\n1\n```\nFIXTURE a.csv: corrected content follows")
+    assert found == {} and "more than one FIXTURE header" in problems[0]
+    found, problems = _parse_fixture_blocks("FIXTURE a.csv:\n```\n1\n```\nFIXTURE a.csv corrected\n```\n2\n```")
+    assert found == {} and "more than one FIXTURE header" in problems[0]
+    found, problems = _parse_fixture_blocks("FIXTURE :\n```\n1\n```")
+    assert found == {} and "names no path" in problems[0]
+
+
+def test_a_failed_write_removes_the_partial_file_it_created(tmp_path, monkeypatch):
+    import os
+
+    from quadratus.session import _write_fixture_bound
+    root = tmp_path / "project"
+    root.mkdir()
+    real_write = os.write
+    calls = []
+
+    def short_then_full(fd, data):
+        calls.append(len(data))
+        if len(calls) == 1:
+            return real_write(fd, bytes(data[:5]))
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(os, "write", short_then_full)
+    why = _write_fixture_bound(root, ".quadratus/capture-fixtures/t6/x.csv", b"start,end\n1,abc\n")
+    assert "partial file was removed" in why
+    assert not (root / ".quadratus" / "capture-fixtures" / "t6" / "x.csv").exists()
+
+
+def test_a_failed_supply_stops_before_capture_and_review(tmp_path, monkeypatch):
+    # Codex review of ada4c75: a problem was recorded and the flow still
+    # captured and reached APPROVED on a partial sample.
+    monkeypatch.setattr("quadratus.session._write_fixture_bound",
+                        lambda root, path, data: "the write failed and the partial file was removed (OSError: 28)")
+    session, prompts, captures = _run(tmp_path, monkeypatch)
+    assert captures == [], "no capture against a failed supply"
+    assert not any("Reply exactly APPROVED" in p for _, p in prompts)
+    record = session.design_checks[-1]
+    assert record["verified"] is False and "could not be supplied" in record["problem"]
+    assert record["fixtures_written"] == [] and "partial file was removed" in record["fixture_problems"][0]
+    assert any("without clean rendered evidence" in f for f in session.open_findings)
+
+
 def test_the_bound_write_refuses_links_at_the_operation_and_never_overwrites(tmp_path):
     from quadratus.session import _write_fixture_bound
     root = tmp_path / "project"
@@ -201,7 +246,7 @@ def test_the_bound_write_refuses_links_at_the_operation_and_never_overwrites(tmp
 def test_a_duplicate_block_in_the_supply_round_is_a_problem_not_a_write(tmp_path, monkeypatch):
     twice = f"FIXTURE {FIXTURE}:\n```\na,b\n```\nFIXTURE {FIXTURE}:\n```\nc,d\n```\n"
     session, _, captures = _run(tmp_path, monkeypatch, supply=twice)
-    assert not (tmp_path / "project" / FIXTURE).exists() and len(captures) == 1
+    assert not (tmp_path / "project" / FIXTURE).exists() and captures == []
     record = session.design_checks[-1]
     assert record["fixtures_written"] == [] and "more than one FIXTURE header" in record["fixture_problems"][0]
     assert record["verified"] is False
@@ -226,4 +271,4 @@ def test_a_symlink_anywhere_on_the_fixture_path_refuses_the_write(tmp_path, monk
     assert not any(outside.iterdir()), "nothing written outside the project"
     record = session.design_checks[-1]
     assert record["fixtures_written"] == [] and "symlink" in record["fixture_problems"][0]
-    assert record["verified"] is False and len(captures) == 1
+    assert record["verified"] is False and captures == []

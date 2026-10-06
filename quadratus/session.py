@@ -722,50 +722,48 @@ _CAPTURE_LINE = re.compile(r"^\s*CAPTURE\s*:\s*(.*\S)\s*$", re.IGNORECASE)
 _CAPTURE_MARKER = re.compile(r"CAPTURE\s*:", re.IGNORECASE)
 
 
-def _capture_candidates(reply: str) -> List[str]:
-    """Every declaration candidate in ``reply``, as the text that follows it
-    on its line: a marker (any case) followed by ``{`` or ``none``, and any
-    other line that starts with a JSON object naming a capture ``path``. The
-    harness reads exactly one; two are a choice it never makes (Codex reviews
-    of 351d3ba and 6844b97: a first object with a ``CAPTURE: none`` beside
-    it, a later lower-case correction, an object on the next line, or a
-    quoted example beside the real line must not silently select one)."""
+def _capture_candidates(reply: str):
+    """``(declarations, conflicts)`` across the whole reply. A declaration
+    is marker-backed: a ``CAPTURE:`` marker (any case) followed by ``{`` or
+    ``none``. Everything else that looks like an attempt is a conflict and
+    never a declaration: a marker with any other tail or no tail at all
+    (``Correction.capture: invalid``, ``Correction.CAPTURE:``), and a line
+    outside the marker lines that starts with ``{`` (a second object, an
+    unmarked example, an incomplete ``{"path":``). The harness reads exactly
+    one declaration and only when nothing conflicts with it (Codex reviews
+    of 351d3ba, 6844b97 and ada4c75)."""
     text = (reply or "").replace("`", "")
-    candidates: List[str] = []
+    declarations: List[str] = []
+    conflicts: List[str] = []
+    lines = text.splitlines()
     marker_lines = set()
-    for index, line in enumerate(text.splitlines()):
+    for index, line in enumerate(lines):
         for match in _CAPTURE_MARKER.finditer(line):
+            marker_lines.add(index)
             tail = line[match.end():].strip()
-            spelled = match.group(0).startswith("CAPTURE")   # the prompt's own spelling
-            # An upper-case marker with anything after it is a declaration,
-            # valid or not (a later ``CAPTURE: invalid`` is a correction the
-            # harness must not drop); a lower-case one in prose counts only
-            # when something declarable follows it.
-            if tail and (spelled or tail.startswith("{") or re.match(r"none\b", tail, re.IGNORECASE)):
-                candidates.append(tail)
-                marker_lines.add(index)
-    for index, line in enumerate(text.splitlines()):
+            if tail.startswith("{") or re.match(r"none\b", tail, re.IGNORECASE):
+                declarations.append(tail)
+            else:
+                conflicts.append(f"marker with no declaration after it: {line.strip()[:60]}")
+    for index, line in enumerate(lines):
         stripped = line.strip()
-        if index in marker_lines or not stripped.startswith("{"):
-            continue
-        try:
-            obj, _ = json.JSONDecoder().raw_decode(stripped)
-        except ValueError:
-            continue
-        if isinstance(obj, dict) and "path" in obj:
-            candidates.append(stripped)
-    return candidates
+        if index not in marker_lines and stripped.startswith("{"):
+            conflicts.append(f"an object outside any CAPTURE: marker: {stripped[:60]}")
+    return declarations, conflicts
 
 
 def _capture_declaration(reply: str):
     """``(tail, "")`` for the one declaration candidate in ``reply``, or
     ``(None, why)``."""
-    candidates = _capture_candidates(reply)
-    if not candidates:
+    declarations, conflicts = _capture_candidates(reply)
+    if not declarations and not conflicts:
         return None, "no CAPTURE: line in the reply"
-    if len(candidates) > 1:
-        return None, f"{len(candidates)} capture declarations in the reply; one is read, never a choice"
-    return candidates[0], ""
+    if len(declarations) + len(conflicts) > 1:
+        return None, (f"{len(declarations)} capture declaration(s) and {len(conflicts)} conflicting line(s) "
+                      "in the reply; one declaration is read, never a choice")
+    if not declarations:
+        return None, f"no usable CAPTURE: declaration ({conflicts[0]})"
+    return declarations[0], ""
 
 
 def _parse_capture_line(reply: str, task_id: str):
@@ -811,7 +809,11 @@ _FIXTURE_BLOCK = re.compile(r"^[ \t]*FIXTURE[ \t]+(\S+?):?[ \t]*\n[ \t]*```[^\n]
                             re.MULTILINE | re.DOTALL)
 
 
-_FIXTURE_HEADER = re.compile(r"^[ \t]*FIXTURE[ \t]+(\S+?):?[ \t]*$", re.MULTILINE)
+#: Any line that starts like a header, well-formed or not (Codex review of
+#: ada4c75: ``FIXTURE a.csv: corrected content follows`` after a valid block
+#: escaped the duplicate accounting). The path is the first token; an
+#: empty one is a malformed header.
+_FIXTURE_HEADER = re.compile(r"^[ \t]*FIXTURE\b[ \t]*(\S*)", re.MULTILINE)
 
 
 def _parse_fixture_blocks(reply: str):
@@ -827,7 +829,9 @@ def _parse_fixture_blocks(reply: str):
     text = reply or ""
     headers: Dict[str, int] = {}
     for match in _FIXTURE_HEADER.finditer(text):
-        path = match.group(1).strip().strip("`'\"")
+        path = match.group(1).strip().rstrip(":").strip("`'\"")
+        if not path:
+            return {}, ["malformed reply: a FIXTURE header names no path"]
         headers[path] = headers.get(path, 0) + 1
     blocks: Dict[str, List[str]] = {}
     for match in _FIXTURE_BLOCK.finditer(text):
@@ -875,9 +879,24 @@ def _write_fixture_bound(root, path: str, data: bytes) -> str:
         fd = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
                      0o644, dir_fd=fds[-1])
         fds.append(fd)
-        view = memoryview(data)
-        while view:
-            view = view[os.write(fd, view):]
+        created = os.fstat(fd)
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+        except OSError as exc:
+            # The file this call created must not survive as a partial
+            # sample the capture's reader would accept (Codex review of
+            # ada4c75: a short write then ENOSPC left five bytes and the
+            # flow reached APPROVED). Only the inode we created is removed;
+            # a concurrent replacement is left alone.
+            try:
+                current = os.stat(parts[-1], dir_fd=fds[-2], follow_symlinks=False)
+                if (current.st_ino, current.st_dev) == (created.st_ino, created.st_dev):
+                    os.unlink(parts[-1], dir_fd=fds[-2])
+            except OSError:
+                pass
+            return f"the write failed and the partial file was removed ({exc.__class__.__name__}: {exc})"
         return ""
     except FileExistsError:
         return "the target already exists; nothing is overwritten"
@@ -4691,7 +4710,19 @@ class Session:
                 # was spent). The sample is harness state, so the harness
                 # writes it: one bounded round asks the lead for the content.
                 record["missing_fixtures"] = list(missing)
-                self._supply_fixtures(spec, lead, task, record, missing)
+                problems = self._supply_fixtures(spec, lead, task, record, missing)
+                if problems:
+                    # A failed or partial supply is not evidence to capture
+                    # against (Codex review of ada4c75): the design stays
+                    # unverified here, before any capture or review.
+                    failure = "the capture's declared fixture(s) could not be supplied: " + "; ".join(problems)
+                    record.update(verified=False, problem=failure, harness_capture=False)
+                    self._open_finding("invalid_proof", f"Task {spec.task_id} is design work without clean "
+                                                        f"rendered evidence: {failure}.")
+                    self._design_unverified.append((spec.task_id, failure))
+                    self.design_checks.append(record)
+                    task.keep(json.dumps(record), kind="design-evidence")
+                    return
             failure = self._harness_capture(spec)
             if failure:
                 self._hand_off_preview(spec, task, record, failure)
@@ -5829,7 +5860,7 @@ class Session:
                 "No call was made.")
         return ""
 
-    def _supply_fixtures(self, spec, lead, task, record, missing) -> None:
+    def _supply_fixtures(self, spec, lead, task, record, missing) -> List[str]:
         """One bounded round: the lead replies with the content of each
         missing capture-only sample and the harness writes it under the
         task's own .quadratus/capture-fixtures/<task id>/ folder. No write
@@ -5878,6 +5909,7 @@ class Session:
         if problems:
             record["fixture_problems"] = problems
             self._note(f"task {spec.task_id}: fixture supply incomplete ({'; '.join(problems)[:160]})")
+        return problems
 
     def _missing_own_fixtures(self, spec) -> List[str]:
         """The capture-only samples this task's file steps declare under its

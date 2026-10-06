@@ -203,19 +203,26 @@ def test_a_reply_with_no_marker_at_all_keeps_the_verdict_with_no_second_call(tmp
     ("CAPTURE: none", "none"),
     ("I think CAPTURE: none. Nothing shows it.", "none"),
     ('prose CAPTURE: {"path": "/x", "steps": []} trailing words', "/x"),
-    ("the word capture: appears but with no object", "no CAPTURE"),
-    ("CAPTURE:   ", "no CAPTURE"),
+    ("the word capture: appears but with no object", "no usable"),
+    ("CAPTURE:   ", "no usable"),
     # Codex review of 351d3ba: two markers or two objects are a choice the
     # harness never makes; a later invalid correction is not silently dropped.
-    ('CAPTURE: {"path": "/a", "steps": []}\nlater CAPTURE: {"path": "/b", "steps": []}', "declarations"),
-    ('CAPTURE: {"path": "/first", "steps": []} CAPTURE: none', "declarations"),
-    ('CAPTURE: {"path": "/a", "steps": []}\nCorrection.CAPTURE: invalid', "declarations"),
+    ('CAPTURE: {"path": "/a", "steps": []}\nlater CAPTURE: {"path": "/b", "steps": []}', "never a choice"),
+    ('CAPTURE: {"path": "/first", "steps": []} CAPTURE: none', "never a choice"),
+    ('CAPTURE: {"path": "/a", "steps": []}\nCorrection.CAPTURE: invalid', "never a choice"),
     ('CAPTURE: {"path": "/a", "steps": []} {"path": "/b", "steps": []}', "more than one object"),
     # Codex review of 6844b97: ambiguity across lines and case is a choice too.
-    ('CAPTURE: {"path": "/first", "steps": []}\n{"path": "/second", "steps": []}', "declarations"),
-    ('CAPTURE: {"path": "/first", "steps": []}\nCorrection.capture: none', "declarations"),
-    ('the prompt showed CAPTURE: {"path": "/route", "steps": []}\ncapture: {"path": "/real", "steps": []}', "declarations"),
-    ("the capture: wait on the result row, then\nCAPTURE: none", "none"),
+    ('CAPTURE: {"path": "/first", "steps": []}\n{"path": "/second", "steps": []}', "never a choice"),
+    ('CAPTURE: {"path": "/first", "steps": []}\nCorrection.capture: none', "never a choice"),
+    ('the prompt showed CAPTURE: {"path": "/route", "steps": []}\ncapture: {"path": "/real", "steps": []}', "never a choice"),
+    # Codex review of ada4c75: unmarked objects never become a declaration,
+    # and a malformed later marker is a conflict, not something to drop.
+    ('{"path": "/example", "steps": []}', "no usable"),
+    ('Example only; I have not chosen a declaration:\n{"path": "/example", "steps": []}', "no usable"),
+    ('CAPTURE: {"path": "/first", "steps": []}\nCorrection.capture: invalid', "never a choice"),
+    ('CAPTURE: {"path": "/first", "steps": []}\nCorrection.CAPTURE:', "never a choice"),
+    ('CAPTURE: {"path": "/first", "steps": []}\n{"path":', "never a choice"),
+    ("the capture: wait on the result row, then\nCAPTURE: none", "never a choice"),
 ])
 def test_exactly_one_declaration_is_read_wherever_the_marker_sits(reply, expected):
     capture, why = _parse_capture_line(reply, "t6")

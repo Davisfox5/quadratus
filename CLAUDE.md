@@ -700,9 +700,13 @@ Key design decisions already settled:
   `O_NOFOLLOW` relative to the handle of the directory before it, the file
   created `O_EXCL`, so a link swapped in after the check is refused and an
   unexpectedly present file is never overwritten; Codex reviews of 351d3ba
-  and 6844b97). Every `FIXTURE` header is accounted for, so a trailing
-  partial duplicate keeps nothing for its path. No write grant changes,
-  and a committed sample elsewhere is still checked by the capture itself.
+  and 6844b97). A write that fails part-way removes the inode this call
+  created and nothing else, and any supply problem stops the design check
+  unverified before a capture or review can run on it (Codex review of
+  ada4c75). Every line that starts like a `FIXTURE` header is accounted
+  for, well-formed or not, so a trailing or malformed duplicate keeps
+  nothing for its path. No write grant changes, and a committed sample
+  elsewhere is still checked by the capture itself.
 - **A final wait that was visible at load is a declaration defect and
   gets a redeclaration, never a design-fix** (series rule-3572b72 f2 t1,
   2026-10-06). The qualifier rightly refused both renders because the
@@ -723,12 +727,13 @@ Key design decisions already settled:
   parser recorded "no CAPTURE: line" and the blocking verdict stood.
   `runtime.DECLARATION_ROLES` (capture-redeclare, fixture-supply) now take
   `DECLARATION_MAX_TURNS` (6), never above the operator's lead cap, and
-  `_capture_candidates` reads the whole reply for declaration candidates
-  (an upper-case `CAPTURE:` with anything after it, any-case `capture:`
-  followed by `{` or `none`, or a line that is a JSON object naming a
-  `path`), wherever they sit; exactly one is read, and two are a choice the
-  harness never makes, refused without a call (Codex reviews of 351d3ba
-  and 6844b97). A
+  `_capture_candidates` reads the whole reply: a declaration is
+  marker-backed (any-case `capture:` followed by `{` or `none`, wherever it
+  sits on its line), and every other attempt is a conflict only, never a
+  declaration (a marker with any other tail or none, a line outside the
+  marker lines that starts with `{`); exactly one declaration with nothing
+  conflicting is read, anything else is refused without a call (Codex
+  reviews of 351d3ba, 6844b97 and ada4c75). A
   reply with no marker still stands as the verdict it was: one bounded
   declaration round and no second call because parsing failed (Codex,
   terminal audit of rule-3572b72), so there is no re-ask. The one
