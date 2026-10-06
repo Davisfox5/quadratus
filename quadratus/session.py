@@ -858,48 +858,60 @@ def _write_fixture_bound(root, path: str, data: bytes) -> str:
 
     Every component is opened with ``O_NOFOLLOW`` relative to the handle of
     the directory before it, so a link swapped in after the pathname check
-    is refused at the operation itself, and the file is created with
-    ``O_EXCL`` so an unexpectedly present target (a project file reached
-    through a redirected parent) is never overwritten (Codex review of
-    6844b97: a path check, however repeated, cannot protect a pathname the
-    write re-resolves).
+    is refused at the operation itself. The bytes go to a unique temporary
+    name in the task folder, created ``O_EXCL``; only after the whole write
+    succeeds is that inode linked to the declared name, which fails if
+    anything has appeared there, so the declared name never names a
+    partial or foreign file (Codex reviews of 6844b97, cc045a1 and a7cde45:
+    a pathname check cannot protect a pathname the write re-resolves, a
+    pathname unlink can delete a replacement, and a partial file left under
+    the declared name became evidence later). Nothing is deleted by the
+    declared name; the temporary name is this call's alone.
     """
+    import secrets
     parts = PurePosixPath(path).parts
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     fds: List[int] = []
+    temp = f".supply-{os.getpid()}-{secrets.token_hex(6)}"
     try:
-        fds.append(os.open(str(root), flags))
+        fds.append(os.open(str(root), dir_flags))
         for part in parts[:-1]:
             try:
-                fd = os.open(part, flags, dir_fd=fds[-1])
+                fd = os.open(part, dir_flags, dir_fd=fds[-1])
             except FileNotFoundError:
                 os.mkdir(part, 0o755, dir_fd=fds[-1])
-                fd = os.open(part, flags, dir_fd=fds[-1])
+                fd = os.open(part, dir_flags, dir_fd=fds[-1])
             fds.append(fd)
-        fd = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-                     0o644, dir_fd=fds[-1])
+        folder = fds[-1]
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                     0o644, dir_fd=folder)
         fds.append(fd)
         try:
             view = memoryview(data)
             while view:
                 view = view[os.write(fd, view):]
+            os.fsync(fd)
         except OSError as exc:
-            # The partial bytes must not survive as a sample the capture's
-            # reader would accept (Codex review of ada4c75), and nothing is
-            # deleted by pathname, since a name can change hands between
-            # any check and an unlink (Codex review of cc045a1). The bytes
-            # are discarded through this call's own descriptor, which is
-            # the one inode it created; the empty placeholder that remains
-            # is refused by the reader and counts as missing.
+            # The declared name was never created, so nothing partial can be
+            # read by it; the temporary is emptied through its own
+            # descriptor as a courtesy and left under its private name.
             try:
                 os.ftruncate(fd, 0)
-                discarded = "the partial bytes were discarded through this call's own descriptor"
-            except OSError as inner:
-                discarded = f"the partial bytes could not be discarded ({inner.__class__.__name__}: {inner})"
-            return f"the write failed; {discarded}; the placeholder is not usable evidence ({exc.__class__.__name__}: {exc})"
+            except OSError:
+                pass
+            return (f"the write failed before the file was published; the declared name does not exist "
+                    f"({exc.__class__.__name__}: {exc})")
+        try:
+            os.link(temp, parts[-1], src_dir_fd=folder, dst_dir_fd=folder, follow_symlinks=False)
+        except FileExistsError:
+            return "the target appeared before publication; nothing is overwritten"
+        try:
+            os.unlink(temp, dir_fd=folder)
+        except OSError:
+            pass    # the private temporary name stays; the published file is complete either way
         return ""
     except FileExistsError:
-        return "the target already exists; nothing is overwritten"
+        return "the temporary name already exists; nothing is written"
     except (OSError, ValueError) as exc:
         return f"the write was refused at the operation ({exc.__class__.__name__}: {exc})"
     finally:

@@ -700,12 +700,15 @@ Key design decisions already settled:
   `O_NOFOLLOW` relative to the handle of the directory before it, the file
   created `O_EXCL`, so a link swapped in after the check is refused and an
   unexpectedly present file is never overwritten; Codex reviews of 351d3ba
-  and 6844b97). A write that fails part-way discards its bytes through this
-  call's own descriptor and deletes nothing by pathname (a name can change
-  hands between any check and an unlink; Codex review of cc045a1); the
-  empty placeholder is refused by the capture's reader and counts as
-  missing, and any supply problem stops the design check unverified before
-  a capture or review can run on it (Codex review of ada4c75). Every line
+  and 6844b97). The bytes go to a private temporary name in the task
+  folder and the declared name is created only by linking that inode after
+  the whole write succeeded, which fails if anything appeared there; so the
+  declared name never names a partial or foreign file, nothing is deleted
+  by the declared name, and a failed write leaves the declared name absent
+  (Codex reviews of cc045a1 and a7cde45: a pathname unlink can delete a
+  replacement, and a partial file under the declared name became evidence
+  later). Any supply problem stops the design check unverified before a
+  capture or review can run on it (Codex review of ada4c75). Every line
   that starts like a `FIXTURE` header is accounted
   for, well-formed or not, so a trailing or malformed duplicate keeps
   nothing for its path. No write grant changes, and a committed sample

@@ -187,7 +187,7 @@ def test_a_malformed_later_header_still_counts_as_a_duplicate():
     assert found == {} and "names no path" in problems[0]
 
 
-def test_a_failed_write_removes_the_partial_file_it_created(tmp_path, monkeypatch):
+def test_a_failed_write_never_publishes_the_declared_name(tmp_path, monkeypatch):
     import os
 
     from quadratus.session import _write_fixture_bound
@@ -202,15 +202,18 @@ def test_a_failed_write_removes_the_partial_file_it_created(tmp_path, monkeypatc
             return real_write(fd, bytes(data[:5]))
         raise OSError(28, "No space left on device")
     monkeypatch.setattr(os, "write", short_then_full)
+    # Codex review of a7cde45: with the discard denied too, five bytes under
+    # the declared name became evidence for a later check. The declared
+    # name is now created only by linking a fully written file.
+    monkeypatch.setattr(os, "ftruncate", lambda fd, length: (_ for _ in ()).throw(PermissionError(13, "denied")))
     why = _write_fixture_bound(root, ".quadratus/capture-fixtures/t6/x.csv", b"start,end\n1,abc\n")
-    # Codex review of cc045a1: nothing is deleted by pathname; the bytes are
-    # discarded through the owned descriptor and the empty placeholder is
-    # refused by the reader and counts as missing.
-    assert "discarded through this call's own descriptor" in why and "not usable evidence" in why
-    placeholder = root / ".quadratus" / "capture-fixtures" / "t6" / "x.csv"
-    assert placeholder.is_file() and placeholder.stat().st_size == 0
+    assert "before the file was published" in why and "declared name does not exist" in why
+    folder = root / ".quadratus" / "capture-fixtures" / "t6"
+    assert not (folder / "x.csv").exists()
+    leftovers = [p.name for p in folder.iterdir()]
+    assert leftovers and all(name.startswith(".supply-") for name in leftovers), "only the private temporary"
     from quadratus.design_evidence import _fixture
-    with pytest.raises(ValueError, match="empty"):
+    with pytest.raises(ValueError, match="not a regular file"):
         _fixture(root, ".quadratus/capture-fixtures/t6/x.csv", "t6")
     from quadratus.artifacts import ArtifactStore
     from quadratus.session import Session, SessionConfig
@@ -221,30 +224,32 @@ def test_a_failed_write_removes_the_partial_file_it_created(tmp_path, monkeypatc
     assert session._missing_own_fixtures(spec) == [".quadratus/capture-fixtures/t6/x.csv"]
 
 
-def test_a_denied_discard_is_reported_as_such(tmp_path, monkeypatch):
+def test_a_complete_write_is_published_by_link_and_the_temporary_is_gone(tmp_path):
+    from quadratus.session import _write_fixture_bound
+    root = tmp_path / "project"
+    root.mkdir()
+    assert _write_fixture_bound(root, ".quadratus/capture-fixtures/t6/y.csv", b"a,b\n") == ""
+    folder = root / ".quadratus" / "capture-fixtures" / "t6"
+    assert (folder / "y.csv").read_bytes() == b"a,b\n"
+    assert [p.name for p in folder.iterdir()] == ["y.csv"]
+
+
+def test_a_target_appearing_before_publication_is_never_overwritten(tmp_path, monkeypatch):
     import os
 
     from quadratus.session import _write_fixture_bound
     root = tmp_path / "project"
-    root.mkdir()
-    monkeypatch.setattr(os, "write", lambda fd, data: (_ for _ in ()).throw(OSError(28, "No space left on device")))
-    monkeypatch.setattr(os, "ftruncate", lambda fd, length: (_ for _ in ()).throw(PermissionError(13, "denied")))
-    why = _write_fixture_bound(root, ".quadratus/capture-fixtures/t6/x.csv", b"a,b\n")
-    assert "could not be discarded" in why and "not usable evidence" in why
+    folder = root / ".quadratus" / "capture-fixtures" / "t6"
+    folder.mkdir(parents=True)
+    real_fsync = os.fsync
 
-
-def test_a_failed_supply_stops_before_capture_and_review(tmp_path, monkeypatch):
-    # Codex review of ada4c75: a problem was recorded and the flow still
-    # captured and reached APPROVED on a partial sample.
-    monkeypatch.setattr("quadratus.session._write_fixture_bound",
-                        lambda root, path, data: "the write failed; the partial bytes were discarded through this call's own descriptor; the placeholder is not usable evidence (OSError: 28)")
-    session, prompts, captures = _run(tmp_path, monkeypatch)
-    assert captures == [], "no capture against a failed supply"
-    assert not any("Reply exactly APPROVED" in p for _, p in prompts)
-    record = session.design_checks[-1]
-    assert record["verified"] is False and "could not be supplied" in record["problem"]
-    assert record["fixtures_written"] == [] and "partial bytes were discarded" in record["fixture_problems"][0]
-    assert any("without clean rendered evidence" in f for f in session.open_findings)
+    def plant_then_sync(fd):
+        (folder / "z.csv").write_text("concurrent owner replacement")
+        return real_fsync(fd)
+    monkeypatch.setattr(os, "fsync", plant_then_sync)
+    why = _write_fixture_bound(root, ".quadratus/capture-fixtures/t6/z.csv", b"a,b\n")
+    assert "appeared before publication" in why
+    assert (folder / "z.csv").read_text() == "concurrent owner replacement"
 
 
 def test_the_bound_write_refuses_links_at_the_operation_and_never_overwrites(tmp_path):
@@ -260,7 +265,7 @@ def test_the_bound_write_refuses_links_at_the_operation_and_never_overwrites(tmp
     (root / ".quadratus" / "capture-fixtures" / "t6").mkdir()
     (root / ".quadratus" / "capture-fixtures" / "t6" / "x.csv").write_text("existing")
     why = _write_fixture_bound(root, ".quadratus/capture-fixtures/t6/x.csv", b"a,b\n")
-    assert "already exists" in why
+    assert "appeared before publication" in why
     assert (root / ".quadratus" / "capture-fixtures" / "t6" / "x.csv").read_text() == "existing"
     assert _write_fixture_bound(root, ".quadratus/capture-fixtures/t6/y.csv", b"a,b\n") == ""
     assert (root / ".quadratus" / "capture-fixtures" / "t6" / "y.csv").read_bytes() == b"a,b\n"
