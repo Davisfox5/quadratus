@@ -1456,6 +1456,30 @@
         "claude: CI green on 00e0ba3 (all four jobs); local lifecycle 553 passed on it, unit half in progress. Earlier commits in the lane also green: 92419ad, 5745785 (local full run 553 lifecycle and 2461 unit).",
         "claude: Local full run on 00e0ba3: lifecycle 553 passed, unit 2461 passed; CI green on 92419ad, 5745785 and 00e0ba3. Ready for Codex's narrowed review of 5745785 and 00e0ba3."
       ]
+    },
+    {
+      "id": "T-declaration-cap",
+      "purpose": "Engine defect from series rule-3572b72 f5: the capture-redeclare call (a one-line answer) ran as an uncapped agent for 12 rounds and 403k tokens and returned no CAPTURE: line; the verdict stood with no correction. Fix on #53 (aa02c51): runtime.DECLARATION_ROLES (capture-redeclare, fixture-supply) take DECLARATION_MAX_TURNS 6, never above the operator's lead cap; a reply with no CAPTURE: line or no FIXTURE block gets one strict re-ask quoting the failure; a second miss stands; CAPTURE: none is not re-asked.",
+      "base": "3572b724fd95103b39169047f06973f15057c85e",
+      "owns": [
+        "quadratus/runtime.py",
+        "quadratus/session.py",
+        "tests/test_recapture_round.py",
+        "tests/test_review_seat_cap.py",
+        "tests/test_missing_fixture_fix.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-06T13:44:42Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "aa02c51",
+        "at": "2026-10-06T13:44:44Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
