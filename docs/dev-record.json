@@ -1809,7 +1809,9 @@
       },
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: Codex constraints for the f5 UI evidence route (#35 comment 6038178890, crossed with the ce35fb6 delivery): the saved f5 R3 includes deleting the last project through its card, so the delete/confirm route is within the original goal and this is ordinary repair under the completion mandate, not a profile or goal waiver and not CAPTURE: none acceptance. A dialog response must be explicitly declared and narrowly matched to the intended confirmation: unexpected dialogs, wrong type or text, missing dialogs, timeouts and cancellation stay honest unverified outcomes; no arbitrary JavaScript, direct API mutation, role grants or global auto-accept; origin, fixture, source and one-declaration boundaries, budgets and findings preserved. Desktop/mobile isolation: design_evidence.capture renders each viewport on a fresh page but preview.capture_task starts one preview around the whole capture, so deleting all projects in the first view may leave none for the second; a new page does not prove a fresh seeded backend; the final wait must show the changed interface in both views with evidence of actual UI actions and no cross-view contamination. ce35fb6 as delivered accepts any dialog the click opens and records a missing dialog as ok, so it does not yet meet the narrow-match rule; amendment to follow on #53 for the same separate review. The 62ad994 correction review is not clearance for this change."
+      ]
     }
   ],
   "receipts": [
