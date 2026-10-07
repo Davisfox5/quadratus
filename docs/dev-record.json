@@ -1582,6 +1582,29 @@
         "claude: CI green on a7cde45 and 7590b13 (all four jobs each); local suite on each: lifecycle 553 passed, rest 2499 passed. Posted on #53 (comment 6019163430). Scoped review of a7cde45..7590b13 still blocked by the reviewer platform; counts are not clearance.",
         "claude: Codex narrow transport qualification of the capture-redeclare provider path at exact 7590b13 (#35 comment 6025478716): grok:default, native --max-turns 6, one provider invocation, two model rounds, 34,049 reported tokens, 16.4 s, no capture/reviewer/grader, source and engine clean. The synthetic probe omitted the declaration schema and the parser refused its url/wait reply; declaration validity unverified by this probe, nothing recaptured or re-asked (production supplies the path/steps/action schema). Transport qualification only; no product-success claim. Ledger SHA ea410c05..., independent verification SHA cf7a57a3..., human-ruling evidence SHA 4df10723.... Davis's ruling acknowledged as an operator exception for a7cde45..7590b13 only, not a Codex source clearance and not platform-access resolution."
       ]
+    },
+    {
+      "id": "T-check-report",
+      "purpose": "Engine defect from series rule-7590b13 f3: the first failing integration gate of the cycle (the lead's own tests/test_ui_rename.py asserting on a node runner's '# pass 0', 1 failed / 122 passed) was CheckUnattributable and the run stopped with six tasks closed and no repair call, because the Stage B packet's check never carried --quadratus-report={report}, which the phase-3 attribution rule (#25) requires before any gate-fix call; the same suite also ran twice per gate (operator check and scanned declared-python) because -p no:cacheprovider made the argv differ. Fix on #53: the packet check declares the token; _check_identity treats -p no:cacheprovider as non-selecting plumbing so the declared pytest is named by the operator's and runs once, with the report. Node extra_checks stay unattributable by design. Cell budget 4M to 5M (6263772) travels in the same delivery.",
+      "base": "7590b13b0e8743b49cca609548d56ee911c83584",
+      "owns": [
+        "quadratus/project_run.py",
+        "tests/test_declared_checks.py",
+        "tools/jev_stage_b/packet.stage-b.json",
+        "CLAUDE.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-07T03:34:34Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "61f3ad9",
+        "at": "2026-10-07T03:34:41Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
