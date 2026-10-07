@@ -1693,12 +1693,12 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "blocked",
+      "state": "delivered",
       "claimed_at": "2026-10-07T11:20:01Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "6fbbad2",
-        "at": "2026-10-07T11:20:07Z"
+        "sha": "62ad994",
+        "at": "2026-10-07T12:32:54Z"
       },
       "reviews": [
         {
@@ -1743,18 +1743,18 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "blocked",
+      "state": "delivered",
       "claimed_at": "2026-10-07T11:49:56Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "f8d8c03",
-        "at": "2026-10-07T11:49:56Z"
+        "sha": "62ad994",
+        "at": "2026-10-07T12:32:53Z"
       },
       "reviews": [
         {
           "reviewer": "codex",
           "sha": "f8d8c03b2c4372b5fd9b414f6523a67f33f55db2",
-          "verdict": "blocked",
+          "verdict": "stale",
           "evidence": "Codex scoped review relayed on #53 comment 6037915578 (NOT CLEARED, 58a4625..f8d8c03 including 6fbbad2): 124 focused repository tests passed; 15 independent tests, 12 passed, 3 failed; wheel built offline, shipped .mjs matches source SHA256 afd3de8f9b0a7f08da9d8469eb99276925bb56c2b1221aef86b98d363470b0ba; installed-layout probes pass; four exact-head CI jobs success; Python 3.12.14 and Node v24.15.0, Node 22 and older not independently qualified.",
           "scope": [
             "quadratus/integration.py",
@@ -1765,7 +1765,8 @@
             "pyproject.toml",
             "CLAUDE.md"
           ],
-          "at": "2026-10-07T12:29:58Z"
+          "at": "2026-10-07T12:29:58Z",
+          "stale_reason": "delivery moved from f8d8c03 to 62ad994"
         }
       ],
       "blockers": [
@@ -1779,7 +1780,9 @@
           "at": "2026-10-07T12:29:58Z"
         }
       ],
-      "decisions": []
+      "decisions": [
+        "claude: Both Codex findings on f8d8c03 fixed at 62ad994: the node reporter skips node's subtestsFailed aggregate on a parent test or suite (the leaf's own event carries the failure), so nested describe/it and t.test assertion failures are product and a nested runtime error stays not; design_evidence.main exits 3 on a crash inside the capture and 1 only when a declared step did not happen, so _step_failure reads the tool's positive statement and a browser crash buys no declaration call (tests: nested assertion x2, nested TypeError, the three exit codes, crash/usage/timeout failures buy no redeclaration). Gate, declaration, fixture and preview suites 130 passed; full suite and CI running."
+      ]
     }
   ],
   "receipts": [
