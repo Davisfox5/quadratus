@@ -799,8 +799,10 @@ def _parse_capture_line(reply: str, task_id: str):
 def _step_failure(failure) -> bool:
     """Whether a harness capture failed on a declared interaction step: the
     capture tool exits 1 only when a step did not happen (design_evidence
-    main), 2 for usage, fixture and capture errors, and a preview failure
-    carries its own text."""
+    main), 2 for usage and fixture errors, 3 for a crash in the capture
+    itself, and a preview failure carries its own text. Exit 1 is the
+    tool's positive statement, never an inference from a nonzero exit
+    (Codex review of f8d8c03: an uncaught exception used to exit 1 too)."""
     return str(failure).startswith("the capture exited with 1:")
 
 

@@ -796,7 +796,10 @@ Key design decisions already settled:
   `ERR_ASSERTION` is a plain assertion; any other thrown type, a hook
   failure, a cancelled subtest and a file whose process failed (a
   collection error) are not the application's to repair, exactly as the
-  pytest rules read them.
+  pytest rules read them. Node also fails the parent of a failed child
+  (`subtestsFailed`); that aggregate is skipped, since the leaf's own event
+  carries the failure, or an ordinary nested suite reads as a setup error
+  (Codex review of f8d8c03).
 - **A declared step that does not happen is a declaration defect, and a
   redeclaration ends in a wait** (series rule-58a4625 f2, 2026-10-07). t2
   was drafted, reviewed, revised and rechecked, then the harness capture
@@ -804,7 +807,10 @@ Key design decisions already settled:
   never matched after the clear click) and the task stayed unverified with
   no redeclaration, while the sibling defect (a final wait visible at load)
   already bought one. The capture tool exits 1 only for a failed step
-  (`_step_failure`), so that case now gets the same one
+  (`_step_failure`; a crash inside the capture exits 3 since the Codex
+  review of f8d8c03, because an uncaught exception used to exit 1 as well
+  and a browser crash must never buy a declaration call), so that case now
+  gets the same one
   `_recapture_declared` round with the capture named as the source; a
   recapture that succeeds continues into the ordinary check and review, one
   that fails stays unverified with no fix call, and exit 2, preview and

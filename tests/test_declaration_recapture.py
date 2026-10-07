@@ -206,13 +206,20 @@ def test_a_redeclaration_that_also_fails_a_step_stays_unverified_with_no_fix_cal
     assert any("without clean rendered evidence" in f for f in session.open_findings)
 
 
-def test_a_fixture_or_usage_failure_gets_no_redeclaration(tmp_path, monkeypatch):
-    exit2 = "the capture exited with 2: error: file step path is not a regular file in the project: 'x.csv'"
+@pytest.mark.parametrize("failure", [
+    "the capture exited with 2: error: file step path is not a regular file in the project: 'x.csv'",
+    "the capture exited with 3: error: the capture crashed (RuntimeError: browser gone)",
+    "the capture did not finish within 60s of the 120s budget",
+])
+def test_a_fixture_usage_or_crash_failure_gets_no_redeclaration(tmp_path, monkeypatch, failure):
+    """Only the tool's own exit 1 names a failed step; a crash (exit 3, Codex
+    review of f8d8c03), a usage error and a timeout buy no declaration call
+    and no second capture."""
     session, prompts, captures = _run(tmp_path, monkeypatch, "CAPTURE: " + json.dumps(REDECLARED),
-                                      capture_failures=[exit2])
+                                      capture_failures=[failure])
     assert len(captures) == 1 and not any("Reply with exactly one line" in p for _, p in prompts)
     record = session.design_checks[-1]
-    assert record["verified"] is False and record["problem"] == exit2
+    assert record["verified"] is False and record["problem"] == failure
 
 
 def test_a_redeclaration_without_a_final_wait_is_no_declaration(tmp_path, monkeypatch):
@@ -225,3 +232,25 @@ def test_a_redeclaration_without_a_final_wait_is_no_declaration(tmp_path, monkey
     assert record["verified"] is False
     assert record["recapture"]["declared"] == {"path": "/", "steps": []}
     assert "must end in a wait" in record["recapture"]["problem"]
+
+
+def test_the_capture_tool_exits_3_on_a_crash_and_1_only_for_a_failed_step(monkeypatch, capsys):
+    """Codex review of f8d8c03: an uncaught exception in the capture exited 1,
+    the code the session reads as a failed declared step."""
+    from quadratus import design_evidence as de
+
+    def crash(*args, **kwargs):
+        raise RuntimeError("browser gone")
+    monkeypatch.setattr(de, "capture", crash)
+    assert de.main(["http://127.0.0.1:1/", "t6", ".", "--wait", "#x"]) == 3
+    assert "the capture crashed (RuntimeError: browser gone)" in capsys.readouterr().err
+
+    def failed_step(*args, **kwargs):
+        return {"desktop": {"steps": [{"n": 1, "action": "wait", "selector": "#x", "ok": False}]}}
+    monkeypatch.setattr(de, "capture", failed_step)
+    assert de.main(["http://127.0.0.1:1/", "t6", ".", "--wait", "#x"]) == 1
+
+    def usage(*args, **kwargs):
+        raise ValueError("bad selector")
+    monkeypatch.setattr(de, "capture", usage)
+    assert de.main(["http://127.0.0.1:1/", "t6", ".", "--wait", "#x"]) == 2

@@ -50,6 +50,13 @@ export default async function* quadratusGateReport(source) {
     const error = details.error || {};
     const cause = error.cause;
     const kind = error.failureType;
+    if (kind === 'subtestsFailed') {
+      // The aggregate on a parent test or suite whose child failed: the
+      // leaf's own event already carries the failure, so this is not a
+      // second failure and never an error of its own (Codex review of
+      // f8d8c03: describe/it and t.test children read as setup errors).
+      continue;
+    }
     const nodeid = `${data.file || ''}::${data.name || ''}`.slice(0, 300);
     const typeName = (e) => (e && (e.name || (e.constructor && e.constructor.name))) || null;
     const fileLevel = (data.nesting || 0) === 0 && details.type !== 'suite'

@@ -653,6 +653,12 @@ def main(argv=None) -> int:
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    except Exception as exc:  # noqa: BLE001 -- a crash is its own exit code, never a failed step
+        # Exit 1 means exactly one thing, a declared step that did not
+        # happen; a browser or runtime crash is 3, so the session never
+        # reads a crash as a declaration defect (Codex review of f8d8c03).
+        print(f"error: the capture crashed ({type(exc).__name__}: {str(exc)[:300]})", file=sys.stderr)
+        return 3
     print(json.dumps(out, indent=2))
     failed = [s for view in out.values() for s in view.get("steps", []) if not s.get("ok")]
     return 1 if failed else 0

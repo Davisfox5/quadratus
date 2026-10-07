@@ -329,3 +329,28 @@ def test_the_model_facing_check_carries_no_report_declaration():
     assert model_facing(DECLARED) == DECLARED[:-1]
     assert model_facing(NODE_DECLARED) == NODE_DECLARED[:-1]
     assert model_facing(["python", "-m", "pytest", "-q"]) == ["python", "-m", "pytest", "-q"]
+
+
+@pytest.mark.skipif(not _NODE, reason="needs node")
+@pytest.mark.parametrize("body", [
+    "import { describe, it } from 'node:test'; import assert from 'node:assert';\n"
+    "describe('outer', () => { it('leaf', () => { assert.equal(1, 2); }); });\n",
+    "import test from 'node:test'; import assert from 'node:assert';\n"
+    "test('parent', async (t) => { await t.test('child', () => { assert.equal(1, 2); }); });\n",
+])
+def test_a_nested_node_assertion_is_product_and_the_parent_aggregate_is_not_an_error(tmp_path, body):
+    """Codex review of f8d8c03: the parent's subtestsFailed aggregate read as
+    a setup error and denied the repair an ordinary nested suite earns."""
+    result = _node_gate(tmp_path, body)
+    assert result.report["state"] == "parsed", result.report
+    assert result.report["counts"] == dict(passed=0, failed=1, errors=0, skipped=0)
+    assert [f["assertion"] for f in result.report["failures"]] == [True]
+    assert attribute(result) == dict(product=True, reasons=[])
+
+
+@pytest.mark.skipif(not _NODE, reason="needs node")
+def test_a_nested_node_runtime_error_is_still_not_product(tmp_path):
+    body = ("import test from 'node:test';\n"
+            "test('parent', async (t) => { await t.test('child', () => { null.x(); }); });\n")
+    result = _node_gate(tmp_path, body)
+    assert result.report["counts"]["errors"] == 0 and "TypeError" in _reasons(result)
