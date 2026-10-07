@@ -1185,7 +1185,7 @@ def _fake_render(root):
     return render
 
 
-def _summary(root):
+def _read_summary(root):
     return json.loads((evidence_dir(root, "t1") / "summary.json").read_text())
 
 
@@ -1202,24 +1202,24 @@ def test_a_single_view_capture_combines_only_siblings_of_the_same_attempt(tmp_pa
     steps = [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]
     page = str(root / "index.html")
     out = capture(page, "t1", root, steps, views=["desktop"], attempt="aa" * 8)
-    assert set(out) == {"desktop"} and set(_summary(root)["views"]) == {"desktop"}
-    assert _summary(root)["attempt"] == "aa" * 8 and _summary(root)["steps"][0]["message"] == CONFIRM["message"]
+    assert set(out) == {"desktop"} and set(_read_summary(root)["views"]) == {"desktop"}
+    assert _read_summary(root)["attempt"] == "aa" * 8 and _read_summary(root)["steps"][0]["message"] == CONFIRM["message"]
     out = capture(page, "t1", root, steps, views=["mobile"], attempt="aa" * 8)
     assert set(out) == {"mobile"}, "the return answers for the views rendered now"
-    assert set(_summary(root)["views"]) == {"desktop", "mobile"}
+    assert set(_read_summary(root)["views"]) == {"desktop", "mobile"}
     # Another attempt, a changed declaration, a changed source or a failed
     # sibling: the old view is history, never a sibling.
     capture(page, "t1", root, steps, views=["desktop"], attempt="aa" * 8)
     capture(page, "t1", root, steps, views=["mobile"], attempt="bb" * 8)
-    assert set(_summary(root)["views"]) == {"mobile"}
+    assert set(_read_summary(root)["views"]) == {"mobile"}
     capture(page, "t1", root, steps, views=["desktop"], attempt="cc" * 8)
     other = [dict(CONFIRM, message="Delete project Beta Bowl?"), dict(action="wait", selector="#projects-empty")]
     capture(page, "t1", root, other, views=["mobile"], attempt="cc" * 8)
-    assert set(_summary(root)["views"]) == {"mobile"}
+    assert set(_read_summary(root)["views"]) == {"mobile"}
     capture(page, "t1", root, steps, views=["desktop"], attempt="dd" * 8)
     (root / "index.html").write_text("<p>changed</p>\n")
     capture(page, "t1", root, steps, views=["mobile"], attempt="dd" * 8)
-    assert set(_summary(root)["views"]) == {"mobile"}
+    assert set(_read_summary(root)["views"]) == {"mobile"}
 
     def failing(target, *, out_dir, viewport=None, steps=None, **kwargs):
         evidence = _fake_render(root)(target, out_dir=out_dir, viewport=viewport, steps=steps)
@@ -1232,7 +1232,7 @@ def test_a_single_view_capture_combines_only_siblings_of_the_same_attempt(tmp_pa
     assert de.main([page, "t1", str(root), "--confirm", ".delete-btn", CONFIRM["message"],
                     "--wait", "#projects-empty", "--view", "desktop", "--attempt", "ee" * 8]) == 0, \
         "a stale failed sibling never fails the next render"
-    assert set(_summary(root)["views"]) == {"desktop"}, "and it is not kept as a sibling either"
+    assert set(_read_summary(root)["views"]) == {"desktop"}, "and it is not kept as a sibling either"
     with pytest.raises(ValueError):
         capture(page, "t1", root, steps, views=["tablet"])
     assert de.main([page, "t1", str(root), "--view", "desktop", "--attempt", "not-hex"]) == 2
@@ -1242,7 +1242,7 @@ def test_a_single_view_capture_combines_only_siblings_of_the_same_attempt(tmp_pa
     monkeypatch.setattr(browser, "render_page", broken)
     with pytest.raises(RuntimeError):
         capture(page, "t1", root, steps, views=["mobile"], attempt="ee" * 8)
-    summary = _summary(root)
+    summary = _read_summary(root)
     assert summary["views"] == {} and "capture_failed" in summary
 
 
