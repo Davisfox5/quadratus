@@ -479,9 +479,17 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
                         dialog.accept()
                     else:
                         dialog.dismiss()
-                page.once("dialog", answer)
-                page.click(selector, timeout=limit)
-                page.wait_for_timeout(min(200, budget.ms(200)))
+                # The permission lives exactly as long as this step's click:
+                # the handler is removed on every exit (dialog or none, click
+                # error, timeout), so a dialog a later step opens can never
+                # be answered under this step's declaration (Codex review of
+                # ce35fb6: a once handler stays armed until an event arrives).
+                page.on("dialog", answer)
+                try:
+                    page.click(selector, timeout=limit)
+                    page.wait_for_timeout(min(200, budget.ms(200)))
+                finally:
+                    page.remove_listener("dialog", answer)
                 if not seen:
                     record["dialog"] = None
                     record["error"] = f"no dialog opened; expected a confirm containing {expected[:80]!r}"

@@ -1072,17 +1072,24 @@ class _DialogPage(_FakePage):
     """A page whose click opens a dialog, answered through the handler
     registered with ``once``."""
 
-    def __init__(self, dialog=("confirm", "Delete project Alpha Cup?")):
+    def __init__(self, dialog=("confirm", "Delete project Alpha Cup?"), click_error=None):
         super().__init__()
         self.handlers = {}
         self.dialog = dialog
         self.answered = []
+        self.click_error = click_error
 
-    def once(self, event, handler):
+    def on(self, event, handler):
         self.handlers[event] = handler
+
+    def remove_listener(self, event, handler):
+        if self.handlers.get(event) is handler:
+            del self.handlers[event]
 
     def click(self, selector, timeout):
         super().click(selector, timeout)
+        if self.click_error:
+            raise self.click_error
         if self.dialog and "dialog" in self.handlers:
             page = self
             kind, text = self.dialog
@@ -1095,7 +1102,7 @@ class _DialogPage(_FakePage):
 
                 def dismiss(self):
                     page.answered.append("dismissed")
-            self.handlers.pop("dialog")(Dialog())
+            self.handlers["dialog"](Dialog())
 
 
 CONFIRM = dict(action="confirm", selector=".delete-btn", message="Delete project")
@@ -1196,3 +1203,30 @@ def test_a_single_view_capture_keeps_the_other_view_only_from_a_finished_summary
         capture(str(root / "index.html"), "t1", root, steps, views=["mobile"])
     summary = json.loads((evidence_dir(root, "t1") / "summary.json").read_text())
     assert summary["views"] == {} and "capture_failed" in summary
+
+
+@pytest.mark.parametrize("page", [_DialogPage(None), _DialogPage(click_error=TimeoutError("click timed out")),
+                                  _DialogPage()])
+def test_the_dialog_handler_is_removed_on_every_exit(page):
+    """Codex review of ce35fb6: a once handler stays armed after a click with
+    no dialog or a timeout, so a later step's dialog is answered under the
+    old step's permission."""
+    import time
+
+    from quadratus.browser import _run_steps
+    _run_steps(page, [dict(CONFIRM)], [], 5000, time.monotonic() + 5)
+    assert "dialog" not in page.handlers
+
+
+def test_the_evidence_check_requires_the_declared_dialog_to_have_been_accepted():
+    from quadratus.design_evidence import _step_problem
+    requested = [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]
+    good = [dict(n=1, action="confirm", selector=".delete-btn", ok=True,
+                 dialog=dict(type="confirm", message="Delete project Alpha Cup?", accepted=True)),
+            dict(n=2, action="wait", selector="#projects-empty", ok=True)]
+    assert _step_problem("desktop", requested, good) is None
+    for bad in (None, dict(type="confirm", message="Reset?", accepted=True),
+                dict(type="alert", message="Delete project Alpha Cup?", accepted=True),
+                dict(type="confirm", message="Delete project Alpha Cup?", accepted=False)):
+        done = [dict(good[0], dialog=bad), good[1]]
+        assert "no record of the declared dialog being accepted" in _step_problem("desktop", requested, done)

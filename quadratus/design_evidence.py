@@ -467,6 +467,17 @@ def _step_problem(view: str, requested, done) -> Optional[str]:
         if got.get("ok") is not True:
             return (f"the {view} render's step {index + 1} ({want['action']} {want['selector'][:80]}) "
                     f"failed: {str(got.get('error'))[:160]}")
+        if want["action"] == "confirm":
+            # The evidence must show the declared dialog was the one answered
+            # (Codex review of ce35fb6: a record with no dialog, or another
+            # dialog, passed the checker).
+            dialog = got.get("dialog")
+            expected = str(want.get("message") or "")
+            if (not isinstance(dialog, dict) or dialog.get("accepted") is not True
+                    or dialog.get("type") != "confirm" or not expected
+                    or expected not in str(dialog.get("message") or "")):
+                return (f"the {view} render's step {index + 1} (confirm {want['selector'][:80]}) carries no "
+                        f"record of the declared dialog being accepted")
     if len(done) != len(requested):
         return f"the {view} render ran {len(done)} of {len(requested)} interaction steps"
     return None

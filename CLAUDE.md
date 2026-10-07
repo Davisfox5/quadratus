@@ -789,8 +789,15 @@ Key design decisions already settled:
   a failed step, so an unexpected, wrong or missing dialog stays an honest
   unverified outcome and nothing is ever auto-accepted (Codex,
   6038178890). The dialog's type, message and whether it was accepted are
-  recorded on the step. It is validated, carried through the CLI as
-  `--confirm SEL MESSAGE`, and named in the orchestrator's capture rule.
+  recorded on the step, and the evidence check accepts a confirm step
+  only when its record shows the declared dialog accepted (Codex review of
+  ce35fb6: a record with no dialog, or another dialog, passed the
+  checker). The handler is bound to that one click and removed on every
+  exit, dialog or none, click error or timeout, so a dialog a later step
+  opens is never answered under an earlier step's declaration (same
+  review: a `once` handler stays armed until an event arrives). It is
+  validated, carried through the CLI as `--confirm SEL MESSAGE`, and named
+  in the orchestrator's capture rule.
   Because it changes the preview's state, such a capture is rendered one
   view per fresh preview (`preview.mutates_preview`, `--view`): the first
   view's delete must not empty the list for the second. Whether the
