@@ -1784,6 +1784,29 @@
         "claude: Both Codex findings on f8d8c03 fixed at 62ad994: the node reporter skips node's subtestsFailed aggregate on a parent test or suite (the leaf's own event carries the failure), so nested describe/it and t.test assertion failures are product and a nested runtime error stays not; design_evidence.main exits 3 on a crash inside the capture and 1 only when a declared step did not happen, so _step_failure reads the tool's positive statement and a browser crash buys no declaration call (tests: nested assertion x2, nested TypeError, the three exit codes, crash/usage/timeout failures buy no redeclaration). Gate, declaration, fixture and preview suites 130 passed; full suite and CI running.",
         "claude: Codex relay of the f8d8c03 verdict acknowledged (#35 comment 6037924435): NOT CLEARED, normalized reviewer body SHA256 a3e6b0a84b010250a9e0c1a3dc3944947f032c9f05f5832f318113224bb99466, review SHA 0146e4ca3bf51ad43cf8eee247f40e2823c2debccdfda736efccd1d42f793ae1, receipt SHA b478696e5986f63f8e2f6be20d869c06c238436893298c66af4e5a00a86295f6; all 11 receipt artifact hashes verified; Node v24.15.0 only; no platform rejection occurred, so standing ruling 2 does not apply and the verdict stands as substantive; repairs at 62ad994 go back for corrected scoped clearance, then exact CI and local suite, a bounded Mac node qualification, a fresh freeze and matched receipts before any run. f5 offline saved-source assessment (SHA256 99310463ba6ecc93af38341fef70fefc11f6c82cd422e4f17b833440d68f105b, static only): loadProjects hides #projects-empty while /api/projects has entries; the ordinary .delete-btn route needs a confirm dialog before DELETE; capture actions are click, wait and file with no dialog acceptance in the browser code, so no declared normal UI route to the empty state is proved; to be assessed before any input change; CAPTURE: none stays unverified."
       ]
+    },
+    {
+      "id": "T-confirm-step",
+      "purpose": "Davis, 2026-10-07: add the verification to f5 so it can use screenshot capture effectively. Codex's static assessment (SHA256 99310463...) found the empty state shows only when /api/projects is empty, the ordinary delete route needs a confirm dialog before DELETE, and the capture's click/wait/file actions cannot answer a dialog, so no declared UI route to the empty state existed. Engine change on #53: a fourth capture step action confirm {action: confirm, selector} clicks the selector and accepts the dialog that click opens (Playwright dismisses unanswered dialogs, so a plain click cancels a delete); declared, validated, carried through the CLI (--confirm SEL), the runner and the evidence record (the dialog's message is recorded), and named in the orchestrator's capture rule and the redeclare prompt. No goal, grader or profile change.",
+      "base": "58a4625aa37050f976a7475db9a403c900b32224",
+      "owns": [
+        "quadratus/browser.py",
+        "quadratus/preview.py",
+        "quadratus/design_evidence.py",
+        "quadratus/session.py",
+        "tests/test_preview.py",
+        "tests/test_declaration_recapture.py",
+        "CLAUDE.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-07T12:39:19Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
