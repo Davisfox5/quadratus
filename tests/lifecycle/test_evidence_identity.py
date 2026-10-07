@@ -179,3 +179,44 @@ def test_only_positive_observations_are_tagged(tmp_path):
     shot.unlink()
     shot.symlink_to(shot.parent.parent / "desktop" / "page.png")
     assert tags(check_records(tmp_path, "t1", 0)[3]) == [(True, None)]
+
+
+def test_a_manifest_rewritten_beside_replaced_bytes_stops_against_the_harness_receipt(tmp_path, monkeypatch):
+    """Codex review of 180012d: the digests lived only in the same mutable
+    summary as the files, so replaced bytes beside a rewritten manifest
+    passed direct checking. The harness measures each view right after its
+    own capture and the check holds the summary to that measurement. The
+    capture itself is stood in for here (no browser): the renders are
+    written as the capture writes them, measured as the harness measures
+    them, then replaced beside a manifest that agrees with the new bytes."""
+    from quadratus.design_evidence import view_receipt
+    from quadratus.session import Session
+
+    profile, port = _profile(tmp_path)
+
+    def captured(self, spec):
+        root = Path(self.project)
+        H.evidence(root, spec.task_id, age=0, target=f"http://127.0.0.1:{port}/index.html")
+        self._capture_receipts[spec.task_id] = {name: view_receipt(root, spec.task_id, name)
+                                                for name in ("desktop", "mobile")}
+        folder = evidence_dir(root, spec.task_id)
+        shot = folder / "desktop" / "page.png"
+        shot.write_bytes(shot.read_bytes() + b"\0")
+        path = folder / "summary.json"
+        summary = json.loads(path.read_text())
+        summary["views"]["desktop"]["files"]["page.png"] = hashlib.sha256(shot.read_bytes()).hexdigest()
+        path.write_text(json.dumps(summary))
+        return ""
+    monkeypatch.setattr(Session, "_harness_capture", captured)
+    build = _decl("KIND: frontend standard", dict(REPAIR_SCOPE, capture=CAPTURE), "Add the toolbar.")
+    replay = _run(tmp_path, monkeypatch, [REQS + build], {"t1": _fix}, profile=profile)
+    result = replay.result
+    needle = "desktop render's record does not match the harness's measurement"
+    assert not result.completed
+    assert result.error.startswith("EvidenceIdentityMismatch: task t1") and needle in result.error, result.error
+    stop = replay.workflow["run"]["facts"][-1]
+    assert stop["kind"] == "integrity" and stop["legacy"] == "EvidenceIdentityMismatch", stop
+    assert not replay.of("design-fix"), "never recaptured or repaired"
+    record = json.loads(replay.artifact_texts("design-evidence")[0])
+    assert record["harness_capture"] is True and record["identity_mismatch"] and needle in record["problem"]
+    assert (replay.project / "templates/index.html").read_text() == FITTING_PAGE, "work preserved"

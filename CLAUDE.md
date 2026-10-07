@@ -898,6 +898,20 @@ Key design decisions already settled:
   matches, and `message` is null. The dialog records are written in the
   click's `finally`, so a click or pause that raises after the declared
   confirm was accepted still says so (Codex review of f30e8b4).
+- **The digest manifest is held to a receipt the harness keeps outside the
+  project** (Codex review of 180012d). A manifest in the same mutable
+  summary as the files proves only that nobody rewrote one without the
+  other. `preview.capture_task` fills a `receipt` with `view_receipt` right
+  after each view's capture process ends; `Session._harness_capture` keeps
+  it per task, and every `check_records` of a harness capture (the design
+  check, a recapture, the design-fix recheck, settlement) passes it: a view
+  the harness did not measure is no evidence, a record that disagrees with
+  the measurement is an observed mismatch. Self-captures have no receipt.
+  The checker also requires a digest for every file a render writes
+  (`VIEW_FILES`), refuses a symlink anywhere from `.quadratus` down to the
+  view folder, and a sibling refused in a partial merge because its bytes
+  changed is recorded under `not_kept` with `mismatch=True`, which the
+  check reports ahead of the incomplete set it leaves behind.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

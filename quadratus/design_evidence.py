@@ -358,8 +358,8 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
     # compared again by the check, so a render stands only for this source.
     source = source_fingerprint(root)
     declared = [{k: v for k, v in s.items() if k != "path"} for s in checked]
-    kept = (_kept_views(folder, previous, set(VIEWPORTS) - set(wanted), target=target, attempt=attempt,
-                        source=source, declared=declared) if views else {})
+    kept, not_kept = (_kept_views(folder, previous, set(VIEWPORTS) - set(wanted), target=target, attempt=attempt,
+                                  source=source, declared=declared) if views else ({}, {}))
     try:
         _source_excludes(Path(root))
         identity_error = None
@@ -392,6 +392,8 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
                    source_fingerprint=source if source and source == source_fingerprint(root) else None)
     if attempt:
         summary["attempt"] = attempt
+    if not_kept:
+        summary["not_kept"] = not_kept
     if identity_error:
         summary["source_identity_error"] = identity_error
     if checked:
@@ -451,20 +453,39 @@ VIEW_FILES = ("page.png", "evidence.json")
 _FILE_CHANGED = "changed after the capture"
 
 
+def _symlinked_component(folder: Path) -> Optional[Path]:
+    """The first symlink among a view folder and the evidence folders above
+    it (task, design-evidence, .quadratus), if any: a leaf check alone
+    endorses files reached through a symlinked directory (Codex review of
+    180012d: the view folder replaced by a link to a tree outside the
+    project)."""
+    for component in (folder, folder.parent, folder.parent.parent, folder.parent.parent.parent):
+        if component.is_symlink():
+            return component
+    return None
+
+
 def _files_problem(folder: Path, view) -> Optional[Tuple[str, bool]]:
     """Why a view's files do not stand as the capture wrote them, if they do
-    not: ``(problem, mismatch)``. The entry must record a digest for the
-    screenshot, every recorded digest must be well formed and name one of
-    the render's files, and each named file must hash to it now. Only a
-    digest that disagrees with the bytes is an observed mismatch; a missing
-    or malformed record is unverified, never a match."""
+    not: ``(problem, mismatch)``. The entry must record a well-formed digest
+    for every file a render writes and nothing else, no folder on the way
+    to them may be a symlink, and each file must hash to its digest now.
+    Only a symlink or a digest that disagrees with the bytes is an observed
+    mismatch; a missing or malformed record is unverified, never a match."""
     files = view.get("files") if isinstance(view, dict) else None
-    if not isinstance(files, dict) or "page.png" not in files:
+    if not isinstance(files, dict):
         return "carries no record of its files' digests", False
+    for leaf in VIEW_FILES:
+        if leaf not in files:
+            return f"carries no record of its {leaf} digest", False
     for leaf, recorded in files.items():
         if (leaf not in VIEW_FILES or not isinstance(recorded, str)
                 or not re.fullmatch(r"[0-9a-f]{64}", recorded)):
             return f"carries a malformed digest record ({str(leaf)[:40]})", False
+    linked = _symlinked_component(folder)
+    if linked is not None:
+        return f"folder {linked.name} is a symlink, not a capture folder", True
+    for leaf, recorded in files.items():
         path = folder / leaf
         if path.is_symlink():
             return f"{leaf} is a symlink, not a capture", True
@@ -476,6 +497,14 @@ def _files_problem(folder: Path, view) -> Optional[Tuple[str, bool]]:
     return None
 
 
+def view_receipt(root, task_id: str, name: str) -> dict:
+    """The digests of one view's files as they are on disk now, for a harness
+    that measures right after its own capture and keeps the result outside
+    the project (``check_records(receipt=...)``). A missing file is None."""
+    folder = evidence_dir(root, task_id) / name
+    return {leaf: _digest(folder / leaf) for leaf in VIEW_FILES}
+
+
 def _kept_views(folder: Path, previous, names, *, target: str, attempt: Optional[str], source, declared) -> dict:
     """The named views' entries from the previous summary, kept for a
     partial render only as siblings: the previous summary finished under
@@ -483,24 +512,32 @@ def _kept_views(folder: Path, previous, names, *, target: str, attempt: Optional
     fingerprint and the same checked steps, with every step of each kept
     view passed and its files present and hashing to the digests its entry
     records; otherwise nothing. A view that fails any of these is history
-    and never joins this attempt."""
+    and never joins this attempt. Returns ``(kept, refused)``: ``refused``
+    names each sibling candidate whose files did not stand, with the
+    problem and whether it was an observed mismatch."""
     if not names:
-        return {}
+        return {}, {}
     if (not previous or not attempt or previous.get("attempt") != attempt or previous.get("target") != target
             or previous.get("capture_in_progress") or previous.get("capture_failed") or previous.get("steps_refused")
             or not isinstance(previous.get("views"), dict)
             or not source or previous.get("source_fingerprint") != source
             or previous.get("steps", []) != declared):
-        return {}
-    kept = {}
+        return {}, {}
+    kept, refused = {}, {}
     for name in names:
         view = previous["views"].get(name)
-        if (isinstance(view, dict) and (folder / name / "page.png").is_file()
-                and (folder / name / "evidence.json").is_file()
-                and _files_problem(folder / name, view) is None     # the bytes the capture wrote, still
-                and all(isinstance(s, dict) and s.get("ok") is True for s in view.get("steps", []))):
+        if not isinstance(view, dict):
+            continue
+        # The bytes the capture wrote, still: a sibling whose files were
+        # observed to differ is refused with that classification kept, so
+        # the record says "replaced", never merely "missing" (Codex review
+        # of 180012d).
+        problem = _files_problem(folder / name, view)
+        if problem:
+            refused[name] = dict(problem=problem[0], mismatch=problem[1])
+        elif all(isinstance(s, dict) and s.get("ok") is True for s in view.get("steps", [])):
             kept[name] = view
-    return kept if len(kept) == len(set(names)) else {}
+    return (kept if len(kept) == len(set(names)) else {}), refused
 
 
 def _step_problem(view: str, requested, done) -> Optional[str]:
@@ -595,7 +632,8 @@ def check(root, task_id: str, since: float, *, expected_source: Optional[str] = 
     return check_records(root, task_id, since, expected_source=expected_source)[:3]
 
 
-def check_records(root, task_id: str, since: float, *, expected_source: Optional[str] = None):
+def check_records(root, task_id: str, since: float, *, expected_source: Optional[str] = None,
+                  receipt: Optional[dict] = None):
     """:func:`check` plus typed problem records. Never raises.
 
     Kinds: ``integrity`` (the evidence itself cannot be trusted: missing,
@@ -608,15 +646,24 @@ def check_records(root, task_id: str, since: float, *, expected_source: Optional
     screenshot, a fixture whose bytes changed after capture); one carrying
     ``identity="source"`` names a source mismatch, which counts as observed
     only when the harness took the capture itself (map J9b).
+
+    ``receipt`` is the harness's own measurement of each view's files
+    (:func:`view_receipt`, taken right after its capture and held outside
+    the project): with it, every view's recorded digests must equal what
+    the harness measured, so a manifest rewritten beside replaced bytes is
+    an observed mismatch and a view the harness never measured is no
+    evidence (Codex review of 180012d: the digests lived only in the same
+    mutable summary as the files).
     """
     try:
-        return _check(root, task_id, since, expected_source)
+        return _check(root, task_id, since, expected_source, receipt)
     except Exception as exc:  # noqa: BLE001 -- evidence is data; malformed data is a finding
         message = f"the evidence could not be read ({type(exc).__name__}: {str(exc)[:160]})"
         return False, message, [], [dict(kind="integrity", message=message)]
 
 
-def _check(root, task_id: str, since: float, expected_source: Optional[str] = None):
+def _check(root, task_id: str, since: float, expected_source: Optional[str] = None,
+           receipt: Optional[dict] = None):
     """``(ok, message, shots, records)``; each record is a typed problem,
     ``{"kind", "message", ...}``, so callers branch on kinds, never text."""
     folder = evidence_dir(root, task_id)
@@ -638,11 +685,21 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
         return fail("the last capture did not finish")
     if isinstance(summary, dict) and summary.get("steps_refused"):
         return fail(f"the capture's interaction steps were refused: {str(summary['steps_refused'])[:200]}")
+    # A sibling the last partial capture refused because its files were
+    # observed to differ: the mismatch is reported as such, ahead of the
+    # incomplete view set it leaves behind.
+    not_kept = summary.get("not_kept") if isinstance(summary, dict) else None
+    for name, entry in (not_kept.items() if isinstance(not_kept, dict) else []):
+        if isinstance(entry, dict) and entry.get("mismatch") is True and isinstance(entry.get("problem"), str):
+            add("integrity", f"the {str(name)[:20]} render of this attempt was not kept: {entry['problem'][:160]}",
+                mismatch=True)
     if (not isinstance(summary, dict) or not isinstance(summary.get("target"), str) or not summary["target"]
             or not isinstance(summary.get("views"), dict)
             or set(summary["views"]) != set(VIEWPORTS)
             or not all(isinstance(v, dict) for v in summary["views"].values())):
-        return fail("no well-formed summary.json naming the rendered page (use python -m quadratus.design_evidence)")
+        message = "no well-formed summary.json naming the rendered page (use python -m quadratus.design_evidence)"
+        add("integrity", message)
+        return False, problems[0], [], records
     for name, view in summary["views"].items():
         if not view.get("clean"):
             errors = "; ".join(str(e)[:120] for e in (view.get("console_errors") or [])[:3])
@@ -704,6 +761,15 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
         if problem:
             add("integrity", f"the {name} render {problem[0]}", **(dict(mismatch=True) if problem[1] else {}))
             continue
+        if receipt is not None:
+            measured = receipt.get(name) if isinstance(receipt, dict) else None
+            if not isinstance(measured, dict) or any(not isinstance(measured.get(leaf), str) for leaf in VIEW_FILES):
+                add("integrity", f"the {name} render was not measured by the harness in this attempt")
+                continue
+            if summary["views"][name]["files"] != {leaf: measured[leaf] for leaf in VIEW_FILES}:
+                add("integrity", f"the {name} render's record does not match the harness's measurement of "
+                                 "its files", mismatch=True)
+                continue
         if abs(width - viewport["width"]) > 64:
             view = summary["views"].get(name) or {}
             offenders = [o for o in (view.get("overflow") or []) if isinstance(o, dict)][:5]

@@ -1627,6 +1627,10 @@ class Session:
         self._review_evidence_hashes: Dict[str, str] = {}
         #: ``(task_id, target, steps, evidence)`` taken before that review.
         self._review_snapshot: Optional[tuple] = None
+        #: task id -> {view: {file: sha256}} as the harness measured each
+        #: view's files right after its own capture; the summary is held to
+        #: it on every check of a harness capture (Codex review of 180012d).
+        self._capture_receipts: Dict[str, dict] = {}
         self._task_started: Optional[float] = None
         #: When the most recent editing call that changed source began:
         #: renders older than this show a tree that has since changed.
@@ -4786,7 +4790,8 @@ class Session:
             ok, problem, shots, records = captured
         else:
             ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
-                                                        expected_source=self._trusted_source())
+                                                        expected_source=self._trusted_source(),
+                                                        receipt=self._capture_receipt(spec.task_id, harness))
             self._refuse_mismatched(spec, record, task, records, harness)
         problem, records = self._qualify_debt(spec, ok, problem, records)
         if self._audit_debt_applies(spec, ok, records):
@@ -4835,7 +4840,7 @@ class Session:
             else:
                 ok, problem, shots, records = check_records(
                     self.project, spec.task_id, self._last_edit_started or 0,
-                    expected_source=self._trusted_source())
+                    expected_source=self._trusted_source(), receipt=self._capture_receipt(spec.task_id, harness))
                 self._refuse_mismatched(spec, record, task, records, harness)
         elif not ok:
             record["first_problem"] = problem
@@ -4862,7 +4867,8 @@ class Session:
             self._run_integration_gate(lead, spec, task)
             self._stage("design")  # the recheck is design work again, as above
             ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
-                                                        expected_source=self._trusted_source())
+                                                        expected_source=self._trusted_source(),
+                                                        receipt=self._capture_receipt(spec.task_id, harness))
             self._refuse_mismatched(spec, record, task, records, harness)
             problem, records = self._qualify_debt(spec, ok, problem, records)
             if self._audit_debt_applies(spec, ok, records):
@@ -5008,7 +5014,8 @@ class Session:
             return False, str(failure), [], [dict(kind="integrity", message=str(failure))]
         from .design_evidence import check_records
         ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
-                                                    expected_source=self._trusted_source())
+                                                    expected_source=self._trusted_source(),
+                                                    receipt=self._capture_receipt(spec.task_id, True))
         self._refuse_mismatched(spec, record, task, records, True)
         return ok, problem, shots, records
 
@@ -5747,7 +5754,7 @@ class Session:
         recorded, so a replaced screenshot would otherwise surface as the
         check's own integrity failure and the observed comparison the
         settlement records would be lost."""
-        from .design_evidence import check
+        from .design_evidence import check_records
         problem = self._evidence_set_problem(task_id)
         if problem:
             return problem, None
@@ -5762,7 +5769,8 @@ class Session:
                    for d in _snapshot_files((task_id, None, None, now_evidence)).values()):
                 return problem, now_evidence
             return problem, None
-        ok, problem, _ = check(self.project, task_id, 0, expected_source=self._trusted_source())
+        ok, problem, _, _records = check_records(self.project, task_id, 0, expected_source=self._trusted_source(),
+                                                 receipt=self._capture_receipts.get(task_id))
         return ("" if ok else problem), None
 
     def _findings_block_done(self) -> bool:
@@ -6039,11 +6047,20 @@ class Session:
         from .preview import capture_task
         self._verify_dependencies(f"before preview ({spec.task_id})")
         before = self._source_fingerprint()
-        failure = capture_task(profile, self.project, spec.task_id, spec.scope.capture)
+        receipt: dict = {}
+        self._capture_receipts.pop(spec.task_id, None)
+        failure = capture_task(profile, self.project, spec.task_id, spec.scope.capture, receipt=receipt)
         self._verify_dependencies(f"during preview ({spec.task_id})")
         if before is None or self._source_fingerprint() != before:
             return "the project source changed while the harness previewed and captured it"
+        if not failure:
+            self._capture_receipts[spec.task_id] = receipt
         return failure
+
+    def _capture_receipt(self, task_id, harness) -> Optional[dict]:
+        """The harness's measurement of a task's capture, for the check to
+        hold the summary to; None for a self-capture, which has none."""
+        return self._capture_receipts.get(task_id) if harness else None
 
     def _hand_off_preview(self, spec, task, record, failure) -> None:
         """Stop as an operator handoff when the capture failure's origin is

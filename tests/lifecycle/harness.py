@@ -275,12 +275,14 @@ def evidence(root: Path, task_id: str, *, age: float, target="http://127.0.0.1:5
         folder = evidence_dir(root, task_id) / name
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "page.png").write_bytes(png_bytes((png or {}).get(name, width)))
+        (folder / "evidence.json").write_text("{}")
         stamp = time.time() + age
         os.utime(folder / "page.png", (stamp, stamp))
         wide = (measured or {}).get(name, width)
         views[name] = dict(clean=clean, console_errors=[] if clean else ["Uncaught TypeError: x"],
                            failed_requests=[], document_width=wide,
-                           files={"page.png": hashlib.sha256((folder / "page.png").read_bytes()).hexdigest()},
+                           files={leaf: hashlib.sha256((folder / leaf).read_bytes()).hexdigest()
+                                  for leaf in ("page.png", "evidence.json")},
                            overflow=[dict(element="div.toolbar", side="right", left=0, right=wide, width=wide)]
                            if wide > width + 1 else [])
         if steps:

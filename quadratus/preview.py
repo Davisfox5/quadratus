@@ -444,9 +444,15 @@ def capture_argv(profile: CaptureProfile, task_id: str, capture: dict, view: Opt
     return argv
 
 
-def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict) -> str:
+def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict,
+                 receipt: Optional[dict] = None) -> str:
     """Preview, capture the task's declared state, stop. Returns "" on success
     or why it failed; never raises for a preview or capture failure.
+
+    ``receipt``, when given, is filled with each view's file digests as the
+    harness measures them right after that view's capture process ends
+    (``design_evidence.view_receipt``): a record kept outside the project,
+    for ``check_records(receipt=...)`` to hold the summary to.
 
     A declaration that changes the preview's state (``mutates_preview``) is
     captured one view per preview: the preview is started, the view
@@ -461,7 +467,7 @@ def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict) -> 
     if mutates_preview(capture):
         import secrets
 
-        from .design_evidence import VIEWPORTS
+        from .design_evidence import VIEWPORTS, view_receipt
         attempt = secrets.token_hex(8)
         # One capture allowance for the whole attempt, spent across the
         # views, beside the one total deadline (Codex review of 4a51291:
@@ -472,10 +478,16 @@ def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict) -> 
                                            deadline, allowance)
             if failure:
                 return failure
+            if receipt is not None:
+                receipt[view] = view_receipt(root, task_id, view)
             allowance -= spent
         return ""
     failure, _ = _capture_once(profile, root, capture_argv(profile, task_id, capture), deadline,
                                float(profile.capture_timeout))
+    if not failure and receipt is not None:
+        from .design_evidence import VIEWPORTS, view_receipt
+        for view in VIEWPORTS:
+            receipt[view] = view_receipt(root, task_id, view)
     return failure
 
 
