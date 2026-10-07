@@ -230,12 +230,20 @@ def _run_monitor(args: argparse.Namespace) -> int:
     for a terminal over ssh, so it is one screen of plain text and never a
     model call. Exit 0 whether or not a run is live; 1 only when there is
     nothing to read because no project or series was named.
+
+    With ``--serve PORT`` it instead keeps running and serves the same
+    status as a self-reloading web page on 127.0.0.1 (quadratus.monitor_server),
+    for a phone via Tailscale Serve.
     """
     from .monitor import read_status, render_text, run_history
 
     if not args.project and not args.series:
         print("Error: --monitor needs --project DIR or --series DIR")
         return 1
+    if args.serve is not None:
+        from .monitor_server import serve
+        return serve(args.serve, project=args.project, series=args.series,
+                     state_dir=args.state_dir, history=args.history)
     status = read_status(args.project, args.series, state_dir=args.state_dir)
     project = status.get("project")
     history = run_history(project, state_dir=args.state_dir, limit=args.history) \
@@ -436,6 +444,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         metavar="N",
         help="How many recent runs --monitor lists (default 10).",
     )
+    watch.add_argument(
+        "--serve",
+        type=int,
+        nargs="?",
+        const=7861,
+        default=None,
+        metavar="PORT",
+        help=(
+            "With --monitor: keep running and serve the status as a read-only web "
+            "page on 127.0.0.1 (default port 7861) that reloads itself. Loopback "
+            "only; use `tailscale serve --bg PORT` to open it on a phone."
+        ),
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging.")
     args = parser.parse_args(argv)
 
@@ -444,8 +465,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         format="%(levelname)s %(name)s: %(message)s",
     )
 
-    if args.series and not args.monitor:
-        parser.error("--series is only used with --monitor")
+    if (args.series or args.serve is not None) and not args.monitor:
+        parser.error("--series and --serve are only used with --monitor")
     if args.monitor:
         if args.prompt or args.probe or args.probe_all or args.status or args.policy_preview:
             parser.error("--monitor takes no prompt and cannot be combined with probe, status or policy preview")

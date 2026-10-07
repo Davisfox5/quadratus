@@ -67,3 +67,22 @@ def test_monitor_refuses_a_prompt_and_series_needs_monitor(tmp_path):
         main(["--monitor", "--project", str(tmp_path), "do something"])
     with pytest.raises(SystemExit):
         main(["--series", str(tmp_path), "do something"])
+
+
+def test_monitor_serve_hands_the_arguments_to_the_server(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_serve(port, **kw):
+        seen.update(kw, port=port)
+        return 0
+
+    monkeypatch.setattr("quadratus.monitor_server.serve", fake_serve)
+    assert main(["--monitor", "--project", str(tmp_path), "--serve"]) == 0
+    assert seen["port"] == 7861 and seen["project"] == str(tmp_path) and seen["history"] == 10
+    assert main(["--monitor", "--series", str(tmp_path), "--serve", "8123", "--history", "4"]) == 0
+    assert seen["port"] == 8123 and seen["series"] == str(tmp_path) and seen["history"] == 4
+
+
+def test_serve_needs_monitor(tmp_path):
+    with pytest.raises(SystemExit):
+        main(["--serve", "--project", str(tmp_path), "do something"])

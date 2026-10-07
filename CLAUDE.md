@@ -471,6 +471,11 @@ Key design decisions already settled:
   also never calls a model: a status that depends on a seat answering is
   the problem it exists to remove. The stage is inferred from the latest
   role and the newest artifact kind, and says so when it cannot tell.
+  `--monitor --serve` renders the same dict as a self-reloading page on
+  loopback only (`monitor_server.py`, no bind flag); Tailscale Serve is the
+  way onto a phone, and the Gradio GUI is never exposed that way because
+  its Project tab can run commands. The page has no controls at all, which
+  is what makes it the thing that may be reached from another device.
 
 ## Model routing: this repo is build-time tooling
 
