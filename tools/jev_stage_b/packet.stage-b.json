@@ -16,7 +16,8 @@
       "tests/ui/bulk_keyboard.test.js",
       "tests/ui/bulk_serialization.test.js",
       "tests/ui/import_preview.test.js",
-      "tests/ui/load_app.test.js"
+      "tests/ui/load_app.test.js",
+      "--test-reporter-destination={report}"
     ]
   ],
   "capture_profiles": {

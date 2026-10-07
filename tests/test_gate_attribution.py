@@ -5,7 +5,10 @@ report, with exit status 1 and a consistent record, is a product failure;
 every other failure is unattributable (Codex review 5858008514)."""
 
 import json
+import shutil
 import sys
+
+import pytest
 
 from quadratus.integration import (
     REPORT_TOKEN,
@@ -264,3 +267,65 @@ def test_partial_runs_under_maxfail_stay_accurate(tmp_path):
     assert two.report["counts"]["failed"] == 2 and attribute(two)["product"] is True
     mixed = _gate(tmp_path, body.replace("assert 2 == 0", "raise OSError('display')"), DECLARED + ["--maxfail=2"])
     assert "builtins.OSError" in _reasons(mixed)
+
+
+# --- node:test producer (series rule-58a4625 f3) ---------------------------
+
+_NODE = shutil.which("node")
+NODE_DECLARED = ["node", "--test", "a.test.mjs", "--test-reporter-destination={report}"]
+
+
+def _node_gate(tmp_path, body, argv=NODE_DECLARED, name="a.test.mjs"):
+    (tmp_path / name).write_text(body)
+    return IntegrationGate(argv, cwd=tmp_path).run()
+
+
+@pytest.mark.skipif(not _NODE, reason="needs node")
+def test_a_node_assertion_failure_is_product_and_the_tap_count_survives(tmp_path):
+    body = ("import test from 'node:test'; import assert from 'node:assert';\n"
+            "test('ok', () => {});\ntest('bad', () => { assert.strictEqual(1, 2); });\n")
+    result = _node_gate(tmp_path, body)
+    assert result.returncode == 1 and result.report["state"] == "parsed", result.report
+    assert result.report["failures"] == [dict(nodeid=result.report["failures"][0]["nodeid"], when="call",
+                                              exc_type="AssertionError", assertion=True)]
+    assert result.report["counts"] == dict(passed=1, failed=1, errors=0, skipped=0)
+    assert attribute(result) == dict(product=True, reasons=[])
+    assert "# pass 1" in result.output and "# fail 1" in result.output, "TAP stays on stdout for the count"
+    assert not list(tmp_path.glob("*.json")), "the report lives outside the project"
+
+
+@pytest.mark.skipif(not _NODE, reason="needs node")
+def test_a_node_runtime_error_is_not_an_assertion(tmp_path):
+    body = "import test from 'node:test';\ntest('bad', () => { null.querySelector('x'); });\n"
+    result = _node_gate(tmp_path, body)
+    assert "TypeError" in _reasons(result) and "not assertions" in _reasons(result)
+
+
+@pytest.mark.skipif(not _NODE, reason="needs node")
+def test_a_node_hook_failure_and_a_cancelled_subtest_are_errors_not_product(tmp_path):
+    body = ("import { describe, it, before } from 'node:test';\n"
+            "describe('s', () => { before(() => { throw new Error('boom'); }); it('inner', () => {}); });\n")
+    result = _node_gate(tmp_path, body)
+    assert result.report["state"] == "parsed" and result.report["counts"]["errors"] == 2
+    assert "setup or teardown error" in _reasons(result)
+
+
+@pytest.mark.skipif(not _NODE, reason="needs node")
+def test_a_node_file_that_fails_to_load_is_a_collection_error(tmp_path):
+    result = _node_gate(tmp_path, "throw new Error('load boom');\n")
+    assert result.report["state"] == "parsed" and result.report["collect_errors"] == 1
+    assert "collection error" in _reasons(result)
+
+
+@pytest.mark.skipif(not _NODE, reason="needs node")
+def test_an_undeclared_node_check_is_still_unattributable(tmp_path):
+    body = "import test from 'node:test'; import assert from 'node:assert';\ntest('bad', () => { assert.ok(false); });\n"
+    result = _node_gate(tmp_path, body, argv=["node", "--test", "a.test.mjs"])
+    assert _reasons(result) == "check: structured report undeclared"
+
+
+def test_the_model_facing_check_carries_no_report_declaration():
+    from quadratus.integration import model_facing
+    assert model_facing(DECLARED) == DECLARED[:-1]
+    assert model_facing(NODE_DECLARED) == NODE_DECLARED[:-1]
+    assert model_facing(["python", "-m", "pytest", "-q"]) == ["python", "-m", "pytest", "-q"]

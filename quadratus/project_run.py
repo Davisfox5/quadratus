@@ -351,7 +351,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         fleet.progress = progress  # one live line per call as it ends
         # The checks are the commands a granted editing call may run
         # unapproved and the denials that count as a capability failure.
-        fleet.check_commands = tuple(shlex.join(g['argv']) for g in plan if g.get('argv'))
+        from .integration import model_facing
+        # What a seat is told to run: the harness's report declaration is
+        # its own and never reaches a model's argv (series rule-58a4625 f3).
+        fleet.check_commands = tuple(shlex.join(model_facing(g['argv'])) for g in plan if g.get('argv'))
     except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
         pass
     in_flight = {}

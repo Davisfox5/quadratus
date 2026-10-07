@@ -773,6 +773,30 @@ Key design decisions already settled:
   redeclaration is shared by both routes that can ask for it (the capture
   check and the blind review): after it is spent, a blind review stays
   unverified, and the first receipt is kept as written.
+- **A node check has a producer, and the report token never reaches a
+  model** (series rule-58a4625 f3, 2026-10-07). Two findings from one cell.
+  The packet's pytest check now carried `--quadratus-report={report}`, and
+  the APPROVED CHECK COMMANDS guidance showed the lead that argv verbatim,
+  so two leads ran it and got exit 4 (`unrecognized arguments`); the token
+  is the harness's own and `integration.model_facing` strips it from every
+  command a seat is told to run. Then the node extra check failed in the
+  lead's own `tests/ui/load_app.test.js` and, with no producer, was
+  unattributable by design: the second cycle in a row that f3 ended on a
+  failing node UI test with the work done and the graders passing.
+  `_gate_producer/quadratus_gate_report.mjs` is a harness-owned node:test
+  reporter (`quadratus-node/1`, nonce- and digest-bound like the pytest
+  plugin): a `node --test` check declares
+  `--test-reporter-destination={report}`, and the harness replaces that
+  argument with `--test-reporter=tap --test-reporter-destination=stdout`
+  (the count reader needs the runner's text) plus its reporter and the
+  report path, inserted directly after `--test` because node reads an
+  option after the first test file as another file (probed on node 22;
+  custom reporters need node 19.6 or later, so a Mac probe is the
+  qualification). A failed test body whose cause is node:assert's own
+  `ERR_ASSERTION` is a plain assertion; any other thrown type, a hook
+  failure, a cancelled subtest and a file whose process failed (a
+  collection error) are not the application's to repair, exactly as the
+  pytest rules read them.
 - **A declared step that does not happen is a declaration defect, and a
   redeclaration ends in a wait** (series rule-58a4625 f2, 2026-10-07). t2
   was drafted, reviewed, revised and rechecked, then the harness capture

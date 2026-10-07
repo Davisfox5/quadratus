@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Literal, Optional, Sequence
 
 __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateSuite", "REPORT_TOKEN",
-           "CheckUnattributable", "attribute", "read_report"]
+           "CheckUnattributable", "attribute", "read_report", "model_facing"]
 
 #: The argv token a check uses to declare the harness's structured report.
 #: The only supported producer is the harness-owned pytest plugin
@@ -40,7 +40,17 @@ __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateS
 #: attributable, so never repaired.
 REPORT_TOKEN = "{report}"
 PRODUCER = "quadratus-pytest/3"
+#: The node:test producer (series rule-58a4625 f3: the second cycle in a row
+#: ended on a failing node UI test with the work done and the graders
+#: passing, because a node check had no producer and so no fix call). A
+#: ``node --test`` check declares ``--test-reporter-destination={report}``;
+#: the harness copies the shipped reporter and passes it as a second
+#: reporter beside TAP on stdout, so the text output the count reader needs
+#: is unchanged.
+PRODUCER_NODE = "quadratus-node/1"
+PRODUCERS = (PRODUCER, PRODUCER_NODE)
 _PRODUCER_FILE = Path(__file__).resolve().parent / "_gate_producer" / "quadratus_gate_report.py"
+_NODE_PRODUCER_FILE = _PRODUCER_FILE.with_suffix(".mjs")
 #: Kept for the install-layout proof: where the shipped producer lives.
 _PRODUCER_DIR = str(_PRODUCER_FILE.parent)
 _REPORT_FAILURES = 200
@@ -79,6 +89,30 @@ def _report_slot(argv, env):
     import secrets
     owned = tempfile.mkdtemp(prefix="quadratus-report-")
     nonce = secrets.token_hex(16)
+    path = os.path.join(owned, "report.json")
+    if _is_node_test(argv):
+        source = _NODE_PRODUCER_FILE.read_bytes()
+        copy = os.path.join(owned, f"quadratus_gate_report_{secrets.token_hex(8)}.mjs")
+        with open(copy, "wb") as out:
+            out.write(source)
+        expected = dict(nonce=nonce, module_file=os.path.realpath(copy),
+                        module_sha256=hashlib.sha256(source).hexdigest())
+        # The declaring argument is replaced, never kept: node pairs each
+        # --test-reporter with the next destination, so the runner's own TAP
+        # stays on stdout (the count reader needs it) and the harness's
+        # reporter writes the report. Placed directly after --test: node
+        # reads an option after the first test file as another file and
+        # the reporter never loads (probed on node 22).
+        rest = [a for a in argv if REPORT_TOKEN not in a]
+        at = rest.index("--test") + 1
+        argv = rest[:at] + ["--test-reporter=tap", "--test-reporter-destination=stdout",
+                            f"--test-reporter={copy}", f"--test-reporter-destination={path}"] + rest[at:]
+        env = dict(env, QUADRATUS_GATE_NONCE=nonce)
+        try:
+            yield argv, env, path, expected
+        finally:
+            shutil.rmtree(owned, ignore_errors=True)
+        return
     module = f"quadratus_gate_report_{secrets.token_hex(8)}"
     source = _PRODUCER_FILE.read_bytes()
     copy = os.path.join(owned, module + ".py")
@@ -86,7 +120,6 @@ def _report_slot(argv, env):
         out.write(source)
     expected = dict(nonce=nonce, module_file=os.path.realpath(copy),
                     module_sha256=hashlib.sha256(source).hexdigest())
-    path = os.path.join(owned, "report.json")
     plugins = [p for p in env.get("PYTEST_PLUGINS", "").split(",") if p.strip()]
     env = dict(env, QUADRATUS_GATE_NONCE=nonce, PYTEST_PLUGINS=",".join(plugins + [module]),
                PYTHONPATH=os.pathsep.join([owned] + [p for p in [env.get("PYTHONPATH")] if p]))
@@ -94,6 +127,21 @@ def _report_slot(argv, env):
         yield [a.replace(REPORT_TOKEN, path) for a in argv], env, path, expected
     finally:
         shutil.rmtree(owned, ignore_errors=True)
+
+
+def _is_node_test(argv) -> bool:
+    """A ``node --test`` invocation (the runner is node and ``--test`` is an
+    argument of its own), the only non-pytest runner with a producer."""
+    head = Path(argv[0]).name if argv else ""
+    return head in ("node", "nodejs") and "--test" in argv[1:]
+
+
+def model_facing(argv):
+    """The check as a model may run it: the harness's report declaration
+    removed. The token names nothing outside the harness's own run (series
+    rule-58a4625 f3: two leads ran the pytest check with the literal token
+    and got exit 4, unrecognized arguments)."""
+    return [a for a in argv if REPORT_TOKEN not in a]
 
 
 def _read_capped(path):
@@ -182,7 +230,7 @@ def read_report(path, expected) -> dict:
     if not isinstance(data, dict):
         return dict(state="unparsable", detail="not an object")
     expected = expected or {}
-    if (data.get("producer") != PRODUCER or data.get("nonce") != expected.get("nonce")
+    if (data.get("producer") not in PRODUCERS or data.get("nonce") != expected.get("nonce")
             or data.get("module_file") != expected.get("module_file")
             or data.get("module_sha256") != expected.get("module_sha256")):
         return dict(state="foreign", detail=f"producer {str(data.get('producer'))[:40]!r}, module "
