@@ -1600,7 +1600,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-07T03:34:34Z",
       "acknowledged": false,
       "delivery": {
@@ -1621,6 +1621,19 @@
           ],
           "at": "2026-10-07T10:44:06Z",
           "stale_reason": "reviewed 58a4625 but the delivery is 61f3ad9"
+        },
+        {
+          "reviewer": "davis",
+          "sha": "61f3ad963296cfc9ed3d7ee315608897eadce0d4",
+          "verdict": "cleared",
+          "evidence": "Davis, 2026-10-07, direct standing rulings (#46 comment 6036192843; receipt SHA256 54ed432dc3e55e6d9b3fbe1cc7513cee7fb7ac355775e388b7e5e38b215bfd2a): rule 2 makes Claude's independent reading (#53 comment 6036033545) with green CI (4 of 4) and the posted local suite the review for 6263772 and 61f3ad9; rule 3 clears them expressly. Operator-bypass, not a Codex verdict; the Codex platform rejection is preserved. The 2d86be9 entry at 58a4625 for this task was recorded against the wrong delivery and stays as written.",
+          "scope": [
+            "quadratus/project_run.py",
+            "tests/test_declared_checks.py",
+            "tools/jev_stage_b/packet.stage-b.json",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-07T10:44:21Z"
         }
       ],
       "blockers": [],
