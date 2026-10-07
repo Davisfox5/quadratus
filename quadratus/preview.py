@@ -485,11 +485,11 @@ def validate_capture(capture) -> dict:
         raise ValueError(f"SCOPE capture steps must be a list of at most {MAX_STEPS} steps")
     out = []
     for step in steps:
-        if (not isinstance(step, dict) or step.get("action") not in ("click", "wait", "file")
+        if (not isinstance(step, dict) or step.get("action") not in ("click", "wait", "file", "confirm")
                 or not isinstance(step.get("selector"), str) or not step["selector"].strip()
                 or len(step["selector"]) > MAX_SELECTOR_CHARS or set(step) - {"action", "selector", "path"}
                 or (step["action"] == "file") != isinstance(step.get("path"), str)):
-            raise ValueError("SCOPE capture steps need action click, wait or file, a selector, "
+            raise ValueError("SCOPE capture steps need action click, wait, confirm or file, a selector, "
                              "and a path for file steps only")
         if step["action"] == "file":
             # Syntax and containment now; which task owns a fixture is checked

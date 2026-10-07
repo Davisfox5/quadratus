@@ -1065,3 +1065,66 @@ def test_a_fixture_step_without_a_valid_digest_is_unverified(tmp_path):
         view["steps"] = [dict(n=1, action="file", selector="#f", file="fixtures/rows.csv", ok=True)]
     (folder / "summary.json").write_text(json.dumps(summary))
     assert "has no valid recorded digest" in check(root, "t1", 0)[1]
+
+
+class _DialogPage(_FakePage):
+    """A page whose click opens a confirm dialog, answered through the
+    handler registered with ``once``."""
+
+    def __init__(self, opens_dialog=True):
+        super().__init__()
+        self.handlers = {}
+        self.opens_dialog = opens_dialog
+        self.answered = []
+
+    def once(self, event, handler):
+        self.handlers[event] = handler
+
+    def click(self, selector, timeout):
+        super().click(selector, timeout)
+        if self.opens_dialog and "dialog" in self.handlers:
+            page = self
+
+            class Dialog:
+                type, message = "confirm", "Delete project Alpha Cup?"
+
+                def accept(self):
+                    page.answered.append("accepted")
+            self.handlers.pop("dialog")(Dialog())
+
+
+def test_a_confirm_step_clicks_and_accepts_the_dialog_it_opens():
+    """Series rule-58a4625 f5: the empty list sits behind a confirm dialog
+    that a plain click leaves unanswered, so the browser cancels the delete."""
+    import time
+
+    from quadratus.browser import _run_steps
+    page = _DialogPage()
+    records = _run_steps(page, [dict(action="confirm", selector=".delete-btn"),
+                                dict(action="wait", selector="#projects-empty:not([hidden])")],
+                         [], 5000, time.monotonic() + 5)
+    assert [r["ok"] for r in records] == [True, True]
+    assert records[0]["dialog"] == "confirm: Delete project Alpha Cup?" and page.answered == ["accepted"]
+    assert [c[0] for c in page.calls] == ["click", "pause", "wait"]
+
+
+def test_a_confirm_step_with_no_dialog_records_none_and_still_passes():
+    import time
+
+    from quadratus.browser import _run_steps
+    page = _DialogPage(opens_dialog=False)
+    records = _run_steps(page, [dict(action="confirm", selector=".delete-btn")], [], 5000, time.monotonic() + 5)
+    assert records == [dict(n=1, action="confirm", selector=".delete-btn", ok=True, dialog=None)]
+
+
+def test_confirm_steps_parse_validate_and_render_like_the_others(tmp_path):
+    from quadratus.preview import CaptureProfile, capture_argv, validate_capture
+    _, steps = parse_steps(["p.html", "t1", "--confirm", ".delete-btn", "--wait", "#projects-empty"])
+    assert steps == [dict(action="confirm", selector=".delete-btn"), dict(action="wait", selector="#projects-empty")]
+    checked, _ = validate_steps(steps, "http://127.0.0.1:1/", tmp_path, "t1")
+    assert checked == steps
+    capture = validate_capture({"path": "/", "steps": steps})
+    assert capture["steps"] == steps
+    profile = CaptureProfile(preview=("true",), origin="http://127.0.0.1:1")
+    argv = capture_argv(profile, "t1", capture)
+    assert argv[-4:] == ["--confirm", ".delete-btn", "--wait", "#projects-empty"]

@@ -158,7 +158,7 @@ MAX_STEPS = 12
 MAX_SELECTOR_CHARS = 300
 STEP_TIMEOUT_MS = 5000
 CAPTURE_SECONDS = 90
-_ACTIONS = ("click", "wait", "file")
+_ACTIONS = ("click", "wait", "file", "confirm")
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 #: Never uploaded, whatever the task asks. Any hidden path component is
 #: refused outright (run state, VCS data, .env, .ssh, .codex, tool configs);
@@ -168,7 +168,7 @@ _BLOCKED_NAMES = SECRET_NAMES   # shared with the context pack (project_files)
 
 
 def parse_steps(argv: List[str]) -> Tuple[List[str], List[dict]]:
-    """Split ``--click/--wait/--upload/--file`` steps from positional arguments.
+    """Split ``--click/--wait/--confirm/--upload/--file`` steps from positional arguments.
 
     ``--upload SELECTOR PATH`` takes two arguments, so neither may need
     escaping. ``--file SELECTOR=PATH`` splits at the first ``=``, which is
@@ -184,7 +184,7 @@ def parse_steps(argv: List[str]) -> Tuple[List[str], List[dict]]:
                 raise ValueError("--upload takes SELECTOR PATH")
             selector, path = items.pop(0), items.pop(0)
             steps.append(dict(action="file", selector=selector, path=path))
-        elif item in ("--click", "--wait", "--file"):
+        elif item in ("--click", "--wait", "--confirm", "--file"):
             if not items:
                 raise ValueError(f"{item} needs a value")
             value = items.pop(0)
@@ -282,7 +282,7 @@ def validate_steps(steps: List[dict], target: str, root, task_id: Optional[str] 
     for step in steps:
         action, selector = step.get("action"), step.get("selector")
         if action not in _ACTIONS:
-            raise ValueError(f"unknown step {action!r}; use --click, --wait or --file")
+            raise ValueError(f"unknown step {action!r}; use --click, --wait, --confirm or --file")
         if not isinstance(selector, str) or not selector.strip() or len(selector) > MAX_SELECTOR_CHARS:
             raise ValueError(f"each step needs a selector of at most {MAX_SELECTOR_CHARS} characters")
         item = dict(action=action, selector=selector.strip())
@@ -645,7 +645,7 @@ def main(argv=None) -> int:
         return 2
     if len(positional) not in (2, 3):
         print("usage: python -m quadratus.design_evidence <url-or-html-file> <task-id> [project-root] "
-              "[--click SEL] [--wait SEL] [--upload SEL path] [--file SEL=path]", file=sys.stderr)
+              "[--click SEL] [--wait SEL] [--confirm SEL] [--upload SEL path] [--file SEL=path]", file=sys.stderr)
         return 2
     try:
         out = capture(positional[0], positional[1], positional[2] if len(positional) == 3 else ".", steps,

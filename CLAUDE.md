@@ -773,6 +773,24 @@ Key design decisions already settled:
   redeclaration is shared by both routes that can ask for it (the capture
   check and the blind review): after it is spent, a blind review stays
   unverified, and the first receipt is kept as written.
+- **A capture step can answer a dialog** (`{"action": "confirm",
+  "selector": ...}`; Davis, 2026-10-07: "add the verification to f5 so it
+  can use screenshot capture effectively"). Codex's static read of the
+  saved f5 source: the empty state shows only when `/api/projects` is
+  empty, the only UI route there is a delete behind a `confirm` dialog,
+  and the capture's click, wait and file steps cannot answer one, so no
+  declared route to the state existed and f5 stayed unverified on every
+  cycle with all four graders passing. Playwright dismisses an unanswered
+  dialog, so a plain click on a delete control cancels the delete. A
+  confirm step registers a one-shot dialog handler, clicks, accepts, and
+  records the dialog's type and message on the step (none appearing is
+  recorded, never a failure); it is validated, carried through the CLI as
+  `--confirm SEL`, and named in the orchestrator's capture rule. It mutates
+  preview state on purpose: a preview that writes its data inside the
+  project root will trip the source-fingerprint check ("the project source
+  changed while the harness previewed"), which is the profile's problem to
+  solve (a data directory outside the project), not a reason to weaken the
+  check. No goal, grader or profile change was made.
 - **A node check has a producer, and the report token never reaches a
   model** (series rule-58a4625 f3, 2026-10-07). Two findings from one cell.
   The packet's pytest check now carried `--quadratus-report={report}`, and

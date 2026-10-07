@@ -458,6 +458,23 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
             if action == "click":
                 page.click(selector, timeout=limit)
                 page.wait_for_timeout(min(200, budget.ms(200)))  # let a started navigation reach the guard
+            elif action == "confirm":
+                # A click that opens a browser dialog (confirm, alert, prompt)
+                # and accepts it. Playwright dismisses an unanswered dialog, so
+                # a plain click on a delete control cancels the delete and the
+                # state the declaration names is never reached (series
+                # rule-58a4625 f5: the empty list sits behind a confirm). The
+                # dialog's message is recorded as evidence; none appearing is
+                # recorded too, never read as a failure of the step.
+                seen: List[str] = []
+
+                def accept(dialog, seen=seen):
+                    seen.append(f"{dialog.type}: {dialog.message}"[:200])
+                    dialog.accept()
+                page.once("dialog", accept)
+                page.click(selector, timeout=limit)
+                page.wait_for_timeout(min(200, budget.ms(200)))
+                record["dialog"] = seen[0] if seen else None
             elif action == "wait":
                 page.wait_for_selector(selector, state="visible", timeout=limit)
             elif action == "file":
