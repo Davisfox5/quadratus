@@ -222,6 +222,28 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
     return 0
 
 
+def _run_monitor(args: argparse.Namespace) -> int:
+    """Print what the engine is doing, read from the run directory, and exit.
+
+    Observational only: ``quadratus.monitor`` reads the series lock, the
+    latest run directory and its bounded tails, and writes nothing. Meant
+    for a terminal over ssh, so it is one screen of plain text and never a
+    model call. Exit 0 whether or not a run is live; 1 only when there is
+    nothing to read because no project or series was named.
+    """
+    from .monitor import read_status, render_text, run_history
+
+    if not args.project and not args.series:
+        print("Error: --monitor needs --project DIR or --series DIR")
+        return 1
+    status = read_status(args.project, args.series, state_dir=args.state_dir)
+    project = status.get("project")
+    history = run_history(project, state_dir=args.state_dir, limit=args.history) \
+        if project and project != "unknown" else []
+    print(render_text(status, history))
+    return 0
+
+
 def _operator(args):
     """Interactive answers, preceded by any rulings the operator gave in advance."""
     def interactive(question):
@@ -385,6 +407,35 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Declare a narrow project-relative path; whole-project dot is refused. Repeat as needed.")
     engine.add_argument("--forbid", action="append", default=[],
                         help="Forbid writes to a project-relative path or glob. Repeat as needed.")
+    watch = parser.add_argument_group(
+        "monitor",
+        "Read what the engine is doing from the run directory and exit. "
+        "Nothing is started, stopped or written.",
+    )
+    watch.add_argument(
+        "--monitor",
+        action="store_true",
+        help=(
+            "Print the latest run's status for --project (or the running cell of "
+            "--series): live or not, run id, task, stage, seat, tokens against "
+            "the cap, last event, and a finished run's stop reason and report."
+        ),
+    )
+    watch.add_argument(
+        "--series",
+        metavar="DIR",
+        help=(
+            "A Stage B series directory (manifest.json and run.lock). Supplies the "
+            "running cell's project and the packet's token limits to --monitor."
+        ),
+    )
+    watch.add_argument(
+        "--history",
+        type=int,
+        default=10,
+        metavar="N",
+        help="How many recent runs --monitor lists (default 10).",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging.")
     args = parser.parse_args(argv)
 
@@ -392,6 +443,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
     )
+
+    if args.series and not args.monitor:
+        parser.error("--series is only used with --monitor")
+    if args.monitor:
+        if args.prompt or args.probe or args.probe_all or args.status or args.policy_preview:
+            parser.error("--monitor takes no prompt and cannot be combined with probe, status or policy preview")
+        return _run_monitor(args)
 
     if (args.policy_preview or args.forbid or args.declared_paths) and not args.project:
         parser.error("--policy-preview, --path and --forbid require --project")
