@@ -661,8 +661,20 @@ Key design decisions already settled:
   reserve, every other call reserves the operator's figure in full, the
   post-return threshold is unchanged, and the snapshot counts
   `shaped_reservations`.
-- **The Stage B cell budget is 4M and the reserve 250k** (Davis,
+- **The Stage B cell budget is 5M and the reserve 250k** (Davis,
   2026-10-06: "the reserve and the overall token count are now in play").
+  Raised from 4M after series rule-7590b13 f2: all three tasks' work was
+  finished (drafted, reviewed, revised, rechecked, design-reviewed) and
+  the cell stopped at 3.76M with 237k of headroom when the third task's
+  one-turn close-out asked for the full 250k reserve, because a codex
+  summary call is not argv-capped and so never gets the 64k allowance
+  (`CLISpec.summary_turn_capped`). The DONE turn and the audit would have
+  needed about 250k more, so the cell needed about 4.05M; f1 used 3.45M
+  on three tasks. On this engine a task costs about 1.2M (an Opus
+  collaborator review 260k to 560k, an Opus design review about 200k, a
+  revision 100k to 450k), so 5M covers four tasks with the 1.5M per-call
+  ceiling unchanged. The 4M history follows.
+- **The Stage B cell budget was 4M** (Davis, 2026-10-06).
   On engine 3f9c548 the cells that finished (f6, and f7 on 2ffa7f6) used
   about 0.8M; the cells that reached a review cycle stopped at 2.0M to
   2.3M with the cycle unfinished, and finishing them needs one revision,
