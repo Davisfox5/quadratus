@@ -1608,6 +1608,29 @@
       "reviews": [],
       "blockers": [],
       "decisions": []
+    },
+    {
+      "id": "T-declaration-stop",
+      "purpose": "Engine defect from series rule-7590b13 f5: the DECLARATION_MAX_TURNS cap (6) fired on grok's capture-redeclare call (6 of 6 rounds, 159k tokens, stop_reason cancelled) and the TurnLimitReached it raised passed out of the design check and ended the run with t1 never closed, although all four graders passed. Fix on #53 (58a4625): _recapture_declared and _supply_fixtures catch the cap through _capped_declaration; the partial text is kept as <role>-capped evidence and never parsed, the record says the call stopped at N rounds with no declaration, the redeclaration stays spent, nothing is re-asked, and the check proceeds as after a reply with no marker (unverified, no fix call). Two tests.",
+      "base": "7590b13b0e8743b49cca609548d56ee911c83584",
+      "owns": [
+        "quadratus/session.py",
+        "tests/test_declaration_recapture.py",
+        "tests/test_missing_fixture_fix.py",
+        "CLAUDE.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-07T04:10:11Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "58a4625",
+        "at": "2026-10-07T04:10:11Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
