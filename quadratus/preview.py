@@ -419,8 +419,9 @@ def running(profile: CaptureProfile, root, deadline: Optional[float] = None):
         shutil.rmtree(tempdir, ignore_errors=True)
 
 
-def capture_argv(profile: CaptureProfile, task_id: str, capture: dict) -> List[str]:
-    """The harness's own capture command for a task's declared capture."""
+def capture_argv(profile: CaptureProfile, task_id: str, capture: dict, view: Optional[str] = None) -> List[str]:
+    """The harness's own capture command for a task's declared capture;
+    ``view`` renders that one width only."""
     target = profile.origin + _web_path(capture.get("path", "/"), "capture path")
     # -P and a working directory outside the project: a project folder named
     # quadratus can never stand in for the harness's own capture module
@@ -430,18 +431,42 @@ def capture_argv(profile: CaptureProfile, task_id: str, capture: dict) -> List[s
     for step in capture.get("steps") or []:
         if step.get("action") == "file":
             argv += ["--upload", step["selector"], step["path"]]
+        elif step.get("action") == "confirm":
+            argv += ["--confirm", step["selector"], step["message"]]
         else:
             argv += [f"--{step['action']}", step["selector"]]
+    if view:
+        argv += ["--view", view]
     return argv
 
 
 def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict) -> str:
     """Preview, capture the task's declared state, stop. Returns "" on success
-    or why it failed; never raises for a preview or capture failure."""
+    or why it failed; never raises for a preview or capture failure.
+
+    A declaration that changes the preview's state (``mutates_preview``) is
+    captured one view per preview: the preview is started, the view
+    rendered and the preview stopped, then again for the next view, so the
+    second view meets the profile's own seed and not the state the first
+    view left (Codex, 6038178890). Whether the profile reseeds on start is
+    the profile's property; a view whose final wait was already satisfied
+    before its steps is caught by the evidence check as a declaration
+    problem, never passed off as proof."""
     root = Path(root)
-    argv = capture_argv(profile, task_id, capture)
-    package = str(Path(__file__).resolve().parent.parent)
     deadline = time.monotonic() + profile.total_timeout
+    if mutates_preview(capture):
+        from .design_evidence import VIEWPORTS
+        for view in VIEWPORTS:
+            failure = _capture_once(profile, root, capture_argv(profile, task_id, capture, view), deadline)
+            if failure:
+                return failure
+        return ""
+    return _capture_once(profile, root, capture_argv(profile, task_id, capture), deadline)
+
+
+def _capture_once(profile: CaptureProfile, root: Path, argv: List[str], deadline: float) -> str:
+    """One preview around one capture command."""
+    package = str(Path(__file__).resolve().parent.parent)
     try:
         with running(profile, root, deadline):
             env = dict(_environment())
@@ -487,10 +512,13 @@ def validate_capture(capture) -> dict:
     for step in steps:
         if (not isinstance(step, dict) or step.get("action") not in ("click", "wait", "file", "confirm")
                 or not isinstance(step.get("selector"), str) or not step["selector"].strip()
-                or len(step["selector"]) > MAX_SELECTOR_CHARS or set(step) - {"action", "selector", "path"}
-                or (step["action"] == "file") != isinstance(step.get("path"), str)):
+                or len(step["selector"]) > MAX_SELECTOR_CHARS or set(step) - {"action", "selector", "path", "message"}
+                or (step["action"] == "file") != isinstance(step.get("path"), str)
+                or (step["action"] == "confirm") != isinstance(step.get("message"), str)
+                or (step["action"] == "confirm" and (not step["message"].strip()
+                                                     or len(step["message"]) > MAX_SELECTOR_CHARS))):
             raise ValueError("SCOPE capture steps need action click, wait, confirm or file, a selector, "
-                             "and a path for file steps only")
+                             "a path for file steps only and a message for confirm steps only")
         if step["action"] == "file":
             # Syntax and containment now; which task owns a fixture is checked
             # at dispatch, existence and hash by the capture (a repair may
@@ -509,5 +537,12 @@ def validate_capture(capture) -> dict:
                     or any(ord(c) < 32 for c in upload)):
                 raise ValueError("SCOPE capture file steps must name a non-hidden project file or "
                                  ".quadratus/capture-fixtures/<task>/<name>")
-        out.append({k: (v.strip() if k == "selector" else v) for k, v in step.items()})
+        out.append({k: (v.strip() if k in ("selector", "message") else v) for k, v in step.items()})
     return dict(path=path, steps=out)
+
+
+def mutates_preview(capture: dict) -> bool:
+    """Whether a declaration changes the preview's state (a confirm step):
+    such a capture gets one preview per view, so the second view starts
+    from the profile's own seed and not from what the first view did."""
+    return any(s.get("action") == "confirm" for s in (capture.get("steps") or []))

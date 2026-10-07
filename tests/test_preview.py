@@ -5,6 +5,7 @@ group is really signalled, and a real browser captures the page where one is
 available. No model is involved.
 """
 
+import contextlib
 import json
 import os
 import socket
@@ -722,3 +723,38 @@ def test_pinning_that_cannot_be_set_up_fails_the_capture(tmp_path, monkeypatch):
             render_page(f"http://127.0.0.1:{port}/index.html", out_dir=tmp_path / "out",
                         allow_navigation=lambda url: url.startswith(f"http://127.0.0.1:{port}/"),
                         pin_requests=True)
+
+
+def test_a_state_changing_capture_gets_one_preview_per_view(tmp_path, monkeypatch):
+    """Codex, 6038178890: one preview around both views lets the first view's
+    delete empty the list for the second; a confirm declaration restarts
+    the preview per view, a plain one does not."""
+    from quadratus.design_evidence import VIEWPORTS
+    starts, runs = [], []
+    original = preview.running
+
+    @contextlib.contextmanager
+    def counting(profile, root, deadline=None):
+        starts.append(1)
+        with original(profile, root, deadline):
+            yield
+    monkeypatch.setattr(preview, "running", counting)
+    (tmp_path / "record.py").write_text("import sys, pathlib\n"
+                                        "pathlib.Path('argv.log').open('a').write(' '.join(sys.argv[1:]) + '\\n')\n")
+    real_argv = preview.capture_argv
+
+    def argv(profile, task_id, capture, view=None):
+        runs.append(real_argv(profile, task_id, capture, view)[-2:] if view else ["(both)"])
+        return [sys.executable, str(tmp_path / "record.py"), *(["--view", view] if view else [])]
+    monkeypatch.setattr(preview, "capture_argv", argv)
+    port = _free_port()
+    profile = _profile(tmp_path, _server(port), port, total_timeout=60)
+    confirm = {"path": "/", "steps": [dict(action="confirm", selector=".delete-btn", message="Delete project"),
+                                      dict(action="wait", selector="#projects-empty")]}
+    assert preview.capture_task(profile, tmp_path, "t1", confirm) == ""
+    assert len(starts) == len(VIEWPORTS) and runs == [["--view", v] for v in VIEWPORTS]
+    starts.clear()
+    runs.clear()
+    plain = {"path": "/", "steps": [dict(action="click", selector="#a"), dict(action="wait", selector="#b")]}
+    assert preview.capture_task(profile, tmp_path, "t1", plain) == ""
+    assert len(starts) == 1 and runs == [["(both)"]]

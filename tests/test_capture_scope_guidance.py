@@ -62,7 +62,7 @@ def test_the_correction_for_a_capture_error_carries_the_capture_rules(tmp_path):
     session, calls = _session(tmp_path, iter([_declaration(KEYED), _declaration(VALID)]))
     spec = session.next_task()
     assert len(calls) == 2
-    assert "CORRECTION REQUIRED: SCOPE capture steps need action click, wait or file" in calls[1]
+    assert "CORRECTION REQUIRED: SCOPE capture steps need action click, wait, confirm or file" in calls[1]
     assert _CAPTURE_SCOPE_REQUEST in calls[1], "the correction states every rule the declaration is held to"
     assert spec.scope.capture["steps"][0] == {"action": "click", "selector": "#open"}
 

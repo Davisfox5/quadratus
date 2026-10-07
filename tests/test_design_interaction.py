@@ -9,6 +9,7 @@ a working dialog, an inert launcher, a missing selector, a blocked navigation.
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -1068,13 +1069,13 @@ def test_a_fixture_step_without_a_valid_digest_is_unverified(tmp_path):
 
 
 class _DialogPage(_FakePage):
-    """A page whose click opens a confirm dialog, answered through the
-    handler registered with ``once``."""
+    """A page whose click opens a dialog, answered through the handler
+    registered with ``once``."""
 
-    def __init__(self, opens_dialog=True):
+    def __init__(self, dialog=("confirm", "Delete project Alpha Cup?")):
         super().__init__()
         self.handlers = {}
-        self.opens_dialog = opens_dialog
+        self.dialog = dialog
         self.answered = []
 
     def once(self, event, handler):
@@ -1082,49 +1083,116 @@ class _DialogPage(_FakePage):
 
     def click(self, selector, timeout):
         super().click(selector, timeout)
-        if self.opens_dialog and "dialog" in self.handlers:
+        if self.dialog and "dialog" in self.handlers:
             page = self
+            kind, text = self.dialog
 
             class Dialog:
-                type, message = "confirm", "Delete project Alpha Cup?"
+                type, message = kind, text
 
                 def accept(self):
                     page.answered.append("accepted")
+
+                def dismiss(self):
+                    page.answered.append("dismissed")
             self.handlers.pop("dialog")(Dialog())
 
 
-def test_a_confirm_step_clicks_and_accepts_the_dialog_it_opens():
+CONFIRM = dict(action="confirm", selector=".delete-btn", message="Delete project")
+
+
+def test_a_confirm_step_accepts_only_the_declared_confirm_dialog():
     """Series rule-58a4625 f5: the empty list sits behind a confirm dialog
     that a plain click leaves unanswered, so the browser cancels the delete."""
     import time
 
     from quadratus.browser import _run_steps
     page = _DialogPage()
-    records = _run_steps(page, [dict(action="confirm", selector=".delete-btn"),
-                                dict(action="wait", selector="#projects-empty:not([hidden])")],
+    records = _run_steps(page, [dict(CONFIRM), dict(action="wait", selector="#projects-empty:not([hidden])")],
                          [], 5000, time.monotonic() + 5)
     assert [r["ok"] for r in records] == [True, True]
-    assert records[0]["dialog"] == "confirm: Delete project Alpha Cup?" and page.answered == ["accepted"]
+    assert records[0]["dialog"] == dict(type="confirm", message="Delete project Alpha Cup?", accepted=True)
+    assert page.answered == ["accepted"]
     assert [c[0] for c in page.calls] == ["click", "pause", "wait"]
 
 
-def test_a_confirm_step_with_no_dialog_records_none_and_still_passes():
+@pytest.mark.parametrize("dialog, said", [
+    (("confirm", "Reset everything?"), "did not match: confirm 'Reset everything?'"),
+    (("alert", "Delete project Alpha Cup?"), "did not match: alert"),
+    (None, "no dialog opened"),
+])
+def test_an_unexpected_or_missing_dialog_fails_the_confirm_step_and_is_dismissed(dialog, said):
+    """Codex, 6038178890: a dialog response is narrowly matched; anything
+    else stays an honest failed step, and nothing is ever auto-accepted."""
     import time
 
     from quadratus.browser import _run_steps
-    page = _DialogPage(opens_dialog=False)
-    records = _run_steps(page, [dict(action="confirm", selector=".delete-btn")], [], 5000, time.monotonic() + 5)
-    assert records == [dict(n=1, action="confirm", selector=".delete-btn", ok=True, dialog=None)]
+    page = _DialogPage(dialog)
+    records = _run_steps(page, [dict(CONFIRM), dict(action="wait", selector="#projects-empty")],
+                         [], 5000, time.monotonic() + 5)
+    assert len(records) == 1 and records[0]["ok"] is False and said in records[0]["error"]
+    assert page.answered == (["dismissed"] if dialog else [])
+    assert "Delete project" in records[0]["error"], "the expected text is named"
 
 
 def test_confirm_steps_parse_validate_and_render_like_the_others(tmp_path):
     from quadratus.preview import CaptureProfile, capture_argv, validate_capture
-    _, steps = parse_steps(["p.html", "t1", "--confirm", ".delete-btn", "--wait", "#projects-empty"])
-    assert steps == [dict(action="confirm", selector=".delete-btn"), dict(action="wait", selector="#projects-empty")]
+    _, steps = parse_steps(["p.html", "t1", "--confirm", ".delete-btn", "Delete project", "--wait", "#projects-empty"])
+    assert steps == [CONFIRM, dict(action="wait", selector="#projects-empty")]
     checked, _ = validate_steps(steps, "http://127.0.0.1:1/", tmp_path, "t1")
     assert checked == steps
     capture = validate_capture({"path": "/", "steps": steps})
     assert capture["steps"] == steps
     profile = CaptureProfile(preview=("true",), origin="http://127.0.0.1:1")
     argv = capture_argv(profile, "t1", capture)
-    assert argv[-4:] == ["--confirm", ".delete-btn", "--wait", "#projects-empty"]
+    assert argv[-5:] == ["--confirm", ".delete-btn", "Delete project", "--wait", "#projects-empty"]
+    assert capture_argv(profile, "t1", capture, "mobile")[-2:] == ["--view", "mobile"]
+    with pytest.raises(ValueError):
+        parse_steps(["p.html", "t1", "--confirm", ".delete-btn"])
+    for bad in (dict(action="confirm", selector=".d"), dict(action="confirm", selector=".d", message="  "),
+                dict(action="click", selector=".d", message="x")):
+        with pytest.raises(ValueError):
+            validate_capture({"path": "/", "steps": [bad]})
+        with pytest.raises(ValueError):
+            validate_steps([bad], "http://127.0.0.1:1/", tmp_path, "t1")
+
+
+def _fake_render(root):
+    """A render_page that writes the files a view needs and reports its steps done."""
+    from quadratus.browser import PageEvidence
+
+    def render(target, *, out_dir, viewport=None, steps=None, **kwargs):
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "page.png").write_bytes(b"\x89PNG")
+        (out_dir / "evidence.json").write_text("{}")
+        done = [dict(n=i + 1, action=s["action"], selector=s["selector"], ok=True) for i, s in enumerate(steps or [])]
+        return PageEvidence(url=target, title="t", screenshot_path=str(out_dir / "page.png"), steps=done,
+                            document_width=viewport["width"] if viewport else None)
+    return render
+
+
+def test_a_single_view_capture_keeps_the_other_view_only_from_a_finished_summary(tmp_path, monkeypatch):
+    """A state-changing declaration is captured one view per preview; the
+    second run merges the first's view, and a run that raises leaves nothing."""
+    from quadratus import browser
+    root = _project(tmp_path)
+    monkeypatch.setattr(browser, "render_page", _fake_render(root))
+    steps = [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]
+    capture(str(root / "index.html"), "t1", root, steps, views=["desktop"])
+    summary = json.loads((evidence_dir(root, "t1") / "summary.json").read_text())
+    assert set(summary["views"]) == {"desktop"} and summary["steps"][0]["message"] == "Delete project"
+    capture(str(root / "index.html"), "t1", root, steps, views=["mobile"])
+    summary = json.loads((evidence_dir(root, "t1") / "summary.json").read_text())
+    assert set(summary["views"]) == {"desktop", "mobile"}
+    assert (evidence_dir(root, "t1") / "desktop" / "page.png").exists()
+    with pytest.raises(ValueError):
+        capture(str(root / "index.html"), "t1", root, steps, views=["tablet"])
+
+    def broken(*a, **k):
+        raise RuntimeError("browser crashed")
+    monkeypatch.setattr(browser, "render_page", broken)
+    with pytest.raises(RuntimeError):
+        capture(str(root / "index.html"), "t1", root, steps, views=["mobile"])
+    summary = json.loads((evidence_dir(root, "t1") / "summary.json").read_text())
+    assert summary["views"] == {} and "capture_failed" in summary

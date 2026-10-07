@@ -782,15 +782,24 @@ Key design decisions already settled:
   declared route to the state existed and f5 stayed unverified on every
   cycle with all four graders passing. Playwright dismisses an unanswered
   dialog, so a plain click on a delete control cancels the delete. A
-  confirm step registers a one-shot dialog handler, clicks, accepts, and
-  records the dialog's type and message on the step (none appearing is
-  recorded, never a failure); it is validated, carried through the CLI as
-  `--confirm SEL`, and named in the orchestrator's capture rule. It mutates
-  preview state on purpose: a preview that writes its data inside the
-  project root will trip the source-fingerprint check ("the project source
-  changed while the harness previewed"), which is the profile's problem to
-  solve (a data directory outside the project), not a reason to weaken the
-  check. No goal, grader or profile change was made.
+  confirm step declares the text its dialog must show
+  (`"message"`), registers a one-shot handler, clicks, and accepts that one
+  dialog only when it is a confirm whose message contains the declared
+  text; any other dialog is dismissed and the step fails, and no dialog is
+  a failed step, so an unexpected, wrong or missing dialog stays an honest
+  unverified outcome and nothing is ever auto-accepted (Codex,
+  6038178890). The dialog's type, message and whether it was accepted are
+  recorded on the step. It is validated, carried through the CLI as
+  `--confirm SEL MESSAGE`, and named in the orchestrator's capture rule.
+  Because it changes the preview's state, such a capture is rendered one
+  view per fresh preview (`preview.mutates_preview`, `--view`): the first
+  view's delete must not empty the list for the second. Whether the
+  preview reseeds on start is the profile's property; a second view whose
+  final wait was already satisfied before its steps is caught by the
+  evidence check as a declaration problem, and a preview that writes its
+  data inside the project root trips the source-fingerprint check, which
+  is the profile's problem to solve, not a reason to weaken the check. No
+  goal, grader or profile change was made.
 - **A node check has a producer, and the report token never reaches a
   model** (series rule-58a4625 f3, 2026-10-07). Two findings from one cell.
   The packet's pytest check now carried `--quadratus-report={report}`, and

@@ -184,7 +184,12 @@ def parse_steps(argv: List[str]) -> Tuple[List[str], List[dict]]:
                 raise ValueError("--upload takes SELECTOR PATH")
             selector, path = items.pop(0), items.pop(0)
             steps.append(dict(action="file", selector=selector, path=path))
-        elif item in ("--click", "--wait", "--confirm", "--file"):
+        elif item == "--confirm":
+            if len(items) < 2:
+                raise ValueError("--confirm takes SELECTOR MESSAGE (text the confirm dialog must show)")
+            selector, message = items.pop(0), items.pop(0)
+            steps.append(dict(action="confirm", selector=selector, message=message))
+        elif item in ("--click", "--wait", "--file"):
             if not items:
                 raise ValueError(f"{item} needs a value")
             value = items.pop(0)
@@ -286,6 +291,14 @@ def validate_steps(steps: List[dict], target: str, root, task_id: Optional[str] 
         if not isinstance(selector, str) or not selector.strip() or len(selector) > MAX_SELECTOR_CHARS:
             raise ValueError(f"each step needs a selector of at most {MAX_SELECTOR_CHARS} characters")
         item = dict(action=action, selector=selector.strip())
+        if action != "confirm" and step.get("message") is not None:
+            raise ValueError("only a confirm step names a dialog message")
+        if action == "confirm":
+            message = step.get("message")
+            if not isinstance(message, str) or not message.strip() or len(message) > MAX_SELECTOR_CHARS:
+                raise ValueError(f"a confirm step names the text its dialog must show, at most "
+                                 f"{MAX_SELECTOR_CHARS} characters")
+            item["message"] = message.strip()
         if action == "file":
             path = _fixture(root, step.get("path") or "", task_id)
             size = path.stat().st_size
@@ -298,22 +311,32 @@ def validate_steps(steps: List[dict], target: str, root, task_id: Optional[str] 
 
 
 def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = None, *,
-            pinned: bool = False) -> dict:
+            pinned: bool = False, views: Optional[List[str]] = None) -> dict:
     """Render ``target`` at each width into the task's evidence folder.
 
     With ``steps``, each width runs them on a fresh page before its
     screenshot. ``pinned`` holds navigation to the target's origin even with
     no steps (the harness's own capture, quadratus.preview). Refused steps are written into summary.json and raised, so the
     design check reports why instead of accepting an earlier render.
+
+    ``views`` renders only those widths (the harness captures a state-
+    changing declaration one view per preview, quadratus.preview). The
+    other views' entries are kept from the previous summary only when it
+    was complete, for the same target, and this run finishes; a run that
+    raises part-way still leaves nothing standing.
     """
     from .browser import render_page
     folder = evidence_dir(root, task_id)
     folder.mkdir(parents=True, exist_ok=True)
+    wanted = {name: VIEWPORTS[name] for name in (views or VIEWPORTS) if name in VIEWPORTS}
+    if views and set(views) - set(VIEWPORTS):
+        raise ValueError(f"unknown view(s) {sorted(set(views) - set(VIEWPORTS))}; the views are {list(VIEWPORTS)}")
+    kept = _kept_views(folder, target, set(VIEWPORTS) - set(wanted)) if views else {}
     # Invalidate before anything can fail: a capture that raises part-way
     # must never leave an earlier, successful summary and screenshots standing
     # as this attempt's evidence (Codex review of c222d62).
     _write_summary(folder, dict(target=target, views={}, capture_in_progress=True))
-    for name in VIEWPORTS:
+    for name in wanted:
         for leftover in ("page.png", "evidence.json"):
             (folder / name / leftover).unlink(missing_ok=True)
     try:
@@ -334,7 +357,7 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
     except ExcludesError as exc:
         identity_error = str(exc)
     try:
-        for name, viewport in VIEWPORTS.items():
+        for name, viewport in wanted.items():
             for item in checked:
                 if item["action"] == "file" and _digest(Path(item["path"])) != item["sha256"]:
                     raise ValueError(f"fixture {item['label']} changed or vanished during the capture")
@@ -351,6 +374,8 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
         _write_summary(folder, dict(target=target, views={}, rendered=sorted(out),
                                     capture_failed=f"{type(exc).__name__}: {str(exc)[:300]}"))
         raise
+    if kept:
+        out = {**kept, **out}
     summary = dict(target=target, views=out,
                    source_fingerprint=source if source and source == source_fingerprint(root) else None)
     if identity_error:
@@ -396,6 +421,26 @@ def _fixture_problem(root, step: dict, task_id: str) -> Optional[str]:
 
 def _write_summary(folder: Path, summary: dict) -> None:
     (folder / "summary.json").write_text(json.dumps(summary, indent=2))
+
+
+def _kept_views(folder: Path, target: str, names) -> dict:
+    """The named views' entries from the summary on disk, kept for a
+    partial render, when that summary is a finished one for the same target
+    with those views rendered and their files present; otherwise nothing."""
+    try:
+        previous = json.loads((folder / "summary.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    if (not isinstance(previous, dict) or previous.get("target") != target or previous.get("capture_in_progress")
+            or previous.get("capture_failed") or previous.get("steps_refused")
+            or not isinstance(previous.get("views"), dict)):
+        return {}
+    kept = {}
+    for name in names:
+        view = previous["views"].get(name)
+        if isinstance(view, dict) and (folder / name / "page.png").is_file() and (folder / name / "evidence.json").is_file():
+            kept[name] = view
+    return kept if len(kept) == len(set(names)) else {}
 
 
 def _step_problem(view: str, requested, done) -> Optional[str]:
@@ -628,6 +673,7 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
         if requested:
             shots.append("steps: " + "; ".join(
                 f"{s['action']} {s['selector']}"
+                + (f" ({s.get('message')!r})" if s["action"] == "confirm" else "")
                 + (f" = {s.get('label')}" + (f" (sha256 {str(s['sha256'])[:12]}, {s.get('bytes')} bytes)"
                                             if s.get("sha256") else "") if s["action"] == "file" else "")
                 for s in requested))
@@ -638,6 +684,14 @@ def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     pinned = "--pinned" in argv
     argv = [a for a in argv if a != "--pinned"]
+    views = None
+    while "--view" in argv:
+        at = argv.index("--view")
+        if at + 1 >= len(argv):
+            print("error: --view needs a name", file=sys.stderr)
+            return 2
+        views = (views or []) + [argv[at + 1]]
+        del argv[at:at + 2]
     try:
         positional, steps = parse_steps(argv)
     except ValueError as exc:
@@ -645,11 +699,12 @@ def main(argv=None) -> int:
         return 2
     if len(positional) not in (2, 3):
         print("usage: python -m quadratus.design_evidence <url-or-html-file> <task-id> [project-root] "
-              "[--click SEL] [--wait SEL] [--confirm SEL] [--upload SEL path] [--file SEL=path]", file=sys.stderr)
+              "[--click SEL] [--wait SEL] [--confirm SEL MESSAGE] [--upload SEL path] [--file SEL=path] "
+              "[--view desktop|mobile]", file=sys.stderr)
         return 2
     try:
         out = capture(positional[0], positional[1], positional[2] if len(positional) == 3 else ".", steps,
-                      pinned=pinned)
+                      pinned=pinned, views=views)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

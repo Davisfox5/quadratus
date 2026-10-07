@@ -459,22 +459,38 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
                 page.click(selector, timeout=limit)
                 page.wait_for_timeout(min(200, budget.ms(200)))  # let a started navigation reach the guard
             elif action == "confirm":
-                # A click that opens a browser dialog (confirm, alert, prompt)
-                # and accepts it. Playwright dismisses an unanswered dialog, so
-                # a plain click on a delete control cancels the delete and the
-                # state the declaration names is never reached (series
-                # rule-58a4625 f5: the empty list sits behind a confirm). The
-                # dialog's message is recorded as evidence; none appearing is
-                # recorded too, never read as a failure of the step.
-                seen: List[str] = []
+                # A click that opens a browser confirm dialog, answered only
+                # when it is the one declared: a confirm whose message holds
+                # the declared text is accepted; any other dialog (another
+                # type, another message) is dismissed and the step fails; no
+                # dialog at all fails the step. Playwright dismisses an
+                # unanswered dialog, so a plain click on a delete control
+                # cancels the delete and the state the declaration names is
+                # never reached (series rule-58a4625 f5: the empty list sits
+                # behind a confirm). Never a global auto-accept (Codex,
+                # 6038178890): one handler, one click, one dialog.
+                expected = str(step.get("message") or "")
+                seen: List[dict] = []
 
-                def accept(dialog, seen=seen):
-                    seen.append(f"{dialog.type}: {dialog.message}"[:200])
-                    dialog.accept()
-                page.once("dialog", accept)
+                def answer(dialog, seen=seen, expected=expected):
+                    matched = dialog.type == "confirm" and bool(expected) and expected in dialog.message
+                    seen.append(dict(type=dialog.type, message=str(dialog.message)[:200], accepted=matched))
+                    if matched:
+                        dialog.accept()
+                    else:
+                        dialog.dismiss()
+                page.once("dialog", answer)
                 page.click(selector, timeout=limit)
                 page.wait_for_timeout(min(200, budget.ms(200)))
-                record["dialog"] = seen[0] if seen else None
+                if not seen:
+                    record["dialog"] = None
+                    record["error"] = f"no dialog opened; expected a confirm containing {expected[:80]!r}"
+                    break
+                record["dialog"] = seen[0]
+                if not seen[0]["accepted"]:
+                    record["error"] = (f"the dialog did not match: {seen[0]['type']} {seen[0]['message'][:80]!r}; "
+                                       f"expected a confirm containing {expected[:80]!r}; dismissed")
+                    break
             elif action == "wait":
                 page.wait_for_selector(selector, state="visible", timeout=limit)
             elif action == "file":
