@@ -161,7 +161,27 @@ def _check_identity(argv):
         head, rest = 'python', ['-m', 'pytest', *rest]
     # The declared harness report only adds output (integration.REPORT_TOKEN),
     # so a check that declares it is the same check as the scanned one.
+    # ``-p no:cacheprovider`` disables pytest's result cache (``.pytest_cache``,
+    # ``--lf``/``--ff``) and selects nothing: series rule-7590b13 f3 ran its
+    # suite twice per gate, once as the operator's ``check`` and once as the
+    # scanned ``declared-python``, and the second had no report to attribute.
+    rest = _without_cacheprovider(rest)
     return (head, *[a for a in rest if a not in _QUIET_FLAGS and not _report_only(a)])
+
+
+def _without_cacheprovider(rest):
+    out, skip = [], False
+    for i, arg in enumerate(rest):
+        if skip:
+            skip = False
+            continue
+        if arg == '-p' and i + 1 < len(rest) and rest[i + 1] == 'no:cacheprovider':
+            skip = True
+            continue
+        if arg == '-pno:cacheprovider':
+            continue
+        out.append(arg)
+    return out
 
 
 def _report_only(arg: str) -> bool:

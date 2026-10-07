@@ -661,6 +661,21 @@ Key design decisions already settled:
   reserve, every other call reserves the operator's figure in full, the
   post-return threshold is unchanged, and the snapshot counts
   `shaped_reservations`.
+- **The Stage B check declares the harness report, and a cache-free pytest
+  is the same check** (series rule-7590b13 f3, 2026-10-07). A gate failure
+  buys a fix call only when the check carries `--quadratus-report={report}`
+  and the report shows plain assertion failures (phase 3, #25); the packet's
+  check never carried the token, so the first failing gate of the cycle
+  (the lead's own `tests/test_ui_rename.py` asserting on a node runner's
+  `# pass 0`) was `CheckUnattributable` and the run stopped with six tasks
+  closed and no repair call. The packet now declares the token. The same
+  suite had also been running twice per gate, once as the operator's
+  `check` and once as the scanned `declared-python`, because
+  `-p no:cacheprovider` made the two argv differ; `_check_identity` now
+  treats that switch as the non-selecting plumbing it is, so the declared
+  pytest is named by the operator's and runs once, with the report. The
+  node `extra_checks` gate has no report producer and stays unattributable
+  by design: a node failure is still the operator's.
 - **The Stage B cell budget is 5M and the reserve 250k** (Davis,
   2026-10-06: "the reserve and the overall token count are now in play").
   Raised from 4M after series rule-7590b13 f2: all three tasks' work was

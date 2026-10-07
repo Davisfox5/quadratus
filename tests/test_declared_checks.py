@@ -128,6 +128,9 @@ PY = [sys.executable, "-m", "pytest", "-q"]
     (PY, True),
     (["pytest", "-q"], True),
     (["python3", "-m", "pytest"], True),
+    (["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"], True),    # no cache: runs the same tests
+    (["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "--quadratus-report={report}"], True),
+    (["python", "-m", "pytest", "-p", "no:randomly"], False),            # another plugin switch is not proven
     (["python", "-m", "pytest", "tests/test_one.py"], False),       # a subset
     (["python", "-m", "pytest", "-q", "-k", "fast"], False),        # a selection
     (["echo", "pytest"], False),                                    # merely mentions it

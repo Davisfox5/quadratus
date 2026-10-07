@@ -7,7 +7,7 @@
   "engine_sha": "<filled at launch from the engine checkout HEAD>",
   "jev_model": "jev-1.13.0",
   "goal": "REQUIREMENTS:\nR1 <unused: every task carries its own goal>\n",
-  "check": "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python -m pytest -q -p no:cacheprovider",
+  "check": "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python -m pytest -q -p no:cacheprovider --quadratus-report={report}",
   "extra_checks": [
     [
       "node",
