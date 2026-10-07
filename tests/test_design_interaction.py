@@ -1073,13 +1073,21 @@ class _DialogPage(_FakePage):
     """A page whose click opens a dialog, answered through the handler
     registered with ``once``."""
 
-    def __init__(self, dialog=("confirm", "Delete project Alpha Cup?"), click_error=None, dialogs=None):
+    def __init__(self, dialog=("confirm", "Delete project Alpha Cup?"), click_error=None, dialogs=None,
+                 error_after=None, pause_error=None):
         super().__init__()
         self.handlers = {}
         self.dialog = dialog
         self.dialogs = dialogs
         self.answered = []
         self.click_error = click_error
+        self.error_after = error_after      # raised by the click after its dialogs were handled
+        self.pause_error = pause_error      # raised by the pause that follows the click
+
+    def wait_for_timeout(self, ms):
+        super().wait_for_timeout(ms)
+        if self.pause_error:
+            raise self.pause_error
 
     def on(self, event, handler):
         self.handlers[event] = handler
@@ -1106,6 +1114,8 @@ class _DialogPage(_FakePage):
                 def dismiss(self):
                     page.answered.append("dismissed")
             self.handlers["dialog"](Dialog())
+        if self.error_after:
+            raise self.error_after
 
 
 CONFIRM = dict(action="confirm", selector=".delete-btn", message="Delete project Alpha Cup?")
@@ -1388,3 +1398,25 @@ def test_a_dialog_record_keeps_the_compared_text_and_never_a_non_string():
     assert len(records[0]["dialog"]["message"]) == 600
     forged = [dict(records[0], ok=True, dialog=dict(records[0]["dialog"], accepted=True))]
     assert "no record of the declared dialog" in _step_problem("desktop", [dict(CONFIRM)], forged)
+
+
+@pytest.mark.parametrize("failing", ["click", "pause"])
+def test_dialog_records_survive_a_click_or_pause_that_fails_after_them(failing):
+    """Codex review of f30e8b4: a timeout after an accepted confirm and a
+    dismissed prompt recorded only the error, so the failed step could not
+    say whether the declared operation had already happened."""
+    import time
+
+    from quadratus.browser import _run_steps
+    dialogs = [("confirm", "Delete project Alpha Cup?"), ("prompt", "Name the backup")]
+    error = TimeoutError("navigation timed out")
+    page = _DialogPage(dialogs=dialogs, **({"error_after": error} if failing == "click" else {"pause_error": error}))
+    records = _run_steps(page, [dict(CONFIRM), dict(action="wait", selector="#projects-empty")],
+                         [], 5000, time.monotonic() + 5)
+    assert len(records) == 1 and records[0]["ok"] is False and "navigation timed out" in records[0]["error"]
+    assert records[0]["dialog"] == dict(type="confirm", message="Delete project Alpha Cup?", accepted=True)
+    assert records[0]["extra_dialogs"] == [dict(type="prompt", message="Name the backup", accepted=False)]
+    assert page.answered == ["accepted", "dismissed"] and "dialog" not in page.handlers
+    page = _DialogPage(dialog=None, pause_error=error)
+    records = _run_steps(page, [dict(CONFIRM)], [], 5000, time.monotonic() + 5)
+    assert records[0]["dialog"] is None and "navigation timed out" in records[0]["error"]

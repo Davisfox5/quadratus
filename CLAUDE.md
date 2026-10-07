@@ -895,7 +895,9 @@ Key design decisions already settled:
   the message as it was compared (whitespace collapsed, whole up to 600
   characters) so the evidence check compares exactly what the step did; a
   non-string message is recorded by repr under `message_repr`, never
-  matches, and `message` is null.
+  matches, and `message` is null. The dialog records are written in the
+  click's `finally`, so a click or pause that raises after the declared
+  confirm was accepted still says so (Codex review of f30e8b4).
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

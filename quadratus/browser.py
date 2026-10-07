@@ -524,13 +524,18 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
                     page.wait_for_timeout(min(200, budget.ms(200)))
                 finally:
                     page.remove_listener("dialog", answer)
+                    # What the click opened is evidence whether or not the
+                    # click returned: a step that fails after the declared
+                    # operation was accepted must say so (Codex review of
+                    # f30e8b4: a timeout after an accepted confirm and a
+                    # dismissed prompt recorded only the error).
+                    record["dialog"] = seen[0] if seen else None
+                    if len(seen) > 1:
+                        record["extra_dialogs"] = seen[1:]
                 if not seen:
-                    record["dialog"] = None
                     record["error"] = f"no dialog opened; expected the confirm {expected[:80]!r}"
                     break
-                record["dialog"] = seen[0]
                 if len(seen) > 1:
-                    record["extra_dialogs"] = seen[1:]
                     record["error"] = (f"{len(seen)} dialogs opened where one confirm was declared; the extra "
                                        f"{seen[1]['type']} {str(seen[1]['message'])[:80]!r} was dismissed")
                     break
