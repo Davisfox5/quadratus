@@ -1677,6 +1677,28 @@
       ],
       "blockers": [],
       "decisions": []
+    },
+    {
+      "id": "T-step-recapture",
+      "purpose": "Engine defect from series rule-58a4625 f2: t2 was drafted, reviewed by Opus (15 rounds), revised, rechecked and closed, then the harness capture exited 1 on the orchestrator's declared wait (#project-search-count:empty after click #btn-project-search-clear) and the task stayed unverified with no redeclaration (run ended DesignUnverified), while the sibling declaration defect (a final wait visible at load) already buys one redeclaration. Also t1: the redeclaration {path: /, steps: []} was accepted, captured and verified because there was no wait to check. Fix on #53 (6fbbad2): the capture tool exits 1 only for a failed step (_step_failure), and that case now gets the one _recapture_declared round with the capture as source; success continues into the ordinary check and review, failure stays unverified with no fix call; exit 2, preview and integrity failures unchanged; a recapture must end in a wait on the changed state or it is no usable declaration. Four tests.",
+      "base": "58a4625aa37050f976a7475db9a403c900b32224",
+      "owns": [
+        "quadratus/session.py",
+        "tests/test_declaration_recapture.py",
+        "CLAUDE.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-07T11:20:01Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "6fbbad2",
+        "at": "2026-10-07T11:20:07Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
