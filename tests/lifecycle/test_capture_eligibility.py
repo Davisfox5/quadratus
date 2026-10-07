@@ -113,9 +113,12 @@ def test_a_passing_task_gate_reaches_capture_despite_an_unrelated_run_check_offl
     captures = []
     from quadratus import preview
 
-    def capture(_profile, root, task_id, declaration):
+    def capture(_profile, root, task_id, declaration, receipt=None):
+        from quadratus.design_evidence import view_receipt
         captures.append((task_id, declaration["path"]))
         H.evidence(Path(root), task_id, age=H.FRESH)
+        if receipt is not None:     # measured as the harness measures its own capture
+            receipt.update({name: view_receipt(Path(root), task_id, name) for name in ("desktop", "mobile")})
         return ""
 
     monkeypatch.setattr(preview, "capture_task", capture)

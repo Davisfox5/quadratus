@@ -1057,7 +1057,9 @@ def test_the_design_reviewer_can_read_the_renders_in_its_copy(tmp_path, monkeypa
 
     _design_run(tmp_path, monkeypatch, max_lines=40, review=review)
     assert seen["cwd_is_project"] is False, "a fresh source copy, not the project"
-    assert seen["files"] == [".quadratus/design-evidence/t1/desktop/page.png",
+    assert seen["files"] == [".quadratus/design-evidence/t1/desktop/evidence.json",
+                             ".quadratus/design-evidence/t1/desktop/page.png",
+                             ".quadratus/design-evidence/t1/mobile/evidence.json",
                              ".quadratus/design-evidence/t1/mobile/page.png",
                              ".quadratus/design-evidence/t1/summary.json"]
     assert seen["png"] == b"\x89PNG\r\n\x1a\n", "the reviewer actually reads the image in its copy"
@@ -1131,8 +1133,17 @@ def test_a_later_non_ui_tasks_reviewers_get_no_earlier_renders(tmp_path, monkeyp
 
 def test_an_incomplete_evidence_transfer_blocks_the_review_instead_of_claiming_it(tmp_path, monkeypatch):
     def lead(call, replay):
+        import hashlib
         reply = _edits_and_captures(call, replay)
-        Path(call.cwd, ".quadratus/design-evidence/t1/mobile/evidence.json").write_text("not json")
+        broken = Path(call.cwd, ".quadratus/design-evidence/t1/mobile/evidence.json")
+        broken.write_text("not json")
+        # The capture itself wrote the non-JSON file: its summary digest
+        # agrees with the bytes, so the evidence check passes and only the
+        # transfer refuses it.
+        summary_path = Path(call.cwd, ".quadratus/design-evidence/t1/summary.json")
+        summary = json.loads(summary_path.read_text())
+        summary["views"]["mobile"]["files"]["evidence.json"] = hashlib.sha256(broken.read_bytes()).hexdigest()
+        summary_path.write_text(json.dumps(summary))
         return reply
 
     replay = _design_run(tmp_path, monkeypatch, lead=lead,

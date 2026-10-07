@@ -162,7 +162,9 @@ def test_an_approved_design_task_records_what_was_delivered_and_the_response(tmp
     assert t1["edges"]["delivered"] is True and t1["edges"]["reviewer"] is True
     reviewer = replay.of("design-review")[0]
     assert t1["delivery"]["reviewer"].endswith(reviewer.model), "the reviewer actually called"
-    assert sorted(t1["delivery"]["files"]) == [".quadratus/design-evidence/t1/desktop/page.png",
+    assert sorted(t1["delivery"]["files"]) == [".quadratus/design-evidence/t1/desktop/evidence.json",
+                                               ".quadratus/design-evidence/t1/desktop/page.png",
+                                               ".quadratus/design-evidence/t1/mobile/evidence.json",
                                                ".quadratus/design-evidence/t1/mobile/page.png",
                                                ".quadratus/design-evidence/t1/summary.json"]
     assert "reviewer" not in t1["unsatisfied"]
