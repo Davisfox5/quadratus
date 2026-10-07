@@ -70,7 +70,12 @@ def test_a_mixed_record_set_is_not_declaration_only():
     assert not _declaration_only([])
 
 
-def _run(tmp_path, monkeypatch, lead_reply, *, second_visible=False):
+STEP_FAILURE = ('the capture exited with 1: "steps": [{"n": 1, "action": "click", "selector": '
+                '"#btn-clear", "ok": true}, {"n": 2, "action": "wait", "selector": "#count:empty", '
+                '"ok": false, "visible_before_steps": false, "error": "Page.wait_for_selector: Timeout 5000ms exceeded."}]')
+
+
+def _run(tmp_path, monkeypatch, lead_reply, *, second_visible=False, capture_failures=()):
     root = tmp_path / "project"
     (root / "templates").mkdir(parents=True)
     (root / "templates" / "index.html").write_text("<input id=project-search>\n")
@@ -94,8 +99,12 @@ def _run(tmp_path, monkeypatch, lead_reply, *, second_visible=False):
 
     captures = []
 
+    failures = list(capture_failures)
+
     def harness_capture(self, spec):
         captures.append(dict(spec.scope.capture))
+        if failures:
+            return failures.pop(0)
         _fake_evidence(root)
         _postdate(root)
         _steps_summary(root, spec.scope.capture["steps"],
@@ -168,3 +177,51 @@ def test_a_capped_redeclare_call_is_no_declaration_not_a_run_stop(tmp_path, monk
     assert "stopped at 6 rounds" in record["recapture"]["problem"]
     assert record.get("recapture_spent") is True
     assert any("without clean rendered evidence" in f for f in session.open_findings)
+
+
+def test_a_failed_declared_step_buys_the_one_redeclaration_not_a_fix_call(tmp_path, monkeypatch):
+    """Series rule-58a4625 f2 t2: the capture exited 1 on the orchestrator's
+    declared wait and the task stayed unverified with no redeclaration,
+    while a final wait visible at load already bought one."""
+    session, prompts, captures = _run(tmp_path, monkeypatch, "CAPTURE: " + json.dumps(REDECLARED),
+                                      capture_failures=[STEP_FAILURE])
+    asks = [p for _, p in prompts if "CAPTURE:" in p and "Reply with exactly one line" in p]
+    assert len(asks) == 1 and "the capture replied" in asks[0] and "exited with 1" in asks[0]
+    assert not any("Fix it in source" in p for _, p in prompts), "a wait selector is not mended by a source edit"
+    assert len(captures) == 2 and captures[1] == REDECLARED
+    record = session.design_checks[-1]
+    assert record["first_problem"].startswith("the capture exited with 1")
+    assert record["recapture"]["verified"] is True and record["verified"] is True
+    assert record["final_review"]["verdict"] == "APPROVED"
+    assert not any("without clean rendered evidence" in f for f in session.open_findings)
+
+
+def test_a_redeclaration_that_also_fails_a_step_stays_unverified_with_no_fix_call(tmp_path, monkeypatch):
+    session, prompts, captures = _run(tmp_path, monkeypatch, "CAPTURE: " + json.dumps(REDECLARED),
+                                      capture_failures=[STEP_FAILURE, STEP_FAILURE])
+    assert len(captures) == 2 and not any("Fix it in source" in p for _, p in prompts)
+    record = session.design_checks[-1]
+    assert record["verified"] is False and record["problem"].startswith("the capture exited with 1")
+    assert record["recapture"]["verified"] is False
+    assert any("without clean rendered evidence" in f for f in session.open_findings)
+
+
+def test_a_fixture_or_usage_failure_gets_no_redeclaration(tmp_path, monkeypatch):
+    exit2 = "the capture exited with 2: error: file step path is not a regular file in the project: 'x.csv'"
+    session, prompts, captures = _run(tmp_path, monkeypatch, "CAPTURE: " + json.dumps(REDECLARED),
+                                      capture_failures=[exit2])
+    assert len(captures) == 1 and not any("Reply with exactly one line" in p for _, p in prompts)
+    record = session.design_checks[-1]
+    assert record["verified"] is False and record["problem"] == exit2
+
+
+def test_a_redeclaration_without_a_final_wait_is_no_declaration(tmp_path, monkeypatch):
+    """Series rule-58a4625 f2 t1: {"path": "/", "steps": []} was accepted,
+    captured and verified because there was no wait to check."""
+    session, prompts, captures = _run(tmp_path, monkeypatch, 'CAPTURE: {"path": "/", "steps": []}')
+    assert len(captures) == 1, "nothing is recaptured on a declaration with no final wait"
+    assert not any("Fix it in source" in p for _, p in prompts)
+    record = session.design_checks[-1]
+    assert record["verified"] is False
+    assert record["recapture"]["declared"] == {"path": "/", "steps": []}
+    assert "must end in a wait" in record["recapture"]["problem"]

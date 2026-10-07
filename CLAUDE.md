@@ -773,6 +773,21 @@ Key design decisions already settled:
   redeclaration is shared by both routes that can ask for it (the capture
   check and the blind review): after it is spent, a blind review stays
   unverified, and the first receipt is kept as written.
+- **A declared step that does not happen is a declaration defect, and a
+  redeclaration ends in a wait** (series rule-58a4625 f2, 2026-10-07). t2
+  was drafted, reviewed, revised and rechecked, then the harness capture
+  exited 1 on the orchestrator's declared wait (`#project-search-count:empty`
+  never matched after the clear click) and the task stayed unverified with
+  no redeclaration, while the sibling defect (a final wait visible at load)
+  already bought one. The capture tool exits 1 only for a failed step
+  (`_step_failure`), so that case now gets the same one
+  `_recapture_declared` round with the capture named as the source; a
+  recapture that succeeds continues into the ordinary check and review, one
+  that fails stays unverified with no fix call, and exit 2, preview and
+  integrity failures keep their old handling. In t1 the redeclaration was
+  `{"path": "/", "steps": []}`, accepted and verified because there was no
+  wait to check; a recapture must now end in a wait on the changed state or
+  it is no usable declaration (the prompt's own rule, enforced).
 - **A capped declaration call is a missing declaration, never a run stop**
   (series rule-7590b13 f5, 2026-10-07). The 6-round cap above did its job
   on grok's capture-redeclare call (6 of 6, 159k tokens, `cancelled`), and

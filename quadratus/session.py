@@ -796,6 +796,14 @@ def _parse_capture_line(reply: str, task_id: str):
     return capture, ""
 
 
+def _step_failure(failure) -> bool:
+    """Whether a harness capture failed on a declared interaction step: the
+    capture tool exits 1 only when a step did not happen (design_evidence
+    main), 2 for usage, fixture and capture errors, and a preview failure
+    carries its own text."""
+    return str(failure).startswith("the capture exited with 1:")
+
+
 def _declaration_only(records) -> bool:
     """Every typed problem on the evidence is a capture-declaration problem
     (design_evidence.CAPTURE_DECLARATION): nothing about the page or the
@@ -4712,6 +4720,7 @@ class Session:
             self.design_checks.append(record)
             return
         harness = evidence == "harness"
+        captured = None
         if harness:
             missing = self._missing_own_fixtures(spec)
             if missing:
@@ -4738,16 +4747,37 @@ class Session:
             failure = self._harness_capture(spec)
             if failure:
                 self._hand_off_preview(spec, task, record, failure)
-                record.update(verified=False, problem=failure, harness_capture=True)
-                self._open_finding("invalid_proof", f"Task {spec.task_id} is design work without clean "
-                                                    f"rendered evidence: {failure}.")
-                self._design_unverified.append((spec.task_id, failure))
-                self.design_checks.append(record)
-                task.keep(json.dumps(record), kind="design-evidence")
-                return
-        ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
-                                                    expected_source=self._trusted_source())
-        self._refuse_mismatched(spec, record, task, records, harness)
+                redone = None
+                if _step_failure(failure) and not is_review_only(spec):
+                    # A declared step that does not reach its state (the
+                    # capture exits 1 with the step named) is the same kind
+                    # of defect as a final wait visible at load: the
+                    # declaration, not the source. It gets the same one
+                    # redeclaration, never a fix call (series rule-58a4625
+                    # f2 t2: a reviewed, rechecked task ended the run on a
+                    # wait selector the orchestrator guessed).
+                    record["first_problem"] = failure
+                    redone = self._recapture_declared(spec, lead, task, record, failure, source="the capture")
+                    if redone is not None:
+                        record["recapture"] = dict(capture=spec.scope.capture, verified=redone[0],
+                                                   problem=redone[1], screenshots=redone[2])
+                if redone is None or not redone[0]:
+                    problem = failure if redone is None else redone[1]
+                    record.update(verified=False, problem=problem, harness_capture=True)
+                    self._open_finding("invalid_proof", f"Task {spec.task_id} is design work without clean "
+                                                        f"rendered evidence: {problem}.")
+                    self._design_unverified.append((spec.task_id, problem))
+                    self.design_checks.append(record)
+                    task.keep(json.dumps(record), kind="design-evidence")
+                    return
+                captured = redone
+        if captured is not None:
+            # The recapture already read and checked its records.
+            ok, problem, shots, records = captured
+        else:
+            ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
+                                                        expected_source=self._trusted_source())
+            self._refuse_mismatched(spec, record, task, records, harness)
         problem, records = self._qualify_debt(spec, ok, problem, records)
         if self._audit_debt_applies(spec, ok, records):
             # A recapture cannot change a measured fault on valid evidence, so
@@ -4948,6 +4978,16 @@ class Session:
         if capture == current:
             self._note(f"task {spec.task_id}: the recapture declaration repeats the dispatched capture")
             record["recapture"] = dict(declared=capture, problem="same page and steps as dispatched")
+            return None
+        if not capture["steps"] or capture["steps"][-1].get("action") != "wait":
+            # The prompt's own rule: the steps end in a wait on something
+            # only the changed state shows. A bare page, or steps with no
+            # final wait, is the dispatched problem again (series
+            # rule-58a4625 f2 t1: {"path": "/", "steps": []} was accepted,
+            # captured and verified because there was no wait to check).
+            why = "a recapture must end in a wait on the changed state; a page with no final wait proves nothing"
+            self._note(f"task {spec.task_id}: no usable recapture declaration ({why})")
+            record["recapture"] = dict(declared=capture, problem=why)
             return None
         spec.scope = replace(spec.scope, capture=capture)
         self._note(f"task {spec.task_id}: recapturing {capture['path']} after {len(capture['steps'])} step(s)")
