@@ -1072,10 +1072,11 @@ class _DialogPage(_FakePage):
     """A page whose click opens a dialog, answered through the handler
     registered with ``once``."""
 
-    def __init__(self, dialog=("confirm", "Delete project Alpha Cup?"), click_error=None):
+    def __init__(self, dialog=("confirm", "Delete project Alpha Cup?"), click_error=None, dialogs=None):
         super().__init__()
         self.handlers = {}
         self.dialog = dialog
+        self.dialogs = dialogs
         self.answered = []
         self.click_error = click_error
 
@@ -1090,9 +1091,10 @@ class _DialogPage(_FakePage):
         super().click(selector, timeout)
         if self.click_error:
             raise self.click_error
-        if self.dialog and "dialog" in self.handlers:
-            page = self
-            kind, text = self.dialog
+        page = self
+        for kind, text in (self.dialogs or ([self.dialog] if self.dialog else [])):
+            if "dialog" not in self.handlers:
+                break
 
             class Dialog:
                 type, message = kind, text
@@ -1271,3 +1273,34 @@ def test_the_evidence_check_requires_the_declared_dialog_to_have_been_accepted()
                 dict(type="confirm", message="Delete project Alpha Cup?", accepted=False)):
         done = [dict(good[0], dialog=bad), good[1]]
         assert "no record of the declared dialog being accepted" in _step_problem("desktop", requested, done)
+
+
+@pytest.mark.parametrize("dialogs", [
+    [("confirm", "Delete project Alpha Cup?"), ("confirm", "Delete project Alpha Cup?")],
+    [("confirm", "Delete project Alpha Cup?"), ("prompt", "Name the backup")],
+])
+def test_a_second_dialog_in_one_confirm_step_is_dismissed_recorded_and_fails_the_step(dialogs):
+    """Codex review of ca60892: two matching confirms were both accepted, and
+    a prompt after a valid confirm was dismissed but left out of the record."""
+    import time
+
+    from quadratus.browser import _run_steps
+    page = _DialogPage(dialogs=dialogs)
+    records = _run_steps(page, [dict(CONFIRM), dict(action="wait", selector="#projects-empty")],
+                         [], 5000, time.monotonic() + 5)
+    assert len(records) == 1 and records[0]["ok"] is False and "2 dialogs opened" in records[0]["error"]
+    assert page.answered == ["accepted", "dismissed"], "one permission, the first dialog only"
+    assert records[0]["dialog"]["accepted"] is True and records[0]["extra_dialogs"][0]["type"] == dialogs[1][0]
+    assert "dialog" not in page.handlers
+
+
+def test_the_evidence_check_requires_a_string_message_and_no_extra_dialogs():
+    from quadratus.design_evidence import _step_problem
+    requested = [dict(CONFIRM)]
+    good = dict(n=1, action="confirm", selector=".delete-btn", ok=True,
+                dialog=dict(type="confirm", message="Delete project Alpha Cup?", accepted=True))
+    assert _step_problem("desktop", requested, [good]) is None
+    listed = dict(good, dialog=dict(good["dialog"], message=["Delete project Alpha Cup?"]))
+    assert "no record of the declared dialog" in _step_problem("desktop", requested, [listed])
+    extra = dict(good, extra_dialogs=[dict(type="prompt", message="Name the backup", accepted=False)])
+    assert "no record of the declared dialog" in _step_problem("desktop", requested, [extra])

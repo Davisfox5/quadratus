@@ -790,8 +790,13 @@ Key design decisions already settled:
   dialog is dismissed and the step fails, and no dialog is a failed step,
   so an unexpected, wrong or missing dialog stays an honest unverified
   outcome and nothing is ever auto-accepted (Codex, 6038178890). The
-  recorded message is kept whole (600 characters, twice the declared
-  maximum) so the evidence check compares it untruncated. The dialog's type, message and whether it was accepted are
+  permission covers one dialog, the first: every later dialog the click
+  opens is dismissed, recorded under `extra_dialogs`, and fails the step
+  (Codex review of ca60892: two matching confirms were both accepted and
+  a prompt after a valid confirm went unrecorded). The recorded message
+  is kept whole (600 characters, twice the declared maximum) so the
+  evidence check compares it untruncated, and the check reads only a
+  string message, never a stringified container. The dialog's type, message and whether it was accepted are
   recorded on the step, and the evidence check accepts a confirm step
   only when its record shows the declared dialog accepted (Codex review of
   ce35fb6: a record with no dialog, or another dialog, passed the

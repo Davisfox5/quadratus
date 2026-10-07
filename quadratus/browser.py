@@ -486,8 +486,13 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
                     # Exactly the declared message, whitespace collapsed: a
                     # longer message that merely contains it is another
                     # operation (Codex review of 4a51291: "Delete project
-                    # Alpha? Also delete every other project?" matched).
-                    matched = dialog.type == "confirm" and bool(expected) and _dialog_text(dialog.message) == expected
+                    # Alpha? Also delete every other project?" matched). The
+                    # permission covers one dialog: the first; every later
+                    # one is dismissed and recorded, and fails the step
+                    # (Codex review of ca60892: two matching confirms were
+                    # both accepted, a prompt after a confirm went unrecorded).
+                    matched = (not seen and dialog.type == "confirm" and bool(expected)
+                               and _dialog_text(dialog.message) == expected)
                     seen.append(dict(type=dialog.type, message=str(dialog.message)[:_DIALOG_RECORD_CHARS],
                                      accepted=matched))
                     if matched:
@@ -510,6 +515,11 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
                     record["error"] = f"no dialog opened; expected the confirm {expected[:80]!r}"
                     break
                 record["dialog"] = seen[0]
+                if len(seen) > 1:
+                    record["extra_dialogs"] = seen[1:]
+                    record["error"] = (f"{len(seen)} dialogs opened where one confirm was declared; the extra "
+                                       f"{seen[1]['type']} {seen[1]['message'][:80]!r} was dismissed")
+                    break
                 if not seen[0]["accepted"]:
                     record["error"] = (f"the dialog did not match: {seen[0]['type']} {seen[0]['message'][:80]!r}; "
                                        f"expected the confirm {expected[:80]!r}; dismissed")

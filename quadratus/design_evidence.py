@@ -499,7 +499,9 @@ def _step_problem(view: str, requested, done) -> Optional[str]:
             expected = _dialog_text(want.get("message"))
             if (not isinstance(dialog, dict) or dialog.get("accepted") is not True
                     or dialog.get("type") != "confirm" or not expected
-                    or _dialog_text(dialog.get("message")) != expected):
+                    or not isinstance(dialog.get("message"), str)   # typed evidence, never a stringified container
+                    or _dialog_text(dialog["message"]) != expected
+                    or got.get("extra_dialogs")):
                 return (f"the {view} render's step {index + 1} (confirm {want['selector'][:80]}) carries no "
                         f"record of the declared dialog being accepted")
     if len(done) != len(requested):
