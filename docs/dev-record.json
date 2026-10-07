@@ -1828,7 +1828,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "blocked",
       "claimed_at": "2026-10-07T12:39:19Z",
       "acknowledged": false,
       "delivery": {
@@ -1869,6 +1869,23 @@
           ],
           "at": "2026-10-07T13:08:51Z",
           "stale_reason": "reviewed 4a51291 but the delivery is ca60892"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "ca6089267495302edc3bbf6dc8f49929b9c66e06",
+          "verdict": "stale",
+          "evidence": "Codex scoped correction review of 4a51291..ca60892 NOT CLEARED (#53 comment 6038753000; review SHA256 215719ccbef625c63e4d2aeed917ad88d32e77660ef3e678ff21960826276db3, receipt SHA256 5314e39f2fcf4d7407ae860bc0ee08a3be80aac9c9291a3dc0d864f8d31fe908; seven artifact hashes verified; no platform rejection). Disposition: (1) P1 open, kept views still relabelled with the new source identity; (2) P2 partly open, substring match, 200-char truncation of a 300-char declared message, and str() coercion lets a list containing the text pass; (3) closed, handler removed on every tested exit; (4) open, a stale failed mobile view still aborts the next attempt; (5) open, per-view capture allowance; plus a new multiple-dialog regression from the on handler. ca0ad65 (delivered before this verdict reached me) carries the attempt-bound sibling rule, exact match with the whole record, exit on rendered views and the shared allowance; the string-type check and the multiple-dialog case follow.",
+          "scope": [
+            "quadratus/browser.py",
+            "quadratus/preview.py",
+            "quadratus/design_evidence.py",
+            "quadratus/session.py",
+            "tests/test_preview.py",
+            "tests/test_declaration_recapture.py",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-07T13:16:51Z",
+          "stale_reason": "reviewed ca60892 but the delivery is ca0ad65"
         }
       ],
       "blockers": [
@@ -1889,6 +1906,15 @@
           "by": "codex",
           "sha": "4a5129139e29ee9e41420e62333e46259e1d0516",
           "at": "2026-10-07T13:08:51Z"
+        },
+        {
+          "requirement": "Sibling views combine only under one attempt with the same source, declaration and fixtures; the confirmation matches exactly against complete typed evidence; one dialog per confirm step; a stale failed sibling never ends the next attempt; one capture allowance per attempt",
+          "failure": "ca60892 kept views on target and file presence, matched by substring, truncated the record, accepted a stringified container as the message, let a stale failed sibling fail the next render, granted each view the full allowance, and with an on handler could answer more than one dialog in one step",
+          "evidence": "Retained offline reproductions for each finding; independent controls",
+          "classification": "reachable",
+          "by": "codex",
+          "sha": "ca6089267495302edc3bbf6dc8f49929b9c66e06",
+          "at": "2026-10-07T13:16:51Z"
         }
       ],
       "decisions": [
