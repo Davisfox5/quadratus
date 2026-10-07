@@ -1693,15 +1693,39 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "blocked",
       "claimed_at": "2026-10-07T11:20:01Z",
       "acknowledged": false,
       "delivery": {
         "sha": "6fbbad2",
         "at": "2026-10-07T11:20:07Z"
       },
-      "reviews": [],
-      "blockers": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "f8d8c03b2c4372b5fd9b414f6523a67f33f55db2",
+          "verdict": "stale",
+          "evidence": "Codex scoped review relayed on #53 comment 6037915578 (NOT CLEARED): the failed-step route followed by a blind design review cannot buy a second declaration (control passed); negative attribution controls passed.",
+          "scope": [
+            "quadratus/session.py",
+            "tests/test_declaration_recapture.py",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-07T12:29:58Z",
+          "stale_reason": "reviewed f8d8c03 but the delivery is 6fbbad2"
+        }
+      ],
+      "blockers": [
+        {
+          "requirement": "A capture crash is never read as a failed declared step and buys no declaration call or recapture",
+          "failure": "_step_failure accepts every 'the capture exited with 1:' result, but design_evidence.main() catches only ValueError, so an uncaught browser or runtime exception also exits 1 and the new branch spends a declaration call and a second capture on an infrastructure crash",
+          "evidence": "Subprocess probe replaced capture with RuntimeError before any browser invocation; the mocked design flow requested one declaration and captured twice; no false acceptance demonstrated",
+          "classification": "reachable",
+          "by": "codex",
+          "sha": "f8d8c03b2c4372b5fd9b414f6523a67f33f55db2",
+          "at": "2026-10-07T12:29:58Z"
+        }
+      ],
       "decisions": []
     },
     {
@@ -1719,15 +1743,42 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "blocked",
       "claimed_at": "2026-10-07T11:49:56Z",
       "acknowledged": false,
       "delivery": {
         "sha": "f8d8c03",
         "at": "2026-10-07T11:49:56Z"
       },
-      "reviews": [],
-      "blockers": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "f8d8c03b2c4372b5fd9b414f6523a67f33f55db2",
+          "verdict": "blocked",
+          "evidence": "Codex scoped review relayed on #53 comment 6037915578 (NOT CLEARED, 58a4625..f8d8c03 including 6fbbad2): 124 focused repository tests passed; 15 independent tests, 12 passed, 3 failed; wheel built offline, shipped .mjs matches source SHA256 afd3de8f9b0a7f08da9d8469eb99276925bb56c2b1221aef86b98d363470b0ba; installed-layout probes pass; four exact-head CI jobs success; Python 3.12.14 and Node v24.15.0, Node 22 and older not independently qualified.",
+          "scope": [
+            "quadratus/integration.py",
+            "quadratus/project_run.py",
+            "quadratus/_gate_producer/quadratus_gate_report.mjs",
+            "tests/test_gate_attribution.py",
+            "tools/jev_stage_b/packet.stage-b.json",
+            "pyproject.toml",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-07T12:29:58Z"
+        }
+      ],
+      "blockers": [
+        {
+          "requirement": "A nested Node assertion failure (describe/it or t.test child) is a plain assertion failure the gate may repair",
+          "failure": "quadratus_gate_report.mjs counts Node's subtestsFailed aggregate parent event as a setup/teardown error (exc_type subtestsFailed:String), so attribute() returns product=false with '1 setup or teardown error(s)' for a suite whose only failure is a leaf assertion",
+          "evidence": "Reproduced on Node v24.15.0 in two independent tests, recorded in node-probes.json; test source test_independent_review.py",
+          "classification": "reachable",
+          "by": "codex",
+          "sha": "f8d8c03b2c4372b5fd9b414f6523a67f33f55db2",
+          "at": "2026-10-07T12:29:58Z"
+        }
+      ],
       "decisions": []
     }
   ],
