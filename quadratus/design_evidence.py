@@ -379,6 +379,11 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
                              document_width=evidence.document_width, overflow=evidence.overflow[:5])
             if checked:
                 out[name]["steps"] = evidence.steps
+            # The bytes this render produced, bound to its entry: a retained
+            # view stands only while its files still hash to what the capture
+            # wrote (Codex review of ca0ad65: a replaced page.png of the same
+            # size was kept as a sibling and accepted).
+            out[name]["files"] = {leaf: _digest(folder / name / leaf) for leaf in VIEW_FILES}
     except BaseException as exc:
         _write_summary(folder, dict(target=target, views={}, rendered=sorted(out),
                                     capture_failed=f"{type(exc).__name__}: {str(exc)[:300]}"))
@@ -440,13 +445,45 @@ def _read_summary(folder: Path):
     return data if isinstance(data, dict) else None
 
 
+#: The files a render writes, each recorded by digest in the view's entry.
+VIEW_FILES = ("page.png", "evidence.json")
+
+_FILE_CHANGED = "changed after the capture"
+
+
+def _files_problem(folder: Path, view) -> Optional[Tuple[str, bool]]:
+    """Why a view's files do not stand as the capture wrote them, if they do
+    not: ``(problem, mismatch)``. The entry must record a digest for the
+    screenshot, every recorded digest must be well formed and name one of
+    the render's files, and each named file must hash to it now. Only a
+    digest that disagrees with the bytes is an observed mismatch; a missing
+    or malformed record is unverified, never a match."""
+    files = view.get("files") if isinstance(view, dict) else None
+    if not isinstance(files, dict) or "page.png" not in files:
+        return "carries no record of its files' digests", False
+    for leaf, recorded in files.items():
+        if (leaf not in VIEW_FILES or not isinstance(recorded, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", recorded)):
+            return f"carries a malformed digest record ({str(leaf)[:40]})", False
+        path = folder / leaf
+        if path.is_symlink():
+            return f"{leaf} is a symlink, not a capture", True
+        now = _digest(path)
+        if now is None:
+            return f"{leaf} is missing or unreadable", False
+        if now != recorded:
+            return f"{leaf} {_FILE_CHANGED}", True
+    return None
+
+
 def _kept_views(folder: Path, previous, names, *, target: str, attempt: Optional[str], source, declared) -> dict:
     """The named views' entries from the previous summary, kept for a
     partial render only as siblings: the previous summary finished under
     the same attempt token, for the same target, the same source
     fingerprint and the same checked steps, with every step of each kept
-    view passed and its files present; otherwise nothing. A view that fails
-    any of these is history and never joins this attempt."""
+    view passed and its files present and hashing to the digests its entry
+    records; otherwise nothing. A view that fails any of these is history
+    and never joins this attempt."""
     if not names:
         return {}
     if (not previous or not attempt or previous.get("attempt") != attempt or previous.get("target") != target
@@ -460,6 +497,7 @@ def _kept_views(folder: Path, previous, names, *, target: str, attempt: Optional
         view = previous["views"].get(name)
         if (isinstance(view, dict) and (folder / name / "page.png").is_file()
                 and (folder / name / "evidence.json").is_file()
+                and _files_problem(folder / name, view) is None     # the bytes the capture wrote, still
                 and all(isinstance(s, dict) and s.get("ok") is True for s in view.get("steps", []))):
             kept[name] = view
     return kept if len(kept) == len(set(names)) else {}
@@ -500,7 +538,7 @@ def _step_problem(view: str, requested, done) -> Optional[str]:
             if (not isinstance(dialog, dict) or dialog.get("accepted") is not True
                     or dialog.get("type") != "confirm" or not expected
                     or not isinstance(dialog.get("message"), str)   # typed evidence, never a stringified container
-                    or _dialog_text(dialog["message"]) != expected
+                    or dialog.get("truncated") or _dialog_text(dialog["message"]) != expected
                     or got.get("extra_dialogs")):
                 return (f"the {view} render's step {index + 1} (confirm {want['selector'][:80]}) carries no "
                         f"record of the declared dialog being accepted")
@@ -659,6 +697,12 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
             continue
         if shot.stat().st_mtime < since:
             add("integrity", f"the {name} screenshot predates this task")
+            continue
+        # The files must still be the bytes the capture recorded for this
+        # view; a record without digests is no evidence of what was rendered.
+        problem = _files_problem(folder / name, summary["views"].get(name))
+        if problem:
+            add("integrity", f"the {name} render {problem[0]}", **(dict(mismatch=True) if problem[1] else {}))
             continue
         if abs(width - viewport["width"]) > 64:
             view = summary["views"].get(name) or {}

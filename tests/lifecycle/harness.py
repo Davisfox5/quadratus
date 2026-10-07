@@ -14,6 +14,7 @@ does with a given reply, never how often a model produces it.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -279,6 +280,7 @@ def evidence(root: Path, task_id: str, *, age: float, target="http://127.0.0.1:5
         wide = (measured or {}).get(name, width)
         views[name] = dict(clean=clean, console_errors=[] if clean else ["Uncaught TypeError: x"],
                            failed_requests=[], document_width=wide,
+                           files={"page.png": hashlib.sha256((folder / "page.png").read_bytes()).hexdigest()},
                            overflow=[dict(element="div.toolbar", side="right", left=0, right=wide, width=wide)]
                            if wide > width + 1 else [])
         if steps:

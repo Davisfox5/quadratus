@@ -5739,27 +5739,31 @@ class Session:
     def _identity_check(self, task_id, target, steps, evidence):
         """``(problem, observed)``: :meth:`_identity_problem`'s reason, and
         the evidence digests now on disk when, and only when, the renders
-        still verify and show the approved state but their digests differ
-        from the approved snapshot's (map J9b). Otherwise ``observed`` is
-        None: a different state, a failed check or an incomplete set is not
-        an observed digest mismatch."""
+        still show the approved state but their digests differ from the
+        approved snapshot's (map J9b). Otherwise ``observed`` is None: a
+        different state or an incomplete set is not an observed digest
+        mismatch. The approved snapshot is compared before the check re-runs:
+        the check now verifies each file against the digest its capture
+        recorded, so a replaced screenshot would otherwise surface as the
+        check's own integrity failure and the observed comparison the
+        settlement records would be lost."""
         from .design_evidence import check
         problem = self._evidence_set_problem(task_id)
-        if not problem:
-            ok, problem, _ = check(self.project, task_id, 0, expected_source=self._trusted_source())
-            problem = "" if ok else problem
-        if not problem:
-            now_target, now_steps, now_evidence = self._capture_state(task_id)
-            if (now_target, now_steps) != (target, steps):
-                problem = "the resolving renders now show a different state"
-            elif now_evidence != evidence:
-                problem = "the resolving renders were replaced after they were reviewed"
-                # Only a digest actually read from every named file is an
-                # observed comparison; an unreadable file is not (map J9b).
-                if all(isinstance(d, str) and re.fullmatch(r"[0-9a-f]{64}", d)
-                       for d in _snapshot_files((task_id, None, None, now_evidence)).values()):
-                    return problem, now_evidence
-        return problem, None
+        if problem:
+            return problem, None
+        now_target, now_steps, now_evidence = self._capture_state(task_id)
+        if (now_target, now_steps) != (target, steps):
+            return "the resolving renders now show a different state", None
+        if now_evidence != evidence:
+            problem = "the resolving renders were replaced after they were reviewed"
+            # Only a digest actually read from every named file is an
+            # observed comparison; an unreadable file is not (map J9b).
+            if all(isinstance(d, str) and re.fullmatch(r"[0-9a-f]{64}", d)
+                   for d in _snapshot_files((task_id, None, None, now_evidence)).values()):
+                return problem, now_evidence
+            return problem, None
+        ok, problem, _ = check(self.project, task_id, 0, expected_source=self._trusted_source())
+        return ("" if ok else problem), None
 
     def _findings_block_done(self) -> bool:
         """Whether open findings refuse DONE, after re-checking resolved ones

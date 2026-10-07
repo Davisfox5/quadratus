@@ -422,8 +422,12 @@ class _Budget:
         return max(1, min(cap, left))
 
 
-#: A recorded dialog message is kept whole up to twice the longest message
-#: a declaration may carry, so the record can always be compared untruncated.
+#: A recorded dialog message is the compared text itself (whitespace
+#: collapsed), kept whole up to twice the longest message a declaration may
+#: carry: any message that can match is recorded untruncated, and the
+#: evidence check compares the record exactly as the step did. The raw text
+#: is not what is kept (Codex review of ca0ad65: 700 leading spaces before the
+#: declared text matched at the step and left a record of spaces).
 _DIALOG_RECORD_CHARS = 600
 
 
@@ -491,10 +495,20 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
                     # one is dismissed and recorded, and fails the step
                     # (Codex review of ca60892: two matching confirms were
                     # both accepted, a prompt after a confirm went unrecorded).
-                    matched = (not seen and dialog.type == "confirm" and bool(expected)
-                               and _dialog_text(dialog.message) == expected)
-                    seen.append(dict(type=dialog.type, message=str(dialog.message)[:_DIALOG_RECORD_CHARS],
-                                     accepted=matched))
+                    # Only a string message is text; anything else is recorded
+                    # by repr and never matches (Codex review of ca0ad65: a
+                    # non-string coerced to the declared text).
+                    typed = isinstance(dialog.message, str)
+                    text = _dialog_text(dialog.message) if typed else ""
+                    matched = (not seen and dialog.type == "confirm" and bool(expected) and typed
+                               and text == expected)
+                    entry = dict(type=dialog.type, message=text[:_DIALOG_RECORD_CHARS] if typed else None,
+                                 accepted=matched)
+                    if not typed:
+                        entry["message_repr"] = repr(dialog.message)[:_DIALOG_RECORD_CHARS]
+                    elif len(text) > _DIALOG_RECORD_CHARS:
+                        entry["truncated"] = True
+                    seen.append(entry)
                     if matched:
                         dialog.accept()
                     else:
@@ -518,10 +532,10 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
                 if len(seen) > 1:
                     record["extra_dialogs"] = seen[1:]
                     record["error"] = (f"{len(seen)} dialogs opened where one confirm was declared; the extra "
-                                       f"{seen[1]['type']} {seen[1]['message'][:80]!r} was dismissed")
+                                       f"{seen[1]['type']} {str(seen[1]['message'])[:80]!r} was dismissed")
                     break
                 if not seen[0]["accepted"]:
-                    record["error"] = (f"the dialog did not match: {seen[0]['type']} {seen[0]['message'][:80]!r}; "
+                    record["error"] = (f"the dialog did not match: {seen[0]['type']} {str(seen[0]['message'])[:80]!r}; "
                                        f"expected the confirm {expected[:80]!r}; dismissed")
                     break
             elif action == "wait":

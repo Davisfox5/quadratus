@@ -880,6 +880,22 @@ Key design decisions already settled:
   check proceeds exactly as after a reply with no marker (unverified, no
   fix call). A cap on a review seat is already handled this way
   (`_capped_review`); the declaration seats were the two left raising.
+- **A view's files are bound to its entry by digest, and a dialog record is
+  the compared text** (Codex review of ca0ad65). The attempt token said two
+  partial captures were siblings; nothing said the retained screenshot was
+  still the one that render wrote, and a replaced `page.png` of the same
+  size was kept and accepted. `capture` now records `files` (sha256 of
+  `page.png` and `evidence.json`) in every view entry; `_kept_views` keeps a
+  sibling only while its files hash to that record, and `check_records`
+  verifies every view's digests before reading the screenshot (a missing
+  record is unverified, a disagreeing one is an observed mismatch). The
+  session's settlement compares the approved snapshot before re-running the
+  check, so a replaced render still lands as the J9b observed comparison
+  rather than as the check's own failure. The confirm step's record holds
+  the message as it was compared (whitespace collapsed, whole up to 600
+  characters) so the evidence check compares exactly what the step did; a
+  non-string message is recorded by repr under `message_repr`, never
+  matches, and `message` is null.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

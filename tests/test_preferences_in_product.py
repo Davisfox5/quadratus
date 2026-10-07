@@ -126,6 +126,7 @@ def test_missing_evidence_gets_one_fix_call_then_an_open_finding(tmp_path):
 
 
 def _fake_evidence(root, clean=True, width=(1280, 390)):
+    import hashlib
     import json
     import struct
     import zlib
@@ -144,6 +145,7 @@ def _fake_evidence(root, clean=True, width=(1280, 390)):
         (folder / "page.png").write_bytes(png(w))
         views[name] = dict(clean=clean, console_errors=[] if clean else ["Uncaught TypeError: x"],
                            failed_requests=[] if clean else ["GET /missing.png 404"],
+                           files={"page.png": hashlib.sha256((folder / "page.png").read_bytes()).hexdigest()},
                            document_width={"desktop": 1280, "mobile": 390}[name], overflow=[])
     from quadratus.design_evidence import source_fingerprint
     (evidence_dir(root, "t6") / "summary.json").write_text(json.dumps(dict(

@@ -1052,7 +1052,8 @@ def test_the_fixture_verifier_reads_nothing_outside_its_boundary(tmp_path, monke
     monkeypatch.setattr(de, "_digest", lambda path: read.append(str(path)))
     passed, problem = check(root, "t1", 0)[:2]
     assert not passed and "is not a permitted fixture now" in problem
-    assert read == [], "no byte of a path outside the fixture boundary was read"
+    assert all(Path(p).is_relative_to(folder) for p in read), \
+        "no byte of a path outside the fixture boundary was read (the capture's own files are digested)"
 
 
 def test_a_fixture_step_without_a_valid_digest_is_unverified(tmp_path):
@@ -1304,3 +1305,86 @@ def test_the_evidence_check_requires_a_string_message_and_no_extra_dialogs():
     assert "no record of the declared dialog" in _step_problem("desktop", requested, [listed])
     extra = dict(good, extra_dialogs=[dict(type="prompt", message="Name the backup", accepted=False)])
     assert "no record of the declared dialog" in _step_problem("desktop", requested, [extra])
+
+
+def test_a_retained_view_stands_only_while_its_files_hash_as_captured(tmp_path, monkeypatch):
+    """Codex review of ca0ad65: a replaced page.png of the same size was kept
+    as the next render's sibling and accepted. Each rendered view now records
+    its files' digests; a retained view must still hash to them."""
+    from quadratus import browser
+    root = _project(tmp_path)
+    monkeypatch.setattr(browser, "render_page", _fake_render(root))
+    steps = [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]
+    page = str(root / "index.html")
+    capture(page, "t1", root, steps, views=["desktop"], attempt="ab" * 8)
+    files = _read_summary(root)["views"]["desktop"]["files"]
+    assert set(files) == {"page.png", "evidence.json"} and all(len(d) == 64 for d in files.values())
+    shot = evidence_dir(root, "t1") / "desktop" / "page.png"
+    shot.write_bytes(b"\x89PNG" + b"\0")        # another image under the same name and attempt
+    capture(page, "t1", root, steps, views=["mobile"], attempt="ab" * 8)
+    assert set(_read_summary(root)["views"]) == {"mobile"}, "the replaced desktop is history, not a sibling"
+    capture(page, "t1", root, steps, views=["desktop"], attempt="ac" * 8)
+    (evidence_dir(root, "t1") / "desktop" / "evidence.json").write_text('{"edited": true}')
+    capture(page, "t1", root, steps, views=["mobile"], attempt="ac" * 8)
+    assert set(_read_summary(root)["views"]) == {"mobile"}, "the record file is bound the same way"
+    capture(page, "t1", root, steps, views=["desktop"], attempt="ad" * 8)
+    capture(page, "t1", root, steps, views=["mobile"], attempt="ad" * 8)
+    assert set(_read_summary(root)["views"]) == {"desktop", "mobile"}, "untouched files are kept"
+
+
+def test_the_evidence_check_verifies_each_views_recorded_digests(tmp_path):
+    from quadratus.design_evidence import check_records
+    from tests.lifecycle.harness import evidence
+    evidence(tmp_path, "t1", age=0)
+    ok, problem, *_ = check_records(tmp_path, "t1", 0)
+    assert ok, problem
+    path = evidence_dir(tmp_path, "t1") / "summary.json"
+    summary = json.loads(path.read_text())
+    shot = evidence_dir(tmp_path, "t1") / "mobile" / "page.png"
+    shot.write_bytes(shot.read_bytes() + b"\0")
+    ok, problem, _, records = check_records(tmp_path, "t1", 0)
+    assert not ok and "mobile render page.png changed after the capture" in problem
+    assert any(r.get("mismatch") for r in records), "a digest that disagrees with the bytes is an observed mismatch"
+    evidence(tmp_path, "t1", age=0)
+    summary = json.loads(path.read_text())
+    del summary["views"]["desktop"]["files"]
+    path.write_text(json.dumps(summary))
+    ok, problem, _, records = check_records(tmp_path, "t1", 0)
+    assert not ok and "desktop render carries no record of its files' digests" in problem
+    assert not any(r.get("mismatch") for r in records), "a missing record is unverified, never a mismatch"
+    evidence(tmp_path, "t1", age=0)
+    summary = json.loads(path.read_text())
+    summary["views"]["desktop"]["files"]["other.txt"] = "0" * 64
+    path.write_text(json.dumps(summary))
+    ok, problem, *_ = check_records(tmp_path, "t1", 0)
+    assert not ok and "malformed digest record" in problem
+
+
+def test_a_dialog_record_keeps_the_compared_text_and_never_a_non_string():
+    """Codex review of ca0ad65: 700 leading spaces before the declared text
+    matched at the step and the raw record held only spaces, so the evidence
+    check refused a step that had passed; a numeric message coerced to the
+    declared text. The record is the compared text; a non-string never matches."""
+    import time
+
+    from quadratus.browser import _run_steps
+    from quadratus.design_evidence import _step_problem
+    page = _DialogPage(dialog=("confirm", " " * 700 + "Delete  project\n Alpha Cup? "))
+    records = _run_steps(page, [dict(CONFIRM)], [], 5000, time.monotonic() + 5)
+    assert records[0]["ok"] is True and records[0]["dialog"]["message"] == CONFIRM["message"]
+    assert "truncated" not in records[0]["dialog"]
+    assert _step_problem("desktop", [dict(CONFIRM)], records) is None
+    page = _DialogPage(dialog=("confirm", 42))
+    records = _run_steps(page, [dict(CONFIRM, message="42")], [], 5000, time.monotonic() + 5)
+    assert records[0]["ok"] is False and "did not match" in records[0]["error"]
+    assert records[0]["dialog"]["message"] is None and records[0]["dialog"]["message_repr"] == "42"
+    assert page.answered == ["dismissed"]
+    forged = [dict(records[0], ok=True, dialog=dict(records[0]["dialog"], accepted=True))]
+    assert "no record of the declared dialog" in _step_problem("desktop", [dict(CONFIRM, message="42")], forged)
+    long = "x" * 700
+    page = _DialogPage(dialog=("confirm", long))
+    records = _run_steps(page, [dict(CONFIRM)], [], 5000, time.monotonic() + 5)
+    assert records[0]["ok"] is False and records[0]["dialog"]["truncated"] is True
+    assert len(records[0]["dialog"]["message"]) == 600
+    forged = [dict(records[0], ok=True, dialog=dict(records[0]["dialog"], accepted=True))]
+    assert "no record of the declared dialog" in _step_problem("desktop", [dict(CONFIRM)], forged)
