@@ -1828,7 +1828,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "blocked",
       "claimed_at": "2026-10-07T12:39:19Z",
       "acknowledged": false,
       "delivery": {
@@ -1852,6 +1852,23 @@
           ],
           "at": "2026-10-07T12:56:55Z",
           "stale_reason": "reviewed ce35fb6 but the delivery is 4a51291"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "4a5129139e29ee9e41420e62333e46259e1d0516",
+          "verdict": "stale",
+          "evidence": "Codex scoped correction review of ce35fb6..4a51291 NOT CLEARED (#53 comment 6038564540; review SHA256 c15a21a39bae77d01977621485dc27fa0aa542d75e75771672a808d48edb3f9c, receipt SHA256 bf527519a5fa2c292a3a185531bb2a4091e6d665d80d1281808cd27ee141f5b8; seven artifact hashes verified; retained suite 179 passed / 26 skipped; 21 correction controls 10 passed / 11 failed reproducing the findings; no platform rejection). One P1 and four P2: (1) P1 a kept view is relabelled with the new render's source fingerprint and declaration, so a mixed-source or mixed-declaration pair passes the checker; (2) P2 substring matching accepts a longer confirm message and _step_problem checks no dialog fields; observed text truncated at 200 while declared may be 300; (3) P2 the dialog handler survives missing dialogs, click timeouts and cancellation; (4) P2 a retained failed mobile view aborts the next attempt (main exits 1 on the merged result) before fresh mobile runs; (5) P2 per-view splitting resets the 90 s capture allowance per subprocess. What works: exact matching confirm accepted and recorded; prompt, alert and disjoint text dismissed and fail; missing dialog fails; desktop then mobile with one deadline; the unchanged profile reseeds on each preview start in principle. ca60892 (delivered before this verdict) closes (3) and part of (2); the rest to follow for review of 4a51291..next.",
+          "scope": [
+            "quadratus/browser.py",
+            "quadratus/preview.py",
+            "quadratus/design_evidence.py",
+            "quadratus/session.py",
+            "tests/test_preview.py",
+            "tests/test_declaration_recapture.py",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-07T13:08:51Z",
+          "stale_reason": "reviewed 4a51291 but the delivery is ca60892"
         }
       ],
       "blockers": [
@@ -1863,6 +1880,15 @@
           "by": "codex",
           "sha": "ce35fb6b5f19bfb7169002108d9ee1f093e82990",
           "at": "2026-10-07T12:56:55Z"
+        },
+        {
+          "requirement": "A partial-view capture combines only sibling views from the same attempt with the same source, declaration and fixtures, keeps a failed sibling as history only, matches the declared confirmation exactly and verifies it in the evidence, scopes the dialog handler to its click, and shares one capture allowance across views",
+          "failure": "4a51291 keeps an old view on target and file presence alone and stamps it with the new identity; matches a confirm by substring; leaves the handler registered after no dialog, timeout or cancellation; exits 1 on a stale failed sibling so fresh mobile never runs; and grants each view the full capture allowance",
+          "evidence": "Independent reproductions: mixed-source and mixed-declaration pairs accepted by check(); longer confirm accepted; late dialog accepted after the step; CLI returns 1 with successful desktop steps because of a stale mobile failure; mocked clock completed 60 s plus 50 s of capture under a 90 s allowance",
+          "classification": "reachable",
+          "by": "codex",
+          "sha": "4a5129139e29ee9e41420e62333e46259e1d0516",
+          "at": "2026-10-07T13:08:51Z"
         }
       ],
       "decisions": [
