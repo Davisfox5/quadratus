@@ -975,7 +975,8 @@
         "claude: Cell f4-tags-export/rule-r0, series-rule-7590b13-20261006T211446Z (#35 comment 6030538324): state ran, grade 6/6, engine complete, no stop; 1312 s, 21 calls, 2,955,712 tokens; 4 tasks, 3 closed clean, t1 (claude:opus lead) stopped on scope at 164 changed lines (68 code, 96 tests) against ~100, the same first-task test-line overrun as every prior f4, recovered by the survey's t2 (hypothesis: the test file's fixture and setup cost was not counted; recovery sized at 50 with no new setup); t3 (grok:default) reviewed by Opus, revised, then the capture-redeclare call ran under the new DECLARATION_MAX_TURNS cap (one call, 99k tokens, returned a usable declaration) and design review APPROVED; auditor ok. No engine cause. Evidence cell-f4-tags-export.json SHA256 542e402a55b5e0121752ba54874b26395843d63d4e6efae63e0cc9aa23c4488a.",
         "claude: Cell f5-empty-state/rule-r0, series-rule-7590b13-20261006T211446Z (#35 comment 6030703058): state ran, grade 4/4 (every grader passed), engine complete False, stop TurnLimitReached ('grok stopped at its turn limit (6 of 6) before finishing') after 8 calls, 2,019,006 tokens, 916 s. t1 (grok:default lead) drafted (11 rounds, 491k), Opus collaborator reviewed (10 rounds, 359k), revised (13 rounds, 580k), rechecked, design review found the renders did not show the change, and the capture-redeclare call on grok hit the DECLARATION_MAX_TURNS cap of 6 (159k tokens, stop_reason cancelled); _recapture_declared does not catch TurnLimitReached, so the cap raised out of the design check and ended the run with t1 never closed, instead of standing as 'no usable declaration' the way T-declaration-cap intended. Engine cause: a capped declaration call must be a missing declaration, not a run stop. The graders passing 4/4 shows the work itself was done. Evidence cell-f5-empty-state.json SHA256 58ae0284f87401d50585070b5a55aab913900d2e9bea5b1cbf9e35c15dcf2075.",
         "claude: Terminal packet series-rule-7590b13-20261006T211446Z (#35 comment 6030703623): five cells ran, series stop none; grades f1 4/4, f2 4/5, f3 4/5, f4 6/6, f5 4/4 = 22/24 fresh requirements (33/35 cross-cycle with f6/f7's 11), engine complete 2/5 (f1, f4); 91 attempts, 15,368,142 reported tokens, 6929 summed cell seconds; no Jev or TypeSafe calls, no overrides or replays; frozen inputs unchanged; engine 7590b13 clean at terminal; CLI versions claude 2.1.269, codex-cli 0.154.0, grok 1.0.30. Named causes: f2 reported_token_reserve on a close-out (packet 5M on #53 6263772), f3 CheckUnattributable (T-check-report, #53 61f3ad9), f5 TurnLimitReached on the capture-redeclare call (repair pending). Full packet SHA256 0785c657ad9c2d339d8d7e4644edf9cb7c35da11607162c266dfc4f25f3a1a9a, shared packet d94b07e3d5556ee38eec35fc195d11f8ffcc4c20b2ca3772ad79efcec6df1f19.",
-        "claude: Codex independent terminal audit of series-rule-7590b13-20261006T211446Z acknowledged (#35 comment 6030771635): audit-7590b13.json SHA256 1416c69205994a514d11dd1ca31afd8ae2e93b0221fa6b6abd7960fa4f93edcf, terminal-7590b13-verification.json SHA256 9017070028f51e4a239228f7574e6041c4883b936770265a4b1f0e6e3fb02242; controller and reporter exited 0, no surviving processes, engine 7590b13 clean, 1,060 raw files and all five cell and terminal publications verified by readback; 91 attempts, 15,368,142 reported tokens, cross-cycle 33/35 requirements and 4/7 engine-complete, no single-series claim. Factual reconciliation of Claude's cell notes: (f2) the 4.05M needed-to-finish figure and the hidden-card-versus-grader reading are Claude's interpretations, not independent acceptance and not permission to alter the grader or budget; (f3) the gate's 1 failed / 122 passed wrapped an actual Node rename runner result of 0 pass / 4 fail with a setup querySelector on null, so the earlier 'passed its own tests' is withdrawn: the lead's UI tests were failing at the final gate, and the R3 empty-name acceptance failure is consistent with that, with the same-re-render-mechanism reading a hypothesis only; (f5) the independent Opus note was BLOCKING (the renders do not show the changed interface), the one Grok capture-redeclare call hit six rounds at 162,309 reported tokens per Codex's trace (159,476 in the ledger line), returned TurnLimitReached and ended the run before task closure and the auditor, design_checks was empty after the exception on 7590b13, and the raw declaration trace records a successful read-only grep of the primary Quadratus checkout with no write recorded; preserved as an access observation for scoped review, no denial invented. Codex status: 6263772 (5M packet), 61f3ad9 (T-check-report) and 58a4625 (T-declaration-stop) are NOT launch cleared; the verified numeric ruling remains 4M with 250k reserve and no direct human 5M ruling is verified; the Codex reviewer remains at its failed platform turn, so any new scoped review needs supported human or platform direction; exact new CI and a bounded Mac qualification (only if provider paths changed) are required before a fresh f2/f3/f5 cycle. Two decisions for Davis: a direct ruling on the 5M cell budget, and the review path for the three new commits."
+        "claude: Codex independent terminal audit of series-rule-7590b13-20261006T211446Z acknowledged (#35 comment 6030771635): audit-7590b13.json SHA256 1416c69205994a514d11dd1ca31afd8ae2e93b0221fa6b6abd7960fa4f93edcf, terminal-7590b13-verification.json SHA256 9017070028f51e4a239228f7574e6041c4883b936770265a4b1f0e6e3fb02242; controller and reporter exited 0, no surviving processes, engine 7590b13 clean, 1,060 raw files and all five cell and terminal publications verified by readback; 91 attempts, 15,368,142 reported tokens, cross-cycle 33/35 requirements and 4/7 engine-complete, no single-series claim. Factual reconciliation of Claude's cell notes: (f2) the 4.05M needed-to-finish figure and the hidden-card-versus-grader reading are Claude's interpretations, not independent acceptance and not permission to alter the grader or budget; (f3) the gate's 1 failed / 122 passed wrapped an actual Node rename runner result of 0 pass / 4 fail with a setup querySelector on null, so the earlier 'passed its own tests' is withdrawn: the lead's UI tests were failing at the final gate, and the R3 empty-name acceptance failure is consistent with that, with the same-re-render-mechanism reading a hypothesis only; (f5) the independent Opus note was BLOCKING (the renders do not show the changed interface), the one Grok capture-redeclare call hit six rounds at 162,309 reported tokens per Codex's trace (159,476 in the ledger line), returned TurnLimitReached and ended the run before task closure and the auditor, design_checks was empty after the exception on 7590b13, and the raw declaration trace records a successful read-only grep of the primary Quadratus checkout with no write recorded; preserved as an access observation for scoped review, no denial invented. Codex status: 6263772 (5M packet), 61f3ad9 (T-check-report) and 58a4625 (T-declaration-stop) are NOT launch cleared; the verified numeric ruling remains 4M with 250k reserve and no direct human 5M ruling is verified; the Codex reviewer remains at its failed platform turn, so any new scoped review needs supported human or platform direction; exact new CI and a bounded Mac qualification (only if provider paths changed) are required before a fresh f2/f3/f5 cycle. Two decisions for Davis: a direct ruling on the 5M cell budget, and the review path for the three new commits.",
+        "claude: Standing rulings recorded (Davis, 2026-10-07, #46 comment 6036192843, receipt SHA256 54ed432dc3e55e6d9b3fbe1cc7513cee7fb7ac355775e388b7e5e38b215bfd2a): (1) cell budget 5M reported tokens, reserve 250k, per-call ceiling 1.5M; Claude may adjust the cell budget within 2M-8M and the reserve within 64k-500k on #53 without a new ruling, recorded here. (2) On a Codex reviewer platform rejection, Codex may rephrase neutrally and retry once; a second rejection makes Claude's independent reading on #53 with green CI and local suite the review, recorded here as operator-bypass. (3) 6263772, 61f3ad9 and 58a4625 cleared under rule 2; freeze and run f2, f3, f5 on 58a4625 under the 5M packet, same graders, f1/f4/f6/f7 preserved. Freeze acknowledged: series-rule-58a4625-20261007T104132Z (#35 comment 6036248695), engine 58a4625aa37050f976a7475db9a403c900b32224 at /Users/davisfox/.codex/worktrees/stage-b-58a4625-execution/quadratus, cells f2-project-search, f3-project-rename, f5-empty-state, rule arm, one repeat, argv run --out <series>/cells --arm rule --pairs 1, three Jev templates excluded forever; bounds 90 calls / 5M / 3600 s / 2 workers / 250k reserve / 1.5M per call, max_tasks 10, survey 4, repeats 1, lead_max_turns null; check command carries the report token; provider transport byte-unchanged from 7590b13 with the prior native proof carried as transport-only evidence; fresh scope 14 requirements plus carried 21 = 35, 3 fresh plus 4 prior workflows = 7, no single-series claim. Digests: freeze.json 4b9c605506683e45b1c010fa2c038a2fc494c261c4bcb8564863ecf4a35044f6; packet canonical 48242c315adc977635a49a0ed8dee18d1c779f25bf6a9588bb2285bad3da2171, file 7e71f6cb18e43e29a9e943498d4279998687fa8dc617e57a06dcaccde5fa01e5; frozen inputs canonical 61c9f0cd60f53b4a7ef49156091239c9579b5db2acc128162d0980a6ba5a95a5, file 6254c15725a98926d0a0bfe1115095f8248026712c4c927ffc7414c0d8ab794c; original seven goals 06cbf43c6875cc763657ec8cf230667b2ce171e33915df92c287af91c4e2ca43; carryover ee7867732fa39e3d179142fdcb4382a6c257239aa8422bb9391d2d230c1759d3; authorization 8045b1209e1575dad17a84597fb0d22fea712ab59d209f074242daa026ded5e3; human ruling 54ed432dc3e55e6d9b3fbe1cc7513cee7fb7ac355775e388b7e5e38b215bfd2a; operator review authorization af2014103772359ea73189e97aa5c0562d59f92f50c09ff4d6c5526526805308; qualification carryforward d09b69710eb17c39c3650b7bbe1b0c6923588da5d094996f1e14fcf73ab4c711."
       ]
     },
     {
@@ -1606,7 +1607,22 @@
         "sha": "61f3ad9",
         "at": "2026-10-07T03:34:41Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "davis",
+          "sha": "58a4625aa37050f976a7475db9a403c900b32224",
+          "verdict": "stale",
+          "evidence": "Davis, 2026-10-07, direct standing rulings (#46 comment 6036192843; receipt human-standing-rulings-20261007.json SHA256 54ed432dc3e55e6d9b3fbe1cc7513cee7fb7ac355775e388b7e5e38b215bfd2a): rule 2 makes Claude's independent reading (#53 comment 6036033545) with green CI (4 of 4 on each head) and the posted local suite (58a4625: 553 lifecycle, 2504 rest) the review for 6263772, 61f3ad9 and 58a4625; rule 3 clears them expressly. Operator-bypass, not a Codex verdict; the Codex platform rejection is preserved.",
+          "scope": [
+            "quadratus/project_run.py",
+            "tests/test_declared_checks.py",
+            "tools/jev_stage_b/packet.stage-b.json",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-07T10:44:06Z",
+          "stale_reason": "reviewed 58a4625 but the delivery is 61f3ad9"
+        }
+      ],
       "blockers": [],
       "decisions": []
     },
@@ -1622,14 +1638,28 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-07T04:10:11Z",
       "acknowledged": false,
       "delivery": {
         "sha": "58a4625",
         "at": "2026-10-07T04:10:11Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "davis",
+          "sha": "58a4625aa37050f976a7475db9a403c900b32224",
+          "verdict": "cleared",
+          "evidence": "Davis, 2026-10-07, direct standing rulings (#46 comment 6036192843; receipt human-standing-rulings-20261007.json SHA256 54ed432dc3e55e6d9b3fbe1cc7513cee7fb7ac355775e388b7e5e38b215bfd2a): rule 2 makes Claude's independent reading (#53 comment 6036033545) with green CI (4 of 4 on each head) and the posted local suite (58a4625: 553 lifecycle, 2504 rest) the review for 6263772, 61f3ad9 and 58a4625; rule 3 clears them expressly. Operator-bypass, not a Codex verdict; the Codex platform rejection is preserved.",
+          "scope": [
+            "quadratus/session.py",
+            "tests/test_declaration_recapture.py",
+            "tests/test_missing_fixture_fix.py",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-07T10:44:06Z"
+        }
+      ],
       "blockers": [],
       "decisions": []
     }
