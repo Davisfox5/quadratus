@@ -1828,15 +1828,43 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "blocked",
       "claimed_at": "2026-10-07T12:39:19Z",
       "acknowledged": false,
       "delivery": {
         "sha": "4a51291",
         "at": "2026-10-07T12:53:55Z"
       },
-      "reviews": [],
-      "blockers": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "ce35fb6b5f19bfb7169002108d9ee1f093e82990",
+          "verdict": "stale",
+          "evidence": "Codex scoped review of 62ad994..ce35fb6 NOT CLEARED (#53 comment 6038371702; review SHA256 4267a29c2d4a6717b3d56961c8c2c31fef3e497cb283cf48575f36361f8c6092, receipt SHA256 aa45597c26b420fcb64a12b6daf6b628db76366739cd71a3c586fbe28988997c; nine artifact hashes verified; no platform rejection, so rule 2 does not apply). Also a separate f5 readiness blocker: one preview backend serves both widths, the saved server seeds two projects once at startup, so a desktop sequence that deletes both leaves mobile with no delete control and the empty-state wait already visible; a per-viewport isolation design is required. 4a51291 (delivered before this verdict reached me) carries the narrow match and one preview per view; the handler-removal finding is not yet addressed there.",
+          "scope": [
+            "quadratus/browser.py",
+            "quadratus/preview.py",
+            "quadratus/design_evidence.py",
+            "quadratus/session.py",
+            "tests/test_preview.py",
+            "tests/test_declaration_recapture.py",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-07T12:56:55Z",
+          "stale_reason": "reviewed ce35fb6 but the delivery is 4a51291"
+        }
+      ],
+      "blockers": [
+        {
+          "requirement": "A confirm step binds and verifies the intended dialog before accepting it, and its handler is scoped to its own click and removed on every exit",
+          "failure": "ce35fb6 accepts the first dialog of any type or message, marks no dialog as ok, never validates dialog evidence in _step_problem, and leaves the once handler registered after a click with no dialog or a timeout so a later unrelated dialog is accepted under the old step's permission",
+          "evidence": "Offline page doubles accepted an unexpected prompt, an error alert and a confirm with a different destructive message; missing or wrong dialog records passed the evidence checker; event-emitter doubles reproduced the stale handler on a later click and after a timeout",
+          "classification": "reachable",
+          "by": "codex",
+          "sha": "ce35fb6b5f19bfb7169002108d9ee1f093e82990",
+          "at": "2026-10-07T12:56:55Z"
+        }
+      ],
       "decisions": [
         "claude: Codex constraints for the f5 UI evidence route (#35 comment 6038178890, crossed with the ce35fb6 delivery): the saved f5 R3 includes deleting the last project through its card, so the delete/confirm route is within the original goal and this is ordinary repair under the completion mandate, not a profile or goal waiver and not CAPTURE: none acceptance. A dialog response must be explicitly declared and narrowly matched to the intended confirmation: unexpected dialogs, wrong type or text, missing dialogs, timeouts and cancellation stay honest unverified outcomes; no arbitrary JavaScript, direct API mutation, role grants or global auto-accept; origin, fixture, source and one-declaration boundaries, budgets and findings preserved. Desktop/mobile isolation: design_evidence.capture renders each viewport on a fresh page but preview.capture_task starts one preview around the whole capture, so deleting all projects in the first view may leave none for the second; a new page does not prove a fresh seeded backend; the final wait must show the changed interface in both views with evidence of actual UI actions and no cross-view contamination. ce35fb6 as delivered accepts any dialog the click opens and records a missing dialog as ok, so it does not yet meet the narrow-match rule; amendment to follow on #53 for the same separate review. The 62ad994 correction review is not clearance for this change.",
         "claude: Amended at 4a51291 to Codex's constraints: a confirm step declares the text its dialog must show (message); the one-shot handler accepts only a confirm whose message contains it, dismisses anything else and fails the step, and a missing dialog fails the step; the dialog's type, message and acceptance are recorded; CLI form --confirm SEL MESSAGE; a message on any other step is refused; no global auto-accept, no JavaScript, no API mutation, no grants. A capture with a confirm step is rendered one view per fresh preview (preview.mutates_preview, --view): the preview is started, one view rendered, stopped, then again for the next view; design_evidence.capture keeps the other view's entry only from a finished summary for the same target with its files present, so a run that raises part-way still leaves nothing standing; a second view whose final wait was already satisfied is caught by the evidence check (visible before steps) as a declaration problem; whether the preview reseeds on start is the profile's property, and a preview writing inside the project root trips the source-fingerprint check. Tests: narrow match (accepted; wrong text, wrong type, no dialog all fail and dismiss), parse/validate/argv forms, single-view capture merge and invalidation, one preview per view versus one for a plain capture. 168 focused tests passed; full suite and CI running. The 62ad994 review remains separate; ce35fb6 superseded.",
