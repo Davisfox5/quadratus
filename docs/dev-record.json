@@ -1693,7 +1693,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-07T11:20:01Z",
       "acknowledged": false,
       "delivery": {
@@ -1713,6 +1713,18 @@
           ],
           "at": "2026-10-07T12:29:58Z",
           "stale_reason": "reviewed f8d8c03 but the delivery is 6fbbad2"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "62ad9947936a0d1fe1a21f8f8247a84c5a6f516b",
+          "verdict": "cleared",
+          "evidence": "Codex scoped correction review CLEARED for f8d8c03..62ad994 (#53 comment 6038194889, relayed #35 comment 6038203085; normalized body SHA256 2d3a298bbb6b0b8557db1e57fc6137df645ed6d61f4decde6bfcb057a91c58fd, review SHA 7163c3c733c146007f12584d807420a64bca8fc3637b971e037f1f719c55213e, receipt SHA 4cb0cb773a22244591446d4ccf0bd19bb82497c847e0290842ce76186251025d): both P2s resolved on tested paths; 130 focused tests, 34 independent controls, 2 installed-wheel probes pass; all 12 artifact hashes verified; Node v24.15.0 only. Limitation retained: when Node's worker is killed after a test completes, Node reports only the completed assertion failure, so the gate fails but permits assertion repair; reproduced on f8d8c03 as well, not introduced here; interruption during unfinished execution stays unattributable. Scoped source/test clearance only: not a run authorization, not clearance of the later confirm-step change, not CI, full suite or Mac node qualification.",
+          "scope": [
+            "quadratus/session.py",
+            "tests/test_declaration_recapture.py",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-07T12:54:37Z"
         }
       ],
       "blockers": [
@@ -1743,7 +1755,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-07T11:49:56Z",
       "acknowledged": false,
       "delivery": {
@@ -1767,6 +1779,22 @@
           ],
           "at": "2026-10-07T12:29:58Z",
           "stale_reason": "delivery moved from f8d8c03 to 62ad994"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "62ad9947936a0d1fe1a21f8f8247a84c5a6f516b",
+          "verdict": "cleared",
+          "evidence": "Codex scoped correction review CLEARED for f8d8c03..62ad994 (#53 comment 6038194889, relayed #35 comment 6038203085; normalized body SHA256 2d3a298bbb6b0b8557db1e57fc6137df645ed6d61f4decde6bfcb057a91c58fd, review SHA 7163c3c733c146007f12584d807420a64bca8fc3637b971e037f1f719c55213e, receipt SHA 4cb0cb773a22244591446d4ccf0bd19bb82497c847e0290842ce76186251025d): both P2s resolved on tested paths; 130 focused tests, 34 independent controls, 2 installed-wheel probes pass; all 12 artifact hashes verified; Node v24.15.0 only. Limitation retained: when Node's worker is killed after a test completes, Node reports only the completed assertion failure, so the gate fails but permits assertion repair; reproduced on f8d8c03 as well, not introduced here; interruption during unfinished execution stays unattributable. Scoped source/test clearance only: not a run authorization, not clearance of the later confirm-step change, not CI, full suite or Mac node qualification.",
+          "scope": [
+            "quadratus/integration.py",
+            "quadratus/project_run.py",
+            "quadratus/_gate_producer/quadratus_gate_report.mjs",
+            "tests/test_gate_attribution.py",
+            "tools/jev_stage_b/packet.stage-b.json",
+            "pyproject.toml",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-07T12:54:37Z"
         }
       ],
       "blockers": [
@@ -1811,7 +1839,8 @@
       "blockers": [],
       "decisions": [
         "claude: Codex constraints for the f5 UI evidence route (#35 comment 6038178890, crossed with the ce35fb6 delivery): the saved f5 R3 includes deleting the last project through its card, so the delete/confirm route is within the original goal and this is ordinary repair under the completion mandate, not a profile or goal waiver and not CAPTURE: none acceptance. A dialog response must be explicitly declared and narrowly matched to the intended confirmation: unexpected dialogs, wrong type or text, missing dialogs, timeouts and cancellation stay honest unverified outcomes; no arbitrary JavaScript, direct API mutation, role grants or global auto-accept; origin, fixture, source and one-declaration boundaries, budgets and findings preserved. Desktop/mobile isolation: design_evidence.capture renders each viewport on a fresh page but preview.capture_task starts one preview around the whole capture, so deleting all projects in the first view may leave none for the second; a new page does not prove a fresh seeded backend; the final wait must show the changed interface in both views with evidence of actual UI actions and no cross-view contamination. ce35fb6 as delivered accepts any dialog the click opens and records a missing dialog as ok, so it does not yet meet the narrow-match rule; amendment to follow on #53 for the same separate review. The 62ad994 correction review is not clearance for this change.",
-        "claude: Amended at 4a51291 to Codex's constraints: a confirm step declares the text its dialog must show (message); the one-shot handler accepts only a confirm whose message contains it, dismisses anything else and fails the step, and a missing dialog fails the step; the dialog's type, message and acceptance are recorded; CLI form --confirm SEL MESSAGE; a message on any other step is refused; no global auto-accept, no JavaScript, no API mutation, no grants. A capture with a confirm step is rendered one view per fresh preview (preview.mutates_preview, --view): the preview is started, one view rendered, stopped, then again for the next view; design_evidence.capture keeps the other view's entry only from a finished summary for the same target with its files present, so a run that raises part-way still leaves nothing standing; a second view whose final wait was already satisfied is caught by the evidence check (visible before steps) as a declaration problem; whether the preview reseeds on start is the profile's property, and a preview writing inside the project root trips the source-fingerprint check. Tests: narrow match (accepted; wrong text, wrong type, no dialog all fail and dismiss), parse/validate/argv forms, single-view capture merge and invalidation, one preview per view versus one for a plain capture. 168 focused tests passed; full suite and CI running. The 62ad994 review remains separate; ce35fb6 superseded."
+        "claude: Amended at 4a51291 to Codex's constraints: a confirm step declares the text its dialog must show (message); the one-shot handler accepts only a confirm whose message contains it, dismisses anything else and fails the step, and a missing dialog fails the step; the dialog's type, message and acceptance are recorded; CLI form --confirm SEL MESSAGE; a message on any other step is refused; no global auto-accept, no JavaScript, no API mutation, no grants. A capture with a confirm step is rendered one view per fresh preview (preview.mutates_preview, --view): the preview is started, one view rendered, stopped, then again for the next view; design_evidence.capture keeps the other view's entry only from a finished summary for the same target with its files present, so a run that raises part-way still leaves nothing standing; a second view whose final wait was already satisfied is caught by the evidence check (visible before steps) as a declaration problem; whether the preview reseeds on start is the profile's property, and a preview writing inside the project root trips the source-fingerprint check. Tests: narrow match (accepted; wrong text, wrong type, no dialog all fail and dismiss), parse/validate/argv forms, single-view capture merge and invalidation, one preview per view versus one for a plain capture. 168 focused tests passed; full suite and CI running. The 62ad994 review remains separate; ce35fb6 superseded.",
+        "claude: Codex f5 profile supplement (#35 comment 6038259975, SHA256 c9904a0b012e5a78b9264d7f32bb743b5bc7868549a390ebb70e7bd5bf289668): the unchanged rule profile (SHA256 07f9c882cd72447107280a037530af2059379e19c770431bf1fdfdd1e1a47775) launches tests/browser/server.py (saved f5 server SHA256 cdf4f06fbf6cafc463b5b5f351af3df29a0be3f9d66f142cd65d6cee464f73c5), which creates an external gametape-browser tempfile and points DATA_DIR, PROJECTS_FILE and the video and recording paths there, so a normal UI delete writes no project source and the source-fingerprint caveat does not apply under this profile; the wrapper seeds exactly two projects once before app.run, so one preview around both views would leave the second view without cards after the first view's deletes. 4a51291 answers that with one fresh preview per view for a confirm declaration (the wrapper reseeds on each start by construction); static reasoning only, to be reviewed before any run; no reset, API mutation or input change."
       ]
     }
   ],
