@@ -1700,6 +1700,32 @@
       "reviews": [],
       "blockers": [],
       "decisions": []
+    },
+    {
+      "id": "T-node-producer",
+      "purpose": "Engine defects from series rule-58a4625 f3. (1) Regression from 61f3ad9: the APPROVED CHECK COMMANDS guidance showed leads the pytest check argv with the --quadratus-report={report} token, so t5 and t6 ran it and got exit 4 unrecognized arguments; integration.model_facing now strips the token from every command a seat is told to run. (2) The node extra check (five tests/ui files) failed in the lead-edited tests/ui/load_app.test.js and, with no report producer, was unattributable by design, so no fix call and the run stopped with 5/5 graders passing; second cycle in a row f3 ended on a failing node UI test. Fix on #53 (f8d8c03): a harness-owned node:test reporter (_gate_producer/quadratus_gate_report.mjs, producer quadratus-node/1, nonce- and digest-bound like the pytest plugin); a node --test check declares --test-reporter-destination={report} and the harness inserts TAP-to-stdout plus its reporter directly after --test (node reads an option after the first test file as another file, probed on node 22); ERR_ASSERTION in a test body is product, other throws, hook failures, cancellations and file-level failures are not; the Stage B node extra check declares the token; wheel ships the reporter. Six tests. Custom reporters need node 19.6 or later: a Mac probe of the node version is the qualification.",
+      "base": "58a4625aa37050f976a7475db9a403c900b32224",
+      "owns": [
+        "quadratus/integration.py",
+        "quadratus/project_run.py",
+        "quadratus/_gate_producer/quadratus_gate_report.mjs",
+        "tests/test_gate_attribution.py",
+        "tools/jev_stage_b/packet.stage-b.json",
+        "pyproject.toml",
+        "CLAUDE.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-07T11:49:56Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "f8d8c03",
+        "at": "2026-10-07T11:49:56Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
