@@ -743,8 +743,9 @@ def test_a_state_changing_capture_gets_one_preview_per_view(tmp_path, monkeypatc
                                         "pathlib.Path('argv.log').open('a').write(' '.join(sys.argv[1:]) + '\\n')\n")
     real_argv = preview.capture_argv
 
-    def argv(profile, task_id, capture, view=None):
-        runs.append(real_argv(profile, task_id, capture, view)[-2:] if view else ["(both)"])
+    def argv(profile, task_id, capture, view=None, attempt=None):
+        runs.append(real_argv(profile, task_id, capture, view, attempt)[-4:-2] if view else ["(both)"])
+        assert (attempt is None) == (view is None), "the views of one attempt carry its token"
         return [sys.executable, str(tmp_path / "record.py"), *(["--view", view] if view else [])]
     monkeypatch.setattr(preview, "capture_argv", argv)
     port = _free_port()
@@ -758,3 +759,19 @@ def test_a_state_changing_capture_gets_one_preview_per_view(tmp_path, monkeypatc
     plain = {"path": "/", "steps": [dict(action="click", selector="#a"), dict(action="wait", selector="#b")]}
     assert preview.capture_task(profile, tmp_path, "t1", plain) == ""
     assert len(starts) == 1 and runs == [["(both)"]]
+
+
+def test_the_capture_allowance_is_shared_across_the_views_of_one_attempt(tmp_path, monkeypatch):
+    """Codex review of 4a51291: each view was granted the full capture
+    allowance again; the allowance is one per attempt, spent view by view."""
+    granted = []
+
+    def once(profile, root, argv, deadline, allowance):
+        granted.append(allowance)
+        return "", 35.0
+    monkeypatch.setattr(preview, "_capture_once", once)
+    profile = _profile(tmp_path, _server(5000), 5000, total_timeout=300, capture_timeout=90)
+    confirm = {"path": "/", "steps": [dict(action="confirm", selector=".delete-btn", message="Delete project Alpha Cup?"),
+                                      dict(action="wait", selector="#projects-empty")]}
+    assert preview.capture_task(profile, tmp_path, "t1", confirm) == ""
+    assert granted == [90.0, 55.0]

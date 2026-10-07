@@ -311,7 +311,7 @@ def validate_steps(steps: List[dict], target: str, root, task_id: Optional[str] 
 
 
 def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = None, *,
-            pinned: bool = False, views: Optional[List[str]] = None) -> dict:
+            pinned: bool = False, views: Optional[List[str]] = None, attempt: Optional[str] = None) -> dict:
     """Render ``target`` at each width into the task's evidence folder.
 
     With ``steps``, each width runs them on a fresh page before its
@@ -320,10 +320,16 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
     design check reports why instead of accepting an earlier render.
 
     ``views`` renders only those widths (the harness captures a state-
-    changing declaration one view per preview, quadratus.preview). The
-    other views' entries are kept from the previous summary only when it
-    was complete, for the same target, and this run finishes; a run that
-    raises part-way still leaves nothing standing.
+    changing declaration one view per preview, quadratus.preview), under
+    ``attempt``, the harness's token for that one capture. The other views'
+    entries are kept from the previous summary only when they are siblings
+    of this render: the same attempt, the same target, the same source
+    fingerprint, the same checked steps, every step passed, and their files
+    present; anything else is history, not a sibling (Codex review of
+    4a51291: a kept view was relabelled with the new render's identity, and
+    a stale failed sibling ended the next attempt). The returned dict holds
+    only the views rendered now; a run that raises part-way still leaves
+    nothing standing.
     """
     from .browser import render_page
     folder = evidence_dir(root, task_id)
@@ -331,7 +337,7 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
     wanted = {name: VIEWPORTS[name] for name in (views or VIEWPORTS) if name in VIEWPORTS}
     if views and set(views) - set(VIEWPORTS):
         raise ValueError(f"unknown view(s) {sorted(set(views) - set(VIEWPORTS))}; the views are {list(VIEWPORTS)}")
-    kept = _kept_views(folder, target, set(VIEWPORTS) - set(wanted)) if views else {}
+    previous = _read_summary(folder) if views else None
     # Invalidate before anything can fail: a capture that raises part-way
     # must never leave an earlier, successful summary and screenshots standing
     # as this attempt's evidence (Codex review of c222d62).
@@ -351,6 +357,9 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
     # The tree the renders show (Codex review of 3d5c3f3): recorded, and
     # compared again by the check, so a render stands only for this source.
     source = source_fingerprint(root)
+    declared = [{k: v for k, v in s.items() if k != "path"} for s in checked]
+    kept = (_kept_views(folder, previous, set(VIEWPORTS) - set(wanted), target=target, attempt=attempt,
+                        source=source, declared=declared) if views else {})
     try:
         _source_excludes(Path(root))
         identity_error = None
@@ -374,14 +383,14 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
         _write_summary(folder, dict(target=target, views={}, rendered=sorted(out),
                                     capture_failed=f"{type(exc).__name__}: {str(exc)[:300]}"))
         raise
-    if kept:
-        out = {**kept, **out}
-    summary = dict(target=target, views=out,
+    summary = dict(target=target, views={**kept, **out},
                    source_fingerprint=source if source and source == source_fingerprint(root) else None)
+    if attempt:
+        summary["attempt"] = attempt
     if identity_error:
         summary["source_identity_error"] = identity_error
     if checked:
-        summary["steps"] = [{k: v for k, v in s.items() if k != "path"} for s in checked]
+        summary["steps"] = declared
     (folder / "summary.json").write_text(json.dumps(summary, indent=2))
     return out
 
@@ -423,22 +432,35 @@ def _write_summary(folder: Path, summary: dict) -> None:
     (folder / "summary.json").write_text(json.dumps(summary, indent=2))
 
 
-def _kept_views(folder: Path, target: str, names) -> dict:
-    """The named views' entries from the summary on disk, kept for a
-    partial render, when that summary is a finished one for the same target
-    with those views rendered and their files present; otherwise nothing."""
+def _read_summary(folder: Path):
     try:
-        previous = json.loads((folder / "summary.json").read_text())
+        data = json.loads((folder / "summary.json").read_text())
     except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _kept_views(folder: Path, previous, names, *, target: str, attempt: Optional[str], source, declared) -> dict:
+    """The named views' entries from the previous summary, kept for a
+    partial render only as siblings: the previous summary finished under
+    the same attempt token, for the same target, the same source
+    fingerprint and the same checked steps, with every step of each kept
+    view passed and its files present; otherwise nothing. A view that fails
+    any of these is history and never joins this attempt."""
+    if not names:
         return {}
-    if (not isinstance(previous, dict) or previous.get("target") != target or previous.get("capture_in_progress")
-            or previous.get("capture_failed") or previous.get("steps_refused")
-            or not isinstance(previous.get("views"), dict)):
+    if (not previous or not attempt or previous.get("attempt") != attempt or previous.get("target") != target
+            or previous.get("capture_in_progress") or previous.get("capture_failed") or previous.get("steps_refused")
+            or not isinstance(previous.get("views"), dict)
+            or not source or previous.get("source_fingerprint") != source
+            or previous.get("steps", []) != declared):
         return {}
     kept = {}
     for name in names:
         view = previous["views"].get(name)
-        if isinstance(view, dict) and (folder / name / "page.png").is_file() and (folder / name / "evidence.json").is_file():
+        if (isinstance(view, dict) and (folder / name / "page.png").is_file()
+                and (folder / name / "evidence.json").is_file()
+                and all(isinstance(s, dict) and s.get("ok") is True for s in view.get("steps", []))):
             kept[name] = view
     return kept if len(kept) == len(set(names)) else {}
 
@@ -468,14 +490,16 @@ def _step_problem(view: str, requested, done) -> Optional[str]:
             return (f"the {view} render's step {index + 1} ({want['action']} {want['selector'][:80]}) "
                     f"failed: {str(got.get('error'))[:160]}")
         if want["action"] == "confirm":
-            # The evidence must show the declared dialog was the one answered
-            # (Codex review of ce35fb6: a record with no dialog, or another
-            # dialog, passed the checker).
+            # The evidence must show the declared dialog, exactly, was the one
+            # answered and accepted (Codex reviews of ce35fb6 and 4a51291: a
+            # record with no dialog, another dialog, or a longer message
+            # passed the checker).
+            from .browser import _dialog_text
             dialog = got.get("dialog")
-            expected = str(want.get("message") or "")
+            expected = _dialog_text(want.get("message"))
             if (not isinstance(dialog, dict) or dialog.get("accepted") is not True
                     or dialog.get("type") != "confirm" or not expected
-                    or expected not in str(dialog.get("message") or "")):
+                    or _dialog_text(dialog.get("message")) != expected):
                 return (f"the {view} render's step {index + 1} (confirm {want['selector'][:80]}) carries no "
                         f"record of the declared dialog being accepted")
     if len(done) != len(requested):
@@ -703,6 +727,14 @@ def main(argv=None) -> int:
             return 2
         views = (views or []) + [argv[at + 1]]
         del argv[at:at + 2]
+    attempt = None
+    if "--attempt" in argv:
+        at = argv.index("--attempt")
+        if at + 1 >= len(argv) or not re.fullmatch(r"[0-9a-f]{8,64}", argv[at + 1]):
+            print("error: --attempt needs a hex token", file=sys.stderr)
+            return 2
+        attempt = argv[at + 1]
+        del argv[at:at + 2]
     try:
         positional, steps = parse_steps(argv)
     except ValueError as exc:
@@ -711,11 +743,11 @@ def main(argv=None) -> int:
     if len(positional) not in (2, 3):
         print("usage: python -m quadratus.design_evidence <url-or-html-file> <task-id> [project-root] "
               "[--click SEL] [--wait SEL] [--confirm SEL MESSAGE] [--upload SEL path] [--file SEL=path] "
-              "[--view desktop|mobile]", file=sys.stderr)
+              "[--view desktop|mobile] [--attempt HEX]", file=sys.stderr)
         return 2
     try:
         out = capture(positional[0], positional[1], positional[2] if len(positional) == 3 else ".", steps,
-                      pinned=pinned, views=views)
+                      pinned=pinned, views=views, attempt=attempt)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -726,6 +758,10 @@ def main(argv=None) -> int:
         print(f"error: the capture crashed ({type(exc).__name__}: {str(exc)[:300]})", file=sys.stderr)
         return 3
     print(json.dumps(out, indent=2))
+    # Exit status from the views this invocation rendered: a partial render
+    # answers for itself, and final acceptance is the checker's, which needs
+    # every view (Codex review of 4a51291: a stale failed sibling made a
+    # successful desktop render exit 1).
     failed = [s for view in out.values() for s in view.get("steps", []) if not s.get("ok")]
     return 1 if failed else 0
 

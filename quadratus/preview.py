@@ -419,9 +419,11 @@ def running(profile: CaptureProfile, root, deadline: Optional[float] = None):
         shutil.rmtree(tempdir, ignore_errors=True)
 
 
-def capture_argv(profile: CaptureProfile, task_id: str, capture: dict, view: Optional[str] = None) -> List[str]:
+def capture_argv(profile: CaptureProfile, task_id: str, capture: dict, view: Optional[str] = None,
+                 attempt: Optional[str] = None) -> List[str]:
     """The harness's own capture command for a task's declared capture;
-    ``view`` renders that one width only."""
+    ``view`` renders that one width only, under the capture's ``attempt``
+    token so the views of one attempt combine and nothing older does."""
     target = profile.origin + _web_path(capture.get("path", "/"), "capture path")
     # -P and a working directory outside the project: a project folder named
     # quadratus can never stand in for the harness's own capture module
@@ -437,6 +439,8 @@ def capture_argv(profile: CaptureProfile, task_id: str, capture: dict, view: Opt
             argv += [f"--{step['action']}", step["selector"]]
     if view:
         argv += ["--view", view]
+    if attempt:
+        argv += ["--attempt", attempt]
     return argv
 
 
@@ -455,27 +459,44 @@ def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict) -> 
     root = Path(root)
     deadline = time.monotonic() + profile.total_timeout
     if mutates_preview(capture):
+        import secrets
+
         from .design_evidence import VIEWPORTS
+        attempt = secrets.token_hex(8)
+        # One capture allowance for the whole attempt, spent across the
+        # views, beside the one total deadline (Codex review of 4a51291:
+        # each view had been granted the full allowance again).
+        allowance = float(profile.capture_timeout)
         for view in VIEWPORTS:
-            failure = _capture_once(profile, root, capture_argv(profile, task_id, capture, view), deadline)
+            failure, spent = _capture_once(profile, root, capture_argv(profile, task_id, capture, view, attempt),
+                                           deadline, allowance)
             if failure:
                 return failure
+            allowance -= spent
         return ""
-    return _capture_once(profile, root, capture_argv(profile, task_id, capture), deadline)
+    failure, _ = _capture_once(profile, root, capture_argv(profile, task_id, capture), deadline,
+                               float(profile.capture_timeout))
+    return failure
 
 
-def _capture_once(profile: CaptureProfile, root: Path, argv: List[str], deadline: float) -> str:
-    """One preview around one capture command."""
+def _capture_once(profile: CaptureProfile, root: Path, argv: List[str], deadline: float, allowance: float):
+    """One preview around one capture command: ``(failure, seconds the
+    capture itself took)``, the capture bounded by ``allowance`` and by
+    what is left of the deadline."""
     package = str(Path(__file__).resolve().parent.parent)
+    spent = 0.0
     try:
         with running(profile, root, deadline):
             env = dict(_environment())
             env["PYTHONPATH"] = package + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
             # What is left of the one budget, never a fresh full timeout.
-            left = min(profile.capture_timeout, deadline - time.monotonic())
+            left = min(allowance, deadline - time.monotonic())
             if left <= 0:
-                return f"the preview used the whole {profile.total_timeout:g}s budget before the capture"
+                return (f"the preview used the whole {profile.total_timeout:g}s budget before the capture"
+                        if allowance > 0 else
+                        f"the {profile.capture_timeout:g}s capture allowance was spent on an earlier view"), spent
             argv = [str(root.resolve()) if a == "{root}" else a for a in argv]
+            started = time.monotonic()
             capture = subprocess.Popen(argv, cwd=package, env=env, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                        start_new_session=True)
@@ -484,17 +505,20 @@ def _capture_once(profile: CaptureProfile, root: Path, argv: List[str], deadline
                 try:
                     capture.wait(timeout=left)
                 except subprocess.TimeoutExpired:
-                    return f"the capture did not finish within {left:.0f}s of the {profile.total_timeout:g}s budget"
+                    spent = time.monotonic() - started
+                    return (f"the capture did not finish within {left:.0f}s of the {profile.total_timeout:g}s "
+                            f"budget"), spent
+                spent = time.monotonic() - started
                 if capture.returncode != 0:
-                    return f"the capture exited with {capture.returncode}: " + output.tail()[-400:]
+                    return f"the capture exited with {capture.returncode}: " + output.tail()[-400:], spent
             finally:
                 # Whatever happened, the capture and everything it started
                 # (the browser, a child holding its output) are stopped.
                 _stop(capture)
                 output.close()
     except PreviewFailed as exc:
-        return CaptureFailure(str(exc), exc.origin)
-    return ""
+        return CaptureFailure(str(exc), exc.origin), spent
+    return "", spent
 
 
 def validate_capture(capture) -> dict:

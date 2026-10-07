@@ -783,12 +783,15 @@ Key design decisions already settled:
   cycle with all four graders passing. Playwright dismisses an unanswered
   dialog, so a plain click on a delete control cancels the delete. A
   confirm step declares the text its dialog must show
-  (`"message"`), registers a one-shot handler, clicks, and accepts that one
-  dialog only when it is a confirm whose message contains the declared
-  text; any other dialog is dismissed and the step fails, and no dialog is
-  a failed step, so an unexpected, wrong or missing dialog stays an honest
-  unverified outcome and nothing is ever auto-accepted (Codex,
-  6038178890). The dialog's type, message and whether it was accepted are
+  (`"message"`), registers a handler for its own click, and accepts that
+  one dialog only when it is a confirm whose whole message equals the
+  declared text (whitespace collapsed; a longer message that merely
+  contains it is another operation, Codex review of 4a51291); any other
+  dialog is dismissed and the step fails, and no dialog is a failed step,
+  so an unexpected, wrong or missing dialog stays an honest unverified
+  outcome and nothing is ever auto-accepted (Codex, 6038178890). The
+  recorded message is kept whole (600 characters, twice the declared
+  maximum) so the evidence check compares it untruncated. The dialog's type, message and whether it was accepted are
   recorded on the step, and the evidence check accepts a confirm step
   only when its record shows the declared dialog accepted (Codex review of
   ce35fb6: a record with no dialog, or another dialog, passed the
@@ -800,13 +803,20 @@ Key design decisions already settled:
   in the orchestrator's capture rule.
   Because it changes the preview's state, such a capture is rendered one
   view per fresh preview (`preview.mutates_preview`, `--view`): the first
-  view's delete must not empty the list for the second. Whether the
-  preview reseeds on start is the profile's property; a second view whose
-  final wait was already satisfied before its steps is caught by the
-  evidence check as a declaration problem, and a preview that writes its
-  data inside the project root trips the source-fingerprint check, which
-  is the profile's problem to solve, not a reason to weaken the check. No
-  goal, grader or profile change was made.
+  view's delete must not empty the list for the second. The views of one
+  capture share one attempt token (`--attempt`) and one capture allowance
+  spent across them beside the one total deadline; a partial render keeps
+  the other view only as a sibling (same attempt, target, source
+  fingerprint and checked steps, every step passed, files present), never
+  relabels old bytes with a new identity, answers with its exit code for
+  the views it rendered, and leaves final acceptance to the checker, which
+  needs every view (Codex review of 4a51291: a kept view took the new
+  render's source and declaration, and a stale failed sibling ended the
+  next attempt). Whether the preview reseeds on start is the profile's
+  property (the Stage B profile's server seeds on each start); a second
+  view whose final wait was already satisfied before its steps is caught
+  by the evidence check as a declaration problem. No goal, grader or
+  profile change was made.
 - **A node check has a producer, and the report token never reaches a
   model** (series rule-58a4625 f3, 2026-10-07). Two findings from one cell.
   The packet's pytest check now carried `--quadratus-report={report}`, and

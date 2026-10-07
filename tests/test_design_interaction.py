@@ -1105,7 +1105,7 @@ class _DialogPage(_FakePage):
             self.handlers["dialog"](Dialog())
 
 
-CONFIRM = dict(action="confirm", selector=".delete-btn", message="Delete project")
+CONFIRM = dict(action="confirm", selector=".delete-btn", message="Delete project Alpha Cup?")
 
 
 def test_a_confirm_step_accepts_only_the_declared_confirm_dialog():
@@ -1125,7 +1125,9 @@ def test_a_confirm_step_accepts_only_the_declared_confirm_dialog():
 
 @pytest.mark.parametrize("dialog, said", [
     (("confirm", "Reset everything?"), "did not match: confirm 'Reset everything?'"),
+    (("confirm", "Delete project Alpha Cup? Also delete every other project?"), "did not match: confirm"),
     (("alert", "Delete project Alpha Cup?"), "did not match: alert"),
+    (("prompt", "Delete project Alpha Cup?"), "did not match: prompt"),
     (None, "no dialog opened"),
 ])
 def test_an_unexpected_or_missing_dialog_fails_the_confirm_step_and_is_dismissed(dialog, said):
@@ -1139,12 +1141,13 @@ def test_an_unexpected_or_missing_dialog_fails_the_confirm_step_and_is_dismissed
                          [], 5000, time.monotonic() + 5)
     assert len(records) == 1 and records[0]["ok"] is False and said in records[0]["error"]
     assert page.answered == (["dismissed"] if dialog else [])
-    assert "Delete project" in records[0]["error"], "the expected text is named"
+    assert "Delete project Alpha Cup?" in records[0]["error"], "the expected text is named"
 
 
 def test_confirm_steps_parse_validate_and_render_like_the_others(tmp_path):
     from quadratus.preview import CaptureProfile, capture_argv, validate_capture
-    _, steps = parse_steps(["p.html", "t1", "--confirm", ".delete-btn", "Delete project", "--wait", "#projects-empty"])
+    _, steps = parse_steps(["p.html", "t1", "--confirm", ".delete-btn", "Delete project Alpha Cup?",
+                            "--wait", "#projects-empty"])
     assert steps == [CONFIRM, dict(action="wait", selector="#projects-empty")]
     checked, _ = validate_steps(steps, "http://127.0.0.1:1/", tmp_path, "t1")
     assert checked == steps
@@ -1152,8 +1155,9 @@ def test_confirm_steps_parse_validate_and_render_like_the_others(tmp_path):
     assert capture["steps"] == steps
     profile = CaptureProfile(preview=("true",), origin="http://127.0.0.1:1")
     argv = capture_argv(profile, "t1", capture)
-    assert argv[-5:] == ["--confirm", ".delete-btn", "Delete project", "--wait", "#projects-empty"]
-    assert capture_argv(profile, "t1", capture, "mobile")[-2:] == ["--view", "mobile"]
+    assert argv[-5:] == ["--confirm", ".delete-btn", "Delete project Alpha Cup?", "--wait", "#projects-empty"]
+    assert capture_argv(profile, "t1", capture, "mobile", "abcdef0123456789")[-4:] == [
+        "--view", "mobile", "--attempt", "abcdef0123456789"]
     with pytest.raises(ValueError):
         parse_steps(["p.html", "t1", "--confirm", ".delete-btn"])
     for bad in (dict(action="confirm", selector=".d"), dict(action="confirm", selector=".d", message="  "),
@@ -1179,29 +1183,64 @@ def _fake_render(root):
     return render
 
 
-def test_a_single_view_capture_keeps_the_other_view_only_from_a_finished_summary(tmp_path, monkeypatch):
+def _summary(root):
+    return json.loads((evidence_dir(root, "t1") / "summary.json").read_text())
+
+
+def test_a_single_view_capture_combines_only_siblings_of_the_same_attempt(tmp_path, monkeypatch):
     """A state-changing declaration is captured one view per preview; the
-    second run merges the first's view, and a run that raises leaves nothing."""
+    second run keeps the first's view only as a sibling (same attempt,
+    target, source and declaration, every step passed, files present), the
+    returned dict and the exit code answer only for the views rendered now,
+    and a run that raises leaves nothing standing (Codex review of 4a51291)."""
     from quadratus import browser
+    from quadratus import design_evidence as de
     root = _project(tmp_path)
     monkeypatch.setattr(browser, "render_page", _fake_render(root))
     steps = [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]
-    capture(str(root / "index.html"), "t1", root, steps, views=["desktop"])
-    summary = json.loads((evidence_dir(root, "t1") / "summary.json").read_text())
-    assert set(summary["views"]) == {"desktop"} and summary["steps"][0]["message"] == "Delete project"
-    capture(str(root / "index.html"), "t1", root, steps, views=["mobile"])
-    summary = json.loads((evidence_dir(root, "t1") / "summary.json").read_text())
-    assert set(summary["views"]) == {"desktop", "mobile"}
-    assert (evidence_dir(root, "t1") / "desktop" / "page.png").exists()
+    page = str(root / "index.html")
+    out = capture(page, "t1", root, steps, views=["desktop"], attempt="aa" * 8)
+    assert set(out) == {"desktop"} and set(_summary(root)["views"]) == {"desktop"}
+    assert _summary(root)["attempt"] == "aa" * 8 and _summary(root)["steps"][0]["message"] == CONFIRM["message"]
+    out = capture(page, "t1", root, steps, views=["mobile"], attempt="aa" * 8)
+    assert set(out) == {"mobile"}, "the return answers for the views rendered now"
+    assert set(_summary(root)["views"]) == {"desktop", "mobile"}
+    # Another attempt, a changed declaration, a changed source or a failed
+    # sibling: the old view is history, never a sibling.
+    capture(page, "t1", root, steps, views=["desktop"], attempt="aa" * 8)
+    capture(page, "t1", root, steps, views=["mobile"], attempt="bb" * 8)
+    assert set(_summary(root)["views"]) == {"mobile"}
+    capture(page, "t1", root, steps, views=["desktop"], attempt="cc" * 8)
+    other = [dict(CONFIRM, message="Delete project Beta Bowl?"), dict(action="wait", selector="#projects-empty")]
+    capture(page, "t1", root, other, views=["mobile"], attempt="cc" * 8)
+    assert set(_summary(root)["views"]) == {"mobile"}
+    capture(page, "t1", root, steps, views=["desktop"], attempt="dd" * 8)
+    (root / "index.html").write_text("<p>changed</p>\n")
+    capture(page, "t1", root, steps, views=["mobile"], attempt="dd" * 8)
+    assert set(_summary(root)["views"]) == {"mobile"}
+
+    def failing(target, *, out_dir, viewport=None, steps=None, **kwargs):
+        evidence = _fake_render(root)(target, out_dir=out_dir, viewport=viewport, steps=steps)
+        evidence.steps[0] = dict(evidence.steps[0], ok=False, error="no dialog opened")
+        return evidence
+    monkeypatch.setattr(browser, "render_page", failing)
+    assert de.main([page, "t1", str(root), "--confirm", ".delete-btn", CONFIRM["message"],
+                    "--wait", "#projects-empty", "--view", "mobile", "--attempt", "ee" * 8]) == 1
+    monkeypatch.setattr(browser, "render_page", _fake_render(root))
+    assert de.main([page, "t1", str(root), "--confirm", ".delete-btn", CONFIRM["message"],
+                    "--wait", "#projects-empty", "--view", "desktop", "--attempt", "ee" * 8]) == 0, \
+        "a stale failed sibling never fails the next render"
+    assert set(_summary(root)["views"]) == {"desktop"}, "and it is not kept as a sibling either"
     with pytest.raises(ValueError):
-        capture(str(root / "index.html"), "t1", root, steps, views=["tablet"])
+        capture(page, "t1", root, steps, views=["tablet"])
+    assert de.main([page, "t1", str(root), "--view", "desktop", "--attempt", "not-hex"]) == 2
 
     def broken(*a, **k):
         raise RuntimeError("browser crashed")
     monkeypatch.setattr(browser, "render_page", broken)
     with pytest.raises(RuntimeError):
-        capture(str(root / "index.html"), "t1", root, steps, views=["mobile"])
-    summary = json.loads((evidence_dir(root, "t1") / "summary.json").read_text())
+        capture(page, "t1", root, steps, views=["mobile"], attempt="ee" * 8)
+    summary = _summary(root)
     assert summary["views"] == {} and "capture_failed" in summary
 
 
@@ -1226,7 +1265,9 @@ def test_the_evidence_check_requires_the_declared_dialog_to_have_been_accepted()
             dict(n=2, action="wait", selector="#projects-empty", ok=True)]
     assert _step_problem("desktop", requested, good) is None
     for bad in (None, dict(type="confirm", message="Reset?", accepted=True),
+                dict(type="confirm", message="Delete project Alpha Cup? Also delete every other project?", accepted=True),
                 dict(type="alert", message="Delete project Alpha Cup?", accepted=True),
+                dict(type="prompt", message="Delete project Alpha Cup?", accepted=True),
                 dict(type="confirm", message="Delete project Alpha Cup?", accepted=False)):
         done = [dict(good[0], dialog=bad), good[1]]
         assert "no record of the declared dialog being accepted" in _step_problem("desktop", requested, done)

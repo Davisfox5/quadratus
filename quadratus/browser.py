@@ -422,6 +422,16 @@ class _Budget:
         return max(1, min(cap, left))
 
 
+#: A recorded dialog message is kept whole up to twice the longest message
+#: a declaration may carry, so the record can always be compared untruncated.
+_DIALOG_RECORD_CHARS = 600
+
+
+def _dialog_text(text) -> str:
+    """A dialog message as compared: whitespace collapsed, ends trimmed."""
+    return " ".join(str(text or "").split())
+
+
 def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
     """Run interaction steps in order; stop at the first failure.
 
@@ -469,12 +479,17 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
                 # never reached (series rule-58a4625 f5: the empty list sits
                 # behind a confirm). Never a global auto-accept (Codex,
                 # 6038178890): one handler, one click, one dialog.
-                expected = str(step.get("message") or "")
+                expected = _dialog_text(step.get("message"))
                 seen: List[dict] = []
 
                 def answer(dialog, seen=seen, expected=expected):
-                    matched = dialog.type == "confirm" and bool(expected) and expected in dialog.message
-                    seen.append(dict(type=dialog.type, message=str(dialog.message)[:200], accepted=matched))
+                    # Exactly the declared message, whitespace collapsed: a
+                    # longer message that merely contains it is another
+                    # operation (Codex review of 4a51291: "Delete project
+                    # Alpha? Also delete every other project?" matched).
+                    matched = dialog.type == "confirm" and bool(expected) and _dialog_text(dialog.message) == expected
+                    seen.append(dict(type=dialog.type, message=str(dialog.message)[:_DIALOG_RECORD_CHARS],
+                                     accepted=matched))
                     if matched:
                         dialog.accept()
                     else:
@@ -492,12 +507,12 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
                     page.remove_listener("dialog", answer)
                 if not seen:
                     record["dialog"] = None
-                    record["error"] = f"no dialog opened; expected a confirm containing {expected[:80]!r}"
+                    record["error"] = f"no dialog opened; expected the confirm {expected[:80]!r}"
                     break
                 record["dialog"] = seen[0]
                 if not seen[0]["accepted"]:
                     record["error"] = (f"the dialog did not match: {seen[0]['type']} {seen[0]['message'][:80]!r}; "
-                                       f"expected a confirm containing {expected[:80]!r}; dismissed")
+                                       f"expected the confirm {expected[:80]!r}; dismissed")
                     break
             elif action == "wait":
                 page.wait_for_selector(selector, state="visible", timeout=limit)
