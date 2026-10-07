@@ -4926,8 +4926,18 @@ class Session:
             "preview can reach that state, reply exactly CAPTURE: none and one line saying why. "
             "Do not change files: this call declares, it does not edit."
         )
-        with invocation(spec.task_id, "capture-redeclare"):
-            reply = self._invoke_model(lead, prompt)
+        try:
+            with invocation(spec.task_id, "capture-redeclare"):
+                reply = self._invoke_model(lead, prompt)
+        except TurnLimitReached as exc:
+            # A declaration call that hits its round cap gave no declaration
+            # (series rule-7590b13 f5: the cap raised out of the design check
+            # and ended a run whose graders all passed). Its narration is
+            # kept, never parsed; the verdict stands, as for a reply with no
+            # marker.
+            why = self._capped_declaration(spec, lead, task, "capture-redeclare", exc)
+            record["recapture"] = dict(declared=None, problem=why)
+            return None
         task.record("assistant", f"[{lead}] {reply}")
         task.keep(reply, kind="capture-redeclare", author=lead)
         capture, why = _parse_capture_line(reply, spec.task_id)
@@ -5890,8 +5900,14 @@ class Session:
             f"{MAX_FIXTURE_BYTES:,} bytes). Reply with nothing else. Do not change files: this call "
             "supplies content, it does not edit."
         )
-        with invocation(spec.task_id, "fixture-supply"):
-            reply = self._invoke_model(lead, prompt)
+        try:
+            with invocation(spec.task_id, "fixture-supply"):
+                reply = self._invoke_model(lead, prompt)
+        except TurnLimitReached as exc:
+            why = self._capped_declaration(spec, lead, task, "fixture-supply", exc)
+            record["fixtures_written"] = []
+            record["fixture_problems"] = [f"{path}: {why}" for path in missing]
+            return list(record["fixture_problems"])
         task.record("assistant", f"[{lead}] {reply}")
         task.keep(reply, kind="fixture-supply", author=lead)
         supplied, problems = _parse_fixture_blocks(reply)
@@ -5922,6 +5938,19 @@ class Session:
             record["fixture_problems"] = problems
             self._note(f"task {spec.task_id}: fixture supply incomplete ({'; '.join(problems)[:160]})")
         return problems
+
+    def _capped_declaration(self, spec, lead, task, what: str, exc: TurnLimitReached) -> str:
+        """A bounded declaration call that stopped at its round cap made no
+        declaration. The partial text is narration of unfinished work and is
+        kept as evidence, never read for a CAPTURE line or a FIXTURE block;
+        the run goes on exactly as after a reply with no marker."""
+        rounds = f"{exc.turns} rounds" if exc.turns else "its round cap"
+        why = f"the {what} call stopped at {rounds} before answering; no declaration"
+        task.record("user", f"The {what} call stopped at {rounds}; nothing it wrote is read as a declaration.")
+        if exc.partial_text:
+            task.keep(exc.partial_text, kind=f"{what}-capped", author=lead)
+        self._note(f"task {spec.task_id}: {why}")
+        return why
 
     def _missing_own_fixtures(self, spec) -> List[str]:
         """The capture-only samples this task's file steps declare under its

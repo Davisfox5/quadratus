@@ -60,7 +60,10 @@ def _run(tmp_path, monkeypatch, *, supply=SUPPLY, capture=CAPTURE, present=False
     def generate(model_key, provider, prompt, role):
         prompts.append((model_key, prompt))
         if "The harness cannot capture this task yet" in prompt or "carried no FIXTURE block" in prompt:
-            return supplies.pop(0) if len(supplies) > 1 else supplies[0]
+            answer = supplies.pop(0) if len(supplies) > 1 else supplies[0]
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
         return "APPROVED"
     monkeypatch.setattr(fleet, "_generate", generate)
 
@@ -303,3 +306,19 @@ def test_a_symlink_anywhere_on_the_fixture_path_refuses_the_write(tmp_path, monk
     record = session.design_checks[-1]
     assert record["fixtures_written"] == [] and "symlink" in record["fixture_problems"][0]
     assert record["verified"] is False and captures == []
+
+
+def test_a_capped_supply_call_writes_nothing_and_does_not_stop_the_run(tmp_path, monkeypatch):
+    """The fixture-supply call is bounded like the redeclare call; a cap on
+    it is a supply that did not arrive, never a run stop (series
+    rule-7590b13 f5 on the sibling path)."""
+    from quadratus.providers import TurnLimitReached
+    capped = TurnLimitReached("grok stopped at its turn limit (6 of 6) before finishing",
+                              partial_text=SUPPLY, turns=6)
+    session, prompts, captures = _run(tmp_path, monkeypatch, supply=capped)
+    asks = [p for _, p in prompts if "The harness cannot capture this task yet" in p]
+    assert len(asks) == 1 and captures == []
+    assert not (tmp_path / "project" / FIXTURE).exists(), "the partial text is never read as a block"
+    record = session.design_checks[-1]
+    assert record["fixtures_written"] == [] and "stopped at 6 rounds" in record["fixture_problems"][0]
+    assert record["verified"] is False and "could not be supplied" in record["problem"]

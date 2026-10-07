@@ -773,6 +773,19 @@ Key design decisions already settled:
   redeclaration is shared by both routes that can ask for it (the capture
   check and the blind review): after it is spent, a blind review stays
   unverified, and the first receipt is kept as written.
+- **A capped declaration call is a missing declaration, never a run stop**
+  (series rule-7590b13 f5, 2026-10-07). The 6-round cap above did its job
+  on grok's capture-redeclare call (6 of 6, 159k tokens, `cancelled`), and
+  the `TurnLimitReached` it raised passed straight out of the design check
+  and ended a run whose four graders all passed, with its one task never
+  closed. Both declaration calls (`_recapture_declared`, `_supply_fixtures`)
+  now catch the cap through `_capped_declaration`: the partial text is kept
+  as `<role>-capped` evidence and never read for a `CAPTURE:` line or a
+  `FIXTURE` block, the record says the call stopped at N rounds with no
+  declaration, the redeclaration stays spent, nothing is re-asked, and the
+  check proceeds exactly as after a reply with no marker (unverified, no
+  fix call). A cap on a review seat is already handled this way
+  (`_capped_review`); the declaration seats were the two left raising.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

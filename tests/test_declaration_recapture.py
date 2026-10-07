@@ -84,6 +84,8 @@ def _run(tmp_path, monkeypatch, lead_reply, *, second_visible=False):
     def generate(model_key, provider, prompt, role):
         prompts.append((model_key, prompt))
         if "Reply with exactly one line" in prompt and "CAPTURE:" in prompt:
+            if isinstance(lead_reply, Exception):
+                raise lead_reply
             return lead_reply
         if "Fix it in source" in prompt:
             return "Fixed.\nCHANGED: []"
@@ -146,3 +148,23 @@ def test_capture_none_leaves_the_declaration_problem_on_the_record(tmp_path, mon
     assert len(captures) == 1 and not any("Fix it in source" in p for _, p in prompts)
     record = session.design_checks[-1]
     assert record["verified"] is False and record["recapture"]["declared"] is None
+
+
+def test_a_capped_redeclare_call_is_no_declaration_not_a_run_stop(tmp_path, monkeypatch):
+    """Series rule-7590b13 f5: the grok capture-redeclare call hit its
+    6-round cap and the TurnLimitReached ended a run whose graders all
+    passed. The cap is a missing declaration: the verdict stands, the
+    narration is kept and never parsed, nothing is re-asked."""
+    from quadratus.providers import TurnLimitReached
+    capped = TurnLimitReached("grok stopped at its turn limit (6 of 6) before finishing",
+                              partial_text="Let me look at the template first. CAPTURE: " + json.dumps(REDECLARED),
+                              turns=6)
+    session, prompts, captures = _run(tmp_path, monkeypatch, capped)
+    asks = [p for _, p in prompts if "CAPTURE:" in p and "Reply with exactly one line" in p]
+    assert len(asks) == 1 and len(captures) == 1, "one bounded call, no re-ask, no recapture"
+    assert not any("Fix it in source" in p for _, p in prompts)
+    record = session.design_checks[-1]
+    assert record["verified"] is False and record["recapture"]["declared"] is None
+    assert "stopped at 6 rounds" in record["recapture"]["problem"]
+    assert record.get("recapture_spent") is True
+    assert any("without clean rendered evidence" in f for f in session.open_findings)
