@@ -39,6 +39,62 @@ Open that address in Safari on the phone, tap Share, then Add to Home
 Screen. The page declares itself a standalone web app, so it opens
 full-screen from the icon and reloads every five seconds while open.
 
+## Or: a public address on dfconsulting.tech
+
+This replaces step 2 when you want `https://monitor.dfconsulting.tech`
+instead of a Tailscale address: no VPN app on the phone, any network. The
+server still binds to loopback only. The tunnel is the only way in, and
+Cloudflare Access in front of it is the whole lock, so set it up before
+the hostname goes live.
+
+The domain has to be on Cloudflare DNS. If it isn't, add it in the
+Cloudflare dashboard (free plan) and switch the registrar's nameservers to
+the two Cloudflare gives you. Everything else on the domain keeps working
+once its records are copied over, which Cloudflare does on import.
+
+1. Lock it first. In the Cloudflare dashboard open Zero Trust, then Access,
+   Applications, Add an application, Self-hosted. Domain
+   `monitor.dfconsulting.tech`. Policy: Allow, Include, Emails, your
+   address only. Login method: One-time PIN. Session duration: 1 month, so
+   the home-screen app doesn't ask for a code every day.
+
+2. Create the tunnel on the Mac:
+
+   ```
+   brew install cloudflared
+   cloudflared tunnel login
+   cloudflared tunnel create quadratus-monitor
+   cloudflared tunnel route dns quadratus-monitor monitor.dfconsulting.tech
+   ```
+
+3. Copy `cloudflared-config.yml` to `~/.cloudflared/config.yml`, put the
+   tunnel id from step 2 in both places, then try it in the foreground:
+
+   ```
+   cloudflared tunnel run quadratus-monitor
+   ```
+
+   With the monitor running (step 1 above), open
+   `https://monitor.dfconsulting.tech` on the phone. It should ask for the
+   email code, then show the page. If it shows the page without asking,
+   stop the tunnel: Access isn't in front of it yet.
+
+4. Keep it up across restarts:
+
+   ```
+   sudo cloudflared service install
+   ```
+
+   This installs a launch daemon that reads `~/.cloudflared/config.yml`.
+   `sudo cloudflared service uninstall` removes it.
+
+5. Safari, Share, Add to Home Screen. The code from step 1 is asked once
+   inside the home-screen app; iOS keeps its cookies apart from Safari's.
+
+What passes through Cloudflare: task text, file paths, model names, stop
+reasons, token counts. Nothing that can act on a run. Anyone past the
+Access policy can read it, so keep the policy to your own address.
+
 ## Why not share the Gradio GUI the same way
 
 The GUI's Project tab can read local files and run check commands. That
