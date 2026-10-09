@@ -655,7 +655,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "reviewed",
+      "state": "delivered",
       "claimed_at": "2026-10-03T16:39:28Z",
       "acknowledged": false,
       "delivery": {
@@ -713,12 +713,18 @@
           "classification": "reachable",
           "by": "codex",
           "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
-          "at": "2026-10-03T20:37:59Z"
+          "at": "2026-10-03T20:37:59Z",
+          "resolved": {
+            "resolution": "Historical reconciliation (#46 6090230498, confirmed by root): blocker(s) raised on f09c832 were fixed at the delivered 17a2b5f, which Codex cleared in a full-scope review recorded 2026-10-03T21:12:01Z (evidence: https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973516204). The original failure, its evidence and that review's stated limits stay on the record unchanged; no verdict is re-recorded. Applied with tools/dev_record.py at c49d9f0 (#57).",
+            "by": "claude",
+            "at": "2026-10-09T22:27:17Z"
+          }
         }
       ],
       "decisions": [
         "claude: Delivered at f09c832 on #50 (e734779 plus a guard for attribute-less fake views). Live verification on claude 2.1.288 in the cloud container through ClaudeCLIProvider.in_directory(allow_writes=True) with granted_commands=('python3 -V',): argv carries --permission-mode acceptEdits --allowedTools 'Bash(python3 -V)' 'Bash(python3 -V:*)'; the Write landed, python3 -V ran, python3 -c was denied and recorded as a permission_denied tool failure (54,048 in / 538 out, haiku). Mac verification on claude 2.1.269 still owed before the rerun.",
-        "claude: Codex blocker (fork loses check_commands) fixed at 10bb9b46657bcea7f8bc95e9b3b97255b8c6f317: Fleet.fork(root) carries check_commands and progress with the shared budget, meter and ledger; new_session's fork closure uses it; test_a_forked_fleet_carries_the_granted_check_commands. Full suite 2900 passed locally."
+        "claude: Codex blocker (fork loses check_commands) fixed at 10bb9b46657bcea7f8bc95e9b3b97255b8c6f317: Fleet.fork(root) carries check_commands and progress with the shared budget, meter and ledger; new_session's fork closure uses it; test_a_forked_fleet_carries_the_granted_check_commands. Full suite 2900 passed locally.",
+        "unblocked by claude: Historical reconciliation (#46 6090230498, confirmed by root): blocker(s) raised on f09c832 were fixed at the delivered 17a2b5f, which Codex cleared in a full-scope review recorded 2026-10-03T21:12:01Z (evidence: https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973516204). The original failure, its evidence and that review's stated limits stay on the record unchanged; no verdict is re-recorded. Applied with tools/dev_record.py at c49d9f0 (#57)."
       ]
     },
     {
@@ -787,7 +793,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "reviewed",
+      "state": "delivered",
       "claimed_at": "2026-10-03T16:39:28Z",
       "acknowledged": false,
       "delivery": {
@@ -836,7 +842,12 @@
           "classification": "reachable",
           "by": "codex",
           "sha": "f09c832b1d98bedf0c352de4a2b622d510673b6b",
-          "at": "2026-10-03T20:37:59Z"
+          "at": "2026-10-03T20:37:59Z",
+          "resolved": {
+            "resolution": "Historical reconciliation (#46 6090230498, confirmed by root): blocker(s) raised on 10bb9b4, f09c832 were fixed at the delivered 17a2b5f, which Codex cleared in a full-scope review recorded 2026-10-03T21:11:17Z (evidence: https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973516204). The original failure, its evidence and that review's stated limits stay on the record unchanged; no verdict is re-recorded. Applied with tools/dev_record.py at c49d9f0 (#57).",
+            "by": "claude",
+            "at": "2026-10-09T22:27:17Z"
+          }
         },
         {
           "requirement": "Lead writes are judged against the cell's project after resolving relative paths, traversal and symlinks; a trace record with a parser error is unusable evidence",
@@ -845,12 +856,18 @@
           "classification": "reachable",
           "by": "codex",
           "sha": "10bb9b46657bcea7f8bc95e9b3b97255b8c6f317",
-          "at": "2026-10-03T21:07:17Z"
+          "at": "2026-10-03T21:07:17Z",
+          "resolved": {
+            "resolution": "Historical reconciliation (#46 6090230498, confirmed by root): blocker(s) raised on 10bb9b4, f09c832 were fixed at the delivered 17a2b5f, which Codex cleared in a full-scope review recorded 2026-10-03T21:11:17Z (evidence: https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973516204). The original failure, its evidence and that review's stated limits stay on the record unchanged; no verdict is re-recorded. Applied with tools/dev_record.py at c49d9f0 (#57).",
+            "by": "claude",
+            "at": "2026-10-09T22:27:17Z"
+          }
         }
       ],
       "decisions": [
         "claude: Codex blockers fixed at 10bb9b46657bcea7f8bc95e9b3b97255b8c6f317: lead writes judged against the cell's project root (denied and successful paths both; outside-project activity reported apart), and every invoked lead joined to its trace by invocation_id with missing or unusable records listed and the pair non-comparable; tests reproduce Codex's scratch-write and unavailable-transcript cases.",
-        "claude: Codex re-review blockers (10bb9b4) fixed at 17a2b5f2ae5fbbf7587a111c0ef7cfc31510372c: relative write paths resolved against the call's cwd with traversal and symlinks followed before containment; withheld paths uncertain; a trace record with error is unusable evidence even with empty tool_calls. Only tools/jev_stage_b changed; 23 runner tests pass."
+        "claude: Codex re-review blockers (10bb9b4) fixed at 17a2b5f2ae5fbbf7587a111c0ef7cfc31510372c: relative write paths resolved against the call's cwd with traversal and symlinks followed before containment; withheld paths uncertain; a trace record with error is unusable evidence even with empty tool_calls. Only tools/jev_stage_b changed; 23 runner tests pass.",
+        "unblocked by claude: Historical reconciliation (#46 6090230498, confirmed by root): blocker(s) raised on 10bb9b4, f09c832 were fixed at the delivered 17a2b5f, which Codex cleared in a full-scope review recorded 2026-10-03T21:11:17Z (evidence: https://github.com/Davisfox5/quadratus/pull/50#issuecomment-5973516204). The original failure, its evidence and that review's stated limits stay on the record unchanged; no verdict is re-recorded. Applied with tools/dev_record.py at c49d9f0 (#57)."
       ]
     },
     {
@@ -1082,7 +1099,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "reviewed",
+      "state": "delivered",
       "claimed_at": "2026-10-06T02:02:43Z",
       "acknowledged": false,
       "delivery": {
@@ -1120,11 +1137,17 @@
           "classification": "reachable in normal execution",
           "by": "codex",
           "sha": "c3abcf0f25c8e8cf9cb22372cd9a72ae5121c3ea",
-          "at": "2026-10-06T05:26:26Z"
+          "at": "2026-10-06T05:26:26Z",
+          "resolved": {
+            "resolution": "Historical reconciliation (#46 6090230498, confirmed by root): blocker(s) raised on c3abcf0 were fixed at the delivered 2ffa7f6, which Codex cleared in a full-scope review recorded 2026-10-06T05:39:35Z (evidence: Codex scoped offline clearance of #52 at 2ffa7f6 (#52 comment 6010116199; #35 comment 6010119188): no remaining finding in the repair scope; 101 tests passed ...). The original failure, its evidence and that review's stated limits stay on the record unchanged; no verdict is re-recorded. Applied with tools/dev_record.py at c49d9f0 (#57).",
+            "by": "claude",
+            "at": "2026-10-09T22:27:17Z"
+          }
         }
       ],
       "decisions": [
-        "claude: Third reproduction, same feature, third different lead (series b1ff751 jev Sol, rule grok; series rule-b1ff751 rule grok): the capture profile renders the app root at the fixed target and the empty-state feature only appears when the project has no clips or no projects, which the profile's steps never set up. The reviewer is right that the renders show nothing changed; the defect is that the capture scope request lets a lead declare steps that do not reach the state its change affects, and the harness verifies the capture ran rather than that it shows the change. Fix candidates: require the lead's capture declaration to name the state it demonstrates and include the steps that produce it; or let the design reviewer return 'not demonstrated' as a capture defect routed back to the lead for a recapture instead of a BLOCKING design finding that closes the task open. Now evidenced enough to fix on Davis's go."
+        "claude: Third reproduction, same feature, third different lead (series b1ff751 jev Sol, rule grok; series rule-b1ff751 rule grok): the capture profile renders the app root at the fixed target and the empty-state feature only appears when the project has no clips or no projects, which the profile's steps never set up. The reviewer is right that the renders show nothing changed; the defect is that the capture scope request lets a lead declare steps that do not reach the state its change affects, and the harness verifies the capture ran rather than that it shows the change. Fix candidates: require the lead's capture declaration to name the state it demonstrates and include the steps that produce it; or let the design reviewer return 'not demonstrated' as a capture defect routed back to the lead for a recapture instead of a BLOCKING design finding that closes the task open. Now evidenced enough to fix on Davis's go.",
+        "unblocked by claude: Historical reconciliation (#46 6090230498, confirmed by root): blocker(s) raised on c3abcf0 were fixed at the delivered 2ffa7f6, which Codex cleared in a full-scope review recorded 2026-10-06T05:39:35Z (evidence: Codex scoped offline clearance of #52 at 2ffa7f6 (#52 comment 6010116199; #35 comment 6010119188): no remaining finding in the repair scope; 101 tests passed ...). The original failure, its evidence and that review's stated limits stay on the record unchanged; no verdict is re-recorded. Applied with tools/dev_record.py at c49d9f0 (#57)."
       ]
     },
     {
@@ -1137,7 +1160,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "reviewed",
+      "state": "delivered",
       "claimed_at": "2026-10-06T02:56:39Z",
       "acknowledged": false,
       "delivery": {
@@ -1177,11 +1200,17 @@
           "classification": "reachable in normal execution",
           "by": "codex",
           "sha": "c3abcf0f25c8e8cf9cb22372cd9a72ae5121c3ea",
-          "at": "2026-10-06T05:26:26Z"
+          "at": "2026-10-06T05:26:26Z",
+          "resolved": {
+            "resolution": "Historical reconciliation (#46 6090230498, confirmed by root): blocker(s) raised on c3abcf0 were fixed at the delivered 2ffa7f6, which Codex cleared in a full-scope review recorded 2026-10-06T05:39:35Z (evidence: Codex scoped offline clearance of #52 at 2ffa7f6 (#52 comment 6010116199; #35 comment 6010119188): no remaining finding in the repair scope; 101 tests passed ...). The original failure, its evidence and that review's stated limits stay on the record unchanged; no verdict is re-recorded. Applied with tools/dev_record.py at c49d9f0 (#57).",
+            "by": "claude",
+            "at": "2026-10-09T22:27:17Z"
+          }
         }
       ],
       "decisions": [
-        "claude: Live proof PASSED on the Mac (Codex, #35 comment 6010342708), on exact 2ffa7f6 after all four CI jobs succeeded and the scoped clearance: codex-cli 0.154.0, wire model gpt-5.6-sol, one invocation, no retry, fallback or children. Raw trace inspected independently: fixture pytest exit 0 (1 passed), TMPDIR scratch write exit 0 inside the copy, outside-copy /tmp sentinel write exit 1 with PermissionError Operation not permitted, sentinel absent, source fixture unchanged; a conflicting attached -C override refused before dispatch; the effective sandbox policy excludes /tmp and TMPDIR roots so only the copy is writable. Ledger /Users/davisfox/Documents/GitHub/stage-b/provider-proof-2ffa7f6/provider-proof-ledger.json SHA256 7cde65efcd9abb5a46d482d33fa96b6af0aec35f0822fbf128b1ffbbf4a02254; raw trace SHA256 93765972c6f0e43953a57b88fecfbfcb48eead2b25c034ef435cd765151f7fa8; independent-verification.json SHA256 84e88ba28c2abac61533f6f55edb5806c0bbf6ecf7e86426811f764a40f30129. Usage 35,702 input (28,288 cached), 358 output, 29.1 s; subscription transport, invoice cost null; outside series accounting."
+        "claude: Live proof PASSED on the Mac (Codex, #35 comment 6010342708), on exact 2ffa7f6 after all four CI jobs succeeded and the scoped clearance: codex-cli 0.154.0, wire model gpt-5.6-sol, one invocation, no retry, fallback or children. Raw trace inspected independently: fixture pytest exit 0 (1 passed), TMPDIR scratch write exit 0 inside the copy, outside-copy /tmp sentinel write exit 1 with PermissionError Operation not permitted, sentinel absent, source fixture unchanged; a conflicting attached -C override refused before dispatch; the effective sandbox policy excludes /tmp and TMPDIR roots so only the copy is writable. Ledger /Users/davisfox/Documents/GitHub/stage-b/provider-proof-2ffa7f6/provider-proof-ledger.json SHA256 7cde65efcd9abb5a46d482d33fa96b6af0aec35f0822fbf128b1ffbbf4a02254; raw trace SHA256 93765972c6f0e43953a57b88fecfbfcb48eead2b25c034ef435cd765151f7fa8; independent-verification.json SHA256 84e88ba28c2abac61533f6f55edb5806c0bbf6ecf7e86426811f764a40f30129. Usage 35,702 input (28,288 cached), 358 output, 29.1 s; subscription transport, invoice cost null; outside series accounting.",
+        "unblocked by claude: Historical reconciliation (#46 6090230498, confirmed by root): blocker(s) raised on c3abcf0 were fixed at the delivered 2ffa7f6, which Codex cleared in a full-scope review recorded 2026-10-06T05:39:35Z (evidence: Codex scoped offline clearance of #52 at 2ffa7f6 (#52 comment 6010116199; #35 comment 6010119188): no remaining finding in the repair scope; 101 tests passed ...). The original failure, its evidence and that review's stated limits stay on the record unchanged; no verdict is re-recorded. Applied with tools/dev_record.py at c49d9f0 (#57)."
       ]
     },
     {
@@ -1234,7 +1263,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "reviewed",
+      "state": "delivered",
       "claimed_at": "2026-10-06T08:04:33Z",
       "acknowledged": false,
       "delivery": {
@@ -1280,14 +1309,20 @@
           "classification": "defect",
           "by": "codex",
           "sha": "0983dac",
-          "at": "2026-10-06T08:41:47Z"
+          "at": "2026-10-06T08:41:47Z",
+          "resolved": {
+            "resolution": "Historical reconciliation (#46 6090230498, confirmed by root): blocker(s) raised on 0983dac were fixed at the delivered 3f9c548, which Codex cleared in a full-scope review recorded 2026-10-06T09:20:21Z (evidence: #53 comment 6013232147: scoped offline clearance, 136 focused checks). The original failure, its evidence and that review's stated limits stay on the record unchanged; no verdict is re-recorded. Applied with tools/dev_record.py at c49d9f0 (#57).",
+            "by": "claude",
+            "at": "2026-10-09T22:27:17Z"
+          }
         }
       ],
       "decisions": [
         "claude: cd8c5b0: capped peers tracked in a set, reply text no longer read for a prefix; a capped recheck files the original BLOCKING lines as an unverified finding and an open question for the close-out, still no fix round. Three regression tests added.",
         "claude: Codex re-review of cd8c5b0 BLOCKED (#53 comment 6012684237): P1 a successful reply with no verdict ('UNFINISHED: did not reach a verdict') still closed the task with review=True and no record; P2 the capped-recheck record kept only literal BLOCKING: lines, losing continuation lines and bullet/bold markers. Fixed at 3f9c548: the collaborator prompt asks for a closing REVIEW: COMPLETE line; a reply that is not NO FINDINGS, carries no BLOCKING finding and has no such line is recorded as an unfinished review (unverified) and still reaches the lead; the capped-recheck record keeps the whole original note. Test fakes answering reviews in prose now carry the completion line or NO FINDINGS; no fixture regenerated.",
         "claude: CI green on 3f9c548 (test 3.11 and 3.12, both suites); local full run 553 lifecycle and 2440 unit passed. #53 is Codex-cleared and green: ready for Codex's fresh immutable freeze and rule-only series under Davis's continuation instruction.",
-        "claude: Codex Mac qualification of 3f9c548 PASSED (#35 comment 6013504688): one signed-in codex-cli 0.154.0 call through the new auditor disposable-copy path, openai:gpt-5.6-sol; derived 20-round value reached the review view and the exact approved commands plus no-.git guidance reached its system text; fixture pytest exit 0, TMPDIR scratch write exit 0, outside-copy /tmp write exit 1 PermissionError, attached -C override refused before dispatch, copy had no .git, source bytes unchanged. Ledger SHA256 e86f33767b750a6f73c2ca492277a5fabdb7e71c4b77217343b6a2799865974c, raw trace 0a147a238ac497f392910db296b522016c6aeb724555afd91d8e8ff60e6b6223, verification d9f7ac1ec2cdddab30ff07b845c2e411370d008c8a6c0710865cb64ff9a23f82; 36,764 reported tokens, 23.7 s, invoice cost null. Codex has no native turn-cap flag, so live cap enforcement on codex seats is not established. Next: one fresh freeze and seven-cell rule-only series on 3f9c548 under Davis's continuation mandate (6009847383), same goals, graders, profiles and bounds, one repeat."
+        "claude: Codex Mac qualification of 3f9c548 PASSED (#35 comment 6013504688): one signed-in codex-cli 0.154.0 call through the new auditor disposable-copy path, openai:gpt-5.6-sol; derived 20-round value reached the review view and the exact approved commands plus no-.git guidance reached its system text; fixture pytest exit 0, TMPDIR scratch write exit 0, outside-copy /tmp write exit 1 PermissionError, attached -C override refused before dispatch, copy had no .git, source bytes unchanged. Ledger SHA256 e86f33767b750a6f73c2ca492277a5fabdb7e71c4b77217343b6a2799865974c, raw trace 0a147a238ac497f392910db296b522016c6aeb724555afd91d8e8ff60e6b6223, verification d9f7ac1ec2cdddab30ff07b845c2e411370d008c8a6c0710865cb64ff9a23f82; 36,764 reported tokens, 23.7 s, invoice cost null. Codex has no native turn-cap flag, so live cap enforcement on codex seats is not established. Next: one fresh freeze and seven-cell rule-only series on 3f9c548 under Davis's continuation mandate (6009847383), same goals, graders, profiles and bounds, one repeat.",
+        "unblocked by claude: Historical reconciliation (#46 6090230498, confirmed by root): blocker(s) raised on 0983dac were fixed at the delivered 3f9c548, which Codex cleared in a full-scope review recorded 2026-10-06T09:20:21Z (evidence: #53 comment 6013232147: scoped offline clearance, 136 focused checks). The original failure, its evidence and that review's stated limits stay on the record unchanged; no verdict is re-recorded. Applied with tools/dev_record.py at c49d9f0 (#57)."
       ]
     },
     {
@@ -1713,7 +1748,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "reviewed",
+      "state": "delivered",
       "claimed_at": "2026-10-07T11:20:01Z",
       "acknowledged": false,
       "delivery": {
@@ -1755,10 +1790,17 @@
           "classification": "reachable",
           "by": "codex",
           "sha": "f8d8c03b2c4372b5fd9b414f6523a67f33f55db2",
-          "at": "2026-10-07T12:29:58Z"
+          "at": "2026-10-07T12:29:58Z",
+          "resolved": {
+            "resolution": "Historical reconciliation (#46 6090230498, confirmed by root): blocker(s) raised on f8d8c03 were fixed at the delivered 62ad994, which Codex cleared in a full-scope review recorded 2026-10-07T12:54:37Z (evidence: Codex scoped correction review CLEARED for f8d8c03..62ad994 (#53 comment 6038194889, relayed #35 comment 6038203085; normalized body SHA256 ...). The original failure, its evidence and that review's stated limits stay on the record unchanged; no verdict is re-recorded. Applied with tools/dev_record.py at c49d9f0 (#57).",
+            "by": "claude",
+            "at": "2026-10-09T22:27:17Z"
+          }
         }
       ],
-      "decisions": []
+      "decisions": [
+        "unblocked by claude: Historical reconciliation (#46 6090230498, confirmed by root): blocker(s) raised on f8d8c03 were fixed at the delivered 62ad994, which Codex cleared in a full-scope review recorded 2026-10-07T12:54:37Z (evidence: Codex scoped correction review CLEARED for f8d8c03..62ad994 (#53 comment 6038194889, relayed #35 comment 6038203085; normalized body SHA256 ...). The original failure, its evidence and that review's stated limits stay on the record unchanged; no verdict is re-recorded. Applied with tools/dev_record.py at c49d9f0 (#57)."
+      ]
     },
     {
       "id": "T-node-producer",
@@ -1775,7 +1817,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "reviewed",
+      "state": "delivered",
       "claimed_at": "2026-10-07T11:49:56Z",
       "acknowledged": false,
       "delivery": {
@@ -1825,12 +1867,18 @@
           "classification": "reachable",
           "by": "codex",
           "sha": "f8d8c03b2c4372b5fd9b414f6523a67f33f55db2",
-          "at": "2026-10-07T12:29:58Z"
+          "at": "2026-10-07T12:29:58Z",
+          "resolved": {
+            "resolution": "Historical reconciliation (#46 6090230498, confirmed by root): blocker(s) raised on f8d8c03 were fixed at the delivered 62ad994, which Codex cleared in a full-scope review recorded 2026-10-07T12:54:37Z (evidence: Codex scoped correction review CLEARED for f8d8c03..62ad994 (#53 comment 6038194889, relayed #35 comment 6038203085; normalized body SHA256 ...). The original failure, its evidence and that review's stated limits stay on the record unchanged; no verdict is re-recorded. Applied with tools/dev_record.py at c49d9f0 (#57).",
+            "by": "claude",
+            "at": "2026-10-09T22:27:17Z"
+          }
         }
       ],
       "decisions": [
         "claude: Both Codex findings on f8d8c03 fixed at 62ad994: the node reporter skips node's subtestsFailed aggregate on a parent test or suite (the leaf's own event carries the failure), so nested describe/it and t.test assertion failures are product and a nested runtime error stays not; design_evidence.main exits 3 on a crash inside the capture and 1 only when a declared step did not happen, so _step_failure reads the tool's positive statement and a browser crash buys no declaration call (tests: nested assertion x2, nested TypeError, the three exit codes, crash/usage/timeout failures buy no redeclaration). Gate, declaration, fixture and preview suites 130 passed; full suite and CI running.",
-        "claude: Codex relay of the f8d8c03 verdict acknowledged (#35 comment 6037924435): NOT CLEARED, normalized reviewer body SHA256 a3e6b0a84b010250a9e0c1a3dc3944947f032c9f05f5832f318113224bb99466, review SHA 0146e4ca3bf51ad43cf8eee247f40e2823c2debccdfda736efccd1d42f793ae1, receipt SHA b478696e5986f63f8e2f6be20d869c06c238436893298c66af4e5a00a86295f6; all 11 receipt artifact hashes verified; Node v24.15.0 only; no platform rejection occurred, so standing ruling 2 does not apply and the verdict stands as substantive; repairs at 62ad994 go back for corrected scoped clearance, then exact CI and local suite, a bounded Mac node qualification, a fresh freeze and matched receipts before any run. f5 offline saved-source assessment (SHA256 99310463ba6ecc93af38341fef70fefc11f6c82cd422e4f17b833440d68f105b, static only): loadProjects hides #projects-empty while /api/projects has entries; the ordinary .delete-btn route needs a confirm dialog before DELETE; capture actions are click, wait and file with no dialog acceptance in the browser code, so no declared normal UI route to the empty state is proved; to be assessed before any input change; CAPTURE: none stays unverified."
+        "claude: Codex relay of the f8d8c03 verdict acknowledged (#35 comment 6037924435): NOT CLEARED, normalized reviewer body SHA256 a3e6b0a84b010250a9e0c1a3dc3944947f032c9f05f5832f318113224bb99466, review SHA 0146e4ca3bf51ad43cf8eee247f40e2823c2debccdfda736efccd1d42f793ae1, receipt SHA b478696e5986f63f8e2f6be20d869c06c238436893298c66af4e5a00a86295f6; all 11 receipt artifact hashes verified; Node v24.15.0 only; no platform rejection occurred, so standing ruling 2 does not apply and the verdict stands as substantive; repairs at 62ad994 go back for corrected scoped clearance, then exact CI and local suite, a bounded Mac node qualification, a fresh freeze and matched receipts before any run. f5 offline saved-source assessment (SHA256 99310463ba6ecc93af38341fef70fefc11f6c82cd422e4f17b833440d68f105b, static only): loadProjects hides #projects-empty while /api/projects has entries; the ordinary .delete-btn route needs a confirm dialog before DELETE; capture actions are click, wait and file with no dialog acceptance in the browser code, so no declared normal UI route to the empty state is proved; to be assessed before any input change; CAPTURE: none stays unverified.",
+        "unblocked by claude: Historical reconciliation (#46 6090230498, confirmed by root): blocker(s) raised on f8d8c03 were fixed at the delivered 62ad994, which Codex cleared in a full-scope review recorded 2026-10-07T12:54:37Z (evidence: Codex scoped correction review CLEARED for f8d8c03..62ad994 (#53 comment 6038194889, relayed #35 comment 6038203085; normalized body SHA256 ...). The original failure, its evidence and that review's stated limits stay on the record unchanged; no verdict is re-recorded. Applied with tools/dev_record.py at c49d9f0 (#57)."
       ]
     },
     {
