@@ -559,17 +559,28 @@ Key design decisions already settled:
   run there and is an open unverified finding, as is a gate whose commands
   cannot be read; neither is a pass. Unchanged originals are not re-run. The
   audit is shown the unnamed test files and every `NOT RUN: <item> - <why>`
-  line an editing call wrote, and lowers a MET deterministically when every
-  citation is an unnamed test file, or when a task covering the requirement
-  reported NOT RUN and no later passing check's command names the item. A
-  run unit file does not stand in for a scenario that did not run. A line
-  starting 'BLOCKED:' is read the same way (gui-sort-v5 t4 wrote that), and
-  so is a passing required check that skipped more cases than the run's
-  previous check of the same id (v5 t4: Node 37 passed, 2 browser cases
-  skipped, gate green); a later passing check skipping no more than before
-  lifts it. The run's first check has no earlier count: its skips are shown
-  to the audit and lower nothing. Downward only: no reply raises a verdict,
-  and prose without a marker is not read.
+  (or `BLOCKED:`) line an editing call wrote, and lowers a MET
+  deterministically when every citation is an unnamed test file, or when a
+  task covering the requirement reported NOT RUN, or when its required check
+  passed with skipped cases once any test file changed in the run (the first
+  check included; optional commands never count). Only a *complete run*
+  discharges one (Codex review of b6ba3ba, F3, F4, F6): a later passing
+  required command, no name or marker filter, cases executed and zero
+  skipped, naming every path of a NOT RUN item as a whole operand (a skip
+  fact: the same command). A substring, an optional or skipped receipt, a
+  filtered run, a lower skip total, or a model's word never does; a report
+  written after a run is a new report. Without case identity a skip stands
+  until a run skips nothing, so a suite with permanent skips keeps those
+  requirements open. An unnamed file is reconciled by a later complete run
+  that names it or names a file that names it. Parallel children's reports
+  come back to the parent, re-based to its checks (F5). Test-only runner
+  configs (`pytest.ini`, jest/vitest/playwright/mocha configs) are kept and
+  restored with the tests; a change to test selection in a mixed file
+  (`pyproject.toml [tool.pytest]`, `setup.cfg`/`tox.ini` pytest sections,
+  `package.json` type/imports/runner keys) means the original suite cannot be
+  established: an open unverified finding, never a pass (F1). The project is
+  re-read after the copy runs, and a change fails the check (F2). Downward
+  only: no reply raises a verdict, and prose without a marker is not read.
   Reviewers are told which run-start test files changed. A goal that
   legitimately changes behaviour an original test pins will fail this check;
   there is no exemption and no new grant.

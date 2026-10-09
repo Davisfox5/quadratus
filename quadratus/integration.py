@@ -734,17 +734,109 @@ class GateSuite:
 #: tests/ui/load_app.js matched no test-file pattern and was edited to fit the
 #: code, so the gate passed on a harness the original tests never used.
 _TEST_DIRS = frozenset({'tests', 'test', '__tests__', 'spec', 'specs'})
-_TEST_SUPPORT_NAMES = frozenset({'conftest.py'})
+_TEST_SUPPORT_NAMES = frozenset({'conftest.py', 'pytest.ini', '.pytest.ini'})
+#: Test-runner configuration that only selects or shapes tests: kept and
+#: restored with the run-start tests (Codex review of b6ba3ba, F1: a changed
+#: pytest.ini deselected the restored original assertion in both checks).
+_TEST_CONFIG = re.compile(r'(?:^|/)(?:(?:jest|vitest|playwright|ava)\.config\.[cm]?[jt]s|\.mocharc\.[\w.]+)$')
+#: Files that hold test selection beside other project settings, so they are
+#: compared section by section and never restored whole (restoring an old
+#: package.json "type" or pyproject dependency table would break the current
+#: code for reasons unrelated to its tests).
+_MIXED_CONFIG = ('pyproject.toml', 'setup.cfg', 'tox.ini', 'package.json')
+_PACKAGE_TEST_KEYS = ('type', 'imports', 'jest', 'mocha', 'ava', 'vitest', 'c8', 'nyc')
+#: Arguments that run only part of what a command names: such a run never
+#: shows that a whole named file executed (F3: --test-name-pattern=unit ran
+#: the unit case of the browser file and lifted its NOT RUN).
+_FILTER_FLAGS = ('--test-name-pattern', '--test-skip-pattern', '--test-only', '--test-shard', '-k', '-m',
+                 '--deselect', '--lf', '--last-failed', '--sw', '--stepwise', '--grep', '-g', '--fgrep',
+                 '-t', '--testNamePattern', '--testPathPattern', '--only', '--ignore', '--ignore-glob')
 #: Runtime-dependency trees a copy may need; linked, never copied, and
 #: guarded by quadratus.deptree like the project's own checks.
 _DEPENDENCY_DIRS = ('node_modules', '.venv', 'venv', 'env')
 
 
 def is_test_support(path: str) -> bool:
-    """A test file, or a file under a test folder (helpers and fixtures)."""
+    """A test file, a file under a test folder (helpers and fixtures), or a
+    test-only runner configuration such as pytest.ini."""
     parts = path.split('/')
     return (_test_family(path) is not None or parts[-1] in _TEST_SUPPORT_NAMES
+            or _TEST_CONFIG.search(path) is not None
             or any(part in _TEST_DIRS for part in parts[:-1]))
+
+
+def selection_sections(contents: dict) -> dict:
+    """The test-selection part of each mixed configuration file: pyproject's
+    [tool.pytest] tables, setup.cfg's [tool:pytest], tox.ini's [pytest] and
+    [tool:pytest], and package.json's module and test-runner keys. A file that
+    cannot be read this way is kept whole, so any change to it counts."""
+    import configparser
+    out = {}
+    for name, data in contents.items():
+        base = name.rsplit('/', 1)[-1]
+        if base not in _MIXED_CONFIG:
+            continue
+        try:
+            text = data.decode('utf-8')
+            if base == 'pyproject.toml':
+                import tomllib
+                tool = tomllib.loads(text).get('tool', {})
+                section = tool.get('pytest', {}) if isinstance(tool, dict) else {}
+            elif base == 'package.json':
+                loaded = json.loads(text)
+                section = {k: loaded.get(k) for k in _PACKAGE_TEST_KEYS} if isinstance(loaded, dict) else loaded
+                scripts = loaded.get('scripts') if isinstance(loaded, dict) else None
+                section['scripts.test'] = scripts.get('test') if isinstance(scripts, dict) else None
+            else:
+                parser = configparser.RawConfigParser()
+                parser.read_string(text)
+                section = {s: dict(parser.items(s)) for s in ('pytest', 'tool:pytest') if parser.has_section(s)}
+            out[name] = json.dumps(section, sort_keys=True, default=str)
+        except Exception:  # noqa: BLE001 -- unreadable: the whole file is the section
+            out[name] = hashlib.sha256(data).hexdigest()
+    return out
+
+
+def changed_selection(original: dict, current: dict) -> List[str]:
+    """Mixed configuration files whose test-selection section changed, or
+    that were added or removed, since run start."""
+    now = selection_sections(current)
+    return sorted(name for name in original.keys() | now.keys() if original.get(name) != now.get(name))
+
+
+def _runner_args(argv) -> list:
+    """The runner's own arguments: after ``python -m <module>`` when the
+    interpreter is what the command starts (its -m is not pytest's -m)."""
+    argv = [str(a) for a in argv]
+    if len(argv) > 2 and argv[1] == '-m':
+        return argv[3:]
+    return argv[1:]
+
+
+def is_filtered(argv) -> bool:
+    """Whether a command runs only part of what it names."""
+    for arg in _runner_args(argv):
+        arg = str(arg)
+        if '::' in arg:
+            return True
+        if any(arg == f or arg.startswith(f + '=') or (len(f) == 2 and arg.startswith(f) and len(arg) > 2
+                                                        and not arg.startswith('--'))
+               for f in _FILTER_FLAGS):
+            return True
+    return False
+
+
+def operand_paths(argv, root=None) -> List[str]:
+    """The file operands a command names, project-relative where they can be."""
+    out = []
+    for arg in _runner_args(argv):
+        arg = str(arg)
+        if arg.startswith('-') or '::' in arg:
+            continue
+        if root is not None and arg.startswith(str(root).rstrip('/') + '/'):
+            arg = arg[len(str(root).rstrip('/')) + 1:]
+        out.append(arg[2:] if arg.startswith('./') else arg)
+    return out
 
 
 def original_tests(contents: dict) -> dict:

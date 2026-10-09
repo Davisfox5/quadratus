@@ -1133,41 +1133,59 @@ _COVERS = re.compile(r"^\s*COVERS:\s*(.+?)\s*$", re.MULTILINE)
 #: An editing call's own account of acceptance it could not run (runtime
 #: check guidance). Read only to lower an audit verdict, never to raise one.
 _NOT_RUN_LINE = re.compile(r"^\s*(?:NOT RUN|BLOCKED):\s*(.+?)\s*$", re.MULTILINE)
-def _passing_commands(check: dict) -> List[List[str]]:
-    """The argv of each passing required command in a recorded check."""
+def _check_runs(check: dict, root=None) -> List[dict]:
+    """Each command of a recorded check as execution evidence: whether it
+    passed and was required, whether it ran only part of what it names, how
+    many cases executed and how many it skipped (None when unknown), and the
+    files it names whole. A check with no receipts is one required command."""
     import shlex
+    from types import SimpleNamespace
+
+    from .integration import _test_count, is_filtered, operand_paths, skipped_count
     receipts = check.get("receipts") or ()
-    texts = ([str(r.get("command") or "") for r in receipts
-              if r.get("status") == "passed" and r.get("required", True)]
-             if receipts else [str(check.get("command") or "")])
+    if receipts:
+        rows = [dict(id=r.get("id"), passed=r.get("status") == "passed", required=r.get("required", True),
+                     command=str(r.get("command") or ""), output=r.get("output") or "", report=r.get("report"),
+                     tests=r.get("tests")) for r in receipts]
+    else:
+        rows = [dict(id="check", passed=bool(check.get("passed")), required=True,
+                     command=str(check.get("command") or ""), output=check.get("output") or "",
+                     report=check.get("report"), tests=None)]
     out = []
-    for text in texts:
+    for row in rows:
         try:
-            out.append(shlex.split(text))
+            argv = shlex.split(row["command"])
         except ValueError:
-            out.append(text.split())
+            argv = row["command"].split()
+        tests = row["tests"] if row["tests"] is not None else _test_count(row["output"])
+        out.append(dict(id=row["id"], passed=row["passed"], required=row["required"], filtered=is_filtered(argv),
+                        tests=tests, skipped=skipped_count(SimpleNamespace(output=row["output"],
+                                                                           report=row["report"])),
+                        files=set(operand_paths(argv, root))))
     return out
 
 
-def _names_every_path(item: str, commands: List[List[str]]) -> bool:
-    """Whether one passing command names, as whole arguments, every path in a
-    NOT RUN item. An item with no path (a bare runner name, prose) is never
-    lifted by a check: a substring match let \"NOT RUN: pytest\" be lifted by
-    any pytest command (Codex preliminary review of b6ba3ba)."""
+def _complete_run(run: dict) -> bool:
+    """A passing required command that ran whole files: no filter, at least
+    one executed case and a known zero skips. Anything less does not show
+    that a named file's cases ran (Codex review of b6ba3ba, F3 and F4)."""
+    return (run["passed"] and run["required"] and not run["filtered"]
+            and (run["tests"] or 0) > 0 and run["skipped"] == 0)
+
+
+def _item_paths(item: str) -> List[str]:
+    """The file paths a NOT RUN item names; none for a runner name or prose."""
     import shlex
     try:
         tokens = shlex.split(item)
     except ValueError:
         tokens = item.split()
-    paths = [t.split("::")[0].lstrip("./") for t in tokens
-             if "/" in t or re.search(r"\.[A-Za-z]\w*$", t.split("::")[0])]
-    if not paths:
-        return False
-    for argv in commands:
-        named = {a.split("::")[0].lstrip("./") for a in argv}
-        if all(p in named for p in paths):
-            return True
-    return False
+    paths = []
+    for token in tokens:
+        token = token.split("::")[0]
+        if "/" in token or re.search(r"\.[A-Za-z]\w*$", token):
+            paths.append(token[2:] if token.startswith("./") else token)
+    return paths
 
 
 _AUDIT_LINE = re.compile(r"^\s*(R\d+)\s*:\s*(MET|NOT MET)\b[\s:—-]*(.*)$", re.MULTILINE | re.IGNORECASE)
@@ -5394,6 +5412,12 @@ class Session:
                 self.scope_reports.extend(child.scope_reports)
                 self.design_checks.extend(child.design_checks)
                 self.open_findings.extend(child.open_findings)
+                # A child's execution facts come back with it, re-based to the
+                # parent's checks: only a check the parent runs after the merge
+                # can discharge them (Codex review of b6ba3ba, F5).
+                for entry in child.unexecuted_acceptance:
+                    self.unexecuted_acceptance.append(dict(entry, after_check=len(self.checks)))
+                self.original_test_runs.extend(child.original_test_runs)
                 # The child's design debt comes back with its findings, so a
                 # stop names it rather than a generic open finding (map G8).
                 self._design_unverified.extend(child._design_unverified)
@@ -5755,78 +5779,111 @@ class Session:
                 continue
             entry = dict(task=task, role=role, author=key, item=item[:300], why=why.strip()[:300],
                          requirements=list(self._current_covers), after_check=len(self.checks))
-            if not any(e["task"] == task and e["item"] == entry["item"] for e in self.unexecuted_acceptance):
+            # A report after a check is a new report: an earlier run cannot
+            # discharge what was said about the source since (F3: a re-report
+            # in revision was deduplicated away and the old run lifted it).
+            if not any(e["task"] == task and e["item"] == entry["item"] and e["after_check"] == entry["after_check"]
+                       for e in self.unexecuted_acceptance):
                 self.unexecuted_acceptance.append(entry)
                 self._note(f"task {task}: {role} reported NOT RUN: {entry['item'][:120]}")
 
     def _note_skips(self, spec, result) -> None:
-        """A required check that passed while skipping more cases than the
-        run's previous check of the same id is acceptance that did not run
-        (gui-sort-v5 t4, Codex #35 6076559403: Node 37 passed, 2 browser
-        cases skipped because Playwright was unavailable, the gate green).
-        Recorded like a NOT RUN report for the task's requirements; lifted
-        only when a later passing check of that id skips no more than the
-        count before. The run's first check has no earlier count, so its
-        skips are shown to the audit without lowering anything."""
+        """A passing required command that skipped cases, once test files
+        changed in this run, is acceptance that did not run for the task's
+        requirements (gui-sort-v5 t4: Node 37 passed, 2 browser cases skipped).
+        The first check counts like any other: no earlier count is needed,
+        because nothing here compares totals (F4: an unrelated old case that
+        ran cancelled a new required skip, and first-check skips lowered
+        nothing). Optional commands never record one. Without case identity
+        a skip stands until a later complete run of the same command, with
+        no skips at all, shows every case executed."""
         from .integration import GateReceipt, skipped_count
         receipts = result.receipts or (GateReceipt(id="check", status="passed" if result.passed else "failed",
                                                    reason="", required=True, output=result.output,
                                                    report=result.report),)
-        previous = getattr(self, "_skips_seen", {})
+        if not self._tests_changed_in_run():
+            return
         for receipt in receipts:
-            if receipt.status != "passed":
+            if receipt.status != "passed" or not receipt.required:
                 continue
             count = skipped_count(receipt)
-            if count is None:
+            if not count:
                 continue
-            before = previous.get(receipt.id)
-            if count and (before is None or count > before):
-                entry = dict(task=spec.task_id, role="check", author="harness",
-                             item=f"{receipt.id}: {count} skipped test case(s)"
-                                  + (f", {before} before this task" if before is not None else ""),
-                             why="the check passed with these cases skipped",
-                             requirements=list(self._current_covers) if before is not None else [],
-                             after_check=len(self.checks), receipt=receipt.id,
-                             baseline=before, kind="skipped")
-                self.unexecuted_acceptance.append(entry)
-                self._note(f"task {spec.task_id}: {entry['item']}")
-            # The baseline only falls: a rise is the fact above, never the new normal.
-            previous[receipt.id] = count if before is None else min(before, count)
-        self._skips_seen = previous
+            if any(e.get("kind") == "skipped" and e["task"] == spec.task_id and e["receipt"] == receipt.id
+                   and e["after_check"] == len(self.checks) for e in self.unexecuted_acceptance):
+                continue
+            entry = dict(task=spec.task_id, role="check", author="harness",
+                         item=f"{receipt.id}: {count} skipped test case(s)",
+                         why="the required check passed with these cases skipped",
+                         requirements=list(self._current_covers), after_check=len(self.checks),
+                         receipt=receipt.id, kind="skipped")
+            self.unexecuted_acceptance.append(entry)
+            self._note(f"task {spec.task_id}: {entry['item']}")
+
+    def _tests_changed_in_run(self) -> bool:
+        """Whether any test or support file differs from run start (true when
+        there is no run-start record to compare with: unknown is not none)."""
+        from .integration import is_test_support
+        from .project import Project
+        if not self._original_tests or not self.project:
+            return True
+        try:
+            current = Project(self.project, exclude=self.config.project_excludes).contents()
+        except Exception:  # noqa: BLE001 -- unreadable is not unchanged
+            return True
+        names = {n for n in current if is_test_support(n)} | set(self._original_tests)
+        return any(current.get(n) != self._original_tests.get(n) for n in names)
 
     def _standing_not_run(self) -> List[dict]:
-        """Reported NOT RUN items no later passing required check ran. Only a
-        measured run lifts one: a later check that passed and whose command
-        names the item. A later model's word never does."""
+        """Reported items no later complete run discharges. A NOT RUN item is
+        discharged only by a later passing required command that names every
+        path in it as a whole operand, runs no filter, executed cases and
+        skipped none; a skip fact only by such a run of the same command. A
+        model's word, a substring, an optional or skipped receipt, or a
+        name-filtered run never does (Codex review of b6ba3ba, F3)."""
         standing = []
         for entry in self.unexecuted_acceptance:
             ran = False
+            paths = _item_paths(entry["item"]) if entry.get("kind") != "skipped" else []
             for check in self.checks[entry["after_check"]:]:
-                if not check.get("passed"):
-                    continue
+                runs = [r for r in _check_runs(check, self.project) if _complete_run(r)]
                 if entry.get("kind") == "skipped":
-                    from types import SimpleNamespace as _Receipt
-
-                    from .integration import skipped_count
-                    later = [r for r in check.get("receipts") or () if r.get("id") == entry["receipt"]]
-                    if not later and entry["receipt"] == "check" and not check.get("receipts"):
-                        later = [dict(output=check.get("output", ""), report=check.get("report"))]
-                    count = (skipped_count(_Receipt(output=later[0].get("output", ""), report=later[0].get("report")))
-                             if later else None)
-                    if entry["baseline"] is not None and count is not None and count <= entry["baseline"]:
-                        ran = True
-                        break
-                    continue
-                if _names_every_path(entry["item"], _passing_commands(check)):
-                    ran = True
+                    ran = any(r["id"] == entry["receipt"] for r in runs)
+                else:
+                    ran = bool(paths) and any(all(p in r["files"] for p in paths) for r in runs)
+                if ran:
                     break
             if not ran:
                 standing.append(entry)
         return standing
 
+    def _unnamed_standing(self) -> List[str]:
+        """Unnamed test files not reconciled by later execution. A later
+        complete run that names the file, or names a test file that names it,
+        makes the observation unknown again, as it was never claimed when the
+        file was first named that way (F6: a historical unnamed path kept a
+        later executed child assertion NOT MET)."""
+        since = getattr(self, "_unnamed_since", {}) or {}
+        out = []
+        for path in list(getattr(self, "unnamed_test_files", []) or []):
+            reconciled = False
+            for check in self.checks[since.get(path, 0):]:
+                for run in _check_runs(check, self.project):
+                    if not _complete_run(run):
+                        continue
+                    if path in run["files"] or (self.project and self._named_by_a_run_test(
+                            path, [["runner", *sorted(run["files"])]])):
+                        reconciled = True
+                        break
+                if reconciled:
+                    break
+            if not reconciled:
+                out.append(path)
+        return out
+
     def _not_run_block(self) -> str:
         """The audit's view of what is not shown to have run."""
-        unrun = list(getattr(self, "unnamed_test_files", []) or [])
+        unrun = self._unnamed_standing()
         standing = self._standing_not_run()
         if not unrun and not standing:
             return ""
@@ -5846,13 +5903,14 @@ class Session:
         not run, whatever the auditor wrote; never the other way.
 
         A MET whose resolved citations are all test files no required check
-        names is not shown (integration.uncovered_tests; files outside those
-        families are not classified, so citing them is not lowered here). A
-        requirement a task covering it reported NOT RUN for is not met while
-        that report stands, even when the MET also cites a file that did run:
-        a unit file that ran does not stand in for a scenario that did not.
+        names, and no later run reconciled, is not shown (files outside the
+        test families are not classified, so citing them is not lowered
+        here). A requirement a task covering it reported NOT RUN for, or
+        whose task's required check skipped cases, is not met while that
+        record stands, even when the MET also cites a file that did run: a
+        unit file that ran does not stand in for a scenario that did not.
         """
-        unrun = set(getattr(self, "unnamed_test_files", []) or [])
+        unrun = set(self._unnamed_standing())
         standing = self._standing_not_run()
         lowered = []
         for rid, (met, why) in list(found.items()):
@@ -7292,6 +7350,10 @@ class Session:
                 f"{'it' if len(unrun) == 1 else 'them'} indirectly is unknown, so "
                 f"{'its' if len(unrun) == 1 else 'their'} tests are not shown to have passed.")
         self.unnamed_test_files = list(dict.fromkeys([*getattr(self, "unnamed_test_files", []), *unrun]))
+        since = getattr(self, "_unnamed_since", {}) or {}
+        for path in unrun:
+            since[path] = len(self.checks)
+        self._unnamed_since = since
         task.record("user", text)
         self._note(f"task {spec.task_id}: test file(s) no required check names: {', '.join(unrun)}")
 
@@ -7433,11 +7495,15 @@ class Session:
         edited helper and passed, and the original tests failed against the
         delivered code. The bytes kept here are what a later check restores
         (Codex decision D, #35 6076286834)."""
-        from .integration import original_tests
+        from .integration import original_tests, selection_sections
         from .project import Project
         try:
-            self._original_tests = original_tests(
-                Project(self.project, exclude=self.config.project_excludes).contents())
+            contents = Project(self.project, exclude=self.config.project_excludes).contents()
+            self._original_tests = original_tests(contents)
+            # Test selection held in mixed files (pyproject, setup.cfg, tox.ini,
+            # package.json) is kept by section; pure test configs such as
+            # pytest.ini are already among the restored files (F1).
+            self._original_selection = selection_sections(contents)
         except Exception as exc:  # noqa: BLE001 -- recorded, never a silent pass
             self._original_tests = None
             self._unverified_once("The run-start test files could not be read, so changes to "
@@ -7458,10 +7524,12 @@ class Session:
         originals = self._original_tests
         if not originals:
             return result
+        task = getattr(self._active_spec, "task_id", "run")
+        if self._selection_changed(current, task):
+            return result
         changed = changed_originals(originals, current)
         if not changed:
             return result
-        task = getattr(self._active_spec, "task_id", "run")
         baseline, problem = run_original_tests(gate, self.project, originals, current)
         self._verify_dependencies(f"during original tests ({task})")
         drift = self._source_drift(current)
@@ -7496,6 +7564,23 @@ class Session:
                        output=f"{result.output}\n\n{heading}\n{baseline.output}"[-8_000:],
                        receipts=tuple(inner) + tuple(baseline.receipts))
 
+    def _selection_changed(self, current: dict, where: str) -> bool:
+        """Whether test selection in a mixed configuration file changed since
+        run start. Restoring such a file whole would also restore unrelated
+        settings the current code needs, so the original suite cannot be
+        established: an open unverified finding, never a pass (Codex review of
+        b6ba3ba, F1: a changed selection hid a restored original assertion)."""
+        from .integration import changed_selection
+        names = changed_selection(getattr(self, "_original_selection", None) or {}, current)
+        if not names:
+            return False
+        text = (f"{'At DONE' if where == 'DONE' else f'Task {where}'}: test selection in "
+                f"{', '.join(names)} changed since run start, so the original tests cannot be run as "
+                "they were; their result is not established.")
+        self._unverified_once(text)
+        self.original_test_runs.append(dict(task=where, changed=names, passed=None, problem=text, receipts=[]))
+        return True
+
     def _source_drift(self, current: dict) -> str:
         """What changed in the project since ``current`` was read, or ''."""
         from .project import Project
@@ -7511,6 +7596,8 @@ class Session:
         if not self._original_tests or not self.project:
             return ""
         current = Project(self.project, exclude=self.config.project_excludes).contents()
+        if self._selection_changed(current, "DONE"):
+            return ""
         changed = changed_originals(self._original_tests, current)
         if not changed:
             return ""

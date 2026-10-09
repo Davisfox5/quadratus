@@ -253,3 +253,50 @@ def test_a_source_change_during_the_original_run_fails_the_check(tmp_path, monke
     monkeypatch.setattr(integration, "run_original_tests", moving)
     result = session._check(gate)
     assert not result.passed and "app.py" in result.output
+
+
+def test_a_changed_pytest_ini_cannot_hide_a_restored_original(tmp_path):
+    """Codex review of b6ba3ba, F1: pytest.ini changed to ignore the original
+    test; it is restored with the run-start tests, so the assertion runs."""
+    root = _project(tmp_path)
+    (root / "tests" / "test_smoke.py").write_text("def test_smoke():\n    assert True\n")
+    (root / "pytest.ini").write_text("[pytest]\n")
+    gate = IntegrationGate(DECLARED, cwd=root)
+    session = _session(tmp_path, root, gate)
+    (root / "app.py").write_text("def total(items):\n    return 12\n")
+    (root / "pytest.ini").write_text("[pytest]\naddopts = --ignore=tests/test_app.py\n")
+    assert IntegrationGate(DECLARED, cwd=root).run().passed, "the current selection hides the failure"
+    result = session._check(gate)
+    assert not result.passed and session.original_test_runs[-1]["changed"] == ["pytest.ini"]
+
+
+def test_a_changed_pyproject_test_selection_leaves_the_originals_unestablished(tmp_path):
+    root = _project(tmp_path)
+    (root / "pyproject.toml").write_text('[project]\nname = "x"\n')
+    gate = IntegrationGate(DECLARED, cwd=root)
+    session = _session(tmp_path, root, gate)
+    (root / "pyproject.toml").write_text('[project]\nname = "x"\nversion = "1"\n')
+    assert session._check(gate).passed and session.open_findings == [], "only test selection counts"
+    (root / "pyproject.toml").write_text('[project]\nname = "x"\n[tool.pytest.ini_options]\n'
+                                        'addopts = "--ignore=tests/test_app.py"\n')
+    (root / "app.py").write_text("def total(items):\n    return 12\n")
+    session._check(gate)
+    assert any("test selection in pyproject.toml changed" in f for f in session.open_findings)
+    assert session.original_test_runs[-1]["passed"] is None, "not established, never passed"
+
+
+def test_the_original_copy_cannot_change_the_delivered_project_unnoticed(tmp_path):
+    """Codex review of b6ba3ba, F2: code that writes its configured project
+    path only when run from the copy."""
+    root = _project(tmp_path)
+    gate = IntegrationGate(DECLARED, cwd=root)
+    session = _session(tmp_path, root, gate)
+    (root / "tests" / "helpers.py").write_text("def items():\n    return [1, 2, 3]  # changed support\n")
+    real = str(root)
+    (root / "app.py").write_text("from pathlib import Path\n"
+                                 f"if Path(__file__).resolve().parent != Path({real!r}):\n"
+                                 f"    (Path({real!r}) / 'delivered.txt').write_text('written from the copy')\n"
+                                 "def total(items):\n    return sum(items)\n")
+    result = session._check(gate)
+    assert (root / "delivered.txt").exists(), "the probe reached the original-test run"
+    assert not result.passed and "delivered.txt" in result.output
