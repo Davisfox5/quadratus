@@ -286,10 +286,15 @@ def _clearance(task: dict, sha: str = "") -> str:
 def unblock(record: dict, *, task_id: str, resolution: str, by: str) -> dict:
     """A blocker was resolved: the resolution is recorded against every open
     blocker and the task returns to claimed (or delivered, if it has a
-    delivery). The blockers stay on the record as history."""
+    delivery). The blockers stay on the record as history. Any task with an
+    open blocker can be unblocked, whatever its state: records written before
+    a cleared review stopped hiding blockers (Z6) hold reviewed tasks with
+    blockers never resolved, and those need a recorded resolution too. The
+    task leaves reviewed for delivered; an earlier clearance stays on the
+    record but is not re-recorded as a new verdict."""
     task = _task(record, task_id)
-    if task["state"] != "blocked":
-        raise RecordError(f"{task_id} is {task['state']}, not blocked")
+    if not _open_blockers(task):
+        raise RecordError(f"{task_id} is {task['state']}, not blocked, and has no open blocker")
     if not resolution:
         raise RecordError("an unblock names its resolution")
     for blocker in task["blockers"]:

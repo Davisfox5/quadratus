@@ -254,3 +254,22 @@ def test_ready_rechecks_an_integrated_task_against_its_current_scope():
     rec["tasks"][0]["owns"].append("app/b.py")
     readiness = R.readiness(rec)
     assert readiness["ready"] is False and readiness["uncovered_integrations"][0]["task"] == "T1"
+
+
+def test_a_reviewed_task_with_a_historical_open_blocker_can_be_unblocked():
+    """Records from before Z6 hold reviewed tasks whose blockers were never
+    resolved; unblock records the resolution and the task leaves reviewed
+    for delivered without any new review being written."""
+    rec = _record()
+    _delivered(rec)
+    rec["tasks"][0]["blockers"].append(dict(requirement="r", failure="f", evidence="e",
+                                            classification="reachable", by="codex", sha=DELIVERY, at="t"))
+    rec["tasks"][0]["reviews"].append(dict(reviewer="codex", sha=DELIVERY, verdict="cleared", evidence="u",
+                                           scope=["quadratus/a.py"], at="t2"))
+    rec["tasks"][0]["state"] = "reviewed"
+    R.unblock(rec, task_id="T1", resolution="fixed at the delivery, cleared at t2", by="claude")
+    task = rec["tasks"][0]
+    assert task["state"] == "delivered" and len(task["reviews"]) == 1
+    assert task["blockers"][0]["resolved"]["resolution"].startswith("fixed")
+    with pytest.raises(R.RecordError):
+        R.unblock(rec, task_id="T1", resolution="again", by="claude")
