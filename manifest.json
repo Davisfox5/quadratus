@@ -1,0 +1,11 @@
+{
+  "files": 45,
+  "bytes": 1915707,
+  "compressed_bytes": 821784,
+  "bundle_sha256": "adda6b8c5919d653784992cf509a1a045ee788338e330492913e9610e6a9945e",
+  "archive_sha256": "fccb486befd151b04931313dc2dbef6f74452c21d5f902f86c65da0fdb5d278b",
+  "report_sha256": "5e232c27620622f8564403bb4ed85cb75d04548fdd5a1803b667f21dd24771d9",
+  "receipt_sha256": "9dad0f1adae18266962d09b83090a7d5927d5d82cc77626016b2ec054cd696a1",
+  "original_manifest_sha256": "4c8439126ba7418cd26f54fd2414911f398dac6e63b93ea984126fb45747b115",
+  "root_all44_verified": true
+}
