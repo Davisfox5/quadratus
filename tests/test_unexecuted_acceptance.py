@@ -123,3 +123,68 @@ def test_editing_calls_record_their_not_run_lines(tmp_path):
     session._edit("openai:gpt-5.6-sol", "prompt", role="lead")
     assert [(e["task"], e["role"], e["item"], e["requirements"]) for e in session.unexecuted_acceptance] == [
         ("t3", "lead", "node tests/browser/run.js", ["R5"])]
+
+
+def test_a_blocked_line_is_read_like_not_run(tmp_path):
+    """gui-sort-v5 t4 (Codex #35 6076559403) said BLOCKED, not NOT RUN."""
+    session, _ = _session(tmp_path, f"R5: MET - {UNIT}\n")
+    _not_run(session, "t4", ["R5"], "BLOCKED: desktop and mobile browser checks - Playwright unavailable")
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+    _not_run(session, "t4", ["R1"], "BLOCKING: a reviewer's finding is not a report")
+    assert all(e["requirements"] == ["R5"] for e in session.unexecuted_acceptance)
+
+
+def _gate_result(skips, *, rid="extra-1", passed=True):
+    from quadratus.integration import GateReceipt, GateResult
+    report = dict(state="parsed", counts=dict(passed=37, failed=0, errors=0, skipped=skips))
+    receipt = GateReceipt(id=rid, status="passed" if passed else "failed", reason="exit 0", required=True,
+                          command="node --test tests/ui/sort.test.js", output=f"# pass 37\n# skipped {skips}\n",
+                          report=report)
+    return GateResult(passed, "gate suite", 0, receipt.output, (receipt,))
+
+
+def _ran(session, task, covers, result):
+    import dataclasses
+    session._current_covers = list(covers)
+    session._note_skips(SimpleNamespace(task_id=task), result)
+    session.checks.append(dict(passed=result.passed, command=result.command, output=result.output,
+                               receipts=[dataclasses.asdict(r) for r in result.receipts]))
+    session._current_covers = []
+
+
+def test_a_passing_check_that_skips_more_cases_keeps_the_requirement_open(tmp_path):
+    """The v5 shape: Node 37 passed, 2 browser cases skipped, gate green,
+    and the audit cites the unit file that ran."""
+    session, prompts = _session(tmp_path, f"R5: MET - {UNIT}\n")
+    _ran(session, "t1", ["R1"], _gate_result(0))
+    _ran(session, "t4", ["R5"], _gate_result(2))
+    met, why = session._audit_requirements(ids=["R5"])["R5"]
+    assert met is False and "t4: extra-1: 2 skipped test case(s), 0 before this task" in why
+    assert "reported NOT RUN: extra-1: 2 skipped" in prompts[-1]
+    _ran(session, "t5", ["R1"], _gate_result(2))
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False, "the same skips again lift nothing"
+    _ran(session, "t6", ["R5"], _gate_result(0))
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is True, "a later run of those cases lifts it"
+
+
+def test_the_first_checks_skips_are_shown_without_lowering(tmp_path):
+    session, prompts = _session(tmp_path, f"R1: MET - {UNIT}\n")
+    _ran(session, "t1", ["R1"], _gate_result(3))
+    assert session._audit_requirements(ids=["R1"])["R1"][0] is True
+    assert "extra-1: 3 skipped test case(s)" in prompts[-1], "no earlier count: shown, not lowered"
+
+
+def test_skips_in_a_real_node_check_are_counted(tmp_path):
+    import shutil
+
+    import pytest
+
+    from quadratus.integration import GateCommand, GateSuite, skipped_count
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    (tmp_path / "a.test.js").write_text(
+        "const test = require('node:test');\n"
+        "test('unit', () => {});\n"
+        "test('browser', { skip: 'Playwright unavailable' }, () => {});\n")
+    result = GateSuite([GateCommand(id="extra-1", argv=("node", "--test", "a.test.js"))], cwd=tmp_path).run()
+    assert result.passed and skipped_count(result.receipts[0]) == 1

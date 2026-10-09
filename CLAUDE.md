@@ -562,8 +562,14 @@ Key design decisions already settled:
   line an editing call wrote, and lowers a MET deterministically when every
   citation is an unnamed test file, or when a task covering the requirement
   reported NOT RUN and no later passing check's command names the item. A
-  run unit file does not stand in for a scenario that did not run. Downward
-  only: no reply raises a verdict, and prose without the marker is not read.
+  run unit file does not stand in for a scenario that did not run. A line
+  starting 'BLOCKED:' is read the same way (gui-sort-v5 t4 wrote that), and
+  so is a passing required check that skipped more cases than the run's
+  previous check of the same id (v5 t4: Node 37 passed, 2 browser cases
+  skipped, gate green); a later passing check skipping no more than before
+  lifts it. The run's first check has no earlier count: its skips are shown
+  to the audit and lower nothing. Downward only: no reply raises a verdict,
+  and prose without a marker is not read.
   Reviewers are told which run-start test files changed. A goal that
   legitimately changes behaviour an original test pins will fail this check;
   there is no exemption and no new grant.

@@ -1132,7 +1132,7 @@ _REQ_LINE = re.compile(r"^\s*(R\d+)\s*[:.)-]\s*(.+?)\s*$", re.MULTILINE)
 _COVERS = re.compile(r"^\s*COVERS:\s*(.+?)\s*$", re.MULTILINE)
 #: An editing call's own account of acceptance it could not run (runtime
 #: check guidance). Read only to lower an audit verdict, never to raise one.
-_NOT_RUN_LINE = re.compile(r"^\s*NOT RUN:\s*(.+?)\s*$", re.MULTILINE)
+_NOT_RUN_LINE = re.compile(r"^\s*(?:NOT RUN|BLOCKED):\s*(.+?)\s*$", re.MULTILINE)
 _AUDIT_LINE = re.compile(r"^\s*(R\d+)\s*:\s*(MET|NOT MET)\b[\s:—-]*(.*)$", re.MULTILINE | re.IGNORECASE)
 
 
@@ -5722,6 +5722,41 @@ class Session:
                 self.unexecuted_acceptance.append(entry)
                 self._note(f"task {task}: {role} reported NOT RUN: {entry['item'][:120]}")
 
+    def _note_skips(self, spec, result) -> None:
+        """A required check that passed while skipping more cases than the
+        run's previous check of the same id is acceptance that did not run
+        (gui-sort-v5 t4, Codex #35 6076559403: Node 37 passed, 2 browser
+        cases skipped because Playwright was unavailable, the gate green).
+        Recorded like a NOT RUN report for the task's requirements; lifted
+        only when a later passing check of that id skips no more than the
+        count before. The run's first check has no earlier count, so its
+        skips are shown to the audit without lowering anything."""
+        from .integration import GateReceipt, skipped_count
+        receipts = result.receipts or (GateReceipt(id="check", status="passed" if result.passed else "failed",
+                                                   reason="", required=True, output=result.output,
+                                                   report=result.report),)
+        previous = getattr(self, "_skips_seen", {})
+        for receipt in receipts:
+            if receipt.status != "passed":
+                continue
+            count = skipped_count(receipt)
+            if count is None:
+                continue
+            before = previous.get(receipt.id)
+            if count and (before is None or count > before):
+                entry = dict(task=spec.task_id, role="check", author="harness",
+                             item=f"{receipt.id}: {count} skipped test case(s)"
+                                  + (f", {before} before this task" if before is not None else ""),
+                             why="the check passed with these cases skipped",
+                             requirements=list(self._current_covers) if before is not None else [],
+                             after_check=len(self.checks), receipt=receipt.id,
+                             baseline=before, kind="skipped")
+                self.unexecuted_acceptance.append(entry)
+                self._note(f"task {spec.task_id}: {entry['item']}")
+            # The baseline only falls: a rise is the fact above, never the new normal.
+            previous[receipt.id] = count if before is None else min(before, count)
+        self._skips_seen = previous
+
     def _standing_not_run(self) -> List[dict]:
         """Reported NOT RUN items no later passing required check ran. Only a
         measured run lifts one: a later check that passed and whose command
@@ -5731,6 +5766,19 @@ class Session:
             ran = False
             for check in self.checks[entry["after_check"]:]:
                 if not check.get("passed"):
+                    continue
+                if entry.get("kind") == "skipped":
+                    from types import SimpleNamespace as _Receipt
+
+                    from .integration import skipped_count
+                    later = [r for r in check.get("receipts") or () if r.get("id") == entry["receipt"]]
+                    if not later and entry["receipt"] == "check" and not check.get("receipts"):
+                        later = [dict(output=check.get("output", ""), report=check.get("report"))]
+                    count = (skipped_count(_Receipt(output=later[0].get("output", ""), report=later[0].get("report")))
+                             if later else None)
+                    if entry["baseline"] is not None and count is not None and count <= entry["baseline"]:
+                        ran = True
+                        break
                     continue
                 commands = [str(check.get("command") or "")] + [
                     str(r.get("command") or "") for r in check.get("receipts") or ()]
@@ -7139,6 +7187,7 @@ class Session:
             self._outcome.edge("checks", result.passed)
         if full:
             self._note_unrun_tests(spec, task, gate)
+            self._note_skips(spec, result)
         if not result.passed:
             task.record(
                 "user",

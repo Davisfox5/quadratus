@@ -846,3 +846,21 @@ def _relative(cwd: str, operand: str, copy: Path) -> str:
             return operand
     import posixpath
     return posixpath.normpath(posixpath.join(cwd, operand))
+
+
+def skipped_count(receipt) -> Optional[int]:
+    """Cases a check skipped: the structured report's count when it parsed,
+    else the runner's own summary line, else None (unknown, never zero)."""
+    report = getattr(receipt, 'report', None) or {}
+    if report.get('state') == 'parsed':
+        return int(report['counts']['skipped'])
+    output = getattr(receipt, 'output', '') or ''
+    node = re.findall(r'(?m)^(?:#|\u2139)\s*(?:skipped|skip) (\d+)\s*$', output)
+    if node:
+        return int(node[-1])
+    for line in reversed(output.splitlines()):
+        found = re.findall(r'\b(\d+) (passed|failed|skipped|deselected|errors?)\b', line)
+        if found:
+            return sum(int(n) for n, kind in found if kind == 'skipped')
+    unittest = re.findall(r'skipped=(\d+)', output)
+    return int(unittest[-1]) if unittest else None
