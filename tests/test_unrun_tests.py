@@ -58,3 +58,21 @@ def test_the_lead_is_told_new_tests_belong_in_a_listed_file():
 
     from quadratus import runtime
     assert "never runs and its tests stay unverified" in inspect.getsource(runtime)
+
+
+def test_a_new_test_file_a_run_test_invokes_is_not_claimed(tmp_path):
+    """Batch 2 gui-ui-v3 t5: a pytest test ran node on the new search tests,
+    inside the approved pytest check. A mention by name is evidence it may
+    run, so nothing is claimed."""
+    root = tmp_path / "project"
+    (root / "tests" / "ui").mkdir(parents=True)
+    session = Session("goal", ArtifactStore(tmp_path / "artifacts"), lambda *a, **k: "",
+                      config=SessionConfig(project=root, allow_writes=True))
+    session._task_before = session._capture_source()
+    (root / "tests" / "ui" / "project_search.test.js").write_text("// new\n")
+    (root / "tests" / "test_node_bridge.py").write_text(
+        "import subprocess\ndef test_search():\n"
+        "    subprocess.run(['node', '--test', 'tests/ui/project_search.test.js'], check=True)\n")
+    gate = SimpleNamespace(commands=(GateCommand(id="check", argv=PYTEST), GateCommand(id="extra-1", argv=NODE)))
+    session._note_unrun_tests(SimpleNamespace(task_id="t5"), TaskMemory("t5", "x", session.store), gate)
+    assert session.open_findings == []

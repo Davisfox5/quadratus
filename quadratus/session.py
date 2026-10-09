@@ -7007,6 +7007,11 @@ class Session:
         except Exception:  # noqa: BLE001 -- observation never fails a task
             return
         unrun = uncovered_tests(changed, argvs)
+        # A test file a required check runs may itself run the new one (batch
+        # 2 gui-ui-v3 t5: a pytest test invoked node on the new search tests,
+        # inside the approved pytest check). A mention by name is evidence it
+        # may run, so nothing is claimed for it: unknown is not uncovered.
+        unrun = [path for path in unrun if not self._named_by_a_run_test(path, argvs)]
         if not unrun:
             return
         text = (f"Task {spec.task_id}: {', '.join(unrun)} changed by this task "
@@ -7016,6 +7021,41 @@ class Session:
         self._open_finding("unverified", text)
         task.record("user", text)
         self._note(f"task {spec.task_id}: unrun test file(s) {', '.join(unrun)}")
+
+    def _named_by_a_run_test(self, path: str, argvs, *, limit: int = 2000) -> bool:
+        """Whether a test file some required check runs names ``path``: a
+        listed test file, or a Python test file when a check discovers them.
+        Bounded: at most ``limit`` files of at most 1 MB are read."""
+        from .integration import _test_family
+        root = Path(self.project)
+        name = PurePosixPath(path).name
+        listed = {str(a) for argv in argvs for a in argv[1:] if _test_family(str(a))}
+        discovers = any("pytest" in " ".join(str(a) for a in argv[:3]) for argv in argvs)
+        from .project import Project
+        seen = 0
+        try:
+            files = Project(self.project, exclude=self.config.project_excludes).files()
+        except Exception:  # noqa: BLE001 -- observation never fails a task
+            return False
+        for candidate in files:
+            if seen >= limit:
+                break
+            candidate = Path(candidate)
+            candidate = candidate if candidate.is_absolute() else root / candidate
+            rel = candidate.relative_to(root).as_posix()
+            if rel == path:
+                continue
+            family = _test_family(rel)
+            if not (rel in listed or (discovers and family and family[1] == "py")):
+                continue
+            seen += 1
+            try:
+                if candidate.is_file() and not candidate.is_symlink() and candidate.stat().st_size <= 1 << 20:
+                    if name in candidate.read_text(encoding="utf-8", errors="replace"):
+                        return True
+            except OSError:
+                continue
+        return False
 
     def _handoff_unattributable(self, gate, result, task) -> None:
         """Stop, with diagnostics and no repair call, on a failure that is not
