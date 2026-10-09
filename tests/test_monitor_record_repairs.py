@@ -223,3 +223,34 @@ def test_unblock_then_a_full_review_still_integrates():
     R.review(rec, task_id="T1", reviewer="codex", sha=DELIVERY, verdict="cleared", evidence="u")
     assert _integrate(rec)["state"] == "integrated"
     assert R.readiness(rec)["blockers"] == []
+
+
+def test_a_scope_extended_after_integration_reopens_the_task_and_ready():
+    """Codex review of 178c193: claim, deliver, review and integrate with
+    every candidate receipt passed reads ready; a later extend left the task
+    integrated on its old review and ready stayed true."""
+    rec = _record()
+    rec["candidate"]["required_receipts"] = ["ci"]
+    _delivered(rec, owns=("app/a.py",))
+    R.review(rec, task_id="T1", reviewer="codex", sha=DELIVERY, verdict="cleared", evidence="u")
+    _integrate(rec)
+    R.receipt(rec, kind="ci", sha=NEW_CANDIDATE, state="passed")
+    assert R.readiness(rec)["ready"] is True
+    R.extend(rec, task_id="T1", owns=["app/b.py"], by="claude")
+    assert rec["tasks"][0]["state"] == "delivered"
+    assert R.readiness(rec)["ready"] is False
+
+
+def test_ready_rechecks_an_integrated_task_against_its_current_scope():
+    """The record, not the state label: an integrated task whose owned scope
+    outgrew its cleared review (a hand edit, or an older tool) keeps the
+    candidate from reading ready."""
+    rec = _record()
+    rec["candidate"]["required_receipts"] = ["ci"]
+    _delivered(rec, owns=("app/a.py",))
+    R.review(rec, task_id="T1", reviewer="codex", sha=DELIVERY, verdict="cleared", evidence="u")
+    _integrate(rec)
+    R.receipt(rec, kind="ci", sha=NEW_CANDIDATE, state="passed")
+    rec["tasks"][0]["owns"].append("app/b.py")
+    readiness = R.readiness(rec)
+    assert readiness["ready"] is False and readiness["uncovered_integrations"][0]["task"] == "T1"

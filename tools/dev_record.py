@@ -262,23 +262,24 @@ def _open_blockers(task: dict) -> List[dict]:
     return [b for b in task.get("blockers", []) if not b.get("resolved")]
 
 
-def _clearance(task: dict) -> str:
+def _clearance(task: dict, sha: str = "") -> str:
     """Why the task's record does not support integration now, or ''. The
-    state alone is not trusted: the latest delivery needs a cleared,
-    non-stale review whose scope covers everything the task owns today, and
-    no blocker may be open."""
+    state alone is not trusted: the delivery (or ``sha``, the integrated
+    commit) needs a cleared, non-stale review whose scope covers everything
+    the task owns today, and no blocker may be open."""
     if _open_blockers(task):
         return "it has an unresolved blocker; unblock it first"
     delivery = task.get("delivery")
     if not delivery:
         return "it has no delivery"
+    target = sha or delivery["sha"]
     for review in task.get("reviews", []):
-        if review.get("verdict") != "cleared" or not _same_commit(review.get("sha", ""), delivery["sha"]):
+        if review.get("verdict") != "cleared" or not _same_commit(review.get("sha", ""), target):
             continue
         outside, uncovered = _coverage(review.get("scope") or [], task["owns"])
         if not outside and not uncovered:
             return ""
-    return (f"no cleared review of {delivery['sha'][:7]} covers everything it owns now "
+    return (f"no cleared review of {target[:7]} covers everything it owns now "
             f"({', '.join(task['owns'])})")
 
 
@@ -364,11 +365,14 @@ def extend(record: dict, *, task_id: str, owns: List[str], by: str, resolve: boo
                                   "the coordinator resolves overlaps with --resolve")
     task["owns"].extend(added)
     task["decisions"].append(f"{by}: scope extended to {', '.join(added)}")
-    if task["state"] == "reviewed":
+    if task["state"] in ("reviewed", "integrated"):
         # The cleared review covered the old scope only; the added files
-        # have not been reviewed, so the task is delivered again.
+        # have not been reviewed, so the task is delivered again, even after
+        # integration: the candidate carries files nobody reviewed under this
+        # task. The integration record stays as history.
+        was = task["state"]
         task["state"] = "delivered"
-        task["decisions"].append(f"{by}: review no longer covers the extended scope; back to delivered")
+        task["decisions"].append(f"{by}: review no longer covers the extended scope; {was} -> delivered")
     return task
 
 
@@ -410,9 +414,17 @@ def readiness(record: dict) -> dict:
     open_tasks = [t["id"] for t in record["tasks"] if t["state"] in ("claimed", "delivered", "reviewed")]
     stale = [dict(task=t["id"], reviews=[r for r in t["reviews"] if r["verdict"] == "stale"])
              for t in record["tasks"] if any(r["verdict"] == "stale" for r in t["reviews"])]
-    ready = all(state == "passed" for state in receipts.values()) and not blockers and not open_tasks
+    # An integrated task is re-checked against the record, not trusted by its
+    # state: its integrated commit still needs a cleared review covering
+    # everything it owns now (Codex review of 178c193: a scope extended after
+    # integration left ready true on the old review).
+    uncovered = [dict(task=t["id"], reason=why) for t in record["tasks"]
+                 if t["state"] == "integrated" and t.get("integrated")
+                 for why in [_clearance(t, t["integrated"].get("sha", ""))] if why]
+    ready = (all(state == "passed" for state in receipts.values()) and not blockers and not open_tasks
+             and not uncovered)
     return dict(candidate=sha, gate=record["candidate"].get("gate"), ready=ready, receipts=receipts,
-                blockers=blockers, open_tasks=open_tasks, stale_reviews=stale)
+                blockers=blockers, open_tasks=open_tasks, stale_reviews=stale, uncovered_integrations=uncovered)
 
 
 def render(record: dict) -> str:

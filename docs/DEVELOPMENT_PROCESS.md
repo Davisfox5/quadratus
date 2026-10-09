@@ -35,8 +35,8 @@ their evidence; it never copies it and never turns an UNPROVEN row green.
    reviews stale and keeps their evidence. A review scope names only files
    the task owns; a scope covering part of them is recorded as partial and
    does not clear the task, and a `--scope` given with no paths is refused.
-   Extending a reviewed task's scope returns it to delivered, because the
-   review covered the old scope. A cleared review never resolves a
+   Extending a reviewed or integrated task's scope returns it to delivered,
+   because the review covered the old scope. A cleared review never resolves a
    blocker: only `unblock` records a resolution. `integrate` re-checks the
    record rather than trusting the state: a cleared review of the delivered
    SHA must cover everything the task owns now, and no blocker may be open
@@ -63,7 +63,8 @@ their evidence; it never copies it and never turns an UNPROVEN row green.
    exact SHA (`receipt`) with failed, missing, skipped and unproven kept
    distinct; `ready` says whether the candidate can integrate and names what
    stands in the way, including any task's unresolved blocker whatever its
-   state. A task that is claimed, delivered or reviewed but not
+   state, and any integrated task whose integrated commit has no cleared
+   review covering everything it owns now. A task that is claimed, delivered or reviewed but not
    integrated keeps the candidate open.
 8. Every mutating command holds a lock on the record for its whole
    load, validate and save, so two agents acting at once cannot both pass
