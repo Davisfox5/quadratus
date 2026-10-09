@@ -2065,6 +2065,13 @@
       "state": "passed",
       "evidence": "suite-37, immutable detached snapshot at exact 9a0d7f0, clean before and after: lifecycle 557 passed 10 skipped; rest 2652 passed 36 skipped 1 deselected; test_browser.py and test_browser_pilot.py excluded and the wheel test deselected as in every suite of this series; Linux Python 3.11; log SHA256 e755309f0c1d4d79730846065d05d1dc4a11456b3f77a7d2e2acdf5532339ecc. Agrees with the root Mac suite on 9a0d7f0 (3229 passed, 44 skipped). Not clearance: 9a0d7f0 reporting P2/P3 are fixed on 5d9f5ff; suite-38 starts on a 5d9f5ff snapshot.",
       "at": "2026-10-09T04:27:21Z"
+    },
+    {
+      "kind": "full-suite-mac",
+      "sha": "5d9f5ff",
+      "state": "passed",
+      "evidence": "Codex root Mac full suite and fresh installation on exact 5d9f5ff061b621af7673806a1a723375af9587bb, #35 comment 6074317782, stored full body SHA256 d2fb44cb6f574dff0b07210d368672357a7f42915ba52e66232d7b87a4218ff8 (GET-read here). Suite: main Python 3.12 -m pytest -q -p no:cacheprovider, clean before and after, source unchanged, exit 0, 3234 passed 44 skipped 0 failed in 548.12s, models invoked 0; raw log SHA256 435de01d5cb6607a66dcc813d142224d0421a0a947bb65c7dd733341ad223652 recomputed here from the published log with one trailing newline. Fresh install: wheel SHA256 804cb3a7b2ab92480c20939ba7f3b646b89e8d45398e04e9a4de5a75d3fd9170, source tar SHA256 9198cffcbb81e86c16f6935fb6192602979dc1c68ed5509e4f041ea38ebc5536, fresh dependencies installed, pip check passed, CLI help exit 0, 107 installed files matched, model calls 0. Four-part scoped review publications acknowledged in the previous review entry (#53 6074305247/6074305561, #35 6074305871/6074306176; part 1 abaecacd818798390aef6ff18b762635301794aa34769d37a90b7bae7356f712, part 2 937ae5b17361d13d348000451b14ad4ad89c7b254c642ca23734a44aec856b23; review ebe07d848e0e5f2365bf04e2c8f02b1c723f02d3e37da2afcc6d6b54038a70dd; receipt 05256b0a6b577934174062d6d0b315649d169d52791bca44b14db10196c4bb47). Exact CI at observation: 1 success, 3 in progress, not four passes. Prior failed suites stand (Mac 0a99ee2 6/3161/44, Linux CI 5/3162/44); 9a0d7f0 Mac 3229/44 recorded at 21ac21b. Not live feature, capture or MVP acceptance; root's five-file Node qualification follows; freeze and live wait on the remaining exact CI and full receipts.",
+      "at": "2026-10-09T04:33:54Z"
     }
   ]
 }
