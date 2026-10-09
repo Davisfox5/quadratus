@@ -393,3 +393,50 @@ def test_a_case_renamed_in_another_file_cannot_discharge_a_named_skip(tmp_path):
         "const t=require('node:test');t('browser-still-unavailable',{skip:'missing browser'},()=>{});\n")
     _gate(session, "t2", ["R1"])
     assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+
+
+# Codex review of e530b89, U1-U2.
+
+@needs_node
+def test_a_historical_name_reused_in_another_file_is_a_new_skip(tmp_path):
+    root = _node_project(tmp_path, "const t=require('node:test');t('browser',()=>{});\n")
+    (root / UNIT).write_text("const t=require('node:test');t('smoke',()=>{});t('legacy-platform',{skip:true},()=>{});\n")
+    gate = GateSuite([GateCommand(id="ui", argv=(NODE, "--test", UNIT, BROWSER))], cwd=root)
+    session = _session(tmp_path, root, gate, f"R5: MET - {BROWSER}")
+    session._snapshot_original_tests()
+    (root / BROWSER).write_text("const t=require('node:test');t('browser',{skip:true},()=>{});\n")
+    _gate(session, "t1", ["R5"])
+    assert session.unexecuted_acceptance[-1]["case_files"] == {"browser": [BROWSER]}
+    (root / UNIT).write_text("const t=require('node:test');t('smoke',()=>{});t('browser',()=>{});\n")
+    (root / BROWSER).write_text("const t=require('node:test');t('legacy-platform',{skip:true},()=>{});\n")
+    _gate(session, "t2", ["R1"])
+    assert session.unexecuted_acceptance[-1]["cases"] == ["legacy-platform"], "the old name in a new file is new"
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+
+
+@pytest.mark.parametrize("unit_skip", ["historical", "new"])
+def test_a_file_qualified_case_recovers_its_own_requirement(tmp_path, unit_skip):
+    root = tmp_path / "project"
+    (root / "tests").mkdir(parents=True)
+    browser, unit = "tests/test_browser.py", "tests/test_unit.py"
+    ran = "def test_browser():\n    assert True\n"
+    skipped = ("import pytest\n@pytest.mark.skip(reason='browser unavailable')\n"
+               "def test_browser():\n    raise AssertionError('browser did not run')\n")
+
+    def unit_source(skip):
+        return ("import pytest\ndef test_smoke():\n    assert True\n"
+                + ("@pytest.mark.skip(reason='unit unavailable')\n" if skip else "") + "def test_unit():\n    assert True\n")
+    (root / browser).write_text(ran)
+    (root / unit).write_text(unit_source(unit_skip == "historical"))
+    gate = GateSuite([GateCommand(id="acceptance", argv=(*PYTEST, "-vv", browser, unit))], cwd=root)
+    session = _session(tmp_path, root, gate, f"R1: MET - {unit}\nR5: MET - {browser}")
+    session._snapshot_original_tests()
+    (root / browser).write_text(skipped)
+    _gate(session, "t1", ["R5"])
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+    (root / browser).write_text(ran)
+    (root / unit).write_text(unit_source(True))
+    _gate(session, "t2", ["R1"])
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is True, "the browser case ran under its own file"
+    if unit_skip == "new":
+        assert session._audit_requirements(ids=["R1"])["R1"][0] is False, "the new unit skip still blocks R1"

@@ -567,31 +567,35 @@ Key design decisions already settled:
   anything (`skip_baselines`): a product edit that turns a case into a skip
   counts (Codex review of 81adcc7, R3), a case skipped since before the run
   does not, and the restored-original receipts never record one (R4). A skip
-  is historical only when its name is one case in both runs and that case was
-  skipped at run start; names are read from the whole output before its tail
-  is kept (`case_record`, Codex review of 67c9fad, S1), and a name over 300
-  characters is keyed by its SHA256 (`case_key`, d157378 T1). A shared name, a
-  record past its bound (the tail is never used as identity, T2) or no
-  baseline: every skip counts. A pytest XFAIL is not execution (S5). Optional
-  commands never record one. Only a *complete run* discharges a NOT RUN item
-  (Codex review of b6ba3ba, F3, F4, F6): a later passing required command, no
-  filter in argv, in pytest's `addopts`/`PYTEST_ADDOPTS` or `NODE_OPTIONS`, no
-  case reported deselected (R2), no `-p` plugin or `PYTEST_PLUGINS` (T3), no
-  collection or execution hook in a conftest.py pytest would load, no node
-  configuration file (S2), cases executed and zero skipped, naming every path
-  of the item as a whole operand read from the command's own cwd (R5; a
-  single-command gate's cwd and selection are kept on its check and on the
-  receipt synthesized when original tests join, S3 and S4). A named skip fact
-  is discharged only by a later run of the same command whose complete case
-  record shows those cases executed and none skipped, and which skips nothing
-  beyond that command's run-start baseline: names are not file-qualified, so a
-  case renamed in another file cannot stand in while one is still skipped
-  (T4). An unnamed skip fact needs such a run skipping nothing. A substring,
-  an optional or skipped receipt, a filtered run, a lower skip total, or a
-  model's word never does; a report written after a run is a new report. An
-  unnamed file is reconciled by a later complete run that names it or names a
-  file that names it. Parallel children's reports come back to the parent,
-  re-based to its checks (F5). Test-only runner configs (`pytest.ini`,
+  is historical only when its name is one case in both runs, that case was
+  skipped at run start, and the one test file holding it (the file in a pytest
+  node id, or the one file with the bare name quoted) is the same file,
+  unchanged since run start (Codex review of e530b89, U1); names are read from
+  the whole output before its tail is kept (`case_record`, Codex review of
+  67c9fad, S1), and a name over 300 characters is keyed by its SHA256
+  (`case_key`, d157378 T1). A shared name, a record past its bound (the tail
+  is never used as identity, T2) or no baseline: every skip counts. A pytest
+  XFAIL is not execution (S5). Optional commands never record one. Only a
+  *complete run* discharges a NOT RUN item (Codex review of b6ba3ba, F3, F4,
+  F6): a later passing required command, no filter in argv, in pytest's
+  `addopts`/`PYTEST_ADDOPTS` or `NODE_OPTIONS`, no case reported deselected
+  (R2), no `-p` plugin or `PYTEST_PLUGINS` (T3), no collection or execution
+  hook in a conftest.py pytest would load, no node configuration file (S2),
+  cases executed and zero skipped, naming every path of the item as a whole
+  operand read from the command's own cwd (R5; a single-command gate's cwd and
+  selection are kept on its check and on the receipt synthesized when original
+  tests join, S3 and S4). A named skip fact is discharged, decided when each
+  check runs against that check's source, by a later run of the same command
+  whose complete case record shows those cases executed and none skipped. A
+  pytest node id carries its file, so its own execution is enough whatever
+  else was skipped (U2); a bare name must be held by the same single test file
+  as when it was recorded, so a name reused in another file never stands in
+  (T4, U1). An unnamed skip fact needs such a run skipping nothing. A
+  substring, an optional or skipped receipt, a filtered run, a lower skip
+  total, or a model's word never does; a report written after a run is a new
+  report. An unnamed file is reconciled by a later complete run that names it
+  or names a file that names it. Parallel children's reports come back to the
+  parent, re-based to its checks (F5). Test-only runner configs (`pytest.ini`,
   jest/vitest/playwright/mocha configs) are kept and restored with the tests,
   and one added during the run (or an added `conftest.py`) triggers the
   original run with it left out (R1); a change to test selection in a mixed

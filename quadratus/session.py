@@ -1220,18 +1220,37 @@ def _receipt_names(receipt):
     return skipped, every, executed
 
 
-def _new_skips(skipped, every, start):
+def _new_skips(skipped, every, start, stable):
     """The skips in ``skipped`` that are not historical against ``start``
     (``(count, skipped, every)`` from the run-start baseline, or None). A
-    skip is historical only when its key is one case in both runs and that
-    case was skipped at run start; without complete identity on both sides
-    every skip is new (S1, T2)."""
+    skip is historical only when its key is one case in both runs, that case
+    was skipped at run start, and ``stable(key)`` says the one test file that
+    holds it is the same file, unchanged since run start. Without complete
+    identity on both sides every skip is new (S1, T2); a name reused in
+    another file or revision is new too (Codex review of e530b89, U1)."""
     from collections import Counter
     if start is None or every is None or start[2] is None or start[1] is None:
         return Counter(skipped)
     start_skipped, start_every = start[1], start[2]
     return Counter({n: k for n, k in skipped.items()
-                    if not (every[n] == 1 and start_every[n] == 1 and start_skipped[n] == 1)})
+                    if not (every[n] == 1 and start_every[n] == 1 and start_skipped[n] == 1 and stable(n))})
+
+
+_QUOTES = ("'", '"', "`")
+
+
+def _case_files(key: str, texts: dict):
+    """The test files that hold one case, as a frozenset, or None when that
+    cannot be read. A pytest node id names its file (``path::name``); a bare
+    name (node's runner prints no file) is held by the test files whose text
+    has it as a quoted string. A hashed long key cannot be searched for."""
+    if "\u2026sha256:" in key:
+        return None
+    if "::" in key:
+        path = key.split("::", 1)[0]
+        return frozenset([path]) if path in texts else None
+    found = frozenset(path for path, text in texts.items() if any(q + key + q in text for q in _QUOTES))
+    return found or None
 
 
 def _complete_run(run: dict) -> bool:
@@ -5488,7 +5507,7 @@ class Session:
                 # parent's checks: only a check the parent runs after the merge
                 # can discharge them (Codex review of b6ba3ba, F5).
                 for entry in child.unexecuted_acceptance:
-                    self.unexecuted_acceptance.append(dict(entry, after_check=len(self.checks)))
+                    self.unexecuted_acceptance.append(dict(entry, after_check=len(self.checks), discharged_at=None))
                 self.original_test_runs.extend(child.original_test_runs)
                 self.skip_baselines.extend(getattr(child, "skip_baselines", []))
                 # The child's design debt comes back with its findings, so a
@@ -5884,6 +5903,7 @@ class Session:
                                                    report=result.report, cases=result.cases),)
         starts = getattr(self, "_start_skips", None) or {}
         keys = self._command_keys(gate) if gate is not None else {}
+        texts, stable = self._case_texts()
         for receipt in receipts:
             if receipt.status != "passed" or not receipt.required or receipt.id.startswith("original-tests:"):
                 continue
@@ -5899,7 +5919,7 @@ class Session:
                 # or one that ran there, says nothing about which skipped now
                 # (Codex review of 67c9fad, S1). Without complete identity on
                 # both sides every skip counts (d157378, T2).
-                new = _new_skips(names, every, start)
+                new = _new_skips(names, every, start, stable)
                 if not new:
                     continue
                 cases = sorted(new.elements())
@@ -5914,6 +5934,11 @@ class Session:
                          why="the required check passed with these cases skipped",
                          requirements=list(self._current_covers), after_check=len(self.checks),
                          receipt=receipt.id, kind="skipped", cases=cases,
+                         # Which test file held each named case when it was
+                         # recorded, so a later discharge can tell the same
+                         # case from a name reused elsewhere (U1).
+                         case_files=None if not cases else {
+                             n: sorted(_case_files(n, texts) or ()) for n in set(cases)},
                          # The run-start baseline this fact was measured
                          # against, kept so a later discharge reads the same
                          # one (T4).
@@ -5922,6 +5947,57 @@ class Session:
                              every=None if start[2] is None else dict(start[2])))
             self.unexecuted_acceptance.append(entry)
             self._note(f"task {spec.task_id}: {entry['item']}")
+
+    def _case_texts(self):
+        """``(texts, stable)``: the current test and support files' text, and
+        a predicate for a case key whose one holding file is the same file,
+        byte-identical to run start (_new_skips)."""
+        from .integration import is_test_support
+        from .project import Project
+        originals = self._original_tests or {}
+        try:
+            contents = Project(self.project, exclude=self.config.project_excludes).contents() if self.project else {}
+        except Exception:  # noqa: BLE001 -- unreadable: nothing is stable
+            return {}, lambda key: False
+        texts = {n: d.decode("utf-8", "replace") for n, d in contents.items() if is_test_support(n)}
+        start = {n: d.decode("utf-8", "replace") for n, d in originals.items()}
+
+        def stable(key):
+            now, then = _case_files(key, texts), _case_files(key, start)
+            return (now is not None and now == then and len(now) == 1
+                    and all(contents.get(f) == originals.get(f) for f in now))
+        return texts, stable
+
+    def _discharge_named(self) -> None:
+        """Decide, for the check just recorded, which named skip facts it
+        discharges: a passing, required, unfiltered run of the same command
+        whose complete case record shows each named case executed and none
+        of them skipped. A pytest node id carries its file, so its execution
+        is enough, whatever else that command skipped (Codex review of
+        e530b89, U2). A bare name must be held by the same single test file
+        as when it was recorded, read from this check's source, so a name
+        reused in another file never stands in (T4, U1)."""
+        from collections import Counter
+        index = len(self.checks) - 1
+        pending = [e for e in self.unexecuted_acceptance if e.get("kind") == "skipped" and e.get("cases")
+                   and e.get("discharged_at") is None and e["after_check"] <= index]
+        if not pending:
+            return
+        texts, _ = self._case_texts()
+        runs = _check_runs(self.checks[index], self.project)
+        for entry in pending:
+            need = Counter(entry["cases"])
+            files = entry.get("case_files") or {}
+            for run in runs:
+                if not (run["id"] == entry["receipt"] and run["passed"] and run["required"]
+                        and not run["filtered"] and run["every_names"] is not None):
+                    continue
+                if not all(run["executed_names"][n] >= k and not run["skipped_names"][n] for n, k in need.items()):
+                    continue
+                if all("::" in n or (files.get(n) and _case_files(n, texts) == frozenset(files[n]))
+                       for n in need):
+                    entry["discharged_at"] = index
+                    break
 
     def _skip_baseline(self, gate, result, current: dict):
         """Run the gate's commands once on the run-start source when a passing
@@ -5982,7 +6058,6 @@ class Session:
         skipped none; a skip fact only by such a run of the same command. A
         model's word, a substring, an optional or skipped receipt, or a
         name-filtered run never does (Codex review of b6ba3ba, F3)."""
-        from collections import Counter
         standing = []
         for entry in self.unexecuted_acceptance:
             ran = False
@@ -5990,27 +6065,9 @@ class Session:
             for check in self.checks[entry["after_check"]:]:
                 runs = [r for r in _check_runs(check, self.project) if _complete_run(r)]
                 if entry.get("kind") == "skipped" and entry.get("cases"):
-                    # Named skips are discharged by a later passing, unfiltered
-                    # run of the same command whose complete case record shows
-                    # each of them executed and none skipped, and which skips
-                    # nothing beyond what that command skipped at run start.
-                    # Names are not file-qualified, so a case renamed in
-                    # another file could otherwise stand in for one still
-                    # skipped (Codex review of d157378, T4); old skips the
-                    # baseline had still do not block (R4).
-                    need = Counter(entry["cases"])
-                    base = entry.get("baseline") or None
-                    start = None if base is None else (None, None if base.get("skipped") is None else Counter(
-                        base["skipped"]), None if base.get("every") is None else Counter(base["every"]))
-                    ran = False
-                    for r in _check_runs(check, self.project):
-                        if not (r["id"] == entry["receipt"] and r["passed"] and r["required"]
-                                and not r["filtered"] and r["every_names"] is not None):
-                            continue
-                        if all(r["executed_names"][n] >= k and not r["skipped_names"][n] for n, k in need.items()) \
-                                and not _new_skips(r["skipped_names"], r["every_names"], start):
-                            ran = True
-                            break
+                    # Decided when each check ran, against that check's own
+                    # source (_discharge_named).
+                    ran = entry.get("discharged_at") is not None
                 elif entry.get("kind") == "skipped":
                     ran = any(r["id"] == entry["receipt"] for r in runs)
                 else:
@@ -7429,6 +7486,7 @@ class Session:
                             "selection": self._gate_selection(gate), "command_cwd": self._gate_cwd(gate),
                             "cases": result.cases,
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
+        self._discharge_named()
         # A passing check makes every earlier check failure in the same task
         # history: this invocation's attempts and an earlier invocation's, such
         # as a gate a design-fix later repaired (map G12, J38). Only the
