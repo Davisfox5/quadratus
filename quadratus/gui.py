@@ -135,7 +135,7 @@ class OperatorChannel:
 
 def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
                    *, forbid=(), declared_paths=(), channel: Optional[OperatorChannel] = None,
-                   neutral: bool = False):
+                   neutral: bool = False, capture_profile=None, extra_checks=(), readiness=None):
     """Stream progress while the shared project runner performs model calls."""
     import dataclasses
 
@@ -149,6 +149,8 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
                              allow_writes=allow_writes, check=check,
                              mode=mode, max_tasks=int(max_tasks),
                              forbid=forbid, declared_paths=declared_paths,
+                             capture_profile=capture_profile or None,
+                             extra_checks=tuple(extra_checks), readiness=readiness or None,
                              progress=events.put,
                              ask_operator=channel.ask if channel is not None else None)
         while not future.done():
@@ -220,6 +222,16 @@ def build_interface(settings: Optional[Settings] = None):
                     max_tasks = gr.Number(value=20, minimum=1, precision=0, label='Task limit')
                 check = gr.Textbox(label='Test or build command (optional)',
                                    placeholder='Auto-detect from the project, or enter a command')
+                with gr.Accordion('UI capture and further checks (optional)', open=False):
+                    gr.Markdown('The same operator inputs as the command line. A capture profile lets the '
+                                'harness start your app and capture UI tasks itself; it is validated before '
+                                'any model call. Further checks run beside the test command and are required.')
+                    capture_profile = gr.Textbox(label='Capture profile file (JSON, --capture-profile)',
+                                                 placeholder='/path/to/capture-profile.json')
+                    extra_checks = gr.Textbox(label='Further required checks (one command per line, --extra-check)',
+                                              lines=2)
+                    readiness = gr.Textbox(label='Readiness probes file (JSON, --readiness)',
+                                           placeholder='/path/to/readiness.json')
                 declared_paths = gr.Textbox(label='Paths this task may change (one per line)', lines=2)
                 forbid_paths = gr.Textbox(label='Paths that must stay unchanged (one per line)', lines=2)
                 preview_button = gr.Button('Preview policy')
@@ -258,15 +270,21 @@ def build_interface(settings: Optional[Settings] = None):
                 open_button.click(open_project, inputs=[project_path, clone_url, branch],
                                   outputs=[selected, project_info, source_files, clone_url, branch, run_button])
 
-                def run_selected(goal, folder, writes, command, mode, limit, paths, forbid, no_personal):
+                def run_selected(goal, folder, writes, command, mode, limit, paths, forbid, no_personal,
+                                 profile_path, further, probes):
                     if not folder:
                         raise gr.Error('Open a project first.')
                     yield from run_project_ui(goal, folder, writes, command, mode, limit, settings,
                                               declared_paths=[p.strip() for p in paths.splitlines() if p.strip()],
                                               forbid=[p.strip() for p in forbid.splitlines() if p.strip()],
-                                              channel=channel, neutral=bool(no_personal))
+                                              channel=channel, neutral=bool(no_personal),
+                                              capture_profile=(profile_path or '').strip() or None,
+                                              extra_checks=[c.strip() for c in (further or '').splitlines()
+                                                            if c.strip()],
+                                              readiness=(probes or '').strip() or None)
 
-                run_button.click(run_selected, inputs=[goal, selected, edits, check, mode, max_tasks, declared_paths, forbid_paths, neutral],
+                run_button.click(run_selected, inputs=[goal, selected, edits, check, mode, max_tasks, declared_paths,
+                                                       forbid_paths, neutral, capture_profile, extra_checks, readiness],
                                  outputs=[report, diff, downloads], concurrency_limit=1)
             with gr.Tab('Code discussion'):
                 gr.Markdown('Discuss snippets without opening a project. Answers here do not create source files.')
@@ -316,17 +334,57 @@ def resolve_share(settings) -> bool:
     return False
 
 
-def main() -> int:
+DEFAULT_GUI_PORT = 7860
+
+
+def gui_port(argv=None) -> int:
+    """The local port to serve on: ``--port N``, else ``QUADRATUS_GUI_PORT``,
+    else 7860. Raises ValueError naming the bad value."""
+    raw, source = None, "QUADRATUS_GUI_PORT"
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--port" in argv:
+        at = argv.index("--port")
+        raw, source = (argv[at + 1] if at + 1 < len(argv) else ""), "--port"
+    elif os.environ.get("QUADRATUS_GUI_PORT", "").strip():
+        raw = os.environ["QUADRATUS_GUI_PORT"].strip()
+    if raw is None:
+        return DEFAULT_GUI_PORT
+    if not raw.isdigit() or not 1024 <= int(raw) <= 65535:
+        raise ValueError(f"{source} must be a port number from 1024 to 65535, not {raw!r}")
+    return int(raw)
+
+
+def _port_busy(port: int) -> bool:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return True
+    return False
+
+
+def main(argv=None) -> int:
     try:
         import gradio  # noqa: F401
     except ImportError:
         print("Gradio is not installed. Run: pip install gradio", file=sys.stderr)
         return 1
+    try:
+        port = gui_port(argv)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    if _port_busy(port):
+        print(f"Port {port} on 127.0.0.1 is already in use. Start on another port with "
+              f"quadratus-gui --port {port + 1} (or set QUADRATUS_GUI_PORT).", file=sys.stderr)
+        return 2
     demo = build_interface()
     favicon = brand_asset("favicon.svg")
+    print(f"Quadratus is serving on http://127.0.0.1:{port}", flush=True)
     demo.launch(
         server_name="127.0.0.1",
-        server_port=7860,
+        server_port=port,
         css=INTERFACE_CSS,
         share=resolve_share(Settings.from_env()),
         favicon_path=str(favicon) if favicon is not None else None,

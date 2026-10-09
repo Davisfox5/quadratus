@@ -107,6 +107,10 @@ DEFAULT_BACKEND = "cli"
 _VALID_BACKENDS = ("cli", "api")
 
 
+class SettingsError(ValueError):
+    """A configured value no run can use; the message names the variable."""
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))
@@ -232,6 +236,34 @@ class Settings:
     max_file_chars: int = field(
         default_factory=lambda: _env_int("MAX_FILE_CHARS", 20000)
     )
+
+    def __post_init__(self) -> None:
+        """Refuse numeric settings no run can use, naming the variable, before
+        any provider exists (Codex installation assessment on 4a273a3:
+        CLI_TIMEOUT=-1, CLI_TIMEOUT=nan and MAX_TOKENS=-1 were accepted and
+        would have reached a subprocess timeout or a request). Text that does
+        not parse as a number still falls back to the default."""
+        import math
+        positive = (("timeout", "REQUEST_TIMEOUT"), ("cli_timeout", "CLI_TIMEOUT"))
+        for attr, env in positive:
+            value = getattr(self, attr)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) \
+                    or value <= 0:
+                raise SettingsError(f"{env} must be a finite number of seconds above 0, not {value!r}")
+        delay = self.retry_base_delay
+        if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not math.isfinite(delay) or delay < 0:
+            raise SettingsError(f"RETRY_BASE_DELAY must be a finite number of seconds, 0 or more, not {delay!r}")
+        for attr, env, floor in (("max_tokens", "MAX_TOKENS", 1), ("max_retries", "MAX_RETRIES", 0),
+                                 ("max_memory_turns", "MAX_MEMORY_ENTRIES", 0),
+                                 ("max_file_bytes", "MAX_FILE_BYTES", 1), ("max_file_chars", "MAX_FILE_CHARS", 1)):
+            value = getattr(self, attr)
+            if isinstance(value, bool) or not isinstance(value, int) or value < floor:
+                raise SettingsError(f"{env} must be a whole number of at least {floor}, not {value!r}")
+        if self.lead_max_turns is not None and (isinstance(self.lead_max_turns, bool)
+                                                or not isinstance(self.lead_max_turns, int)
+                                                or self.lead_max_turns < 1):
+            raise SettingsError(f"the lead turn limit must be a whole number of at least 1, not "
+                                f"{self.lead_max_turns!r}")
 
     # -- transport & routing helpers -----------------------------------------
     def backend_for(self, provider: str) -> str:

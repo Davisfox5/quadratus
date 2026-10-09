@@ -487,7 +487,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(json.dumps(plan, indent=2))
         return 1 if plan['blocked'] else 0
 
-    settings = _build_settings(args)
+    from .config import SettingsError
+    try:
+        settings = _build_settings(args)
+    except SettingsError as exc:
+        print(f"Error: invalid setting: {exc}", file=sys.stderr)
+        return 2
     if args.probe or args.probe_all:
         return _run_probe(settings, everything=args.probe_all)
 

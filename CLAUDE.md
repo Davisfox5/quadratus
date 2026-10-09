@@ -32,6 +32,17 @@ Key design decisions already settled:
   `.quadratus/runs/<id>` keeps report, ledger, raw artifacts, usage, diff and
   machine-readable status. Failed or interrupted model runs keep their report.
   Task caps, unresolved findings and failed checks are incomplete outcomes.
+- **The installed product starts the way the README says** (Codex
+  installation assessment on 4a273a3). Setup installs the package (`pip
+  install -e .` in a venv, Python 3.11+), since only that puts `quadratus`
+  and `quadratus-gui` on PATH; `requirements.txt` is for source work. The
+  GUI's Project tab carries the CLI's `--capture-profile`, `--extra-check`
+  and `--readiness` inputs; `quadratus-gui --port N` or
+  `QUADRATUS_GUI_PORT` chooses the port and a busy port is reported with
+  the way out. `Settings.__post_init__` refuses numeric settings no run can
+  use (non-finite or non-positive timeouts, a negative delay, token or
+  retry counts below their floor) naming the variable; unparsable text
+  still falls back to the default, which a test pins.
 - **Public GUI sharing is disabled.** Project controls can access local files
   and execute check commands; API transport does not make those controls safe
   to expose without authentication. GitHub clone and new local branches are
