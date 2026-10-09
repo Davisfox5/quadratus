@@ -1158,7 +1158,15 @@ Key design decisions already settled:
   `usage.jsonl`, and `result.json`, and it never writes, never takes a lock
   (the project's `run.lock` is an flock with no pid, and probing it could
   make a starting run believe the project is busy), never raises on bad
-  data (every field is `unknown` with a reason) and bounds every read. It
+  data (every field is `unknown` with a reason) and bounds every read: only
+  regular files are opened, through a non-blocking descriptor read to a byte
+  bound, so a FIFO or device cannot stall a refresh, and a count outside
+  any range a run produces reads as unknown (Codex review of 736e94b, Z3).
+  It finds runs exactly where `run_project` writes them (`~` expanded, a
+  relative state dir joined to the project once, Z2), reports a
+  listed-task run as listed tasks complete with the goal not judged rather
+  than as a completed goal (Z1), and the phone page says which finished
+  call its Task and Seat describe (Z4). It
   also never calls a model: a status that depends on a seat answering is
   the problem it exists to remove. The stage is inferred from the latest
   role and the newest artifact kind, and says so when it cannot tell.

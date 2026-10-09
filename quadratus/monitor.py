@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -108,6 +109,47 @@ def _size(path: Path) -> Optional[int]:
         return None
 
 
+#: Largest token or call count read as a fact. A larger integer is not a count
+#: any run produced, and dividing one into a float overflows the renderers.
+MAX_COUNT = 10 ** 15
+
+
+def _count(value: Any) -> Optional[int]:
+    """``value`` when it is a plausible count: an int, not a bool, in range."""
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < MAX_COUNT:
+        return value
+    return None
+
+
+def _read_regular(path: Path, max_bytes: int, tail: bool = False):
+    """At most ``max_bytes`` of ``path``, read only when it is a regular file.
+
+    A FIFO, device or socket reports a size of 0 and would block or read
+    without bound, so it is refused before any read; the file is opened
+    non-blocking and checked through its own descriptor, so a swap after the
+    size check is caught too. With ``tail`` the last ``max_bytes`` are read.
+    Returns ``(data, offset)``, the offset being where ``data`` starts.
+    """
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(f"{path.name} is not a regular file")
+        offset = info.st_size - max_bytes if tail and info.st_size > max_bytes else 0
+        if offset:
+            os.lseek(fd, offset, os.SEEK_SET)
+        chunks, left = [], max_bytes
+        while left > 0:
+            chunk = os.read(fd, min(left, 1 << 16))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            left -= len(chunk)
+        return b"".join(chunks), offset
+    finally:
+        os.close(fd)
+
+
 def _mtime(path: Path) -> Optional[float]:
     try:
         return path.stat().st_mtime
@@ -128,10 +170,7 @@ def _tail_jsonl(path: Path, max_bytes: int = TAIL_BYTES):
     if size == 0:
         return [], f"{path.name} is empty"
     try:
-        with path.open("rb") as fh:
-            offset = max(0, size - max_bytes)
-            fh.seek(offset)
-            data = fh.read(max_bytes)
+        data, offset = _read_regular(path, max_bytes, tail=True)
     except OSError as exc:
         return [], f"{path.name} unreadable: {exc.__class__.__name__}"
     text = data.decode("utf-8", errors="replace")
@@ -145,7 +184,7 @@ def _tail_jsonl(path: Path, max_bytes: int = TAIL_BYTES):
             continue
         try:
             record = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
             skipped += 1
             continue
         if isinstance(record, dict):
@@ -165,8 +204,8 @@ def _read_json(path: Path, max_bytes: int = MAX_JSON_BYTES):
     if size > max_bytes:
         return None, f"{path.name} is {size:,} bytes, over the {max_bytes:,} byte read bound"
     try:
-        value = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, ValueError) as exc:
+        value = json.loads(_read_regular(path, max_bytes + 1)[0].decode("utf-8", errors="replace"))
+    except (OSError, ValueError, RecursionError) as exc:
         return None, f"{path.name} unreadable: {exc.__class__.__name__}"
     if not isinstance(value, dict):
         return None, f"{path.name} is not a JSON object"
@@ -186,8 +225,8 @@ def _sum_usage(path: Path):
     total = 0
     for record in records:
         for key in ("input_tokens", "output_tokens"):
-            value = record.get(key)
-            if isinstance(value, int) and not isinstance(value, bool):
+            value = _count(record.get(key))
+            if value is not None:
                 total += value
     return total, problem
 
@@ -229,7 +268,10 @@ def _age(seconds: Optional[float]) -> str:
 # -- the run directory ------------------------------------------------------
 
 def _runs_dir(project_root: Path, state_dir: Optional[Path]) -> Path:
-    state = Path(state_dir) if state_dir else project_root / ".quadratus"
+    # Chosen as run_project chooses it (project_run.py): ``~`` expanded, and
+    # a relative state dir (the default included) joined to the project once,
+    # so a relative project path does not get prefixed twice.
+    state = Path(state_dir).expanduser() if state_dir else Path(".quadratus")
     if not state.is_absolute():
         state = project_root / state
     return state / "runs"
@@ -307,7 +349,7 @@ def _read_series_lock(series_dir: Path):
     if size > 4096:
         return None, None, f"run.lock is {size:,} bytes; not a series lock"
     try:
-        text = lock.read_text(encoding="utf-8", errors="replace")
+        text = _read_regular(lock, 4097)[0].decode("utf-8", errors="replace")
     except OSError as exc:
         return None, None, f"run.lock unreadable: {exc.__class__.__name__}"
     match = _LOCK_LINE.search(text)
@@ -408,8 +450,8 @@ def _fill(status, mark, project_root, series_dir, state_dir, now) -> None:
             limits = ((manifest.get("packet") or {}).get("limits") if isinstance(manifest.get("packet"), dict)
                       else None) or {}
             for field in ("max_reported_tokens", "reserve_tokens_per_call", "max_tokens_per_call"):
-                value = limits.get(field) if isinstance(limits, dict) else None
-                if isinstance(value, int) and not isinstance(value, bool):
+                value = _count(limits.get(field)) if isinstance(limits, dict) else None
+                if value is not None:
                     status[field] = value
                 else:
                     mark(field, f"packet limits carry no integer {field}")
@@ -589,13 +631,13 @@ def _fill_calls(status, mark, run_dir: Path, now: float) -> None:
 def _fill_tokens(status, mark, run_dir: Path) -> None:
     budget, problem = _read_json(run_dir / "budget.json")
     if budget is not None:
-        reported = budget.get("reported_tokens")
-        if isinstance(reported, int) and not isinstance(reported, bool):
+        reported = _count(budget.get("reported_tokens"))
+        if reported is not None:
             status["tokens_reported"] = reported
         else:
-            mark("tokens_reported", "budget.json carries no integer reported_tokens")
-        calls = budget.get("reserved_attempts")
-        if isinstance(calls, int) and not isinstance(calls, bool):
+            mark("tokens_reported", "budget.json carries no plausible integer reported_tokens")
+        calls = _count(budget.get("reserved_attempts"))
+        if calls is not None:
             status["calls"] = calls
         else:
             mark("calls", "budget.json carries no integer reserved_attempts")
@@ -603,8 +645,8 @@ def _fill_tokens(status, mark, run_dir: Path) -> None:
             limits = budget.get("limits")
             if isinstance(limits, dict):
                 for field in ("max_reported_tokens", "reserve_tokens_per_call", "max_tokens_per_call"):
-                    value = limits.get(field)
-                    if isinstance(value, int) and not isinstance(value, bool):
+                    value = _count(limits.get(field))
+                    if value is not None:
                         status[field] = value
                         status["unknown"].pop(field, None)
         return
@@ -621,6 +663,27 @@ def _fill_tokens(status, mark, run_dir: Path) -> None:
         mark("calls", f"{problem}; invocations.jsonl " + ("is absent" if size is None else "exceeds the tail bound"))
 
 
+def _outcome(result: Dict[str, Any], open_reason: str):
+    """``(status, stop_reason)`` for a run's result.json.
+
+    A run given an explicit task list (``explicit_tasks``) reports
+    ``completed`` when the listed tasks closed, and the goal was never judged
+    (project_run's report says so in its title); that is not a completed
+    goal, and the monitor must not call it one."""
+    error = _first_line(result.get("error"))
+    completed = result.get("completed") is True
+    explicit = result.get("explicit_tasks")
+    if completed and isinstance(explicit, dict) and explicit.get("goal_judged") is not True:
+        return "listed tasks complete", "listed tasks complete; the goal was not judged"
+    if completed:
+        return "complete", "goal reported complete"
+    if error:
+        return "error", error
+    budget = result.get("budget")
+    stop = budget.get("stop_reason") if isinstance(budget, dict) else None
+    return "incomplete", (f"budget: {_first_line(stop)}" if stop else open_reason)
+
+
 def _fill_terminal(status, mark, run_dir: Path, result, problem) -> None:
     report = run_dir / "report.md"
     status["report"] = str(report) if report.exists() else UNKNOWN
@@ -630,21 +693,8 @@ def _fill_terminal(status, mark, run_dir: Path, result, problem) -> None:
         mark("terminal_status", problem)
         mark("stop_reason", problem)
         return
-    error = _first_line(result.get("error"))
-    completed = result.get("completed") is True
-    status["terminal_status"] = "complete" if completed else ("error" if error else "incomplete")
-    if completed:
-        status["stop_reason"] = "goal reported complete"
-    elif error:
-        status["stop_reason"] = error
-    else:
-        budget = result.get("budget")
-        budget_stop = budget.get("stop_reason") if isinstance(budget, dict) else None
-        if budget_stop:
-            status["stop_reason"] = f"budget: {_first_line(budget_stop)}"
-        else:
-            status["stop_reason"] = ("the plan was declined, the task limit was reached, "
-                                     "or findings/checks remain open")
+    status["terminal_status"], status["stop_reason"] = _outcome(
+        result, "the plan was declined, the task limit was reached, or findings/checks remain open")
 
 
 # -- history ----------------------------------------------------------------
@@ -682,20 +732,10 @@ def _history_row(run_dir: Path) -> Dict[str, Any]:
         row["stop_reason"] = problem
     else:
         row["ended"] = _iso(_mtime(result_path)) or UNKNOWN
-        error = _first_line(result.get("error"))
-        completed = result.get("completed") is True
-        row["status"] = "complete" if completed else ("error" if error else "incomplete")
-        if completed:
-            row["stop_reason"] = "goal reported complete"
-        elif error:
-            row["stop_reason"] = error
-        else:
-            budget = result.get("budget")
-            stop = budget.get("stop_reason") if isinstance(budget, dict) else None
-            row["stop_reason"] = f"budget: {_first_line(stop)}" if stop else "open findings, checks or task limit"
+        row["status"], row["stop_reason"] = _outcome(result, "open findings, checks or task limit")
     budget, _ = _read_json(run_dir / "budget.json")
-    reported = budget.get("reported_tokens") if isinstance(budget, dict) else None
-    if isinstance(reported, int) and not isinstance(reported, bool):
+    reported = _count(budget.get("reported_tokens")) if isinstance(budget, dict) else None
+    if reported is not None:
         row["tokens"] = reported
     else:
         total, _ = _sum_usage(run_dir / "usage.jsonl")

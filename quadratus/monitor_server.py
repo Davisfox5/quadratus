@@ -100,7 +100,10 @@ def render_html(status: Dict[str, Any], history: List[Dict[str, Any]], *,
         tokens = _fmt(spent) if spent != UNKNOWN else (UNKNOWN if cap == UNKNOWN else f"{UNKNOWN} of {_fmt(cap)}")
         bar = ""
     rows = [("Project", status.get("project")), ("Run", f"{status.get('run_id')} started {status.get('started')}"),
-            ("Last write", status.get("last_write")), ("Cell", status.get("cell")),
+            ("Last write", status.get("last_write")),
+            ("Last call ended", f"{status.get('last_call_ended')} (a call in progress is not written "
+                                "until it returns; Task and Seat below are that call's)"),
+            ("Cell", status.get("cell")),
             ("Task", f"{status.get('task')} (stage {status.get('stage')})"),
             ("Seat", f"{status.get('seat')} (role {status.get('role')})"),
             ("Calls", _fmt(status.get("calls"))),
