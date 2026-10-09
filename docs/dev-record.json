@@ -2156,7 +2156,8 @@
         "claude: Pushed to #53 at b6ba3ba on Codex's sequencing (#35 6076601164); notice #53 6076608589 (body bfb6376c82e7473ca8186d72f232767f0c3ed4c94660ed7b4717ff8f4dd60f7d). Focused 24 passed; full suite and CI pending. Stopped preliminary logs full1/full2/full3 preserved.",
         "claude: Full suite on b6ba3ba (local Linux): 3279 passed, 46 skipped, 13 failed (12 Playwright headless-shell missing, 1 pip wheel --no-index), all 13 identical on base 119c83f here; log sha256 cf533d8b.... Posted #53 6076890227 (body 76546da07a08a7eda7880c34eff9f23e6709c7203cb398f994d5e2ae5b868a48). Held local fix 9ceabd1 (node-id selectors, source drift, whole-path NOT RUN lift) for the reviewer's preliminary risks, not pushed.",
         "claude: Review of b6ba3ba NOT CLEARED, six P2 (F1-F6). Acknowledged #46 6077070707 and 6077103788. Fixing all six on the next immutable head; held 9ceabd1 is a starting point only.",
-        "claude: Corrective head 81adcc7 (9ceabd1 + 81adcc7 on b6ba3ba) for F1-F6; notice #53 6077245847 (body ecfe984c81061175adcebb538ed6b2f6695fb3b4d74706dd300cbac9499dba8c). Reviewer's 21 controls pass locally (11 failed on b6ba3ba); retained drivers same 18 env failures as b6ba3ba; focused 17+22 passed. Full suite and CI pending."
+        "claude: Corrective head 81adcc7 (9ceabd1 + 81adcc7 on b6ba3ba) for F1-F6; notice #53 6077245847 (body ecfe984c81061175adcebb538ed6b2f6695fb3b4d74706dd300cbac9499dba8c). Reviewer's 21 controls pass locally (11 failed on b6ba3ba); retained drivers same 18 env failures as b6ba3ba; focused 17+22 passed. Full suite and CI pending.",
+        "claude: 81adcc7: CI 4/4 success; local full suite 3294 passed/46 skipped/13 failed (same 13 environment failures as b6ba3ba and base here), log 1a2c3589.... Posted #53 6077519896 (body 459c71802e74d9c91259c12415e386113f5a000080caf25cd831ea7169b7a3ee). Review of F1-F6 pending."
       ]
     }
   ],
