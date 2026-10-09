@@ -1133,6 +1133,43 @@ _COVERS = re.compile(r"^\s*COVERS:\s*(.+?)\s*$", re.MULTILINE)
 #: An editing call's own account of acceptance it could not run (runtime
 #: check guidance). Read only to lower an audit verdict, never to raise one.
 _NOT_RUN_LINE = re.compile(r"^\s*(?:NOT RUN|BLOCKED):\s*(.+?)\s*$", re.MULTILINE)
+def _passing_commands(check: dict) -> List[List[str]]:
+    """The argv of each passing required command in a recorded check."""
+    import shlex
+    receipts = check.get("receipts") or ()
+    texts = ([str(r.get("command") or "") for r in receipts
+              if r.get("status") == "passed" and r.get("required", True)]
+             if receipts else [str(check.get("command") or "")])
+    out = []
+    for text in texts:
+        try:
+            out.append(shlex.split(text))
+        except ValueError:
+            out.append(text.split())
+    return out
+
+
+def _names_every_path(item: str, commands: List[List[str]]) -> bool:
+    """Whether one passing command names, as whole arguments, every path in a
+    NOT RUN item. An item with no path (a bare runner name, prose) is never
+    lifted by a check: a substring match let \"NOT RUN: pytest\" be lifted by
+    any pytest command (Codex preliminary review of b6ba3ba)."""
+    import shlex
+    try:
+        tokens = shlex.split(item)
+    except ValueError:
+        tokens = item.split()
+    paths = [t.split("::")[0].lstrip("./") for t in tokens
+             if "/" in t or re.search(r"\.[A-Za-z]\w*$", t.split("::")[0])]
+    if not paths:
+        return False
+    for argv in commands:
+        named = {a.split("::")[0].lstrip("./") for a in argv}
+        if all(p in named for p in paths):
+            return True
+    return False
+
+
 _AUDIT_LINE = re.compile(r"^\s*(R\d+)\s*:\s*(MET|NOT MET)\b[\s:—-]*(.*)$", re.MULTILINE | re.IGNORECASE)
 
 
@@ -5780,9 +5817,7 @@ class Session:
                         ran = True
                         break
                     continue
-                commands = [str(check.get("command") or "")] + [
-                    str(r.get("command") or "") for r in check.get("receipts") or ()]
-                if len(entry["item"]) >= 3 and any(entry["item"] in c for c in commands):
+                if _names_every_path(entry["item"], _passing_commands(check)):
                     ran = True
                     break
             if not ran:
@@ -7429,6 +7464,12 @@ class Session:
         task = getattr(self._active_spec, "task_id", "run")
         baseline, problem = run_original_tests(gate, self.project, originals, current)
         self._verify_dependencies(f"during original tests ({task})")
+        drift = self._source_drift(current)
+        if drift:
+            # The copy was built from a source that is no longer the project's:
+            # its receipts describe neither, so the check fails as any check
+            # whose tree moved under it does (Codex preliminary review of b6ba3ba).
+            return replace(result, passed=False, output=drift)
         skipped = [r for r in (baseline.receipts if baseline else ()) if r.status == "skipped"]
         self.original_test_runs.append(dict(
             task=task, changed=changed, passed=None if baseline is None else baseline.passed,
@@ -7454,6 +7495,12 @@ class Session:
                        returncode=result.returncode if not result.passed else baseline.returncode,
                        output=f"{result.output}\n\n{heading}\n{baseline.output}"[-8_000:],
                        receipts=tuple(inner) + tuple(baseline.receipts))
+
+    def _source_drift(self, current: dict) -> str:
+        """What changed in the project since ``current`` was read, or ''."""
+        from .project import Project
+        now = Project(self.project, exclude=self.config.project_excludes).contents()
+        return "" if now == current else _describe_tree_change(current, now)
 
     def _original_tests_at_done(self) -> str:
         """At DONE: the original tests again when run-start bytes differ.
@@ -7485,6 +7532,10 @@ class Session:
             return ""
         baseline, problem = run_original_tests(gate, self.project, self._original_tests, current)
         self._verify_dependencies("during original tests (DONE)")
+        drift = self._source_drift(current)
+        if drift:
+            return ("\n\n--- DONE SENT BACK ---\nThe project changed while its original tests ran, so "
+                    "they prove nothing about the delivered source:\n" + drift[:1_000])
         self.original_test_runs.append(dict(
             task="DONE", changed=changed, passed=None if baseline is None else baseline.passed,
             problem=problem, receipts=[dict(id=r.id, status=r.status, reason=r.reason, tests=r.tests)

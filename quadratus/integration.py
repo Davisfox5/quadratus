@@ -817,8 +817,11 @@ def run_original_tests(gate, root, originals: dict, current: dict):
         mapped = []
         for command in commands:
             argv = tuple(inside.sub(str(copy), a) for a in command.argv)
-            added = [a for a in argv[1:] if not a.startswith('-') and _test_family(a)
-                     and _relative(command.cwd, a, copy) not in originals]
+            # A pytest node id (file::test) names its file (Codex preliminary
+            # review of b6ba3ba: the selector form escaped this check and ran
+            # against a file the copy does not hold).
+            added = [a for a in argv[1:] if not a.startswith('-') and _test_family(a.split('::')[0])
+                     and _relative(command.cwd, a.split('::')[0], copy) not in originals]
             mapped.append(replace(command, argv=argv, skip_reason=command.skip_reason or (
                 f"names test file(s) added during the run: {', '.join(added)}" if added else '')))
         suite = GateSuite(mapped, cwd=copy)

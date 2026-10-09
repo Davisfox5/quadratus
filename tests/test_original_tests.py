@@ -221,3 +221,35 @@ def test_done_runs_the_original_tests_once_per_source(tmp_path):
     (root / "app.py").write_text("def total(items):\n    return sum(items)  # touched\n")
     session._original_tests_at_done()
     assert len(session.original_test_runs) == 2
+
+
+def test_a_node_id_for_a_new_test_file_is_skipped_not_run(tmp_path):
+    """Codex preliminary review of b6ba3ba: tests/test_new.py::test_new was
+    not recognised as naming a run-added file and ran against a copy without it."""
+    root = _project(tmp_path)
+    listed = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_new.py::test_new"]
+    suite = GateSuite([GateCommand(id="check", argv=tuple(DECLARED)),
+                       GateCommand(id="extra-1", argv=tuple(listed))], cwd=root)
+    session = _session(tmp_path, root, suite)
+    (root / "tests" / "test_new.py").write_text("def test_new():\n    assert True\n")
+    (root / "tests" / "helpers.py").write_text("def items():\n    return [3, 2, 1]\n")
+    result = session._check(suite)
+    statuses = {r.id: r.status for r in result.receipts}
+    assert result.passed and statuses["original-tests:extra-1"] == "skipped"
+
+
+def test_a_source_change_during_the_original_run_fails_the_check(tmp_path, monkeypatch):
+    from quadratus import integration
+    root = _project(tmp_path)
+    gate = IntegrationGate(DECLARED, cwd=root)
+    session = _session(tmp_path, root, gate)
+    (root / "tests" / "helpers.py").write_text("def items():\n    return [3, 2, 1]\n")
+    real = integration.run_original_tests
+
+    def moving(*args, **kwargs):
+        out = real(*args, **kwargs)
+        (root / "app.py").write_text("def total(items):\n    return 0\n")
+        return out
+    monkeypatch.setattr(integration, "run_original_tests", moving)
+    result = session._check(gate)
+    assert not result.passed and "app.py" in result.output

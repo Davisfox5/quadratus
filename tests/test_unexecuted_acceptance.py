@@ -92,13 +92,13 @@ def test_only_a_later_passing_check_naming_the_item_lifts_a_report(tmp_path):
     session, _ = _session(tmp_path, f"R5: MET - {UNIT}\n")
     _not_run(session, "t3", ["R5"], f"NOT RUN: {SCENARIO} - not approved")
     session.checks.append(dict(passed=True, command="gate suite",
-                               receipts=[dict(id="check", command="pytest -q")]))
+                               receipts=[dict(id="check", status="passed", command="pytest -q")]))
     assert session._audit_requirements(ids=["R5"])["R5"][0] is False, "an unrelated passing check lifts nothing"
     session.checks.append(dict(passed=False, command="gate suite",
-                               receipts=[dict(id="extra-2", command=f"node {SCENARIO}")]))
+                               receipts=[dict(id="extra-2", status="failed", command=f"node {SCENARIO}")]))
     assert session._audit_requirements(ids=["R5"])["R5"][0] is False, "a failing run lifts nothing"
     session.checks.append(dict(passed=True, command="gate suite",
-                               receipts=[dict(id="extra-2", command=f"node {SCENARIO}")]))
+                               receipts=[dict(id="extra-2", status="passed", command=f"node {SCENARIO}")]))
     assert session._audit_requirements(ids=["R5"])["R5"][0] is True
 
 
@@ -188,3 +188,19 @@ def test_skips_in_a_real_node_check_are_counted(tmp_path):
         "test('browser', { skip: 'Playwright unavailable' }, () => {});\n")
     result = GateSuite([GateCommand(id="extra-1", argv=("node", "--test", "a.test.js"))], cwd=tmp_path).run()
     assert result.passed and skipped_count(result.receipts[0]) == 1
+
+
+def test_a_report_without_a_path_is_never_lifted_by_command_text(tmp_path):
+    """Codex preliminary review of b6ba3ba: a substring match let any pytest
+    command lift 'NOT RUN: pytest'. Only whole path arguments lift."""
+    session, _ = _session(tmp_path, f"R5: MET - {UNIT}\n")
+    _not_run(session, "t3", ["R5"], "NOT RUN: pytest - the browser marker suite was not approved")
+    _not_run(session, "t4", ["R5"], "NOT RUN: node tests/browser/run.js - denied")
+    session.checks.append(dict(passed=True, command="gate suite", receipts=[
+        dict(id="check", status="passed", command="python -m pytest -q"),
+        dict(id="extra-1", status="passed", command="node --test tests/browser/run.js.bak")]))
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+    assert len(session._standing_not_run()) == 2, "neither a runner name nor a longer path lifts"
+    session.checks.append(dict(passed=True, command="gate suite", receipts=[
+        dict(id="extra-2", status="passed", command="node tests/browser/run.js")]))
+    assert [e["task"] for e in session._standing_not_run()] == ["t3"], "the named file ran; 'pytest' never lifts"
