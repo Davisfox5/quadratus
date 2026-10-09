@@ -265,8 +265,10 @@ section caps one run: model calls, total reported tokens, time, parallel
 workers and extra recovery tasks after failures, with a preset that fills the
 fields. The run shows the effective numbers before any call and saves them as
 `run-limits.json` beside its report. Token limits count what the CLIs report
-after each call returns, so they are not a hard ceiling. Left off, a run has
-no shared allowance, as before. Conversation memory, file uploads, and a per-model
+after each call returns, so they are not a hard ceiling. A one-turn summary
+call reserves less than an ordinary call, and a per-call threshold also sets a
+lead turn cap unless you set one yourself; the summary names both. Left off, a
+run has no shared allowance, as before. Conversation memory, file uploads, and a per-model
 contribution breakdown. Sharing is disabled while a CLI backend is active.
 
 ## Project layout

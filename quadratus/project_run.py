@@ -293,12 +293,6 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     (run_dir / 'gate-plan.json').write_text(json.dumps(plan, indent=2), encoding='utf-8')
     if progress:
         progress('Checks: ' + ('; '.join(f"{g['id']}: {' '.join(g['argv'])}" for g in plan) or 'none'))
-    # The allowance this run was given, saved before any model call so an
-    # interrupted run still says what it was allowed (Codex GUI plan, #35).
-    selected = _selected_limits(max_tasks, run_limits, survey)
-    (run_dir / 'run-limits.json').write_text(json.dumps(selected, indent=2) + '\n', encoding='utf-8')
-    if progress:
-        progress('Run limits: ' + selected['described'])
     gate = (GateSuite(gates, cwd=project.root, exclude=project.exclude) if gates is not None
             else IntegrationGate(command, cwd=project.root,
                                  minimum_tests=1 if _is_test_suite(command) else None) if command else None)
@@ -313,17 +307,23 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # A decider object handed in directly (tests, embedding callers) is
         # bound to this run's budget too: no billed call escapes the limits.
         decider.budget = budget
-    if getattr(settings, 'lead_max_turns', None) is None and run_limits is not None:
-        # A per-call ceiling with no turn cap stops a lead only after the
-        # oversized call returns (both Stage B series on b1ff751); the cap
-        # derived here acts before it, and the operator's own value wins.
-        from .run_budget import lead_turns_for
-        derived = lead_turns_for(getattr(run_limits, 'max_tokens_per_call', None))
-        if derived:
-            settings = dataclasses.replace(settings, lead_max_turns=derived)
-            if progress:
-                progress(f'Lead turn cap: {derived} rounds, derived from max_tokens_per_call '
-                         f'{run_limits.max_tokens_per_call:,}')
+    # A per-call ceiling with no turn cap stops a lead only after the
+    # oversized call returns (both Stage B series on b1ff751); the cap
+    # derived here acts before it, and the operator's own value wins.
+    from .run_budget import effective_lead_turns
+    lead_turns, lead_source = effective_lead_turns(getattr(settings, 'lead_max_turns', None), run_limits)
+    if lead_turns is not None and getattr(settings, 'lead_max_turns', None) is None:
+        settings = dataclasses.replace(settings, lead_max_turns=lead_turns)
+        if progress:
+            progress(f'Lead turn cap: {lead_turns} rounds, derived from max_tokens_per_call '
+                     f'{run_limits.max_tokens_per_call:,}')
+    # The allowance this run was given, saved before any model call so an
+    # interrupted run still says what it was allowed (Codex GUI plan, #35),
+    # with the lead turn cap the session is about to be built with.
+    selected = _selected_limits(max_tasks, run_limits, survey, lead_turns, lead_source)
+    (run_dir / 'run-limits.json').write_text(json.dumps(selected, indent=2) + '\n', encoding='utf-8')
+    if progress:
+        progress('Run limits: ' + selected['described'])
     config = SessionConfig(
         project=project.root, project_excludes=tuple(project.exclude),
         allow_writes=allow_writes, mode=mode, integration_gate=gate,
@@ -501,13 +501,17 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     return ProjectResult(completed, report, run_dir, diff, error)
 
 
-def _selected_limits(max_tasks, run_limits, survey):
-    from .run_budget import describe_limits
+def _selected_limits(max_tasks, run_limits, survey, lead_turns=None, lead_source=None):
+    from .run_budget import SUMMARY_CALL_RESERVE_TOKENS, describe_limits
+    reserve = run_limits.reserve_tokens_per_call if run_limits is not None else 0
     return {
         'max_tasks': max_tasks,
         'run_limits': dataclasses.asdict(run_limits) if run_limits is not None else None,
+        'summary_call_reserve_tokens': min(reserve, SUMMARY_CALL_RESERVE_TOKENS) if reserve else None,
+        'lead_max_turns': lead_turns,
+        'lead_max_turns_source': lead_source,
         'survey_recovery_tasks': survey.recovery_tasks if survey is not None else None,
-        'described': describe_limits(run_limits, survey, max_tasks),
+        'described': describe_limits(run_limits, survey, max_tasks, lead_turns, lead_source),
     }
 
 

@@ -135,7 +135,20 @@ class RunLimits:
             raise ValueError('wall_seconds must be positive and finite')
 
 
-def describe_limits(limits, survey=None, max_tasks=None) -> str:
+def effective_lead_turns(operator_turns, limits):
+    """The lead turn cap a run will use and where it comes from: the
+    operator's ``Settings.lead_max_turns`` when set, else one derived from
+    the per-call threshold when the run has limits, else none. The same rule
+    ``project_run`` applies, so what is shown and saved is what runs."""
+    if operator_turns is not None:
+        return operator_turns, 'operator setting'
+    derived = lead_turns_for(getattr(limits, 'max_tokens_per_call', None)) if limits is not None else None
+    if derived:
+        return derived, f'derived from the {limits.max_tokens_per_call:,}-token per-call threshold'
+    return None, None
+
+
+def describe_limits(limits, survey=None, max_tasks=None, lead_turns=None, lead_source=None) -> str:
     """The selected allowance in plain words, one wording for the GUI form,
     the progress stream and the saved record (Codex GUI plan on #35,
     2026-10-09). Token limits are counted from what each CLI reports after a
@@ -152,13 +165,18 @@ def describe_limits(limits, survey=None, max_tasks=None) -> str:
         parts.append(f'Time limit {limits.wall_seconds:,g} seconds: no call starts after it and each call '
                      'gets only the time left, but checks and captures between calls are not cut off.')
         if limits.reserve_tokens_per_call:
-            parts.append(f'A call starts only while at least {limits.reserve_tokens_per_call:,} tokens '
-                         'of the total remain.')
+            reserve = limits.reserve_tokens_per_call
+            parts.append(f'An ordinary call starts only while at least {reserve:,} tokens of the total '
+                         f'remain; a one-turn summary call on a CLI whose flags hold it to one turn '
+                         f'(Claude, Grok) needs {min(reserve, SUMMARY_CALL_RESERVE_TOKENS):,}.')
         if limits.max_tokens_per_call:
             parts.append(f'A single call that reports more than {limits.max_tokens_per_call:,} tokens '
                          'stops the run after it returns; it cannot cut that call short.')
         parts.append('Token counts are what the CLIs report after each call, not a hard ceiling '
                      'and not an invoice.')
+    if lead_turns:
+        parts.append(f'Lead turn cap: {lead_turns} rounds per lead or reviewer call ({lead_source}); '
+                     'Codex seats have no turn flag and are not held to it.')
     if survey is not None:
         parts.append(f'Recovery: up to {survey.recovery_tasks} extra continuation or repair task(s) '
                      'after failures.')

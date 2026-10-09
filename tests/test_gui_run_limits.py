@@ -158,3 +158,60 @@ def test_a_busy_port_suggestion_stays_inside_the_accepted_range(monkeypatch):
     monkeypatch.setattr(gui, "_port_busy", lambda port: True)
     assert gui._free_port_near(7860) is None
     assert gui._free_port_near(7860, tries=10 ** 6) is None
+
+
+def test_the_text_states_the_smaller_summary_reserve_and_the_effective_lead_cap():
+    """Root review of 6cf72f4..9a0d7f0: the summary promised the full reserve
+    before every call, while a one-turn summary call reserves at most 64,000,
+    and it left out the lead turn cap the runner derives."""
+    text = gui.limits_summary(10, *gui.preset_values(DIAGNOSTIC))
+    assert "An ordinary call starts only while at least 250,000 tokens" in text
+    assert "(Claude, Grok) needs 64,000" in text
+    assert "Lead turn cap: 20 rounds" in text and "derived from the 1,500,000-token per-call threshold" in text
+    assert "Codex seats have no turn flag" in text
+    text = gui.limits_summary(10, *gui.preset_values(DIAGNOSTIC), operator_turns=12)
+    assert "Lead turn cap: 12 rounds" in text and "operator setting" in text
+    small = gui.limits_summary(10, True, 24, 500_000, 900, 2, 40_000, 0, 0)
+    assert "needs 40,000" in small and "Lead turn cap" not in small
+    assert "Lead turn cap" not in gui.limits_summary(10, False, 24, 500_000, 900, 2, 0, 0, 0)
+
+
+def test_the_named_clis_are_the_ones_whose_flags_hold_a_summary_call_to_one_turn():
+    from quadratus.cli_providers import CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC
+    assert CLAUDE_SPEC.summary_turn_capped() and GROK_SPEC.summary_turn_capped()
+    assert not CODEX_SPEC.summary_turn_capped() and not CODEX_SPEC.max_turns_flag
+
+
+@pytest.mark.parametrize("operator, expected, source", [
+    (None, 20, "derived from the 1,500,000-token per-call threshold"),
+    (12, 12, "operator setting"),
+])
+def test_the_saved_record_carries_the_cap_the_session_was_built_with(tmp_path, monkeypatch, operator,
+                                                                     expected, source):
+    from quadratus.project_run import run_project
+    from quadratus.session import Session
+
+    (tmp_path / 'app.py').write_text('x\n')
+    seen = {}
+
+    def run(self, **kwargs):
+        seen['config'] = self.config.lead_max_turns
+        return None
+    monkeypatch.setattr(Session, 'run', run)
+    limits, survey = gui.limits_from_form(*gui.preset_values(DIAGNOSTIC))
+    result = run_project('g', tmp_path, Settings(backend='cli', lead_max_turns=operator), allow_writes=True,
+                         max_tasks=10, run_limits=limits, survey=survey)
+    saved = json.loads((result.run_dir / 'run-limits.json').read_text())
+    assert seen['config'] == saved['lead_max_turns'] == expected
+    assert saved['lead_max_turns_source'] == source
+    assert saved['summary_call_reserve_tokens'] == 64_000
+    assert f"Lead turn cap: {expected} rounds" in saved['described']
+
+
+def test_run_project_ui_shows_the_cap_in_its_first_line(tmp_path, monkeypatch):
+    seen = {}
+    _fake_runner(monkeypatch, tmp_path, seen)
+    limits, survey = gui.limits_from_form(*gui.preset_values(DIAGNOSTIC))
+    first = next(gui.run_project_ui("goal", str(tmp_path), True, "", "adversarial", 10,
+                                    Settings(lead_max_turns=8), run_limits=limits, survey=survey))
+    assert "Lead turn cap: 8 rounds" in first[0] and "operator setting" in first[0]

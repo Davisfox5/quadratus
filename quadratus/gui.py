@@ -205,15 +205,17 @@ def limits_from_form(enabled, *values):
     return limits, survey
 
 
-def limits_summary(max_tasks, enabled, *values) -> str:
-    """What the form would run with, or why it would refuse."""
-    from .run_budget import describe_limits
+def limits_summary(max_tasks, enabled, *values, operator_turns=None) -> str:
+    """What the form would run with, or why it would refuse. ``operator_turns``
+    is ``Settings.lead_max_turns``, which outranks a derived lead turn cap."""
+    from .run_budget import describe_limits, effective_lead_turns
     try:
         limits, survey = limits_from_form(enabled, *values)
         tasks = _whole(max_tasks, 'max_tasks', 1)
     except ValueError as exc:
         return f'**Run limits are not valid:** {exc}'
-    return '**This run will use:** ' + describe_limits(limits, survey, tasks)
+    return '**This run will use:** ' + describe_limits(limits, survey, tasks,
+                                                       *effective_lead_turns(operator_turns, limits))
 
 
 def preset_values(name):
@@ -235,7 +237,7 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
     import dataclasses
 
     from .project_run import run_project
-    from .run_budget import describe_limits
+    from .run_budget import describe_limits, effective_lead_turns
     if neutral:
         settings = dataclasses.replace(settings, neutral_preferences=True)
     events = queue.Queue()
@@ -243,7 +245,8 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
         tasks = int(max_tasks)
     except (TypeError, ValueError):
         tasks = None  # the runner reports a bad Task limit, as it always has
-    notes = ['**Run limits:** ' + describe_limits(run_limits, survey, tasks)]
+    notes = ['**Run limits:** ' + describe_limits(
+        run_limits, survey, tasks, *effective_lead_turns(getattr(settings, 'lead_max_turns', None), run_limits))]
     yield notes[0], '', []
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(run_project, goal, folder, settings,
@@ -364,13 +367,15 @@ def build_interface(settings: Optional[Settings] = None):
                                                       label=_LIMIT_LABELS['reserve_tokens_per_call'])
                             limit_per_call = gr.Number(value=0, precision=0, minimum=0,
                                                        label=_LIMIT_LABELS['max_tokens_per_call'])
-                    limits_info = gr.Markdown(limits_summary(20, False, 24, 500_000, 900, 2, 0, 0, 0))
+                    def summarize(*values):
+                        return limits_summary(*values, operator_turns=settings.lead_max_turns)
+                    limits_info = gr.Markdown(summarize(20, False, 24, 500_000, 900, 2, 0, 0, 0))
                 limit_inputs = [limits_on, limit_calls, limit_tokens, limit_seconds, limit_workers,
                                 limit_reserve, limit_per_call, limit_recovery]
                 limits_preset.change(lambda name: preset_values(name) if name else [gr.update()] * 8,
                                      inputs=[limits_preset], outputs=limit_inputs)
                 for field in [max_tasks, *limit_inputs]:
-                    field.change(limits_summary, inputs=[max_tasks, *limit_inputs], outputs=[limits_info])
+                    field.change(summarize, inputs=[max_tasks, *limit_inputs], outputs=[limits_info])
                 declared_paths = gr.Textbox(label='Paths this task may change (one per line)', lines=2)
                 forbid_paths = gr.Textbox(label='Paths that must stay unchanged (one per line)', lines=2)
                 preview_button = gr.Button('Preview policy')

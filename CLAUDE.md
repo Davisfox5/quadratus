@@ -447,7 +447,11 @@ Key design decisions already settled:
   as `selected_limits` in `result.json`, with one plain wording
   (`run_budget.describe_limits`) that never calls a post-return threshold a
   ceiling. Limits off and zero recovery passes `None` for both, exactly the
-  call made before the form existed.
+  call made before the form existed. The wording states what the engine
+  does, not a simpler promise: a one-turn summary call reserves
+  `min(reserve, SUMMARY_CALL_RESERVE_TOKENS)`, and the record carries the
+  lead turn cap the session is built with and its source
+  (`run_budget.effective_lead_turns`, the same rule the runner applies).
 - **A runtime-dependency tree is part of what a check proves**
   (`deptree.py`, contract v2 on #25). Run 19: a lead wrote a
   `node_modules` shim the source checks could not see, and the project's
