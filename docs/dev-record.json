@@ -1829,7 +1829,9 @@
         "quadratus/gui.py",
         "quadratus/project_run.py",
         "quadratus/run_budget.py",
-        "tests/test_gui_run_limits.py"
+        "tests/test_gui_run_limits.py",
+        "tests/test_review_seat_cap.py",
+        "tests/test_stale_capture_fixtures.py"
       ],
       "author": "claude",
       "reviewer": "codex",
@@ -1837,8 +1839,8 @@
       "claimed_at": "2026-10-07T12:39:19Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "5d9f5ff",
-        "at": "2026-10-09T04:20:17Z"
+        "sha": "391f3c8",
+        "at": "2026-10-09T04:51:51Z"
       },
       "reviews": [
         {
@@ -1895,7 +1897,7 @@
         {
           "reviewer": "codex",
           "sha": "5d9f5ff061b621af7673806a1a723375af9587bb",
-          "verdict": "cleared",
+          "verdict": "stale",
           "evidence": "Codex scoped review of 9a0d7f0..5d9f5ff SCOPED CLEAR, whole-candidate acceptance pending (#53 comments 6074305247 part 1 and 6074305561 part 2; #35 comments 6074305871 and 6074306176, identical; stored full body SHA256 part 1 abaecacd818798390aef6ff18b762635301794aa34769d37a90b7bae7356f712, part 2 937ae5b17361d13d348000451b14ad4ad89c7b254c642ca23734a44aec856b23, GET-read here). Review SHA256 ebe07d848e0e5f2365bf04e2c8f02b1c723f02d3e37da2afcc6d6b54038a70dd and receipt SHA256 05256b0a6b577934174062d6d0b315649d169d52791bca44b14db10196c4bb47 recomputed here: the receipt decoded from the two text blocks (encoded payload SHA256 420aa711be138065c8210a97e8e180e5388b16d75b183e2737b55a888f140c4f, base64 then gzip, 185,043 bytes, 1268 artifacts). Prior P2 reserve wording and P3 effective-cap record closed; no new actionable finding; budget classes and lead_turns_for ASTs unchanged; focused limits 96 pass 3 skip, installed controls 9 pass 0 fail with zero provider guard attempts across seven public-runner cases, parser boundaries 57 pass; 107 installed files match 5d9 (existing 9a dependency environment, not a fresh resolution). Two review setup errors kept (wrong test filename collected nothing; archive filter unsupported on system Python, first wheel build failed). Limits: exact-head CI in progress at observation; full suites not run by the reviewer; inherited 9a results (197/1, 205/26, 27 controls) not re-run; Node 24 only; Codex seats have no turn flag; prior failed Mac and Linux suites stand. Not live or MVP acceptance.",
           "scope": [
             "CLAUDE.md",
@@ -1914,7 +1916,8 @@
             "quadratus/session.py",
             "tests/test_declaration_recapture.py",
             "tests/test_preview.py"
-          ]
+          ],
+          "stale_reason": "delivery moved from 5d9f5ff to 391f3c8"
         }
       ],
       "blockers": [
@@ -1980,7 +1983,9 @@
         "claude: Coordinator overlap resolution: the #53 deliveries 2ea3b20..5d9f5ff (GUI Run limits, run-limits record) touched README.md, quadratus/gui.py, quadratus/project_run.py, quadratus/run_budget.py and tests/test_gui_run_limits.py; this task's scope is extended to them so Codex's scoped review can be recorded against what it reviewed. quadratus/project_run.py overlaps T-jev-stage-b-prep (reviewed, cleared @b332951, its runner work long integrated); no work of that task is reopened or changed.",
         "claude: Batch 2 freeze acknowledged in full on exact 5d9f5ff: #35 comments 6074413158 (stored body SHA256 09cfebae174ecaa047986a9cb322b606134c983c2106f9d30cf04c8101dea8ea) and 6074413452 (1854273af65304160148a9c663b7387f23949f75989ba534a07b2df7aeb085ae), GET-read; encoded payload SHA256 7b15f91aba5ff1d37a735b67907a8eaf803af8f388e5351d9240c3c110384fee and decoded bundle SHA256 c90cc37dd8ac36b7cfca1aa2a7848f23c5d25541ffaa57063fba45a5eb71406c (206,480 bytes) recomputed here; freeze files as listed: recovery-v2 4242948cd7ffb99e249d2dc6ff7484d03f1a8f6fb931acb84d9509c9a71abf5e, gui-ui-v3 ff11ce3b26d281d2c00e8e4a5b94050a1298eba66d144e1de8f4c2c79f8bfff1; configs 7fa7e99bb34c7eb4430513dd487e7fe3aec167764a250a4008d617fad46dd2a1 (recovery) and a8e773d1804ba307f7d1bbfdf864ac1aa311ccae2cea8fb5ebd54ddbf9143bcf (GUI), Mac files not hashable here. Independently checked: all 914 engine file hashes equal a clean 5d9f5ff checkout; all 107 installed package files in the GUI immutable list equal the same source (gui.py c41c00bb...); CI four of four success; root Mac 3234/44; suite-38 green; Node v24.15.0 qualification one invocation passed, no models. Bounds as frozen, per lane: 90 calls, 5M reported tokens, 3600 s (3596 execution plus 4 cleanup, TERM 2 KILL 1), 2 workers, reserve 250k ordinary and 64k for one-turn Claude/Grok summary calls (Codex 250k), 1.5M post-return per-call threshold, Task limit 10, survey 4, effective lead cap 20 derived (supported turn flags only; declarations min 6; close-out and orchestrator uncapped; Codex no turn flag). Two lanes together up to 180 calls, 10M tokens, four workers, no shared cap, no hard token ceiling; invoice null; unknown usage stays unknown; process ownership by PID, creation identity and env tag with no kernel containment, fast stripped-tag orphan gap and non-atomic check-then-signal, overruns and survivors recorded. Historical acceptance unchanged (33/35, 4/7, four completed runs never replayed). One gap noted on #35: the GUI lane's numbers are bound only through its launch config hash; the run's form summary, first progress line and run-limits.json will show them. Not blocking. Acknowledgment #35 comment 6074426582, stored body SHA256 d9d4e497f7ddf02de0e4f3a2a5828b9dff5501296da9c4ac45a51e969c5d58ad. Frozen engine, helpers and inputs untouched; repairs on #53 only.",
         "claude: Batch 2 freeze supplement acknowledged: #35 comment 6074425181, stored body SHA256 5241865f27ebe94848f424e1110a1547f0854b95e2c7f5687a127c4239e5556f (GET-read), artifact SHA256 3f499be6897339b324292ae6e56737e078e3ddbe60743beae894b314793a2037 recomputed. Both whole launch configs reproduce byte for byte the bundle's config_sha256 (recovery-v2 7fa7e99bb34c7eb4430513dd487e7fe3aec167764a250a4008d617fad46dd2a1, gui-ui-v3 a8e773d1804ba307f7d1bbfdf864ac1aa311ccae2cea8fb5ebd54ddbf9143bcf). GUI future_limits 90 / 5,000,000 / 3600 / 2 / 250,000 / 1,500,000 / no cost cap, max_tasks 10, survey 4, adversarial, personal-settings checkbox false; goal 092d2ab7... and capture profile 816e11d6... equal the UI-v2 plan values; GUI extra-check line shlex-parses to the config argv. The GUI-numbers gap named earlier is closed. Acknowledgment complete with parts 6074413158/6074413452 and bundle c90cc37d...; #35 comment 6074438893, stored body SHA256 6abf9fcd2f34f465d2c76bc22f053438fa78d10b8dca0ec9d6c809b19d47007c.",
-        "claude: Batch 2 started once each on frozen engine 5d9f5ff (#35 comment 6074495202, stored body SHA256 2ca04ce588cf59b85fd1a9c5333e0c0408d83b1668fff783fb0ade4de299fbdc, GET-read): recovery-v2 CLI run 20261009T044624Z-f242cdb1 (supervisor 55214, controller 55217; invoke-once marker binds freeze 4242948c...), gui-ui-v3 production GUI run 20261009T044636Z-1a7c3419 (supervisor 55215, GUI 55226, browser 55294; one click; freeze ff11ce3b...; saved visible limits and capture/Node inputs match the frozen config per root). Raw run directories are on the Mac; this session reviews them through what root publishes. Repairs go to #53 only; frozen engine, helpers and inputs untouched. Not Stage B acceptance; no MVP completion claimed."
+        "claude: Batch 2 started once each on frozen engine 5d9f5ff (#35 comment 6074495202, stored body SHA256 2ca04ce588cf59b85fd1a9c5333e0c0408d83b1668fff783fb0ade4de299fbdc, GET-read): recovery-v2 CLI run 20261009T044624Z-f242cdb1 (supervisor 55214, controller 55217; invoke-once marker binds freeze 4242948c...), gui-ui-v3 production GUI run 20261009T044636Z-1a7c3419 (supervisor 55215, GUI 55226, browser 55294; one click; freeze ff11ce3b...; saved visible limits and capture/Node inputs match the frozen config per root). Raw run directories are on the Mac; this session reviews them through what root publishes. Repairs go to #53 only; frozen engine, helpers and inputs untouched. Not Stage B acceptance; no MVP completion claimed.",
+        "claude: scope extended to tests/test_review_seat_cap.py, tests/test_stale_capture_fixtures.py",
+        "claude: Delivered 391f3c8069863ee7f5b5e8fd2da1da5bb3adcb25 (range 5d9f5ff..391f3c8) for two P2s from Codex's automated code review of 5d9f5ff on #53 (review comments 4226680387 and 4226680384, relayed by the Confirm PR 46 session, which set #53 ready after Davis cleared all PRs to merge): a capped design review now records the delivered edge and delivery before the capped review is filed (verdict unchanged, unverified); project_run moves .quadratus/capture-fixtures into the new run's stale-capture-fixtures/ before any model call (moved, never deleted, not a source change; linked folder left alone and named; result.json stale_capture_fixtures). Replies 4226717795 and 4226717899, threads resolved. Local: new tests plus 218 lifecycle/design neighbours pass, 2 skipped; ruff clean. The live batch 2 runs use the frozen 5d9f5ff engine and are unaffected. 391f3c8 needs Codex's scoped review and exact CI."
       ]
     }
   ],
