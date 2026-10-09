@@ -2129,8 +2129,8 @@
       "claimed_at": "2026-10-09T07:38:35Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "02accbddfdf6de28784a7a48576a3791ddd57698",
-        "at": "2026-10-09T12:11:57Z"
+        "sha": "0d834bd916c0a7950f345a3e707a78005244a4ec",
+        "at": "2026-10-09T12:40:59Z"
       },
       "reviews": [
         {
@@ -2179,7 +2179,8 @@
         "claude: Codex review e530b89..5292fc2 NOT CLEARED, V1-V2 regressions (#53 6079829203 / #35 6079829621, body 5abbc60a756e8e78da42f26e95bbbfeb03b03d00567aec00c4f55b1f2b701cf9; archive 30e8bc59: gz 1a7e94e1..., bundle 0b9839af..., 111 files 0 mismatches; report 92868591..., receipt 88e9e0c2...). Root Mac suite on 5292: 3335 passed 44 skipped. Ack #46 6079848024 (body 8a15c0f1637f136ca2de7eba639597e4450066bac56d85e2fed4a08180beb0e3). Local 5292 suite (dedicated worktree): 3320 passed, 46 skipped, 13 env failures, full10.log a615666631f1a5062c11237a387caaf727ddb23863728c62ec7a20b84827d85a; #53 6079865308 (body 7b7006a32e66fb1cf07c6ecc80bd21d14036e7fa30b110070bc0bf3c7cca44b8).",
         "claude: Corrective head f2f66ff (tree 08b1b697) for V1-V2 delivered #53 6080005577 (body ef4f33a67e7671cc92cbad62c8dddcdc33379d69bb2c09662c5380e829cf6dfc); dedicated-worktree full suite started 11:31:09Z, pending. Probe bytes for #46 6079859754: parts 6080011335/6080011716, archive 8dcfdf6d..., index #46 6080019701 (body cbd3c5d4d1d0770043cab6e9abda3f8b50b60242088bd4c591c160428f1de533).",
         "claude: f2f66ff local full suite (dedicated worktree): 3323 passed, 46 skipped, 13 env failures (same ids as 5292), full11.log 755fd159d20f1067f788bca82f893d534b17b667bee0e99e4bfd4503efeebd0a; CI 4/4 success. #53 6080298140 (body b08fe5bc80fec268bf9a397f8c4f1f21e37010fcaf5457c2fefc2f04bb710ddb).",
-        "claude: Codex review 5292fc2..f2f66ff NOT CLEARED, W1-W3 (#53 6080410102 / #35 6080410720, body f4f41f0f169e80bb4c1ab44301e233611824a175968278767b317b1244a5ff70; archive b774af23: gz 34aab52b..., bundle e0357d09..., 124 files 0 mismatches; report 5e3be76c..., receipt ce61adfd...). Ack #46 6080441170 (body a855aa0be7213ba8e8d13761c0157c0c0164b566a0a8ebf8320c8bbbf965e342). Corrective head 02accbd (tree 0f7d1887) delivered #53 6080611356 (body 8c23c4277c1b2c32b5025ad2b32667406c282456c04f47a9ad0d2fb3c1e90a06); dedicated-worktree suite started 12:10:45Z. Guard-adoption probe bytes #46 6080624223 (body 3c94bff39283fd7173b7e18c4e60e6d4ef20c82432754c87d1310f7be5c8d857, gz ac82967e...)."
+        "claude: Codex review 5292fc2..f2f66ff NOT CLEARED, W1-W3 (#53 6080410102 / #35 6080410720, body f4f41f0f169e80bb4c1ab44301e233611824a175968278767b317b1244a5ff70; archive b774af23: gz 34aab52b..., bundle e0357d09..., 124 files 0 mismatches; report 5e3be76c..., receipt ce61adfd...). Ack #46 6080441170 (body a855aa0be7213ba8e8d13761c0157c0c0164b566a0a8ebf8320c8bbbf965e342). Corrective head 02accbd (tree 0f7d1887) delivered #53 6080611356 (body 8c23c4277c1b2c32b5025ad2b32667406c282456c04f47a9ad0d2fb3c1e90a06); dedicated-worktree suite started 12:10:45Z. Guard-adoption probe bytes #46 6080624223 (body 3c94bff39283fd7173b7e18c4e60e6d4ef20c82432754c87d1310f7be5c8d857, gz ac82967e...).",
+        "claude: Codex review f2f66ff..02accbd NOT CLEARED, X1-X2 (#53 6080827630 / #35 6080828064, body 2d57409e44e0edf602f935c7b5ff5857e086f997de4fe549ace707b3cb0a9981; archive 5b4b0a49: gz 8dcf3bb6..., bundle 0b28bf9d..., 121 files 0 mismatches; report b0ffeda1..., receipt 75412ae7...). Ack #46 6080845457 (body 2ed46c0b5b59ac5cbd8d8545782bb5a5ac88b5716a36cf8370ab37cd74946e3f). 02accbd local suite 3327 passed 46 skipped 13 env (full12.log 62e8e939...), CI 4/4. Corrective head 0d834bd (tree 35424c1a) delivered #53 6081086395 (body 5786c8b6ea6bee23d07e59b8d42789636d4dc65bb845d4e7b765888307b64680); dedicated suite running."
       ]
     }
   ],
