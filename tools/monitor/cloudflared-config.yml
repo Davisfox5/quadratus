@@ -1,0 +1,13 @@
+# Cloudflare Tunnel for the read-only Quadratus monitor page.
+# Copy to ~/.cloudflared/config.yml and replace <TUNNEL-ID> (twice) with the
+# id `cloudflared tunnel create quadratus-monitor` printed. See README.md.
+#
+# Only the monitor port is routed. The Gradio GUI (7860) is never put on a
+# tunnel: its Project tab can read files and run check commands.
+tunnel: <TUNNEL-ID>
+credentials-file: /Users/davisfox/.cloudflared/<TUNNEL-ID>.json
+
+ingress:
+  - hostname: monitor.dfconsulting.tech
+    service: http://127.0.0.1:7861
+  - service: http_status:404

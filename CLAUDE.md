@@ -579,6 +579,24 @@ Key design decisions already settled:
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
   reviewers produce judgement.
+- **The run monitor is read-only, and that is the whole design**
+  (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
+  already writes everything a human wants to know under
+  `.quadratus/runs/<id>`; nothing rendered it live, so the operator was
+  asking two models whether a run was even running. The monitor reads the
+  series lock's pid, the tail of `invocations.jsonl`, `budget.json` or
+  `usage.jsonl`, and `result.json`, and it never writes, never takes a lock
+  (the project's `run.lock` is an flock with no pid, and probing it could
+  make a starting run believe the project is busy), never raises on bad
+  data (every field is `unknown` with a reason) and bounds every read. It
+  also never calls a model: a status that depends on a seat answering is
+  the problem it exists to remove. The stage is inferred from the latest
+  role and the newest artifact kind, and says so when it cannot tell.
+  `--monitor --serve` renders the same dict as a self-reloading page on
+  loopback only (`monitor_server.py`, no bind flag); Tailscale Serve is the
+  way onto a phone, and the Gradio GUI is never exposed that way because
+  its Project tab can run commands. The page has no controls at all, which
+  is what makes it the thing that may be reached from another device.
 
 ## How development is coordinated
 
