@@ -127,3 +127,31 @@ def test_an_unreadable_state_folder_stops_the_run_before_any_call(tmp_path, monk
     with pytest.raises(ValueError, match="could not be retired"):
         run_project("g", project, Settings(backend="cli"), allow_writes=True)
     assert calls == [], "no session ran"
+
+
+def test_a_project_folder_replaced_whole_does_not_resolve(tmp_path, monkeypatch):
+    """Codex review of 7515f28: the project directory itself is replaced after
+    the retirement binds it. Relative to the held root, .quadratus still
+    agreed with itself, so the record said ``resolves: true`` while
+    <project>/<path> did not exist. The bytes stay in the parked original."""
+    project = tmp_path / "project"
+    _sample(project, "owned stale sample\n")
+    parked = tmp_path / "parked"
+    real_open = os.open
+
+    def swapping_open(path, flags, *args, **kwargs):
+        fd = real_open(path, flags, *args, **kwargs)
+        if path == ".quadratus":
+            os.rename(project, parked)
+            project.mkdir()
+        return fd
+    monkeypatch.setattr(project_run.os, "open", swapping_open)
+    where = _retire_stale_fixtures(project, tmp_path / "run-1")
+    monkeypatch.setattr(project_run.os, "open", real_open)
+    assert where["path"] == ".quadratus/capture-fixtures.retired-run-1"
+    assert not (project / where["path"]).exists()
+    assert where["resolves"] is False, "the project path no longer leads to the retired bytes"
+    assert (parked / ".quadratus" / "capture-fixtures.retired-run-1" / "t1" / "rows.csv").read_text() == \
+        "owned stale sample\n"
+    info = os.stat(parked / ".quadratus")
+    assert where["state_directory"] == {"device": info.st_dev, "inode": info.st_ino}

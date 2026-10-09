@@ -463,7 +463,9 @@ Key design decisions already settled:
   project's fixtures; Codex review of 391f3c8). A linked `.quadratus` or
   `capture-fixtures` is left alone and named; any other failure stops the
   run before a model call, and the record says whether the retired path
-  still leads to the samples (Codex review of 6a338a1). A capped design review still records the
+  still leads to the samples (Codex review of 6a338a1), read through the
+  project pathname itself, so a project folder replaced as a whole reads
+  false (Codex review of 7515f28). A capped design review still records the
   delivery: the model ran, so the renders reached its copy.
 - **A task record says what happened, not what the stage list implies**
   (batch 2 recovery-v2 on 5d9f5ff). Three simple tasks drew no collaborator

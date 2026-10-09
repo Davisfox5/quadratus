@@ -580,7 +580,8 @@ def _retire_stale_fixtures(root, run_dir, progress=None):
     (Codex review of 6a338a1: an unreadable state directory let the session
     start with the stale samples still in place). Returns None, or the
     retired folder's project-relative ``path``, whether ``.quadratus`` still
-    names the directory it was retired in (``resolves``), and that
+    names the directory it was retired in (``resolves``, read through the
+    project pathname, so a project folder replaced as a whole is false), and that
     directory's ``state_directory`` identity: after a parent swap the bytes
     are safe but the path leads elsewhere, and the record says so.
     """
@@ -631,13 +632,19 @@ def _retire_stale_fixtures(root, run_dir, progress=None):
             retired = f'capture-fixtures.retired-{Path(run_dir).name}'
             os.rename('capture-fixtures', retired, src_dir_fd=state_fd, dst_dir_fd=state_fd)
             held = os.fstat(state_fd)
-            # The locator is true only while .quadratus still names the
-            # directory the rename happened in (Codex review of 6a338a1: after
-            # a parent swap the bytes were safe but the path led elsewhere).
+            moved = os.stat(retired, dir_fd=state_fd, follow_symlinks=False)
+            # The locator is true only while the project's pathname, read
+            # fresh from the operator's folder, still leads to the retired
+            # bytes. Comparing .quadratus relative to the held root was not
+            # enough (Codex review of 6a338a1, then of 7515f28): a project
+            # folder replaced as a whole left the held root agreeing with
+            # itself while <project>/<path> no longer existed.
             try:
-                now = os.stat('.quadratus', dir_fd=root_fd, follow_symlinks=False)
-                resolves = (stat.S_ISDIR(now.st_mode)
-                            and (now.st_dev, now.st_ino) == (held.st_dev, held.st_ino))
+                now = os.stat(os.path.join(str(root), '.quadratus'), follow_symlinks=False)
+                there = os.stat(os.path.join(str(root), '.quadratus', retired), follow_symlinks=False)
+                resolves = (stat.S_ISDIR(now.st_mode) and stat.S_ISDIR(there.st_mode)
+                            and (now.st_dev, now.st_ino) == (held.st_dev, held.st_ino)
+                            and (there.st_dev, there.st_ino) == (moved.st_dev, moved.st_ino))
             except OSError:
                 resolves = False
         except OSError as exc:
