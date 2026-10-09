@@ -37,10 +37,13 @@ def cli_environment(monkeypatch):
         monkeypatch.delenv(f'QUADRATUS_CLI_ARGS_{vendor}', raising=False)
 
 
-def _run(tmp_path, monkeypatch, reviews, lead_reply, *, capture_failure=""):
+def _run(tmp_path, monkeypatch, reviews, lead_reply, *, capture_failure="", files=()):
     root = tmp_path / "project"
     (root / "templates").mkdir(parents=True)
     (root / "templates" / "index.html").write_text("<button id=preview>Import preview</button>\n")
+    for rel, text in files:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
     fleet = Fleet(Settings(backend="cli"), project=Project(root, exclude={root / ".quadratus"}),
                   allow_writes=True)
     view = SimpleNamespace()
@@ -54,7 +57,10 @@ def _run(tmp_path, monkeypatch, reviews, lead_reply, *, capture_failure=""):
         if "CAPTURE:" in prompt and ("Reply with exactly one line" in prompt
                                      or "carried no CAPTURE: line" in prompt):
             return lead_replies.pop(0) if len(lead_replies) > 1 else lead_replies[0]
-        return reviews.pop(0)
+        answer = reviews.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
     monkeypatch.setattr(fleet, "_generate", generate)
 
     captures = []
@@ -168,6 +174,49 @@ def test_a_failed_recapture_is_recorded_unverified(tmp_path, monkeypatch):
     record = session.design_checks[0]
     assert record["verified"] is False and "the preview died" in record["final_review"]["verdict"]
     assert ("t6", "the preview died") in session._design_unverified
+
+
+UPLOAD = {"path": "/import", "steps": [{"action": "file", "selector": "#csv", "path": "tests/fixtures/clips.csv"},
+                                       {"action": "wait", "selector": ".imported"}]}
+FIXTURE = {"path": "/import", "steps": [{"action": "file", "selector": "#csv",
+                                         "path": ".quadratus/capture-fixtures/t6/clips.csv"},
+                                        {"action": "wait", "selector": ".imported"}]}
+
+
+@pytest.mark.parametrize("declared", [UPLOAD, FIXTURE])
+def test_a_declaration_uploading_a_sample_that_does_not_exist_spends_no_recapture(tmp_path, monkeypatch, declared):
+    """The redeclaring call cannot write, so a fixture it names into being
+    would only fail at capture (Codex review of 2ffa7f6 on #52): the verdict
+    stands and the one recapture is kept."""
+    session, spec, prompts, captures = _run(tmp_path, monkeypatch, [BLIND], "CAPTURE: " + json.dumps(declared))
+    assert captures == [DECLARED] and spec.scope.capture == DECLARED
+    problem = session.design_checks[0]["recapture"]["problem"]
+    assert "does not exist in the project" in problem and declared["steps"][0]["path"] in problem
+    assert [f for f in session.open_findings if "do not show the changed interface" in f]
+    ask = next(p for _, p in prompts if "CAPTURE:" in p and "Reply with exactly one line" in p)
+    assert "already exists in the project" in ask
+
+
+def test_a_declaration_uploading_a_committed_sample_is_recaptured(tmp_path, monkeypatch):
+    session, spec, prompts, captures = _run(
+        tmp_path, monkeypatch, [BLIND, "APPROVED"], "CAPTURE: " + json.dumps(UPLOAD),
+        files=[("tests/fixtures/clips.csv", "a,b\n1,2\n")])
+    assert captures == [DECLARED, UPLOAD]
+    assert session.design_checks[0]["final_review"]["verdict"] == "APPROVED"
+
+
+def test_a_reviewer_that_altered_its_copy_gives_no_verdict(tmp_path, monkeypatch):
+    """Fleet refuses a copy-bound answer formed after the handed files
+    changed; the design check records that as the blocking verdict rather
+    than accepting or re-asking."""
+    from quadratus.runtime import ReviewCopyAltered
+    session, spec, prompts, captures = _run(
+        tmp_path, monkeypatch, [ReviewCopyAltered("claude:opus changed or removed files (templates/index.html)")],
+        "CAPTURE: none")
+    assert captures == [DECLARED], "no recapture: this is not a blind render"
+    verdict = session.design_checks[0]["final_review"]["verdict"]
+    assert verdict.startswith("BLOCKING: the reviewer altered its copy") and "templates/index.html" in verdict
+    assert [f for f in session.open_findings if "altered its copy" in f]
 
 
 @pytest.mark.parametrize("reply, capture, why", [

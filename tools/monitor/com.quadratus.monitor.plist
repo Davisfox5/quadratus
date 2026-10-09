@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Starts the read-only Quadratus monitor page at login and keeps it up.
+  See tools/monitor/README.md. Replace the two paths before loading.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.quadratus.monitor</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/davisfox/Documents/GitHub/quadratus/.venv/bin/quadratus</string>
+    <string>--monitor</string>
+    <string>--serve</string>
+    <string>7861</string>
+    <string>--series</string>
+    <string>/Users/davisfox/Documents/GitHub/stage-b/runs</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/quadratus-monitor.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/quadratus-monitor.log</string>
+</dict>
+</plist>

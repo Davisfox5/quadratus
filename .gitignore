@@ -73,3 +73,7 @@ flagged/
 
 # Claude Code agent worktrees (session scratch, never source)
 .claude/worktrees/
+
+# dev record tool: cross-process lock and atomic-write temp file
+docs/dev-record.json.lock
+docs/dev-record.json.tmp

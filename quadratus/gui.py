@@ -400,6 +400,32 @@ def policy_preview_ui(folder, paths='', forbid='', writing=False):
         return f'Policy preview failed: {exc}'
 
 
+#: How often the Monitor tab re-reads the run directory, in seconds. Every
+#: read is bounded (quadratus.monitor), so a short interval costs little.
+MONITOR_REFRESH_SECONDS = 5
+MONITOR_HISTORY = 10
+
+
+def monitor_view(folder, series='', selected='', limit=MONITOR_HISTORY):
+    """The Monitor tab's one read: status markdown and the run history rows.
+
+    Read-only by construction: it calls ``quadratus.monitor`` and nothing
+    else, so a refresh can never start, stop or alter a run. ``folder``
+    falls back to the project opened on the Project tab; a blank series
+    directory means the Stage B packet is not read.
+    """
+    from .monitor import history_rows, read_status, render_markdown, run_history
+    folder = (folder or '').strip() or (selected or '').strip()
+    series = (series or '').strip() or None
+    if not folder and not series:
+        return ('Enter a project folder (or open one on the Project tab), or a Stage B '
+                'series directory, to watch its runs.', [])
+    status = read_status(folder or None, series)
+    project = status.get('project')
+    history = run_history(project, limit=limit) if project and project != 'unknown' else []
+    return render_markdown(status), history_rows(history)
+
+
 def build_interface(settings: Optional[Settings] = None):
     import gradio as gr
 
@@ -576,6 +602,29 @@ def build_interface(settings: Optional[Settings] = None):
                 submit_btn.click(respond, inputs=[msg, chatbot, file_upload], outputs=[chatbot, msg, file_upload])
                 msg.submit(respond, inputs=[msg, chatbot, file_upload], outputs=[chatbot, msg, file_upload])
                 clear_btn.click(lambda: ([], '', None), outputs=[chatbot, msg, file_upload])
+            with gr.Tab('Monitor'):
+                from .monitor import HISTORY_COLUMNS
+                gr.Markdown('What the engine is doing, read from the run directory. This tab only '
+                            'reads: it cannot start, stop or change a run.')
+                with gr.Row():
+                    monitor_folder = gr.Textbox(label='Project folder (blank: the opened project)',
+                                                placeholder='/path/to/project')
+                    monitor_series = gr.Textbox(label='Stage B series directory (optional)',
+                                                placeholder='/abs/runs')
+                with gr.Row():
+                    monitor_refresh = gr.Button('Refresh now')
+                    monitor_auto = gr.Checkbox(label=f'Refresh every {MONITOR_REFRESH_SECONDS} s', value=True)
+                monitor_status = gr.Markdown('Enter a project folder or series directory.')
+                monitor_history = gr.Dataframe(headers=HISTORY_COLUMNS, value=[], interactive=False,
+                                               wrap=True, label=f'Last {MONITOR_HISTORY} runs')
+                monitor_timer = gr.Timer(MONITOR_REFRESH_SECONDS, active=True)
+                monitor_inputs = [monitor_folder, monitor_series, selected]
+                monitor_outputs = [monitor_status, monitor_history]
+                monitor_timer.tick(monitor_view, inputs=monitor_inputs, outputs=monitor_outputs,
+                                   show_progress='hidden')
+                monitor_refresh.click(monitor_view, inputs=monitor_inputs, outputs=monitor_outputs)
+                monitor_auto.change(lambda on: gr.Timer(active=bool(on)), inputs=[monitor_auto],
+                                    outputs=[monitor_timer])
     return demo
 
 
