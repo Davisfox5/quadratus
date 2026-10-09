@@ -2,13 +2,11 @@
 
 ## Communication
 
-**Lead with a TL;DR on anything long or technical.** Plain language, bullets,
-no jargon, at the very top — what it means and what the decision is. Put the
-technical detail below it for when it's wanted. Don't make the summary an
-afterthought at the bottom; it goes first.
-
-This applies to design discussions, research findings, architecture proposals,
-and post-change reports. A short answer to a short question doesn't need one.
+**No TL;DRs. Ever.** Davis's standing instruction (2026-10-01): explain
+everything in succinct, simple, plain English. One short explanation, not
+a summary followed by the same thing again. Lead with the answer, keep it
+short, no headers or bullet walls on short replies, no closing offers.
+Technical detail only when it changes what Davis does next.
 
 ## Project context
 
@@ -581,6 +579,17 @@ Key design decisions already settled:
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
   reviewers produce judgement.
+
+## How development is coordinated
+
+`docs/DEVELOPMENT_PROCESS.md` carries the short rules adopted on
+2026-10-01 from the plan published on #35; `docs/dev-record.json` is the one
+shared development record (candidate SHA, gate, each task's scope, author,
+independent reviewer, delivery and review SHAs, blockers), edited only
+through `tools/dev_record.py` (`claim`, `deliver`, `review`, `receipt`,
+`ready`, `render`, `candidate`, `note`, `extend`). Claude coordinates and integrates; Codex is the root
+reviewer and owns local execution and live runs. The acceptance manifest and
+the workflow scorecard keep their own evidence.
 
 ## Model routing: this repo is build-time tooling
 
