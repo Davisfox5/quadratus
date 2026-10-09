@@ -1,0 +1,11 @@
+{
+  "files": 3327,
+  "bytes": 7150396,
+  "compressed_bytes": 1912997,
+  "bundle_sha256": "29fd28be593d6c15c6ff04725023cc2bfb411cba486a90deb61c4756bd6c6821",
+  "archive_sha256": "08cb84e32b37f53921e8e2167783d855830bae7b89df0c2273cb41a56988d194",
+  "report_sha256": "d9bc93fa29bff3bf79ac4d08cbe427d6b534779a810815070e44e8a15b78a5a0",
+  "receipt_sha256": "e993f6899d45646b7dd3d041e645744abc26db1486952f8a769785870ff9c5fd",
+  "symlinks_preserved_metadata": 283,
+  "FIFO_preserved_metadata_unopened": 5
+}
