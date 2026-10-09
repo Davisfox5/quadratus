@@ -536,10 +536,12 @@ def _observe_transcript_children(traces, delegation):
                 # review of 6a338a1), so it is noted, never filed as a child.
                 delegation.note_blind_spot(f'{name} call refused by permissions in {where}; no child ran')
                 continue
-            # Keyed by the vendor's call id within the parent session, so a
-            # transcript read twice (a resumed session, a repeated streamed
-            # block) files one child, not two.
-            key = call.get('id') or f"{record.get('invocation_id') or '?'}:{n}"
+            # Keyed by the vendor's call id within the parent session, else
+            # by the call's position in that session's transcript (stable
+            # across rereads of one growing transcript), never by the parent
+            # invocation: two invocations sharing a session read the same
+            # calls (Codex review of 6a338a1).
+            key = call.get('id') or f"#{n}"
             ran = outcome == 'success'
             delegation.observe_native(NativeChild(
                 session_id=f"unidentified:transcript:{record.get('session_id') or '?'}:{key}",

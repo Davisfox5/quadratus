@@ -214,8 +214,9 @@ def _codex(path: Path) -> dict:
         else:
             outcome = "unknown"
         inner = re.findall(r"tools\.([a-z_]+)\(", text) or [name]
-        for tool in inner:
-            trace["tool_calls"].append(dict(name=tool, target="", outcome=outcome))
+        for k, tool in enumerate(inner):
+            trace["tool_calls"].append(dict(name=tool, target="", outcome=outcome,
+                                            **({"id": cid if k == 0 else f"{cid}.{k}"} if cid else {})))
         for cmd in re.findall(r'cmd"?\s*:\s*"((?:[^"\\]|\\.)*)"', text):
             trace["commands"].append(dict(command=cmd[:300], exit=codes[0] if codes else None,
                                           outcome=outcome))
@@ -259,7 +260,8 @@ def _grok(path: Path, origin: Optional[Path] = None) -> dict:
                 trace["texts"].append(text)
             for call in row.get("tool_calls") or []:
                 trace["tool_calls"].append(dict(name=call.get("name"), target=_target(call.get("arguments")),
-                                                outcome=outcomes.get(call.get("id"), "unknown")))
+                                                outcome=outcomes.get(call.get("id"), "unknown"),
+                                                **({"id": call["id"]} if call.get("id") else {})))
         elif kind == "reasoning":
             trace["reasoning"].append(text or json.dumps(row)[:4000])
     for name, values in decisions.items():

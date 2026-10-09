@@ -25,7 +25,7 @@ def test_an_agent_call_in_a_transcript_is_an_unidentified_child_with_nothing_add
     assert record["unidentified_native_activity"] == 1 and record["native_children"] == 0
     assert record["native_child_tokens"] == 0, "the child's spend is inside the parent's total; nothing is added"
     ledger = (result.run_dir / "delegation.md").read_text()
-    assert "unidentified:transcript:3117d48a:4221d9a5:1 (unknown model) via Agent: usage unknown" in ledger
+    assert "unidentified:transcript:3117d48a:#1 (unknown model) via Agent: usage unknown" in ledger
 
 
 def _run_with(tmp_path, monkeypatch, traces):
@@ -77,3 +77,21 @@ def test_the_claude_trace_lists_a_restated_block_once(tmp_path):
     path.write_text("".join(json.dumps(r) + "\n" for r in rows))
     calls = _claude(path)["tool_calls"]
     assert [(c["name"], c["outcome"], c["id"]) for c in calls] == [("Agent", "success", "toolu_7")]
+
+
+def test_two_invocations_reading_one_transcript_through_the_real_parser_file_one_child(tmp_path, monkeypatch):
+    """Codex's control on 6a338a1: one transcript, one Agent call, two invoked
+    parent rows pointing at it; the real trace parser and the observer."""
+    from quadratus.trace import _claude
+    rows = [{"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": "toolu_1", "name": "Agent", "input": {"prompt": "x"}}]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "done"}]}}]
+    path = tmp_path / "s.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    calls = _claude(path)["tool_calls"]
+    traces = [dict(invocation_id=i, task="run", role="orchestrator", model="claude:fable",
+                   session_id="s1", tool_calls=calls) for i in ("i1", "i2")]
+    (tmp_path / "p").mkdir()
+    record, _ = _run_with(tmp_path / "p", monkeypatch, traces)
+    assert record["unidentified_native_activity"] == 1 and record["native_child_tokens"] == 0
