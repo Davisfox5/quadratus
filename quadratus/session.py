@@ -653,6 +653,32 @@ def is_design_task(spec) -> bool:
     return any(_UI_PATH.search(str(p)) for p in paths)
 
 
+def _frontend_without_rendered_file(spec) -> bool:
+    """A task labelled frontend whose declared scope names files but none
+    that renders (no template, page, component, stylesheet or markup). The
+    label alone makes it design work that must be captured; the recovery
+    diagnostic lane on 2e57e94 stopped on a CommonJS state model labelled
+    frontend with no page anywhere in its acceptance. A frontend task with no
+    declared paths is left as it is: there is nothing to compare."""
+    if getattr(spec, "kind", None) != TaskKind.FRONTEND:
+        return False
+    paths = getattr(getattr(spec, "scope", None), "permitted_paths", ()) or ()
+    return bool(paths) and not any(_UI_PATH.search(str(p)) for p in paths)
+
+
+#: The one send-back for a frontend label whose scope renders nothing: the
+#: orchestrator either names the rendered file or labels the task by what its
+#: checks exercise. Named again unchanged, the label stands and the capture
+#: requirement applies in full; this never waives capture for rendered work.
+_FRONTEND_WITHOUT_RENDER = (
+    "This task is labelled frontend, which makes it design work the harness must capture in a real browser, "
+    "but none of its permitted paths is a rendered file (a template, page, component, stylesheet or markup). "
+    "If a page a user sees changes, add that file to permitted_paths and declare the capture. If nothing in "
+    "the acceptance renders (a module, state model, library or CLI, even one written in JavaScript), label "
+    "the task by what its checks exercise, for example backend, general or test."
+)
+
+
 def is_review_only(spec) -> bool:
     """A task whose SCOPE declares ``"edits": "none"``: an audit. Only the
     declaration counts; a one-line fix is still editing work (Codex review of
@@ -1611,6 +1637,9 @@ class Session:
         self._resolution_candidate: Optional[tuple] = None
         #: ``(task_id, lead)`` chosen by the pre-dispatch capability check.
         self._dispatch_lead: Optional[tuple] = None
+        #: Task ids already sent back once for a frontend label whose scope
+        #: names no rendered file (_FRONTEND_WITHOUT_RENDER).
+        self._frontend_challenged: set = set()
         #: Capped tasks not yet finished by a task that names them in a
         #: CONTINUES line. Any entry blocks completion.
         self._partial_tasks: set = set()
@@ -5910,6 +5939,11 @@ class Session:
         if not (self.config.design_self_verify and self.project and self.config.allow_writes
                 and is_design_task(spec)):
             return ""
+        if _frontend_without_rendered_file(spec) and spec.task_id not in self._frontend_challenged:
+            # Once per task: a deliberate frontend label survives being named
+            # again and is then held to the capture requirement as before.
+            self._frontend_challenged.add(spec.task_id)
+            return _FRONTEND_WITHOUT_RENDER
         profile = self.config.capture_profile
         if profile is not None:
             capture = getattr(spec.scope, "capture", None)
@@ -5949,7 +5983,7 @@ class Session:
                 f"task {spec.task_id} is UI work whose renders the harness requires, and its lead "
                 f"{lead} cannot run the capture on its transport; declare a capture profile "
                 "(--capture-profile) so the harness captures, or run this task on a seat that can. "
-                "No call was made.")
+                "No call was made to its lead.")
         return ""
 
     def _supply_fixtures(self, spec, lead, task, record, missing) -> List[str]:
@@ -7383,7 +7417,10 @@ _KIND_REQUEST = (
     "one of: " + ", ".join(sorted(ROUTING)) + ". Difficulty is one of: rote, "
     "simple, standard, complex -- judge it by how many logical steps the task "
     "takes and what breaks if it is wrong. Most well-sized tasks are simple; "
-    "reserve complex for genuinely hard reasoning. Then the task on the "
+    "reserve complex for genuinely hard reasoning. frontend means a page a user sees "
+    "in a browser renders differently, and commits the task to a real-browser capture; "
+    "code with no page, template, stylesheet or browser in its acceptance is not frontend, "
+    "even when it is JavaScript. Then the task on the "
     "following line. Omit the line if none fits. The KIND line is read only within "
     f"the first {MAX_PREFACE_LINES} lines of the reply; later it is prose and the task "
     "is routed as general/simple. In those same lines no line may begin with ASK:, "

@@ -925,6 +925,17 @@ Key design decisions already settled:
   `observed`), never inventing an observed digest for a missing file, and
   the approval snapshot (`_capture_state`, `_snapshot_files`) covers each
   view's `evidence.json` beside its screenshot.
+- **A frontend label must name something that renders** (recovery
+  diagnostic lane, 2026-10-09). The orchestrator picked kinds from bare
+  label names and was never told that `frontend` commits a task to a
+  real-browser capture; it labelled a CommonJS state model frontend and the
+  label alone ended the run before any lead call. `_KIND_REQUEST` now
+  states the rule, and a frontend task whose declared `permitted_paths`
+  name no rendered file (`_UI_PATH`) is sent back once
+  (`_FRONTEND_WITHOUT_RENDER`, counted against the dispatch corrections).
+  Named again as frontend, the label stands and capture applies in full:
+  this is a correction, never a waiver. A frontend task with no declared
+  paths is unchanged.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
