@@ -39,7 +39,7 @@ __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateS
 #: (phase 3, #25). Other runners have no producer: their failures are never
 #: attributable, so never repaired.
 REPORT_TOKEN = "{report}"
-PRODUCER = "quadratus-pytest/3"
+PRODUCER = "quadratus-pytest/4"
 #: The node:test producer (series rule-58a4625 f3: the second cycle in a row
 #: ended on a failing node UI test with the work done and the graders
 #: passing, because a node check had no producer and so no fix call). A
@@ -200,6 +200,7 @@ def _malformed(data) -> str:
     for f in failures:
         if (not isinstance(f, dict) or not isinstance(f.get("nodeid"), str) or f.get("when") not in _WHEN
                 or type(f.get("assertion")) is not bool
+                or not (f.get("body") is None or type(f.get("body")) is bool)
                 or not (f.get("exc_type") is None or isinstance(f.get("exc_type"), str))):
             return "a failure record"
     if counts["passed"] + counts["failed"] + counts["skipped"] > data["collected"]:
@@ -241,7 +242,8 @@ def read_report(path, expected) -> dict:
     return dict(state="parsed", exitstatus=data["exitstatus"], collected=data["collected"],
                 collect_errors=data["collect_errors"], counts={k: data["counts"][k] for k in _COUNTS},
                 failures=[dict(nodeid=f["nodeid"][:300], when=f["when"], exc_type=(f["exc_type"] or "")[:120],
-                               assertion=f["assertion"]) for f in data["failures"]],
+                               assertion=f["assertion"], body=f.get("body"))
+                          for f in data["failures"]],
                 truncated=data["truncated"])
 
 
@@ -268,7 +270,9 @@ def _report_reasons(gid, status, reason, returncode, report) -> list:
                      f"collected, {counts['failed']} failed, {len(failures)} recorded)")
     # The producer records whether the exception's type *is* AssertionError;
     # a name is only shown, never trusted.
-    other = sorted({f["exc_type"] for f in failures if f["when"] != "call" or not f["assertion"]})
+    other = sorted({f["exc_type"] + (" raised outside the test body"
+                                     if f["when"] == "call" and f.get("body") is False else "")
+                    for f in failures if f["when"] != "call" or not f["assertion"]})
     if other:
         found.append(f"{gid}: failures that are not assertions: {', '.join(other)[:200]}")
     return found
@@ -280,7 +284,9 @@ def attribute(result) -> dict:
     Only facts decide, never prose, counts alone or message wording: every
     failed required check exited 1 on its own, declared the harness report,
     and that report (this invocation's, by nonce) shows only test-body
-    failures raised as a plain ``AssertionError``, with no collection, setup
+    failures raised as a plain ``AssertionError`` whose traceback passes
+    through the test function's own frame (a call-phase hook that asserts
+    before the body runs is not the test), with no collection, setup
     or teardown error and a consistent record. Anything else is not the
     application's to repair, and the reasons say why. A pass is not product.
     """

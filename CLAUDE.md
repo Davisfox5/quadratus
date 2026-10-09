@@ -417,6 +417,16 @@ Key design decisions already settled:
   survivor is carried loudly into the close-out. Sequencing + the map keep
   pieces consistent; only execution proves them, and no model is in this
   loop.
+- **A test assertion is one raised through the test's own frame** (Codex
+  attribution assessment on 4a273a3). Pytest reports a failure from a
+  `pytest_runtest_call` or `pytest_pyfunc_call` hook in the call phase, so
+  a hook that asserted before the body ran was attributed as a product
+  failure and could buy an application repair. The producer
+  (`quadratus-pytest/4`) records `body`: whether the exception's traceback
+  passes through the unwrapped test function's code object, and
+  `assertion` now requires it. Expected-exception failures (`pytest.raises`
+  with nothing raised, `builtins.Failed`) stay unattributable: that is a
+  stated capability gap, not something this change widens.
 - **A runtime-dependency tree is part of what a check proves**
   (`deptree.py`, contract v2 on #25). Run 19: a lead wrote a
   `node_modules` shim the source checks could not see, and the project's

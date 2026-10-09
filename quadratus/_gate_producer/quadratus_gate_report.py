@@ -20,7 +20,7 @@ import hashlib
 import json
 import os
 
-PRODUCER = "quadratus-pytest/3"
+PRODUCER = "quadratus-pytest/4"
 MAX_FAILURES = 200
 
 import pytest  # noqa: E402 -- after the constants a reader of this file wants first
@@ -35,6 +35,36 @@ def pytest_configure(config):
     path = config.getoption("--quadratus-report")
     if path:
         config.pluginmanager.register(_Recorder(path), "quadratus-gate-recorder")
+
+
+def _test_code(item):
+    """The code object of the test function itself, unwrapped through
+    decorators; None when the item has no plain function behind it."""
+    import inspect
+    function = getattr(item, "function", None)
+    try:
+        function = inspect.unwrap(getattr(function, "__func__", function))
+    except Exception:  # noqa: BLE001 -- unknown stays unknown
+        return None
+    return getattr(function, "__code__", None)
+
+
+def _from_body(item, excinfo):
+    """Whether the exception's traceback passes through the test function's
+    own frame: the body ran and the failure came from it or from code it
+    called. A hook that fails before or around the body (pytest_runtest_call,
+    pytest_pyfunc_call) never has that frame, though pytest reports it in the
+    call phase (Codex attribution assessment on 4a273a3: a call-hook
+    AssertionError was admitted as a product failure with the body unrun)."""
+    code = _test_code(item)
+    if excinfo is None or code is None:
+        return False
+    tb = getattr(excinfo, "tb", None)
+    while tb is not None:
+        if tb.tb_frame.f_code is code:
+            return True
+        tb = tb.tb_next
+    return False
 
 
 def _type_name(excinfo):
@@ -63,9 +93,13 @@ class _Recorder:
         outcome = yield
         report = outcome.get_result()
         report.quadratus_exc = _type_name(call.excinfo)
+        report.quadratus_body = call.when == "call" and _from_body(item, call.excinfo)
         # Identity, not a name: pytest's own outcome exceptions report their
         # module as "builtins", so a name can be spoofed; the type cannot.
-        report.quadratus_assertion = call.excinfo is not None and call.excinfo.type is AssertionError
+        # And provenance, not the phase: only an assertion raised through the
+        # test function's own frame is a test assertion.
+        report.quadratus_assertion = (call.excinfo is not None and call.excinfo.type is AssertionError
+                                      and report.quadratus_body)
 
     def pytest_runtest_logreport(self, report):
         if report.when == "call":
@@ -88,7 +122,8 @@ class _Recorder:
             return
         self.failures.append(dict(nodeid=report.nodeid[:300], when=report.when,
                                   exc_type=getattr(report, "quadratus_exc", None),
-                                  assertion=getattr(report, "quadratus_assertion", False) is True))
+                                  assertion=getattr(report, "quadratus_assertion", False) is True,
+                                  body=getattr(report, "quadratus_body", False) is True))
 
     def pytest_sessionfinish(self, session, exitstatus):
         with open(__file__, "rb") as source:

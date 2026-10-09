@@ -37,7 +37,8 @@ def test_a_plain_assertion_in_a_test_body_is_product(tmp_path):
     result = _gate(tmp_path, "def test_a():\n    assert 1 == 2\n\ndef test_b():\n    pass\n")
     assert result.report["state"] == "parsed" and result.report["exitstatus"] == 1
     assert result.report["failures"] == [dict(nodeid="test_app.py::test_a", when="call",
-                                              exc_type="builtins.AssertionError", assertion=True)]
+                                              exc_type="builtins.AssertionError", assertion=True,
+                                              body=True)]
     assert attribute(result) == dict(product=True, reasons=[])
     assert not list(tmp_path.glob("*.json")), "the report lives outside the project"
 
@@ -117,7 +118,7 @@ EXPECTED = dict(nonce="n1", module_file="/owned/quadratus_gate_report_ab.py", mo
 
 
 def _report(**changes):
-    good = dict(producer="quadratus-pytest/3", nonce="n1", module_file=EXPECTED["module_file"],
+    good = dict(producer="quadratus-pytest/4", nonce="n1", module_file=EXPECTED["module_file"],
                 module_sha256=EXPECTED["module_sha256"], exitstatus=1, collected=1, collect_errors=0,
                 counts=dict(passed=0, failed=1, errors=0, skipped=0),
                 failures=[dict(nodeid="t", when="call", exc_type="builtins.AssertionError", assertion=True)],
@@ -230,7 +231,7 @@ def pytest_addoption(parser):
 
 def pytest_sessionfinish(session, exitstatus):
     path = session.config.getoption("--quadratus-report")
-    json.dump(dict(producer="quadratus-pytest/3", nonce=os.environ.get("QUADRATUS_GATE_NONCE", ""),
+    json.dump(dict(producer="quadratus-pytest/4", nonce=os.environ.get("QUADRATUS_GATE_NONCE", ""),
                    module_file=os.path.realpath(__file__), module_sha256="0" * 64, exitstatus=1,
                    collected=1, collect_errors=0, counts=dict(passed=0, failed=1, errors=0, skipped=0),
                    failures=[dict(nodeid="x", when="call", exc_type="builtins.AssertionError",
@@ -287,7 +288,7 @@ def test_a_node_assertion_failure_is_product_and_the_tap_count_survives(tmp_path
     result = _node_gate(tmp_path, body)
     assert result.returncode == 1 and result.report["state"] == "parsed", result.report
     assert result.report["failures"] == [dict(nodeid=result.report["failures"][0]["nodeid"], when="call",
-                                              exc_type="AssertionError", assertion=True)]
+                                              exc_type="AssertionError", assertion=True, body=None)]
     assert result.report["counts"] == dict(passed=1, failed=1, errors=0, skipped=0)
     assert attribute(result) == dict(product=True, reasons=[])
     assert "# pass 1" in result.output and "# fail 1" in result.output, "TAP stays on stdout for the count"
@@ -354,3 +355,55 @@ def test_a_nested_node_runtime_error_is_still_not_product(tmp_path):
             "test('parent', async (t) => { await t.test('child', () => { null.x(); }); });\n")
     result = _node_gate(tmp_path, body)
     assert result.report["counts"]["errors"] == 0 and "TypeError" in _reasons(result)
+
+
+# -- provenance: only an assertion raised through the test function's frame counts --------
+
+def test_a_call_hook_assertion_with_the_body_unrun_is_not_product(tmp_path):
+    """Codex attribution assessment on 4a273a3: a tryfirst pytest_runtest_call
+    hook raised AssertionError before the body ran; pytest reports it in the
+    call phase, and it was admitted as a product failure."""
+    (tmp_path / "conftest.py").write_text(
+        "import pytest\n\n@pytest.hookimpl(tryfirst=True)\n"
+        "def pytest_runtest_call(item):\n    assert False, 'runner environment not ready'\n")
+    result = _gate(tmp_path, "def test_a():\n    pass\n")
+    verdict = attribute(result)
+    assert verdict["product"] is False
+    assert "builtins.AssertionError raised outside the test body" in _reasons(result)
+
+
+def test_a_pyfunc_hook_assertion_is_not_product(tmp_path):
+    (tmp_path / "conftest.py").write_text(
+        "import pytest\n\n@pytest.hookimpl(tryfirst=True)\n"
+        "def pytest_pyfunc_call(pyfuncitem):\n    assert False, 'plugin refused'\n")
+    assert attribute(_gate(tmp_path, "def test_a():\n    pass\n"))["product"] is False
+
+
+@pytest.mark.parametrize("body", [
+    # A helper the body calls: the body's frame is on the traceback.
+    "def check(x):\n    assert x == 2\n\ndef test_a():\n    check(1)\n",
+    # pytest.raises(match=) fails with an AssertionError inside the body.
+    "import pytest\n\ndef test_a():\n    with pytest.raises(ValueError, match='right'):\n"
+    "        raise ValueError('wrong')\n",
+    # A method in a test class.
+    "class TestThing:\n    def test_a(self):\n        assert 1 == 2\n",
+    # A decorated test: unwrapped to the function the body is.
+    "import functools\n\ndef deco(f):\n    @functools.wraps(f)\n    def wrap(*a, **k):\n"
+    "        return f(*a, **k)\n    return wrap\n\n@deco\ndef test_a():\n    assert 1 == 2\n",
+    # A parametrized test.
+    "import pytest\n\n@pytest.mark.parametrize('n', [1])\ndef test_a(n):\n    assert n == 2\n",
+])
+def test_assertions_raised_through_the_body_stay_product(tmp_path, body):
+    result = _gate(tmp_path, body)
+    assert attribute(result)["product"] is True, _reasons(result)
+
+
+def test_a_report_without_the_body_field_still_parses(tmp_path):
+    """The body field is optional in the schema; an assertion still decides."""
+    from quadratus.integration import _malformed
+    record = dict(producer="quadratus-pytest/4", exitstatus=1, collected=1, collect_errors=0,
+                  counts=dict(passed=0, failed=1, errors=0, skipped=0), truncated=False,
+                  failures=[dict(nodeid="t::a", when="call", exc_type="builtins.AssertionError", assertion=True)])
+    assert _malformed(record) == ""
+    record["failures"][0]["body"] = "yes"
+    assert _malformed(record) == "a failure record"
