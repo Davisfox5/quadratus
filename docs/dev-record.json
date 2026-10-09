@@ -2095,6 +2095,33 @@
         "claude: gui-sort-v4 reconciled with Codex (#35 6076018142, body f1c9f50d71f8abfd554981716947f27ac530248aeeb61f4987a4b920874efaa7): reconciliation #35 6076027284. Correction to my 6075983490: Preview was pressed (browser.py line 64) but not awaited; the helper checked only for 'Policy preview failed:' and screenshotted before the preview rendered, so the empty panel does not show Preview was skipped. Agreed: operator/input preparation defect, engine enforced policy, no engine finding, zero-model truthful incomplete, four byte-matched production downloads, process facts, v4 preserved. v5 requirements: new project/run, same baseline/tests/goal/engine, only tests/sorting/ writable, installed resolver accepts and refuses the 23 individually, browser awaits preview and refuses any Blocked row/error/ambiguous hash/changed scope; freeze to record empty blocked list and plan hash.",
         "claude: gui-sort-v5 final freeze verified on 119c83f: #46 6076103271 (stored body b58db8dc57955686398de035689131e92daf2c6e4f99a172a84736168dc14eb3). 7 parts #35 6076056911..6076059184 GET-read, body hashes recomputed; bundle 2b16442f2c3610a2136a7ff4dd29f1a5cf238cea4dc210b04c4a4fa04bcd6e23 (1,067,077 bytes, 112 files, no mismatch); freeze 5794f39a..., config.prepared 2d9d886f..., root-policy-validation d7d456b0.... 919 engine entries match 119c83f; 81 project files identical to v4; goal adds only the tests/sorting/ paragraph. Own resolver run: v5 blocked empty, v4-style tests declaration 23 blocked, each forbidden test refused, tests/sorting files allowed; plan hash b8be73e2... reproduced with the Mac venv interpreter path (hash depends on sys.executable). Browser awaits a completed preview and refuses Blocked/failure/ambiguous hash/scope drift, but does not compare the visible hash to freeze plan_hash (observation for a future helper, not blocking). 12 limits carried. No launch from this session."
       ]
+    },
+    {
+      "id": "T-unexecuted-acceptance",
+      "purpose": "Engine correction from series rule-119c83f f2 and gui-sort-v5 t4 (Codex #35 6076219864, decision D 6076286834, observation 6076559403): run-start test and support files are checked in their run-start form when changed (gate receipts original-tests:<id>, again at DONE); the audit sees unnamed test files and NOT RUN/BLOCKED reports and skip increases, and lowers MET deterministically (downward only); reviewers told which original tests changed. On #53 (claude/engine-repairs-3): 1e00ada, b6ba3ba. No new grants; active 119 engines unchanged.",
+      "base": "119c83f0d76111855bd26e2934d007df874e0f52",
+      "owns": [
+        "quadratus/integration.py",
+        "quadratus/session.py",
+        "quadratus/runtime.py",
+        "quadratus/project_run.py",
+        "tests/test_original_tests.py",
+        "tests/test_unexecuted_acceptance.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-09T07:38:35Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "b6ba3ba8c2595e93b26fdb40ccb38d3fc5e1712e",
+        "at": "2026-10-09T07:38:36Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "claude: Pushed to #53 at b6ba3ba on Codex's sequencing (#35 6076601164); notice #53 6076608589 (body bfb6376c82e7473ca8186d72f232767f0c3ed4c94660ed7b4717ff8f4dd60f7d). Focused 24 passed; full suite and CI pending. Stopped preliminary logs full1/full2/full3 preserved."
+      ]
     }
   ],
   "receipts": [
