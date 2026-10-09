@@ -112,12 +112,75 @@ def test_a_valid_independently_reviewed_candidate_qualifies():
     _claim(rec)
     R.deliver(rec, task_id="T1", sha="e" * 40, exists=lambda s: True)
     R.review(rec, task_id="T1", reviewer="codex", sha="e" * 40, verdict="cleared", evidence="u")
-    R.integrate(rec, task_id="T1", sha="e" * 40, candidate="n" * 40)
+    R.integrate(rec, task_id="T1", sha="e" * 40, candidate="n" * 40, exists=lambda s: True, contains=lambda c, s: True)
     for kind in ("ci", "acceptance", "review"):
         R.receipt(rec, kind=kind, sha="n" * 40, state="passed", evidence="x")
     r = R.readiness(rec)
     assert r["ready"] and r["candidate"] == "n" * 40 and not r["open_tasks"] and not r["blockers"]
     assert "ready;" in R.render(rec)
+
+
+def test_a_reviewed_but_unintegrated_task_keeps_the_candidate_open():
+    rec = _record()
+    for kind in ("ci", "acceptance", "review"):
+        R.receipt(rec, kind=kind, sha=CANDIDATE, state="passed", evidence="x")
+    assert R.readiness(rec)["ready"]
+    _claim(rec)
+    R.deliver(rec, task_id="T1", sha="e" * 40, exists=lambda s: True)
+    R.review(rec, task_id="T1", reviewer="codex", sha="e" * 40, verdict="cleared", evidence="u")
+    r = R.readiness(rec)
+    assert rec["tasks"][0]["state"] == "reviewed" and r["open_tasks"] == ["T1"] and not r["ready"]
+    R.integrate(rec, task_id="T1", sha="e" * 40, candidate="n" * 40, exists=lambda s: True, contains=lambda c, s: True)
+    assert not R.readiness(rec)["open_tasks"]
+
+
+def test_integration_takes_only_the_reviewed_delivery_and_a_candidate_on_origin():
+    rec = _record()
+    _claim(rec)
+    R.deliver(rec, task_id="T1", sha="e" * 40, exists=lambda s: True)
+    R.review(rec, task_id="T1", reviewer="codex", sha="e" * 40, verdict="cleared", evidence="u")
+    with pytest.raises(R.RecordError, match="not the reviewed delivery"):
+        R.integrate(rec, task_id="T1", sha="f" * 40, candidate="n" * 40, exists=lambda s: True, contains=lambda c, s: True)
+    with pytest.raises(R.RecordError, match="not on origin"):
+        R.integrate(rec, task_id="T1", sha="e" * 40, candidate="n" * 40, exists=lambda s: False,
+                    contains=lambda c, s: True)
+    with pytest.raises(R.RecordError, match="does not contain the reviewed delivery"):
+        R.integrate(rec, task_id="T1", sha="e" * 40, candidate=CANDIDATE, exists=lambda s: True,
+                    contains=lambda c, s: False)
+    assert rec["tasks"][0]["state"] == "reviewed" and rec["candidate"]["sha"] == CANDIDATE
+    R.integrate(rec, task_id="T1", sha="e" * 40, candidate="n" * 40, exists=lambda s: s == "n" * 40,
+                contains=lambda c, s: (c, s) == ("n" * 40, "e" * 40))
+    assert rec["tasks"][0]["state"] == "integrated" and rec["candidate"]["sha"] == "n" * 40
+
+
+def test_a_review_scope_stays_inside_the_owned_files_and_clears_only_when_it_covers_them():
+    rec = _record()
+    _claim(rec, owns=["quadratus/a.py", "docs/b.md"])
+    R.deliver(rec, task_id="T1", sha="e" * 40, exists=lambda s: True)
+    with pytest.raises(R.RecordError, match="outside what T1 owns"):
+        R.review(rec, task_id="T1", reviewer="codex", sha="e" * 40, verdict="cleared", evidence="u",
+                 scope=["quadratus/other.py"])
+    partial = R.review(rec, task_id="T1", reviewer="codex", sha="e" * 40, verdict="cleared", evidence="u",
+                       scope=["quadratus/a.py"])
+    assert partial["coverage"] == "partial" and partial["uncovered"] == ["docs/b.md"]
+    assert rec["tasks"][0]["state"] == "delivered"
+    full = R.review(rec, task_id="T1", reviewer="codex", sha="e" * 40, verdict="cleared", evidence="u",
+                    scope=["quadratus/a.py", "docs/b.md"])
+    assert "coverage" not in full and rec["tasks"][0]["state"] == "reviewed"
+
+
+def test_a_mutating_command_waits_for_the_lock_and_is_refused_when_it_cannot_get_it(tmp_path, monkeypatch):
+    path = tmp_path / "rec.json"
+    path.write_text(json.dumps(_record()))
+    monkeypatch.setattr(R, "LOCK_TIMEOUT", 0.2)
+    argv = ["--record", str(path), "claim", "--id", "T1", "--purpose", "p", "--base", CANDIDATE,
+            "--owns", "quadratus/a.py", "--author", "claude"]
+    with R.locked(path):
+        assert R.main(argv) == 2
+        assert json.loads(path.read_text())["tasks"] == []
+        assert R.main(["--record", str(path), "ready"]) == 0
+    assert R.main(argv) == 0
+    assert json.loads(path.read_text())["tasks"][0]["id"] == "T1"
 
 
 def test_the_cli_round_trips_through_the_file(tmp_path, monkeypatch):

@@ -32,8 +32,14 @@ their evidence; it never copies it and never turns an UNPROVEN row green.
 2. One author and one independent reviewer own each area. A review is bound
    to the exact reviewed commit and scope (`review --sha`); the author's own
    review is not an independent receipt. A later delivery marks earlier
-   reviews stale and keeps their evidence.
-3. A delivery is a commit on origin (`deliver`), nothing local.
+   reviews stale and keeps their evidence. A review scope names only files
+   the task owns; a scope covering part of them is recorded as partial and
+   does not clear the task.
+3. A delivery is a commit on origin (`deliver`), nothing local. So is the
+   candidate `integrate` moves to; the integrated SHA is the delivery the
+   cleared review covered, and the new candidate must contain it (the
+   delivery is an ancestor of the candidate), since a candidate on origin
+   that never took the work in is not an integration.
 4. When a shared setting or handoff is faulty, inventory all its consumers
    and deliver one bounded correction for the shared cause. Review the change
    and its relevant neighbours; repeat a cleared review only for a concrete
@@ -50,7 +56,12 @@ their evidence; it never copies it and never turns an UNPROVEN row green.
 7. Required receipts (CI, acceptance, independent review) are recorded per
    exact SHA (`receipt`) with failed, missing, skipped and unproven kept
    distinct; `ready` says whether the candidate can integrate and names what
-   stands in the way.
+   stands in the way. A task that is claimed, delivered or reviewed but not
+   integrated keeps the candidate open.
+8. Every mutating command holds a lock on the record for its whole
+   load, validate and save, so two agents acting at once cannot both pass
+   validation and silently overwrite each other. A command that cannot get
+   the lock within `LOCK_TIMEOUT` is refused, not queued.
 
 Any direct action taken outside the tool stays visible as unqualified until
 it is reconciled into the record. A candidate that moved without
