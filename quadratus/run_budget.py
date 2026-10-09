@@ -147,9 +147,10 @@ def describe_limits(limits, survey=None, max_tasks=None) -> str:
         parts.append('No shared run allowance: model calls, reported tokens and time are not capped '
                      'for this run.')
     else:
-        parts.append(f'At most {limits.max_calls:,} model calls, {limits.max_reported_tokens:,} reported '
-                     f'tokens in total and {limits.wall_seconds:,g} seconds; '
-                     f'{limits.max_concurrent_workers} parallel worker(s).')
+        parts.append(f'At most {limits.max_calls:,} model calls and {limits.max_reported_tokens:,} reported '
+                     f'tokens in total; {limits.max_concurrent_workers} parallel worker(s).')
+        parts.append(f'Time limit {limits.wall_seconds:,g} seconds: no call starts after it and each call '
+                     'gets only the time left, but checks and captures between calls are not cut off.')
         if limits.reserve_tokens_per_call:
             parts.append(f'A call starts only while at least {limits.reserve_tokens_per_call:,} tokens '
                          'of the total remain.')

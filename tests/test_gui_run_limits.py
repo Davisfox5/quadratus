@@ -69,7 +69,7 @@ def test_the_survey_allowance_itself_refuses_a_negative_or_non_whole_count():
 
 def test_the_summary_states_every_number_and_never_promises_a_ceiling():
     text = gui.limits_summary(10, *gui.preset_values(DIAGNOSTIC))
-    for number in ("Task limit: 10", "90 model calls", "5,000,000 reported", "3,600 seconds",
+    for number in ("Task limit: 10", "90 model calls", "5,000,000 reported", "Time limit 3,600 seconds", "not cut off",
                    "2 parallel", "250,000 tokens", "1,500,000 tokens", "up to 4 extra"):
         assert number in text, number
     assert "not a hard ceiling" in text and "not an invoice" in text
@@ -146,7 +146,7 @@ def test_the_runner_saves_the_selected_allowance_before_any_model_call(tmp_path,
     record = json.loads((result.run_dir / 'result.json').read_text())
     assert record['selected_limits'] == seen['saved']
     assert record['budget']['limits']['reserve_tokens_per_call'] == 250_000
-    assert any(n.startswith('Run limits: Task limit: 10. At most 90 model calls') for n in notes)
+    assert any(n.startswith('Run limits: Task limit: 10. At most 90 model calls and 5,000,000') for n in notes)
 
 
 def test_a_busy_port_suggestion_stays_inside_the_accepted_range(monkeypatch):
