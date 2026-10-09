@@ -969,7 +969,15 @@ Key design decisions already settled:
   `{project}/relative` to project-relative paths, the way `env` does,
   refuses any other `{name}`, and refuses a script an interpreter is told
   to run (`python x.py`, `node x.mjs`) that is not a file in the project.
-  The profile loads before any model call, so these cost nothing.
+  The profile loads before any model call, so these cost nothing. The
+  script is found through a bounded option grammar (Codex review of
+  3e95645: `python -u missing.py` and extensionless scripts slipped by):
+  Python single-letter flags, `-W`/`-X` values and `--`; Node long
+  options and the known valued ones (`-r`, `--require`, `--import`, ...).
+  `python -m`/`-c` and `node -e`/`-p` name no script; an option the grammar
+  does not know, or one that prompts or exits (`-i`, `--version`,
+  `--check`), is refused. A project file merely named like an interpreter
+  (`./python3`) is the program itself and is not parsed.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

@@ -88,6 +88,23 @@ def _server(port, directory="."):
     (dict(preview=["python", "{project}/../outside.py"]), "outside the project"),
     (dict(preview=["python", "missing/preview.py"]), "is not a file in the project"),
     (dict(preview=["node", "server.mjs"]), "is not a file in the project"),
+    # Codex review of 3e95645: options before the script, and extensionless scripts.
+    (dict(preview=["python", "-u", "missing.py"]), "is not a file in the project"),
+    (dict(preview=["python", "-B", "missing.py"]), "is not a file in the project"),
+    (dict(preview=["python", "-X", "utf8", "missing.py"]), "is not a file in the project"),
+    (dict(preview=["python", "-Xutf8", "-uB", "missing.py"]), "is not a file in the project"),
+    (dict(preview=["python", "-W", "ignore", "--", "missing.py"]), "is not a file in the project"),
+    (dict(preview=["node", "--no-warnings", "missing.js"]), "is not a file in the project"),
+    (dict(preview=["node", "--require", "app.py", "missing.js"]), "is not a file in the project"),
+    (dict(preview=["python", "missing_script"]), "is not a file in the project"),
+    (dict(preview=["node", "missing_script"]), "is not a file in the project"),
+    (dict(preview=["python3.12", "-u", "missing_script"]), "is not a file in the project"),
+    (dict(preview=["python"]), "with no script"),
+    (dict(preview=["python", "-u"]), "with no script"),
+    (dict(preview=["python", "--version"]), "is not one the harness can read"),
+    (dict(preview=["python", "-i", "app.py"]), "is not one the harness can read"),
+    (dict(preview=["node", "-i"]), "is not one the harness can read"),
+    (dict(preview=["node", "--check", "app.py"]), "is not one the harness can read"),
 ])
 def test_an_unusable_profile_is_refused(tmp_path, data, message):
     (tmp_path / "app.py").write_text("")
@@ -127,6 +144,26 @@ def test_project_placeholders_in_the_preview_command_are_made_project_relative(t
     profile = profile_from_dict(dict(preview=["python", "-m", "http.server", "5000"],
                                      origin="http://127.0.0.1:5000"), tmp_path)
     assert profile.preview == ("python", "-m", "http.server", "5000"), "a module run names no script"
+
+
+@pytest.mark.parametrize("argv", [
+    ["python", "-u", "app.py"], ["python", "-X", "utf8", "-B", "app.py"], ["python", "--", "app.py"],
+    ["python", "-m", "http.server", "5000"], ["python", "-mhttp.server"], ["python", "-c", "print(1)"],
+    ["python", "serve"], ["node", "--no-warnings", "serve"], ["node", "--env-file=.env.local", "serve"],
+    ["node", "-e", "require('http')"], ["node", "--require", "app.py", "serve"],
+])
+def test_interpreter_options_modules_and_extensionless_scripts_are_read(tmp_path, argv):
+    (tmp_path / "app.py").write_text("")
+    (tmp_path / "serve").write_text("")
+    (tmp_path / ".env.local").write_text("")
+    profile = profile_from_dict(dict(preview=argv, origin="http://127.0.0.1:5000"), tmp_path)
+    assert profile.preview == tuple(argv)
+
+
+def test_a_project_file_named_like_an_interpreter_is_the_program_itself(tmp_path):
+    (tmp_path / "python3").write_text("#!/bin/sh\nexit 0\n")
+    for argv in (["./python3"], [str(tmp_path / "python3")]):
+        assert profile_from_dict(dict(preview=argv, origin="http://127.0.0.1:5000"), tmp_path).preview == tuple(argv)
 
 
 def test_a_usable_profile_is_accepted(tmp_path):
@@ -758,8 +795,17 @@ def test_a_state_changing_capture_gets_one_preview_per_view(tmp_path, monkeypatc
         with original(profile, root, deadline):
             yield
     monkeypatch.setattr(preview, "running", counting)
-    (tmp_path / "record.py").write_text("import sys, pathlib\n"
-                                        "pathlib.Path('argv.log').open('a').write(' '.join(sys.argv[1:]) + '\\n')\n")
+    # Writes what a capture writes, so the harness can measure each view
+    # (d6e145d: a view with nothing to measure stops the attempt).
+    (tmp_path / "record.py").write_text(
+        "import sys, pathlib\n"
+        "pathlib.Path('argv.log').open('a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+        f"root = pathlib.Path({str(tmp_path)!r}) / '.quadratus' / 'design-evidence' / 't1'\n"
+        "views = [sys.argv[sys.argv.index('--view') + 1]] if '--view' in sys.argv else ['desktop', 'mobile']\n"
+        "for view in views:\n"
+        "    (root / view).mkdir(parents=True, exist_ok=True)\n"
+        "    (root / view / 'page.png').write_bytes(b'png')\n"
+        "    (root / view / 'evidence.json').write_text('{}')\n")
     real_argv = preview.capture_argv
 
     def argv(profile, task_id, capture, view=None, attempt=None, measured=None):
@@ -787,6 +833,11 @@ def test_the_capture_allowance_is_shared_across_the_views_of_one_attempt(tmp_pat
 
     def once(profile, root, argv, deadline, allowance):
         granted.append(allowance)
+        view = argv[argv.index("--view") + 1]
+        folder = root / ".quadratus" / "design-evidence" / "t1" / view
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "page.png").write_bytes(b"png")
+        (folder / "evidence.json").write_text("{}")
         return "", 35.0
     monkeypatch.setattr(preview, "_capture_once", once)
     profile = _profile(tmp_path, _server(5000), 5000, total_timeout=300, capture_timeout=90)

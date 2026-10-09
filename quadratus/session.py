@@ -663,7 +663,11 @@ def _frontend_without_rendered_file(spec) -> bool:
     if getattr(spec, "kind", None) != TaskKind.FRONTEND:
         return False
     paths = getattr(getattr(spec, "scope", None), "permitted_paths", ()) or ()
-    return bool(paths) and not any(_UI_PATH.search(str(p)) for p in paths)
+    # A bare UI directory ("static", "templates") is a rendered scope too:
+    # the path rule wants its trailing slash (the direct-tier admission
+    # tests declare permitted_paths=["static"]).
+    return bool(paths) and not any(_UI_PATH.search(str(p)) or _UI_PATH.search(str(p).rstrip("/") + "/")
+                                   for p in paths)
 
 
 #: The one send-back for a frontend label whose scope renders nothing: the

@@ -194,6 +194,76 @@ def _timeout(value, name: str) -> float:
     return float(value)
 
 
+#: Python options that take no value, as single letters (combinable: -uB).
+_PY_FLAGS = set("bBdEIOPqRsSux")
+#: Node options whose value is the next argument.
+_NODE_VALUED = {"-r", "--require", "--import", "--loader", "--experimental-loader", "-C", "--conditions",
+                "--input-type", "--title", "--env-file", "--redirect-warnings", "--icu-data-dir"}
+#: Options that print or open a prompt and exit: never a preview.
+_NOT_A_SERVER = {"-h", "--help", "-V", "-v", "--version", "-i", "--interactive", "-c", "--check", "-"}
+
+
+def _interpreter_script(argv, root: Optional[Path] = None) -> Optional[str]:
+    """The script file a ``python`` or ``node`` preview command runs, found
+    through a bounded option grammar; None when the command runs a module or
+    inline code (``python -m``/``-c``, ``node -e``/``-p``) or is not one of
+    those interpreters. Raises ValueError for a form the grammar does not
+    know, since the harness cannot say what it would run."""
+    name = Path(argv[0]).name
+    is_python = re.fullmatch(r"python[\d.]*", name) is not None
+    if not is_python and name != "node":
+        return None
+    if argv[0] != name:
+        # A path, not a bare interpreter name: a project file that is merely
+        # named like one (./python3, <project>/python3) is the program itself.
+        first = Path(argv[0])
+        if not first.is_absolute():
+            return None
+        if root is not None:
+            try:
+                if first.resolve().is_relative_to(Path(root).resolve()) or first.parent.resolve().is_relative_to(
+                        Path(root).resolve()):
+                    return None
+            except (OSError, RuntimeError):
+                return None
+    args, i = list(argv[1:]), 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            i += 1
+            break
+        if not arg.startswith("-") or arg == "-":
+            break
+        if is_python:
+            if arg in ("-m", "-c") or arg[:2] in ("-m", "-c"):
+                return None                       # a module or inline code, not a file
+            if arg in ("-W", "-X"):
+                i += 2
+                continue
+            if arg[:2] in ("-W", "-X"):
+                i += 1
+                continue
+            if not arg.startswith("--") and len(arg) > 1 and set(arg[1:]) <= _PY_FLAGS:
+                i += 1
+                continue
+        else:
+            option = arg.split("=", 1)[0]
+            if option in ("-e", "--eval", "-p", "--print"):
+                return None
+            if option in _NODE_VALUED:
+                i += 1 if "=" in arg else 2
+                continue
+            if arg.startswith("--") and option not in _NOT_A_SERVER:
+                i += 1
+                continue
+        raise ValueError(f"capture profile preview option {arg[:40]!r} is not one the harness can read; "
+                         f"start the {name} preview as '{name} [options] <script in the project>'"
+                         + (" or 'python -m <module>'" if is_python else ""))
+    if i >= len(args) or args[i] == "-":
+        raise ValueError(f"capture profile preview runs {name} with no script; name the project file it serves")
+    return args[i]
+
+
 def _project_relative(argument: str) -> str:
     """A preview argument with ``{project}`` written the way ``env`` accepts
     it, made project-relative: the preview runs in the project, so
@@ -249,15 +319,15 @@ def profile_from_dict(data, root) -> CaptureProfile:
             problem = _path_problem(value, root)
             if problem:
                 raise ValueError(f"capture profile preview argument {argument[:60]!r} is {problem}")
-    script = argv[1] if len(argv) > 1 and re.fullmatch(r"python[\d.]*|node", Path(first).name) else None
-    if script is not None and not script.startswith("-") and (
-            "/" in script or PurePosixPath(script).suffix in (".py", ".js", ".mjs", ".cjs", ".ts")):
-        # The script an interpreter is told to run must be in the project
-        # now: a wrong path otherwise surfaces only when the harness first
-        # previews, after every editing and review call of the task has been
-        # spent (UI diagnostic lane on 4a273a3: 1.48M tokens, then exit 2).
-        if not (root / script).is_file():
-            raise ValueError(f"capture profile preview script {script[:80]!r} is not a file in the project")
+    # The script an interpreter is told to run must be in the project now: a
+    # wrong path otherwise surfaces only when the harness first previews,
+    # after every editing and review call of the task has been spent (UI
+    # diagnostic lane on 4a273a3: 1.48M tokens, then exit 2). The operand is
+    # found through the interpreter's own option grammar (Codex review of
+    # 3e95645: python -u missing.py and an extensionless script slipped by).
+    script = _interpreter_script(argv, root)
+    if script is not None and not (root / script).is_file():
+        raise ValueError(f"capture profile preview script {script[:80]!r} is not a file in the project")
     origin = data.get("origin")
     match = _ORIGIN.fullmatch(origin) if isinstance(origin, str) else None
     if not match or not 1024 <= int(match.group(2)) <= 65535:
