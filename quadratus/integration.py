@@ -590,6 +590,14 @@ class GateReceipt:
     runner_hash: str = ''
     #: The structured report (read_report), when the command declares one.
     report: Optional[dict] = None
+    #: Where the command ran, relative to the project: a file it names is
+    #: read from there (Codex review of 81adcc7, R5: ``node --test
+    #: browser.test.js`` in tests/ui never matched tests/ui/browser.test.js).
+    cwd: str = '.'
+    #: Test selection the runner takes from configuration or the environment
+    #: rather than from argv, '' when none was found (R2: ``addopts = -k
+    #: unit`` in pytest.ini ran one case of a named file and looked whole).
+    selection: str = ''
 
 
 def _test_count(output):
@@ -676,7 +684,8 @@ class GateSuite:
         for command in self.commands:
             config = hashlib.sha256(json.dumps(asdict(command), sort_keys=True).encode()).hexdigest()
             base = dict(id=command.id, required=command.required, command=shlex.join(command.argv),
-                        source_hash=source, config_hash=config)
+                        source_hash=source, config_hash=config, cwd=command.cwd,
+                        selection=config_selection(command.argv, self.cwd / command.cwd, self.cwd))
             if changed or command.skip_reason:
                 receipts.append(GateReceipt(**base, status='skipped',
                                             reason='source changed during a prior gate' if changed
@@ -815,7 +824,11 @@ def _runner_args(argv) -> list:
 
 def is_filtered(argv) -> bool:
     """Whether a command runs only part of what it names."""
-    for arg in _runner_args(argv):
+    return _has_filter(_runner_args(argv))
+
+
+def _has_filter(args) -> bool:
+    for arg in args:
         arg = str(arg)
         if '::' in arg:
             return True
@@ -826,8 +839,11 @@ def is_filtered(argv) -> bool:
     return False
 
 
-def operand_paths(argv, root=None) -> List[str]:
-    """The file operands a command names, project-relative where they can be."""
+def operand_paths(argv, root=None, cwd='.') -> List[str]:
+    """The file operands a command names, project-relative where they can
+    be: an absolute path inside ``root`` loses the root, and a relative one is
+    read from the command's ``cwd`` (R5)."""
+    import posixpath
     out = []
     for arg in _runner_args(argv):
         arg = str(arg)
@@ -835,8 +851,156 @@ def operand_paths(argv, root=None) -> List[str]:
             continue
         if root is not None and arg.startswith(str(root).rstrip('/') + '/'):
             arg = arg[len(str(root).rstrip('/')) + 1:]
+        elif not posixpath.isabs(arg):
+            arg = posixpath.normpath(posixpath.join(cwd or '.', arg))
         out.append(arg[2:] if arg.startswith('./') else arg)
     return out
+
+
+#: Files pytest reads ``addopts`` from, looked for from a command's cwd up to
+#: the project root.
+_PYTEST_CONFIGS = ('pytest.ini', '.pytest.ini', 'pyproject.toml', 'tox.ini', 'setup.cfg')
+
+
+def _is_pytest(argv) -> bool:
+    argv = [str(a) for a in argv]
+    return (any(Path(a).name in ('pytest', 'py.test') for a in argv[:3])
+            or (len(argv) > 2 and argv[1] == '-m' and argv[2] in ('pytest', 'py.test')))
+
+
+def _config_addopts(path: Path) -> Optional[str]:
+    """The pytest ``addopts`` one configuration file sets: '' for none,
+    None when the file exists and cannot be read (unknown, never none)."""
+    import configparser
+    if not path.is_file():
+        return ''
+    try:
+        text = path.read_text(encoding='utf-8')
+        if path.name == 'pyproject.toml':
+            import tomllib
+            tool = tomllib.loads(text).get('tool', {}) or {}
+            pytest_table = tool.get('pytest', {}) if isinstance(tool, dict) else {}
+            values = []
+            for table in (pytest_table.get('ini_options', {}), pytest_table):
+                value = table.get('addopts') if isinstance(table, dict) else None
+                if isinstance(value, list):
+                    value = shlex.join(str(v) for v in value)
+                if value:
+                    values.append(str(value))
+            return ' '.join(values)
+        parser = configparser.RawConfigParser()
+        parser.read_string(text)
+        sections = {'setup.cfg': ('tool:pytest',), 'tox.ini': ('pytest', 'tool:pytest')}.get(path.name, ('pytest',))
+        return ' '.join(parser.get(s, 'addopts') for s in sections
+                        if parser.has_section(s) and parser.has_option(s, 'addopts'))
+    except Exception:  # noqa: BLE001 -- unreadable selection is unknown selection
+        return None
+
+
+def config_selection(argv, cwd, root) -> str:
+    """Test selection a command takes from outside its argv: ``addopts`` in
+    pytest's configuration files from ``cwd`` up to ``root`` and
+    ``PYTEST_ADDOPTS`` for a pytest command, ``NODE_OPTIONS`` for any.
+    '' when none of them filters; an unreadable configuration counts.
+
+    Every candidate file is read, not only the one pytest would pick, so this
+    can name a file pytest ignores: it only ever withholds a "whole file ran"
+    reading, never grants one (Codex review of 81adcc7, R2)."""
+    found = []
+    names = ('NODE_OPTIONS', 'PYTEST_ADDOPTS') if _is_pytest(argv) else ('NODE_OPTIONS',)
+    for name in names:
+        value = os.environ.get(name, '')
+        if value and _filters(value):
+            found.append(f'{name}={value}')
+    if _is_pytest(argv):
+        try:
+            root, here = Path(root).resolve(), Path(cwd).resolve()
+        except OSError:
+            return 'command cwd unreadable'
+        while here.is_relative_to(root):
+            for name in _PYTEST_CONFIGS:
+                addopts = _config_addopts(here / name)
+                where = (here / name).relative_to(root).as_posix()
+                if addopts is None:
+                    found.append(f'{where}: unreadable')
+                elif addopts and _filters(addopts):
+                    found.append(f'{where}: addopts = {addopts}')
+            if here == root:
+                break
+            here = here.parent
+    return '; '.join(found)[:300]
+
+
+def _filters(options: str) -> bool:
+    try:
+        tokens = shlex.split(options)
+    except ValueError:
+        return True
+    return _has_filter(tokens)
+
+
+def deselected_count(output: str) -> int:
+    """Cases the runner's final summary line reports deselected (pytest
+    prints ``N deselected`` only when there are some)."""
+    for line in reversed((output or '').splitlines()):
+        found = re.findall(r'\b(\d+) (passed|failed|xfailed|xpassed|skipped|deselected|errors?)\b', line)
+        if found:
+            return sum(int(n) for n, kind in found if kind == 'deselected')
+    return 0
+
+
+_SPEC_CASE = re.compile(r'^\s*(\u2714|\u2716|\ufe63)\s+(.*?)\s+\([\d.]+m?s\)(?:\s+#\s*(.*?))?\s*$')
+_TAP_CASE = re.compile(r'^\s*(not ok|ok)\s+\d+\s+-\s+(.*?)(?:\s+#\s*(SKIP|TODO)\b.*?)?\s*$', re.I)
+_PYTEST_CASE = re.compile(r'^(\S+::\S+)\s+(PASSED|FAILED|SKIPPED|XFAIL|XPASS|ERROR)\b')
+
+
+def case_outcomes(output: str):
+    """``(skipped, executed)`` case names the runner printed, as Counters:
+    node's spec reporter (``\u2714``/``\u2716``/``\ufe63``), TAP (``ok N - name
+    # SKIP``) and pytest's verbose lines. Names, not file-qualified: node's
+    spec output carries no file per case. Todo cases are neither."""
+    from collections import Counter
+    skipped, executed = Counter(), Counter()
+    for line in (output or '').splitlines():
+        spec = _SPEC_CASE.match(line)
+        if spec:
+            mark, name, directive = spec.group(1), spec.group(2), (spec.group(3) or '')
+            if directive.upper().startswith('TODO'):
+                continue
+            (skipped if mark == '\ufe63' else executed)[name] += 1
+            continue
+        tap = _TAP_CASE.match(line)
+        if tap:
+            directive = (tap.group(3) or '').upper()
+            if directive == 'SKIP':
+                skipped[tap.group(2)] += 1
+            elif not directive:
+                executed[tap.group(2)] += 1
+            continue
+        case = _PYTEST_CASE.match(line)
+        if case:
+            (skipped if case.group(2) == 'SKIPPED' else executed)[case.group(1)] += 1
+    return skipped, executed
+
+
+def skipped_cases(receipt):
+    """The names of the cases a check skipped, as a Counter, when the output
+    names exactly as many as it counts; None otherwise (unknown)."""
+    count = skipped_count(receipt)
+    if count is None:
+        return None
+    skipped, _ = case_outcomes(getattr(receipt, 'output', '') or '')
+    return skipped if sum(skipped.values()) == count else None
+
+
+def added_selectors(originals: dict, current: dict) -> List[str]:
+    """Test-only configuration added since run start (a pytest.ini, a
+    conftest.py, a jest config): its appearance can deselect tests the
+    run-start suite ran, so it is a change to the original suite the same
+    way an edit is (Codex review of 81adcc7, R1). The original-test copy
+    leaves it out, as it leaves out every added support file."""
+    return sorted(name for name in current if name not in originals
+                  and (name.rsplit('/', 1)[-1] in _TEST_SUPPORT_NAMES or _TEST_CONFIG.search(name)))
 
 
 def original_tests(contents: dict) -> dict:

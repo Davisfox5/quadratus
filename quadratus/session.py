@@ -1141,16 +1141,24 @@ def _check_runs(check: dict, root=None) -> List[dict]:
     import shlex
     from types import SimpleNamespace
 
-    from .integration import _test_count, is_filtered, operand_paths, skipped_count
+    from .integration import (
+        _test_count,
+        case_outcomes,
+        deselected_count,
+        is_filtered,
+        operand_paths,
+        skipped_count,
+    )
     receipts = check.get("receipts") or ()
     if receipts:
         rows = [dict(id=r.get("id"), passed=r.get("status") == "passed", required=r.get("required", True),
                      command=str(r.get("command") or ""), output=r.get("output") or "", report=r.get("report"),
-                     tests=r.get("tests")) for r in receipts]
+                     tests=r.get("tests"), cwd=r.get("cwd") or ".", selection=r.get("selection") or "")
+                for r in receipts]
     else:
         rows = [dict(id="check", passed=bool(check.get("passed")), required=True,
                      command=str(check.get("command") or ""), output=check.get("output") or "",
-                     report=check.get("report"), tests=None)]
+                     report=check.get("report"), tests=None, cwd=".", selection=check.get("selection") or "")]
     out = []
     for row in rows:
         try:
@@ -1158,10 +1166,17 @@ def _check_runs(check: dict, root=None) -> List[dict]:
         except ValueError:
             argv = row["command"].split()
         tests = row["tests"] if row["tests"] is not None else _test_count(row["output"])
-        out.append(dict(id=row["id"], passed=row["passed"], required=row["required"], filtered=is_filtered(argv),
+        # Selection from configuration or the environment, or cases the runner
+        # reports deselected, is a filter as much as one in argv (Codex review
+        # of 81adcc7, R2: pytest.ini's addopts = -k unit printed "1 passed, 1
+        # deselected" for a named file and looked like a whole run).
+        filtered = is_filtered(argv) or bool(row["selection"]) or deselected_count(row["output"]) > 0
+        skipped_names, executed_names = case_outcomes(row["output"])
+        out.append(dict(id=row["id"], passed=row["passed"], required=row["required"], filtered=filtered,
                         tests=tests, skipped=skipped_count(SimpleNamespace(output=row["output"],
                                                                            report=row["report"])),
-                        files=set(operand_paths(argv, root))))
+                        files=set(operand_paths(argv, root, row["cwd"])),
+                        skipped_names=skipped_names, executed_names=executed_names))
     return out
 
 
@@ -1774,6 +1789,9 @@ class Session:
         self._original_tests: Optional[dict] = None
         #: Each run of the gate's commands against those bytes.
         self.original_test_runs: List[dict] = []
+        #: What the gate's commands skipped on the run-start source, measured
+        #: once when a check first skips cases (Session._skip_baseline).
+        self.skip_baselines: List[dict] = []
         #: Acceptance an editing call said it did not run ('NOT RUN:' lines):
         #: evidence that can only lower an audit verdict, never raise one.
         self.unexecuted_acceptance: List[dict] = []
@@ -5418,6 +5436,7 @@ class Session:
                 for entry in child.unexecuted_acceptance:
                     self.unexecuted_acceptance.append(dict(entry, after_check=len(self.checks)))
                 self.original_test_runs.extend(child.original_test_runs)
+                self.skip_baselines.extend(getattr(child, "skip_baselines", []))
                 # The child's design debt comes back with its findings, so a
                 # stop names it rather than a generic open finding (map G8).
                 self._design_unverified.extend(child._design_unverified)
@@ -5787,38 +5806,97 @@ class Session:
                 self.unexecuted_acceptance.append(entry)
                 self._note(f"task {task}: {role} reported NOT RUN: {entry['item'][:120]}")
 
-    def _note_skips(self, spec, result) -> None:
-        """A passing required command that skipped cases, once test files
-        changed in this run, is acceptance that did not run for the task's
+    def _note_skips(self, spec, result, gate=None) -> None:
+        """A passing required command that skipped cases the run-start source
+        did not skip is acceptance that did not run for the task's
         requirements (gui-sort-v5 t4: Node 37 passed, 2 browser cases skipped).
-        The first check counts like any other: no earlier count is needed,
-        because nothing here compares totals (F4: an unrelated old case that
-        ran cancelled a new required skip, and first-check skips lowered
-        nothing). Optional commands never record one. Without case identity
-        a skip stands until a later complete run of the same command, with
-        no skips at all, shows every case executed."""
-        from .integration import GateReceipt, skipped_count
+
+        What counts is the run's own effect, measured against the same
+        commands run once on the run-start source (``_skip_baseline``), not
+        whether test files changed: a product edit can turn a case into a skip
+        (Codex review of 81adcc7, R3), and a case skipped since before the run
+        is not this task's missing acceptance (R4). Where the runner names its
+        cases the new skips are those names; where it does not, a total above
+        run start's counts, and so does any skip once test files changed, so
+        an unrelated old case that now runs cannot hide a new skip (F4).
+        Without a baseline every skip counts. The first check counts like any
+        other; optional commands and the run-start compatibility receipts
+        (``original-tests:*``, immutable by design) never record one."""
+        from .integration import GateReceipt, skipped_cases, skipped_count
         receipts = result.receipts or (GateReceipt(id="check", status="passed" if result.passed else "failed",
                                                    reason="", required=True, output=result.output,
                                                    report=result.report),)
-        if not self._tests_changed_in_run():
-            return
+        starts = getattr(self, "_start_skips", None) or {}
+        keys = self._command_keys(gate) if gate is not None else {}
         for receipt in receipts:
-            if receipt.status != "passed" or not receipt.required:
+            if receipt.status != "passed" or not receipt.required or receipt.id.startswith("original-tests:"):
                 continue
             count = skipped_count(receipt)
             if not count:
                 continue
+            names = skipped_cases(receipt)
+            cases = sorted(names.elements()) if names is not None else None
+            start = starts.get(keys.get(receipt.id))
+            if start is not None:
+                start_count, start_names = start
+                if names is not None and start_names is not None:
+                    new = names - start_names
+                    if not new:
+                        continue
+                    cases = sorted(new.elements())
+                elif count <= start_count and not self._tests_changed_in_run():
+                    continue
             if any(e.get("kind") == "skipped" and e["task"] == spec.task_id and e["receipt"] == receipt.id
                    and e["after_check"] == len(self.checks) for e in self.unexecuted_acceptance):
                 continue
+            shown = f"{len(cases)} skipped test case(s) not skipped at run start: {', '.join(cases)}" if (
+                cases and start is not None) else f"{count} skipped test case(s)" + (
+                f": {', '.join(cases)}" if cases else "")
             entry = dict(task=spec.task_id, role="check", author="harness",
-                         item=f"{receipt.id}: {count} skipped test case(s)",
+                         item=f"{receipt.id}: {shown}"[:300],
                          why="the required check passed with these cases skipped",
                          requirements=list(self._current_covers), after_check=len(self.checks),
-                         receipt=receipt.id, kind="skipped")
+                         receipt=receipt.id, kind="skipped", cases=cases)
             self.unexecuted_acceptance.append(entry)
             self._note(f"task {spec.task_id}: {entry['item']}")
+
+    def _skip_baseline(self, gate, result, current: dict):
+        """Run the gate's commands once on the run-start source when a passing
+        required command skipped cases, and keep what each skipped there
+        (``_start_skips``: command identity to ``(count, names)``). The
+        copy is built like the original-test copy, nothing is written to the
+        project, and a project that changed while it ran fails the check as
+        any check whose tree moved does. A command that could not run there
+        has no baseline, so its skips all count."""
+        from .integration import run_original_tests, skipped_cases, skipped_count
+        cache = self.__dict__.setdefault("_start_skips", {})
+        tried = self.__dict__.setdefault("_start_skips_tried", set())
+        start = getattr(self, "_run_start_contents", None)
+        keys = self._command_keys(gate)
+        if not keys or set(keys.values()) <= tried or start is None or self._original_tests is None:
+            return result
+        if not any(r.status == "passed" and r.required and not r.id.startswith("original-tests:")
+                   and skipped_count(r) for r in result.receipts or ()) and not (
+                not result.receipts and result.passed and skipped_count(result)):
+            return result
+        task = getattr(self._active_spec, "task_id", "run")
+        baseline, problem = run_original_tests(gate, self.project, self._original_tests, start)
+        self._verify_dependencies(f"during run-start skip baseline ({task})")
+        drift = self._source_drift(current)
+        if drift:
+            return replace(result, passed=False, output=drift)
+        found = {}
+        for receipt in (baseline.receipts if baseline else ()):
+            key = keys.get(receipt.id.removeprefix("original-tests:"))
+            if receipt.status == "passed" and key is not None:
+                count = skipped_count(receipt)
+                if count is not None:
+                    found[receipt.id.removeprefix("original-tests:")] = cache[key] = (count, skipped_cases(receipt))
+        tried.update(keys.values())
+        self.skip_baselines.append(dict(task=task, problem=problem, receipts={
+            k: dict(skipped=v[0], cases=sorted(v[1].elements()) if v[1] is not None else None)
+            for k, v in found.items()}))
+        return result
 
     def _tests_changed_in_run(self) -> bool:
         """Whether any test or support file differs from run start (true when
@@ -5841,13 +5919,24 @@ class Session:
         skipped none; a skip fact only by such a run of the same command. A
         model's word, a substring, an optional or skipped receipt, or a
         name-filtered run never does (Codex review of b6ba3ba, F3)."""
+        from collections import Counter
         standing = []
         for entry in self.unexecuted_acceptance:
             ran = False
             paths = _item_paths(entry["item"]) if entry.get("kind") != "skipped" else []
             for check in self.checks[entry["after_check"]:]:
                 runs = [r for r in _check_runs(check, self.project) if _complete_run(r)]
-                if entry.get("kind") == "skipped":
+                if entry.get("kind") == "skipped" and entry.get("cases"):
+                    # Named skips are discharged by a later passing, unfiltered
+                    # run of the same command that executed each of them and
+                    # skipped none of them; other cases' skips are not this
+                    # record's (R4).
+                    need = Counter(entry["cases"])
+                    ran = any(r["id"] == entry["receipt"] and r["passed"] and r["required"] and not r["filtered"]
+                              and all(r["executed_names"][n] >= k and not r["skipped_names"][n]
+                                      for n, k in need.items())
+                              for r in _check_runs(check, self.project))
+                elif entry.get("kind") == "skipped":
                     ran = any(r["id"] == entry["receipt"] for r in runs)
                 else:
                     ran = bool(paths) and any(all(p in r["files"] for p in paths) for r in runs)
@@ -7262,6 +7351,7 @@ class Session:
             self._handoff_unattributable(gate, result, task)
         self.checks.append({"passed": result.passed, "command": result.command,
                             "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
+                            "selection": self._gate_selection(gate),
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
         # A passing check makes every earlier check failure in the same task
         # history: this invocation's attempts and an earlier invocation's, such
@@ -7280,7 +7370,7 @@ class Session:
             self._outcome.edge("checks", result.passed)
         if full:
             self._note_unrun_tests(spec, task, gate)
-            self._note_skips(spec, result)
+            self._note_skips(spec, result, gate)
         if not result.passed:
             task.record(
                 "user",
@@ -7408,6 +7498,7 @@ class Session:
             return
         self.checks.append({"passed": False, "command": result.command, "output": result.output,
                             "cwd": str(self.project or getattr(gate, 'cwd', '')),
+                            "selection": self._gate_selection(gate),
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
         if self._outcome is not None:
             self._outcome.edge("checks", False)
@@ -7500,6 +7591,9 @@ class Session:
         try:
             contents = Project(self.project, exclude=self.config.project_excludes).contents()
             self._original_tests = original_tests(contents)
+            # The whole run-start source, for the one skip baseline run
+            # (_skip_baseline, Codex review of 81adcc7, R3 and R4).
+            self._run_start_contents = contents
             # Test selection held in mixed files (pyproject, setup.cfg, tox.ini,
             # package.json) is kept by section; pure test configs such as
             # pytest.ini are already among the restored files (F1).
@@ -7510,6 +7604,33 @@ class Session:
                                              f"them cannot be checked: {type(exc).__name__}: {str(exc)[:160]}")
 
     def _with_original_tests(self, gate, result, current: dict):
+        """The gate's result joined by the original tests, then the run-start
+        skip baseline when this check is the first to need it."""
+        result = self._join_original_tests(gate, result, current)
+        return self._skip_baseline(gate, result, current)
+
+    def _command_keys(self, gate) -> dict:
+        """Receipt id to the command's identity (id, argv, cwd), so a baseline
+        measured once serves every gate object that runs the same command (a
+        cheap view is a new object on each call)."""
+        from .integration import _gate_commands
+        if not self.project:
+            return {}
+        commands = _gate_commands(gate, Path(self.project).resolve()) or []
+        return {c.id: (c.id, tuple(c.argv), c.cwd) for c in commands}
+
+    def _gate_selection(self, gate) -> str:
+        """Configuration or environment test selection for a single-command
+        gate (a suite's receipts carry their own)."""
+        from .integration import IntegrationGate, config_selection
+        if not isinstance(gate, IntegrationGate) or not self.project:
+            return ""
+        try:
+            return config_selection(gate.command, Path(gate.cwd or self.project), Path(self.project))
+        except Exception as exc:  # noqa: BLE001 -- unknown selection is selection
+            return f"selection unreadable: {type(exc).__name__}"
+
+    def _join_original_tests(self, gate, result, current: dict):
         """The gate's result, joined by the original tests when a run-start
         test or support file now differs.
 
@@ -7520,14 +7641,18 @@ class Session:
         with its own receipts, so the ordinary repair and attribution rules
         apply to it. A copy that cannot be checked is an open unverified
         finding, never a pass."""
-        from .integration import GateReceipt, changed_originals, run_original_tests
+        from .integration import GateReceipt, added_selectors, changed_originals, run_original_tests
         originals = self._original_tests
         if not originals:
             return result
         task = getattr(self._active_spec, "task_id", "run")
         if self._selection_changed(current, task):
             return result
-        changed = changed_originals(originals, current)
+        # An added pytest.ini or conftest.py can deselect a run-start test the
+        # same way an edit can (Codex review of 81adcc7, R1); the copy leaves
+        # it out, so the original suite runs as it was selected at run start.
+        added = added_selectors(originals, current)
+        changed = changed_originals(originals, current) + added
         if not changed:
             return result
         baseline, problem = run_original_tests(gate, self.project, originals, current)
@@ -7540,7 +7665,7 @@ class Session:
             return replace(result, passed=False, output=drift)
         skipped = [r for r in (baseline.receipts if baseline else ()) if r.status == "skipped"]
         self.original_test_runs.append(dict(
-            task=task, changed=changed, passed=None if baseline is None else baseline.passed,
+            task=task, changed=changed, added=added, passed=None if baseline is None else baseline.passed,
             problem=problem, receipts=[dict(id=r.id, status=r.status, reason=r.reason, tests=r.tests)
                                        for r in (baseline.receipts if baseline else ())]))
         for receipt in skipped:
@@ -7557,7 +7682,11 @@ class Session:
             reason="exit 0" if result.passed else "nonzero exit", required=True,
             command=result.command, returncode=result.returncode, output=result.output,
             report=result.report),)
-        heading = (f"Original tests (run-start versions of {', '.join(changed)}) against the current "
+        restored = [n for n in changed if n not in added]
+        heading = ("Original tests (" + "; ".join(part for part in (
+            f"run-start versions of {', '.join(restored)}" if restored else "",
+            f"added test configuration left out: {', '.join(added)}" if added else "") if part)
+                   + ") against the current "
                    f"source: {'PASSED' if baseline.passed else 'FAILED'}")
         return replace(result, passed=result.passed and baseline.passed,
                        returncode=result.returncode if not result.passed else baseline.returncode,
@@ -7591,14 +7720,15 @@ class Session:
         """At DONE: the original tests again when run-start bytes differ.
         Returns the refusal text, or '' when they pass or nothing changed;
         a run that cannot check them is an open unverified finding."""
-        from .integration import changed_originals
+        from .integration import added_selectors, changed_originals
         from .project import Project
         if not self._original_tests or not self.project:
             return ""
         current = Project(self.project, exclude=self.config.project_excludes).contents()
         if self._selection_changed(current, "DONE"):
             return ""
-        changed = changed_originals(self._original_tests, current)
+        changed = (changed_originals(self._original_tests, current)
+                   + added_selectors(self._original_tests, current))
         if not changed:
             return ""
         key = hashlib.sha256(b"".join(n.encode() + b"\0" + hashlib.sha256(d).digest()

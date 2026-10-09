@@ -562,20 +562,30 @@ Key design decisions already settled:
   (or `BLOCKED:`) line an editing call wrote, and lowers a MET
   deterministically when every citation is an unnamed test file, or when a
   task covering the requirement reported NOT RUN, or when its required check
-  passed with skipped cases once any test file changed in the run (the first
-  check included; optional commands never count). Only a *complete run*
-  discharges one (Codex review of b6ba3ba, F3, F4, F6): a later passing
-  required command, no name or marker filter, cases executed and zero
-  skipped, naming every path of a NOT RUN item as a whole operand (a skip
-  fact: the same command). A substring, an optional or skipped receipt, a
+  skipped cases the run-start source did not skip. That baseline is the
+  gate's own commands run once on the run-start source, the first time a
+  check skips anything (`skip_baselines`): a product edit that turns a case
+  into a skip counts (Codex review of 81adcc7, R3), a case skipped since
+  before the run does not, and the restored-original receipts never record
+  one (R4). New skips are compared by case name where the runner prints
+  names (node spec and TAP, pytest verbose); without names a total above
+  run start's counts, and any skip once test files changed. With no
+  baseline every skip counts. Optional commands never do. Only a *complete
+  run* discharges a NOT RUN item (Codex review of b6ba3ba, F3, F4, F6): a
+  later passing required command, no filter in argv, in pytest's
+  `addopts`/`PYTEST_ADDOPTS` or `NODE_OPTIONS`, and no case reported
+  deselected (R2), cases executed and zero skipped, naming every path of the
+  item as a whole operand read from the command's own cwd (R5). A named skip
+  fact is discharged by a later passing unfiltered run of the same command
+  that executed each named case and skipped none of them; an unnamed one by
+  such a run skipping nothing. A substring, an optional or skipped receipt, a
   filtered run, a lower skip total, or a model's word never does; a report
-  written after a run is a new report. Without case identity a skip stands
-  until a run skips nothing, so a suite with permanent skips keeps those
-  requirements open. An unnamed file is reconciled by a later complete run
+  written after a run is a new report. An unnamed file is reconciled by a later complete run
   that names it or names a file that names it. Parallel children's reports
   come back to the parent, re-based to its checks (F5). Test-only runner
   configs (`pytest.ini`, jest/vitest/playwright/mocha configs) are kept and
-  restored with the tests; a change to test selection in a mixed file
+  restored with the tests, and one added during the run (or an added
+  `conftest.py`) triggers the original run with it left out (R1); a change to test selection in a mixed file
   (`pyproject.toml [tool.pytest]`, `setup.cfg`/`tox.ini` pytest sections,
   `package.json` type/imports/runner keys) means the original suite cannot be
   established: an open unverified finding, never a pass (F1). The project is
