@@ -2372,7 +2372,8 @@
         "unblocked by claude: Z5 post-integration route fixed at 6007353; Codex independently cleared 178c193..6007353 (#57 6090205373 / #35 6090205718, report 6c7e0e40..., receipt 1ac78263...), its post-integration control passing",
         "claude: claude: clearance acked #46 6090213577 (body d26ed0724ceff39ef73eb33874f73d8d73475156013179415202c0800e30b387). Pending: 6007353 Linux suite and CI. Real-record reconciliation (T-direct-tier contract.py, nine unresolved historical blockers) to be done per task with evidence.",
         "claude: claude: 6007353 Linux suite 3421 passed 13 env (full18 864985e8..., #53 6090318075), CI 4/4; root 600 source gates acked #46 6090312618 (body 62a9c466...). c49d9f0 delivered (unblock any state; #46 6090301557) with A reconciliation applied; suite running. Environment-bound setup (#35 6090229478, body b629c4f3...; archive 62d1fc7, 187 files 0 mismatches; report feed3985..., receipt 09bfc6e2...) assessed #46 6090338839 (body 7538c39947b83379dc96cadd30a80d0493307feed7fe125f4aa8e6abf7364df5): no P1/P2, prior findings closed in source, four P3s.",
-        "claude: claude: c49d9f0 clearance acked #46 6090430130. Linux suite and CI pending."
+        "claude: claude: c49d9f0 clearance acked #46 6090430130. Linux suite and CI pending.",
+        "claude: claude: c49d9f0 Linux suite 3422 passed 13 env (full19 e0618eb6..., #53 6090649728); CI 4/4; root Mac 3437/44 and fresh 109/111 (#35 6090582911) verified; c49 preparation adaptation (#35 6090557606) assessed: no P1/P2, constants/paths only, P3 assembler install count admission-supplied since sealed600. Final note #46 6090649441 (body 7272c5bc...). Paused per Davis: watcher and check-ins stopped, no new work."
       ]
     }
   ],
