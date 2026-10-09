@@ -146,8 +146,36 @@ def test_without_a_profile_a_lead_that_cannot_capture_is_never_invoked(tmp_path,
     audit = AUDIT.replace(', "capture": ' + json.dumps(CAPTURE), "")
     replay = _run(tmp_path, monkeypatch, [REQS + audit], {}, runs_commands=False)
     assert replay.result.error.startswith("CapabilityUnavailable: task t1 is UI work")
-    assert "No call was made" in replay.result.error
+    assert "No call was made to its lead" in replay.result.error
     assert not replay.of("lead") and not replay.result.completed
+
+
+def test_a_frontend_label_whose_scope_renders_nothing_is_sent_back_once(tmp_path, monkeypatch):
+    """Recovery diagnostic lane on 2e57e94: a CommonJS state model with no
+    page in its acceptance was labelled frontend, and the label alone ended
+    the run before any lead call. The orchestrator gets one send-back that
+    states the rule; relabelled, the task runs on the ordinary gates."""
+    scope = dict(permitted_paths=["src/rename_controller.js", "tests/rename_controller.test.js"],
+                 intended_result="a rename state model", acceptance=["node --test passes"], max_lines=40)
+    named = _decl("KIND: frontend simple", scope, "Add the rename state model.")
+    relabelled = _decl("KIND: backend simple", scope, "Add the rename state model.")
+    replay = _run(tmp_path, monkeypatch, [REQS + named, REQS + relabelled], {"t1": _no_edit},
+                  runs_commands=False)
+    sent_back = [c for c in replay.of("orchestrator") if "labelled frontend" in c.prompt]
+    assert sent_back, "the orchestrator was told why the label does not fit"
+    assert "CapabilityUnavailable" not in (replay.result.error or "")
+    assert [c.task for c in replay.of("lead")] == ["t1"], "the relabelled task reached its lead"
+
+
+def test_a_deliberate_frontend_label_named_again_keeps_the_capture_requirement(tmp_path, monkeypatch):
+    """The send-back is once per task: named again as frontend, the task is
+    held to the capture requirement in full. No waiver for rendered work."""
+    scope = dict(permitted_paths=["src/widget.js"], intended_result="a widget",
+                 acceptance=["the widget shows"], max_lines=40)
+    named = _decl("KIND: frontend simple", scope, "Add the widget.")
+    replay = _run(tmp_path, monkeypatch, [REQS + named, REQS + named], {}, runs_commands=False)
+    assert replay.result.error.startswith("CapabilityUnavailable: task t1 is UI work")
+    assert not replay.of("lead")
 
 
 def test_with_a_profile_a_ui_task_without_a_capture_is_sent_back(tmp_path, monkeypatch):
@@ -414,7 +442,7 @@ def test_a_review_only_lead_may_write_its_own_fixture_and_is_told_to(tmp_path, m
                   record_complete=False)
     prompt = _lead_prompts(replay)[0]
     assert "uploads .quadratus/capture-fixtures/t1/sample.csv into #csv" in prompt
-    assert "you must write it before you finish" in prompt and "needs no CHANGED entry" in prompt
+    assert "do not create it" in prompt and "harness asks you for its content" in prompt and "needs no CHANGED entry" in prompt
     assert (replay.project / ".quadratus/capture-fixtures/t1/sample.csv").read_text() == "a,b\n1,2\n"
     task = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t1")
     assert task["closed_as"] == "closed", "writing the fixture is not a scope failure"

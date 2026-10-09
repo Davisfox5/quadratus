@@ -158,7 +158,7 @@ MAX_STEPS = 12
 MAX_SELECTOR_CHARS = 300
 STEP_TIMEOUT_MS = 5000
 CAPTURE_SECONDS = 90
-_ACTIONS = ("click", "wait", "file")
+_ACTIONS = ("click", "wait", "file", "confirm")
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 #: Never uploaded, whatever the task asks. Any hidden path component is
 #: refused outright (run state, VCS data, .env, .ssh, .codex, tool configs);
@@ -168,7 +168,7 @@ _BLOCKED_NAMES = SECRET_NAMES   # shared with the context pack (project_files)
 
 
 def parse_steps(argv: List[str]) -> Tuple[List[str], List[dict]]:
-    """Split ``--click/--wait/--upload/--file`` steps from positional arguments.
+    """Split ``--click/--wait/--confirm/--upload/--file`` steps from positional arguments.
 
     ``--upload SELECTOR PATH`` takes two arguments, so neither may need
     escaping. ``--file SELECTOR=PATH`` splits at the first ``=``, which is
@@ -184,6 +184,11 @@ def parse_steps(argv: List[str]) -> Tuple[List[str], List[dict]]:
                 raise ValueError("--upload takes SELECTOR PATH")
             selector, path = items.pop(0), items.pop(0)
             steps.append(dict(action="file", selector=selector, path=path))
+        elif item == "--confirm":
+            if len(items) < 2:
+                raise ValueError("--confirm takes SELECTOR MESSAGE (text the confirm dialog must show)")
+            selector, message = items.pop(0), items.pop(0)
+            steps.append(dict(action="confirm", selector=selector, message=message))
         elif item in ("--click", "--wait", "--file"):
             if not items:
                 raise ValueError(f"{item} needs a value")
@@ -230,6 +235,10 @@ def _fixture(root: Path, relative: str, task_id: Optional[str] = None) -> Path:
         raise ValueError(f"file step path is not a regular file in the project: {relative!r}")
     if own and current.stat().st_size > MAX_FIXTURE_BYTES:
         raise ValueError(f"capture fixture is larger than {MAX_FIXTURE_BYTES:,} bytes: {relative!r}")
+    if own and current.stat().st_size == 0:
+        # A discarded partial write leaves an empty placeholder
+        # (session._write_fixture_bound); an empty sample is no sample.
+        raise ValueError(f"capture fixture is empty: {relative!r}")
     return current.resolve()
 
 
@@ -278,10 +287,18 @@ def validate_steps(steps: List[dict], target: str, root, task_id: Optional[str] 
     for step in steps:
         action, selector = step.get("action"), step.get("selector")
         if action not in _ACTIONS:
-            raise ValueError(f"unknown step {action!r}; use --click, --wait or --file")
+            raise ValueError(f"unknown step {action!r}; use --click, --wait, --confirm or --file")
         if not isinstance(selector, str) or not selector.strip() or len(selector) > MAX_SELECTOR_CHARS:
             raise ValueError(f"each step needs a selector of at most {MAX_SELECTOR_CHARS} characters")
         item = dict(action=action, selector=selector.strip())
+        if action != "confirm" and step.get("message") is not None:
+            raise ValueError("only a confirm step names a dialog message")
+        if action == "confirm":
+            message = step.get("message")
+            if not isinstance(message, str) or not message.strip() or len(message) > MAX_SELECTOR_CHARS:
+                raise ValueError(f"a confirm step names the text its dialog must show, at most "
+                                 f"{MAX_SELECTOR_CHARS} characters")
+            item["message"] = message.strip()
         if action == "file":
             path = _fixture(root, step.get("path") or "", task_id)
             size = path.stat().st_size
@@ -294,22 +311,43 @@ def validate_steps(steps: List[dict], target: str, root, task_id: Optional[str] 
 
 
 def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = None, *,
-            pinned: bool = False) -> dict:
+            pinned: bool = False, views: Optional[List[str]] = None, attempt: Optional[str] = None,
+            measured: Optional[dict] = None) -> dict:
     """Render ``target`` at each width into the task's evidence folder.
 
     With ``steps``, each width runs them on a fresh page before its
     screenshot. ``pinned`` holds navigation to the target's origin even with
     no steps (the harness's own capture, quadratus.preview). Refused steps are written into summary.json and raised, so the
     design check reports why instead of accepting an earlier render.
+
+    ``views`` renders only those widths (the harness captures a state-
+    changing declaration one view per preview, quadratus.preview), under
+    ``attempt``, the harness's token for that one capture. The other views'
+    entries are kept from the previous summary only when they are siblings
+    of this render: the same attempt, the same target, the same source
+    fingerprint, the same checked steps, every step passed, and their files
+    present; anything else is history, not a sibling (Codex review of
+    4a51291: a kept view was relabelled with the new render's identity, and
+    a stale failed sibling ended the next attempt). ``measured`` is the
+    harness's own receipt for the views it has already captured in this
+    attempt ({view: {file: sha256}}); with it, a sibling is kept only when
+    its recorded digests equal that measurement, so reuse is checked
+    against something outside the mutable summary (Codex review of
+    2e57e94). The returned dict holds only the views rendered now; a run
+    that raises part-way still leaves nothing standing.
     """
     from .browser import render_page
     folder = evidence_dir(root, task_id)
     folder.mkdir(parents=True, exist_ok=True)
+    wanted = {name: VIEWPORTS[name] for name in (views or VIEWPORTS) if name in VIEWPORTS}
+    if views and set(views) - set(VIEWPORTS):
+        raise ValueError(f"unknown view(s) {sorted(set(views) - set(VIEWPORTS))}; the views are {list(VIEWPORTS)}")
+    previous = _read_summary(folder) if views else None
     # Invalidate before anything can fail: a capture that raises part-way
     # must never leave an earlier, successful summary and screenshots standing
     # as this attempt's evidence (Codex review of c222d62).
     _write_summary(folder, dict(target=target, views={}, capture_in_progress=True))
-    for name in VIEWPORTS:
+    for name in wanted:
         for leftover in ("page.png", "evidence.json"):
             (folder / name / leftover).unlink(missing_ok=True)
     try:
@@ -324,13 +362,16 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
     # The tree the renders show (Codex review of 3d5c3f3): recorded, and
     # compared again by the check, so a render stands only for this source.
     source = source_fingerprint(root)
+    declared = [{k: v for k, v in s.items() if k != "path"} for s in checked]
+    kept, not_kept = (_kept_views(folder, previous, set(VIEWPORTS) - set(wanted), target=target, attempt=attempt,
+                                  source=source, declared=declared, measured=measured) if views else ({}, {}))
     try:
         _source_excludes(Path(root))
         identity_error = None
     except ExcludesError as exc:
         identity_error = str(exc)
     try:
-        for name, viewport in VIEWPORTS.items():
+        for name, viewport in wanted.items():
             for item in checked:
                 if item["action"] == "file" and _digest(Path(item["path"])) != item["sha256"]:
                     raise ValueError(f"fixture {item['label']} changed or vanished during the capture")
@@ -343,16 +384,25 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
                              document_width=evidence.document_width, overflow=evidence.overflow[:5])
             if checked:
                 out[name]["steps"] = evidence.steps
+            # The bytes this render produced, bound to its entry: a retained
+            # view stands only while its files still hash to what the capture
+            # wrote (Codex review of ca0ad65: a replaced page.png of the same
+            # size was kept as a sibling and accepted).
+            out[name]["files"] = {leaf: _digest(folder / name / leaf) for leaf in VIEW_FILES}
     except BaseException as exc:
         _write_summary(folder, dict(target=target, views={}, rendered=sorted(out),
                                     capture_failed=f"{type(exc).__name__}: {str(exc)[:300]}"))
         raise
-    summary = dict(target=target, views=out,
+    summary = dict(target=target, views={**kept, **out},
                    source_fingerprint=source if source and source == source_fingerprint(root) else None)
+    if attempt:
+        summary["attempt"] = attempt
+    if not_kept:
+        summary["not_kept"] = not_kept
     if identity_error:
         summary["source_identity_error"] = identity_error
     if checked:
-        summary["steps"] = [{k: v for k, v in s.items() if k != "path"} for s in checked]
+        summary["steps"] = declared
     (folder / "summary.json").write_text(json.dumps(summary, indent=2))
     return out
 
@@ -394,6 +444,133 @@ def _write_summary(folder: Path, summary: dict) -> None:
     (folder / "summary.json").write_text(json.dumps(summary, indent=2))
 
 
+def _read_summary(folder: Path):
+    try:
+        data = json.loads((folder / "summary.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+#: The files a render writes, each recorded by digest in the view's entry.
+VIEW_FILES = ("page.png", "evidence.json")
+
+_FILE_CHANGED = "changed after the capture"
+
+
+def _symlinked_component(folder: Path) -> Optional[Path]:
+    """The first symlink among a view folder and the evidence folders above
+    it (task, design-evidence, .quadratus), if any: a leaf check alone
+    endorses files reached through a symlinked directory (Codex review of
+    180012d: the view folder replaced by a link to a tree outside the
+    project)."""
+    for component in (folder, folder.parent, folder.parent.parent, folder.parent.parent.parent):
+        if component.is_symlink():
+            return component
+    return None
+
+
+def _files_problem(folder: Path, view) -> Optional[dict]:
+    """Why a view's files do not stand as the capture wrote them, if they do
+    not: ``{"problem", "mismatch"}``, plus ``file``, ``recorded`` and
+    ``observed`` when a digest was read and disagreed (Codex review of
+    2e57e94: the refusal kept neither identity). The entry must record a
+    well-formed digest for every file a render writes and nothing else, no
+    folder on the way to them may be a symlink, and each file must hash to
+    its digest now. Only a symlink or a digest that disagrees with the
+    bytes is an observed mismatch; a missing or malformed record is
+    unverified, never a match, and never invents an observed digest."""
+    files = view.get("files") if isinstance(view, dict) else None
+    if not isinstance(files, dict):
+        return dict(problem="carries no record of its files' digests", mismatch=False)
+    for leaf in VIEW_FILES:
+        if leaf not in files:
+            return dict(problem=f"carries no record of its {leaf} digest", mismatch=False)
+    for leaf, recorded in files.items():
+        if (leaf not in VIEW_FILES or not isinstance(recorded, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", recorded)):
+            return dict(problem=f"carries a malformed digest record ({str(leaf)[:40]})", mismatch=False)
+    linked = _symlinked_component(folder)
+    if linked is not None:
+        return dict(problem=f"folder {linked.name} is a symlink, not a capture folder", mismatch=True,
+                    file=linked.name)
+    for leaf, recorded in files.items():
+        path = folder / leaf
+        if path.is_symlink():
+            return dict(problem=f"{leaf} is a symlink, not a capture", mismatch=True, file=leaf, recorded=recorded)
+        now = _digest(path)
+        if now is None:
+            return dict(problem=f"{leaf} is missing or unreadable", mismatch=False, file=leaf, recorded=recorded)
+        if now != recorded:
+            return dict(problem=f"{leaf} {_FILE_CHANGED}", mismatch=True, file=leaf, recorded=recorded, observed=now)
+    return None
+
+
+def _measurement_problem(view, measured) -> Optional[dict]:
+    """Why a view's recorded digests do not match the harness's own
+    measurement of its files, if they do not: ``measured`` is one view's
+    entry of a receipt (``view_receipt``). A view the harness never
+    measured is unverified; a disagreeing digest is an observed mismatch
+    naming the file and both identities."""
+    if not isinstance(measured, dict) or any(not isinstance(measured.get(leaf), str) for leaf in VIEW_FILES):
+        return dict(problem="was not measured by the harness in this attempt", mismatch=False)
+    files = view.get("files") if isinstance(view, dict) else {}
+    for leaf in VIEW_FILES:
+        if files.get(leaf) != measured[leaf]:
+            return dict(problem=f"{leaf} differs from the harness's measurement of it", mismatch=True,
+                        file=leaf, recorded=files.get(leaf), observed=measured[leaf])
+    return None
+
+
+def view_receipt(root, task_id: str, name: str) -> dict:
+    """The digests of one view's files as they are on disk now, for a harness
+    that measures right after its own capture and keeps the result outside
+    the project (``check_records(receipt=...)``). A missing file is None."""
+    folder = evidence_dir(root, task_id) / name
+    return {leaf: _digest(folder / leaf) for leaf in VIEW_FILES}
+
+
+def _kept_views(folder: Path, previous, names, *, target: str, attempt: Optional[str], source, declared,
+                measured: Optional[dict] = None) -> tuple:
+    """The named views' entries from the previous summary, kept for a
+    partial render only as siblings: the previous summary finished under
+    the same attempt token, for the same target, the same source
+    fingerprint and the same checked steps, with every step of each kept
+    view passed and its files present and hashing to the digests its entry
+    records; otherwise nothing. A view that fails any of these is history
+    and never joins this attempt. With ``measured`` (the harness's receipt
+    for the views it already captured), a candidate must also carry exactly
+    the digests the harness measured. Returns ``(kept, refused)``:
+    ``refused`` names each sibling candidate whose files did not stand,
+    with the problem, whether it was an observed mismatch, and the file and
+    both digests when they were read."""
+    if not names:
+        return {}, {}
+    if (not previous or not attempt or previous.get("attempt") != attempt or previous.get("target") != target
+            or previous.get("capture_in_progress") or previous.get("capture_failed") or previous.get("steps_refused")
+            or not isinstance(previous.get("views"), dict)
+            or not source or previous.get("source_fingerprint") != source
+            or previous.get("steps", []) != declared):
+        return {}, {}
+    kept, refused = {}, {}
+    for name in names:
+        view = previous["views"].get(name)
+        if not isinstance(view, dict):
+            continue
+        # The bytes the capture wrote, still: a sibling whose files were
+        # observed to differ is refused with that classification kept, so
+        # the record says "replaced", never merely "missing" (Codex review
+        # of 180012d).
+        problem = _files_problem(folder / name, view)
+        if problem is None and measured is not None:
+            problem = _measurement_problem(view, measured.get(name) if isinstance(measured, dict) else None)
+        if problem:
+            refused[name] = problem
+        elif all(isinstance(s, dict) and s.get("ok") is True for s in view.get("steps", [])):
+            kept[name] = view
+    return (kept if len(kept) == len(set(names)) else {}), refused
+
+
 def _step_problem(view: str, requested, done) -> Optional[str]:
     """What is wrong with one view's step records against the request, if anything.
 
@@ -418,16 +595,45 @@ def _step_problem(view: str, requested, done) -> Optional[str]:
         if got.get("ok") is not True:
             return (f"the {view} render's step {index + 1} ({want['action']} {want['selector'][:80]}) "
                     f"failed: {str(got.get('error'))[:160]}")
+        if want["action"] == "confirm":
+            # The evidence must show the declared dialog, exactly, was the one
+            # answered and accepted (Codex reviews of ce35fb6 and 4a51291: a
+            # record with no dialog, another dialog, or a longer message
+            # passed the checker).
+            from .browser import _dialog_text
+            dialog = got.get("dialog")
+            expected = _dialog_text(want.get("message"))
+            if (not isinstance(dialog, dict) or dialog.get("accepted") is not True
+                    or dialog.get("type") != "confirm" or not expected
+                    or not isinstance(dialog.get("message"), str)   # typed evidence, never a stringified container
+                    or dialog.get("truncated") or _dialog_text(dialog["message"]) != expected
+                    or got.get("extra_dialogs")):
+                return (f"the {view} render's step {index + 1} (confirm {want['selector'][:80]}) carries no "
+                        f"record of the declared dialog being accepted")
     if len(done) != len(requested):
         return f"the {view} render ran {len(done)} of {len(requested)} interaction steps"
-    last = requested[-1] if requested else None
-    if last and last["action"] == "wait" and done[-1].get("visible_before_steps") is True:
-        # Codex, Run 15: the final wait named an element present at load, so
-        # the capture passed whether or not the feature produced anything.
-        # Insufficient evidence, not proof the feature failed: a valid flow
-        # can update a region that was already showing. The selector can
-        # name the new state itself, which keeps the step vocabulary as is.
-        return (f"the {view} render's final wait ({last['selector'][:80]}) was already visible before "
+    return None
+
+
+#: The record kind for a capture whose declared steps cannot show the change:
+#: the declaration, not the page or the source, is what needs changing.
+CAPTURE_DECLARATION = "capture.declaration"
+
+
+def _final_wait_problem(view: str, requested, done) -> Optional[str]:
+    """The final wait named an element present at load (Codex, Run 15), so
+    the capture passed whether or not the feature produced anything.
+    Insufficient evidence, not proof the feature failed: a valid flow can
+    update a region that was already showing. The selector can name the new
+    state itself, which keeps the step vocabulary as is. Reported under its
+    own kind (series rule-3572b72 f2 t1: a design-fix call was spent on
+    source that was not the problem and hit the turn cap at 961k tokens)."""
+    if not (isinstance(requested, list) and requested and isinstance(done, list) and done):
+        return None
+    last = requested[-1]
+    if (isinstance(last, dict) and last.get("action") == "wait" and isinstance(done[-1], dict)
+            and done[-1].get("visible_before_steps") is True):
+        return (f"the {view} render's final wait ({str(last.get('selector'))[:80]}) was already visible before "
                 "any step ran, so seeing it is not evidence of the change; wait on a state only the "
                 "result creates, which the selector can name (for example [data-state=done] or "
                 "#results tr)")
@@ -457,7 +663,8 @@ def check(root, task_id: str, since: float, *, expected_source: Optional[str] = 
     return check_records(root, task_id, since, expected_source=expected_source)[:3]
 
 
-def check_records(root, task_id: str, since: float, *, expected_source: Optional[str] = None):
+def check_records(root, task_id: str, since: float, *, expected_source: Optional[str] = None,
+                  receipt: Optional[dict] = None):
     """:func:`check` plus typed problem records. Never raises.
 
     Kinds: ``integrity`` (the evidence itself cannot be trusted: missing,
@@ -470,15 +677,24 @@ def check_records(root, task_id: str, since: float, *, expected_source: Optional
     screenshot, a fixture whose bytes changed after capture); one carrying
     ``identity="source"`` names a source mismatch, which counts as observed
     only when the harness took the capture itself (map J9b).
+
+    ``receipt`` is the harness's own measurement of each view's files
+    (:func:`view_receipt`, taken right after its capture and held outside
+    the project): with it, every view's recorded digests must equal what
+    the harness measured, so a manifest rewritten beside replaced bytes is
+    an observed mismatch and a view the harness never measured is no
+    evidence (Codex review of 180012d: the digests lived only in the same
+    mutable summary as the files).
     """
     try:
-        return _check(root, task_id, since, expected_source)
+        return _check(root, task_id, since, expected_source, receipt)
     except Exception as exc:  # noqa: BLE001 -- evidence is data; malformed data is a finding
         message = f"the evidence could not be read ({type(exc).__name__}: {str(exc)[:160]})"
         return False, message, [], [dict(kind="integrity", message=message)]
 
 
-def _check(root, task_id: str, since: float, expected_source: Optional[str] = None):
+def _check(root, task_id: str, since: float, expected_source: Optional[str] = None,
+           receipt: Optional[dict] = None):
     """``(ok, message, shots, records)``; each record is a typed problem,
     ``{"kind", "message", ...}``, so callers branch on kinds, never text."""
     folder = evidence_dir(root, task_id)
@@ -500,11 +716,22 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
         return fail("the last capture did not finish")
     if isinstance(summary, dict) and summary.get("steps_refused"):
         return fail(f"the capture's interaction steps were refused: {str(summary['steps_refused'])[:200]}")
+    # A sibling the last partial capture refused because its files were
+    # observed to differ: the mismatch is reported as such, ahead of the
+    # incomplete view set it leaves behind.
+    not_kept = summary.get("not_kept") if isinstance(summary, dict) else None
+    for name, entry in (not_kept.items() if isinstance(not_kept, dict) else []):
+        if isinstance(entry, dict) and entry.get("mismatch") is True and isinstance(entry.get("problem"), str):
+            add("integrity", f"the {str(name)[:20]} render of this attempt was not kept: {entry['problem'][:160]}",
+                mismatch=True, view=str(name)[:20],
+                **{k: str(entry[k])[:80] for k in ("file", "recorded", "observed") if isinstance(entry.get(k), str)})
     if (not isinstance(summary, dict) or not isinstance(summary.get("target"), str) or not summary["target"]
             or not isinstance(summary.get("views"), dict)
             or set(summary["views"]) != set(VIEWPORTS)
             or not all(isinstance(v, dict) for v in summary["views"].values())):
-        return fail("no well-formed summary.json naming the rendered page (use python -m quadratus.design_evidence)")
+        message = "no well-formed summary.json naming the rendered page (use python -m quadratus.design_evidence)"
+        add("integrity", message)
+        return False, problems[0], [], records
     for name, view in summary["views"].items():
         if not view.get("clean"):
             errors = "; ".join(str(e)[:120] for e in (view.get("console_errors") or [])[:3])
@@ -544,6 +771,10 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
         problem = _step_problem(name, requested, view.get("steps"))
         if problem:
             add("integrity", problem)
+            continue
+        problem = _final_wait_problem(name, requested, view.get("steps"))
+        if problem:
+            add(CAPTURE_DECLARATION, problem)
     for name, viewport in VIEWPORTS.items():
         shot = folder / name / "page.png"
         if shot.is_symlink():
@@ -555,6 +786,17 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
             continue
         if shot.stat().st_mtime < since:
             add("integrity", f"the {name} screenshot predates this task")
+            continue
+        # The files must still be the bytes the capture recorded for this
+        # view; a record without digests is no evidence of what was rendered.
+        problem = _files_problem(folder / name, summary["views"].get(name))
+        if problem is None and receipt is not None:
+            problem = _measurement_problem(summary["views"][name],
+                                           receipt.get(name) if isinstance(receipt, dict) else None)
+        if problem:
+            add("integrity", f"the {name} render {problem['problem']}",
+                **(dict(mismatch=True) if problem["mismatch"] else {}),
+                **{k: str(problem[k])[:80] for k in ("file", "recorded", "observed") if isinstance(problem.get(k), str)})
             continue
         if abs(width - viewport["width"]) > 64:
             view = summary["views"].get(name) or {}
@@ -606,6 +848,7 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
         if requested:
             shots.append("steps: " + "; ".join(
                 f"{s['action']} {s['selector']}"
+                + (f" ({s.get('message')!r})" if s["action"] == "confirm" else "")
                 + (f" = {s.get('label')}" + (f" (sha256 {str(s['sha256'])[:12]}, {s.get('bytes')} bytes)"
                                             if s.get("sha256") else "") if s["action"] == "file" else "")
                 for s in requested))
@@ -616,6 +859,39 @@ def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     pinned = "--pinned" in argv
     argv = [a for a in argv if a != "--pinned"]
+    views = None
+    while "--view" in argv:
+        at = argv.index("--view")
+        if at + 1 >= len(argv):
+            print("error: --view needs a name", file=sys.stderr)
+            return 2
+        views = (views or []) + [argv[at + 1]]
+        del argv[at:at + 2]
+    measured = None
+    while "--measured" in argv:
+        at = argv.index("--measured")
+        if len(argv) < at + 4:
+            print("error: --measured needs VIEW FILE SHA256", file=sys.stderr)
+            return 2
+        name, leaf, digest = argv[at + 1:at + 4]
+        if (name not in VIEWPORTS or leaf not in VIEW_FILES
+                or not (digest == "missing" or re.fullmatch(r"[0-9a-f]{64}", digest))):
+            print(f"error: --measured takes a view ({'|'.join(VIEWPORTS)}), a file ({'|'.join(VIEW_FILES)}) "
+                  "and a sha256 or 'missing'", file=sys.stderr)
+            return 2
+        measured = measured or {}
+        # "missing" is a measurement that could not be read: present, so the
+        # held-measurement rule applies, and never equal to any digest.
+        measured.setdefault(name, {})[leaf] = None if digest == "missing" else digest
+        del argv[at:at + 4]
+    attempt = None
+    if "--attempt" in argv:
+        at = argv.index("--attempt")
+        if at + 1 >= len(argv) or not re.fullmatch(r"[0-9a-f]{8,64}", argv[at + 1]):
+            print("error: --attempt needs a hex token", file=sys.stderr)
+            return 2
+        attempt = argv[at + 1]
+        del argv[at:at + 2]
     try:
         positional, steps = parse_steps(argv)
     except ValueError as exc:
@@ -623,15 +899,26 @@ def main(argv=None) -> int:
         return 2
     if len(positional) not in (2, 3):
         print("usage: python -m quadratus.design_evidence <url-or-html-file> <task-id> [project-root] "
-              "[--click SEL] [--wait SEL] [--upload SEL path] [--file SEL=path]", file=sys.stderr)
+              "[--click SEL] [--wait SEL] [--confirm SEL MESSAGE] [--upload SEL path] [--file SEL=path] "
+              "[--view desktop|mobile] [--attempt HEX] [--measured VIEW FILE SHA256 ...]", file=sys.stderr)
         return 2
     try:
         out = capture(positional[0], positional[1], positional[2] if len(positional) == 3 else ".", steps,
-                      pinned=pinned)
+                      pinned=pinned, views=views, attempt=attempt, measured=measured)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    except Exception as exc:  # noqa: BLE001 -- a crash is its own exit code, never a failed step
+        # Exit 1 means exactly one thing, a declared step that did not
+        # happen; a browser or runtime crash is 3, so the session never
+        # reads a crash as a declaration defect (Codex review of f8d8c03).
+        print(f"error: the capture crashed ({type(exc).__name__}: {str(exc)[:300]})", file=sys.stderr)
+        return 3
     print(json.dumps(out, indent=2))
+    # Exit status from the views this invocation rendered: a partial render
+    # answers for itself, and final acceptance is the checker's, which needs
+    # every view (Codex review of 4a51291: a stale failed sibling made a
+    # successful desktop render exit 1).
     failed = [s for view in out.values() for s in view.get("steps", []) if not s.get("ok")]
     return 1 if failed else 0
 

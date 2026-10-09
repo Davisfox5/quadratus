@@ -174,13 +174,23 @@ Design rationale for all of this lives in `CLAUDE.md`.
 
 ## Setup
 
+Quadratus needs Python 3.11 or newer. Install the package itself into a
+virtual environment; that is what puts the `quadratus` and `quadratus-gui`
+commands on your PATH:
+
 ```bash
 git clone https://github.com/Davisfox5/quadratus.git
 cd quadratus
-pip install -r requirements.txt   # or: pip install -e .
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .                  # installs the package and both commands
 
 cp .env.example .env
 ```
+
+`pip install -r requirements.txt` installs the dependencies only, not the
+commands. It is for working on the source; run it as `python -m
+quadratus.cli` and `python -m quadratus.gui` in that case.
 
 Subscription transport is the default, so setup is installing and signing in
 to the CLIs you have subscriptions for (commands verified on macOS,
@@ -246,7 +256,19 @@ fallback and the run continues — availability is learned by calling, so the
 first request is often what discovers it.
 
 Web interface: `quadratus-gui` (or `python chat_gui.py`), then open
-http://127.0.0.1:7860. Conversation memory, file uploads, and a per-model
+http://127.0.0.1:7860. Choose another port with `quadratus-gui --port 8000` or
+`QUADRATUS_GUI_PORT=8000`; a busy port is reported with the command to use
+instead. The Project tab's "UI capture and further checks" section takes the
+same capture profile, further required checks and readiness probes as the
+CLI's `--capture-profile`, `--extra-check` and `--readiness`. Its "Run limits"
+section caps one run: model calls, total reported tokens, time, parallel
+workers and extra recovery tasks after failures, with a preset that fills the
+fields. The run shows the effective numbers before any call and saves them as
+`run-limits.json` beside its report. Token limits count what the CLIs report
+after each call returns, so they are not a hard ceiling. A one-turn summary
+call reserves less than an ordinary call, and a per-call threshold also sets a
+lead turn cap unless you set one yourself; the summary names both. Left off, a
+run has no shared allowance, as before. Conversation memory, file uploads, and a per-model
 contribution breakdown. Sharing is disabled while a CLI backend is active.
 
 ## Project layout

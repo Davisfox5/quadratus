@@ -20,7 +20,7 @@ pytestmark = pytest.mark.requirements_ledger
 
 def _blocked_review(tmp_path, monkeypatch):
     roles = {"collaborator": lambda call, replay: ("BLOCKING: the toolbar gap is inconsistent" if call.task == "t2"
-                                                   else "No blocking findings."),
+                                                   else "No blocking findings.\nREVIEW: COMPLETE"),
              "recheck": lambda call, replay: "STILL BLOCKING: the gap is still inconsistent"}
     return _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1"],
                 {"t1": _capture(measured=WIDE), "t2": _repair()}, roles=roles)

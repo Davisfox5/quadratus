@@ -42,7 +42,9 @@ from tests.lifecycle.test_lifecycle_matrix import (
     _design_script,
 )
 
-EVIDENCE = [".quadratus/design-evidence/t1/desktop/page.png",
+EVIDENCE = [".quadratus/design-evidence/t1/desktop/evidence.json",
+            ".quadratus/design-evidence/t1/desktop/page.png",
+            ".quadratus/design-evidence/t1/mobile/evidence.json",
             ".quadratus/design-evidence/t1/mobile/page.png",
             ".quadratus/design-evidence/t1/summary.json"]
 

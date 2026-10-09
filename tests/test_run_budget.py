@@ -1,5 +1,6 @@
 """Run controls are enforced at real provider attempts, not reporting callbacks."""
 
+import dataclasses
 import json
 from concurrent.futures import ThreadPoolExecutor
 
@@ -259,6 +260,85 @@ def test_a_call_cannot_start_unless_the_remaining_budget_covers_the_reserve():
     t, _ = c.reserve()
     c.finish(t, {'input_tokens': 900, 'output_tokens': 50})
     c.reserve()
+
+
+def test_a_summary_shaped_call_reserves_its_own_bound_not_the_operators_reserve():
+    # Series rule-3f9c548 f3: a finished task's 20k close-out was refused
+    # because the 500k reserve is one size for every call.
+    from quadratus.run_budget import SUMMARY_CALL_RESERVE_TOKENS
+    b = RunBudget(RunLimits(max_reported_tokens=1_000_000, reserve_tokens_per_call=500_000))
+    t, _ = b.reserve()
+    b.finish(t, {'input_tokens': 800_000, 'output_tokens': 0})       # 200k left: under 500k
+    with pytest.raises(RunBudgetExceeded, match='reported_token_reserve'):
+        b.reserve()
+    c = RunBudget(RunLimits(max_reported_tokens=1_000_000, reserve_tokens_per_call=500_000))
+    t, _ = c.reserve()
+    c.finish(t, {'input_tokens': 800_000, 'output_tokens': 0})
+    c.reserve(expected_tokens=SUMMARY_CALL_RESERVE_TOKENS)            # 200k covers 64k
+    assert c.snapshot()['shaped_reservations'] == 1
+    d = RunBudget(RunLimits(max_reported_tokens=1_000_000, reserve_tokens_per_call=500_000))
+    t, _ = d.reserve()
+    d.finish(t, {'input_tokens': 950_000, 'output_tokens': 0})       # 50k left: under 64k
+    with pytest.raises(RunBudgetExceeded, match='reported_token_reserve'):
+        d.reserve(expected_tokens=SUMMARY_CALL_RESERVE_TOKENS)
+
+
+def test_a_shape_never_raises_the_reserve_and_the_threshold_is_unchanged():
+    b = RunBudget(RunLimits(max_reported_tokens=1_000_000, reserve_tokens_per_call=10_000))
+    t, _ = b.reserve()
+    b.finish(t, {'input_tokens': 980_000, 'output_tokens': 0})       # 20k left
+    b.reserve(expected_tokens=64_000)                                 # 10k operator reserve still applies
+    assert b.snapshot()['shaped_reservations'] == 0
+    c = RunBudget(RunLimits(max_reported_tokens=1_000_000, reserve_tokens_per_call=500_000))
+    t, _ = c.reserve()
+    c.finish(t, {'input_tokens': 800_000, 'output_tokens': 0})
+    shaped, _ = c.reserve(expected_tokens=64_000)                    # starts on 200k headroom
+    with pytest.raises(RunBudgetExceeded, match='reported_token_threshold'):
+        c.finish(shaped, {'input_tokens': 300_000, 'output_tokens': 0})  # and still stops past 1M
+
+
+class _Control:
+    limits = RunLimits(max_reported_tokens=1_000_000, reserve_tokens_per_call=500_000)
+
+    def __init__(self):
+        self.seen = []
+
+    def reserve(self, **kw):
+        self.seen.append(kw)
+        raise RunBudgetExceeded('Run stopped: reported_token_reserve')
+
+
+@pytest.mark.parametrize("cls, model, capped", [
+    ("ClaudeCLIProvider", "opus", True),      # --tools '' --max-turns 1
+    ("GrokCLIProvider", "default", True),     # --max-turns 1 (read tools stay)
+    ("CodexCLIProvider", "gpt-5.6-sol", False),  # no turn flag at all
+])
+def test_the_shape_is_passed_only_where_the_argv_enforces_one_turn(monkeypatch, cls, model, capped):
+    # Codex review of 961d2da: the request for a summary is not a bound; the
+    # CLI's own argv is. Codex's summary call has no turn flag, so it keeps
+    # the operator's full reserve.
+    import quadratus.cli_providers as cp
+    monkeypatch.setattr('shutil.which', lambda _: '/unused/cli')
+    provider = getattr(cp, cls)(model=model)
+    assert provider.spec.summary_turn_capped() is capped
+    control = _Control()
+    provider.run_budget = control
+    with pytest.raises(RunBudgetExceeded):
+        provider._observed_call('p', None, 1, 1)
+    provider.summary_only = True
+    with pytest.raises(RunBudgetExceeded):
+        provider._observed_call('p', None, 1, 1)
+    assert control.seen == [{}, {'expected_tokens': 64_000} if capped else {}]
+
+
+def test_the_turn_cap_is_read_from_the_summary_argv_pair():
+    from quadratus.cli_providers import CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC
+    assert CLAUDE_SPEC.summary_turn_capped() and GROK_SPEC.summary_turn_capped()
+    assert not CODEX_SPEC.summary_turn_capped()
+    loose = dataclasses.replace(CLAUDE_SPEC, summary_only_args=["--max-turns", "2"])
+    assert not loose.summary_turn_capped()
+    none = dataclasses.replace(CLAUDE_SPEC, summary_only_args=["--tools", ""])
+    assert not none.summary_turn_capped()
 
 
 def test_an_oversized_call_is_named_after_it_returns():

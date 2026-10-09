@@ -422,6 +422,20 @@ class _Budget:
         return max(1, min(cap, left))
 
 
+#: A recorded dialog message is the compared text itself (whitespace
+#: collapsed), kept whole up to twice the longest message a declaration may
+#: carry: any message that can match is recorded untruncated, and the
+#: evidence check compares the record exactly as the step did. The raw text
+#: is not what is kept (Codex review of ca0ad65: 700 leading spaces before the
+#: declared text matched at the step and left a record of spaces).
+_DIALOG_RECORD_CHARS = 600
+
+
+def _dialog_text(text) -> str:
+    """A dialog message as compared: whitespace collapsed, ends trimmed."""
+    return " ".join(str(text or "").split())
+
+
 def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
     """Run interaction steps in order; stop at the first failure.
 
@@ -458,6 +472,77 @@ def _run_steps(page, steps, blocked, timeout_ms, deadline) -> List[dict]:
             if action == "click":
                 page.click(selector, timeout=limit)
                 page.wait_for_timeout(min(200, budget.ms(200)))  # let a started navigation reach the guard
+            elif action == "confirm":
+                # A click that opens a browser confirm dialog, answered only
+                # when it is the one declared: a confirm whose message holds
+                # the declared text is accepted; any other dialog (another
+                # type, another message) is dismissed and the step fails; no
+                # dialog at all fails the step. Playwright dismisses an
+                # unanswered dialog, so a plain click on a delete control
+                # cancels the delete and the state the declaration names is
+                # never reached (series rule-58a4625 f5: the empty list sits
+                # behind a confirm). Never a global auto-accept (Codex,
+                # 6038178890): one handler, one click, one dialog.
+                expected = _dialog_text(step.get("message"))
+                seen: List[dict] = []
+
+                def answer(dialog, seen=seen, expected=expected):
+                    # Exactly the declared message, whitespace collapsed: a
+                    # longer message that merely contains it is another
+                    # operation (Codex review of 4a51291: "Delete project
+                    # Alpha? Also delete every other project?" matched). The
+                    # permission covers one dialog: the first; every later
+                    # one is dismissed and recorded, and fails the step
+                    # (Codex review of ca60892: two matching confirms were
+                    # both accepted, a prompt after a confirm went unrecorded).
+                    # Only a string message is text; anything else is recorded
+                    # by repr and never matches (Codex review of ca0ad65: a
+                    # non-string coerced to the declared text).
+                    typed = isinstance(dialog.message, str)
+                    text = _dialog_text(dialog.message) if typed else ""
+                    matched = (not seen and dialog.type == "confirm" and bool(expected) and typed
+                               and text == expected)
+                    entry = dict(type=dialog.type, message=text[:_DIALOG_RECORD_CHARS] if typed else None,
+                                 accepted=matched)
+                    if not typed:
+                        entry["message_repr"] = repr(dialog.message)[:_DIALOG_RECORD_CHARS]
+                    elif len(text) > _DIALOG_RECORD_CHARS:
+                        entry["truncated"] = True
+                    seen.append(entry)
+                    if matched:
+                        dialog.accept()
+                    else:
+                        dialog.dismiss()
+                # The permission lives exactly as long as this step's click:
+                # the handler is removed on every exit (dialog or none, click
+                # error, timeout), so a dialog a later step opens can never
+                # be answered under this step's declaration (Codex review of
+                # ce35fb6: a once handler stays armed until an event arrives).
+                page.on("dialog", answer)
+                try:
+                    page.click(selector, timeout=limit)
+                    page.wait_for_timeout(min(200, budget.ms(200)))
+                finally:
+                    page.remove_listener("dialog", answer)
+                    # What the click opened is evidence whether or not the
+                    # click returned: a step that fails after the declared
+                    # operation was accepted must say so (Codex review of
+                    # f30e8b4: a timeout after an accepted confirm and a
+                    # dismissed prompt recorded only the error).
+                    record["dialog"] = seen[0] if seen else None
+                    if len(seen) > 1:
+                        record["extra_dialogs"] = seen[1:]
+                if not seen:
+                    record["error"] = f"no dialog opened; expected the confirm {expected[:80]!r}"
+                    break
+                if len(seen) > 1:
+                    record["error"] = (f"{len(seen)} dialogs opened where one confirm was declared; the extra "
+                                       f"{seen[1]['type']} {str(seen[1]['message'])[:80]!r} was dismissed")
+                    break
+                if not seen[0]["accepted"]:
+                    record["error"] = (f"the dialog did not match: {seen[0]['type']} {str(seen[0]['message'])[:80]!r}; "
+                                       f"expected the confirm {expected[:80]!r}; dismissed")
+                    break
             elif action == "wait":
                 page.wait_for_selector(selector, state="visible", timeout=limit)
             elif action == "file":

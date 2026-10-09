@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import fcntl
 import json
+import os
 import re
 import shlex
 import uuid
@@ -161,7 +162,27 @@ def _check_identity(argv):
         head, rest = 'python', ['-m', 'pytest', *rest]
     # The declared harness report only adds output (integration.REPORT_TOKEN),
     # so a check that declares it is the same check as the scanned one.
+    # ``-p no:cacheprovider`` disables pytest's result cache (``.pytest_cache``,
+    # ``--lf``/``--ff``) and selects nothing: series rule-7590b13 f3 ran its
+    # suite twice per gate, once as the operator's ``check`` and once as the
+    # scanned ``declared-python``, and the second had no report to attribute.
+    rest = _without_cacheprovider(rest)
     return (head, *[a for a in rest if a not in _QUIET_FLAGS and not _report_only(a)])
+
+
+def _without_cacheprovider(rest):
+    out, skip = [], False
+    for i, arg in enumerate(rest):
+        if skip:
+            skip = False
+            continue
+        if arg == '-p' and i + 1 < len(rest) and rest[i + 1] == 'no:cacheprovider':
+            skip = True
+            continue
+        if arg == '-pno:cacheprovider':
+            continue
+        out.append(arg)
+    return out
 
 
 def _report_only(arg: str) -> bool:
@@ -258,6 +279,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
+    stale_fixtures = _retire_stale_fixtures(project.root, run_dir, progress)
     before = project.contents()
     scan = scan_repo(project.root)
     code_map = CodebaseMap(state / 'codebase-map.jsonl')
@@ -287,17 +309,23 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         # A decider object handed in directly (tests, embedding callers) is
         # bound to this run's budget too: no billed call escapes the limits.
         decider.budget = budget
-    if getattr(settings, 'lead_max_turns', None) is None and run_limits is not None:
-        # A per-call ceiling with no turn cap stops a lead only after the
-        # oversized call returns (both Stage B series on b1ff751); the cap
-        # derived here acts before it, and the operator's own value wins.
-        from .run_budget import lead_turns_for
-        derived = lead_turns_for(getattr(run_limits, 'max_tokens_per_call', None))
-        if derived:
-            settings = dataclasses.replace(settings, lead_max_turns=derived)
-            if progress:
-                progress(f'Lead turn cap: {derived} rounds, derived from max_tokens_per_call '
-                         f'{run_limits.max_tokens_per_call:,}')
+    # A per-call ceiling with no turn cap stops a lead only after the
+    # oversized call returns (both Stage B series on b1ff751); the cap
+    # derived here acts before it, and the operator's own value wins.
+    from .run_budget import effective_lead_turns
+    lead_turns, lead_source = effective_lead_turns(getattr(settings, 'lead_max_turns', None), run_limits)
+    if lead_turns is not None and getattr(settings, 'lead_max_turns', None) is None:
+        settings = dataclasses.replace(settings, lead_max_turns=lead_turns)
+        if progress:
+            progress(f'Lead turn cap: {lead_turns} rounds, derived from max_tokens_per_call '
+                     f'{run_limits.max_tokens_per_call:,}')
+    # The allowance this run was given, saved before any model call so an
+    # interrupted run still says what it was allowed (Codex GUI plan, #35),
+    # with the lead turn cap the session is about to be built with.
+    selected = _selected_limits(max_tasks, run_limits, survey, lead_turns, lead_source)
+    (run_dir / 'run-limits.json').write_text(json.dumps(selected, indent=2) + '\n', encoding='utf-8')
+    if progress:
+        progress('Run limits: ' + selected['described'])
     config = SessionConfig(
         project=project.root, project_excludes=tuple(project.exclude),
         allow_writes=allow_writes, mode=mode, integration_gate=gate,
@@ -331,7 +359,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         fleet.progress = progress  # one live line per call as it ends
         # The checks are the commands a granted editing call may run
         # unapproved and the denials that count as a capability failure.
-        fleet.check_commands = tuple(shlex.join(g['argv']) for g in plan if g.get('argv'))
+        from .integration import model_facing
+        # What a seat is told to run: the harness's report declaration is
+        # its own and never reaches a model's argv (series rule-58a4625 f3).
+        fleet.check_commands = tuple(shlex.join(model_facing(g['argv'])) for g in plan if g.get('argv'))
     except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
         pass
     in_flight = {}
@@ -380,6 +411,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         traces = build_traces(run_dir, run_dir / 'invocations.jsonl', project.root)
     except Exception:  # noqa: BLE001 -- tracing never fails a run
         traces = []
+    _observe_transcript_children(traces, delegation)
     diff = project.diff(before)
     completed = bool(session and session.completed and not error)
     checks = session.checks if session else []
@@ -457,6 +489,12 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'policy_preview': preview,
         'policy_plans': getattr(session, 'policy_plans', []),
         'budget': budget.snapshot() if budget else None,
+        'selected_limits': selected,
+        'unnamed_test_files': list(getattr(session, 'unnamed_test_files', []) or []) if session else [],
+        'original_test_runs': list(getattr(session, 'original_test_runs', []) or []) if session else [],
+        'skip_baselines': list(getattr(session, 'skip_baselines', []) or []) if session else [],
+        'unexecuted_acceptance': list(getattr(session, 'unexecuted_acceptance', []) or []) if session else [],
+        'stale_capture_fixtures': stale_fixtures,
         'delegation': reconcile(delegation.events, delegation.native_children.values()),
         'scope_reports': [
             {'within_scope': r.within_scope, 'out_of_scope': r.out_of_scope,
@@ -469,6 +507,177 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     (run_dir / 'findings.json').write_text(
         json.dumps(list(getattr(session, 'findings', []) or []) if session else [], indent=2), encoding='utf-8')
     return ProjectResult(completed, report, run_dir, diff, error)
+
+
+#: Tool names that start a vendor-native child agent inside one call.
+_FANOUT_TOOLS = {'agent', 'task', 'spawn_subagent'}
+
+
+def _observe_transcript_children(traces, delegation):
+    """Record a native child a call's own transcript names but its output hid.
+
+    Claude's ``--output-format json`` envelope carries no tool calls, so a
+    child an unrestricted seat spawns is invisible to the provider. Batch 2
+    recovery-v2 on 5d9f5ff: the orchestrator's second call ran an ``Agent``
+    child to execute the checks, the trace recorded ``Agent: success``, and
+    the delegation record still said zero native children. Each such call
+    becomes an unidentified child with unknown usage: its spend is already
+    inside the parent call's reported total, so nothing is added and no
+    figure is guessed. Observational only; it never stops a run.
+    """
+    from .delegation import NativeChild
+    for record in traces or ():
+        for n, call in enumerate(record.get('tool_calls') or ()):
+            name = str((call or {}).get('name') or '')
+            if name.lower() not in _FANOUT_TOOLS:
+                continue
+            outcome = str(call.get('outcome') or 'unknown')
+            where = (f"{record.get('task')} {record.get('role')} {record.get('model')} "
+                     f"(session {record.get('session_id')})")
+            if outcome.startswith('denied'):
+                # The control holding: a refused spawn ran nothing (Codex
+                # review of 6a338a1), so it is noted, never filed as a child.
+                delegation.note_blind_spot(f'{name} call refused by permissions in {where}; no child ran')
+                continue
+            if outcome != 'success':
+                # Errored or unresolved: an attempt whose execution is
+                # unknown, never filed as a child the record would say ran
+                # (Codex review of 7515f28).
+                delegation.note_blind_spot(f'{name} call with outcome {outcome} in {where}: attempted; '
+                                           'whether a child ran is unknown')
+                continue
+            # Keyed by the vendor's call id within the parent session, else
+            # by the call's position in that session's transcript (stable
+            # across rereads of one growing transcript), never by the parent
+            # invocation: two invocations sharing a session read the same
+            # calls (Codex review of 6a338a1).
+            key = call.get('id') or f"#{n}"
+            delegation.observe_native(NativeChild(
+                session_id=f"unidentified:transcript:{record.get('session_id') or '?'}:{key}",
+                parent_session_id=record.get('session_id'),
+                tool_name=name,
+                detail=(f"named in the saved transcript of {where} with a successful result; its usage "
+                        "is inside the parent call's reported total and is not added"),
+            ))
+
+
+def _retire_stale_fixtures(root, run_dir, progress=None):
+    """Retire capture-only samples left by an earlier run, bound to this
+    project's own state directory.
+
+    Task ids restart at t1 on every run, and an existing nonempty file under
+    ``.quadratus/capture-fixtures/<task id>/`` counts as supplied, so a later
+    run's t1 could upload bytes dictated for a different task (Codex review
+    comment 4226680384 on #53). ``.quadratus`` is opened relative to the
+    project root without following links and held as a directory handle;
+    ``capture-fixtures`` is examined and renamed through that handle to
+    ``capture-fixtures.retired-<run id>`` in the same directory. A rename
+    within one directory is atomic, never crosses devices and never follows
+    a link: the first draft checked pathnames and then moved by pathname,
+    so a ``.quadratus`` replaced by a link in between moved another
+    project's fixtures (Codex review of 391f3c8). The retired name is not a
+    fixture path, so nothing in it can be uploaded again; the bytes stay
+    readable there. A linked ``.quadratus`` or ``capture-fixtures`` is left
+    alone and named. Only an absent folder means there is nothing to do:
+    any other failure to read or rename raises before any model call
+    (Codex review of 6a338a1: an unreadable state directory let the session
+    start with the stale samples still in place). Returns None, or the
+    retired folder's project-relative ``path``, whether ``.quadratus`` still
+    names the directory it was retired in (``resolves``, read through the
+    project pathname, so a project folder replaced as a whole is false), and that
+    directory's ``state_directory`` identity: after a parent swap the bytes
+    are safe but the path leads elsewhere, and the record says so.
+    """
+    import errno
+    import stat
+
+    def say(text):
+        if progress:
+            progress(text)
+
+    flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+    nofollow = getattr(os, 'O_NOFOLLOW', 0)
+    def refuse(exc):
+        return ValueError('Capture-only samples from an earlier run could not be retired '
+                          f'({type(exc).__name__}: {exc}); the run stops before any model call '
+                          'rather than start with them in place.')
+
+    try:
+        root_fd = os.open(str(root), flags)
+    except OSError as exc:
+        raise refuse(exc) from exc
+    try:
+        try:
+            state_fd = os.open('.quadratus', flags | nofollow, dir_fd=root_fd)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                say('Stale capture fixtures not retired: .quadratus is a symlink or not a folder')
+                return None
+            raise refuse(exc) from exc
+        try:
+            try:
+                info = os.stat('capture-fixtures', dir_fd=state_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return None
+            if stat.S_ISLNK(info.st_mode):
+                say('Stale capture fixtures not retired: .quadratus/capture-fixtures is a symlink')
+                return None
+            if not stat.S_ISDIR(info.st_mode):
+                return None
+            folder_fd = os.open('capture-fixtures', flags | nofollow, dir_fd=state_fd)
+            try:
+                if not os.listdir(folder_fd):
+                    return None
+            finally:
+                os.close(folder_fd)
+            retired = f'capture-fixtures.retired-{Path(run_dir).name}'
+            os.rename('capture-fixtures', retired, src_dir_fd=state_fd, dst_dir_fd=state_fd)
+            held = os.fstat(state_fd)
+            moved = os.stat(retired, dir_fd=state_fd, follow_symlinks=False)
+            # The locator is true only while the project's pathname, read
+            # fresh from the operator's folder, still leads to the retired
+            # bytes. Comparing .quadratus relative to the held root was not
+            # enough (Codex review of 6a338a1, then of 7515f28): a project
+            # folder replaced as a whole left the held root agreeing with
+            # itself while <project>/<path> no longer existed.
+            try:
+                now = os.stat(os.path.join(str(root), '.quadratus'), follow_symlinks=False)
+                there = os.stat(os.path.join(str(root), '.quadratus', retired), follow_symlinks=False)
+                resolves = (stat.S_ISDIR(now.st_mode) and stat.S_ISDIR(there.st_mode)
+                            and (now.st_dev, now.st_ino) == (held.st_dev, held.st_ino)
+                            and (there.st_dev, there.st_ino) == (moved.st_dev, moved.st_ino))
+            except OSError:
+                resolves = False
+        except OSError as exc:
+            raise refuse(exc) from exc
+        finally:
+            os.close(state_fd)
+    finally:
+        os.close(root_fd)
+    where = f'.quadratus/{retired}'
+    if resolves:
+        say(f'Capture-only samples from an earlier run retired to {where}')
+    else:
+        say(f'Capture-only samples from an earlier run retired as {retired} inside the state directory '
+            f'that was at .quadratus (device {held.st_dev}, inode {held.st_ino}); .quadratus no longer '
+            'names that directory, so the path does not lead to them')
+    return dict(path=where, resolves=resolves, state_directory=dict(device=held.st_dev, inode=held.st_ino))
+
+
+def _selected_limits(max_tasks, run_limits, survey, lead_turns=None, lead_source=None):
+    from .run_budget import SUMMARY_CALL_RESERVE_TOKENS, describe_limits
+    reserve = run_limits.reserve_tokens_per_call if run_limits is not None else 0
+    return {
+        'max_tasks': max_tasks,
+        'run_limits': dataclasses.asdict(run_limits) if run_limits is not None else None,
+        'summary_call_reserve_tokens': min(reserve, SUMMARY_CALL_RESERVE_TOKENS) if reserve else None,
+        'lead_max_turns': lead_turns,
+        'lead_max_turns_source': lead_source,
+        'survey_recovery_tasks': survey.recovery_tasks if survey is not None else None,
+        'described': describe_limits(run_limits, survey, max_tasks, lead_turns, lead_source),
+    }
 
 
 def _calls_by_task(session):

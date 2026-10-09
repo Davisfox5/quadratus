@@ -62,7 +62,7 @@ def test_the_correction_for_a_capture_error_carries_the_capture_rules(tmp_path):
     session, calls = _session(tmp_path, iter([_declaration(KEYED), _declaration(VALID)]))
     spec = session.next_task()
     assert len(calls) == 2
-    assert "CORRECTION REQUIRED: SCOPE capture steps need action click, wait or file" in calls[1]
+    assert "CORRECTION REQUIRED: SCOPE capture steps need action click, wait, confirm or file" in calls[1]
     assert _CAPTURE_SCOPE_REQUEST in calls[1], "the correction states every rule the declaration is held to"
     assert spec.scope.capture["steps"][0] == {"action": "click", "selector": "#open"}
 
@@ -96,7 +96,7 @@ def test_the_lead_is_told_to_write_its_own_capture_fixture(tmp_path, monkeypatch
                                             "path": ".quadratus/capture-fixtures/t2/manifest.csv"},
                                            {"action": "wait", "selector": "#rows tr"}])
     assert "uploads .quadratus/capture-fixtures/t2/manifest.csv into #csv" in text
-    assert "you must write it before you finish" in text and "needs no CHANGED entry" in text
+    assert "do not create it" in text and "harness asks you for its content" in text and "needs no CHANGED entry" in text
     assert "recorded as unverified design work" in text
 
 
@@ -113,5 +113,5 @@ def test_no_file_step_adds_no_fixture_note(tmp_path, monkeypatch):
     from quadratus.session import _capture_fixture_note
     text = _harness_lead_prompt(tmp_path, [{"action": "wait", "selector": "#rows tr"}])
     assert "(after 1 declared interaction steps)" in text
-    assert "you must write it before you finish" not in text and "must remain a regular file" not in text
+    assert "harness asks you for its content" not in text and "must remain a regular file" not in text
     assert _capture_fixture_note(type("S", (), {"task_id": "t2", "scope": None})()) == ""

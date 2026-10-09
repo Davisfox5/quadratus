@@ -30,6 +30,17 @@ Key design decisions already settled:
   `.quadratus/runs/<id>` keeps report, ledger, raw artifacts, usage, diff and
   machine-readable status. Failed or interrupted model runs keep their report.
   Task caps, unresolved findings and failed checks are incomplete outcomes.
+- **The installed product starts the way the README says** (Codex
+  installation assessment on 4a273a3). Setup installs the package (`pip
+  install -e .` in a venv, Python 3.11+), since only that puts `quadratus`
+  and `quadratus-gui` on PATH; `requirements.txt` is for source work. The
+  GUI's Project tab carries the CLI's `--capture-profile`, `--extra-check`
+  and `--readiness` inputs; `quadratus-gui --port N` or
+  `QUADRATUS_GUI_PORT` chooses the port and a busy port is reported with
+  the way out. `Settings.__post_init__` refuses numeric settings no run can
+  use (non-finite or non-positive timeouts, a negative delay, token or
+  retry counts below their floor) naming the variable; unparsable text
+  still falls back to the default, which a test pins.
 - **Public GUI sharing is disabled.** Project controls can access local files
   and execute check commands; API transport does not make those controls safe
   to expose without authentication. GitHub clone and new local branches are
@@ -415,6 +426,108 @@ Key design decisions already settled:
   survivor is carried loudly into the close-out. Sequencing + the map keep
   pieces consistent; only execution proves them, and no model is in this
   loop.
+- **A test assertion is one raised through the test's own frame** (Codex
+  attribution assessment on 4a273a3). Pytest reports a failure from a
+  `pytest_runtest_call` or `pytest_pyfunc_call` hook in the call phase, so
+  a hook that asserted before the body ran was attributed as a product
+  failure and could buy an application repair. The producer
+  (`quadratus-pytest/4`) records `body`: whether the exception's traceback
+  passes through the unwrapped test function's code object, and
+  `assertion` now requires it. Expected-exception failures (`pytest.raises`
+  with nothing raised, `builtins.Failed`) stay unattributable: that is a
+  stated capability gap, not something this change widens.
+- **The GUI can bound a run, and off is the old run** (Codex GUI plan on
+  #35, 2026-10-09). The Project tab's Run limits form builds the existing
+  `RunLimits` and `SurveyConfig` in the callback, refuses a bad field by
+  name before any project or provider is touched, and forwards both through
+  `run_project_ui` to the shared runner. A preset only fills the fields.
+  `project_run` writes `run-limits.json` before the first call and repeats it
+  as `selected_limits` in `result.json`, with one plain wording
+  (`run_budget.describe_limits`) that never calls a post-return threshold a
+  ceiling. Limits off and zero recovery passes `None` for both, exactly the
+  call made before the form existed. The wording states what the engine
+  does, not a simpler promise: a one-turn summary call reserves
+  `min(reserve, SUMMARY_CALL_RESERVE_TOKENS)`, and the record carries the
+  lead turn cap the session is built with and its source
+  (`run_budget.effective_lead_turns`, the same rule the runner applies).
+- **Capture-only samples belong to one run** (Codex review on #53,
+  2026-10-09). Task ids restart at t1, so a sample an earlier run left under
+  `.quadratus/capture-fixtures/t1/` counted as supplied for the next run's
+  t1. Before any model call `project_run` renames it to
+  `.quadratus/capture-fixtures.retired-<run id>`, through a directory handle
+  on the project's own `.quadratus` opened without following links: never
+  deleted, never a source change, never a pathname move (a `.quadratus`
+  swapped for a link between a check and a pathname move relocated another
+  project's fixtures; Codex review of 391f3c8). A linked `.quadratus` or
+  `capture-fixtures` is left alone and named; any other failure stops the
+  run before a model call, and the record says whether the retired path
+  still leads to the samples (Codex review of 6a338a1), read through the
+  project pathname itself, so a project folder replaced as a whole reads
+  false (Codex review of 7515f28). A capped design review still records the
+  delivery: the model ran, so the renders reached its copy.
+- **A task record says what happened, not what the stage list implies**
+  (batch 2 recovery-v2 on 5d9f5ff). Three simple tasks drew no collaborator
+  (`Complexity.collaborator_count`) yet recorded `review: true`, and each
+  clean close carried the stopped-call note "already on disk when the call
+  stopped". The review edge is now `None` when no peer reviewed, and a clean
+  close says "The task closed with these changes on disk"; a capped or
+  failed close keeps the stopped-call wording. Reporting only: who reviews
+  and what completes are unchanged.
+- **A child the transcript names is on the delegation record** (batch 2
+  recovery-v2 on 5d9f5ff). Claude's JSON envelope carries no tool calls, so
+  the orchestrator's `Agent` child (it ran the checks itself) was invisible
+  to the provider while the trace recorded `Agent: success`, and the record
+  said zero native children. `project_run` now files each `Agent`, `Task`
+  or `spawn_subagent` call a saved transcript names as an unidentified
+  child with unknown usage: its spend is already inside the parent's
+  reported total, so nothing is added, guessed or attributed, and it never
+  stops a run. The parent's unattributed auxiliary tokens stay unattributed.
+- **A test file no check names is reported as unnamed, never as unrun**
+  (batch 2 gui-ui-v3 on 5d9f5ff: t2 added `tests/ui/project_search.test.js`,
+  the frozen Node check names five other files, and the lead's `node --test
+  tests/ui` was correctly refused). Commands are never widened. The lead's
+  guidance says a new test file no listed command names is not shown to
+  have run, so new tests belong in a listed file. After a task's gate,
+  `integration.uncovered_tests` finds changed test files of a family some
+  check lists explicitly that no check names, covers by folder or
+  discovers; they are an observation (on the task, the close-out and
+  `result.json` `unnamed_test_files`), never a finding, because a wrapper
+  can run a file no check names (Codex review of 7515f28).
+  Native children named in a transcript count once per vendor call id; only
+  a successful spawn is a child; a refused, errored or unresolved one is a
+  ledger note that says whether it ran is unknown or that none ran.
+- **The GUI serves copies of a run's files, never the run folder** (batch 2
+  gui-ui-v3 on 5d9f5ff, the first real GUI run). Gradio serves only its
+  working directory, the system temp directory and `allowed_paths`; the
+  run's files live in the project's `.quadratus/runs/<id>`, so returning
+  them raised InvalidPathError and blanked the report, diff and downloads.
+  `gui.downloadable_files` copies exactly `RUN_FILES` into a fresh 0700 temp
+  folder named after the run, bound to descriptors: `.quadratus/runs/<id>`
+  must not contain a link (Codex review of 7515f28), only the project's own
+  location above it is resolved once (macOS `/var` is a link), every
+  component is opened from `/` without following links; each file is
+  examined first, then opened non-blocking and confirmed as the same regular
+  file (a FIFO in a file's slot blocked the open; Codex review of 35f198e),
+  and a linked, non-regular or unreadable file is named in a note while a
+  missing one is simply not offered. Bytes are read from the held
+  descriptor and a partial copy is never offered. `allowed_paths` is never widened, which
+  would expose the whole project tree.
+- **The planner reads the harness record before the lead's account**
+  (batch 2 gui-ui-v3 on 5d9f5ff). t6's close-out said the preview failed
+  and R4 was blocked, because its review seat had tried to start the
+  preview inside its own sandbox; the harness had in fact verified both
+  views and Opus had approved. The planner saw only the account, dispatched
+  t7 to capture again (about 680k tokens), and the run ended on the token
+  reserve with every requirement covered. Each ledger entry now opens with
+  the harness's own record for the task (`Session._harness_record`: design
+  capture verified or not and its views, the final reviewer's verdict, the
+  required checks), labelled as measured and as winning over the account.
+  This is the summary-is-an-index rule applied to the harness's facts.
+  The design review is read whole (`session._review_reading`): APPROVED
+  only when the review approved, otherwise every BLOCKING line; the record
+  stores the decision beside the 600-character text, because a first-line
+  APPROVED followed by a BLOCKING line read as an approval (Codex review of
+  35f198e). The audit prompt uses the same reading.
 - **A runtime-dependency tree is part of what a check proves**
   (`deptree.py`, contract v2 on #25). Run 19: a lead wrote a
   `node_modules` shim the source checks could not see, and the project's
@@ -427,6 +540,83 @@ Key design decisions already settled:
   Nothing outside the project is guarded. The lead's cap
   (`lead_max_turns`) binds revision, gate-fix and design-fix as well as the
   draft; a capped fix is one attempt spent and the checks still decide.
+- **Run-start tests are checked in their run-start form; acceptance that did
+  not run is never audited MET** (series rule-119c83f f2, Codex decision D,
+  #35 6076286834). f2's t2 changed the original helper `tests/ui/load_app.js`
+  so new code loaded under it, the gate ran the edited helper and passed, and
+  every original Node test failed against the delivered code; t3 and t4 said
+  their browser scenario did not run and the audit marked all five
+  requirements met. Every test and test-support file
+  (`integration.is_test_support`: test-file patterns, `conftest.py`, anything
+  under `tests/`, `test/`, `__tests__/`, `spec(s)/`) is kept at run start.
+  When one differs or is gone, the gate's own commands also run in a copy of
+  the current source with those bytes restored and the run's added test files
+  left out (`run_original_tests`); its receipts (`original-tests:<id>`) join
+  the check, so a failure buys the ordinary gate-fix and attribution rules,
+  and DONE runs it again. A command naming a test file the run added cannot
+  run there and is an open unverified finding, as is a gate whose commands
+  cannot be read; neither is a pass. Unchanged originals are not re-run. The
+  audit is shown the unnamed test files and every `NOT RUN: <item> - <why>`
+  (or `BLOCKED:`) line an editing call wrote, and lowers a MET
+  deterministically when every citation is an unnamed test file, or when a
+  task covering the requirement reported NOT RUN, or when its required check
+  skipped cases the run-start source did not skip. That baseline is the gate's
+  own commands run once on the run-start source, the first time a check skips
+  anything (`skip_baselines`): a product edit that turns a case into a skip
+  counts (Codex review of 81adcc7, R3), a case skipped since before the run
+  does not, and the restored-original receipts never record one (R4). A skip
+  is historical only when its name is one case in both runs, that case was
+  skipped at run start, and the one test file holding it (the file in a pytest
+  node id, or the one file with the bare name quoted) is the same file with
+  that case's own definition unchanged since run start: for pytest the test
+  function with its decorators, resolved along its whole class path with each
+  enclosing class's decorators (an ambiguous or missing path is unknown); for
+  a bare name every registration call quoting it, read whole by a bounded scan
+  that matches bracket types and skips strings and comments, and is unknown on
+  anything it cannot read for certain (a `/` that may start a regex, a
+  template with `${`), never a prefix (02accbd, X1), so a changed callback
+  body counts and tests added beside it do not (Codex review of e530b89, U1;
+  5292fc2, V2; f2f66ff, W2, W3); names are read from the whole output before
+  its tail is kept (`case_record`, Codex review of 67c9fad, S1), and a name
+  over 300 characters is keyed by its SHA256 (`case_key`, d157378 T1). A
+  shared name, a record past its bound (the tail is never used as identity,
+  T2) or no baseline: every skip counts. A pytest XFAIL is not execution (S5).
+  Optional commands never record one. Only a *complete run* discharges a NOT
+  RUN item (Codex review of b6ba3ba, F3, F4, F6): a later passing required
+  command, no filter in argv, in pytest's `addopts`/`PYTEST_ADDOPTS` or
+  `NODE_OPTIONS`, no case reported deselected (R2), no `-p` plugin or
+  `PYTEST_PLUGINS` (T3), no collection or execution hook in a conftest.py
+  pytest would load, no node configuration file (S2), cases executed and zero
+  skipped, naming every path of the item as a whole operand read from the
+  command's own cwd (R5; a single-command gate's cwd and selection are kept on
+  its check and on the receipt synthesized when original tests join, S3 and
+  S4). A named skip fact is discharged, decided when each check runs against
+  that check's source, by a later run of the same command whose complete case
+  record shows those cases executed and none skipped. A pytest node id,
+  recorded from pytest's own verbose line in a pytest command's output (case
+  lines are read per the command's runner, taken from the executable's
+  position and never from a test-file operand, so text a node test prints is
+  never a pytest case, W1, X2; a runner the executable does not name, such as a shell wrapper around python, has selection not established and never counts as a whole run, Y1), carries its file, so its own execution is
+  enough whatever else was skipped (U2); a `::` in any other name proves
+  nothing (V1); a bare name must be held by the same single test file as when
+  it was recorded, so a name reused in another file never stands in (T4, U1).
+  An unnamed skip fact needs such a run skipping nothing. A substring, an
+  optional or skipped receipt, a filtered run, a lower skip total, or a
+  model's word never does; a report written after a run is a new report. An
+  unnamed file is reconciled by a later complete run that names it or names a
+  file that names it. Parallel children's reports come back to the parent,
+  re-based to its checks (F5). Test-only runner configs (`pytest.ini`,
+  jest/vitest/playwright/mocha configs) are kept and restored with the tests,
+  and one added during the run (or an added `conftest.py`) triggers the
+  original run with it left out (R1); a change to test selection in a mixed
+  file (`pyproject.toml [tool.pytest]`, `setup.cfg`/`tox.ini` pytest sections,
+  `package.json` type/imports/runner keys) means the original suite cannot be
+  established: an open unverified finding, never a pass (F1). The project is
+  re-read after the copy runs, and a change fails the check (F2). Downward
+  only: no reply raises a verdict, and prose without a marker is not read.
+  Reviewers are told which run-start test files changed. A goal that
+  legitimately changes behaviour an original test pins will fail this check;
+  there is no exemption and no new grant.
 - **The measured diff is the truth; the CHANGED line is the lead's account of
   it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
   project around every editing call, so it already knows what changed. The
@@ -601,6 +791,360 @@ Key design decisions already settled:
     was filed as the open finding because a marker appeared somewhere in its
     prose. `VERDICT: ACCEPT` or `REJECT` decides; ACCEPT still loses to a
     prefixed `BLOCKING:` with content; no line falls back to the scan.
+- **An elided call is not a signature** (series rule-2ffa7f6, f6, 2026-10-06).
+  `scope.declared_signatures` collects every backticked `name(args)` for a
+  `def`-declared name so a mid-description revision is caught before
+  dispatch. It also collected `_serve_guarded(...)`, a reference to the
+  function, as a second signature; the correction round then named `(...)`
+  as the contradiction, the orchestrator could not act on that, and the cell
+  stalled on three calls with no lead invoked. An argument list that is only
+  `...` or `…` says nothing about the parameters and is skipped; a real
+  second signature beside an elision is still refused.
+- **Review seats share the lead's turn cap, and a capped review is no
+  verdict** (series rule-2ffa7f6 f3 and f5, 2026-10-06). Every editing call
+  was bound by the derived 20-round cap while the Opus collaborators ran 15
+  to 20 rounds uncapped at 0.87M to 1.18M tokens, and both cells stopped on
+  the token threshold. `runtime.REVIEW_CAPPED_ROLES` (collaborator,
+  recheck, design-review, verifier) now takes `Settings.lead_max_turns` too;
+  closeout, workers and the orchestrator stay uncapped. A reviewer that hits
+  the cap has given no verdict: its narration is never read as findings, the
+  task carries an `unverified` fact naming the reviewer, a capped recheck
+  buys no fix round, a capped design review is "gave no verdict" rather than
+  a design defect, and a capped verifier leaves the verification edge unset.
+  Review copies also get the editing call's exact check guidance (#51) plus
+  the fact that the copy has no `.git`: f1's reviewers ran `node --test
+  tests/ui/` in place of the five listed files, and `git status`.
+  The cap is a transport fact tracked beside the loop, never read back from
+  the reply (Codex review of 0983dac: a prefix filter dropped an ordinary
+  reply with a BLOCKING line as if capped), and a capped recheck keeps the
+  reviewer's whole original finding on the record as unverified. **A reply
+  that arrived is not a review that finished**: a collaborator's reply
+  counts as a verdict only as NO FINDINGS, at least one BLOCKING finding,
+  or a closing `REVIEW: COMPLETE` line, which the prompt asks for; anything
+  else is recorded as an unfinished review (unverified) and still reaches
+  the lead as a note. A marker as written, like the verifier's VERDICT
+  line, never a reading of the prose.
+- **The lead is told what the harness measures, not only the estimate**
+  (series rule-2ffa7f6 f3, f4 and f7, 2026-10-06). The decomposition prompt
+  already tells the orchestrator that test lines count in full, and it
+  sized first tasks at 85 to 100 lines; the leads then wrote 112 to 171
+  test lines beside 23 to 65 code lines and every first task stopped past
+  the 1.5x line. `TaskScope.render()` now states the counting rule, the
+  exact stop line and "compact named cases", so the seat writing the tests
+  knows the bound it is writing against. The estimate rules and the stop
+  itself are unchanged.
+- **A summary-only call reserves its own shape** (series rule-3f9c548 f3,
+  2026-10-06). The pre-call reserve was one size for every call, so a
+  finished task's 20k close-out was refused on 160k of headroom because the
+  operator's reserve for an agentic call is 500k. The close-out is bounded
+  in one respect only: a 32,000-byte prompt and, where the CLI argv carries
+  `--max-turns 1` (claude, grok; `CLISpec.summary_turn_capped`), one model
+  turn. Nothing caps its output at the CLI (the view's `max_tokens` is not
+  emitted in argv; saved close-outs reported up to 1,629 output tokens), and
+  codex's summary call has no turn flag at all. So the 64k
+  (`SUMMARY_CALL_RESERVE_TOKENS`) is a measured allowance, about 2.7 times
+  the largest saved close-out (24,006), not a hard bound, and it is passed
+  only where the one-turn cap is enforced; codex close-outs reserve the
+  operator's figure in full (Codex review of 961d2da). It never raises a
+  reserve, every other call reserves the operator's figure in full, the
+  post-return threshold is unchanged, and the snapshot counts
+  `shaped_reservations`.
+- **The Stage B check declares the harness report, and a cache-free pytest
+  is the same check** (series rule-7590b13 f3, 2026-10-07). A gate failure
+  buys a fix call only when the check carries `--quadratus-report={report}`
+  and the report shows plain assertion failures (phase 3, #25); the packet's
+  check never carried the token, so the first failing gate of the cycle
+  (the lead's own `tests/test_ui_rename.py` asserting on a node runner's
+  `# pass 0`) was `CheckUnattributable` and the run stopped with six tasks
+  closed and no repair call. The packet now declares the token. The same
+  suite had also been running twice per gate, once as the operator's
+  `check` and once as the scanned `declared-python`, because
+  `-p no:cacheprovider` made the two argv differ; `_check_identity` now
+  treats that switch as the non-selecting plumbing it is, so the declared
+  pytest is named by the operator's and runs once, with the report. The
+  node `extra_checks` gate has no report producer and stays unattributable
+  by design: a node failure is still the operator's.
+- **The Stage B cell budget is 5M and the reserve 250k** (Davis,
+  2026-10-06: "the reserve and the overall token count are now in play").
+  Raised from 4M after series rule-7590b13 f2: all three tasks' work was
+  finished (drafted, reviewed, revised, rechecked, design-reviewed) and
+  the cell stopped at 3.76M with 237k of headroom when the third task's
+  one-turn close-out asked for the full 250k reserve, because a codex
+  summary call is not argv-capped and so never gets the 64k allowance
+  (`CLISpec.summary_turn_capped`). The DONE turn and the audit would have
+  needed about 250k more, so the cell needed about 4.05M; f1 used 3.45M
+  on three tasks. On this engine a task costs about 1.2M (an Opus
+  collaborator review 260k to 560k, an Opus design review about 200k, a
+  revision 100k to 450k), so 5M covers four tasks with the 1.5M per-call
+  ceiling unchanged. The 4M history follows.
+- **The Stage B cell budget was 4M** (Davis, 2026-10-06).
+  On engine 3f9c548 the cells that finished (f6, and f7 on 2ffa7f6) used
+  about 0.8M; the cells that reached a review cycle stopped at 2.0M to
+  2.3M with the cycle unfinished, and finishing them needs one revision,
+  one recheck and a close-out more, about 0.3M to 1.0M on the measured
+  sizes. 4M covers that with the 1.5M per-call ceiling still bounding a
+  single call. The reserve history follows.
+- **The Stage B reserve is 250k, not 500k** (Davis, 2026-10-06, after
+  f1 to f4 of series rule-3f9c548 all stopped on `reported_token_reserve`
+  with their work unfinished). The reserve says what the next call is
+  expected to cost; on this engine the calls that follow a draft measure
+  128k to 378k (revision, collaborator, design review) and 20k to 42k
+  (close-out, recheck), and a 500k reserve refused them on 160k to 300k of
+  headroom. 250k lets a fix cycle finish; the 2.5M threshold and the 1.5M
+  per-call ceiling still bound the overshoot. The ruling was to keep
+  getting results without burning every token, not to remove the bound.
+- **A capture-only sample is dictated by the lead and written by the
+  harness** (series rule-3572b72 f1 t3, 2026-10-06). The built-in policy
+  tells every builder "never change `.quadratus/**`" while the capture note
+  said "you must write `.quadratus/capture-fixtures/<task id>/…`". The
+  Opus lead of t2 wrote its sample anyway; the Sol lead of t3 obeyed the
+  ban, the capture exited 2 on the missing file, and that path spent no
+  call, so three clean tasks ended as `DesignUnverified`. The note now says
+  not to create it. Before the harness captures, `_missing_own_fixtures`
+  lists the declared own-fixture paths that do not exist and
+  `_supply_fixtures` asks the lead once (role `fixture-supply`, read-only
+  copy) for `FIXTURE <path>:` plus a fenced block per file; the harness
+  validates the path against the declaration and the size against
+  `MAX_FIXTURE_BYTES` and writes it. An unexpected path is never written;
+  a missing, oversized or duplicated block, or a reply whose fence
+  swallowed the next header, leaves the capture to fail as before. The
+  write is confined before it happens (`_confined_fixture_target`: exactly
+  `.quadratus/capture-fixtures/<task id>/<name>`, no symlink at any
+  component, the resolved target inside the resolved project) and at the
+  operation itself (`_write_fixture_bound`: every component opened
+  `O_NOFOLLOW` relative to the handle of the directory before it, the file
+  created `O_EXCL`, so a link swapped in after the check is refused and an
+  unexpectedly present file is never overwritten; Codex reviews of 351d3ba
+  and 6844b97). The bytes go to a private temporary name in the task
+  folder and the declared name is created only by linking that inode after
+  the whole write succeeded, which fails if anything appeared there; so the
+  declared name never names a partial or foreign file, nothing is deleted
+  by the declared name, and a failed write leaves the declared name absent
+  (Codex reviews of cc045a1 and a7cde45: a pathname unlink can delete a
+  replacement, and a partial file under the declared name became evidence
+  later). Any supply problem stops the design check unverified before a
+  capture or review can run on it (Codex review of ada4c75). Every line
+  that starts like a `FIXTURE` header is accounted
+  for, well-formed or not, so a trailing or malformed duplicate keeps
+  nothing for its path. No write grant changes, and a committed sample
+  elsewhere is still checked by the capture itself.
+- **A final wait that was visible at load is a declaration defect and
+  gets a redeclaration, never a design-fix** (series rule-3572b72 f2 t1,
+  2026-10-06). The qualifier rightly refused both renders because the
+  declared final wait (`#project-search`) was visible before any step ran,
+  and the engine spent its one design-fix call asking the lead to fix the
+  source, which was sound; the call ran to the 20-round cap at 961k tokens
+  and the run ended `DesignUnverified`. `check_records` now reports that
+  case under `CAPTURE_DECLARATION`, and `_check_design` answers a record
+  set that is only that kind with the one `_recapture_declared` round the
+  blind review gets (the prompt names the capture check as the source).
+  Still wrong after the redeclaration, or `CAPTURE: none`, stays unverified
+  with no fix call spent; a page problem beside it still gets the fix.
+- **A one-line answer is bounded like one, and the marker is read wherever
+  it sits** (series rule-3572b72 f5, 2026-10-06). The recapture round from
+  the earlier f5 fix fired, the grok lead's capture-redeclare call ran 12
+  rounds and 403k tokens in the read-only copy, and its reply held
+  `load.CAPTURE: {...}` after a sentence on the same line; the line-anchored
+  parser recorded "no CAPTURE: line" and the blocking verdict stood.
+  `runtime.DECLARATION_ROLES` (capture-redeclare, fixture-supply) now take
+  `DECLARATION_MAX_TURNS` (6), never above the operator's lead cap, and
+  `_capture_candidates` reads the whole reply: a declaration is
+  marker-backed (any-case `capture:` followed by `{` or `none`, wherever it
+  sits on its line), and every other attempt is a conflict only, never a
+  declaration (a marker with any other tail or none, a line outside the
+  marker lines that starts with `{`); exactly one declaration with nothing
+  conflicting is read, anything else is refused without a call (Codex
+  reviews of 351d3ba, 6844b97 and ada4c75). A
+  reply with no marker still stands as the verdict it was: one bounded
+  declaration round and no second call because parsing failed (Codex,
+  terminal audit of rule-3572b72), so there is no re-ask. The one
+  redeclaration is shared by both routes that can ask for it (the capture
+  check and the blind review): after it is spent, a blind review stays
+  unverified, and the first receipt is kept as written.
+- **A capture step can answer a dialog** (`{"action": "confirm",
+  "selector": ...}`; Davis, 2026-10-07: "add the verification to f5 so it
+  can use screenshot capture effectively"). Codex's static read of the
+  saved f5 source: the empty state shows only when `/api/projects` is
+  empty, the only UI route there is a delete behind a `confirm` dialog,
+  and the capture's click, wait and file steps cannot answer one, so no
+  declared route to the state existed and f5 stayed unverified on every
+  cycle with all four graders passing. Playwright dismisses an unanswered
+  dialog, so a plain click on a delete control cancels the delete. A
+  confirm step declares the text its dialog must show
+  (`"message"`), registers a handler for its own click, and accepts that
+  one dialog only when it is a confirm whose whole message equals the
+  declared text (whitespace collapsed; a longer message that merely
+  contains it is another operation, Codex review of 4a51291); any other
+  dialog is dismissed and the step fails, and no dialog is a failed step,
+  so an unexpected, wrong or missing dialog stays an honest unverified
+  outcome and nothing is ever auto-accepted (Codex, 6038178890). The
+  permission covers one dialog, the first: every later dialog the click
+  opens is dismissed, recorded under `extra_dialogs`, and fails the step
+  (Codex review of ca60892: two matching confirms were both accepted and
+  a prompt after a valid confirm went unrecorded). The recorded message
+  is kept whole (600 characters, twice the declared maximum) so the
+  evidence check compares it untruncated, and the check reads only a
+  string message, never a stringified container. The dialog's type, message and whether it was accepted are
+  recorded on the step, and the evidence check accepts a confirm step
+  only when its record shows the declared dialog accepted (Codex review of
+  ce35fb6: a record with no dialog, or another dialog, passed the
+  checker). The handler is bound to that one click and removed on every
+  exit, dialog or none, click error or timeout, so a dialog a later step
+  opens is never answered under an earlier step's declaration (same
+  review: a `once` handler stays armed until an event arrives). It is
+  validated, carried through the CLI as `--confirm SEL MESSAGE`, and named
+  in the orchestrator's capture rule.
+  Because it changes the preview's state, such a capture is rendered one
+  view per fresh preview (`preview.mutates_preview`, `--view`): the first
+  view's delete must not empty the list for the second. The views of one
+  capture share one attempt token (`--attempt`) and one capture allowance
+  spent across them beside the one total deadline; a partial render keeps
+  the other view only as a sibling (same attempt, target, source
+  fingerprint and checked steps, every step passed, files present), never
+  relabels old bytes with a new identity, answers with its exit code for
+  the views it rendered, and leaves final acceptance to the checker, which
+  needs every view (Codex review of 4a51291: a kept view took the new
+  render's source and declaration, and a stale failed sibling ended the
+  next attempt). Whether the preview reseeds on start is the profile's
+  property (the Stage B profile's server seeds on each start); a second
+  view whose final wait was already satisfied before its steps is caught
+  by the evidence check as a declaration problem. No goal, grader or
+  profile change was made.
+- **A node check has a producer, and the report token never reaches a
+  model** (series rule-58a4625 f3, 2026-10-07). Two findings from one cell.
+  The packet's pytest check now carried `--quadratus-report={report}`, and
+  the APPROVED CHECK COMMANDS guidance showed the lead that argv verbatim,
+  so two leads ran it and got exit 4 (`unrecognized arguments`); the token
+  is the harness's own and `integration.model_facing` strips it from every
+  command a seat is told to run. Then the node extra check failed in the
+  lead's own `tests/ui/load_app.test.js` and, with no producer, was
+  unattributable by design: the second cycle in a row that f3 ended on a
+  failing node UI test with the work done and the graders passing.
+  `_gate_producer/quadratus_gate_report.mjs` is a harness-owned node:test
+  reporter (`quadratus-node/1`, nonce- and digest-bound like the pytest
+  plugin): a `node --test` check declares
+  `--test-reporter-destination={report}`, and the harness replaces that
+  argument with `--test-reporter=tap --test-reporter-destination=stdout`
+  (the count reader needs the runner's text) plus its reporter and the
+  report path, inserted directly after `--test` because node reads an
+  option after the first test file as another file (probed on node 22;
+  custom reporters need node 19.6 or later, so a Mac probe is the
+  qualification). A failed test body whose cause is node:assert's own
+  `ERR_ASSERTION` is a plain assertion; any other thrown type, a hook
+  failure, a cancelled subtest and a file whose process failed (a
+  collection error) are not the application's to repair, exactly as the
+  pytest rules read them. Node also fails the parent of a failed child
+  (`subtestsFailed`); that aggregate is skipped, since the leaf's own event
+  carries the failure, or an ordinary nested suite reads as a setup error
+  (Codex review of f8d8c03).
+- **A declared step that does not happen is a declaration defect, and a
+  redeclaration ends in a wait** (series rule-58a4625 f2, 2026-10-07). t2
+  was drafted, reviewed, revised and rechecked, then the harness capture
+  exited 1 on the orchestrator's declared wait (`#project-search-count:empty`
+  never matched after the clear click) and the task stayed unverified with
+  no redeclaration, while the sibling defect (a final wait visible at load)
+  already bought one. The capture tool exits 1 only for a failed step
+  (`_step_failure`; a crash inside the capture exits 3 since the Codex
+  review of f8d8c03, because an uncaught exception used to exit 1 as well
+  and a browser crash must never buy a declaration call), so that case now
+  gets the same one
+  `_recapture_declared` round with the capture named as the source; a
+  recapture that succeeds continues into the ordinary check and review, one
+  that fails stays unverified with no fix call, and exit 2, preview and
+  integrity failures keep their old handling. In t1 the redeclaration was
+  `{"path": "/", "steps": []}`, accepted and verified because there was no
+  wait to check; a recapture must now end in a wait on the changed state or
+  it is no usable declaration (the prompt's own rule, enforced).
+- **A capped declaration call is a missing declaration, never a run stop**
+  (series rule-7590b13 f5, 2026-10-07). The 6-round cap above did its job
+  on grok's capture-redeclare call (6 of 6, 159k tokens, `cancelled`), and
+  the `TurnLimitReached` it raised passed straight out of the design check
+  and ended a run whose four graders all passed, with its one task never
+  closed. Both declaration calls (`_recapture_declared`, `_supply_fixtures`)
+  now catch the cap through `_capped_declaration`: the partial text is kept
+  as `<role>-capped` evidence and never read for a `CAPTURE:` line or a
+  `FIXTURE` block, the record says the call stopped at N rounds with no
+  declaration, the redeclaration stays spent, nothing is re-asked, and the
+  check proceeds exactly as after a reply with no marker (unverified, no
+  fix call). A cap on a review seat is already handled this way
+  (`_capped_review`); the declaration seats were the two left raising.
+- **A view's files are bound to its entry by digest, and a dialog record is
+  the compared text** (Codex review of ca0ad65). The attempt token said two
+  partial captures were siblings; nothing said the retained screenshot was
+  still the one that render wrote, and a replaced `page.png` of the same
+  size was kept and accepted. `capture` now records `files` (sha256 of
+  `page.png` and `evidence.json`) in every view entry; `_kept_views` keeps a
+  sibling only while its files hash to that record, and `check_records`
+  verifies every view's digests before reading the screenshot (a missing
+  record is unverified, a disagreeing one is an observed mismatch). The
+  session's settlement compares the approved snapshot before re-running the
+  check, so a replaced render still lands as the J9b observed comparison
+  rather than as the check's own failure. The confirm step's record holds
+  the message as it was compared (whitespace collapsed, whole up to 600
+  characters) so the evidence check compares exactly what the step did; a
+  non-string message is recorded by repr under `message_repr`, never
+  matches, and `message` is null. The dialog records are written in the
+  click's `finally`, so a click or pause that raises after the declared
+  confirm was accepted still says so (Codex review of f30e8b4).
+- **The digest manifest is held to a receipt the harness keeps outside the
+  project** (Codex review of 180012d). A manifest in the same mutable
+  summary as the files proves only that nobody rewrote one without the
+  other. `preview.capture_task` fills a `receipt` with `view_receipt` right
+  after each view's capture process ends; `Session._harness_capture` keeps
+  it per task, and every `check_records` of a harness capture (the design
+  check, a recapture, the design-fix recheck, settlement) passes it: a view
+  the harness did not measure is no evidence, a record that disagrees with
+  the measurement is an observed mismatch. Self-captures have no receipt.
+  The checker also requires a digest for every file a render writes
+  (`VIEW_FILES`), refuses a symlink anywhere from `.quadratus` down to the
+  view folder, and a sibling refused in a partial merge because its bytes
+  changed is recorded under `not_kept` with `mismatch=True`, which the
+  check reports ahead of the incomplete set it leaves behind.
+- **An absent receipt refuses; a new attempt retires the old one first**
+  (Codex review of 2e57e94). `_capture_receipt` returns an empty receipt
+  for a harness task with none, so every view reads as unmeasured; only a
+  self-capture gets None. `_harness_capture` adds the task to
+  `_harness_tasks` and drops its receipt before the eligibility and
+  profile checks, so no exit leaves an older measurement standing, and
+  settlement asks the same accessor. Reuse is held to the receipt too: the
+  harness passes `--measured VIEW FILE SHA256` for the views it has taken
+  and `_kept_views` keeps a sibling only when its digests equal them. A
+  refusal names the file and both digests (`file`, `recorded`,
+  `observed`), never inventing an observed digest for a missing file, and
+  the approval snapshot (`_capture_state`, `_snapshot_files`) covers each
+  view's `evidence.json` beside its screenshot. A measurement that could
+  not be read is never dropped (Codex review of 4a273a3): `capture_task`
+  stops the attempt unverified when a view's files cannot be measured, and
+  `capture_argv` writes an unreadable digest as `missing`, which the parser
+  keeps as a present measurement that matches nothing.
+- **A frontend label must name something that renders** (recovery
+  diagnostic lane, 2026-10-09). The orchestrator picked kinds from bare
+  label names and was never told that `frontend` commits a task to a
+  real-browser capture; it labelled a CommonJS state model frontend and the
+  label alone ended the run before any lead call. `_KIND_REQUEST` now
+  states the rule, and a frontend task whose declared `permitted_paths`
+  name no rendered file (`_UI_PATH`) is sent back once
+  (`_FRONTEND_WITHOUT_RENDER`, counted against the dispatch corrections).
+  Named again as frontend, the label stands and capture applies in full:
+  this is a correction, never a waiver. A frontend task with no declared
+  paths is unchanged.
+- **A capture profile is checked at load as far as it can be without
+  running it** (UI diagnostic lane on 4a273a3: the operator wrote
+  `{project}` in the preview command, which `env` accepts but the command
+  ran literally; it exited 2 at the first preview, after 1.48M tokens of
+  editing and review). The preview command now resolves `{project}` and
+  `{project}/relative` to project-relative paths, the way `env` does,
+  refuses any other `{name}`, and refuses a script an interpreter is told
+  to run (`python x.py`, `node x.mjs`) that is not a file in the project.
+  The profile loads before any model call, so these cost nothing. The
+  script is found through a bounded option grammar (Codex review of
+  3e95645: `python -u missing.py` and extensionless scripts slipped by):
+  Python single-letter flags, `-W`/`-X` values and `--`; Node long
+  options and the known valued ones (`-r`, `--require`, `--import`, ...).
+  `python -m`/`-c` and `node -e`/`-p` name no script; an option the grammar
+  does not know, or one that prompts or exits (`-i`, `--version`,
+  `--check`), is refused. A project file merely named like an interpreter
+  (`./python3`) is the program itself and is not parsed.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

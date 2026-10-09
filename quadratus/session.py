@@ -367,6 +367,10 @@ class SurveyConfig:
     """
     recovery_tasks: int = 6
 
+    def __post_init__(self):
+        if type(self.recovery_tasks) is not int or self.recovery_tasks < 0:
+            raise ValueError('recovery_tasks must be a non-negative whole number')
+
 
 @dataclass
 class SessionConfig:
@@ -566,9 +570,17 @@ _CAPTURE_SCOPE_REQUEST = (
     'is a route on the preview origin starting with /, with no query string, spaces, '
     'shell characters or parent segments. steps holds at most ' + str(MAX_CAPTURE_STEPS) + ' '
     'steps. Each step is exactly {"action": "click", '
-    '"selector": "<css selector>"}, {"action": "wait", "selector": "<css selector>"} or '
+    '"selector": "<css selector>"}, {"action": "wait", "selector": "<css selector>"}, '
+    '{"action": "confirm", "selector": "<css selector>", "message": "<text the dialog shows>"} or '
     '{"action": "file", "selector": "<file input selector>", "path": "<sample file>"}; no '
     'other keys or shapes, and a selector is at most ' + str(MAX_SELECTOR_CHARS) + ' characters. '
+    'A confirm step clicks a control that opens a browser confirm dialog (a delete, a reset) '
+    'and accepts that one dialog only when it is a confirm whose whole message equals the '
+    'declared text (whitespace aside); any other dialog is dismissed and the step fails, and '
+    'no dialog is a failed step. A '
+    'plain click leaves the dialog unanswered and the browser cancels it, so the state after a '
+    'confirmed action is reached only by a confirm step. A capture with a confirm step is '
+    'rendered one view per fresh preview. '
     'A file step\'s path is project-relative and names either a '
     'non-hidden file already in the project (a committed sample such as '
     'tests/fixtures/sample.csv) or .quadratus/capture-fixtures/<task id>/<name> for a '
@@ -645,6 +657,36 @@ def is_design_task(spec) -> bool:
     return any(_UI_PATH.search(str(p)) for p in paths)
 
 
+def _frontend_without_rendered_file(spec) -> bool:
+    """A task labelled frontend whose declared scope names files but none
+    that renders (no template, page, component, stylesheet or markup). The
+    label alone makes it design work that must be captured; the recovery
+    diagnostic lane on 2e57e94 stopped on a CommonJS state model labelled
+    frontend with no page anywhere in its acceptance. A frontend task with no
+    declared paths is left as it is: there is nothing to compare."""
+    if getattr(spec, "kind", None) != TaskKind.FRONTEND:
+        return False
+    paths = getattr(getattr(spec, "scope", None), "permitted_paths", ()) or ()
+    # A bare UI directory ("static", "templates") is a rendered scope too:
+    # the path rule wants its trailing slash (the direct-tier admission
+    # tests declare permitted_paths=["static"]).
+    return bool(paths) and not any(_UI_PATH.search(str(p)) or _UI_PATH.search(str(p).rstrip("/") + "/")
+                                   for p in paths)
+
+
+#: The one send-back for a frontend label whose scope renders nothing: the
+#: orchestrator either names the rendered file or labels the task by what its
+#: checks exercise. Named again unchanged, the label stands and the capture
+#: requirement applies in full; this never waives capture for rendered work.
+_FRONTEND_WITHOUT_RENDER = (
+    "This task is labelled frontend, which makes it design work the harness must capture in a real browser, "
+    "but none of its permitted paths is a rendered file (a template, page, component, stylesheet or markup). "
+    "If a page a user sees changes, add that file to permitted_paths and declare the capture. If nothing in "
+    "the acceptance renders (a module, state model, library or CLI, even one written in JavaScript), label "
+    "the task by what its checks exercise, for example backend, general or test."
+)
+
+
 def is_review_only(spec) -> bool:
     """A task whose SCOPE declares ``"edits": "none"``: an audit. Only the
     declaration counts; a one-line fix is still editing work (Codex review of
@@ -715,6 +757,55 @@ def _renders_blind(verdict: str) -> bool:
 
 
 _CAPTURE_LINE = re.compile(r"^\s*CAPTURE\s*:\s*(.*\S)\s*$", re.IGNORECASE)
+#: The marker wherever it sits on a line: series rule-3572b72 f5's lead wrote
+#: prose and then ``load.CAPTURE: {"path": "/", ...}`` on the same line, and a
+#: line-anchored read saw no declaration at all. Any case (the old contract),
+#: and a marker is a candidate only when something declarable follows it.
+_CAPTURE_MARKER = re.compile(r"CAPTURE\s*:", re.IGNORECASE)
+
+
+def _capture_candidates(reply: str):
+    """``(declarations, conflicts)`` across the whole reply. A declaration
+    is marker-backed: a ``CAPTURE:`` marker (any case) followed by ``{`` or
+    ``none``. Everything else that looks like an attempt is a conflict and
+    never a declaration: a marker with any other tail or no tail at all
+    (``Correction.capture: invalid``, ``Correction.CAPTURE:``), and a line
+    outside the marker lines that starts with ``{`` (a second object, an
+    unmarked example, an incomplete ``{"path":``). The harness reads exactly
+    one declaration and only when nothing conflicts with it (Codex reviews
+    of 351d3ba, 6844b97 and ada4c75)."""
+    text = (reply or "").replace("`", "")
+    declarations: List[str] = []
+    conflicts: List[str] = []
+    lines = text.splitlines()
+    marker_lines = set()
+    for index, line in enumerate(lines):
+        for match in _CAPTURE_MARKER.finditer(line):
+            marker_lines.add(index)
+            tail = line[match.end():].strip()
+            if tail.startswith("{") or re.match(r"none\b", tail, re.IGNORECASE):
+                declarations.append(tail)
+            else:
+                conflicts.append(f"marker with no declaration after it: {line.strip()[:60]}")
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if index not in marker_lines and stripped.startswith("{"):
+            conflicts.append(f"an object outside any CAPTURE: marker: {stripped[:60]}")
+    return declarations, conflicts
+
+
+def _capture_declaration(reply: str):
+    """``(tail, "")`` for the one declaration candidate in ``reply``, or
+    ``(None, why)``."""
+    declarations, conflicts = _capture_candidates(reply)
+    if not declarations and not conflicts:
+        return None, "no CAPTURE: line in the reply"
+    if len(declarations) + len(conflicts) > 1:
+        return None, (f"{len(declarations)} capture declaration(s) and {len(conflicts)} conflicting line(s) "
+                      "in the reply; one declaration is read, never a choice")
+    if not declarations:
+        return None, f"no usable CAPTURE: declaration ({conflicts[0]})"
+    return declarations[0], ""
 
 
 def _parse_capture_line(reply: str, task_id: str):
@@ -725,18 +816,18 @@ def _parse_capture_line(reply: str, task_id: str):
     missing or malformed line both return None with the reason; the caller
     keeps the reviewer's verdict in that case.
     """
-    line = None
-    for raw in (reply or "").splitlines():
-        match = _CAPTURE_LINE.match(raw.replace("`", ""))
-        if match:
-            line = match.group(1)
+    line, why = _capture_declaration(reply)
     if line is None:
-        return None, "no CAPTURE: line in the reply"
-    if line.strip().lower().rstrip(".") == "none":
+        return None, why
+    if re.match(r"none\b", line, re.IGNORECASE):
         return None, "the lead declared that no page and steps reach the changed state"
     try:
         from .preview import validate_capture
-        capture = validate_capture(json.loads(line))
+        obj, end = json.JSONDecoder().raw_decode(line)
+        trailing = line[end:].strip()
+        if trailing and ("{" in trailing or "}" in trailing or "[" in trailing):
+            return None, "more than one object after the CAPTURE: marker"
+        capture = validate_capture(obj)
     except (ValueError, TypeError) as exc:
         return None, f"the CAPTURE line did not parse ({str(exc)[:120]})"
     for step in capture["steps"]:
@@ -745,6 +836,176 @@ def _parse_capture_line(reply: str, task_id: str):
             if parts[:2] == (".quadratus", "capture-fixtures") and (len(parts) < 3 or parts[2] != task_id):
                 return None, f"a capture-only fixture must live under .quadratus/capture-fixtures/{task_id}/"
     return capture, ""
+
+
+def _step_failure(failure) -> bool:
+    """Whether a harness capture failed on a declared interaction step: the
+    capture tool exits 1 only when a step did not happen (design_evidence
+    main), 2 for usage and fixture errors, 3 for a crash in the capture
+    itself, and a preview failure carries its own text. Exit 1 is the
+    tool's positive statement, never an inference from a nonzero exit
+    (Codex review of f8d8c03: an uncaught exception used to exit 1 too)."""
+    return str(failure).startswith("the capture exited with 1:")
+
+
+def _declaration_only(records) -> bool:
+    """Every typed problem on the evidence is a capture-declaration problem
+    (design_evidence.CAPTURE_DECLARATION): nothing about the page or the
+    source is reported, so a redeclaration is the whole remedy."""
+    from .design_evidence import CAPTURE_DECLARATION
+    kinds = [r.get("kind") for r in (records or [])]
+    return bool(kinds) and all(k == CAPTURE_DECLARATION for k in kinds)
+
+
+_FIXTURE_BLOCK = re.compile(r"^[ \t]*FIXTURE[ \t]+(\S+?):?[ \t]*\n[ \t]*```[^\n]*\n(.*?)\n?[ \t]*```",
+                            re.MULTILINE | re.DOTALL)
+
+
+#: Any line that starts like a header, well-formed or not (Codex review of
+#: ada4c75: ``FIXTURE a.csv: corrected content follows`` after a valid block
+#: escaped the duplicate accounting). The path is the first token; an
+#: empty one is a malformed header.
+_FIXTURE_HEADER = re.compile(r"^[ \t]*FIXTURE\b[ \t]*(\S*)", re.MULTILINE)
+
+
+def _parse_fixture_blocks(reply: str):
+    """``({path: content}, problems)`` for every ``FIXTURE <path>:`` line
+    followed by one fenced block. The path is taken as written; the caller
+    matches it against the declared fixtures, so an unexpected path is
+    ignored, never written. Every header is accounted for, complete or not:
+    a path with more than one header, or a header with no complete block
+    (an unclosed or missing fence), is a problem for that path and nothing
+    is kept for it; a block whose content holds another header (an unclosed
+    fence swallowed the next block) makes the whole reply malformed (Codex
+    reviews of 351d3ba and 6844b97)."""
+    text = reply or ""
+    headers: Dict[str, int] = {}
+    for match in _FIXTURE_HEADER.finditer(text):
+        path = match.group(1).strip().rstrip(":").strip("`'\"")
+        if not path:
+            return {}, ["malformed reply: a FIXTURE header names no path"]
+        headers[path] = headers.get(path, 0) + 1
+    blocks: Dict[str, List[str]] = {}
+    for match in _FIXTURE_BLOCK.finditer(text):
+        path = match.group(1).strip().strip("`'\"")
+        content = match.group(2)
+        if _FIXTURE_HEADER.search(content):
+            return {}, ["malformed reply: a fenced block holds another FIXTURE header (an unclosed fence)"]
+        blocks.setdefault(path, []).append(content)
+    found: Dict[str, str] = {}
+    problems: List[str] = []
+    for path in sorted(set(headers) | set(blocks)):
+        count, bodies = headers.get(path, 0), blocks.get(path, [])
+        if count == 1 and len(bodies) == 1:
+            found[path] = bodies[0]
+        elif count > 1 or len(bodies) > 1:
+            problems.append(f"{path}: more than one FIXTURE header for the same path")
+        else:
+            problems.append(f"{path}: a FIXTURE header with no complete fenced block")
+    return found, problems
+
+
+def _write_fixture_bound(root, path: str, data: bytes) -> str:
+    """Write ``data`` at ``path`` through directory handles, or say why not.
+
+    Every component is opened with ``O_NOFOLLOW`` relative to the handle of
+    the directory before it, so a link swapped in after the pathname check
+    is refused at the operation itself. The bytes go to a unique temporary
+    name in the task folder, created ``O_EXCL``; only after the whole write
+    succeeds is that inode linked to the declared name, which fails if
+    anything has appeared there, so the declared name never names a
+    partial or foreign file (Codex reviews of 6844b97, cc045a1 and a7cde45:
+    a pathname check cannot protect a pathname the write re-resolves, a
+    pathname unlink can delete a replacement, and a partial file left under
+    the declared name became evidence later). Nothing is deleted by the
+    declared name; the temporary name is this call's alone.
+    """
+    import secrets
+    parts = PurePosixPath(path).parts
+    dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fds: List[int] = []
+    temp = f".supply-{os.getpid()}-{secrets.token_hex(6)}"
+    try:
+        fds.append(os.open(str(root), dir_flags))
+        for part in parts[:-1]:
+            try:
+                fd = os.open(part, dir_flags, dir_fd=fds[-1])
+            except FileNotFoundError:
+                os.mkdir(part, 0o755, dir_fd=fds[-1])
+                fd = os.open(part, dir_flags, dir_fd=fds[-1])
+            fds.append(fd)
+        folder = fds[-1]
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                     0o644, dir_fd=folder)
+        fds.append(fd)
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fsync(fd)
+        except OSError as exc:
+            # The declared name was never created, so nothing partial can be
+            # read by it; the temporary is emptied through its own
+            # descriptor as a courtesy and left under its private name.
+            try:
+                os.ftruncate(fd, 0)
+            except OSError:
+                pass
+            return (f"the write failed before the file was published; the declared name does not exist "
+                    f"({exc.__class__.__name__}: {exc})")
+        try:
+            os.link(temp, parts[-1], src_dir_fd=folder, dst_dir_fd=folder, follow_symlinks=False)
+        except FileExistsError:
+            return "the target appeared before publication; nothing is overwritten"
+        try:
+            os.unlink(temp, dir_fd=folder)
+        except OSError:
+            pass    # the private temporary name stays; the published file is complete either way
+        return ""
+    except FileExistsError:
+        return "the temporary name already exists; nothing is written"
+    except (OSError, ValueError) as exc:
+        return f"the write was refused at the operation ({exc.__class__.__name__}: {exc})"
+    finally:
+        for fd in reversed(fds):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _confined_fixture_target(root, path: str, task_id: str):
+    """The exact task-owned file to write for ``path``, or ``(None, why)``.
+
+    Checked before any write (Codex review of 351d3ba: the later reader
+    refuses links, but a write through a linked ``.quadratus``,
+    ``capture-fixtures``, task folder or target had already landed outside
+    the project): the path is exactly ``.quadratus/capture-fixtures/<task
+    id>/<name>`` with a plain name, no existing component on the way is a
+    symlink, and the resolved target stays inside the resolved project root.
+    """
+    parts = PurePosixPath(path).parts
+    if (len(parts) != 4 or parts[:2] != (".quadratus", "capture-fixtures") or parts[2] != task_id
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", task_id)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", parts[3])):
+        return None, f"{path}: not this task's own fixture path"
+    base = Path(root)
+    current = base
+    for part in parts:
+        current = current / part
+        if current.is_symlink():
+            return None, f"{path}: {current.relative_to(base).as_posix()} is a symlink"
+        if current.exists() and not current.is_dir() and current != base / Path(path):
+            return None, f"{path}: {current.relative_to(base).as_posix()} is not a directory"
+    target = base / Path(path)
+    if target.exists() and not target.is_file():
+        return None, f"{path}: the target exists and is not a regular file"
+    try:
+        if not target.parent.resolve().is_relative_to(base.resolve()):
+            return None, f"{path}: resolves outside the project"
+    except OSError as exc:
+        return None, f"{path}: cannot be resolved ({exc})"
+    return target, ""
 
 
 def _missing_fixtures(project, capture: dict, task_id: str) -> List[str]:
@@ -782,10 +1043,11 @@ def _capture_fixture_note(spec) -> str:
             continue
         path, selector = step.get("path", ""), step.get("selector", "")
         if path.startswith(own):
-            lines.append(f"The capture uploads {path} into {selector}: that file does not exist yet and "
-                         "you must write it before you finish, as a valid, non-secret sample of what "
-                         "that input accepts. It is harness state, not project source: it needs no "
-                         "CHANGED entry and stays for later captures.")
+            lines.append(f"The capture uploads {path} into {selector}: that file does not exist yet. "
+                         "It is harness state, not project source, and the repository policy refuses "
+                         "writes under .quadratus/, so do not create it: after your checks pass the "
+                         "harness asks you for its content (a valid, non-secret sample of what that "
+                         "input accepts) and writes it itself. It needs no CHANGED entry.")
         else:
             lines.append(f"The capture uploads the committed file {path} into {selector}: it must "
                          "remain a regular file at that path; do not move, rename or delete it.")
@@ -886,6 +1148,269 @@ _PARALLEL_REQUEST = _parallel_request(3)
 _REQ_BLOCK = re.compile(r"^\s*REQUIREMENTS:\s*\n((?:\s*R\d+\s*[:.)-].*\n?)+)", re.MULTILINE)
 _REQ_LINE = re.compile(r"^\s*(R\d+)\s*[:.)-]\s*(.+?)\s*$", re.MULTILINE)
 _COVERS = re.compile(r"^\s*COVERS:\s*(.+?)\s*$", re.MULTILINE)
+#: An editing call's own account of acceptance it could not run (runtime
+#: check guidance). Read only to lower an audit verdict, never to raise one.
+_NOT_RUN_LINE = re.compile(r"^\s*(?:NOT RUN|BLOCKED):\s*(.+?)\s*$", re.MULTILINE)
+def _check_runs(check: dict, root=None) -> List[dict]:
+    """Each command of a recorded check as execution evidence: whether it
+    passed and was required, whether it ran only part of what it names, how
+    many cases executed and how many it skipped (None when unknown), and the
+    files it names whole. A check with no receipts is one required command."""
+    import shlex
+    from collections import Counter
+    from types import SimpleNamespace
+
+    from .integration import (
+        _test_count,
+        case_outcomes,
+        deselected_count,
+        is_filtered,
+        operand_paths,
+        skipped_count,
+    )
+    receipts = check.get("receipts") or ()
+    # A single-command gate's selection and cwd are recorded on the check; its
+    # receipts (the one synthesized when original tests join, and theirs)
+    # keep them too, never weaker (Codex review of 67c9fad, S3 and S4).
+    direct = check.get("selection") or ""
+    if receipts:
+        rows = [dict(id=r.get("id"), passed=r.get("status") == "passed", required=r.get("required", True),
+                     command=str(r.get("command") or ""), output=r.get("output") or "", report=r.get("report"),
+                     tests=r.get("tests"), cwd=r.get("cwd") or check.get("command_cwd") or ".",
+                     selection="; ".join(x for x in (r.get("selection") or "", direct if r.get("id") in (
+                         "check", "original-tests:check") else "") if x), cases=r.get("cases"))
+                for r in receipts]
+    else:
+        rows = [dict(id="check", passed=bool(check.get("passed")), required=True,
+                     command=str(check.get("command") or ""), output=check.get("output") or "",
+                     report=check.get("report"), tests=None, cwd=check.get("command_cwd") or ".",
+                     selection=direct, cases=check.get("cases"))]
+    out = []
+    for row in rows:
+        try:
+            argv = shlex.split(row["command"])
+        except ValueError:
+            argv = row["command"].split()
+        tests = row["tests"] if row["tests"] is not None else _test_count(row["output"])
+        # Selection from configuration or the environment, or cases the runner
+        # reports deselected, is a filter as much as one in argv (Codex review
+        # of 81adcc7, R2: pytest.ini's addopts = -k unit printed "1 passed, 1
+        # deselected" for a named file and looked like a whole run).
+        filtered = is_filtered(argv) or bool(row["selection"]) or deselected_count(row["output"]) > 0
+        names = _receipt_names(row)
+        skipped_names = names[0] if names[0] is not None else case_outcomes(row["output"])[0]
+        every_names = names[1]
+        qualified_names = set((row["cases"] or {}).get("qualified") or ()) if isinstance(row["cases"], dict) else set()
+        executed_names = names[2] if names[2] is not None else Counter()
+        out.append(dict(id=row["id"], passed=row["passed"], required=row["required"], filtered=filtered,
+                        tests=tests, skipped=skipped_count(SimpleNamespace(output=row["output"],
+                                                                           report=row["report"])),
+                        files=set(operand_paths(argv, root, row["cwd"])),
+                        skipped_names=skipped_names, executed_names=executed_names, every_names=every_names,
+                        qualified_names=qualified_names))
+    return out
+
+
+def _receipt_names(receipt):
+    """``(skipped, every, executed)`` case-key Counters for one receipt (an
+    object or a recorded dict).
+
+    Identity comes only from a complete whole-output ``cases`` record: then
+    all three are known. Without one (none recorded, or past its bound) the
+    skipped names may still be read from the output tail for the record's
+    text, but ``every`` and ``executed`` are None, because a tail that lists
+    every skip need not list every case sharing a name (Codex review of
+    d157378, T2). Skipped is None too when the names do not account for every
+    skip counted."""
+    from collections import Counter
+    from types import SimpleNamespace
+
+    from .integration import case_outcomes, skipped_count
+    get = receipt.get if isinstance(receipt, dict) else (lambda k, d=None: getattr(receipt, k, d))
+    count = skipped_count(SimpleNamespace(output=get("output") or "", report=get("report")))
+    record = get("cases")
+    if isinstance(record, dict):
+        skipped = Counter(record.get("skipped") or {})
+        executed = Counter(record.get("executed") or {})
+        every = skipped + executed + Counter(record.get("other") or {})
+    else:
+        skipped, every, executed = case_outcomes(get("output") or "")[0], None, None
+    if count is None or sum(skipped.values()) != count:
+        return None, None, None
+    return skipped, every, executed
+
+
+def _new_skips(skipped, every, start, stable):
+    """The skips in ``skipped`` that are not historical against ``start``
+    (``(count, skipped, every)`` from the run-start baseline, or None). A
+    skip is historical only when its key is one case in both runs, that case
+    was skipped at run start, and ``stable(key)`` says the one test file that
+    holds it is the same file, unchanged since run start. Without complete
+    identity on both sides every skip is new (S1, T2); a name reused in
+    another file or revision is new too (Codex review of e530b89, U1)."""
+    from collections import Counter
+    if start is None or every is None or start[2] is None or start[1] is None:
+        return Counter(skipped)
+    start_skipped, start_every = start[1], start[2]
+    return Counter({n: k for n, k in skipped.items()
+                    if not (every[n] == 1 and start_every[n] == 1 and start_skipped[n] == 1 and stable(n))})
+
+
+_QUOTES = ("'", '"', "`")
+
+
+def _case_files(key: str, texts: dict, qualified: bool):
+    """The test files that hold one case, as a frozenset, or None when that
+    cannot be read. A key a pytest verbose line printed (``qualified``) names
+    its file as ``path::name``; any other name, whatever punctuation it holds
+    (a node name may contain ``::``, Codex review of 5292fc2, V1), is held by
+    the test files whose text has it as a quoted string. A hashed long key
+    cannot be searched for."""
+    if "\u2026sha256:" in key:
+        return None
+    if qualified:
+        path = key.split("::", 1)[0]
+        return frozenset([path]) if path in texts else None
+    found = frozenset(path for path, text in texts.items() if any(q + key + q in text for q in _QUOTES))
+    return found or None
+
+
+def _case_block(key: str, qualified: bool, text: str):
+    """The source that defines one case in its file, or None when it cannot
+    be found unambiguously. Comparing this, not the whole file, tells an
+    unchanged old case from a file that merely gained another test (Codex
+    review of 5292fc2, V2).
+
+    A pytest id is resolved along its whole path (``path::Class::test``,
+    parameters dropped): exactly one class or function must match at each
+    step, and the block is the test function with its decorators plus each
+    enclosing class's decorators and header, so the same method name in two
+    classes is two cases (f2f66ff, W3). Any other name is defined by every
+    registration call that quotes it, read whole by a bounded bracket scan
+    that skips strings and comments, so a changed callback body on later
+    lines is a changed case (W2); a call that cannot be scanned is None."""
+    if qualified:
+        return _pytest_block(key, text)
+    blocks = []
+    for quote in _QUOTES:
+        literal = quote + key + quote
+        at = text.find(literal)
+        while at != -1:
+            call = _enclosing_call(text, at)
+            if call is None:
+                return None
+            blocks.append(call)
+            at = text.find(literal, at + 1)
+    return tuple(blocks) or None
+
+
+def _pytest_block(key: str, text: str):
+    import ast
+    parts = key.split("::")[1:]
+    if not parts:
+        return None
+    parts[-1] = parts[-1].split("[")[0]
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    lines = text.splitlines()
+
+    def header(node, whole):
+        first = min([node.lineno] + [d.lineno for d in node.decorator_list])
+        last = node.end_lineno if whole else node.lineno
+        return tuple(lines[first - 1:last])
+
+    body, block = tree.body, []
+    for depth, name in enumerate(parts):
+        matches = [n for n in body if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                   and n.name == name]
+        if len(matches) != 1:
+            return None
+        node = matches[0]
+        final = depth == len(parts) - 1
+        if final and not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return None
+        block.append(header(node, whole=final))
+        body = node.body
+    return tuple(block)
+
+
+def _enclosing_call(text: str, at: int):
+    """The text of the call whose first argument is the string literal at
+    ``at``: from the identifier before its ``(`` to the matching ``)``.
+    Strings and comments are skipped while matching bracket types. None
+    (unknown) when the literal is not a call's first argument, when the call
+    holds anything this lexical scan cannot read with certainty (a ``/`` that
+    may start a regex literal, whose brackets and quotes are not structural;
+    a template literal with ``${``), when a closer does not match its opener,
+    or when the call does not close within 200,000 characters. A prefix is
+    never returned as the whole call (Codex review of 02accbd, X1)."""
+    open_at = at - 1
+    while open_at >= 0 and text[open_at] in " \t\r\n":
+        open_at -= 1
+    if open_at < 0 or text[open_at] != "(":
+        return None
+    start = open_at
+    while start > 0 and (text[start - 1].isalnum() or text[start - 1] in "_$."):
+        start -= 1
+    pairs = {")": "(", "]": "[", "}": "{"}
+    stack, i, end = [], open_at, min(len(text), open_at + 200_000)
+    while i < end:
+        ch = text[i]
+        if ch in "'\"`":
+            close = i + 1
+            while close < end and text[close] != ch:
+                if ch == "`" and text.startswith("${", close):
+                    return None
+                close += 2 if text[close] == "\\" else 1
+            if close >= end:
+                return None
+            i = close
+        elif text.startswith("//", i):
+            newline = text.find("\n", i)
+            i = end if newline == -1 else newline
+        elif text.startswith("/*", i):
+            close = text.find("*/", i + 2)
+            if close == -1:
+                return None
+            i = close + 1
+        elif ch == "/":
+            return None
+        elif ch in "([{":
+            stack.append(ch)
+        elif ch in ")]}":
+            if not stack or stack.pop() != pairs[ch]:
+                return None
+            if not stack:
+                return text[start:i + 1]
+        i += 1
+    return None
+
+
+def _complete_run(run: dict) -> bool:
+    """A passing required command that ran whole files: no filter, at least
+    one executed case and a known zero skips. Anything less does not show
+    that a named file's cases ran (Codex review of b6ba3ba, F3 and F4)."""
+    return (run["passed"] and run["required"] and not run["filtered"]
+            and (run["tests"] or 0) > 0 and run["skipped"] == 0)
+
+
+def _item_paths(item: str) -> List[str]:
+    """The file paths a NOT RUN item names; none for a runner name or prose."""
+    import shlex
+    try:
+        tokens = shlex.split(item)
+    except ValueError:
+        tokens = item.split()
+    paths = []
+    for token in tokens:
+        token = token.split("::")[0]
+        if "/" in token or re.search(r"\.[A-Za-z]\w*$", token):
+            paths.append(token[2:] if token.startswith("./") else token)
+    return paths
+
+
 _AUDIT_LINE = re.compile(r"^\s*(R\d+)\s*:\s*(MET|NOT MET)\b[\s:—-]*(.*)$", re.MULTILINE | re.IGNORECASE)
 
 
@@ -918,6 +1443,7 @@ def _snapshot_files(snapshot) -> Dict[str, str]:
     folder = evidence["summary"].rsplit("/", 1)[0]
     files = {evidence["summary"]: evidence["sha256"]}
     files.update({f"{folder}/{view}/page.png": digest for view, digest in evidence["screenshots"].items()})
+    files.update({f"{folder}/{view}/evidence.json": digest for view, digest in (evidence.get("records") or {}).items()})
     return files
 
 
@@ -1167,6 +1693,26 @@ def _check_for_models(check: dict) -> dict:
 
 
 #: The marker as a verifier writes it: the uppercase word, not the English one.
+def _review_reading(review) -> str:
+    """The whole decision of a final design review, never its first line.
+
+    APPROVED only when the review approved; otherwise every BLOCKING line
+    (at most five shown, the rest counted). A record without the stored
+    decision is read from its verdict text by the same rule the session
+    applies when it records one."""
+    verdict = str(review.get("verdict") or "")
+    blocking = review.get("blocking")
+    if blocking is None:
+        blocking = [line.strip() for line in verdict.splitlines() if line.strip().startswith("BLOCKING:")]
+        if verdict.strip() != "APPROVED" and not blocking:
+            blocking = [f"BLOCKING: the final design review gave no verdict ({verdict[:120]})"]
+    if not blocking:
+        return "APPROVED"
+    shown = "; ".join(str(line)[:300] for line in blocking[:5])
+    more = f"; and {len(blocking) - 5} more BLOCKING lines" if len(blocking) > 5 else ""
+    return f"not approved: {shown}{more}"
+
+
 _FINDING_MARKER = re.compile(r"\b(?:BLOCKING|UNRESOLVED)\b")
 #: A marker directly after one of these is a note about findings, not one.
 _NEGATION_BEFORE = re.compile(r"(?:\bnon-|\bnon |\bnot |\bneither |\bno |\bnothing )$", re.IGNORECASE)
@@ -1262,6 +1808,29 @@ def _security_finding_stands(verdict: str) -> bool:
     return True
 
 
+#: The line a reviewer ends with once it has read the whole work and
+#: reported everything. A review is complete when it says NO FINDINGS,
+#: names at least one BLOCKING finding, or carries this line; anything else
+#: is a reply that arrived, not a review that finished (Codex review of
+#: cd8c5b0: "UNFINISHED: did not reach a verdict" closed the task with
+#: review=True). A marker as written, never a reading of the prose; the
+#: verifier's VERDICT line is the same device.
+_REVIEW_COMPLETE = "REVIEW: COMPLETE"
+
+
+def _review_complete(text: str) -> bool:
+    """Whether a collaborator's reply carries a verdict in one of the three
+    forms the prompt names."""
+    body = (text or "").strip()
+    if body.upper().rstrip(".") == "NO FINDINGS" or _has_blocking_finding(body):
+        return True
+    for line in body.splitlines():
+        bare = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", line.replace("**", "").replace("`", "").strip())
+        if bare.rstrip(" .!").upper() == _REVIEW_COMPLETE:
+            return True
+    return False
+
+
 def _has_blocking_finding(text: str) -> bool:
     """Only a finding's explicit prefix controls the recheck loop."""
     return any(re.match(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?BLOCKING\s*:",
@@ -1326,6 +1895,7 @@ class Session:
         self.invoke = invoke
         self._available = available or (lambda _key: True)
         self.memory = PersistentMemory(goal, store, invariants=invariants)
+        self.memory.harness_record = self._harness_record
         self.workers = WorkerPool(
             store=store,
             run=lambda model, prompt, **kw: self._invoke_model(model, prompt, **kw),
@@ -1377,6 +1947,9 @@ class Session:
         self._resolution_candidate: Optional[tuple] = None
         #: ``(task_id, lead)`` chosen by the pre-dispatch capability check.
         self._dispatch_lead: Optional[tuple] = None
+        #: Task ids already sent back once for a frontend label whose scope
+        #: names no rendered file (_FRONTEND_WITHOUT_RENDER).
+        self._frontend_challenged: set = set()
         #: Capped tasks not yet finished by a task that names them in a
         #: CONTINUES line. Any entry blocks completion.
         self._partial_tasks: set = set()
@@ -1394,6 +1967,14 @@ class Session:
         self._review_evidence_hashes: Dict[str, str] = {}
         #: ``(task_id, target, steps, evidence)`` taken before that review.
         self._review_snapshot: Optional[tuple] = None
+        #: task id -> {view: {file: sha256}} as the harness measured each
+        #: view's files right after its own capture; the summary is held to
+        #: it on every check of a harness capture (Codex review of 180012d).
+        self._capture_receipts: Dict[str, dict] = {}
+        #: task ids whose renders the harness has attempted to capture: for
+        #: them an absent receipt means a failed or unmeasured attempt and
+        #: refuses, never a self-capture (Codex review of 2e57e94).
+        self._harness_tasks: set = set()
         self._task_started: Optional[float] = None
         #: When the most recent editing call that changed source began:
         #: renders older than this show a tree that has since changed.
@@ -1411,6 +1992,17 @@ class Session:
         self._last_changed_report: Optional[dict] = None
         self.requirement_audits: List[dict] = []
         self.requirement_reviews: List[dict] = []
+        #: Run-start bytes of every test and test-support file
+        #: (integration.original_tests), or None before a project run starts.
+        self._original_tests: Optional[dict] = None
+        #: Each run of the gate's commands against those bytes.
+        self.original_test_runs: List[dict] = []
+        #: What the gate's commands skipped on the run-start source, measured
+        #: once when a check first skips cases (Session._skip_baseline).
+        self.skip_baselines: List[dict] = []
+        #: Acceptance an editing call said it did not run ('NOT RUN:' lines):
+        #: evidence that can only lower an audit verdict, never raise one.
+        self.unexecuted_acceptance: List[dict] = []
 
     def _open_finding(self, kind: str, text: str, *, legacy_route: bool = False) -> None:
         """Append a legacy open finding and record it as a typed fact.
@@ -1423,6 +2015,12 @@ class Session:
             self._outcome.note(kind, text, legacy_route=legacy_route)
         else:
             self.run_outcome.note(kind, text)
+
+    def _unverified_once(self, text: str) -> None:
+        """An open unverified finding, recorded once however often the same
+        check repeats it (a gate runs again after every fix round)."""
+        if text not in self.open_findings:
+            self._open_finding("unverified", text)
 
     def _note_replaced_evidence(self) -> bool:
         """An approved delivery whose files no longer hold the approved bytes
@@ -1500,7 +2098,7 @@ class Session:
             # design-fix is the task's own lead editing its work (map G11): it
             # carries the lead's packet, like every other editing role.
             role = ('lead' if context.get('role') in ('lead', 'revision', 'gate-fix', 'security-fix', 'design-fix',
-                                                       'capture-redeclare')
+                                                       'capture-redeclare', 'fixture-supply')
                     else 'verifier'
                     if context.get('role') == 'verifier' else 'reviewer')
             prompt += '\n\n' + self._role_packet(spec, role)
@@ -1600,6 +2198,7 @@ class Session:
             report = self._last_changed_report
             if report and report.get("status") != "match":
                 self._record_changed_report(key, role, reply, report)
+            self._record_not_run(key, role, reply)
             return reply
         except TurnLimitReached as exc:
             if capped is None:
@@ -1671,8 +2270,13 @@ class Session:
         self._note(f"task {spec.task_id}: {role} stopped at the turn limit; checking what it left")
         return text
 
-    def _inspect_partial_edits(self, before) -> dict:
+    def _inspect_partial_edits(self, before, *, stopped: bool = True) -> dict:
         """What, if anything, the stopped call had already written.
+
+        ``stopped=False`` measures a task that closed normally, with the same
+        figures and a note that says so: batch 2 recovery-v2 on 5d9f5ff
+        recorded "already on disk when the call stopped" on three tasks that
+        each closed clean in one round.
 
         Returns a plain dict rather than a class: this is the in-flight state
         that has to survive into the run report for a resumable handoff, so it
@@ -1701,6 +2305,10 @@ class Session:
         state["inspected"] = True
         state["changed"] = changed_paths(diff)
         state["changed_lines"] = count_change_lines(diff)
+        if not stopped:
+            state["note"] = ("The task closed with these changes on disk." if state["changed"]
+                             else "The task closed without changing the source.")
+            return state
         state["note"] = (
             "These changes were already on disk when the call stopped and have "
             "been preserved. Re-sending the same prompt would apply a second "
@@ -2818,7 +3426,10 @@ class Session:
             outcome.source_after = self._source_identity()
             if outcome.partial is None:
                 if measured is None:
-                    measured = (self._inspect_partial_edits(self._task_before) if self.project
+                    # Only a clean close is not a stop: closed_as is set
+                    # before this runs, on both the normal and the raising path.
+                    stopped = getattr(outcome, "closed_as", "") != "closed"
+                    measured = (self._inspect_partial_edits(self._task_before, stopped=stopped) if self.project
                                 else dict(changed=[], changed_lines=0, inspected=False,
                                           note="no project: nothing to measure"))
                 outcome.partial = {k: measured.get(k) for k in ("changed", "changed_lines", "inspected", "note")
@@ -3053,9 +3664,26 @@ class Session:
         notes: List[tuple] = []
         if self._tier(spec) != "direct":
             self._stage("review")
+        capped: set = set()
         for peer in collaborators:
-            with invocation(spec.task_id, "collaborator"):
-                note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
+            try:
+                with invocation(spec.task_id, "collaborator"):
+                    note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
+            except TurnLimitReached as exc:
+                # The cap is a transport fact kept here, never read back from
+                # the text (Codex review of 0983dac: an ordinary reply that
+                # happened to begin UNFINISHED: was dropped as if capped).
+                capped.add(peer)
+                note = self._capped_review(spec, peer, "review", exc)
+            else:
+                if not _review_complete(note):
+                    # A reply arrived; a review did not finish. Recorded as
+                    # unverified; the text still reaches the lead as a note.
+                    self._open_finding("unverified", f"Task {spec.task_id}: review by {peer} ended "
+                                                     "without a verdict (no NO FINDINGS, no BLOCKING "
+                                                     f"finding, no {_REVIEW_COMPLETE} line); recorded as "
+                                                     "an unfinished review.")
+                    self._note(f"task {spec.task_id}: review by {peer} gave no verdict; recorded as unverified")
             task.record("assistant", f"[{labels[peer]}] {note}")
             task.keep(note, kind=f"review:{peer}", author=peer)
             notes.append((peer, note))
@@ -3080,11 +3708,19 @@ class Session:
         # Clean reviews cost nothing further: a reviewer with nothing to say
         # says NO FINDINGS, and a revision round against empty critiques would
         # be the most avoidable spend in the loop.
+        # A capped review is no critique either: it carries no finding to
+        # answer, so it buys no revision. Decided by the recorded cap, not by
+        # the reply's wording: a model's own "UNFINISHED:" is an ordinary
+        # reply, read for findings like any other.
         notes = [
             (p, n) for p, n in notes
-            if n.strip().upper().rstrip(".") != "NO FINDINGS"
+            if n.strip().upper().rstrip(".") != "NO FINDINGS" and p not in capped
         ]
-        self._edge("review", True)
+        # Satisfied only when a peer actually reviewed. Complexity can draw no
+        # collaborator (Complexity.collaborator_count), and batch 2 recovery-v2
+        # on 5d9f5ff recorded "review: true" on three tasks no peer read; with
+        # no peer the edge is not applicable (None), never satisfied.
+        self._edge("review", True if collaborators else None)
         if notes:
             self._stage("revision")
             self._count("revision")
@@ -3388,18 +4024,29 @@ class Session:
             if self._required("security_verdict", self._live_security_verdict()) == "json":
                 self._verify_security_json(spec, task, draft, excursion.worker, verifier)
             else:
-                with invocation(spec.task_id, "verifier"):
-                    verdict = self._invoke_model(
-                        verifier, self._verifier_prompt(spec, draft, verifier)
-                    )
-                task.record("assistant", f"[{verifier}] {verdict}")
-                task.keep(verdict, kind=f"verify:{verifier}", author=verifier)
+                verdict = None
+                try:
+                    with invocation(spec.task_id, "verifier"):
+                        verdict = self._invoke_model(
+                            verifier, self._verifier_prompt(spec, draft, verifier)
+                        )
+                except TurnLimitReached as exc:
+                    # No verdict: the verification edge stays unset, as for any
+                    # other interrupted verifier, and the record says so.
+                    capped = self._capped_review(spec, verifier, "verification", exc)
+                    task.record("assistant", f"[{verifier}] {capped}")
+                    task.keep(capped, kind=f"verify:{verifier}", author=verifier)
+                if verdict is not None:
+                    task.record("assistant", f"[{verifier}] {verdict}")
+                    task.keep(verdict, kind=f"verify:{verifier}", author=verifier)
                 # A finding is a marker as written, not the word in prose (map
                 # G7): the old substring test read "no BLOCKING findings" as
                 # one. Semantics taken from the reviewed helper on 90cc5d9.
                 # An explicit VERDICT line decides (series b1ff751 f6 and
                 # rule-b1ff751 f6: an accepting report filed as the finding).
-                if _security_finding_stands(verdict):
+                if verdict is None:
+                    pass
+                elif _security_finding_stands(verdict):
                     self._open_finding("security", verdict)
                     self._edge("verification", False)
                 else:
@@ -4081,6 +4728,7 @@ class Session:
             self.dependency_watch = DependencyWatch(DependencyGuard(
                 self.project, exempt=self.config.dependency_cache_exemptions))
             self.dependency_watch.start()
+            self._snapshot_original_tests()
         if self.config.readiness_probes:
             self._run_readiness()
         if self.config.plan_gate is not None and self._explicit_tasks is not None:
@@ -4465,20 +5113,65 @@ class Session:
             self.design_checks.append(record)
             return
         harness = evidence == "harness"
+        captured = None
         if harness:
+            missing = self._missing_own_fixtures(spec)
+            if missing:
+                # The policy refuses builder writes under .quadratus/** and the
+                # capture note said "you must write it" (series rule-3572b72
+                # f1 t3: the Opus lead of t2 wrote its sample anyway, the Sol
+                # lead of t3 obeyed the ban, the capture exited 2 and no call
+                # was spent). The sample is harness state, so the harness
+                # writes it: one bounded round asks the lead for the content.
+                record["missing_fixtures"] = list(missing)
+                problems = self._supply_fixtures(spec, lead, task, record, missing)
+                if problems:
+                    # A failed or partial supply is not evidence to capture
+                    # against (Codex review of ada4c75): the design stays
+                    # unverified here, before any capture or review.
+                    failure = "the capture's declared fixture(s) could not be supplied: " + "; ".join(problems)
+                    record.update(verified=False, problem=failure, harness_capture=False)
+                    self._open_finding("invalid_proof", f"Task {spec.task_id} is design work without clean "
+                                                        f"rendered evidence: {failure}.")
+                    self._design_unverified.append((spec.task_id, failure))
+                    self.design_checks.append(record)
+                    task.keep(json.dumps(record), kind="design-evidence")
+                    return
             failure = self._harness_capture(spec)
             if failure:
                 self._hand_off_preview(spec, task, record, failure)
-                record.update(verified=False, problem=failure, harness_capture=True)
-                self._open_finding("invalid_proof", f"Task {spec.task_id} is design work without clean "
-                                                    f"rendered evidence: {failure}.")
-                self._design_unverified.append((spec.task_id, failure))
-                self.design_checks.append(record)
-                task.keep(json.dumps(record), kind="design-evidence")
-                return
-        ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
-                                                    expected_source=self._trusted_source())
-        self._refuse_mismatched(spec, record, task, records, harness)
+                redone = None
+                if _step_failure(failure) and not is_review_only(spec):
+                    # A declared step that does not reach its state (the
+                    # capture exits 1 with the step named) is the same kind
+                    # of defect as a final wait visible at load: the
+                    # declaration, not the source. It gets the same one
+                    # redeclaration, never a fix call (series rule-58a4625
+                    # f2 t2: a reviewed, rechecked task ended the run on a
+                    # wait selector the orchestrator guessed).
+                    record["first_problem"] = failure
+                    redone = self._recapture_declared(spec, lead, task, record, failure, source="the capture")
+                    if redone is not None:
+                        record["recapture"] = dict(capture=spec.scope.capture, verified=redone[0],
+                                                   problem=redone[1], screenshots=redone[2])
+                if redone is None or not redone[0]:
+                    problem = failure if redone is None else redone[1]
+                    record.update(verified=False, problem=problem, harness_capture=True)
+                    self._open_finding("invalid_proof", f"Task {spec.task_id} is design work without clean "
+                                                        f"rendered evidence: {problem}.")
+                    self._design_unverified.append((spec.task_id, problem))
+                    self.design_checks.append(record)
+                    task.keep(json.dumps(record), kind="design-evidence")
+                    return
+                captured = redone
+        if captured is not None:
+            # The recapture already read and checked its records.
+            ok, problem, shots, records = captured
+        else:
+            ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
+                                                        expected_source=self._trusted_source(),
+                                                        receipt=self._capture_receipt(spec.task_id, harness))
+            self._refuse_mismatched(spec, record, task, records, harness)
         problem, records = self._qualify_debt(spec, ok, problem, records)
         if self._audit_debt_applies(spec, ok, records):
             # A recapture cannot change a measured fault on valid evidence, so
@@ -4487,9 +5180,23 @@ class Session:
             self.design_checks.append(record)
             task.keep(json.dumps(record), kind="design-evidence")
             return
-        if not ok and harness and is_review_only(spec):
+        if not ok and harness and _declaration_only(records) and not is_review_only(spec):
+            # The declared steps cannot show the change (a final wait on an
+            # element present at load): the declaration is the defect, not
+            # the source, so the remedy is the one redeclaration the blind
+            # review gets, never a design-fix (series rule-3572b72 f2 t1: a
+            # fix call on sound source ran to the 20-round cap at 961k).
+            record["first_problem"] = problem
+            redone = self._recapture_declared(spec, lead, task, record, problem, source="the capture check")
+            if redone is not None:
+                ok, problem, shots, records = redone
+                record["recapture"] = dict(capture=spec.scope.capture, verified=ok, problem=problem,
+                                           screenshots=shots)
+        if not ok and harness and (is_review_only(spec) or _declaration_only(records)):
             # A harness recapture of an unchanged tree measures the same page;
-            # an audit's problem stands as found, with no fix call spent.
+            # an audit's problem stands as found, with no fix call spent. A
+            # declaration still wrong after its one redeclaration is the same:
+            # no source edit can mend a wait selector.
             pass
         elif not ok and harness:
             record["first_problem"] = problem
@@ -4512,7 +5219,7 @@ class Session:
             else:
                 ok, problem, shots, records = check_records(
                     self.project, spec.task_id, self._last_edit_started or 0,
-                    expected_source=self._trusted_source())
+                    expected_source=self._trusted_source(), receipt=self._capture_receipt(spec.task_id, harness))
                 self._refuse_mismatched(spec, record, task, records, harness)
         elif not ok:
             record["first_problem"] = problem
@@ -4539,7 +5246,8 @@ class Session:
             self._run_integration_gate(lead, spec, task)
             self._stage("design")  # the recheck is design work again, as above
             ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
-                                                        expected_source=self._trusted_source())
+                                                        expected_source=self._trusted_source(),
+                                                        receipt=self._capture_receipt(spec.task_id, harness))
             self._refuse_mismatched(spec, record, task, records, harness)
             problem, records = self._qualify_debt(spec, ok, problem, records)
             if self._audit_debt_applies(spec, ok, records):
@@ -4588,10 +5296,16 @@ class Session:
                             self._design_unverified.append((spec.task_id, problem))
                             verdict = ("BLOCKING: the renders do not show the changed interface, and the "
                                        f"recapture did not produce clean evidence ({problem})")
-                record["final_review"] = dict(reviewer=reviewer, verdict=verdict[:600])
                 blocking = [line for line in (verdict or "").splitlines() if line.strip().startswith("BLOCKING:")]
                 if (verdict or "").strip() != "APPROVED" and not blocking:
                     blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
+                # The decision travels with the text: a reader of the first
+                # line or of the stored 600 characters must not take an
+                # APPROVED that a later BLOCKING line overrode (Codex review
+                # of 35f198e).
+                record["final_review"] = dict(reviewer=reviewer, verdict=verdict[:600],
+                                              approved=not blocking,
+                                              blocking=[line.strip()[:300] for line in blocking])
                 for line in blocking:
                     self._open_finding("unverified", f"Task {spec.task_id} design: {line.strip()}")
                 self._edge("reviewer", not blocking)
@@ -4603,7 +5317,7 @@ class Session:
         self.design_checks.append(record)
         task.keep(json.dumps(record), kind="design-evidence")
 
-    def _recapture_declared(self, spec, lead, task, record, verdict):
+    def _recapture_declared(self, spec, lead, task, record, verdict, *, source="the design reviewer from another vendor"):
         """Ask the lead for the page and steps that reach the changed state,
         recapture once, and return ``(ok, problem, shots, records)``; None
         when the lead gave no usable new declaration (the verdict stands).
@@ -4618,13 +5332,22 @@ class Session:
         the state it needs, so it redeclares; the same validator and fixture
         rules as a SCOPE capture apply, and the recapture is bounded to one.
         """
+        if record.get("recapture_spent"):
+            # One redeclaration per design check, whichever route asks first
+            # (Codex review of 351d3ba: the capture-check route succeeded, a
+            # blind review then bought a second declaration, a third capture
+            # and a second review). The first receipt stays as written.
+            self._note(f"task {spec.task_id}: the one redeclaration is spent; the verdict stands")
+            record["recapture_blocked"] = f"{source} asked again after the one redeclaration was spent"
+            return None
+        record["recapture_spent"] = True
         current = spec.scope.capture or {}
         self._count("recapture")
         self._note(f"task {spec.task_id}: renders do not show the change; one recapture declaration")
         prompt = (
             f"Task: {spec.description}\n\nThe harness captured {current.get('path')} after "
-            f"{len(current.get('steps') or [])} declared interaction step(s) and the design reviewer "
-            f"from another vendor replied: {verdict.strip()[:200]}\n\nThe interface this task changed "
+            f"{len(current.get('steps') or [])} declared interaction step(s) and {source} "
+            f"replied: {verdict.strip()[:300]}\n\nThe interface this task changed "
             "does not appear in those renders, so the declared page or steps do not reach the state "
             "where it shows. Reply with exactly one line\n"
             'CAPTURE: {"path": "/route", "steps": [...]}\n'
@@ -4637,8 +5360,18 @@ class Session:
             "an earlier call of this task wrote); a sample that does not exist yet cannot be "
             "declared here."
         )
-        with invocation(spec.task_id, "capture-redeclare"):
-            reply = self._invoke_model(lead, prompt)
+        try:
+            with invocation(spec.task_id, "capture-redeclare"):
+                reply = self._invoke_model(lead, prompt)
+        except TurnLimitReached as exc:
+            # A declaration call that hits its round cap gave no declaration
+            # (series rule-7590b13 f5: the cap raised out of the design check
+            # and ended a run whose graders all passed). Its narration is
+            # kept, never parsed; the verdict stands, as for a reply with no
+            # marker.
+            why = self._capped_declaration(spec, lead, task, "capture-redeclare", exc)
+            record["recapture"] = dict(declared=None, problem=why)
+            return None
         task.record("assistant", f"[{lead}] {reply}")
         task.keep(reply, kind="capture-redeclare", author=lead)
         capture, why = _parse_capture_line(reply, spec.task_id)
@@ -4649,6 +5382,16 @@ class Session:
         if capture == current:
             self._note(f"task {spec.task_id}: the recapture declaration repeats the dispatched capture")
             record["recapture"] = dict(declared=capture, problem="same page and steps as dispatched")
+            return None
+        if not capture["steps"] or capture["steps"][-1].get("action") != "wait":
+            # The prompt's own rule: the steps end in a wait on something
+            # only the changed state shows. A bare page, or steps with no
+            # final wait, is the dispatched problem again (series
+            # rule-58a4625 f2 t1: {"path": "/", "steps": []} was accepted,
+            # captured and verified because there was no wait to check).
+            why = "a recapture must end in a wait on the changed state; a page with no final wait proves nothing"
+            self._note(f"task {spec.task_id}: no usable recapture declaration ({why})")
+            record["recapture"] = dict(declared=capture, problem=why)
             return None
         missing = _missing_fixtures(self.project, capture, spec.task_id)
         if missing:
@@ -4668,7 +5411,8 @@ class Session:
             return False, str(failure), [], [dict(kind="integrity", message=str(failure))]
         from .design_evidence import check_records
         ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
-                                                    expected_source=self._trusted_source())
+                                                    expected_source=self._trusted_source(),
+                                                    receipt=self._capture_receipt(spec.task_id, True))
         self._refuse_mismatched(spec, record, task, records, True)
         return ok, problem, shots, records
 
@@ -4760,7 +5504,15 @@ class Session:
         from .runtime import EvidenceNotDelivered, ReviewCopyAltered
         try:
             with invocation(spec.task_id, "design-review"):
-                verdict = self._invoke_model(reviewer, prompt)
+                verdict = self._invoke_model(reviewer, prompt + self._review_turn_budget_note(reviewer))
+        except TurnLimitReached as exc:
+            # The model ran, so the renders reached its copy: delivery is
+            # recorded before the capped call is filed (Codex review comment
+            # 4226680387 on #53). Neither APPROVED nor a BLOCKING line: the
+            # caller files it as a review that gave no verdict (unverified),
+            # not as a design defect.
+            self._record_delivery(reviewer, hashes)
+            return self._capped_review(spec, reviewer, "design review", exc)
         except EvidenceNotDelivered as exc:
             self._edge("delivered", False)
             return f"BLOCKING: the renders could not be handed to the reviewer ({str(exc)[:300]})"
@@ -4769,11 +5521,14 @@ class Session:
             # handed: the verdict is not of the bytes on record.
             self._edge("delivered", False)
             return f"BLOCKING: the reviewer altered its copy of the source or renders before judging ({str(exc)[:300]})"
-        # Delivered as bound: the files and hashes the copy was checked against.
+        self._record_delivery(reviewer, hashes)
+        return verdict
+
+    def _record_delivery(self, reviewer, hashes) -> None:
+        """Delivered as bound: the files and hashes the copy was checked against."""
         self._edge("delivered", True)
         if self._outcome is not None:
             self._outcome.delivery = dict(reviewer=reviewer, files=dict(hashes))
-        return verdict
 
     def _parallel_enabled(self) -> bool:
         policy = self.config.repository_policy
@@ -4900,6 +5655,13 @@ class Session:
                 self.scope_reports.extend(child.scope_reports)
                 self.design_checks.extend(child.design_checks)
                 self.open_findings.extend(child.open_findings)
+                # A child's execution facts come back with it, re-based to the
+                # parent's checks: only a check the parent runs after the merge
+                # can discharge them (Codex review of b6ba3ba, F5).
+                for entry in child.unexecuted_acceptance:
+                    self.unexecuted_acceptance.append(dict(entry, after_check=len(self.checks), discharged_at=None))
+                self.original_test_runs.extend(child.original_test_runs)
+                self.skip_baselines.extend(getattr(child, "skip_baselines", []))
                 # The child's design debt comes back with its findings, so a
                 # stop names it rather than a generic open finding (map G8).
                 self._design_unverified.extend(child._design_unverified)
@@ -5073,6 +5835,11 @@ class Session:
         run; that is recorded, not invented.
         """
         ledger = self.memory.ledger
+        refusal = self._original_tests_at_done()
+        if refusal:
+            self._done_refusal = refusal
+            self._note("DONE sent back: the original tests fail against the delivered source")
+            return False
         if not self.config.requirements_ledger:
             return True
         if not ledger.requirements:
@@ -5193,12 +5960,13 @@ class Session:
             + (("\n\n## Rendered design evidence\n" + "\n".join(
                 f"- {d['task']}: " + (", ".join(d.get('screenshots') or []) or d.get('problem', ''))
                 + (f"; independent design review by {d['final_review'].get('reviewer')}: "
-                   f"{(d['final_review'].get('verdict') or '')[:200]}" if d.get('final_review') else
+                   f"{_review_reading(d['final_review'])}" if d.get('final_review') else
                    "; no independent design review verdict on record")
                 for d in self.design_checks)
                 + "\nA design review verdict listed above is the independent approval of that task's "
                 "renders; where one reads APPROVED, do not report the approval as absent.")
                if self.design_checks else "")
+            + self._not_run_block()
             + "\n\nYou are an independent auditor. The project in your working directory is the "
             "delivered work. For each requirement, check the delivered files themselves: code, "
             "interface, tests and documentation. Documentation must agree with the goal, not only "
@@ -5235,10 +6003,317 @@ class Session:
                 if not resolved:
                     met, why = False, f"MET claimed without a file or test that exists in the project ({why[:100]})"
             found[m.group(1).upper()] = (met, why)
+        lowered = self._lower_unexecuted(found)
         verdicts = {r: found.get(r, (False, "the auditor gave no verdict")) for r in audited}
         self.requirement_audits.append(dict(auditor=auditor, verdicts={r: dict(met=ok, why=why)
-                                                                       for r, (ok, why) in verdicts.items()}))
+                                                                       for r, (ok, why) in verdicts.items()},
+                                            lowered=lowered))
         return verdicts
+
+    def _record_not_run(self, key, role, reply) -> None:
+        """Keep each 'NOT RUN:' line an editing call wrote, with the
+        requirements its task covers (series rule-119c83f f2: t3 and t4 said
+        their browser scenario and search commands did not run, and the audit
+        still found all five requirements met)."""
+        task = getattr(self._active_spec, "task_id", "run")
+        for match in _NOT_RUN_LINE.finditer(reply or ""):
+            item, _, why = match.group(1).partition(" - ")
+            item = item.strip().strip("`")
+            if not item or item.lower() in ("none", "nothing", "n/a"):
+                continue
+            entry = dict(task=task, role=role, author=key, item=item[:300], why=why.strip()[:300],
+                         requirements=list(self._current_covers), after_check=len(self.checks))
+            # A report after a check is a new report: an earlier run cannot
+            # discharge what was said about the source since (F3: a re-report
+            # in revision was deduplicated away and the old run lifted it).
+            if not any(e["task"] == task and e["item"] == entry["item"] and e["after_check"] == entry["after_check"]
+                       for e in self.unexecuted_acceptance):
+                self.unexecuted_acceptance.append(entry)
+                self._note(f"task {task}: {role} reported NOT RUN: {entry['item'][:120]}")
+
+    def _note_skips(self, spec, result, gate=None) -> None:
+        """A passing required command that skipped cases the run-start source
+        did not skip is acceptance that did not run for the task's
+        requirements (gui-sort-v5 t4: Node 37 passed, 2 browser cases skipped).
+
+        What counts is the run's own effect, measured against the same
+        commands run once on the run-start source (``_skip_baseline``), not
+        whether test files changed: a product edit can turn a case into a skip
+        (Codex review of 81adcc7, R3), and a case skipped since before the run
+        is not this task's missing acceptance (R4). A skip is historical only
+        when its name is one case in both runs, read from the whole output,
+        and that case was skipped at run start (S1: two cases sharing a name,
+        or names lost from the output tail, hid a new skip). Anything else
+        counts, so an unrelated old case that now runs cannot hide a new skip
+        (F4). Without names, or without a baseline, every skip counts. The first check counts like any
+        other; optional commands and the run-start compatibility receipts
+        (``original-tests:*``, immutable by design) never record one."""
+
+        from .integration import GateReceipt, skipped_count
+        receipts = result.receipts or (GateReceipt(id="check", status="passed" if result.passed else "failed",
+                                                   reason="", required=True, output=result.output,
+                                                   report=result.report, cases=result.cases),)
+        starts = getattr(self, "_start_skips", None) or {}
+        keys = self._command_keys(gate) if gate is not None else {}
+        texts, stable = self._case_texts()
+        for receipt in receipts:
+            if receipt.status != "passed" or not receipt.required or receipt.id.startswith("original-tests:"):
+                continue
+            count = skipped_count(receipt)
+            if not count:
+                continue
+            names, every, _ = _receipt_names(receipt)
+            cases = sorted(names.elements()) if names is not None else None
+            start = starts.get(keys.get(receipt.id))
+            record = receipt.cases if isinstance(receipt.cases, dict) else {}
+            qualified = set(record.get("qualified") or ())
+            if names is not None:
+                # Historical only when the name is one case in both runs and
+                # that case was skipped at run start: a name two cases share,
+                # or one that ran there, says nothing about which skipped now
+                # (Codex review of 67c9fad, S1). Without complete identity on
+                # both sides every skip counts (d157378, T2).
+                new = _new_skips(names, every, start, lambda n, q=frozenset(qualified): stable(n, n in q))
+                if not new:
+                    continue
+                cases = sorted(new.elements())
+            if any(e.get("kind") == "skipped" and e["task"] == spec.task_id and e["receipt"] == receipt.id
+                   and e["after_check"] == len(self.checks) for e in self.unexecuted_acceptance):
+                continue
+            shown = f"{len(cases)} skipped test case(s) not skipped at run start: {', '.join(cases)}" if (
+                cases and start is not None) else f"{count} skipped test case(s)" + (
+                f": {', '.join(cases)}" if cases else "")
+            entry = dict(task=spec.task_id, role="check", author="harness",
+                         item=f"{receipt.id}: {shown}"[:300],
+                         why="the required check passed with these cases skipped",
+                         requirements=list(self._current_covers), after_check=len(self.checks),
+                         receipt=receipt.id, kind="skipped", cases=cases,
+                         # Which test file held each named case when it was
+                         # recorded, so a later discharge can tell the same
+                         # case from a name reused elsewhere (U1).
+                         case_files=None if not cases else {
+                             n: sorted(_case_files(n, texts, n in qualified) or ()) for n in set(cases)},
+                         qualified_cases=sorted(n for n in set(cases or ()) if n in qualified),
+                         # The run-start baseline this fact was measured
+                         # against, kept so a later discharge reads the same
+                         # one (T4).
+                         baseline=None if start is None else dict(
+                             skipped=None if start[1] is None else dict(start[1]),
+                             every=None if start[2] is None else dict(start[2])))
+            self.unexecuted_acceptance.append(entry)
+            self._note(f"task {spec.task_id}: {entry['item']}")
+
+    def _case_texts(self):
+        """``(texts, stable)``: the current test and support files' text, and
+        a predicate ``stable(key, qualified)`` for a case whose one holding
+        file is the same file as at run start, with the case's own definition
+        (``_case_block``) unchanged there (_new_skips). Other tests added to
+        or changed in that file do not matter (Codex review of 5292fc2, V2)."""
+        from .integration import is_test_support
+        from .project import Project
+        originals = self._original_tests or {}
+        try:
+            contents = Project(self.project, exclude=self.config.project_excludes).contents() if self.project else {}
+        except Exception:  # noqa: BLE001 -- unreadable: nothing is stable
+            return {}, lambda key: False
+        texts = {n: d.decode("utf-8", "replace") for n, d in contents.items() if is_test_support(n)}
+        start = {n: d.decode("utf-8", "replace") for n, d in originals.items()}
+
+        def stable(key, qualified):
+            now, then = _case_files(key, texts, qualified), _case_files(key, start, qualified)
+            if now is None or now != then or len(now) != 1:
+                return False
+            (path,) = now
+            block = _case_block(key, qualified, texts[path])
+            return block is not None and block == _case_block(key, qualified, start[path])
+        return texts, stable
+
+    def _discharge_named(self) -> None:
+        """Decide, for the check just recorded, which named skip facts it
+        discharges: a passing, required, unfiltered run of the same command
+        whose complete case record shows each named case executed and none
+        of them skipped. A pytest node id, printed by pytest itself both when
+        the skip was recorded and now, carries its file, so its execution is
+        enough, whatever else that command skipped (Codex review of e530b89,
+        U2); a ``::`` in any other name proves nothing (5292fc2, V1). A bare
+        name must be held by the same single test file as when it was
+        recorded, read from this check's source, so a name reused in another
+        file never stands in (T4, U1)."""
+        from collections import Counter
+        index = len(self.checks) - 1
+        pending = [e for e in self.unexecuted_acceptance if e.get("kind") == "skipped" and e.get("cases")
+                   and e.get("discharged_at") is None and e["after_check"] <= index]
+        if not pending:
+            return
+        texts, _ = self._case_texts()
+        runs = _check_runs(self.checks[index], self.project)
+        for entry in pending:
+            need = Counter(entry["cases"])
+            files = entry.get("case_files") or {}
+            qualified = set(entry.get("qualified_cases") or ())
+            for run in runs:
+                if not (run["id"] == entry["receipt"] and run["passed"] and run["required"]
+                        and not run["filtered"] and run["every_names"] is not None):
+                    continue
+                if not all(run["executed_names"][n] >= k and not run["skipped_names"][n] for n, k in need.items()):
+                    continue
+                if all((n in qualified and n in run["qualified_names"])
+                       or (files.get(n) and _case_files(n, texts, False) == frozenset(files[n]))
+                       for n in need):
+                    entry["discharged_at"] = index
+                    break
+
+    def _skip_baseline(self, gate, result, current: dict):
+        """Run the gate's commands once on the run-start source when a passing
+        required command skipped cases, and keep what each skipped there
+        (``_start_skips``: command identity to ``(count, names)``). The
+        copy is built like the original-test copy, nothing is written to the
+        project, and a project that changed while it ran fails the check as
+        any check whose tree moved does. A command that could not run there
+        has no baseline, so its skips all count."""
+        from .integration import run_original_tests, skipped_count
+        cache = self.__dict__.setdefault("_start_skips", {})
+        tried = self.__dict__.setdefault("_start_skips_tried", set())
+        start = getattr(self, "_run_start_contents", None)
+        keys = self._command_keys(gate)
+        if not keys or set(keys.values()) <= tried or start is None or self._original_tests is None:
+            return result
+        if not any(r.status == "passed" and r.required and not r.id.startswith("original-tests:")
+                   and skipped_count(r) for r in result.receipts or ()) and not (
+                not result.receipts and result.passed and skipped_count(result)):
+            return result
+        task = getattr(self._active_spec, "task_id", "run")
+        baseline, problem = run_original_tests(gate, self.project, self._original_tests, start)
+        self._verify_dependencies(f"during run-start skip baseline ({task})")
+        drift = self._source_drift(current)
+        if drift:
+            return replace(result, passed=False, output=drift)
+        found = {}
+        for receipt in (baseline.receipts if baseline else ()):
+            key = keys.get(receipt.id.removeprefix("original-tests:"))
+            if receipt.status == "passed" and key is not None:
+                count = skipped_count(receipt)
+                if count is not None:
+                    found[receipt.id.removeprefix("original-tests:")] = cache[key] = (count, *_receipt_names(receipt))
+        tried.update(keys.values())
+        self.skip_baselines.append(dict(task=task, problem=problem, receipts={
+            k: dict(skipped=v[0], cases=sorted(v[1].elements()) if v[1] is not None else None)
+            for k, v in found.items()}))
+        return result
+
+    def _tests_changed_in_run(self) -> bool:
+        """Whether any test or support file differs from run start (true when
+        there is no run-start record to compare with: unknown is not none)."""
+        from .integration import is_test_support
+        from .project import Project
+        if not self._original_tests or not self.project:
+            return True
+        try:
+            current = Project(self.project, exclude=self.config.project_excludes).contents()
+        except Exception:  # noqa: BLE001 -- unreadable is not unchanged
+            return True
+        names = {n for n in current if is_test_support(n)} | set(self._original_tests)
+        return any(current.get(n) != self._original_tests.get(n) for n in names)
+
+    def _standing_not_run(self) -> List[dict]:
+        """Reported items no later complete run discharges. A NOT RUN item is
+        discharged only by a later passing required command that names every
+        path in it as a whole operand, runs no filter, executed cases and
+        skipped none; a skip fact only by such a run of the same command. A
+        model's word, a substring, an optional or skipped receipt, or a
+        name-filtered run never does (Codex review of b6ba3ba, F3)."""
+        standing = []
+        for entry in self.unexecuted_acceptance:
+            ran = False
+            paths = _item_paths(entry["item"]) if entry.get("kind") != "skipped" else []
+            for check in self.checks[entry["after_check"]:]:
+                runs = [r for r in _check_runs(check, self.project) if _complete_run(r)]
+                if entry.get("kind") == "skipped" and entry.get("cases"):
+                    # Decided when each check ran, against that check's own
+                    # source (_discharge_named).
+                    ran = entry.get("discharged_at") is not None
+                elif entry.get("kind") == "skipped":
+                    ran = any(r["id"] == entry["receipt"] for r in runs)
+                else:
+                    ran = bool(paths) and any(all(p in r["files"] for p in paths) for r in runs)
+                if ran:
+                    break
+            if not ran:
+                standing.append(entry)
+        return standing
+
+    def _unnamed_standing(self) -> List[str]:
+        """Unnamed test files not reconciled by later execution. A later
+        complete run that names the file, or names a test file that names it,
+        makes the observation unknown again, as it was never claimed when the
+        file was first named that way (F6: a historical unnamed path kept a
+        later executed child assertion NOT MET)."""
+        since = getattr(self, "_unnamed_since", {}) or {}
+        out = []
+        for path in list(getattr(self, "unnamed_test_files", []) or []):
+            reconciled = False
+            for check in self.checks[since.get(path, 0):]:
+                for run in _check_runs(check, self.project):
+                    if not _complete_run(run):
+                        continue
+                    if path in run["files"] or (self.project and self._named_by_a_run_test(
+                            path, [["runner", *sorted(run["files"])]])):
+                        reconciled = True
+                        break
+                if reconciled:
+                    break
+            if not reconciled:
+                out.append(path)
+        return out
+
+    def _not_run_block(self) -> str:
+        """The audit's view of what is not shown to have run."""
+        unrun = self._unnamed_standing()
+        standing = self._standing_not_run()
+        if not unrun and not standing:
+            return ""
+        lines = []
+        if unrun:
+            lines.append("- test files no required check names (not shown to have run): " + ", ".join(unrun))
+        for entry in standing:
+            lines.append(f"- task {entry['task']} ({entry['role']}) reported NOT RUN: {entry['item']}"
+                         + (f" - {entry['why']}" if entry["why"] else "")
+                         + (f" (covers {', '.join(entry['requirements'])})" if entry["requirements"] else ""))
+        return ("\n\n## Not shown to have run (harness records)\n" + "\n".join(lines)
+                + "\nA requirement whose only evidence is a file listed here is NOT MET, and so is a "
+                "requirement a task covering it reported NOT RUN: name what did not run.")
+
+    def _lower_unexecuted(self, found: dict) -> List[dict]:
+        """Turn a MET into NOT MET where the record shows its acceptance did
+        not run, whatever the auditor wrote; never the other way.
+
+        A MET whose resolved citations are all test files no required check
+        names, and no later run reconciled, is not shown (files outside the
+        test families are not classified, so citing them is not lowered
+        here). A requirement a task covering it reported NOT RUN for, or
+        whose task's required check skipped cases, is not met while that
+        record stands, even when the MET also cites a file that did run: a
+        unit file that ran does not stand in for a scenario that did not.
+        """
+        unrun = set(self._unnamed_standing())
+        standing = self._standing_not_run()
+        lowered = []
+        for rid, (met, why) in list(found.items()):
+            if not met:
+                continue
+            cited = sorted({c.split("::")[0] for c in self._resolve_citations(why)})
+            reason = ""
+            if unrun and cited and all(c in unrun for c in cited):
+                reason = (f"MET cites only test files no required check names ({', '.join(cited)}); "
+                          "not shown to have run")
+            blockers = [e for e in standing if rid in e["requirements"]]
+            if blockers:
+                reason = ("acceptance reported NOT RUN by the covering task: "
+                          + "; ".join(f"{e['task']}: {e['item']}" for e in blockers))[:300]
+            if reason:
+                found[rid] = (False, reason)
+                lowered.append(dict(requirement=rid, auditor_said=why[:200], reason=reason))
+        return lowered
 
     def _confirm_goal_met(self) -> bool:
         """After the cap: ask once whether the goal is met, and never act on it.
@@ -5400,27 +6475,32 @@ class Session:
     def _identity_check(self, task_id, target, steps, evidence):
         """``(problem, observed)``: :meth:`_identity_problem`'s reason, and
         the evidence digests now on disk when, and only when, the renders
-        still verify and show the approved state but their digests differ
-        from the approved snapshot's (map J9b). Otherwise ``observed`` is
-        None: a different state, a failed check or an incomplete set is not
-        an observed digest mismatch."""
-        from .design_evidence import check
+        still show the approved state but their digests differ from the
+        approved snapshot's (map J9b). Otherwise ``observed`` is None: a
+        different state or an incomplete set is not an observed digest
+        mismatch. The approved snapshot is compared before the check re-runs:
+        the check now verifies each file against the digest its capture
+        recorded, so a replaced screenshot would otherwise surface as the
+        check's own integrity failure and the observed comparison the
+        settlement records would be lost."""
+        from .design_evidence import check_records
         problem = self._evidence_set_problem(task_id)
-        if not problem:
-            ok, problem, _ = check(self.project, task_id, 0, expected_source=self._trusted_source())
-            problem = "" if ok else problem
-        if not problem:
-            now_target, now_steps, now_evidence = self._capture_state(task_id)
-            if (now_target, now_steps) != (target, steps):
-                problem = "the resolving renders now show a different state"
-            elif now_evidence != evidence:
-                problem = "the resolving renders were replaced after they were reviewed"
-                # Only a digest actually read from every named file is an
-                # observed comparison; an unreadable file is not (map J9b).
-                if all(isinstance(d, str) and re.fullmatch(r"[0-9a-f]{64}", d)
-                       for d in _snapshot_files((task_id, None, None, now_evidence)).values()):
-                    return problem, now_evidence
-        return problem, None
+        if problem:
+            return problem, None
+        now_target, now_steps, now_evidence = self._capture_state(task_id)
+        if (now_target, now_steps) != (target, steps):
+            return "the resolving renders now show a different state", None
+        if now_evidence != evidence:
+            problem = "the resolving renders were replaced after they were reviewed"
+            # Only a digest actually read from every named file is an
+            # observed comparison; an unreadable file is not (map J9b).
+            if all(isinstance(d, str) and re.fullmatch(r"[0-9a-f]{64}", d)
+                   for d in _snapshot_files((task_id, None, None, now_evidence)).values()):
+                return problem, now_evidence
+            return problem, None
+        ok, problem, _, _records = check_records(self.project, task_id, 0, expected_source=self._trusted_source(),
+                                                 receipt=self._capture_receipt(task_id, task_id in self._harness_tasks))
+        return ("" if ok else problem), None
 
     def _findings_block_done(self) -> bool:
         """Whether open findings refuse DONE, after re-checking resolved ones
@@ -5459,7 +6539,10 @@ class Session:
                  for s in (requested if isinstance(requested, list) else []) if isinstance(s, dict)]
         evidence = dict(summary=(folder / "summary.json").relative_to(root).as_posix(),
                         sha256=digest(folder / "summary.json"),
-                        screenshots={name: digest(folder / name / "page.png") for name in VIEWPORTS})
+                        screenshots={name: digest(folder / name / "page.png") for name in VIEWPORTS},
+                        # The render record beside each screenshot is part of
+                        # what was approved too (Codex review of 2e57e94).
+                        records={name: digest(folder / name / "evidence.json") for name in VIEWPORTS})
         return (summary.get("target") if isinstance(summary, dict) else None), steps, evidence
 
     def _harness_captures(self, spec) -> bool:
@@ -5551,6 +6634,11 @@ class Session:
         if not (self.config.design_self_verify and self.project and self.config.allow_writes
                 and is_design_task(spec)):
             return ""
+        if _frontend_without_rendered_file(spec) and spec.task_id not in self._frontend_challenged:
+            # Once per task: a deliberate frontend label survives being named
+            # again and is then held to the capture requirement as before.
+            self._frontend_challenged.add(spec.task_id)
+            return _FRONTEND_WITHOUT_RENDER
         profile = self.config.capture_profile
         if profile is not None:
             capture = getattr(spec.scope, "capture", None)
@@ -5590,14 +6678,108 @@ class Session:
                 f"task {spec.task_id} is UI work whose renders the harness requires, and its lead "
                 f"{lead} cannot run the capture on its transport; declare a capture profile "
                 "(--capture-profile) so the harness captures, or run this task on a seat that can. "
-                "No call was made.")
+                "No call was made to its lead.")
         return ""
+
+    def _supply_fixtures(self, spec, lead, task, record, missing) -> List[str]:
+        """One bounded round: the lead replies with the content of each
+        missing capture-only sample and the harness writes it under the
+        task's own .quadratus/capture-fixtures/<task id>/ folder. No write
+        grant changes; what the lead cannot write, it dictates."""
+        from .design_evidence import MAX_FIXTURE_BYTES
+        self._count("fixture_supply")
+        self._note(f"task {spec.task_id}: declared capture fixture(s) missing; one supply round "
+                   f"({', '.join(missing)[:120]})")
+        prompt = (
+            f"Task: {spec.description}\n\nThe harness cannot capture this task yet: the capture declares "
+            "an upload of " + ", ".join(missing) + ", and no such file exists. The repository policy "
+            "refuses writes under .quadratus/, so the harness writes it from what you reply. For each "
+            "path, reply with the line\nFIXTURE <path>:\nfollowed by one fenced block holding the "
+            "complete file content, a valid non-secret sample of what that input accepts (at most "
+            f"{MAX_FIXTURE_BYTES:,} bytes). Reply with nothing else. Do not change files: this call "
+            "supplies content, it does not edit."
+        )
+        try:
+            with invocation(spec.task_id, "fixture-supply"):
+                reply = self._invoke_model(lead, prompt)
+        except TurnLimitReached as exc:
+            why = self._capped_declaration(spec, lead, task, "fixture-supply", exc)
+            record["fixtures_written"] = []
+            record["fixture_problems"] = [f"{path}: {why}" for path in missing]
+            return list(record["fixture_problems"])
+        task.record("assistant", f"[{lead}] {reply}")
+        task.keep(reply, kind="fixture-supply", author=lead)
+        supplied, problems = _parse_fixture_blocks(reply)
+        written = []
+        flagged = {p.split(":", 1)[0] for p in problems}
+        for path in missing:
+            if path in flagged:
+                continue
+            content = supplied.get(path)
+            if content is None:
+                problems.append(f"{path}: no FIXTURE block in the reply")
+                continue
+            data = content.encode("utf-8")
+            if len(data) > MAX_FIXTURE_BYTES:
+                problems.append(f"{path}: {len(data):,} bytes exceeds {MAX_FIXTURE_BYTES:,}")
+                continue
+            target, why = _confined_fixture_target(self.project, path, spec.task_id)
+            if target is None:
+                problems.append(why)
+                continue
+            why = _write_fixture_bound(self.project, path, data)
+            if why:
+                problems.append(f"{path}: {why}")
+                continue
+            written.append(path)
+        record["fixtures_written"] = written
+        if problems:
+            record["fixture_problems"] = problems
+            self._note(f"task {spec.task_id}: fixture supply incomplete ({'; '.join(problems)[:160]})")
+        return problems
+
+    def _capped_declaration(self, spec, lead, task, what: str, exc: TurnLimitReached) -> str:
+        """A bounded declaration call that stopped at its round cap made no
+        declaration. The partial text is narration of unfinished work and is
+        kept as evidence, never read for a CAPTURE line or a FIXTURE block;
+        the run goes on exactly as after a reply with no marker."""
+        rounds = f"{exc.turns} rounds" if exc.turns else "its round cap"
+        why = f"the {what} call stopped at {rounds} before answering; no declaration"
+        task.record("user", f"The {what} call stopped at {rounds}; nothing it wrote is read as a declaration.")
+        if exc.partial_text:
+            task.keep(exc.partial_text, kind=f"{what}-capped", author=lead)
+        self._note(f"task {spec.task_id}: {why}")
+        return why
+
+    def _missing_own_fixtures(self, spec) -> List[str]:
+        """The capture-only samples this task's file steps declare under its
+        own ``.quadratus/capture-fixtures/<task id>/`` that are not regular
+        files in the project. A committed sample elsewhere is checked by the
+        capture itself, as before."""
+        steps = (getattr(getattr(spec, "scope", None), "capture", None) or {}).get("steps") or []
+        own = f".quadratus/capture-fixtures/{spec.task_id}/"
+        missing = []
+        for step in steps:
+            path = str(step.get("path", "")) if step.get("action") == "file" else ""
+            if not (path.startswith(own) and self.project):
+                continue
+            target = Path(self.project) / path
+            # An empty own fixture is a discarded partial write (see
+            # _write_fixture_bound), never a sample: it counts as missing.
+            if not target.is_file() or target.is_symlink() or target.stat().st_size == 0:
+                missing.append(path)
+        return missing
 
     def _harness_capture(self, spec) -> str:
         """Run the operator's preview and capture this task's declared state;
         "" on success or why not. Only after the last gate passed, and the
         source must be the same before and after (the preview is not a
         writer)."""
+        # A new attempt retires the previous receipt before anything can
+        # stop it: a failed, ineligible or unprofiled attempt leaves no
+        # measurement that an older render could be accepted against.
+        self._harness_tasks.add(spec.task_id)
+        self._capture_receipts.pop(spec.task_id, None)
         ineligible = self._capture_ineligible()
         if ineligible:
             return f"the harness did not capture because {ineligible}"
@@ -5607,11 +6789,22 @@ class Session:
         from .preview import capture_task
         self._verify_dependencies(f"before preview ({spec.task_id})")
         before = self._source_fingerprint()
-        failure = capture_task(profile, self.project, spec.task_id, spec.scope.capture)
+        receipt: dict = {}
+        failure = capture_task(profile, self.project, spec.task_id, spec.scope.capture, receipt=receipt)
         self._verify_dependencies(f"during preview ({spec.task_id})")
         if before is None or self._source_fingerprint() != before:
             return "the project source changed while the harness previewed and captured it"
+        if not failure:
+            self._capture_receipts[spec.task_id] = receipt
         return failure
+
+    def _capture_receipt(self, task_id, harness) -> Optional[dict]:
+        """The harness's measurement of a task's capture, for the check to
+        hold the summary to. None only for a self-capture, which has none;
+        a harness task with no receipt gets an empty one, which refuses
+        every view as unmeasured (an absent receipt was weaker than an
+        empty one: Codex review of 2e57e94)."""
+        return self._capture_receipts.get(task_id, {}) if harness else None
 
     def _hand_off_preview(self, spec, task, record, failure) -> None:
         """Stop as an operator handoff when the capture failure's origin is
@@ -6227,11 +7420,37 @@ class Session:
             "Start each finding that must be fixed before this work is acceptable "
             "on its own line with 'BLOCKING:' -- you will be asked to re-check exactly those "
             "against the revision. If you genuinely find nothing worth changing, "
-            "reply exactly 'NO FINDINGS' and nothing else; do not write 'BLOCKING: none'."
+            "reply exactly 'NO FINDINGS' and nothing else; do not write 'BLOCKING: none'. "
+            f"Otherwise end your reply with exactly one line, {_REVIEW_COMPLETE}, once you have "
+            "read the whole work and reported everything. A reply with no BLOCKING finding and "
+            "no such line is recorded as an unfinished review."
             + _review_subject_note(spec)
             + (_DESIGN_REVIEW_LENS + (self._design_note or "")
                if self._collaboration_applicable(spec) else "")
+            + self._changed_originals_note()
+            + self._review_turn_budget_note(peer)
         )
+
+    def _changed_originals_note(self) -> str:
+        """For a reviewer: run-start test or support files that now differ.
+        f2's t2 changed the original helper tests/ui/load_app.js to fit the
+        new code and its review approved it without the edit being named."""
+        from .integration import changed_originals
+        from .project import Project
+        if not self._original_tests or not self.project:
+            return ""
+        try:
+            current = Project(self.project, exclude=self.config.project_excludes).contents()
+        except Exception:  # noqa: BLE001 -- a note, never a failure
+            return ""
+        changed = changed_originals(self._original_tests, current)
+        if not changed:
+            return ""
+        shown = ", ".join(changed[:20]) + (f" and {len(changed) - 20} more" if len(changed) > 20 else "")
+        return ("\n\nHarness record: these test or test-support files existed when the run started and "
+                f"now differ or are gone: {shown}. Their run-start versions are run against this code "
+                "separately. Judge each edit: a test or helper changed to fit the code is not evidence "
+                "that the code meets the original tests.")
 
     def _revision_prompt(self, spec: TaskSpec, draft: str, notes: List[str]) -> str:
         joined = "\n\n".join(notes)
@@ -6292,22 +7511,71 @@ class Session:
         """
         unresolved: List[tuple] = []
         for peer, note in blocking:
-            verdict = self._invoke_model(
-                peer,
-                self._role_packet(spec, 'reviewer') + '\n\n' +
-                f"Task: {spec.description}\n\n"
-                f"You reviewed this work and raised these findings:\n{note}\n\n"
-                f"The revised work:\n{revision}\n\n"
-                "Check only your BLOCKING findings against the revision. Do "
-                "not raise new findings. Reply exactly 'RESOLVED' if every "
-                "blocking finding is addressed, otherwise 'UNRESOLVED: <what "
-                "specifically remains>'.",
-            )
             shown = (labels or {}).get(peer, peer)
+            try:
+                verdict = self._invoke_model(
+                    peer,
+                    self._role_packet(spec, 'reviewer') + '\n\n' +
+                    f"Task: {spec.description}\n\n"
+                    f"You reviewed this work and raised these findings:\n{note}\n\n"
+                    f"The revised work:\n{revision}\n\n"
+                    "Check only your BLOCKING findings against the revision. Do "
+                    "not raise new findings. Reply exactly 'RESOLVED' if every "
+                    "blocking finding is addressed, otherwise 'UNRESOLVED: <what "
+                    "specifically remains>'."
+                    + self._review_turn_budget_note(peer),
+                )
+            except TurnLimitReached as exc:
+                # No verdict either way: the finding is neither resolved nor
+                # confirmed, so it does not buy another fix round. The
+                # reviewer's original finding stays on the record as the
+                # specific unresolved defect (Codex review of 0983dac: only
+                # the generic no-verdict fact survived), beside the cap fact.
+                capped = self._capped_review(spec, peer, 'recheck', exc)
+                task.record("assistant", f"[{shown} recheck] {capped}")
+                # The whole finding as the reviewer wrote it: continuation
+                # lines and every marker form (Codex review of cd8c5b0).
+                standing = note.strip()
+                self._open_finding("unverified", f"Task {spec.task_id}: not re-checked after the "
+                                                 f"revision (reviewer capped): {standing}")
+                task.record("user", "A blocking finding was not re-checked against the revision "
+                                    "(the reviewer stopped at its turn cap) -- carry it into the "
+                                    f"summary as an open question:\n[{shown}] {standing}")
+                continue
             task.record("assistant", f"[{shown} recheck] {verdict}")
             if not _resolved_verdict(verdict):
                 unresolved.append((peer, verdict.strip()))
         return unresolved
+
+    def _capped_review(self, spec: TaskSpec, peer: str, what: str, exc: TurnLimitReached) -> str:
+        """A review seat that hit its turn cap gave no verdict.
+
+        Series rule-2ffa7f6 f3 and f5: uncapped collaborators spent 15 to 20
+        rounds and up to 1.18M tokens. Capping them (runtime.REVIEW_CAPPED_ROLES)
+        means a review can now stop short; its narration is never read as
+        findings, and the task is recorded as not fully reviewed rather than
+        as reviewed clean or as blocked on a finding nobody made.
+        """
+        rounds = f"{exc.turns} rounds" if exc.turns else "its turn cap"
+        text = f"UNFINISHED: the {what} stopped at {rounds} before giving a verdict."
+        self._open_finding("unverified", f"Task {spec.task_id}: {what} by {peer} did not finish "
+                                         f"within its turn cap ({rounds}); no verdict.")
+        self._note(f"task {spec.task_id}: {what} by {peer} capped at {rounds}; recorded as unverified")
+        return text
+
+    def _review_turn_budget_note(self, peer: str) -> str:
+        """The reviewer's round budget in words, when a cap applies to its CLI."""
+        limit = self.config.lead_max_turns
+        if not limit:
+            return ""
+        from .cli_providers import CLI_SPECS
+        spec = CLI_SPECS.get(peer.partition(":")[0])
+        if spec is None or not spec.max_turns_flag:
+            return ""
+        return (f"\n\nThis call has at most {limit} tool rounds. At round {limit} it stops and the "
+                "review is recorded as unfinished, with nothing you wrote read as a finding. The work "
+                "is in this prompt; read the files it names, run any approved check once, and write "
+                "the verdict well inside the budget.")
 
     def _fix_prompt(self, spec: TaskSpec, revision: str, unresolved: List[tuple]) -> str:
         remaining = "\n\n".join(f"[{p}]\n{v}" for p, v in unresolved)
@@ -6379,7 +7647,10 @@ class Session:
             self._handoff_unattributable(gate, result, task)
         self.checks.append({"passed": result.passed, "command": result.command,
                             "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
+                            "selection": self._gate_selection(gate), "command_cwd": self._gate_cwd(gate),
+                            "cases": result.cases,
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
+        self._discharge_named()
         # A passing check makes every earlier check failure in the same task
         # history: this invocation's attempts and an earlier invocation's, such
         # as a gate a design-fix later repaired (map G12, J38). Only the
@@ -6395,6 +7666,9 @@ class Session:
         if self._outcome is not None:
             self._outcome.attempts["gate_fix"] = getattr(self, "_gate_fixes_used", 0)
             self._outcome.edge("checks", result.passed)
+        if full:
+            self._note_unrun_tests(spec, task, gate)
+            self._note_skips(spec, result, gate)
         if not result.passed:
             task.record(
                 "user",
@@ -6403,6 +7677,108 @@ class Session:
             )
 
         return latest_fix
+
+    def _harness_record(self, task_id: str) -> List[str]:
+        """What the harness measured for ``task_id``: the latest design
+        check (capture verified or not, views, the final reviewer's verdict)
+        and the task's required checks. Facts from records, never prose."""
+        facts: List[str] = []
+        checks = [r for r in self.design_checks if isinstance(r, dict) and r.get("task") == task_id]
+        if checks:
+            record = checks[-1]
+            views = sorted({Path(str(shot)).parent.name for shot in record.get("screenshots") or ()
+                            if str(shot).endswith(".png")})
+            if record.get("verified"):
+                facts.append("design capture: verified by the harness"
+                             + (f" ({', '.join(views)})" if views else ""))
+            else:
+                facts.append("design capture: not verified"
+                             + (f" ({str(record.get('problem'))[:200]})" if record.get("problem") else ""))
+            review = record.get("final_review") or {}
+            if review.get("verdict") or review.get("blocking"):
+                facts.append(f"final design review by {review.get('reviewer')}: {_review_reading(review)}")
+        outcome = self._outcome if getattr(self._outcome, "task_id", None) == task_id else None
+        if outcome is not None and "checks" in (outcome.edges or {}):
+            facts.append("required checks: " + ("passed" if outcome.edges["checks"] else "failed"))
+        return facts
+
+    def _note_unrun_tests(self, spec, task, gate) -> None:
+        """A test file this task added or changed that no required check runs
+        is unverified, never passed by the gate's silence (batch 2 gui-ui-v3
+        on 5d9f5ff: a new tests/ui file beside a Node check listing five
+        others). Nothing is widened: the commands stay as configured, and the
+        finding says which file and which checks."""
+        from .integration import uncovered_tests
+        from .scope import changed_paths
+        if not self.project or self._task_before is None:
+            return
+        argvs = ([c.argv for c in gate.commands] if hasattr(gate, "commands")
+                 else [getattr(gate, "command", ())])
+        try:
+            from .project import Project
+            changed = changed_paths(Project(self.project, exclude=self.config.project_excludes)
+                                    .diff(self._task_before))
+        except Exception:  # noqa: BLE001 -- observation never fails a task
+            return
+        unrun = uncovered_tests(changed, argvs)
+        # A test file a required check runs may itself run the new one (batch
+        # 2 gui-ui-v3 t5: a pytest test invoked node on the new search tests,
+        # inside the approved pytest check). A mention by name is evidence it
+        # may run, so nothing is claimed for it: unknown is not uncovered.
+        unrun = [path for path in unrun if not self._named_by_a_run_test(path, argvs)]
+        if not unrun:
+            return
+        # An observation, not a finding: a check can run a file it does not
+        # name through a wrapper, so "not named" never proves "not run"
+        # (Codex review of 7515f28). It reaches the lead, the close-out and
+        # result.json; it does not decide completion.
+        text = (f"Task {spec.task_id}: {', '.join(unrun)} changed by this task "
+                f"{'is' if len(unrun) == 1 else 'are'} not named by any required check (the checks "
+                "list their test files); whether a check runs "
+                f"{'it' if len(unrun) == 1 else 'them'} indirectly is unknown, so "
+                f"{'its' if len(unrun) == 1 else 'their'} tests are not shown to have passed.")
+        self.unnamed_test_files = list(dict.fromkeys([*getattr(self, "unnamed_test_files", []), *unrun]))
+        since = getattr(self, "_unnamed_since", {}) or {}
+        for path in unrun:
+            since[path] = len(self.checks)
+        self._unnamed_since = since
+        task.record("user", text)
+        self._note(f"task {spec.task_id}: test file(s) no required check names: {', '.join(unrun)}")
+
+    def _named_by_a_run_test(self, path: str, argvs, *, limit: int = 2000) -> bool:
+        """Whether a test file some required check runs names ``path``: a
+        listed test file, or a Python test file when a check discovers them.
+        Bounded: at most ``limit`` files of at most 1 MB are read."""
+        from .integration import _test_family
+        root = Path(self.project)
+        name = PurePosixPath(path).name
+        listed = {str(a) for argv in argvs for a in argv[1:] if _test_family(str(a))}
+        discovers = any("pytest" in " ".join(str(a) for a in argv[:3]) for argv in argvs)
+        from .project import Project
+        seen = 0
+        try:
+            files = Project(self.project, exclude=self.config.project_excludes).files()
+        except Exception:  # noqa: BLE001 -- observation never fails a task
+            return False
+        for candidate in files:
+            if seen >= limit:
+                break
+            candidate = Path(candidate)
+            candidate = candidate if candidate.is_absolute() else root / candidate
+            rel = candidate.relative_to(root).as_posix()
+            if rel == path:
+                continue
+            family = _test_family(rel)
+            if not (rel in listed or (discovers and family and family[1] == "py")):
+                continue
+            seen += 1
+            try:
+                if candidate.is_file() and not candidate.is_symlink() and candidate.stat().st_size <= 1 << 20:
+                    if name in candidate.read_text(encoding="utf-8", errors="replace"):
+                        return True
+            except OSError:
+                continue
+        return False
 
     def _handoff_unattributable(self, gate, result, task) -> None:
         """Stop, with diagnostics and no repair call, on a failure that is not
@@ -6420,6 +7796,8 @@ class Session:
             return
         self.checks.append({"passed": False, "command": result.command, "output": result.output,
                             "cwd": str(self.project or getattr(gate, 'cwd', '')),
+                            "selection": self._gate_selection(gate), "command_cwd": self._gate_cwd(gate),
+                            "cases": result.cases,
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
         if self._outcome is not None:
             self._outcome.edge("checks", False)
@@ -6496,7 +7874,213 @@ class Session:
             after = project.contents()
             if before != after:
                 return replace(result, passed=False, output=_describe_tree_change(before, after))
+            return self._with_original_tests(gate, result, after)
         return result
+
+    def _snapshot_original_tests(self) -> None:
+        """Keep the run-start bytes of every test and support file.
+
+        Series rule-119c83f f2: t2 changed the original helper
+        tests/ui/load_app.js so the new code loaded under it, the gate ran the
+        edited helper and passed, and the original tests failed against the
+        delivered code. The bytes kept here are what a later check restores
+        (Codex decision D, #35 6076286834)."""
+        from .integration import original_tests, selection_sections
+        from .project import Project
+        try:
+            contents = Project(self.project, exclude=self.config.project_excludes).contents()
+            self._original_tests = original_tests(contents)
+            # The whole run-start source, for the one skip baseline run
+            # (_skip_baseline, Codex review of 81adcc7, R3 and R4).
+            self._run_start_contents = contents
+            # Test selection held in mixed files (pyproject, setup.cfg, tox.ini,
+            # package.json) is kept by section; pure test configs such as
+            # pytest.ini are already among the restored files (F1).
+            self._original_selection = selection_sections(contents)
+        except Exception as exc:  # noqa: BLE001 -- recorded, never a silent pass
+            self._original_tests = None
+            self._unverified_once("The run-start test files could not be read, so changes to "
+                                             f"them cannot be checked: {type(exc).__name__}: {str(exc)[:160]}")
+
+    def _with_original_tests(self, gate, result, current: dict):
+        """The gate's result joined by the original tests, then the run-start
+        skip baseline when this check is the first to need it."""
+        result = self._join_original_tests(gate, result, current)
+        return self._skip_baseline(gate, result, current)
+
+    def _command_keys(self, gate) -> dict:
+        """Receipt id to the command's identity (id, argv, cwd), so a baseline
+        measured once serves every gate object that runs the same command (a
+        cheap view is a new object on each call)."""
+        from .integration import _gate_commands
+        if not self.project:
+            return {}
+        commands = _gate_commands(gate, Path(self.project).resolve()) or []
+        return {c.id: (c.id, tuple(c.argv), c.cwd) for c in commands}
+
+    def _gate_cwd(self, gate) -> str:
+        """A single-command gate's working directory relative to the project
+        ('.' for a suite, whose receipts carry their own; S4)."""
+        from .integration import IntegrationGate
+        if not isinstance(gate, IntegrationGate) or not self.project or not gate.cwd:
+            return "."
+        root, cwd = Path(self.project).resolve(), Path(gate.cwd).resolve()
+        return cwd.relative_to(root).as_posix() if cwd.is_relative_to(root) else "."
+
+    def _gate_selection(self, gate) -> str:
+        """Configuration or environment test selection for a single-command
+        gate (a suite's receipts carry their own)."""
+        from .integration import IntegrationGate, config_selection
+        if not isinstance(gate, IntegrationGate) or not self.project:
+            return ""
+        try:
+            return config_selection(gate.command, Path(gate.cwd or self.project), Path(self.project))
+        except Exception as exc:  # noqa: BLE001 -- unknown selection is selection
+            return f"selection unreadable: {type(exc).__name__}"
+
+    def _join_original_tests(self, gate, result, current: dict):
+        """The gate's result, joined by the original tests when a run-start
+        test or support file now differs.
+
+        Unchanged originals need no second run: the gate already ran them as
+        they are. When any changed or was removed, the same commands run in a
+        copy of the current source with the run-start bytes restored
+        (integration.run_original_tests), and a failure there fails the check
+        with its own receipts, so the ordinary repair and attribution rules
+        apply to it. A copy that cannot be checked is an open unverified
+        finding, never a pass."""
+        from .integration import GateReceipt, added_selectors, changed_originals, run_original_tests
+        originals = self._original_tests
+        if not originals:
+            return result
+        task = getattr(self._active_spec, "task_id", "run")
+        if self._selection_changed(current, task):
+            return result
+        # An added pytest.ini or conftest.py can deselect a run-start test the
+        # same way an edit can (Codex review of 81adcc7, R1); the copy leaves
+        # it out, so the original suite runs as it was selected at run start.
+        added = added_selectors(originals, current)
+        changed = changed_originals(originals, current) + added
+        if not changed:
+            return result
+        baseline, problem = run_original_tests(gate, self.project, originals, current)
+        self._verify_dependencies(f"during original tests ({task})")
+        drift = self._source_drift(current)
+        if drift:
+            # The copy was built from a source that is no longer the project's:
+            # its receipts describe neither, so the check fails as any check
+            # whose tree moved under it does (Codex preliminary review of b6ba3ba).
+            return replace(result, passed=False, output=drift)
+        skipped = [r for r in (baseline.receipts if baseline else ()) if r.status == "skipped"]
+        self.original_test_runs.append(dict(
+            task=task, changed=changed, added=added, passed=None if baseline is None else baseline.passed,
+            problem=problem, receipts=[dict(id=r.id, status=r.status, reason=r.reason, tests=r.tests)
+                                       for r in (baseline.receipts if baseline else ())]))
+        for receipt in skipped:
+            self._unverified_once(f"Task {task}: {receipt.id} did not run against the run-start "
+                                             f"test files: {receipt.reason}")
+        if baseline is None:
+            self._unverified_once(f"Task {task}: run-start test files changed "
+                                             f"({', '.join(changed)}) and the original tests were not run: {problem}")
+            return result
+        self._note(f"task {task}: original tests {'passed' if baseline.passed else 'FAILED'} against the "
+                   f"current source (changed run-start files: {', '.join(changed)})")
+        inner = result.receipts or (GateReceipt(
+            id="check", status="passed" if result.passed else "failed",
+            reason="exit 0" if result.passed else "nonzero exit", required=True,
+            command=result.command, returncode=result.returncode, output=result.output,
+            report=result.report, cwd=self._gate_cwd(gate), selection=self._gate_selection(gate),
+            cases=result.cases),)
+        restored = [n for n in changed if n not in added]
+        heading = ("Original tests (" + "; ".join(part for part in (
+            f"run-start versions of {', '.join(restored)}" if restored else "",
+            f"added test configuration left out: {', '.join(added)}" if added else "") if part)
+                   + ") against the current "
+                   f"source: {'PASSED' if baseline.passed else 'FAILED'}")
+        return replace(result, passed=result.passed and baseline.passed,
+                       returncode=result.returncode if not result.passed else baseline.returncode,
+                       output=f"{result.output}\n\n{heading}\n{baseline.output}"[-8_000:],
+                       receipts=tuple(inner) + tuple(baseline.receipts))
+
+    def _selection_changed(self, current: dict, where: str) -> bool:
+        """Whether test selection in a mixed configuration file changed since
+        run start. Restoring such a file whole would also restore unrelated
+        settings the current code needs, so the original suite cannot be
+        established: an open unverified finding, never a pass (Codex review of
+        b6ba3ba, F1: a changed selection hid a restored original assertion)."""
+        from .integration import changed_selection
+        names = changed_selection(getattr(self, "_original_selection", None) or {}, current)
+        if not names:
+            return False
+        text = (f"{'At DONE' if where == 'DONE' else f'Task {where}'}: test selection in "
+                f"{', '.join(names)} changed since run start, so the original tests cannot be run as "
+                "they were; their result is not established.")
+        self._unverified_once(text)
+        self.original_test_runs.append(dict(task=where, changed=names, passed=None, problem=text, receipts=[]))
+        return True
+
+    def _source_drift(self, current: dict) -> str:
+        """What changed in the project since ``current`` was read, or ''."""
+        from .project import Project
+        now = Project(self.project, exclude=self.config.project_excludes).contents()
+        return "" if now == current else _describe_tree_change(current, now)
+
+    def _original_tests_at_done(self) -> str:
+        """At DONE: the original tests again when run-start bytes differ.
+        Returns the refusal text, or '' when they pass or nothing changed;
+        a run that cannot check them is an open unverified finding."""
+        from .integration import added_selectors, changed_originals
+        from .project import Project
+        if not self._original_tests or not self.project:
+            return ""
+        current = Project(self.project, exclude=self.config.project_excludes).contents()
+        if self._selection_changed(current, "DONE"):
+            return ""
+        changed = (changed_originals(self._original_tests, current)
+                   + added_selectors(self._original_tests, current))
+        if not changed:
+            return ""
+        key = hashlib.sha256(b"".join(n.encode() + b"\0" + hashlib.sha256(d).digest()
+                                      for n, d in sorted(current.items()))).hexdigest()
+        cached = getattr(self, "_done_original_tests", None)
+        if cached and cached[0] == key:
+            return cached[1]
+        refusal = self._run_original_tests_at_done(current, changed)
+        self._done_original_tests = (key, refusal)
+        return refusal
+
+    def _run_original_tests_at_done(self, current: dict, changed: List[str]) -> str:
+        from .integration import run_original_tests
+        gate = self.config.integration_gate
+        if gate is None:
+            self._unverified_once("Run-start test files changed and no check is configured to "
+                                             "run the original tests against the delivered source.")
+            return ""
+        baseline, problem = run_original_tests(gate, self.project, self._original_tests, current)
+        self._verify_dependencies("during original tests (DONE)")
+        drift = self._source_drift(current)
+        if drift:
+            return ("\n\n--- DONE SENT BACK ---\nThe project changed while its original tests ran, so "
+                    "they prove nothing about the delivered source:\n" + drift[:1_000])
+        self.original_test_runs.append(dict(
+            task="DONE", changed=changed, passed=None if baseline is None else baseline.passed,
+            problem=problem, receipts=[dict(id=r.id, status=r.status, reason=r.reason, tests=r.tests)
+                                       for r in (baseline.receipts if baseline else ())]))
+        if baseline is None:
+            self._unverified_once(f"At DONE: run-start test files changed ({', '.join(changed)}) "
+                                             f"and the original tests were not run: {problem}")
+            return ""
+        failed = [r for r in baseline.receipts if r.required and r.status not in ("passed", "skipped")]
+        for receipt in baseline.receipts:
+            if receipt.status == "skipped":
+                self._unverified_once(f"At DONE: {receipt.id} did not run against the run-start "
+                                                 f"test files: {receipt.reason}")
+        if not failed:
+            return ""
+        return ("\n\n--- DONE SENT BACK ---\nThe project's original tests (their run-start versions) fail "
+                "against the delivered source:\n"
+                + "\n".join(f"- {r.id}: {r.status}: {r.reason}" for r in failed)
+                + "\nName a task that makes the code pass the original tests (with COVERS).")
 
     def _verifier_prompt(self, spec: TaskSpec, draft: str, verifier: str) -> str:
         label = resolve(verifier)
@@ -6517,6 +8101,7 @@ class Session:
             "verify it. End your reply with exactly one line, VERDICT: ACCEPT or "
             "VERDICT: REJECT; that line is read as your decision, and a REJECT must "
             "name at least one BLOCKING: or UNRESOLVED: finding above it."
+            + self._review_turn_budget_note(verifier)
         )
 
     def _mechanical_close_out(self, lead: str, spec: TaskSpec, task: TaskMemory):
@@ -6865,7 +8450,10 @@ _KIND_REQUEST = (
     "one of: " + ", ".join(sorted(ROUTING)) + ". Difficulty is one of: rote, "
     "simple, standard, complex -- judge it by how many logical steps the task "
     "takes and what breaks if it is wrong. Most well-sized tasks are simple; "
-    "reserve complex for genuinely hard reasoning. Then the task on the "
+    "reserve complex for genuinely hard reasoning. frontend means a page a user sees "
+    "in a browser renders differently, and commits the task to a real-browser capture; "
+    "code with no page, template, stylesheet or browser in its acceptance is not frontend, "
+    "even when it is JavaScript. Then the task on the "
     "following line. Omit the line if none fits. The KIND line is read only within "
     f"the first {MAX_PREFACE_LINES} lines of the reply; later it is prose and the task "
     "is routed as general/simple. In those same lines no line may begin with ASK:, "

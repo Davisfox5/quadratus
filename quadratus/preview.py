@@ -194,6 +194,116 @@ def _timeout(value, name: str) -> float:
     return float(value)
 
 
+#: Python options that take no value, as single letters (combinable: -uB).
+_PY_FLAGS = set("bBdEIOPqRsSux")
+#: Node options whose value is the next argument.
+_NODE_VALUED = {"-r", "--require", "--import", "--loader", "--experimental-loader", "-C", "--conditions",
+                "--input-type", "--title", "--env-file", "--redirect-warnings", "--icu-data-dir"}
+#: Node long options that take no value. Any other long option is refused:
+#: an option the grammar does not know may take a value, and then the
+#: script it would name is a guess (Codex review of 0a99ee2..6cf72f4).
+_NODE_FLAGS = {"--enable-source-maps", "--no-warnings", "--no-deprecation", "--trace-warnings",
+               "--trace-deprecation", "--trace-uncaught", "--throw-deprecation", "--pending-deprecation",
+               "--preserve-symlinks", "--preserve-symlinks-main", "--abort-on-uncaught-exception",
+               "--experimental-vm-modules", "--no-experimental-fetch", "--inspect", "--inspect-brk",
+               "--frozen-intrinsics", "--disable-proto=delete", "--no-addons", "--no-global-search-paths"}
+#: Node long options accepted only in their ``--option=value`` form.
+_NODE_EQUALS = {"--inspect", "--inspect-brk", "--inspect-port", "--max-old-space-size", "--stack-size",
+                "--unhandled-rejections", "--disable-proto", "--dns-result-order", "--experimental-specifier-resolution"}
+#: Options that print or open a prompt and exit: never a preview.
+_NOT_A_SERVER = {"-h", "--help", "-V", "-v", "--version", "-i", "--interactive", "-c", "--check", "-"}
+
+
+def _operand(option: str, value: str, name: str) -> None:
+    """``-m``, ``-c``, ``-e`` and ``-p`` run what follows them; with nothing
+    there the interpreter exits with a usage error instead of serving."""
+    if not value.strip() or (option == "-m" and value.startswith("-")):
+        what = "a module name" if option == "-m" else "code to run"
+        raise ValueError(f"capture profile preview runs {name} {option} without {what}; "
+                         f"give it one, or name the project file it serves")
+
+
+def _interpreter_script(argv, root: Optional[Path] = None) -> Optional[str]:
+    """The script file a ``python`` or ``node`` preview command runs, found
+    through a bounded option grammar; None when the command runs a module or
+    inline code (``python -m``/``-c``, ``node -e``/``-p``) or is not one of
+    those interpreters. Raises ValueError for a form the grammar does not
+    know, since the harness cannot say what it would run."""
+    name = Path(argv[0]).name
+    is_python = re.fullmatch(r"python[\d.]*", name) is not None
+    if not is_python and name != "node":
+        return None
+    if argv[0] != name:
+        # A path, not a bare interpreter name: a project file that is merely
+        # named like one (./python3, <project>/python3) is the program itself.
+        first = Path(argv[0])
+        if not first.is_absolute():
+            return None
+        if root is not None:
+            try:
+                if first.resolve().is_relative_to(Path(root).resolve()) or first.parent.resolve().is_relative_to(
+                        Path(root).resolve()):
+                    return None
+            except (OSError, RuntimeError):
+                return None
+    args, i = list(argv[1:]), 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            i += 1
+            break
+        if not arg.startswith("-") or arg == "-":
+            break
+        if is_python:
+            if arg[:2] in ("-m", "-c"):
+                _operand(arg[:2], arg[2:] if len(arg) > 2 else (args[i + 1] if i + 1 < len(args) else ""), name)
+                return None                       # a module or inline code, not a file
+            if arg in ("-W", "-X"):
+                i += 2
+                continue
+            if arg[:2] in ("-W", "-X"):
+                i += 1
+                continue
+            if not arg.startswith("--") and len(arg) > 1 and set(arg[1:]) <= _PY_FLAGS:
+                i += 1
+                continue
+        else:
+            option = arg.split("=", 1)[0]
+            if option in ("-e", "--eval", "-p", "--print"):
+                _operand(option, arg.split("=", 1)[1] if "=" in arg
+                         else (args[i + 1] if i + 1 < len(args) else ""), name)
+                return None
+            if option in _NODE_VALUED:
+                i += 1 if "=" in arg else 2
+                continue
+            if arg in _NODE_FLAGS or ("=" in arg and option in _NODE_EQUALS and arg.split("=", 1)[1]):
+                i += 1
+                continue
+        raise ValueError(f"capture profile preview option {arg[:40]!r} is not one the harness can read; "
+                         f"start the {name} preview as '{name} [options] <script in the project>'"
+                         + (" or 'python -m <module>'" if is_python else ""))
+    if i >= len(args) or args[i] == "-":
+        raise ValueError(f"capture profile preview runs {name} with no script; name the project file it serves")
+    return args[i]
+
+
+def _project_relative(argument: str) -> str:
+    """A preview argument with ``{project}`` written the way ``env`` accepts
+    it, made project-relative: the preview runs in the project, so
+    ``{project}/x`` is ``x`` and ``{project}`` alone is ``.``. Any other
+    ``{name}`` is refused, because nothing substitutes it and it would reach
+    the command literally (UI diagnostic lane on 4a273a3)."""
+    head, sep, value = argument.partition("=") if argument.startswith("-") else ("", "", argument)
+    if value == "{project}":
+        value = "."
+    elif value.startswith("{project}/"):
+        value = value[len("{project}/"):] or "."
+    if re.search(r"\{[^{}]*\}", head + value):
+        raise ValueError(f"capture profile preview argument {argument[:60]!r} has a placeholder nothing "
+                         "substitutes; write {project} or {project}/relative, or a project-relative path")
+    return head + sep + value
+
+
 def profile_from_dict(data, root) -> CaptureProfile:
     """Validate an operator profile against the selected project ``root``.
 
@@ -210,6 +320,7 @@ def profile_from_dict(data, root) -> CaptureProfile:
     if (not isinstance(argv, list) or not argv
             or any(not isinstance(a, str) or not a or _SHELL.search(a) for a in argv)):
         raise ValueError("capture profile preview must be an argv list with no shell syntax")
+    argv = [_project_relative(a) for a in argv]
     first = argv[0]
     # A conventional interpreter may live outside the project (its absolute
     # path, by basename); any other executable is a project file.
@@ -231,6 +342,15 @@ def profile_from_dict(data, root) -> CaptureProfile:
             problem = _path_problem(value, root)
             if problem:
                 raise ValueError(f"capture profile preview argument {argument[:60]!r} is {problem}")
+    # The script an interpreter is told to run must be in the project now: a
+    # wrong path otherwise surfaces only when the harness first previews,
+    # after every editing and review call of the task has been spent (UI
+    # diagnostic lane on 4a273a3: 1.48M tokens, then exit 2). The operand is
+    # found through the interpreter's own option grammar (Codex review of
+    # 3e95645: python -u missing.py and an extensionless script slipped by).
+    script = _interpreter_script(argv, root)
+    if script is not None and not (root / script).is_file():
+        raise ValueError(f"capture profile preview script {script[:80]!r} is not a file in the project")
     origin = data.get("origin")
     match = _ORIGIN.fullmatch(origin) if isinstance(origin, str) else None
     if not match or not 1024 <= int(match.group(2)) <= 65535:
@@ -419,8 +539,19 @@ def running(profile: CaptureProfile, root, deadline: Optional[float] = None):
         shutil.rmtree(tempdir, ignore_errors=True)
 
 
-def capture_argv(profile: CaptureProfile, task_id: str, capture: dict) -> List[str]:
-    """The harness's own capture command for a task's declared capture."""
+#: How a harness measurement that could not be read is written on the
+#: capture command: present, and never a match.
+MISSING_DIGEST = "missing"
+
+
+def capture_argv(profile: CaptureProfile, task_id: str, capture: dict, view: Optional[str] = None,
+                 attempt: Optional[str] = None, measured: Optional[dict] = None) -> List[str]:
+    """The harness's own capture command for a task's declared capture;
+    ``view`` renders that one width only, under the capture's ``attempt``
+    token so the views of one attempt combine and nothing older does, and
+    ``measured`` hands the capture the harness's receipt for the views
+    already taken, so a sibling is reused only when it still carries
+    exactly those digests."""
     target = profile.origin + _web_path(capture.get("path", "/"), "capture path")
     # -P and a working directory outside the project: a project folder named
     # quadratus can never stand in for the harness's own capture module
@@ -430,27 +561,99 @@ def capture_argv(profile: CaptureProfile, task_id: str, capture: dict) -> List[s
     for step in capture.get("steps") or []:
         if step.get("action") == "file":
             argv += ["--upload", step["selector"], step["path"]]
+        elif step.get("action") == "confirm":
+            argv += ["--confirm", step["selector"], step["message"]]
         else:
             argv += [f"--{step['action']}", step["selector"]]
+    for name, files in sorted((measured or {}).items()):
+        for leaf, digest in sorted((files or {}).items()):
+            # A digest that could not be read travels as "missing", never as
+            # nothing: dropping it would turn a held measurement back into
+            # self-capture reuse (Codex review of 4a273a3).
+            argv += ["--measured", name, leaf, digest if isinstance(digest, str) else MISSING_DIGEST]
+    if view:
+        argv += ["--view", view]
+    if attempt:
+        argv += ["--attempt", attempt]
     return argv
 
 
-def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict) -> str:
+def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict,
+                 receipt: Optional[dict] = None) -> str:
     """Preview, capture the task's declared state, stop. Returns "" on success
-    or why it failed; never raises for a preview or capture failure."""
+    or why it failed; never raises for a preview or capture failure.
+
+    ``receipt``, when given, is filled with each view's file digests as the
+    harness measures them right after that view's capture process ends
+    (``design_evidence.view_receipt``): a record kept outside the project,
+    for ``check_records(receipt=...)`` to hold the summary to.
+
+    A declaration that changes the preview's state (``mutates_preview``) is
+    captured one view per preview: the preview is started, the view
+    rendered and the preview stopped, then again for the next view, so the
+    second view meets the profile's own seed and not the state the first
+    view left (Codex, 6038178890). Whether the profile reseeds on start is
+    the profile's property; a view whose final wait was already satisfied
+    before its steps is caught by the evidence check as a declaration
+    problem, never passed off as proof."""
     root = Path(root)
-    argv = capture_argv(profile, task_id, capture)
-    package = str(Path(__file__).resolve().parent.parent)
     deadline = time.monotonic() + profile.total_timeout
+    if mutates_preview(capture):
+        import secrets
+
+        from .design_evidence import VIEWPORTS, view_receipt
+        attempt = secrets.token_hex(8)
+        # One capture allowance for the whole attempt, spent across the
+        # views, beside the one total deadline (Codex review of 4a51291:
+        # each view had been granted the full allowance again).
+        allowance = float(profile.capture_timeout)
+        taken: dict = {}
+        for view in VIEWPORTS:
+            # The views already measured travel with the next capture, so a
+            # sibling is reused only against the harness's own receipt.
+            failure, spent = _capture_once(profile, root,
+                                           capture_argv(profile, task_id, capture, view, attempt, measured=taken),
+                                           deadline, allowance)
+            if failure:
+                return failure
+            taken[view] = view_receipt(root, task_id, view)
+            if receipt is not None:
+                receipt[view] = taken[view]
+            unread = sorted(leaf for leaf, digest in taken[view].items() if not isinstance(digest, str))
+            if unread:
+                # A view the harness cannot measure is not a view the next
+                # one may be reused beside: the attempt stops unverified.
+                return (f"the {view} capture left {', '.join(unread)} unreadable, so the harness could not "
+                        "measure it; the attempt stops before the next view")
+            allowance -= spent
+        return ""
+    failure, _ = _capture_once(profile, root, capture_argv(profile, task_id, capture), deadline,
+                               float(profile.capture_timeout))
+    if not failure and receipt is not None:
+        from .design_evidence import VIEWPORTS, view_receipt
+        for view in VIEWPORTS:
+            receipt[view] = view_receipt(root, task_id, view)
+    return failure
+
+
+def _capture_once(profile: CaptureProfile, root: Path, argv: List[str], deadline: float, allowance: float):
+    """One preview around one capture command: ``(failure, seconds the
+    capture itself took)``, the capture bounded by ``allowance`` and by
+    what is left of the deadline."""
+    package = str(Path(__file__).resolve().parent.parent)
+    spent = 0.0
     try:
         with running(profile, root, deadline):
             env = dict(_environment())
             env["PYTHONPATH"] = package + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
             # What is left of the one budget, never a fresh full timeout.
-            left = min(profile.capture_timeout, deadline - time.monotonic())
+            left = min(allowance, deadline - time.monotonic())
             if left <= 0:
-                return f"the preview used the whole {profile.total_timeout:g}s budget before the capture"
+                return (f"the preview used the whole {profile.total_timeout:g}s budget before the capture"
+                        if allowance > 0 else
+                        f"the {profile.capture_timeout:g}s capture allowance was spent on an earlier view"), spent
             argv = [str(root.resolve()) if a == "{root}" else a for a in argv]
+            started = time.monotonic()
             capture = subprocess.Popen(argv, cwd=package, env=env, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                        start_new_session=True)
@@ -459,17 +662,20 @@ def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict) -> 
                 try:
                     capture.wait(timeout=left)
                 except subprocess.TimeoutExpired:
-                    return f"the capture did not finish within {left:.0f}s of the {profile.total_timeout:g}s budget"
+                    spent = time.monotonic() - started
+                    return (f"the capture did not finish within {left:.0f}s of the {profile.total_timeout:g}s "
+                            f"budget"), spent
+                spent = time.monotonic() - started
                 if capture.returncode != 0:
-                    return f"the capture exited with {capture.returncode}: " + output.tail()[-400:]
+                    return f"the capture exited with {capture.returncode}: " + output.tail()[-400:], spent
             finally:
                 # Whatever happened, the capture and everything it started
                 # (the browser, a child holding its output) are stopped.
                 _stop(capture)
                 output.close()
     except PreviewFailed as exc:
-        return CaptureFailure(str(exc), exc.origin)
-    return ""
+        return CaptureFailure(str(exc), exc.origin), spent
+    return "", spent
 
 
 def validate_capture(capture) -> dict:
@@ -485,12 +691,15 @@ def validate_capture(capture) -> dict:
         raise ValueError(f"SCOPE capture steps must be a list of at most {MAX_STEPS} steps")
     out = []
     for step in steps:
-        if (not isinstance(step, dict) or step.get("action") not in ("click", "wait", "file")
+        if (not isinstance(step, dict) or step.get("action") not in ("click", "wait", "file", "confirm")
                 or not isinstance(step.get("selector"), str) or not step["selector"].strip()
-                or len(step["selector"]) > MAX_SELECTOR_CHARS or set(step) - {"action", "selector", "path"}
-                or (step["action"] == "file") != isinstance(step.get("path"), str)):
-            raise ValueError("SCOPE capture steps need action click, wait or file, a selector, "
-                             "and a path for file steps only")
+                or len(step["selector"]) > MAX_SELECTOR_CHARS or set(step) - {"action", "selector", "path", "message"}
+                or (step["action"] == "file") != isinstance(step.get("path"), str)
+                or (step["action"] == "confirm") != isinstance(step.get("message"), str)
+                or (step["action"] == "confirm" and (not step["message"].strip()
+                                                     or len(step["message"]) > MAX_SELECTOR_CHARS))):
+            raise ValueError("SCOPE capture steps need action click, wait, confirm or file, a selector, "
+                             "a path for file steps only and a message for confirm steps only")
         if step["action"] == "file":
             # Syntax and containment now; which task owns a fixture is checked
             # at dispatch, existence and hash by the capture (a repair may
@@ -509,5 +718,12 @@ def validate_capture(capture) -> dict:
                     or any(ord(c) < 32 for c in upload)):
                 raise ValueError("SCOPE capture file steps must name a non-hidden project file or "
                                  ".quadratus/capture-fixtures/<task>/<name>")
-        out.append({k: (v.strip() if k == "selector" else v) for k, v in step.items()})
+        out.append({k: (v.strip() if k in ("selector", "message") else v) for k, v in step.items()})
     return dict(path=path, steps=out)
+
+
+def mutates_preview(capture: dict) -> bool:
+    """Whether a declaration changes the preview's state (a confirm step):
+    such a capture gets one preview per view, so the second view starts
+    from the profile's own seed and not from what the first view did."""
+    return any(s.get("action") == "confirm" for s in (capture.get("steps") or []))

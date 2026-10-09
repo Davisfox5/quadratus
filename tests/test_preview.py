@@ -5,6 +5,7 @@ group is really signalled, and a real browser captures the page where one is
 available. No model is involved.
 """
 
+import contextlib
 import json
 import os
 import socket
@@ -82,6 +83,41 @@ def _server(port, directory="."):
     (dict(env={"APP_X": "$(id)"}), "plain string"),
     (dict(ready_status=404), "2xx"),
     (dict(total_timeout=0), "total_timeout"),
+    (dict(preview=["python", "{root}/app.py"]), "placeholder nothing substitutes"),
+    (dict(preview=["python", "app.py", "--dir={home}"]), "placeholder nothing substitutes"),
+    (dict(preview=["python", "{project}/../outside.py"]), "outside the project"),
+    (dict(preview=["python", "missing/preview.py"]), "is not a file in the project"),
+    (dict(preview=["node", "server.mjs"]), "is not a file in the project"),
+    # Codex review of 3e95645: options before the script, and extensionless scripts.
+    (dict(preview=["python", "-u", "missing.py"]), "is not a file in the project"),
+    (dict(preview=["python", "-B", "missing.py"]), "is not a file in the project"),
+    (dict(preview=["python", "-X", "utf8", "missing.py"]), "is not a file in the project"),
+    (dict(preview=["python", "-Xutf8", "-uB", "missing.py"]), "is not a file in the project"),
+    (dict(preview=["python", "-W", "ignore", "--", "missing.py"]), "is not a file in the project"),
+    (dict(preview=["node", "--no-warnings", "missing.js"]), "is not a file in the project"),
+    (dict(preview=["node", "--require", "app.py", "missing.js"]), "is not a file in the project"),
+    (dict(preview=["python", "missing_script"]), "is not a file in the project"),
+    (dict(preview=["node", "missing_script"]), "is not a file in the project"),
+    (dict(preview=["python3.12", "-u", "missing_script"]), "is not a file in the project"),
+    (dict(preview=["python"]), "with no script"),
+    (dict(preview=["python", "-u"]), "with no script"),
+    (dict(preview=["python", "--version"]), "is not one the harness can read"),
+    (dict(preview=["python", "-i", "app.py"]), "is not one the harness can read"),
+    (dict(preview=["node", "-i"]), "is not one the harness can read"),
+    (dict(preview=["node", "--check", "app.py"]), "is not one the harness can read"),
+    # Codex review of 0a99ee2..6cf72f4: an unknown Node option may take a
+    # value, and a module or inline-code flag with nothing after it serves nothing.
+    (dict(preview=["node", "--frobnicate", "app.py"]), "is not one the harness can read"),
+    (dict(preview=["node", "--inspect-port", "9229", "app.py"]), "is not one the harness can read"),
+    (dict(preview=["node", "--max-old-space-size", "app.py"]), "is not one the harness can read"),
+    (dict(preview=["python", "-m"]), "-m without a module name"),
+    (dict(preview=["python", "-m", "-u"]), "-m without a module name"),
+    (dict(preview=["python", "-c"]), "-c without code to run"),
+    (dict(preview=["python", "-c", " "]), "-c without code to run"),
+    (dict(preview=["node", "-e"]), "-e without code to run"),
+    (dict(preview=["node", "-p"]), "-p without code to run"),
+    (dict(preview=["node", "--eval"]), "--eval without code to run"),
+    (dict(preview=["node", "--print="]), "--print without code to run"),
 ])
 def test_an_unusable_profile_is_refused(tmp_path, data, message):
     (tmp_path / "app.py").write_text("")
@@ -107,6 +143,42 @@ def test_operator_env_is_resolved_and_reaches_only_the_preview(tmp_path):
         pass
     assert (tmp_path / "seen.txt").read_text() == f"{port} {tmp_path.resolve()}"
     assert "APP_PORT" not in os.environ
+
+
+def test_project_placeholders_in_the_preview_command_are_made_project_relative(tmp_path):
+    """UI diagnostic lane on 4a273a3: the operator wrote {project}, which env
+    accepts, in the preview command, which ran it literally and exited 2
+    after the task's editing and review calls had all been spent."""
+    (tmp_path / "diagnostic").mkdir()
+    (tmp_path / "diagnostic" / "preview.py").write_text("")
+    profile = profile_from_dict(dict(preview=["python", "{project}/diagnostic/preview.py", "--root={project}"],
+                                     origin="http://127.0.0.1:5000"), tmp_path)
+    assert profile.preview == ("python", "diagnostic/preview.py", "--root=.")
+    profile = profile_from_dict(dict(preview=["python", "-m", "http.server", "5000"],
+                                     origin="http://127.0.0.1:5000"), tmp_path)
+    assert profile.preview == ("python", "-m", "http.server", "5000"), "a module run names no script"
+
+
+@pytest.mark.parametrize("argv", [
+    ["python", "-u", "app.py"], ["python", "-X", "utf8", "-B", "app.py"], ["python", "--", "app.py"],
+    ["python", "-m", "http.server", "5000"], ["python", "-mhttp.server"], ["python", "-c", "print(1)"],
+    ["python", "serve"], ["node", "--no-warnings", "serve"], ["node", "--env-file=.env.local", "serve"],
+    ["node", "-e", "require('http')"], ["node", "--require", "app.py", "serve"],
+    ["node", "--eval=require('http')"], ["node", "--inspect=9229", "serve"], ["node", "--inspect", "serve"],
+    ["node", "--max-old-space-size=512", "--enable-source-maps", "serve"],
+])
+def test_interpreter_options_modules_and_extensionless_scripts_are_read(tmp_path, argv):
+    (tmp_path / "app.py").write_text("")
+    (tmp_path / "serve").write_text("")
+    (tmp_path / ".env.local").write_text("")
+    profile = profile_from_dict(dict(preview=argv, origin="http://127.0.0.1:5000"), tmp_path)
+    assert profile.preview == tuple(argv)
+
+
+def test_a_project_file_named_like_an_interpreter_is_the_program_itself(tmp_path):
+    (tmp_path / "python3").write_text("#!/bin/sh\nexit 0\n")
+    for argv in (["./python3"], [str(tmp_path / "python3")]):
+        assert profile_from_dict(dict(preview=argv, origin="http://127.0.0.1:5000"), tmp_path).preview == tuple(argv)
 
 
 def test_a_usable_profile_is_accepted(tmp_path):
@@ -722,3 +794,69 @@ def test_pinning_that_cannot_be_set_up_fails_the_capture(tmp_path, monkeypatch):
             render_page(f"http://127.0.0.1:{port}/index.html", out_dir=tmp_path / "out",
                         allow_navigation=lambda url: url.startswith(f"http://127.0.0.1:{port}/"),
                         pin_requests=True)
+
+
+def test_a_state_changing_capture_gets_one_preview_per_view(tmp_path, monkeypatch):
+    """Codex, 6038178890: one preview around both views lets the first view's
+    delete empty the list for the second; a confirm declaration restarts
+    the preview per view, a plain one does not."""
+    from quadratus.design_evidence import VIEWPORTS
+    starts, runs = [], []
+    original = preview.running
+
+    @contextlib.contextmanager
+    def counting(profile, root, deadline=None):
+        starts.append(1)
+        with original(profile, root, deadline):
+            yield
+    monkeypatch.setattr(preview, "running", counting)
+    # Writes what a capture writes, so the harness can measure each view
+    # (d6e145d: a view with nothing to measure stops the attempt).
+    (tmp_path / "record.py").write_text(
+        "import sys, pathlib\n"
+        "pathlib.Path('argv.log').open('a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+        f"root = pathlib.Path({str(tmp_path)!r}) / '.quadratus' / 'design-evidence' / 't1'\n"
+        "views = [sys.argv[sys.argv.index('--view') + 1]] if '--view' in sys.argv else ['desktop', 'mobile']\n"
+        "for view in views:\n"
+        "    (root / view).mkdir(parents=True, exist_ok=True)\n"
+        "    (root / view / 'page.png').write_bytes(b'png')\n"
+        "    (root / view / 'evidence.json').write_text('{}')\n")
+    real_argv = preview.capture_argv
+
+    def argv(profile, task_id, capture, view=None, attempt=None, measured=None):
+        runs.append(real_argv(profile, task_id, capture, view, attempt)[-4:-2] if view else ["(both)"])
+        assert (attempt is None) == (view is None), "the views of one attempt carry its token"
+        return [sys.executable, str(tmp_path / "record.py"), *(["--view", view] if view else [])]
+    monkeypatch.setattr(preview, "capture_argv", argv)
+    port = _free_port()
+    profile = _profile(tmp_path, _server(port), port, total_timeout=60)
+    confirm = {"path": "/", "steps": [dict(action="confirm", selector=".delete-btn", message="Delete project"),
+                                      dict(action="wait", selector="#projects-empty")]}
+    assert preview.capture_task(profile, tmp_path, "t1", confirm) == ""
+    assert len(starts) == len(VIEWPORTS) and runs == [["--view", v] for v in VIEWPORTS]
+    starts.clear()
+    runs.clear()
+    plain = {"path": "/", "steps": [dict(action="click", selector="#a"), dict(action="wait", selector="#b")]}
+    assert preview.capture_task(profile, tmp_path, "t1", plain) == ""
+    assert len(starts) == 1 and runs == [["(both)"]]
+
+
+def test_the_capture_allowance_is_shared_across_the_views_of_one_attempt(tmp_path, monkeypatch):
+    """Codex review of 4a51291: each view was granted the full capture
+    allowance again; the allowance is one per attempt, spent view by view."""
+    granted = []
+
+    def once(profile, root, argv, deadline, allowance):
+        granted.append(allowance)
+        view = argv[argv.index("--view") + 1]
+        folder = root / ".quadratus" / "design-evidence" / "t1" / view
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "page.png").write_bytes(b"png")
+        (folder / "evidence.json").write_text("{}")
+        return "", 35.0
+    monkeypatch.setattr(preview, "_capture_once", once)
+    profile = _profile(tmp_path, _server(5000), 5000, total_timeout=300, capture_timeout=90)
+    confirm = {"path": "/", "steps": [dict(action="confirm", selector=".delete-btn", message="Delete project Alpha Cup?"),
+                                      dict(action="wait", selector="#projects-empty")]}
+    assert preview.capture_task(profile, tmp_path, "t1", confirm) == ""
+    assert granted == [90.0, 55.0]

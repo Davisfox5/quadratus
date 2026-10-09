@@ -7,8 +7,10 @@ step rules offline, then drive a real headless browser on tiny generic pages:
 a working dialog, an inert launcher, a missing selector, a blocked navigation.
 """
 
+import hashlib
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -754,6 +756,7 @@ def test_only_a_tasks_declared_evidence_is_furnished_to_a_review_copy(tmp_path):
     evidence(root, "t1", age=0)
     (root / ".quadratus" / "runs").mkdir()
     (root / ".quadratus" / "runs" / "secret.json").write_text("{}")
+    (root / ".quadratus" / "design-evidence" / "t1" / "desktop" / "evidence.json").unlink()
     (root / ".quadratus" / "design-evidence" / "t1" / "desktop" / "evidence.json").symlink_to(
         root / ".quadratus" / "runs" / "secret.json")
     copy = tmp_path / "copy"
@@ -941,6 +944,7 @@ def test_evidence_is_copied_only_for_the_calling_task(tmp_path):
     assert [r for _, r in evidence_refusals(root, names, "t2")] == ["another task's evidence"] * 2
     assert evidence_refusals(root, names, "t1") == []
     missing = [".quadratus/design-evidence/t1/mobile/evidence.json"]
+    (root / missing[0]).unlink()
     assert evidence_refusals(root, missing, "t1") == [(missing[0], "missing")]
     assert evidence_refusals(root, names * 5, "t1")[-1] == ("", "more than 8 evidence files")
 
@@ -1051,7 +1055,8 @@ def test_the_fixture_verifier_reads_nothing_outside_its_boundary(tmp_path, monke
     monkeypatch.setattr(de, "_digest", lambda path: read.append(str(path)))
     passed, problem = check(root, "t1", 0)[:2]
     assert not passed and "is not a permitted fixture now" in problem
-    assert read == [], "no byte of a path outside the fixture boundary was read"
+    assert all(Path(p).is_relative_to(folder) for p in read), \
+        "no byte of a path outside the fixture boundary was read (the capture's own files are digested)"
 
 
 def test_a_fixture_step_without_a_valid_digest_is_unverified(tmp_path):
@@ -1065,3 +1070,679 @@ def test_a_fixture_step_without_a_valid_digest_is_unverified(tmp_path):
         view["steps"] = [dict(n=1, action="file", selector="#f", file="fixtures/rows.csv", ok=True)]
     (folder / "summary.json").write_text(json.dumps(summary))
     assert "has no valid recorded digest" in check(root, "t1", 0)[1]
+
+
+class _DialogPage(_FakePage):
+    """A page whose click opens a dialog, answered through the handler
+    registered with ``once``."""
+
+    def __init__(self, dialog=("confirm", "Delete project Alpha Cup?"), click_error=None, dialogs=None,
+                 error_after=None, pause_error=None):
+        super().__init__()
+        self.handlers = {}
+        self.dialog = dialog
+        self.dialogs = dialogs
+        self.answered = []
+        self.click_error = click_error
+        self.error_after = error_after      # raised by the click after its dialogs were handled
+        self.pause_error = pause_error      # raised by the pause that follows the click
+
+    def wait_for_timeout(self, ms):
+        super().wait_for_timeout(ms)
+        if self.pause_error:
+            raise self.pause_error
+
+    def on(self, event, handler):
+        self.handlers[event] = handler
+
+    def remove_listener(self, event, handler):
+        if self.handlers.get(event) is handler:
+            del self.handlers[event]
+
+    def click(self, selector, timeout):
+        super().click(selector, timeout)
+        if self.click_error:
+            raise self.click_error
+        page = self
+        for kind, text in (self.dialogs or ([self.dialog] if self.dialog else [])):
+            if "dialog" not in self.handlers:
+                break
+
+            class Dialog:
+                type, message = kind, text
+
+                def accept(self):
+                    page.answered.append("accepted")
+
+                def dismiss(self):
+                    page.answered.append("dismissed")
+            self.handlers["dialog"](Dialog())
+        if self.error_after:
+            raise self.error_after
+
+
+CONFIRM = dict(action="confirm", selector=".delete-btn", message="Delete project Alpha Cup?")
+
+
+def test_a_confirm_step_accepts_only_the_declared_confirm_dialog():
+    """Series rule-58a4625 f5: the empty list sits behind a confirm dialog
+    that a plain click leaves unanswered, so the browser cancels the delete."""
+    import time
+
+    from quadratus.browser import _run_steps
+    page = _DialogPage()
+    records = _run_steps(page, [dict(CONFIRM), dict(action="wait", selector="#projects-empty:not([hidden])")],
+                         [], 5000, time.monotonic() + 5)
+    assert [r["ok"] for r in records] == [True, True]
+    assert records[0]["dialog"] == dict(type="confirm", message="Delete project Alpha Cup?", accepted=True)
+    assert page.answered == ["accepted"]
+    assert [c[0] for c in page.calls] == ["click", "pause", "wait"]
+
+
+@pytest.mark.parametrize("dialog, said", [
+    (("confirm", "Reset everything?"), "did not match: confirm 'Reset everything?'"),
+    (("confirm", "Delete project Alpha Cup? Also delete every other project?"), "did not match: confirm"),
+    (("alert", "Delete project Alpha Cup?"), "did not match: alert"),
+    (("prompt", "Delete project Alpha Cup?"), "did not match: prompt"),
+    (None, "no dialog opened"),
+])
+def test_an_unexpected_or_missing_dialog_fails_the_confirm_step_and_is_dismissed(dialog, said):
+    """Codex, 6038178890: a dialog response is narrowly matched; anything
+    else stays an honest failed step, and nothing is ever auto-accepted."""
+    import time
+
+    from quadratus.browser import _run_steps
+    page = _DialogPage(dialog)
+    records = _run_steps(page, [dict(CONFIRM), dict(action="wait", selector="#projects-empty")],
+                         [], 5000, time.monotonic() + 5)
+    assert len(records) == 1 and records[0]["ok"] is False and said in records[0]["error"]
+    assert page.answered == (["dismissed"] if dialog else [])
+    assert "Delete project Alpha Cup?" in records[0]["error"], "the expected text is named"
+
+
+def test_confirm_steps_parse_validate_and_render_like_the_others(tmp_path):
+    from quadratus.preview import CaptureProfile, capture_argv, validate_capture
+    _, steps = parse_steps(["p.html", "t1", "--confirm", ".delete-btn", "Delete project Alpha Cup?",
+                            "--wait", "#projects-empty"])
+    assert steps == [CONFIRM, dict(action="wait", selector="#projects-empty")]
+    checked, _ = validate_steps(steps, "http://127.0.0.1:1/", tmp_path, "t1")
+    assert checked == steps
+    capture = validate_capture({"path": "/", "steps": steps})
+    assert capture["steps"] == steps
+    profile = CaptureProfile(preview=("true",), origin="http://127.0.0.1:1")
+    argv = capture_argv(profile, "t1", capture)
+    assert argv[-5:] == ["--confirm", ".delete-btn", "Delete project Alpha Cup?", "--wait", "#projects-empty"]
+    assert capture_argv(profile, "t1", capture, "mobile", "abcdef0123456789")[-4:] == [
+        "--view", "mobile", "--attempt", "abcdef0123456789"]
+    with pytest.raises(ValueError):
+        parse_steps(["p.html", "t1", "--confirm", ".delete-btn"])
+    for bad in (dict(action="confirm", selector=".d"), dict(action="confirm", selector=".d", message="  "),
+                dict(action="click", selector=".d", message="x")):
+        with pytest.raises(ValueError):
+            validate_capture({"path": "/", "steps": [bad]})
+        with pytest.raises(ValueError):
+            validate_steps([bad], "http://127.0.0.1:1/", tmp_path, "t1")
+
+
+def _fake_render(root):
+    """A render_page that writes the files a view needs and reports its steps done."""
+    from quadratus.browser import PageEvidence
+
+    def render(target, *, out_dir, viewport=None, steps=None, **kwargs):
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "page.png").write_bytes(b"\x89PNG")
+        (out_dir / "evidence.json").write_text("{}")
+        done = [dict(n=i + 1, action=s["action"], selector=s["selector"], ok=True) for i, s in enumerate(steps or [])]
+        return PageEvidence(url=target, title="t", screenshot_path=str(out_dir / "page.png"), steps=done,
+                            document_width=viewport["width"] if viewport else None)
+    return render
+
+
+def _read_summary(root):
+    return json.loads((evidence_dir(root, "t1") / "summary.json").read_text())
+
+
+def test_a_single_view_capture_combines_only_siblings_of_the_same_attempt(tmp_path, monkeypatch):
+    """A state-changing declaration is captured one view per preview; the
+    second run keeps the first's view only as a sibling (same attempt,
+    target, source and declaration, every step passed, files present), the
+    returned dict and the exit code answer only for the views rendered now,
+    and a run that raises leaves nothing standing (Codex review of 4a51291)."""
+    from quadratus import browser
+    from quadratus import design_evidence as de
+    root = _project(tmp_path)
+    monkeypatch.setattr(browser, "render_page", _fake_render(root))
+    steps = [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]
+    page = str(root / "index.html")
+    out = capture(page, "t1", root, steps, views=["desktop"], attempt="aa" * 8)
+    assert set(out) == {"desktop"} and set(_read_summary(root)["views"]) == {"desktop"}
+    assert _read_summary(root)["attempt"] == "aa" * 8 and _read_summary(root)["steps"][0]["message"] == CONFIRM["message"]
+    out = capture(page, "t1", root, steps, views=["mobile"], attempt="aa" * 8)
+    assert set(out) == {"mobile"}, "the return answers for the views rendered now"
+    assert set(_read_summary(root)["views"]) == {"desktop", "mobile"}
+    # Another attempt, a changed declaration, a changed source or a failed
+    # sibling: the old view is history, never a sibling.
+    capture(page, "t1", root, steps, views=["desktop"], attempt="aa" * 8)
+    capture(page, "t1", root, steps, views=["mobile"], attempt="bb" * 8)
+    assert set(_read_summary(root)["views"]) == {"mobile"}
+    capture(page, "t1", root, steps, views=["desktop"], attempt="cc" * 8)
+    other = [dict(CONFIRM, message="Delete project Beta Bowl?"), dict(action="wait", selector="#projects-empty")]
+    capture(page, "t1", root, other, views=["mobile"], attempt="cc" * 8)
+    assert set(_read_summary(root)["views"]) == {"mobile"}
+    capture(page, "t1", root, steps, views=["desktop"], attempt="dd" * 8)
+    (root / "index.html").write_text("<p>changed</p>\n")
+    capture(page, "t1", root, steps, views=["mobile"], attempt="dd" * 8)
+    assert set(_read_summary(root)["views"]) == {"mobile"}
+
+    def failing(target, *, out_dir, viewport=None, steps=None, **kwargs):
+        evidence = _fake_render(root)(target, out_dir=out_dir, viewport=viewport, steps=steps)
+        evidence.steps[0] = dict(evidence.steps[0], ok=False, error="no dialog opened")
+        return evidence
+    monkeypatch.setattr(browser, "render_page", failing)
+    assert de.main([page, "t1", str(root), "--confirm", ".delete-btn", CONFIRM["message"],
+                    "--wait", "#projects-empty", "--view", "mobile", "--attempt", "ee" * 8]) == 1
+    monkeypatch.setattr(browser, "render_page", _fake_render(root))
+    assert de.main([page, "t1", str(root), "--confirm", ".delete-btn", CONFIRM["message"],
+                    "--wait", "#projects-empty", "--view", "desktop", "--attempt", "ee" * 8]) == 0, \
+        "a stale failed sibling never fails the next render"
+    assert set(_read_summary(root)["views"]) == {"desktop"}, "and it is not kept as a sibling either"
+    with pytest.raises(ValueError):
+        capture(page, "t1", root, steps, views=["tablet"])
+    assert de.main([page, "t1", str(root), "--view", "desktop", "--attempt", "not-hex"]) == 2
+
+    def broken(*a, **k):
+        raise RuntimeError("browser crashed")
+    monkeypatch.setattr(browser, "render_page", broken)
+    with pytest.raises(RuntimeError):
+        capture(page, "t1", root, steps, views=["mobile"], attempt="ee" * 8)
+    summary = _read_summary(root)
+    assert summary["views"] == {} and "capture_failed" in summary
+
+
+@pytest.mark.parametrize("page", [_DialogPage(None), _DialogPage(click_error=TimeoutError("click timed out")),
+                                  _DialogPage()])
+def test_the_dialog_handler_is_removed_on_every_exit(page):
+    """Codex review of ce35fb6: a once handler stays armed after a click with
+    no dialog or a timeout, so a later step's dialog is answered under the
+    old step's permission."""
+    import time
+
+    from quadratus.browser import _run_steps
+    _run_steps(page, [dict(CONFIRM)], [], 5000, time.monotonic() + 5)
+    assert "dialog" not in page.handlers
+
+
+def test_the_evidence_check_requires_the_declared_dialog_to_have_been_accepted():
+    from quadratus.design_evidence import _step_problem
+    requested = [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]
+    good = [dict(n=1, action="confirm", selector=".delete-btn", ok=True,
+                 dialog=dict(type="confirm", message="Delete project Alpha Cup?", accepted=True)),
+            dict(n=2, action="wait", selector="#projects-empty", ok=True)]
+    assert _step_problem("desktop", requested, good) is None
+    for bad in (None, dict(type="confirm", message="Reset?", accepted=True),
+                dict(type="confirm", message="Delete project Alpha Cup? Also delete every other project?", accepted=True),
+                dict(type="alert", message="Delete project Alpha Cup?", accepted=True),
+                dict(type="prompt", message="Delete project Alpha Cup?", accepted=True),
+                dict(type="confirm", message="Delete project Alpha Cup?", accepted=False)):
+        done = [dict(good[0], dialog=bad), good[1]]
+        assert "no record of the declared dialog being accepted" in _step_problem("desktop", requested, done)
+
+
+@pytest.mark.parametrize("dialogs", [
+    [("confirm", "Delete project Alpha Cup?"), ("confirm", "Delete project Alpha Cup?")],
+    [("confirm", "Delete project Alpha Cup?"), ("prompt", "Name the backup")],
+])
+def test_a_second_dialog_in_one_confirm_step_is_dismissed_recorded_and_fails_the_step(dialogs):
+    """Codex review of ca60892: two matching confirms were both accepted, and
+    a prompt after a valid confirm was dismissed but left out of the record."""
+    import time
+
+    from quadratus.browser import _run_steps
+    page = _DialogPage(dialogs=dialogs)
+    records = _run_steps(page, [dict(CONFIRM), dict(action="wait", selector="#projects-empty")],
+                         [], 5000, time.monotonic() + 5)
+    assert len(records) == 1 and records[0]["ok"] is False and "2 dialogs opened" in records[0]["error"]
+    assert page.answered == ["accepted", "dismissed"], "one permission, the first dialog only"
+    assert records[0]["dialog"]["accepted"] is True and records[0]["extra_dialogs"][0]["type"] == dialogs[1][0]
+    assert "dialog" not in page.handlers
+
+
+def test_the_evidence_check_requires_a_string_message_and_no_extra_dialogs():
+    from quadratus.design_evidence import _step_problem
+    requested = [dict(CONFIRM)]
+    good = dict(n=1, action="confirm", selector=".delete-btn", ok=True,
+                dialog=dict(type="confirm", message="Delete project Alpha Cup?", accepted=True))
+    assert _step_problem("desktop", requested, [good]) is None
+    listed = dict(good, dialog=dict(good["dialog"], message=["Delete project Alpha Cup?"]))
+    assert "no record of the declared dialog" in _step_problem("desktop", requested, [listed])
+    extra = dict(good, extra_dialogs=[dict(type="prompt", message="Name the backup", accepted=False)])
+    assert "no record of the declared dialog" in _step_problem("desktop", requested, [extra])
+
+
+def test_a_retained_view_stands_only_while_its_files_hash_as_captured(tmp_path, monkeypatch):
+    """Codex review of ca0ad65: a replaced page.png of the same size was kept
+    as the next render's sibling and accepted. Each rendered view now records
+    its files' digests; a retained view must still hash to them."""
+    from quadratus import browser
+    root = _project(tmp_path)
+    monkeypatch.setattr(browser, "render_page", _fake_render(root))
+    steps = [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]
+    page = str(root / "index.html")
+    capture(page, "t1", root, steps, views=["desktop"], attempt="ab" * 8)
+    files = _read_summary(root)["views"]["desktop"]["files"]
+    assert set(files) == {"page.png", "evidence.json"} and all(len(d) == 64 for d in files.values())
+    shot = evidence_dir(root, "t1") / "desktop" / "page.png"
+    shot.write_bytes(b"\x89PNG" + b"\0")        # another image under the same name and attempt
+    capture(page, "t1", root, steps, views=["mobile"], attempt="ab" * 8)
+    assert set(_read_summary(root)["views"]) == {"mobile"}, "the replaced desktop is history, not a sibling"
+    capture(page, "t1", root, steps, views=["desktop"], attempt="ac" * 8)
+    (evidence_dir(root, "t1") / "desktop" / "evidence.json").write_text('{"edited": true}')
+    capture(page, "t1", root, steps, views=["mobile"], attempt="ac" * 8)
+    assert set(_read_summary(root)["views"]) == {"mobile"}, "the record file is bound the same way"
+    capture(page, "t1", root, steps, views=["desktop"], attempt="ad" * 8)
+    capture(page, "t1", root, steps, views=["mobile"], attempt="ad" * 8)
+    assert set(_read_summary(root)["views"]) == {"desktop", "mobile"}, "untouched files are kept"
+
+
+def test_the_evidence_check_verifies_each_views_recorded_digests(tmp_path):
+    from quadratus.design_evidence import check_records
+    from tests.lifecycle.harness import evidence
+    evidence(tmp_path, "t1", age=0)
+    ok, problem, *_ = check_records(tmp_path, "t1", 0)
+    assert ok, problem
+    path = evidence_dir(tmp_path, "t1") / "summary.json"
+    summary = json.loads(path.read_text())
+    shot = evidence_dir(tmp_path, "t1") / "mobile" / "page.png"
+    shot.write_bytes(shot.read_bytes() + b"\0")
+    ok, problem, _, records = check_records(tmp_path, "t1", 0)
+    assert not ok and "mobile render page.png changed after the capture" in problem
+    assert any(r.get("mismatch") for r in records), "a digest that disagrees with the bytes is an observed mismatch"
+    evidence(tmp_path, "t1", age=0)
+    summary = json.loads(path.read_text())
+    del summary["views"]["desktop"]["files"]
+    path.write_text(json.dumps(summary))
+    ok, problem, _, records = check_records(tmp_path, "t1", 0)
+    assert not ok and "desktop render carries no record of its files' digests" in problem
+    assert not any(r.get("mismatch") for r in records), "a missing record is unverified, never a mismatch"
+    evidence(tmp_path, "t1", age=0)
+    summary = json.loads(path.read_text())
+    summary["views"]["desktop"]["files"]["other.txt"] = "0" * 64
+    path.write_text(json.dumps(summary))
+    ok, problem, *_ = check_records(tmp_path, "t1", 0)
+    assert not ok and "malformed digest record" in problem
+
+
+def test_a_dialog_record_keeps_the_compared_text_and_never_a_non_string():
+    """Codex review of ca0ad65: 700 leading spaces before the declared text
+    matched at the step and the raw record held only spaces, so the evidence
+    check refused a step that had passed; a numeric message coerced to the
+    declared text. The record is the compared text; a non-string never matches."""
+    import time
+
+    from quadratus.browser import _run_steps
+    from quadratus.design_evidence import _step_problem
+    page = _DialogPage(dialog=("confirm", " " * 700 + "Delete  project\n Alpha Cup? "))
+    records = _run_steps(page, [dict(CONFIRM)], [], 5000, time.monotonic() + 5)
+    assert records[0]["ok"] is True and records[0]["dialog"]["message"] == CONFIRM["message"]
+    assert "truncated" not in records[0]["dialog"]
+    assert _step_problem("desktop", [dict(CONFIRM)], records) is None
+    page = _DialogPage(dialog=("confirm", 42))
+    records = _run_steps(page, [dict(CONFIRM, message="42")], [], 5000, time.monotonic() + 5)
+    assert records[0]["ok"] is False and "did not match" in records[0]["error"]
+    assert records[0]["dialog"]["message"] is None and records[0]["dialog"]["message_repr"] == "42"
+    assert page.answered == ["dismissed"]
+    forged = [dict(records[0], ok=True, dialog=dict(records[0]["dialog"], accepted=True))]
+    assert "no record of the declared dialog" in _step_problem("desktop", [dict(CONFIRM, message="42")], forged)
+    long = "x" * 700
+    page = _DialogPage(dialog=("confirm", long))
+    records = _run_steps(page, [dict(CONFIRM)], [], 5000, time.monotonic() + 5)
+    assert records[0]["ok"] is False and records[0]["dialog"]["truncated"] is True
+    assert len(records[0]["dialog"]["message"]) == 600
+    forged = [dict(records[0], ok=True, dialog=dict(records[0]["dialog"], accepted=True))]
+    assert "no record of the declared dialog" in _step_problem("desktop", [dict(CONFIRM)], forged)
+
+
+@pytest.mark.parametrize("failing", ["click", "pause"])
+def test_dialog_records_survive_a_click_or_pause_that_fails_after_them(failing):
+    """Codex review of f30e8b4: a timeout after an accepted confirm and a
+    dismissed prompt recorded only the error, so the failed step could not
+    say whether the declared operation had already happened."""
+    import time
+
+    from quadratus.browser import _run_steps
+    dialogs = [("confirm", "Delete project Alpha Cup?"), ("prompt", "Name the backup")]
+    error = TimeoutError("navigation timed out")
+    page = _DialogPage(dialogs=dialogs, **({"error_after": error} if failing == "click" else {"pause_error": error}))
+    records = _run_steps(page, [dict(CONFIRM), dict(action="wait", selector="#projects-empty")],
+                         [], 5000, time.monotonic() + 5)
+    assert len(records) == 1 and records[0]["ok"] is False and "navigation timed out" in records[0]["error"]
+    assert records[0]["dialog"] == dict(type="confirm", message="Delete project Alpha Cup?", accepted=True)
+    assert records[0]["extra_dialogs"] == [dict(type="prompt", message="Name the backup", accepted=False)]
+    assert page.answered == ["accepted", "dismissed"] and "dialog" not in page.handlers
+    page = _DialogPage(dialog=None, pause_error=error)
+    records = _run_steps(page, [dict(CONFIRM)], [], 5000, time.monotonic() + 5)
+    assert records[0]["dialog"] is None and "navigation timed out" in records[0]["error"]
+
+
+def test_the_evidence_check_requires_every_capture_file_digest(tmp_path):
+    """Codex review of 180012d: a view whose evidence.json digest was removed
+    passed with the file present or deleted."""
+    from quadratus.design_evidence import check_records
+    from tests.lifecycle.harness import evidence
+    evidence(tmp_path, "t1", age=0)
+    path = evidence_dir(tmp_path, "t1") / "summary.json"
+    summary = json.loads(path.read_text())
+    del summary["views"]["desktop"]["files"]["evidence.json"]
+    path.write_text(json.dumps(summary))
+    ok, problem, _, records = check_records(tmp_path, "t1", 0)
+    assert not ok and "desktop render carries no record of its evidence.json digest" in problem
+    assert not any(r.get("mismatch") for r in records)
+    (evidence_dir(tmp_path, "t1") / "desktop" / "evidence.json").unlink()
+    ok, problem, *_ = check_records(tmp_path, "t1", 0)
+    assert not ok and "carries no record of its evidence.json digest" in problem
+    evidence(tmp_path, "t1", age=0)
+    (evidence_dir(tmp_path, "t1") / "desktop" / "evidence.json").unlink()
+    ok, problem, *_ = check_records(tmp_path, "t1", 0)
+    assert not ok and "desktop render evidence.json is missing or unreadable" in problem
+
+
+def test_a_symlinked_evidence_folder_is_an_observed_mismatch(tmp_path):
+    """Codex review of 180012d: the view folder replaced by a link to a tree
+    outside the project passed the leaf-only symlink check."""
+    import shutil
+
+    from quadratus import design_evidence as de
+    from quadratus.design_evidence import check_records
+    from tests.lifecycle.harness import evidence
+    root = tmp_path / "project"
+    evidence(root, "t1", age=0)
+    folder = evidence_dir(root, "t1")
+    elsewhere = tmp_path / "elsewhere"
+    shutil.move(str(folder / "desktop"), str(elsewhere))
+    (folder / "desktop").symlink_to(elsewhere, target_is_directory=True)
+    ok, problem, _, records = check_records(root, "t1", 0)
+    assert not ok and "desktop render folder desktop is a symlink, not a capture folder" in problem
+    assert any(r.get("mismatch") for r in records)
+    summary = json.loads((folder / "summary.json").read_text())
+    kept, refused = de._kept_views(folder, dict(summary, attempt="aa" * 8, steps=[]), {"desktop"}, target=summary["target"],
+                                   attempt="aa" * 8, source=summary["source_fingerprint"], declared=[])
+    assert kept == {} and refused["desktop"]["mismatch"] is True, "never kept as a sibling either"
+    (folder / "desktop").unlink()
+    shutil.move(str(elsewhere), str(folder / "desktop"))
+    shutil.move(str(folder), str(elsewhere))
+    folder.symlink_to(elsewhere, target_is_directory=True)
+    ok, problem, *_ = check_records(root, "t1", 0)
+    assert not ok and "folder t1 is a symlink" in problem
+
+
+def test_a_sibling_refused_for_changed_bytes_keeps_its_mismatch_classification(tmp_path, monkeypatch):
+    """Codex review of 180012d: the replaced desktop was dropped from the
+    merge and the check saw only an incomplete summary, not the observed
+    replacement."""
+    from quadratus import browser
+    from quadratus.design_evidence import check_records
+    root = _project(tmp_path)
+    monkeypatch.setattr(browser, "render_page", _fake_render(root))
+    steps = [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]
+    page = str(root / "index.html")
+    capture(page, "t1", root, steps, views=["desktop"], attempt="ab" * 8)
+    recorded_desktop = _read_summary(root)["views"]["desktop"]["files"]["page.png"]
+    (evidence_dir(root, "t1") / "desktop" / "page.png").write_bytes(b"\x89PNG" + b"\0")
+    capture(page, "t1", root, steps, views=["mobile"], attempt="ab" * 8)
+    summary = _read_summary(root)
+    assert set(summary["views"]) == {"mobile"}
+    refused = summary["not_kept"]["desktop"]
+    assert refused["problem"] == "page.png changed after the capture" and refused["mismatch"] is True
+    assert refused["file"] == "page.png" and refused["recorded"] == recorded_desktop, "the captured identity survives"
+    assert refused["observed"] == hashlib.sha256(b"\x89PNG\0").hexdigest(), "and the observed one"
+    ok, problem, _, records = check_records(root, "t1", 0)
+    assert not ok and problem == "the desktop render of this attempt was not kept: page.png changed after the capture"
+    assert records[0].get("mismatch") is True and "no well-formed summary.json" in records[1]["message"]
+    assert (records[0]["file"], records[0]["recorded"], records[0]["observed"]) == (
+        "page.png", refused["recorded"], refused["observed"])
+    # A sibling refused for a missing file is unverified, not a mismatch, and
+    # a clean merge carries no not_kept at all.
+    capture(page, "t1", root, steps, views=["desktop"], attempt="ac" * 8)
+    (evidence_dir(root, "t1") / "desktop" / "evidence.json").unlink()
+    capture(page, "t1", root, steps, views=["mobile"], attempt="ac" * 8)
+    missing = _read_summary(root)["not_kept"]["desktop"]
+    assert missing["mismatch"] is False and missing["file"] == "evidence.json" and "observed" not in missing, \
+        "a missing file never invents an observed digest"
+    ok, problem, _, records = check_records(root, "t1", 0)
+    assert not ok and not any(r.get("mismatch") for r in records)
+    capture(page, "t1", root, steps, views=["desktop"], attempt="ad" * 8)
+    capture(page, "t1", root, steps, views=["mobile"], attempt="ad" * 8)
+    assert "not_kept" not in _read_summary(root)
+
+
+def test_the_check_holds_the_summary_to_the_harness_receipt(tmp_path):
+    """Codex review of 180012d: the digests lived only in the same mutable
+    summary as the files, so replaced bytes beside a rewritten manifest
+    passed. The harness measures each view right after its own capture and
+    the check holds the summary to that measurement."""
+    from quadratus.design_evidence import check_records, view_receipt
+    from tests.lifecycle.harness import evidence
+    evidence(tmp_path, "t1", age=0)
+    receipt = {name: view_receipt(tmp_path, "t1", name) for name in ("desktop", "mobile")}
+    assert set(receipt["desktop"]) == {"page.png", "evidence.json"}
+    ok, problem, *_ = check_records(tmp_path, "t1", 0, receipt=receipt)
+    assert ok, problem
+    path = evidence_dir(tmp_path, "t1") / "summary.json"
+    shot = evidence_dir(tmp_path, "t1") / "desktop" / "page.png"
+    shot.write_bytes(shot.read_bytes() + b"\0")
+    summary = json.loads(path.read_text())
+    summary["views"]["desktop"]["files"]["page.png"] = hashlib.sha256(shot.read_bytes()).hexdigest()
+    path.write_text(json.dumps(summary))
+    ok, problem, *_ = check_records(tmp_path, "t1", 0)
+    assert ok, "without a receipt the rewritten manifest agrees with the bytes"
+    ok, problem, _, records = check_records(tmp_path, "t1", 0, receipt=receipt)
+    assert not ok and "desktop render page.png differs from the harness's measurement" in problem
+    assert any(r.get("mismatch") for r in records)
+    assert records[0]["file"] == "page.png" and records[0]["observed"] == receipt["desktop"]["page.png"]
+    assert records[0]["recorded"] == summary["views"]["desktop"]["files"]["page.png"]
+    ok, problem, _, records = check_records(tmp_path, "t1", 0, receipt={"mobile": receipt["mobile"]})
+    assert not ok and "desktop render was not measured by the harness in this attempt" in problem
+    assert not any(r.get("mismatch") for r in records)
+
+
+def test_capture_task_fills_the_receipt_from_each_views_files(tmp_path, monkeypatch):
+    from quadratus import preview
+    from quadratus.design_evidence import VIEWPORTS
+
+    def fake_capture(profile, root, argv, deadline, allowance):
+        view = argv[argv.index("--view") + 1] if "--view" in argv else None
+        for name in ([view] if view else list(VIEWPORTS)):
+            folder = evidence_dir(root, "t1") / name
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "page.png").write_bytes(b"\x89PNG" + name.encode())
+            (folder / "evidence.json").write_text("{}")
+        return "", 1.0
+    monkeypatch.setattr(preview, "_capture_once", fake_capture)
+    profile = preview.CaptureProfile(preview=("true",), origin="http://127.0.0.1:1", ready_timeout=1,
+                                     capture_timeout=90)
+    receipt = {}
+    confirm = {"path": "/", "steps": [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]}
+    assert preview.capture_task(profile, tmp_path, "t1", confirm, receipt=receipt) == ""
+    assert set(receipt) == {"desktop", "mobile"}
+    assert receipt["desktop"]["page.png"] == hashlib.sha256(b"\x89PNGdesktop").hexdigest()
+    assert receipt["mobile"]["evidence.json"] == hashlib.sha256(b"{}").hexdigest()
+    receipt = {}
+    assert preview.capture_task(profile, tmp_path, "t1", {"path": "/", "steps": []}, receipt=receipt) == ""
+    assert set(receipt) == {"desktop", "mobile"}, "a one-shot capture is measured for both views after it"
+    monkeypatch.setattr(preview, "_capture_once", lambda *a: ("the capture exited with 1: x", 1.0))
+    receipt = {}
+    assert preview.capture_task(profile, tmp_path, "t1", confirm, receipt=receipt).startswith("the capture exited")
+    assert receipt == {}, "a failed attempt leaves no receipt"
+
+
+def test_a_sibling_is_reused_only_against_the_harness_measurement(tmp_path, monkeypatch):
+    """Codex review of 2e57e94: the sibling rule read only the mutable
+    summary, so the receipt protected acceptance but not reuse. The harness
+    hands the capture its measurement of the views already taken."""
+    from quadratus import browser
+    from quadratus.design_evidence import check_records, view_receipt
+    root = _project(tmp_path)
+    monkeypatch.setattr(browser, "render_page", _fake_render(root))
+    steps = [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]
+    page = str(root / "index.html")
+    capture(page, "t1", root, steps, views=["desktop"], attempt="ba" * 8)
+    taken = {"desktop": view_receipt(root, "t1", "desktop")}
+    capture(page, "t1", root, steps, views=["mobile"], attempt="ba" * 8, measured=taken)
+    assert set(_read_summary(root)["views"]) == {"desktop", "mobile"}, "measured and unchanged: kept"
+    capture(page, "t1", root, steps, views=["desktop"], attempt="bb" * 8)
+    taken = {"desktop": view_receipt(root, "t1", "desktop")}
+    shot = evidence_dir(root, "t1") / "desktop" / "page.png"
+    shot.write_bytes(b"\x89PNG" + b"\0")
+    path = evidence_dir(root, "t1") / "summary.json"
+    summary = json.loads(path.read_text())
+    summary["views"]["desktop"]["files"]["page.png"] = hashlib.sha256(shot.read_bytes()).hexdigest()
+    path.write_text(json.dumps(summary))
+    capture(page, "t1", root, steps, views=["mobile"], attempt="bb" * 8, measured=taken)
+    summary = _read_summary(root)
+    assert set(summary["views"]) == {"mobile"}, "a rewritten manifest beside replaced bytes is not a sibling"
+    refused = summary["not_kept"]["desktop"]
+    assert refused["mismatch"] is True and refused["file"] == "page.png"
+    assert refused["recorded"] == hashlib.sha256(shot.read_bytes()).hexdigest()
+    assert refused["observed"] == taken["desktop"]["page.png"]
+    ok, problem, _, records = check_records(root, "t1", 0, receipt=taken)
+    assert not ok and records[0]["mismatch"] is True and "differs from the harness's measurement" in problem
+    capture(page, "t1", root, steps, views=["desktop"], attempt="bc" * 8)
+    capture(page, "t1", root, steps, views=["mobile"], attempt="bc" * 8, measured={})
+    assert set(_read_summary(root)["views"]) == {"mobile"}
+    assert _read_summary(root)["not_kept"]["desktop"] == dict(
+        problem="was not measured by the harness in this attempt", mismatch=False)
+
+
+def test_the_capture_command_carries_and_checks_the_measurement(tmp_path, monkeypatch):
+    from quadratus import browser
+    from quadratus import design_evidence as de
+    from quadratus.design_evidence import view_receipt
+    from quadratus.preview import CaptureProfile, capture_argv
+    profile = CaptureProfile(preview=("true",), origin="http://127.0.0.1:1")
+    capture_decl = {"path": "/", "steps": [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]}
+    argv = capture_argv(profile, "t1", capture_decl, "mobile", "ab" * 8,
+                        measured={"desktop": {"page.png": "0" * 64, "evidence.json": "1" * 64}})
+    tail = argv[-12:]
+    assert tail[:8] == ["--measured", "desktop", "evidence.json", "1" * 64, "--measured", "desktop", "page.png", "0" * 64]
+    assert tail[8:] == ["--view", "mobile", "--attempt", "ab" * 8]
+    root = _project(tmp_path)
+    monkeypatch.setattr(browser, "render_page", _fake_render(root))
+    page = str(root / "index.html")
+    base = [page, "t1", str(root), "--confirm", ".delete-btn", CONFIRM["message"], "--wait", "#projects-empty"]
+    assert de.main(base + ["--view", "desktop", "--attempt", "cd" * 8]) == 0
+    taken = view_receipt(root, "t1", "desktop")
+    assert de.main(base + ["--measured", "desktop", "page.png", taken["page.png"], "--measured", "desktop",
+                           "evidence.json", taken["evidence.json"], "--view", "mobile", "--attempt", "cd" * 8]) == 0
+    assert set(_read_summary(root)["views"]) == {"desktop", "mobile"}
+    assert de.main(base + ["--measured", "desktop", "page.png", "nothex", "--view", "mobile"]) == 2
+    assert de.main(base + ["--measured", "tablet", "page.png", "0" * 64, "--view", "mobile"]) == 2
+    assert de.main(base + ["--measured", "desktop", "other.txt", "0" * 64, "--view", "mobile"]) == 2
+    assert de.main(base + ["--measured", "desktop", "page.png"]) == 2
+
+
+def test_capture_task_hands_each_view_the_measurement_of_the_earlier_ones(tmp_path, monkeypatch):
+    from quadratus import preview
+    from quadratus.design_evidence import view_receipt
+    seen = []
+
+    def fake_capture(profile, root, argv, deadline, allowance):
+        seen.append(list(argv))
+        view = argv[argv.index("--view") + 1]
+        folder = evidence_dir(root, "t1") / view
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "page.png").write_bytes(b"\x89PNG" + view.encode())
+        (folder / "evidence.json").write_text("{}")
+        return "", 1.0
+    monkeypatch.setattr(preview, "_capture_once", fake_capture)
+    profile = preview.CaptureProfile(preview=("true",), origin="http://127.0.0.1:1", ready_timeout=1,
+                                     capture_timeout=90)
+    confirm = {"path": "/", "steps": [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]}
+    assert preview.capture_task(profile, tmp_path, "t1", confirm, receipt={}) == ""
+    assert "--measured" not in seen[0], "the first view has nothing to be held to"
+    desktop = view_receipt(tmp_path, "t1", "desktop")
+    assert seen[1][seen[1].index("--measured"):][:8] == [
+        "--measured", "desktop", "evidence.json", desktop["evidence.json"],
+        "--measured", "desktop", "page.png", desktop["page.png"]]
+
+
+def test_a_harness_task_without_a_receipt_is_refused_not_treated_as_a_self_capture(tmp_path, monkeypatch):
+    """Codex review of 2e57e94: an absent receipt was weaker than an empty
+    one, and a failed or ineligible new attempt left the old receipt in
+    place for an older render to be accepted against."""
+    from types import SimpleNamespace
+
+    from quadratus.design_evidence import check_records
+    from quadratus.session import Session
+    from tests.lifecycle.harness import evidence
+    session = Session.__new__(Session)
+    session._capture_receipts, session._harness_tasks = {}, set()
+    assert session._capture_receipt("t1", False) is None, "a self-capture has no receipt to be held to"
+    assert session._capture_receipt("t1", True) == {}, "a harness task with no receipt is held to an empty one"
+    evidence(tmp_path, "t1", age=0)
+    ok, problem, *_ = check_records(tmp_path, "t1", 0, receipt=session._capture_receipt("t1", True))
+    assert not ok and "was not measured by the harness in this attempt" in problem
+    session._capture_receipts["t1"] = {"desktop": {"page.png": "0" * 64, "evidence.json": "1" * 64}}
+    monkeypatch.setattr(Session, "_capture_ineligible", lambda self: "the task has no dispatch record")
+    failure = Session._harness_capture(session, SimpleNamespace(task_id="t1"))
+    assert failure == "the harness did not capture because the task has no dispatch record"
+    assert session._capture_receipts == {} and "t1" in session._harness_tasks, \
+        "a new attempt retires the old receipt before any exit"
+    assert session._capture_receipt("t1", "t1" in session._harness_tasks) == {}
+
+
+def test_the_approval_snapshot_covers_the_render_record_beside_each_screenshot(tmp_path):
+    from quadratus.session import Session, _snapshot_files
+    from tests.lifecycle.harness import evidence
+    evidence(tmp_path, "t1", age=0)
+    session = Session.__new__(Session)
+    session.project = str(tmp_path)
+    target, steps, state = Session._capture_state(session, "t1")
+    assert set(state["records"]) == {"desktop", "mobile"} and all(len(d) == 64 for d in state["records"].values())
+    files = _snapshot_files(("t1", target, steps, state))
+    assert ".quadratus/design-evidence/t1/desktop/evidence.json" in files
+    assert files[".quadratus/design-evidence/t1/mobile/evidence.json"] == state["records"]["mobile"]
+    (evidence_dir(tmp_path, "t1") / "mobile" / "evidence.json").unlink()
+    assert Session._capture_state(session, "t1")[2]["records"]["mobile"] is None, "unreadable is None, never invented"
+
+
+def test_an_unreadable_measurement_is_carried_as_missing_never_dropped(tmp_path, monkeypatch):
+    """Codex review of 4a273a3: a desktop measurement whose every digest was
+    unreadable produced no --measured arguments, so the mobile capture
+    reused desktop against its own manifest as if it were a self-capture."""
+    from quadratus import browser
+    from quadratus import design_evidence as de
+    from quadratus.preview import MISSING_DIGEST, CaptureProfile, capture_argv
+    profile = CaptureProfile(preview=("true",), origin="http://127.0.0.1:1")
+    capture_decl = {"path": "/", "steps": [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]}
+    argv = capture_argv(profile, "t1", capture_decl, "mobile", "ab" * 8,
+                        measured={"desktop": {"page.png": None, "evidence.json": None}})
+    assert argv[-12:-4] == ["--measured", "desktop", "evidence.json", MISSING_DIGEST,
+                            "--measured", "desktop", "page.png", MISSING_DIGEST]
+    root = _project(tmp_path)
+    monkeypatch.setattr(browser, "render_page", _fake_render(root))
+    page = str(root / "index.html")
+    base = [page, "t1", str(root), "--confirm", ".delete-btn", CONFIRM["message"], "--wait", "#projects-empty"]
+    assert de.main(base + ["--view", "desktop", "--attempt", "ef" * 8]) == 0
+    assert de.main(base + ["--measured", "desktop", "page.png", "missing", "--measured", "desktop",
+                           "evidence.json", "missing", "--view", "mobile", "--attempt", "ef" * 8]) == 0
+    summary = _read_summary(root)
+    assert set(summary["views"]) == {"mobile"}, "a missing measurement refuses reuse, as an empty one does"
+    assert summary["not_kept"]["desktop"]["mismatch"] is False
+
+
+def test_capture_task_stops_when_a_view_cannot_be_measured(tmp_path, monkeypatch):
+    from quadratus import preview
+    seen = []
+
+    def fake_capture(profile, root, argv, deadline, allowance):
+        seen.append(argv[argv.index("--view") + 1])
+        return "", 1.0                      # reports success but leaves no files to measure
+    monkeypatch.setattr(preview, "_capture_once", fake_capture)
+    profile = preview.CaptureProfile(preview=("true",), origin="http://127.0.0.1:1", ready_timeout=1,
+                                     capture_timeout=90)
+    confirm = {"path": "/", "steps": [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]}
+    receipt = {}
+    failure = preview.capture_task(profile, tmp_path, "t1", confirm, receipt=receipt)
+    assert failure.startswith("the desktop capture left evidence.json, page.png unreadable")
+    assert seen == ["desktop"], "the next view is never started beside an unmeasured one"

@@ -193,6 +193,42 @@ def test_quoted_column_headings_are_not_declared_functions():
     assert scope.max_lines == 100
 
 
+# -- f6-download-guard on 2ffa7f6: an elided call is not a signature -------------------
+
+F6_BODY = (
+    "Add a shared path guard.\n\n```python\ndef _serve_guarded(directory, name):\n"
+    "    \"\"\"Serve name from directory or abort 403.\"\"\"\n```\n\n"
+    "Both `/videos/<name>` and `/recordings/<name>` call `_serve_guarded(...)` and "
+    "return its response unchanged; `_serve_guarded(\u2026)` must resolve the path "
+    "before comparing.\n"
+)
+
+
+@pytest.mark.parametrize("mention", ["`_serve_guarded(...)`", "`_serve_guarded(\u2026)`",
+                                     "`_serve_guarded( ... )`"])
+def test_an_elided_call_is_not_a_second_signature(mention):
+    body = "```python\ndef _serve_guarded(directory, name):\n```\nRoutes call " + mention + "."
+    assert declared_signatures(body, [], []) == {"_serve_guarded": ["directory, name"]}
+
+
+def test_the_f6_shape_passes_the_lint():
+    acceptance = ["app.py defines `_serve_guarded(directory, name)`",
+                  "`python -m pytest -q` passes"]
+    scope, body = read_scope(_declaration(F6_BODY, acceptance=acceptance), max_lines=100)
+    assert declared_signatures(body, [scope.intended_result], scope.acceptance) == {
+        "_serve_guarded": ["directory, name"],
+    }
+
+
+def test_a_real_second_signature_next_to_an_elision_is_still_rejected():
+    body = ("```python\ndef _serve_guarded(directory, name):\n```\nRoutes call "
+            "`_serve_guarded(...)`; actually make it `_serve_guarded(directory, name, root)`.")
+    with pytest.raises(ValueError) as info:
+        read_scope(_declaration(body), max_lines=100)
+    assert "(...)" not in str(info.value)
+    assert "_serve_guarded(directory, name, root)" in str(info.value)
+
+
 def test_a_signature_quoted_only_in_acceptance_needs_a_def_to_be_checked():
     # No `def` anywhere: nothing is declared, so nothing can contradict.
     body = "Call `helper(a, b)` and then `helper(a, b, c)` as convenient."

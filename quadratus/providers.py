@@ -303,11 +303,21 @@ class LLMProvider:
         if worker_control is not None:
             worker_control.reserve()
         control = getattr(self, 'run_budget', None)
+        # A summary-only call reserves a measured allowance instead of a full
+        # agentic call's headroom, and only where the CLI argv enforces one
+        # model turn (CLISpec.summary_turn_capped): the request alone is not
+        # a bound (Codex review of 961d2da on #53).
+        shape = {}
+        spec = getattr(self, 'spec', None)
+        if (getattr(self, 'summary_only', False) and spec is not None
+                and getattr(spec, 'summary_turn_capped', lambda: False)()):
+            from .run_budget import SUMMARY_CALL_RESERVE_TOKENS
+            shape = dict(expected_tokens=SUMMARY_CALL_RESERVE_TOKENS)
         if control is not None and control.limits.max_cost_usd is not None:
             ticket, remaining = control.reserve(transport=self.transport,
-                                                price_key=f'{self.name}:{self.model}')
+                                                price_key=f'{self.name}:{self.model}', **shape)
         else:
-            ticket, remaining = control.reserve() if control is not None else (None, None)
+            ticket, remaining = control.reserve(**shape) if control is not None else (None, None)
         previous_timeout = self.timeout if control is not None else None
         if control is not None:
             self.timeout = remaining if previous_timeout is None else min(previous_timeout, remaining)

@@ -221,9 +221,17 @@ class TaskScope:
         if self.review_only:
             parts.append("Declared review-only: report findings; do not change project source.")
         if self.max_lines:
+            # The lead is told what the harness measures, not only the
+            # estimate (series rule-2ffa7f6 f3, f4 and f7: first tasks of 85
+            # to 100 lines landed at 135 to 236, with 112 to 171 of them in
+            # tests the lead wrote against a bound it read as code).
+            stop = int(self.max_lines * _OVERRUN_TOLERANCE)
             parts.append(
-                f"Expected size: about {self.max_lines} changed lines. If the "
-                f"work genuinely needs substantially more, say so and stop "
+                f"Expected size: about {self.max_lines} changed lines, counting added and removed "
+                f"lines in every file, tests in full. The harness measures the diff after each "
+                f"editing call and stops the task past {stop} changed lines with the work kept "
+                f"but unfinished. Write tests as compact named cases, not one fixture per case. "
+                f"If the work genuinely needs substantially more, say so and stop "
                 f"rather than delivering the larger change -- an undersized "
                 f"task quietly growing into a whole feature is the specific "
                 f"failure this bound exists to catch."
@@ -356,6 +364,7 @@ def is_test_path(path: str) -> bool:
 
 _DEFINED = re.compile(r"\bdef\s+([A-Za-z_][\w.]*)\s*\(")
 _DEFINED_WITH_ARGS = re.compile(r"\bdef\s+([A-Za-z_][\w.]*)\s*\(([^()]*)\)")
+_ELIDED = frozenset({"...", "\u2026"})
 _QUOTED = re.compile(r"`\s*(?:def\s+)?([A-Za-z_][\w.]*)\s*\(([^()`]*)\)\s*:?\s*`")
 
 
@@ -388,7 +397,18 @@ def declared_signatures(description: str, *fields: Sequence[str]) -> Dict[str, L
     def note(name: str, args: str) -> None:
         if name not in declared:
             return
-        normalised = ", ".join(a.strip() for a in args.split(",") if a.strip())
+        parts = [a.strip() for a in args.split(",") if a.strip()]
+        if parts and all(a in _ELIDED for a in parts):
+            # ``_serve_guarded(...)`` is a reference to the function, not a
+            # signature: f6-download-guard on 2ffa7f6 stalled because the
+            # description wrote ``def _serve_guarded(directory, name)`` and
+            # later said each route "calls `_serve_guarded(...)`", and this
+            # check reported the ellipsis as a second signature. The
+            # correction then named ``(...)`` as the contradiction, which the
+            # orchestrator could not act on. An elision says nothing about
+            # the parameters, so it is not collected.
+            return
+        normalised = ", ".join(parts)
         forms = found.setdefault(name, [])
         if normalised not in forms:
             forms.append(normalised)

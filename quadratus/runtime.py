@@ -130,6 +130,23 @@ _EXHAUSTION_MARKERS = (
 
 #: The editing roles the lead owns, each bound by ``Settings.lead_max_turns``.
 LEAD_CAPPED_ROLES = frozenset({"lead", "revision", "gate-fix", "design-fix"})
+#: The review seats that read a source copy and may run the project's check,
+#: bound by the same cap (series rule-2ffa7f6 f3 and f5: an uncapped Opus
+#: collaborator ran 20 rounds and 0.87M to 1.18M tokens, past the cell's
+#: threshold, while every editing call was capped). A reviewer's call has
+#: the same shape as a lead's, one context re-sent per round, so the same
+#: arithmetic bounds it. The auditor is one more read-only seat in a copy (f7:
+#: bare pytest and ls in the copy); an audit that stops at the cap is a failed
+#: audit, which the session already counts as nothing met. The orchestrator,
+#: closeout and workers stay uncapped.
+REVIEW_CAPPED_ROLES = frozenset({"collaborator", "recheck", "design-review", "verifier", "auditor"})
+#: Roles whose whole answer is one declared line (a CAPTURE: line, FIXTURE:
+#: blocks). They may read the copy to find a selector, not explore it: series
+#: rule-3572b72 f5's capture-redeclare ran 12 rounds and 403k tokens and
+#: returned no line at all. Bound well under the review cap, and never
+#: above the operator's lead cap where that is smaller.
+DECLARATION_ROLES = frozenset({"capture-redeclare", "fixture-supply"})
+DECLARATION_MAX_TURNS = 6
 
 
 class Fleet:
@@ -372,10 +389,15 @@ class Fleet:
         # TurnLimitReached with its edits still in place; the session keeps
         # them and re-plans rather than treating the call as failed. It binds
         # every editing role the lead owns (Run 19: an uncapped gate-fix and
-        # design-fix ran past the operator's 14 rounds); reviewers, closeout,
-        # workers and the orchestrator stay uncapped.
+        # design-fix ran past the operator's 14 rounds) and every review seat
+        # (REVIEW_CAPPED_ROLES); closeout, workers and the orchestrator stay
+        # uncapped.
+        role_name = (invocation_context.get() or {}).get("role")
         lead_turns = (self.settings.lead_max_turns
-                      if (invocation_context.get() or {}).get("role") in LEAD_CAPPED_ROLES else None)
+                      if role_name in (LEAD_CAPPED_ROLES | REVIEW_CAPPED_ROLES) else None)
+        if role_name in DECLARATION_ROLES:
+            lead_turns = min([DECLARATION_MAX_TURNS, *([self.settings.lead_max_turns]
+                                                       if self.settings.lead_max_turns else [])])
         # The in-session worker tool, served by the session's WorkerBridge for
         # this lead call only. Set on a per-call view, never on the provider.
         lead_tool = ((invocation_context.get() or {}).get("worker_tool")
@@ -418,9 +440,15 @@ class Fleet:
                     + "\n".join(checks)
                     + "\nRun these commands verbatim from the working directory. Do not add cd, pipes, "
                     "wildcards, shell wrappers or substitute a directory for the listed files. "
+                    "A new test file that no listed command names is not shown to have run: unless a "
+                    "listed test file runs it, its tests stay unverified, so add new tests to a "
+                    "file a listed command already names. "
                     "Use Read, Grep and Glob for inspection. If an ungranted command is denied, "
                     "do not retry variants, delegate it or use another tool to execute it. "
-                    "Report the unrun check and finish with the edits and available evidence. "
+                    "Report each check or acceptance step you could not run on its own line "
+                    "'NOT RUN: <command or file> - <why>', above the closing CHANGED line, and finish "
+                    "with the edits and available evidence; a NOT RUN line keeps the requirement it "
+                    "serves open until a check runs it. "
                     "Do not change permissions."
                 )
             before = self.project.contents()
@@ -524,6 +552,23 @@ class Fleet:
                      "Cite files by their path relative to the project root, not by the absolute "
                      "path of this copy: this copy is deleted when your call ends, and an "
                      "absolute path into it is a dead reference in the report.")
+            checks = tuple(getattr(self, "check_commands", ()) or ())
+            if checks and context.get("role") in REVIEW_CAPPED_ROLES:
+                # The same exact-command guidance the editing call gets (#51),
+                # which review seats never had: series rule-2ffa7f6 f1's
+                # collaborator and rechecks ran `node --test tests/ui/`, a
+                # directory in place of the five listed files, and got
+                # MODULE_NOT_FOUND; and `git status`, in a copy with no .git.
+                role += (
+                    "\nAPPROVED CHECK COMMANDS (this list governs even when the task asks for another command):\n"
+                    + "\n".join(checks)
+                    + "\nRun these commands verbatim from the working directory. Do not add cd, pipes, "
+                    "wildcards, shell wrappers or substitute a directory for the listed files. "
+                    "This copy is not a git repository: git commands fail here, so read files and "
+                    "the task's own account of its changes instead. If a command is denied, do not "
+                    "retry variants, delegate it or use another tool to execute it; report the "
+                    "unrun check and judge from what you could read."
+                )
             if allow_writes:
                 role += ("\nYou are a bounded editor. Return exactly PATCH: followed by a fenced "
                          "diff containing a standard unified diff with a/ and b/ paths. "

@@ -43,7 +43,7 @@ class _Recorder:
     def __init__(self, result=""):
         self.profiles, self.result = [], result
 
-    def __call__(self, profile, root, task_id, capture):
+    def __call__(self, profile, root, task_id, capture, receipt=None):
         self.profiles.append(profile)
         return self.result
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import queue
 import re
@@ -133,22 +134,128 @@ class OperatorChannel:
         return "Answer sent; the run continues."
 
 
+#: Named starting points for the Run limits form. A preset only fills the
+#: fields; what runs is what the fields say when the run starts, and every
+#: number is visible before dispatch. "Diagnostic" is the allowance Codex's
+#: bounded GUI plan selected on #35 (2026-10-09); "Small" is RunLimits'
+#: own defaults. Neither changes what a run without limits does.
+RUN_LIMIT_PRESETS = {
+    'Diagnostic: 90 calls, 5M tokens, 1 hour': dict(
+        max_calls=90, max_reported_tokens=5_000_000, wall_seconds=3600, max_concurrent_workers=2,
+        reserve_tokens_per_call=250_000, max_tokens_per_call=1_500_000, recovery_tasks=4),
+    'Small: 24 calls, 500k tokens, 15 minutes': dict(
+        max_calls=24, max_reported_tokens=500_000, wall_seconds=900, max_concurrent_workers=2,
+        reserve_tokens_per_call=0, max_tokens_per_call=0, recovery_tasks=0),
+}
+
+#: Form order of the limit fields, shared by the preset filler and the form reader.
+LIMIT_FIELDS = ('max_calls', 'max_reported_tokens', 'wall_seconds', 'max_concurrent_workers',
+                'reserve_tokens_per_call', 'max_tokens_per_call', 'recovery_tasks')
+
+_LIMIT_LABELS = {
+    'max_tasks': 'Task limit',
+    'max_calls': 'Maximum model calls',
+    'max_reported_tokens': 'Total reported tokens',
+    'wall_seconds': 'Time limit (seconds)',
+    'max_concurrent_workers': 'Parallel workers',
+    'reserve_tokens_per_call': 'Tokens that must remain before a call starts',
+    'max_tokens_per_call': 'Stop after a single call reports more than (tokens, 0 for none)',
+    'recovery_tasks': 'Extra recovery tasks after failures (0 for none)',
+}
+
+
+def _whole(value, field, minimum):
+    label = _LIMIT_LABELS[field]
+    if isinstance(value, bool) or value is None or (isinstance(value, str) and not value.strip()):
+        raise ValueError(f'{label}: enter a whole number.')
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'{label}: {value!r} is not a number.') from None
+    if not math.isfinite(number) or number != int(number) or number < minimum:
+        raise ValueError(f'{label} must be a whole number of at least {minimum}.')
+    return int(number)
+
+
+def limits_from_form(enabled, *values):
+    """The validated RunLimits and SurveyConfig the form describes.
+
+    Returns ``(None, None)`` when limits are off and no recovery task is
+    asked for, which is exactly the call a run without these options made
+    before they existed. Raises ValueError naming the field otherwise, before
+    any project, provider or model is touched.
+    """
+    from .run_budget import RunLimits
+    from .session import SurveyConfig
+    fields = dict(zip(LIMIT_FIELDS, values, strict=True))
+    recovery = _whole(fields.get('recovery_tasks', 0) or 0, 'recovery_tasks', 0)
+    survey = SurveyConfig(recovery_tasks=recovery) if recovery else None
+    if not enabled:
+        return None, survey
+    per_call = _whole(fields.get('max_tokens_per_call', 0) or 0, 'max_tokens_per_call', 0)
+    limits = RunLimits(
+        max_calls=_whole(fields.get('max_calls'), 'max_calls', 1),
+        max_reported_tokens=_whole(fields.get('max_reported_tokens'), 'max_reported_tokens', 1),
+        wall_seconds=_whole(fields.get('wall_seconds'), 'wall_seconds', 1),
+        max_concurrent_workers=_whole(fields.get('max_concurrent_workers'), 'max_concurrent_workers', 1),
+        reserve_tokens_per_call=_whole(fields.get('reserve_tokens_per_call', 0) or 0,
+                                       'reserve_tokens_per_call', 0),
+        max_tokens_per_call=per_call or None,
+    )
+    return limits, survey
+
+
+def limits_summary(max_tasks, enabled, *values, operator_turns=None) -> str:
+    """What the form would run with, or why it would refuse. ``operator_turns``
+    is ``Settings.lead_max_turns``, which outranks a derived lead turn cap."""
+    from .run_budget import describe_limits, effective_lead_turns
+    try:
+        limits, survey = limits_from_form(enabled, *values)
+        tasks = _whole(max_tasks, 'max_tasks', 1)
+    except ValueError as exc:
+        return f'**Run limits are not valid:** {exc}'
+    return '**This run will use:** ' + describe_limits(limits, survey, tasks,
+                                                       *effective_lead_turns(operator_turns, limits))
+
+
+def preset_values(name):
+    """The field values a named preset fills in, in LIMIT_FIELDS order."""
+    preset = RUN_LIMIT_PRESETS[name]
+    return [True, *(preset[f] for f in LIMIT_FIELDS)]
+
+
 def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
                    *, forbid=(), declared_paths=(), channel: Optional[OperatorChannel] = None,
-                   neutral: bool = False):
-    """Stream progress while the shared project runner performs model calls."""
+                   neutral: bool = False, capture_profile=None, extra_checks=(), readiness=None,
+                   run_limits=None, survey=None):
+    """Stream progress while the shared project runner performs model calls.
+
+    ``run_limits`` (a RunLimits) and ``survey`` (a SurveyConfig) go to the
+    shared runner unchanged; leaving them out is the run this function made
+    before they existed: no shared allowance and no recovery tasks.
+    """
     import dataclasses
 
     from .project_run import run_project
+    from .run_budget import describe_limits, effective_lead_turns
     if neutral:
         settings = dataclasses.replace(settings, neutral_preferences=True)
     events = queue.Queue()
-    notes = []
+    try:
+        tasks = int(max_tasks)
+    except (TypeError, ValueError):
+        tasks = None  # the runner reports a bad Task limit, as it always has
+    notes = ['**Run limits:** ' + describe_limits(
+        run_limits, survey, tasks, *effective_lead_turns(getattr(settings, 'lead_max_turns', None), run_limits))]
+    yield notes[0], '', []
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(run_project, goal, folder, settings,
                              allow_writes=allow_writes, check=check,
                              mode=mode, max_tasks=int(max_tasks),
                              forbid=forbid, declared_paths=declared_paths,
+                             capture_profile=capture_profile or None,
+                             extra_checks=tuple(extra_checks), readiness=readiness or None,
+                             run_limits=run_limits, survey=survey,
                              progress=events.put,
                              ask_operator=channel.ask if channel is not None else None)
         while not future.done():
@@ -171,8 +278,114 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
         except Exception as exc:
             yield f"Run failed: {exc}", '', []
             return
-    yield result.report, result.diff, [str(result.run_dir / name)
-                                      for name in ('report.md', 'changes.diff', 'ledger.md', 'result.json')]
+    files, problem = downloadable_files(result.run_dir)
+    report = result.report + (f"\n\n_{problem}_" if problem else "")
+    yield report, result.diff, files
+
+
+#: The run files the Project tab offers for download, by exact name.
+RUN_FILES = ('report.md', 'changes.diff', 'ledger.md', 'result.json')
+
+
+def downloadable_files(run_dir):
+    """Copies of the run's saved files that the GUI may serve, and a note.
+
+    Gradio serves only files under its working directory, the system temp
+    directory or ``allowed_paths``. The run's files live in the selected
+    project's ``.quadratus/runs/<id>``, so returning them directly raised
+    InvalidPathError and blanked the report, diff and downloads together
+    (batch 2 gui-ui-v3 on 5d9f5ff, the first real GUI run). Widening
+    ``allowed_paths`` would expose a whole project tree to the server.
+
+    The copy is bound to descriptors, not pathnames (Codex review of
+    7515f28: a link check followed by a pathname copy could be raced, and a
+    static linked parent was followed). The run folder and the two folders
+    above it (``.quadratus/runs/<id>``) must not be links; only the path
+    above them, the project's own location, is resolved once (on macOS
+    ``/var`` and ``/tmp`` are themselves links). Every component is then
+    opened from ``/`` without following links; each named file is opened
+    through that folder handle without following links, must be a regular file, and is
+    read from its own descriptor into a new file created exclusively in a
+    fresh private folder (mode 0700) under the system temp directory. Each
+    file is examined without opening it first, then opened non-blocking and
+    checked to be the same regular file before any byte is read: a FIFO in
+    a file's slot blocked the open itself (Codex review of 35f198e). A
+    missing file is simply not offered; a link, a non-regular file or one
+    that cannot be read is not offered and is named in the note, with the
+    run folder. A failure leaves the report and diff on screen.
+    """
+    import stat
+    import tempfile
+    run_dir = Path(run_dir)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    nofollow = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    copies, fds, skipped = [], [], []
+    try:
+        absolute = Path(os.path.abspath(run_dir))
+        own = absolute.parts[-3:] if len(absolute.parts) > 3 else absolute.parts[-1:]
+        above = Path(os.path.realpath(absolute.parents[len(own) - 1]))
+        fds.append(os.open("/", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)))
+        for part in (*above.parts[1:], *own):
+            fds.append(os.open(part, flags, dir_fd=fds[-1]))
+        folder_fd = fds[-1]
+        folder = None
+        for name in RUN_FILES:
+            try:
+                seen = os.stat(name, dir_fd=folder_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                skipped.append(f"{name} (could not be examined: {exc.strerror or exc})")
+                continue
+            if stat.S_ISLNK(seen.st_mode):
+                skipped.append(f"{name} (a link)")
+                continue
+            if not stat.S_ISREG(seen.st_mode):
+                skipped.append(f"{name} (not a regular file)")
+                continue
+            try:
+                fd = os.open(name, nofollow, dir_fd=folder_fd)
+            except OSError as exc:
+                skipped.append(f"{name} (could not be opened: {exc.strerror or exc})")
+                continue
+            try:
+                held = os.fstat(fd)
+                if not stat.S_ISREG(held.st_mode) or (held.st_dev, held.st_ino) != (seen.st_dev, seen.st_ino):
+                    skipped.append(f"{name} (replaced while it was being opened)")
+                    continue
+                if folder is None:
+                    folder = Path(tempfile.mkdtemp(prefix=f"quadratus-{run_dir.name}-"))
+                target = folder / name
+                out = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+                try:
+                    while True:
+                        chunk = os.read(fd, 1 << 20)
+                        if not chunk:
+                            break
+                        view = memoryview(chunk)
+                        while view:
+                            view = view[os.write(out, view):]
+                except OSError as exc:
+                    # A partial copy is never offered.
+                    os.unlink(target)
+                    skipped.append(f"{name} (could not be read: {exc.strerror or exc})")
+                    continue
+                finally:
+                    os.close(out)
+                copies.append(str(target))
+            finally:
+                os.close(fd)
+    except OSError as exc:
+        return [], f"The saved run files could not be offered for download ({exc}); they are in {run_dir}."
+    finally:
+        for fd in reversed(fds):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    if skipped:
+        return copies, f"Not offered for download: {', '.join(skipped)}; the run's files are in {run_dir}."
+    return copies, ""
 
 
 def policy_preview_ui(folder, paths='', forbid='', writing=False):
@@ -246,6 +459,55 @@ def build_interface(settings: Optional[Settings] = None):
                     max_tasks = gr.Number(value=20, minimum=1, precision=0, label='Task limit')
                 check = gr.Textbox(label='Test or build command (optional)',
                                    placeholder='Auto-detect from the project, or enter a command')
+                with gr.Accordion('UI capture and further checks (optional)', open=False):
+                    gr.Markdown('The same operator inputs as the command line. A capture profile lets the '
+                                'harness start your app and capture UI tasks itself; it is validated before '
+                                'any model call. Further checks run beside the test command and are required.')
+                    capture_profile = gr.Textbox(label='Capture profile file (JSON, --capture-profile)',
+                                                 placeholder='/path/to/capture-profile.json')
+                    extra_checks = gr.Textbox(label='Further required checks (one command per line, --extra-check)',
+                                              lines=2)
+                    readiness = gr.Textbox(label='Readiness probes file (JSON, --readiness)',
+                                           placeholder='/path/to/readiness.json')
+                with gr.Accordion('Run limits (optional)', open=False):
+                    gr.Markdown('Cap what one run may spend. Off means no shared allowance, as before. '
+                                'A preset fills the fields; the run uses the fields as they read when it '
+                                'starts. Token counts are what the CLIs report after each call returns, '
+                                'so they are not a hard ceiling and not an invoice.')
+                    with gr.Row():
+                        limits_on = gr.Checkbox(label='Use run limits', value=False)
+                        limits_preset = gr.Dropdown(list(RUN_LIMIT_PRESETS), value=None,
+                                                    label='Fill from preset')
+                    with gr.Row():
+                        limit_calls = gr.Number(value=24, precision=0, minimum=1,
+                                                label=_LIMIT_LABELS['max_calls'])
+                        limit_tokens = gr.Number(value=500_000, precision=0, minimum=1,
+                                                 label=_LIMIT_LABELS['max_reported_tokens'])
+                        limit_seconds = gr.Number(value=900, precision=0, minimum=1,
+                                                  label=_LIMIT_LABELS['wall_seconds'])
+                        limit_workers = gr.Number(value=2, precision=0, minimum=1,
+                                                  label=_LIMIT_LABELS['max_concurrent_workers'])
+                    limit_recovery = gr.Number(value=0, precision=0, minimum=0,
+                                               label=_LIMIT_LABELS['recovery_tasks'])
+                    with gr.Accordion('Advanced token rules', open=False):
+                        gr.Markdown('The first is checked before a call starts: no call begins unless this '
+                                    'many tokens of the total remain. The second is checked after a call '
+                                    'returns: a single call that reported more stops the run, but the call '
+                                    'itself has already run.')
+                        with gr.Row():
+                            limit_reserve = gr.Number(value=0, precision=0, minimum=0,
+                                                      label=_LIMIT_LABELS['reserve_tokens_per_call'])
+                            limit_per_call = gr.Number(value=0, precision=0, minimum=0,
+                                                       label=_LIMIT_LABELS['max_tokens_per_call'])
+                    def summarize(*values):
+                        return limits_summary(*values, operator_turns=settings.lead_max_turns)
+                    limits_info = gr.Markdown(summarize(20, False, 24, 500_000, 900, 2, 0, 0, 0))
+                limit_inputs = [limits_on, limit_calls, limit_tokens, limit_seconds, limit_workers,
+                                limit_reserve, limit_per_call, limit_recovery]
+                limits_preset.change(lambda name: preset_values(name) if name else [gr.update()] * 8,
+                                     inputs=[limits_preset], outputs=limit_inputs)
+                for field in [max_tasks, *limit_inputs]:
+                    field.change(summarize, inputs=[max_tasks, *limit_inputs], outputs=[limits_info])
                 declared_paths = gr.Textbox(label='Paths this task may change (one per line)', lines=2)
                 forbid_paths = gr.Textbox(label='Paths that must stay unchanged (one per line)', lines=2)
                 preview_button = gr.Button('Preview policy')
@@ -284,15 +546,27 @@ def build_interface(settings: Optional[Settings] = None):
                 open_button.click(open_project, inputs=[project_path, clone_url, branch],
                                   outputs=[selected, project_info, source_files, clone_url, branch, run_button])
 
-                def run_selected(goal, folder, writes, command, mode, limit, paths, forbid, no_personal):
+                def run_selected(goal, folder, writes, command, mode, limit, paths, forbid, no_personal,
+                                 profile_path, further, probes, *limit_values):
                     if not folder:
                         raise gr.Error('Open a project first.')
+                    try:
+                        run_limits, survey = limits_from_form(*limit_values)
+                    except ValueError as exc:
+                        raise gr.Error(f'Run limits are not valid: {exc}') from exc
                     yield from run_project_ui(goal, folder, writes, command, mode, limit, settings,
                                               declared_paths=[p.strip() for p in paths.splitlines() if p.strip()],
                                               forbid=[p.strip() for p in forbid.splitlines() if p.strip()],
-                                              channel=channel, neutral=bool(no_personal))
+                                              channel=channel, neutral=bool(no_personal),
+                                              capture_profile=(profile_path or '').strip() or None,
+                                              extra_checks=[c.strip() for c in (further or '').splitlines()
+                                                            if c.strip()],
+                                              readiness=(probes or '').strip() or None,
+                                              run_limits=run_limits, survey=survey)
 
-                run_button.click(run_selected, inputs=[goal, selected, edits, check, mode, max_tasks, declared_paths, forbid_paths, neutral],
+                run_button.click(run_selected, inputs=[goal, selected, edits, check, mode, max_tasks, declared_paths,
+                                                       forbid_paths, neutral, capture_profile, extra_checks, readiness,
+                                                       *limit_inputs],
                                  outputs=[report, diff, downloads], concurrency_limit=1)
             with gr.Tab('Code discussion'):
                 gr.Markdown('Discuss snippets without opening a project. Answers here do not create source files.')
@@ -365,17 +639,73 @@ def resolve_share(settings) -> bool:
     return False
 
 
-def main() -> int:
+DEFAULT_GUI_PORT = 7860
+
+
+def gui_port(argv=None) -> int:
+    """The local port to serve on: ``--port N``, else ``QUADRATUS_GUI_PORT``,
+    else 7860. Raises ValueError naming the bad value."""
+    raw, source = None, "QUADRATUS_GUI_PORT"
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--port" in argv:
+        at = argv.index("--port")
+        raw, source = (argv[at + 1] if at + 1 < len(argv) else ""), "--port"
+    elif os.environ.get("QUADRATUS_GUI_PORT", "").strip():
+        raw = os.environ["QUADRATUS_GUI_PORT"].strip()
+    if raw is None:
+        return DEFAULT_GUI_PORT
+    if not raw.isdigit() or not 1024 <= int(raw) <= 65535:
+        raise ValueError(f"{source} must be a port number from 1024 to 65535, not {raw!r}")
+    return int(raw)
+
+
+def _port_busy(port: int) -> bool:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return True
+    return False
+
+
+def _free_port_near(port: int, tries: int = 50):
+    """A free port to suggest after ``port``, inside the 1024..65535 range the
+    parser accepts: counting up and wrapping to 1024, so 65535 never suggests
+    65536 (Codex installed GUI review, P3). None if the bounded search finds
+    nothing free."""
+    span = 65535 - 1024 + 1
+    for step in range(1, min(tries, span - 1) + 1):
+        candidate = 1024 + (port - 1024 + step) % span
+        if not _port_busy(candidate):
+            return candidate
+    return None
+
+
+def main(argv=None) -> int:
     try:
         import gradio  # noqa: F401
     except ImportError:
         print("Gradio is not installed. Run: pip install gradio", file=sys.stderr)
         return 1
+    try:
+        port = gui_port(argv)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    if _port_busy(port):
+        free = _free_port_near(port)
+        how = (f"quadratus-gui --port {free}" if free is not None
+               else "quadratus-gui --port N, with N from 1024 to 65535,")
+        print(f"Port {port} on 127.0.0.1 is already in use. Start on another port with "
+              f"{how} (or set QUADRATUS_GUI_PORT).", file=sys.stderr)
+        return 2
     demo = build_interface()
     favicon = brand_asset("favicon.svg")
+    print(f"Quadratus is serving on http://127.0.0.1:{port}", flush=True)
     demo.launch(
         server_name="127.0.0.1",
-        server_port=7860,
+        server_port=port,
         css=INTERFACE_CSS,
         share=resolve_share(Settings.from_env()),
         favicon_path=str(favicon) if favicon is not None else None,

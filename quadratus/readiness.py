@@ -119,7 +119,18 @@ def probes_from(data, root) -> Tuple[Probe, ...]:
     """Validate an operator declaration: a JSON list of
     ``{"id", "argv", "timeout"}``. Raises ValueError naming the problem."""
     if isinstance(data, (str, Path)):
-        data = json.loads(Path(data).read_text(encoding="utf-8"))
+        path = Path(data)
+        # A named problem, not a raw exception (Codex GUI diagnostic on 0a99ee2).
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"readiness probes file could not be read: {path} "
+                             f"({exc.strerror or type(exc).__name__})") from None
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            raise ValueError(f"readiness probes file is not valid JSON: {path} (line {getattr(exc, 'lineno', '?')})") \
+                from None
     if not isinstance(data, list) or not data:
         raise ValueError("readiness probes must be a non-empty JSON list")
     if len(data) > MAX_PROBES:

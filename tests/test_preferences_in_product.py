@@ -126,6 +126,7 @@ def test_missing_evidence_gets_one_fix_call_then_an_open_finding(tmp_path):
 
 
 def _fake_evidence(root, clean=True, width=(1280, 390)):
+    import hashlib
     import json
     import struct
     import zlib
@@ -142,8 +143,11 @@ def _fake_evidence(root, clean=True, width=(1280, 390)):
         folder = evidence_dir(root, "t6") / name
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "page.png").write_bytes(png(w))
+        (folder / "evidence.json").write_text("{}")
         views[name] = dict(clean=clean, console_errors=[] if clean else ["Uncaught TypeError: x"],
                            failed_requests=[] if clean else ["GET /missing.png 404"],
+                           files={leaf: hashlib.sha256((folder / leaf).read_bytes()).hexdigest()
+                                  for leaf in ("page.png", "evidence.json")},
                            document_width={"desktop": 1280, "mobile": 390}[name], overflow=[])
     from quadratus.design_evidence import source_fingerprint
     (evidence_dir(root, "t6") / "summary.json").write_text(json.dumps(dict(

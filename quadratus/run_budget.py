@@ -49,6 +49,21 @@ class APICostRate:
 #: reported input over 36 turns on f1 and 1,510,139 over 27 on f3, because
 #: the CLI re-sends the whole conversation every turn and reports cached
 #: input at full weight. A seed, like every other number here.
+#: What a one-turn summary call reserves: a measured allowance, not a hard
+#: bound. The close-out's prompt is bounded at 32,000 bytes
+#: (runtime.Fleet._closeout) and, on the CLIs whose argv carries
+#: ``--max-turns 1`` (claude, grok; CLISpec.summary_turn_capped), the call
+#: is one model turn. Nothing caps its output tokens at the CLI: the view's
+#: ``max_tokens`` is a Python attribute the argv does not emit, and saved
+#: close-outs reported 1,465 and 1,629 output tokens. The largest close-out
+#: measured across three series totalled 24,006 reported tokens (series
+#: rule-3f9c548 f3: a 394k lead finished its task and the 500k reserve
+#: refused the close-out that would have closed it). 64k is about 2.7 times
+#: that largest measurement; the operator's reserve applies when it is
+#: smaller, and a CLI without an enforced turn cap (codex) reserves the
+#: operator's figure in full (Codex review of 961d2da on #53).
+SUMMARY_CALL_RESERVE_TOKENS = 64_000
+
 TURN_CONTEXT_TOKENS = 60_000
 #: The share of a per-call ceiling a derived turn cap plans to use; the
 #: rest is headroom for the turns that read more than the average.
@@ -120,6 +135,54 @@ class RunLimits:
             raise ValueError('wall_seconds must be positive and finite')
 
 
+def effective_lead_turns(operator_turns, limits):
+    """The lead turn cap a run will use and where it comes from: the
+    operator's ``Settings.lead_max_turns`` when set, else one derived from
+    the per-call threshold when the run has limits, else none. The same rule
+    ``project_run`` applies, so what is shown and saved is what runs."""
+    if operator_turns is not None:
+        return operator_turns, 'operator setting'
+    derived = lead_turns_for(getattr(limits, 'max_tokens_per_call', None)) if limits is not None else None
+    if derived:
+        return derived, f'derived from the {limits.max_tokens_per_call:,}-token per-call threshold'
+    return None, None
+
+
+def describe_limits(limits, survey=None, max_tasks=None, lead_turns=None, lead_source=None) -> str:
+    """The selected allowance in plain words, one wording for the GUI form,
+    the progress stream and the saved record (Codex GUI plan on #35,
+    2026-10-09). Token limits are counted from what each CLI reports after a
+    call returns, so the text never calls them a hard ceiling or a cost."""
+    parts = []
+    if max_tasks is not None:
+        parts.append(f'Task limit: {int(max_tasks)}.')
+    if limits is None:
+        parts.append('No shared run allowance: model calls, reported tokens and time are not capped '
+                     'for this run.')
+    else:
+        parts.append(f'At most {limits.max_calls:,} model calls and {limits.max_reported_tokens:,} reported '
+                     f'tokens in total; {limits.max_concurrent_workers} parallel worker(s).')
+        parts.append(f'Time limit {limits.wall_seconds:,g} seconds: no call starts after it and each call '
+                     'gets only the time left, but checks and captures between calls are not cut off.')
+        if limits.reserve_tokens_per_call:
+            reserve = limits.reserve_tokens_per_call
+            parts.append(f'An ordinary call starts only while at least {reserve:,} tokens of the total '
+                         f'remain; a one-turn summary call on a CLI whose flags hold it to one turn '
+                         f'(Claude, Grok) needs {min(reserve, SUMMARY_CALL_RESERVE_TOKENS):,}.')
+        if limits.max_tokens_per_call:
+            parts.append(f'A single call that reports more than {limits.max_tokens_per_call:,} tokens '
+                         'stops the run after it returns; it cannot cut that call short.')
+        parts.append('Token counts are what the CLIs report after each call, not a hard ceiling '
+                     'and not an invoice.')
+    if lead_turns:
+        parts.append(f'Lead turn cap: {lead_turns} rounds per lead or reviewer call ({lead_source}); '
+                     'Codex seats have no turn flag and are not held to it.')
+    if survey is not None:
+        parts.append(f'Recovery: up to {survey.recovery_tasks} extra continuation or repair task(s) '
+                     'after failures.')
+    return ' '.join(parts)
+
+
 class RunBudget:
     def __init__(self, limits: RunLimits, *, path=None, clock=time.monotonic):
         self.limits = limits
@@ -136,6 +199,7 @@ class RunBudget:
         self._reason = ''
         self._responses = []
         self._oversized = []
+        self._shaped = 0
 
     def _snapshot(self):
         return {
@@ -155,6 +219,13 @@ class RunBudget:
                                  'reserve_tokens_per_call; a call that reports more than '
                                  'max_tokens_per_call stops the run after it returns'),
             'oversized_calls': list(self._oversized),
+            'shaped_reservations': self._shaped,
+            'shape_boundary': ('a summary-only call whose CLI argv enforces one model turn reserves '
+                               'min(reserve_tokens_per_call, SUMMARY_CALL_RESERVE_TOKENS), a measured '
+                               'allowance (largest saved close-out 24,006 reported tokens), not a hard '
+                               'bound: output tokens are not capped at the CLI; every other call, '
+                               'including a summary call on a CLI with no turn flag, reserves '
+                               'reserve_tokens_per_call in full'),
             'input_boundary': 'normalized provider input includes cached input; do not add it again',
             'wall_boundary': 'attempt timeout plus required external process supervisor',
         }
@@ -184,8 +255,16 @@ class RunBudget:
             self._persist()
             raise RunBudgetExceeded(f'Run stopped: {self._reason}')
 
-    def reserve(self, *, transport="cli", price_key=""):
-        """Atomically authorize one attempt and return its ID and time remaining."""
+    def reserve(self, *, transport="cli", price_key="", expected_tokens=None):
+        """Atomically authorize one attempt and return its ID and time remaining.
+
+        ``expected_tokens`` names a measured allowance for a call the transport
+        holds to one model turn (a summary-only close-out on a CLI whose argv
+        enforces the cap); the reserve asked of the remaining budget is then
+        the smaller of the operator's reserve and that allowance. It is not a
+        hard size bound. It never raises the reserve, and the post-return
+        threshold is unchanged.
+        """
         with self._lock:
             self._check()
             if transport not in ('api', 'cli'):
@@ -197,6 +276,9 @@ class RunBudget:
                 self._reason = 'call_limit'
                 self._check()
             reserve = self.limits.reserve_tokens_per_call
+            if reserve and expected_tokens and 0 < expected_tokens < reserve:
+                reserve = int(expected_tokens)
+                self._shaped += 1
             if reserve and self.limits.max_reported_tokens - (self._input + self._output) < reserve:
                 # Refused before the call: the budget left could not hold a
                 # call of the size the operator said to expect.

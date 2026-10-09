@@ -21,7 +21,9 @@ a repair call, and the failure text is byte-identical on both. Whole
 controller replays with a real preview process and a real port.
 """
 
+import errno
 import json
+import os
 import socket
 import sys
 from pathlib import Path
@@ -140,7 +142,8 @@ def test_a_project_file_preview_that_cannot_launch_stays_unverified(tmp_path, mo
     (["{root}/python3"], None, "the preview could not start: [Errno 13] Permission denied: '{root}/python3'"),
     # A path that cannot be resolved is not proven outside (Sol review, 5863184501).
     (["{root}/loop/python3"], None,
-     "the preview could not start: [Errno 40] Too many levels of symbolic links: '{root}/loop/python3'"),
+     # The number and text are the platform's own (ELOOP is 40 on Linux, 62 on macOS).
+     f"the preview could not start: [Errno {errno.ELOOP}] {os.strerror(errno.ELOOP)}: '{{root}}/loop/python3'"),
     # A launched preview that exits: an application exit, unattributed.
     ([sys.executable, "-c", "raise SystemExit(3)"], None, "the preview exited with 3 before it was ready: "),
 ])

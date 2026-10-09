@@ -7,7 +7,7 @@
   "engine_sha": "<filled at launch from the engine checkout HEAD>",
   "jev_model": "jev-1.13.0",
   "goal": "REQUIREMENTS:\nR1 <unused: every task carries its own goal>\n",
-  "check": "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python -m pytest -q -p no:cacheprovider",
+  "check": "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python -m pytest -q -p no:cacheprovider --quadratus-report={report}",
   "extra_checks": [
     [
       "node",
@@ -16,7 +16,8 @@
       "tests/ui/bulk_keyboard.test.js",
       "tests/ui/bulk_serialization.test.js",
       "tests/ui/import_preview.test.js",
-      "tests/ui/load_app.test.js"
+      "tests/ui/load_app.test.js",
+      "--test-reporter-destination={report}"
     ]
   ],
   "capture_profiles": {
@@ -431,10 +432,10 @@
   },
   "limits": {
     "max_calls": 90,
-    "max_reported_tokens": 2500000,
+    "max_reported_tokens": 5000000,
     "wall_seconds": 3600,
     "max_concurrent_workers": 2,
-    "reserve_tokens_per_call": 500000,
+    "reserve_tokens_per_call": 250000,
     "max_tokens_per_call": 1500000
   },
   "max_tasks": 10,

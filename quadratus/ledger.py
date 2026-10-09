@@ -65,9 +65,20 @@ class LedgerEntry:
     #: Pointers to the full raw work. This is what makes the entry an index
     #: rather than a replacement.
     refs: List[ArtifactRef] = field(default_factory=list)
+    #: What the harness itself measured for this task (capture, design
+    #: review, checks), rendered before the author's account. Batch 2
+    #: gui-ui-v3 on 5d9f5ff: t6's close-out said the preview failed and R4
+    #: was blocked while the harness had verified both views and the reviewer
+    #: had approved; the planner read only the account and spent t7 again.
+    harness: List[str] = field(default_factory=list)
 
     def render(self, *, with_previews: bool = True) -> str:
-        parts = [f"### Task {self.task_id} (by {self.author})", self.summary.strip()]
+        parts = [f"### Task {self.task_id} (by {self.author})"]
+        if self.harness:
+            parts.append("**Harness record (measured by the harness, not written by a model; where the "
+                         "account below disagrees, this is what was measured):**\n"
+                         + "\n".join(f"- {line}" for line in self.harness))
+        parts.append(self.summary.strip())
         if self.reasoning.strip():
             parts.append(f"**Why:** {self.reasoning.strip()}")
         if self.dead_ends:
@@ -154,6 +165,7 @@ class Ledger:
         reasoning: str,
         dead_ends: Optional[Sequence[str]] = None,
         refs: Optional[Sequence[ArtifactRef]] = None,
+        harness: Optional[Sequence[str]] = None,
     ) -> LedgerEntry:
         """Record a completed task. Reasoning is required, not optional."""
         if not summary.strip():
@@ -171,6 +183,7 @@ class Ledger:
             reasoning=reasoning,
             dead_ends=list(dead_ends or []),
             refs=list(refs or []),
+            harness=list(harness or []),
         )
         self._entries.append(entry)
         return entry

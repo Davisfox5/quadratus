@@ -1,0 +1,186 @@
+"""The Project tab can serve a finished run's files (batch 2 gui-ui-v3 on
+5d9f5ff: returning project/.quadratus/runs/<id>/report.md directly raised
+Gradio's InvalidPathError, which blanked the report, the source changes and
+the downloads, and the browser download failed)."""
+
+import tempfile
+
+import pytest
+
+from quadratus import gui
+from quadratus.config import Settings
+
+
+def _layout(tmp_path, monkeypatch):
+    run_dir = tmp_path / "project" / ".quadratus" / "runs" / "20261009T044636Z-1a7c3419"
+    run_dir.mkdir(parents=True)
+    for name in gui.RUN_FILES:
+        (run_dir / name).write_text(f"{name} body\n")
+    system_temp = tmp_path / "systemtemp"
+    system_temp.mkdir()
+    gui_cwd = tmp_path / "guicwd"
+    gui_cwd.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(system_temp))
+    monkeypatch.chdir(gui_cwd)
+    return run_dir, system_temp
+
+
+def _launched(monkeypatch):
+    pytest.importorskip("gradio")
+    from gradio.context import LocalContext
+    demo = gui.build_interface(Settings())
+    monkeypatch.setattr(demo, "has_launched", True, raising=False)
+    token = LocalContext.blocks.set(demo)
+    return token
+
+
+def test_gradio_refuses_the_run_folder_and_accepts_the_copies(tmp_path, monkeypatch):
+    run_dir, system_temp = _layout(tmp_path, monkeypatch)
+    from gradio.context import LocalContext
+    from gradio.exceptions import InvalidPathError
+    from gradio.processing_utils import _check_allowed
+    token = _launched(monkeypatch)
+    try:
+        with pytest.raises(InvalidPathError):
+            _check_allowed(str(run_dir / "report.md"), False)   # the failure the real run hit
+        copies, problem = gui.downloadable_files(run_dir)
+        assert problem == "" and [p.rsplit("/", 1)[1] for p in copies] == list(gui.RUN_FILES)
+        for path in copies:
+            _check_allowed(path, False)
+            assert path.startswith(str(system_temp))
+        assert open(copies[0]).read() == "report.md body\n"
+        assert (run_dir / "report.md").read_text() == "report.md body\n", "the originals stay the record"
+    finally:
+        LocalContext.blocks.reset(token)
+
+
+def test_run_project_ui_yields_servable_copies(tmp_path, monkeypatch):
+    run_dir, system_temp = _layout(tmp_path, monkeypatch)
+
+    class Result:
+        report, diff = "report", "diff"
+    Result.run_dir = run_dir
+    monkeypatch.setattr("quadratus.project_run.run_project", lambda *a, **k: Result())
+    *_, last = gui.run_project_ui("goal", str(tmp_path / "project"), True, "", "adversarial", 3, Settings())
+    report, diff, files = last
+    assert report == "report" and diff == "diff"
+    assert files and all(f.startswith(str(system_temp)) for f in files)
+
+
+def test_missing_files_and_links_are_not_offered_and_a_failed_copy_is_named(tmp_path, monkeypatch):
+    run_dir, _ = _layout(tmp_path, monkeypatch)
+    def failing(*a, **k):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(tempfile, "mkdtemp", failing)
+    files, problem = gui.downloadable_files(run_dir)
+    assert files == [] and "could not be offered" in problem and str(run_dir) in problem
+    monkeypatch.undo()
+    for name in gui.RUN_FILES:
+        (run_dir / name).unlink()
+    files, problem = gui.downloadable_files(run_dir)
+    assert files == [] and problem == ""
+    (run_dir / "report.md").symlink_to(tmp_path / "elsewhere")
+    files, _ = gui.downloadable_files(run_dir)
+    assert files == [], "a link is never copied"
+
+
+def test_a_linked_run_file_is_never_copied(tmp_path, monkeypatch):
+    run_dir, _ = _layout(tmp_path, monkeypatch)
+    secret = tmp_path / "secret.txt"
+    secret.write_text("not a run file\n")
+    (run_dir / "ledger.md").unlink()
+    (run_dir / "ledger.md").symlink_to(secret)
+    files, _ = gui.downloadable_files(run_dir)
+    assert [f.rsplit("/", 1)[1] for f in files] == ["report.md", "changes.diff", "result.json"]
+
+
+
+def test_a_run_folder_swapped_for_a_link_after_it_is_bound_serves_the_original_bytes(tmp_path, monkeypatch):
+    """Codex review of 7515f28: a link check followed by a pathname copy
+    could be raced, and the replacement reached the download."""
+    import os
+    run_dir, _ = _layout(tmp_path, monkeypatch)
+    evil = tmp_path / "evil"
+    evil.mkdir()
+    for name in gui.RUN_FILES:
+        (evil / name).write_text("foreign\n")
+    parked = tmp_path / "parked"
+    real_open = os.open
+    swapped = []
+
+    def swapping_open(path, flags, *args, **kwargs):
+        if path == "report.md" and not swapped:
+            os.rename(run_dir, parked)
+            os.symlink(evil, run_dir)
+            swapped.append(1)
+        return real_open(path, flags, *args, **kwargs)
+    monkeypatch.setattr(gui.os, "open", swapping_open)
+    files, problem = gui.downloadable_files(run_dir)
+    monkeypatch.setattr(gui.os, "open", real_open)
+    assert swapped and problem == ""
+    assert [open(f).read() for f in files] == [f"{name} body\n" for name in gui.RUN_FILES]
+
+
+def test_a_linked_location_above_the_project_is_resolved_once_and_then_bound(tmp_path, monkeypatch):
+    """macOS keeps /var and /tmp behind links, so the project's own location
+    may be reached through one."""
+    run_dir, _ = _layout(tmp_path, monkeypatch)
+    alias = tmp_path / "alias"
+    alias.symlink_to(tmp_path / "project")
+    files, problem = gui.downloadable_files(alias / ".quadratus" / "runs" / run_dir.name)
+    assert problem == "" and [open(f).read() for f in files] == [f"{name} body\n" for name in gui.RUN_FILES]
+
+
+@pytest.mark.parametrize("linked", [".quadratus", "runs"])
+def test_a_static_link_inside_the_state_path_is_refused(tmp_path, monkeypatch, linked):
+    """Codex review of 7515f28: a symlinked run parent was followed although
+    the run folder itself was not a link."""
+    run_dir, _ = _layout(tmp_path, monkeypatch)
+    project = tmp_path / "project"
+    elsewhere = tmp_path / "elsewhere"
+    if linked == ".quadratus":
+        (project / ".quadratus").rename(elsewhere)
+        (project / ".quadratus").symlink_to(elsewhere)
+    else:
+        (project / ".quadratus" / "runs").rename(elsewhere)
+        (project / ".quadratus" / "runs").symlink_to(elsewhere)
+    files, problem = gui.downloadable_files(run_dir)
+    assert files == [] and str(run_dir) in problem
+
+
+def test_a_fifo_in_a_file_slot_never_blocks_and_is_named(tmp_path, monkeypatch):
+    """Codex review of 35f198e: a FIFO in place of a run file blocked the
+    open before its type was checked."""
+    import os
+    import threading
+    run_dir, _ = _layout(tmp_path, monkeypatch)
+    (run_dir / "ledger.md").unlink()
+    os.mkfifo(run_dir / "ledger.md")
+    result = {}
+    worker = threading.Thread(target=lambda: result.update(out=gui.downloadable_files(run_dir)), daemon=True)
+    worker.start()
+    worker.join(10)
+    assert not worker.is_alive(), "the export blocked on a FIFO"
+    files, problem = result["out"]
+    assert [f.rsplit("/", 1)[1] for f in files] == ["report.md", "changes.diff", "result.json"]
+    assert "ledger.md (not a regular file)" in problem and str(run_dir) in problem
+
+
+def test_an_unreadable_or_linked_file_is_named_and_a_missing_one_is_not(tmp_path, monkeypatch):
+    import os
+    run_dir, _ = _layout(tmp_path, monkeypatch)
+    (run_dir / "changes.diff").unlink()
+    (run_dir / "ledger.md").unlink()
+    (run_dir / "ledger.md").symlink_to(tmp_path / "elsewhere")
+    real_open = os.open
+
+    def refusing(path, flags, *args, **kwargs):
+        if path == "result.json":
+            raise PermissionError(13, "Permission denied")
+        return real_open(path, flags, *args, **kwargs)
+    monkeypatch.setattr(gui.os, "open", refusing)
+    files, problem = gui.downloadable_files(run_dir)
+    monkeypatch.setattr(gui.os, "open", real_open)
+    assert [f.rsplit("/", 1)[1] for f in files] == ["report.md"]
+    assert "ledger.md (a link)" in problem and "result.json (could not be opened: Permission denied)" in problem
+    assert "changes.diff" not in problem

@@ -185,7 +185,8 @@ def test_secrets_in_commands_and_reasoning_stay_out_of_the_shareable_trace(tmp_p
     shared = (tmp_path / "run" / "trace.jsonl").read_text()
     assert secret not in shared and secret not in trace.render_timeline(records)
     assert records[0]["commands"] == [{"program": "curl", "exit": None, "outcome": "success"}]
-    assert {"name": "Read", "outcome": "success", "path": "/work/proj/a.py"} in records[0]["tool_calls"]
+    assert {"name": "Read", "outcome": "success", "path": "/work/proj/a.py"} in [
+        {k: v for k, v in c.items() if k != "id"} for c in records[0]["tool_calls"]], "ids are opaque, not text"
     assert records[0]["protocol_attempts"] == [{"verb": "WORKER"}]
     detail = tmp_path / "run" / "native-private" / "trace-detail.jsonl"
     assert secret in detail.read_text(), "the owner-only detail keeps it for the operator"

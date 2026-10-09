@@ -199,8 +199,18 @@ class PersistentMemory:
         self.store = store
         self.ledger = Ledger(invariants=invariants)
 
+    #: Set by the session: the harness's own measured facts for a task id,
+    #: carried into its ledger entry ahead of the author's account.
+    harness_record = None
+
     def absorb(self, summary: TaskSummary) -> None:
         """Fold a completed task into the orchestrator's memory."""
+        facts = []
+        if self.harness_record is not None:
+            try:
+                facts = list(self.harness_record(summary.task_id) or [])
+            except Exception:  # noqa: BLE001 -- the record never blocks a close
+                facts = []
         self.ledger.append(
             task_id=summary.task_id,
             author=summary.author,
@@ -208,6 +218,7 @@ class PersistentMemory:
             reasoning=summary.reasoning,
             dead_ends=summary.dead_ends,
             refs=summary.refs,
+            harness=facts,
         )
 
     def fetch(self, ref_or_id) -> str:

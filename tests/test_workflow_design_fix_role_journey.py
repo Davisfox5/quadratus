@@ -42,7 +42,7 @@ def test_design_fix_gets_the_lead_packet_in_a_bounded_session_journey(
             return "SUMMARY: done\nDECISIONS: none recorded\nDEAD ENDS: none"
         if call.role == "recheck":
             return "RESOLVED"
-        return "No blocking findings."
+        return "No blocking findings.\nREVIEW: COMPLETE"
 
     replay = H.run(tmp_path, monkeypatch, respond, files=FILES)
     fixes = replay.of("design-fix")

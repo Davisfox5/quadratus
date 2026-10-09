@@ -50,11 +50,13 @@ def _run(tmp_path, monkeypatch, reviews, lead_reply, *, capture_failure="", file
     provider = SimpleNamespace(restricted=False, in_directory=lambda *a, **k: view)
     monkeypatch.setattr(fleet, "provider_for", lambda key: provider)
     prompts, reviews = [], list(reviews)
+    lead_replies = list(lead_reply) if isinstance(lead_reply, list) else [lead_reply]
 
     def generate(model_key, provider, prompt, role):
         prompts.append((model_key, prompt))
-        if "Reply with exactly one line" in prompt and "CAPTURE:" in prompt:
-            return lead_reply
+        if "CAPTURE:" in prompt and ("Reply with exactly one line" in prompt
+                                     or "carried no CAPTURE: line" in prompt):
+            return lead_replies.pop(0) if len(lead_replies) > 1 else lead_replies[0]
         answer = reviews.pop(0)
         if isinstance(answer, Exception):
             raise answer
@@ -65,10 +67,16 @@ def _run(tmp_path, monkeypatch, reviews, lead_reply, *, capture_failure="", file
 
     def harness_capture(self, spec):
         captures.append(dict(spec.scope.capture))
+        # As the real harness capture does: the attempt retires the old
+        # measurement first and records its own once the renders are written.
+        self._harness_tasks.add(spec.task_id)
+        self._capture_receipts.pop(spec.task_id, None)
         if capture_failure and len(captures) > 1:
             return capture_failure
         _fake_evidence(root)
         _postdate(root)
+        from quadratus.design_evidence import view_receipt
+        self._capture_receipts[spec.task_id] = {v: view_receipt(root, spec.task_id, v) for v in ("desktop", "mobile")}
         return ""
     monkeypatch.setattr(Session, "_harness_capture", harness_capture)
     monkeypatch.setattr(Session, "_harness_captures", lambda self, spec: True)
@@ -223,3 +231,82 @@ def test_a_reviewer_that_altered_its_copy_gives_no_verdict(tmp_path, monkeypatch
 def test_the_capture_line_parses_like_a_scope_capture(reply, capture, why):
     got, reason = _parse_capture_line(reply, "t6")
     assert got == capture and why in reason
+
+
+# -- series rule-3572b72 f5: the marker after prose on the same line is the declaration ---
+
+def test_a_capture_marker_after_prose_on_the_same_line_is_read(tmp_path, monkeypatch):
+    # The saved f5 reply held "load.CAPTURE: {...}" after a sentence; the
+    # line-anchored read recorded "no CAPTURE: line" and the verdict stood.
+    reply = ("The empty state shows when a project has no clips, so the steps must create one before the "
+             "wait.CAPTURE: " + json.dumps(REACHED) + " which reaches it.")
+    session, spec, prompts, captures = _run(tmp_path, monkeypatch, [BLIND, "APPROVED"], reply)
+    assert captures == [DECLARED, REACHED] and spec.scope.capture == REACHED
+    assert session.design_checks[0]["recapture"]["verified"] is True
+    assert len([p for _, p in prompts if "Reply with exactly one line" in p and "CAPTURE:" in p]) == 1, \
+        "one bounded declaration round, never a re-ask"
+
+
+def test_a_reply_with_no_marker_at_all_keeps_the_verdict_with_no_second_call(tmp_path, monkeypatch):
+    session, spec, prompts, captures = _run(tmp_path, monkeypatch, [BLIND], "narration only, no declaration")
+    assert len([p for _, p in prompts if "CAPTURE:" in p and "Reply with exactly one line" in p]) == 1
+    assert captures == [DECLARED]
+    assert session.design_checks[0]["recapture"]["problem"] == "no CAPTURE: line in the reply"
+
+
+@pytest.mark.parametrize("reply, expected", [
+    ("CAPTURE: none", "none"),
+    ("I think CAPTURE: none. Nothing shows it.", "none"),
+    ('prose CAPTURE: {"path": "/x", "steps": []} trailing words', "/x"),
+    ("the word capture: appears but with no object", "no usable"),
+    ("CAPTURE:   ", "no usable"),
+    # Codex review of 351d3ba: two markers or two objects are a choice the
+    # harness never makes; a later invalid correction is not silently dropped.
+    ('CAPTURE: {"path": "/a", "steps": []}\nlater CAPTURE: {"path": "/b", "steps": []}', "never a choice"),
+    ('CAPTURE: {"path": "/first", "steps": []} CAPTURE: none', "never a choice"),
+    ('CAPTURE: {"path": "/a", "steps": []}\nCorrection.CAPTURE: invalid', "never a choice"),
+    ('CAPTURE: {"path": "/a", "steps": []} {"path": "/b", "steps": []}', "more than one object"),
+    # Codex review of 6844b97: ambiguity across lines and case is a choice too.
+    ('CAPTURE: {"path": "/first", "steps": []}\n{"path": "/second", "steps": []}', "never a choice"),
+    ('CAPTURE: {"path": "/first", "steps": []}\nCorrection.capture: none', "never a choice"),
+    ('the prompt showed CAPTURE: {"path": "/route", "steps": []}\ncapture: {"path": "/real", "steps": []}', "never a choice"),
+    # Codex review of ada4c75: unmarked objects never become a declaration,
+    # and a malformed later marker is a conflict, not something to drop.
+    ('{"path": "/example", "steps": []}', "no usable"),
+    ('Example only; I have not chosen a declaration:\n{"path": "/example", "steps": []}', "no usable"),
+    ('CAPTURE: {"path": "/first", "steps": []}\nCorrection.capture: invalid', "never a choice"),
+    ('CAPTURE: {"path": "/first", "steps": []}\nCorrection.CAPTURE:', "never a choice"),
+    ('CAPTURE: {"path": "/first", "steps": []}\n{"path":', "never a choice"),
+    ("the capture: wait on the result row, then\nCAPTURE: none", "never a choice"),
+])
+def test_exactly_one_declaration_is_read_wherever_the_marker_sits(reply, expected):
+    capture, why = _parse_capture_line(reply, "t6")
+    if expected == "none":
+        assert capture is None and "no page and steps" in why
+    elif expected.startswith("/"):
+        assert capture["path"] == expected
+    else:
+        assert capture is None and expected in why
+
+
+def test_the_one_redeclaration_is_shared_by_both_routes(tmp_path, monkeypatch):
+    # Codex review of 351d3ba: the capture-check route redeclared and passed,
+    # then a blind review bought a second declaration, a third capture and a
+    # second review. One allowance per design check; the verdict then stands.
+    from quadratus.session import Session as S
+    calls = []
+    original = S._recapture_declared
+
+    def counting(self, spec, lead, task, record, verdict, **kw):
+        calls.append(kw.get("source", "reviewer"))
+        return original(self, spec, lead, task, record, verdict, **kw)
+    monkeypatch.setattr(S, "_recapture_declared", counting)
+    session, spec, prompts, captures = _run(tmp_path, monkeypatch, [BLIND, BLIND],
+                                            "CAPTURE: " + json.dumps(REACHED))
+    record = session.design_checks[0]
+    record["recapture_spent"] = True   # as the capture-check route would have left it
+    assert len([p for _, p in prompts if "Reply with exactly one line" in p and "CAPTURE:" in p]) == 1
+    assert len(captures) == 2
+    # a second ask on the same record is refused without a call
+    assert original(session, spec, LEAD, None, record, BLIND) is None
+    assert "spent" in record["recapture_blocked"]
