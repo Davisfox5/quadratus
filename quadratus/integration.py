@@ -342,6 +342,9 @@ class GateResult:
     #: The single-command gate's structured report (read_report); a suite
     #: carries one per receipt instead.
     report: Optional[dict] = None
+    #: Case names read from the whole output before the tail is kept
+    #: (case_record); a suite carries one per receipt instead.
+    cases: Optional[dict] = None
 
     def render(self) -> str:
         """The operator's view: the exact command, for the run record."""
@@ -483,6 +486,7 @@ class IntegrationGate:
             returncode=proc.returncode,
             output=combined[-_TAIL_CHARS:],
             report=report,
+            cases=case_record(combined),
         )
 
 
@@ -598,6 +602,10 @@ class GateReceipt:
     #: rather than from argv, '' when none was found (R2: ``addopts = -k
     #: unit`` in pytest.ini ran one case of a named file and looked whole).
     selection: str = ''
+    #: Case names read from the whole output before the tail is kept
+    #: (case_record), None past its bound (Codex review of 67c9fad, S1: the
+    #: 2,000-character tail lost the names that told two skips apart).
+    cases: Optional[dict] = None
 
 
 def _test_count(output):
@@ -721,7 +729,7 @@ class GateSuite:
                         status, reason = 'failed', 'fewer tests than required'
                 receipt = GateReceipt(**base, status=status, reason=reason,
                                       returncode=proc.returncode, output=output[-_TAIL_CHARS:], tests=count,
-                                      report=report)
+                                      report=report, cases=case_record(output))
             except subprocess.TimeoutExpired:
                 receipt = GateReceipt(**base, status='error', reason=f'timed out after {command.timeout}s')
             except OSError as exc:
@@ -910,25 +918,96 @@ def config_selection(argv, cwd, root) -> str:
     names = ('NODE_OPTIONS', 'PYTEST_ADDOPTS') if _is_pytest(argv) else ('NODE_OPTIONS',)
     for name in names:
         value = os.environ.get(name, '')
-        if value and _filters(value):
+        if value and (_filters(value) or _NODE_CONFIG.search(value) or (
+                name == 'PYTEST_ADDOPTS' and _plugin_option(value))):
             found.append(f'{name}={value}')
+    # A node configuration file can carry testRunner selection the argv never
+    # shows (Codex review of 67c9fad, S2: --experimental-config-file with
+    # test-name-pattern = unit). Its contents are not read: selection there is
+    # unknown, so the run is not whole.
+    configured = [str(a) for a in argv if _NODE_CONFIG.search(str(a))]
+    if configured:
+        found.append(f'node configuration file: {configured[0]}')
     if _is_pytest(argv):
         try:
             root, here = Path(root).resolve(), Path(cwd).resolve()
         except OSError:
             return 'command cwd unreadable'
+        plugins = _plugin_option(shlex.join(str(a) for a in _runner_args(argv)))
+        if plugins:
+            found.append(f'argv loads plugin {plugins}')
+        start = here
         while here.is_relative_to(root):
             for name in _PYTEST_CONFIGS:
                 addopts = _config_addopts(here / name)
                 where = (here / name).relative_to(root).as_posix()
                 if addopts is None:
                     found.append(f'{where}: unreadable')
-                elif addopts and _filters(addopts):
+                elif addopts and (_filters(addopts) or _plugin_option(addopts)):
                     found.append(f'{where}: addopts = {addopts}')
             if here == root:
                 break
             here = here.parent
+        hooks = _collection_hooks(argv, start, root)
+        if hooks:
+            found.append(hooks)
     return '; '.join(found)[:300]
+
+
+#: Node options that read a configuration file (node 23.10 and later).
+_NODE_CONFIG = re.compile(r'^--experimental(?:-default)?-config-file\b|\s--experimental(?:-default)?-config-file\b')
+#: conftest.py names that can drop, replace or bypass collected tests without
+#: the runner reporting them deselected or skipped (S2: a
+#: pytest_collection_modifyitems hook removed test_browser silently), or load
+#: a plugin that can.
+_COLLECTION_HOOKS = re.compile(r'\b(?:pytest_collection_modifyitems|pytest_ignore_collect|pytest_collect_file|'
+                               r'pytest_collect_directory|pytest_pycollect_makeitem|pytest_pycollect_makemodule|'
+                               r'pytest_collection|pytest_runtest_protocol|pytest_pyfunc_call|pytest_runtest_call|'
+                               r'pytest_deselected|collect_ignore|collect_ignore_glob|pytest_plugins)\b')
+
+
+def _plugin_option(options: str) -> str:
+    """A ``-p NAME`` plugin load other than ``-p no:NAME`` (a plugin can
+    select tests); '' when there is none."""
+    try:
+        tokens = shlex.split(options)
+    except ValueError:
+        return 'unparsable options'
+    for i, token in enumerate(tokens):
+        value = tokens[i + 1] if token == '-p' and i + 1 < len(tokens) else (
+            token[2:] if token.startswith('-p') and len(token) > 2 else '')
+        if value and not value.startswith('no:'):
+            return value
+    return ''
+
+
+def _collection_hooks(argv, cwd: Path, root: Path) -> str:
+    """The first conftest.py pytest would load for this command (from the
+    project root down to its cwd and to each file it names) that defines a
+    collection or execution hook; '' when none does. Read only, never run."""
+    rel = cwd.relative_to(root).as_posix() if cwd.is_relative_to(root) else '.'
+    dirs = {Path(rel)}
+    for operand in operand_paths(argv, root, rel):
+        target = root / operand
+        dirs.add(Path(operand) if target.is_dir() else Path(operand).parent)
+    seen = set()
+    for directory in sorted(dirs):
+        parts = [p for p in directory.parts if p not in ('', '.')]
+        for depth in range(len(parts) + 1):
+            conftest = root.joinpath(*parts[:depth], 'conftest.py')
+            if conftest in seen:
+                continue
+            seen.add(conftest)
+            if not conftest.is_file():
+                continue
+            try:
+                text = conftest.read_text(encoding='utf-8', errors='replace')
+            except OSError:
+                return f'{conftest.relative_to(root).as_posix()}: unreadable'
+            hook = _COLLECTION_HOOKS.search(text)
+            if hook:
+                return f'{conftest.relative_to(root).as_posix()}: {hook.group(0)}'
+    return ''
 
 
 def _filters(options: str) -> bool:
@@ -954,33 +1033,57 @@ _TAP_CASE = re.compile(r'^\s*(not ok|ok)\s+\d+\s+-\s+(.*?)(?:\s+#\s*(SKIP|TODO)\
 _PYTEST_CASE = re.compile(r'^(\S+::\S+)\s+(PASSED|FAILED|SKIPPED|XFAIL|XPASS|ERROR)\b')
 
 
-def case_outcomes(output: str):
-    """``(skipped, executed)`` case names the runner printed, as Counters:
-    node's spec reporter (``\u2714``/``\u2716``/``\ufe63``), TAP (``ok N - name
-    # SKIP``) and pytest's verbose lines. Names, not file-qualified: node's
-    spec output carries no file per case. Todo cases are neither."""
-    from collections import Counter
-    skipped, executed = Counter(), Counter()
+def _case_lines(output: str):
+    """``(name, kind)`` for each case line the runner printed, ``kind``
+    skipped, executed or other. Node's spec reporter (``\u2714``/``\u2716``/
+    ``\ufe63``), TAP (``ok N - name # SKIP``) and pytest's verbose lines. A
+    todo case and a pytest XFAIL are other: XFAIL does not say whether the
+    body ran, and ``xfail(run=False)`` never runs it (Codex review of
+    67c9fad, S5)."""
     for line in (output or '').splitlines():
         spec = _SPEC_CASE.match(line)
         if spec:
             mark, name, directive = spec.group(1), spec.group(2), (spec.group(3) or '')
-            if directive.upper().startswith('TODO'):
-                continue
-            (skipped if mark == '\ufe63' else executed)[name] += 1
+            yield name, ('other' if directive.upper().startswith('TODO')
+                         else 'skipped' if mark == '\ufe63' else 'executed')
             continue
         tap = _TAP_CASE.match(line)
         if tap:
             directive = (tap.group(3) or '').upper()
-            if directive == 'SKIP':
-                skipped[tap.group(2)] += 1
-            elif not directive:
-                executed[tap.group(2)] += 1
+            yield tap.group(2), {'SKIP': 'skipped', '': 'executed'}.get(directive, 'other')
             continue
         case = _PYTEST_CASE.match(line)
         if case:
-            (skipped if case.group(2) == 'SKIPPED' else executed)[case.group(1)] += 1
+            yield case.group(1), {'SKIPPED': 'skipped', 'XFAIL': 'other'}.get(case.group(2), 'executed')
+
+
+def case_outcomes(output: str):
+    """``(skipped, executed)`` case names the runner printed, as Counters.
+    Names, not file-qualified: node's spec output carries no file per case."""
+    from collections import Counter
+    skipped, executed = Counter(), Counter()
+    for name, kind in _case_lines(output):
+        if kind == 'skipped':
+            skipped[name] += 1
+        elif kind == 'executed':
+            executed[name] += 1
     return skipped, executed
+
+
+#: Bound on case lines kept per command; past it the record is None.
+_MAX_CASES = 20_000
+
+
+def case_record(output: str) -> Optional[dict]:
+    """Every case name the whole output prints, by kind (skipped, executed,
+    other), as name-to-count maps; None past ``_MAX_CASES`` lines."""
+    record = dict(skipped={}, executed={}, other={})
+    for i, (name, kind) in enumerate(_case_lines(output)):
+        if i >= _MAX_CASES:
+            return None
+        name = name[:300]
+        record[kind][name] = record[kind].get(name, 0) + 1
+    return record
 
 
 def skipped_cases(receipt):

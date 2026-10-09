@@ -1139,6 +1139,7 @@ def _check_runs(check: dict, root=None) -> List[dict]:
     many cases executed and how many it skipped (None when unknown), and the
     files it names whole. A check with no receipts is one required command."""
     import shlex
+    from collections import Counter
     from types import SimpleNamespace
 
     from .integration import (
@@ -1150,15 +1151,22 @@ def _check_runs(check: dict, root=None) -> List[dict]:
         skipped_count,
     )
     receipts = check.get("receipts") or ()
+    # A single-command gate's selection and cwd are recorded on the check; its
+    # receipts (the one synthesized when original tests join, and theirs)
+    # keep them too, never weaker (Codex review of 67c9fad, S3 and S4).
+    direct = check.get("selection") or ""
     if receipts:
         rows = [dict(id=r.get("id"), passed=r.get("status") == "passed", required=r.get("required", True),
                      command=str(r.get("command") or ""), output=r.get("output") or "", report=r.get("report"),
-                     tests=r.get("tests"), cwd=r.get("cwd") or ".", selection=r.get("selection") or "")
+                     tests=r.get("tests"), cwd=r.get("cwd") or check.get("command_cwd") or ".",
+                     selection="; ".join(x for x in (r.get("selection") or "", direct if r.get("id") in (
+                         "check", "original-tests:check") else "") if x), cases=r.get("cases"))
                 for r in receipts]
     else:
         rows = [dict(id="check", passed=bool(check.get("passed")), required=True,
                      command=str(check.get("command") or ""), output=check.get("output") or "",
-                     report=check.get("report"), tests=None, cwd=".", selection=check.get("selection") or "")]
+                     report=check.get("report"), tests=None, cwd=check.get("command_cwd") or ".",
+                     selection=direct, cases=check.get("cases"))]
     out = []
     for row in rows:
         try:
@@ -1171,13 +1179,40 @@ def _check_runs(check: dict, root=None) -> List[dict]:
         # of 81adcc7, R2: pytest.ini's addopts = -k unit printed "1 passed, 1
         # deselected" for a named file and looked like a whole run).
         filtered = is_filtered(argv) or bool(row["selection"]) or deselected_count(row["output"]) > 0
-        skipped_names, executed_names = case_outcomes(row["output"])
+        if isinstance(row["cases"], dict):
+            skipped_names = Counter(row["cases"].get("skipped") or {})
+            executed_names = Counter(row["cases"].get("executed") or {})
+        else:
+            skipped_names, executed_names = case_outcomes(row["output"])
         out.append(dict(id=row["id"], passed=row["passed"], required=row["required"], filtered=filtered,
                         tests=tests, skipped=skipped_count(SimpleNamespace(output=row["output"],
                                                                            report=row["report"])),
                         files=set(operand_paths(argv, root, row["cwd"])),
                         skipped_names=skipped_names, executed_names=executed_names))
     return out
+
+
+def _receipt_names(receipt):
+    """``(skipped, every)`` case-name Counters for one receipt (an object or
+    a recorded dict), read from its whole-output ``cases`` record when it has
+    one and from its output tail otherwise; ``(None, None)`` when the names
+    printed do not account for every skip counted (unknown, never none)."""
+    from collections import Counter
+    from types import SimpleNamespace
+
+    from .integration import case_outcomes, skipped_count
+    get = receipt.get if isinstance(receipt, dict) else (lambda k, d=None: getattr(receipt, k, d))
+    count = skipped_count(SimpleNamespace(output=get("output") or "", report=get("report")))
+    record = get("cases")
+    if isinstance(record, dict):
+        skipped = Counter(record.get("skipped") or {})
+        every = skipped + Counter(record.get("executed") or {}) + Counter(record.get("other") or {})
+    else:
+        skipped, executed = case_outcomes(get("output") or "")
+        every = skipped + executed
+    if count is None or sum(skipped.values()) != count:
+        return None, None
+    return skipped, every
 
 
 def _complete_run(run: dict) -> bool:
@@ -5815,17 +5850,20 @@ class Session:
         commands run once on the run-start source (``_skip_baseline``), not
         whether test files changed: a product edit can turn a case into a skip
         (Codex review of 81adcc7, R3), and a case skipped since before the run
-        is not this task's missing acceptance (R4). Where the runner names its
-        cases the new skips are those names; where it does not, a total above
-        run start's counts, and so does any skip once test files changed, so
-        an unrelated old case that now runs cannot hide a new skip (F4).
-        Without a baseline every skip counts. The first check counts like any
+        is not this task's missing acceptance (R4). A skip is historical only
+        when its name is one case in both runs, read from the whole output,
+        and that case was skipped at run start (S1: two cases sharing a name,
+        or names lost from the output tail, hid a new skip). Anything else
+        counts, so an unrelated old case that now runs cannot hide a new skip
+        (F4). Without names, or without a baseline, every skip counts. The first check counts like any
         other; optional commands and the run-start compatibility receipts
         (``original-tests:*``, immutable by design) never record one."""
-        from .integration import GateReceipt, skipped_cases, skipped_count
+        from collections import Counter
+
+        from .integration import GateReceipt, skipped_count
         receipts = result.receipts or (GateReceipt(id="check", status="passed" if result.passed else "failed",
                                                    reason="", required=True, output=result.output,
-                                                   report=result.report),)
+                                                   report=result.report, cases=result.cases),)
         starts = getattr(self, "_start_skips", None) or {}
         keys = self._command_keys(gate) if gate is not None else {}
         for receipt in receipts:
@@ -5834,18 +5872,22 @@ class Session:
             count = skipped_count(receipt)
             if not count:
                 continue
-            names = skipped_cases(receipt)
+            names, every = _receipt_names(receipt)
             cases = sorted(names.elements()) if names is not None else None
             start = starts.get(keys.get(receipt.id))
-            if start is not None:
-                start_count, start_names = start
-                if names is not None and start_names is not None:
-                    new = names - start_names
-                    if not new:
-                        continue
-                    cases = sorted(new.elements())
-                elif count <= start_count and not self._tests_changed_in_run():
+            if start is not None and names is not None and start[1] is not None:
+                # Historical only when the name is one case in both runs and
+                # that case was skipped at run start: a name two cases share,
+                # or one that ran there, says nothing about which skipped now
+                # (Codex review of 67c9fad, S1). Without names on both sides
+                # every skip counts; equal totals and unchanged test bytes do
+                # not show the same case skipped.
+                start_skipped, start_every = start[1], start[2]
+                new = Counter({n: k for n, k in names.items()
+                               if not (every[n] == 1 and start_every[n] == 1 and start_skipped[n] == 1)})
+                if not new:
                     continue
+                cases = sorted(new.elements())
             if any(e.get("kind") == "skipped" and e["task"] == spec.task_id and e["receipt"] == receipt.id
                    and e["after_check"] == len(self.checks) for e in self.unexecuted_acceptance):
                 continue
@@ -5868,7 +5910,7 @@ class Session:
         project, and a project that changed while it ran fails the check as
         any check whose tree moved does. A command that could not run there
         has no baseline, so its skips all count."""
-        from .integration import run_original_tests, skipped_cases, skipped_count
+        from .integration import run_original_tests, skipped_count
         cache = self.__dict__.setdefault("_start_skips", {})
         tried = self.__dict__.setdefault("_start_skips_tried", set())
         start = getattr(self, "_run_start_contents", None)
@@ -5891,7 +5933,7 @@ class Session:
             if receipt.status == "passed" and key is not None:
                 count = skipped_count(receipt)
                 if count is not None:
-                    found[receipt.id.removeprefix("original-tests:")] = cache[key] = (count, skipped_cases(receipt))
+                    found[receipt.id.removeprefix("original-tests:")] = cache[key] = (count, *_receipt_names(receipt))
         tried.update(keys.values())
         self.skip_baselines.append(dict(task=task, problem=problem, receipts={
             k: dict(skipped=v[0], cases=sorted(v[1].elements()) if v[1] is not None else None)
@@ -7351,7 +7393,8 @@ class Session:
             self._handoff_unattributable(gate, result, task)
         self.checks.append({"passed": result.passed, "command": result.command,
                             "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
-                            "selection": self._gate_selection(gate),
+                            "selection": self._gate_selection(gate), "command_cwd": self._gate_cwd(gate),
+                            "cases": result.cases,
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
         # A passing check makes every earlier check failure in the same task
         # history: this invocation's attempts and an earlier invocation's, such
@@ -7498,7 +7541,8 @@ class Session:
             return
         self.checks.append({"passed": False, "command": result.command, "output": result.output,
                             "cwd": str(self.project or getattr(gate, 'cwd', '')),
-                            "selection": self._gate_selection(gate),
+                            "selection": self._gate_selection(gate), "command_cwd": self._gate_cwd(gate),
+                            "cases": result.cases,
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
         if self._outcome is not None:
             self._outcome.edge("checks", False)
@@ -7619,6 +7663,15 @@ class Session:
         commands = _gate_commands(gate, Path(self.project).resolve()) or []
         return {c.id: (c.id, tuple(c.argv), c.cwd) for c in commands}
 
+    def _gate_cwd(self, gate) -> str:
+        """A single-command gate's working directory relative to the project
+        ('.' for a suite, whose receipts carry their own; S4)."""
+        from .integration import IntegrationGate
+        if not isinstance(gate, IntegrationGate) or not self.project or not gate.cwd:
+            return "."
+        root, cwd = Path(self.project).resolve(), Path(gate.cwd).resolve()
+        return cwd.relative_to(root).as_posix() if cwd.is_relative_to(root) else "."
+
     def _gate_selection(self, gate) -> str:
         """Configuration or environment test selection for a single-command
         gate (a suite's receipts carry their own)."""
@@ -7681,7 +7734,8 @@ class Session:
             id="check", status="passed" if result.passed else "failed",
             reason="exit 0" if result.passed else "nonzero exit", required=True,
             command=result.command, returncode=result.returncode, output=result.output,
-            report=result.report),)
+            report=result.report, cwd=self._gate_cwd(gate), selection=self._gate_selection(gate),
+            cases=result.cases),)
         restored = [n for n in changed if n not in added]
         heading = ("Original tests (" + "; ".join(part for part in (
             f"run-start versions of {', '.join(restored)}" if restored else "",

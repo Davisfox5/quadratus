@@ -204,3 +204,126 @@ def test_case_outcomes_reads_spec_tap_and_pytest_lines():
     assert dict(skipped) == {"a": 1} and dict(executed) == {"b": 1, "c": 1}
     skipped, executed = case_outcomes("tests/t.py::test_a SKIPPED (x)\ntests/t.py::test_b PASSED\n")
     assert dict(skipped) == {"tests/t.py::test_a": 1} and dict(executed) == {"tests/t.py::test_b": 1}
+    skipped, executed = case_outcomes("tests/t.py::test_c XFAIL ([NOTRUN] why)\ntests/t.py::test_d XPASS\n")
+    assert not skipped and dict(executed) == {"tests/t.py::test_d": 1}, "an XFAIL may never have run"
+
+
+# Codex review of 67c9fad, S1-S5.
+
+def _flagged(tmp_path, unit, browser):
+    root = _node_project(tmp_path, browser)
+    (root / UNIT).write_text(unit)
+    (root / "flags.json").write_text('{"old": false, "browser": true}')
+    gate = GateSuite([GateCommand(id="ui", argv=(NODE, "--test", UNIT, BROWSER))], cwd=root)
+    session = _session(tmp_path, root, gate, f"R5: MET - {UNIT} and {BROWSER}")
+    session._snapshot_original_tests()
+    (root / "flags.json").write_text('{"old": true, "browser": false}')
+    return session
+
+
+FLAGS = ("const t=require('node:test');const f=require('node:fs');"
+         "const flags=JSON.parse(f.readFileSync('flags.json','utf8'));\n")
+
+
+@needs_node
+def test_a_name_two_cases_share_is_not_a_historical_skip(tmp_path):
+    session = _flagged(tmp_path, FLAGS + "t('case',{skip:!flags.old},()=>{});\n",
+                       FLAGS + "t('case',{skip:!flags.browser},()=>{});\n")
+    _gate(session, "t1", ["R5"])
+    assert session.unexecuted_acceptance[-1]["cases"] == ["case"]
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+
+
+@needs_node
+def test_names_past_the_output_tail_are_still_read(tmp_path):
+    padding = "".join(f"t('padding-{i}-a-long-distinct-case-name-for-the-output-tail',()=>{{}});\n" for i in range(90))
+    session = _flagged(tmp_path, "const t=require('node:test');t('unit',()=>{});\n",
+                       FLAGS + "t('old-platform',{skip:!flags.old},()=>{});"
+                       "t('required-browser',{skip:!flags.browser},()=>{});\n" + padding)
+    check = _gate(session, "t1", ["R5"])
+    assert "required-browser" not in check["receipts"][0]["output"]
+    assert check["receipts"][0]["cases"]["skipped"] == {"required-browser": 1}
+    assert session.unexecuted_acceptance[-1]["cases"] == ["required-browser"]
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+
+
+def test_a_collection_hook_or_plugin_is_selection(tmp_path):
+    root = tmp_path / "project"
+    (root / "tests" / "ui").mkdir(parents=True)
+    argv = [sys.executable, "-m", "pytest", "tests/ui/test_b.py"]
+    assert config_selection(argv, root, root) == ""
+    (root / "tests" / "conftest.py").write_text("def pytest_collection_modifyitems(items):\n    items[:] = []\n")
+    assert config_selection(argv, root, root) == "tests/conftest.py: pytest_collection_modifyitems"
+    (root / "tests" / "conftest.py").write_text("collect_ignore = ['ui']\n")
+    assert config_selection(argv, root, root) == "tests/conftest.py: collect_ignore"
+    (root / "tests" / "conftest.py").unlink()
+    assert config_selection([*argv, "-p", "no:cacheprovider"], root, root) == ""
+    assert config_selection([*argv, "-p", "myfilter"], root, root) == "argv loads plugin myfilter"
+    assert config_selection(["node", "--experimental-config-file=c.json", "--test", "a.test.js"], root, root) == (
+        "node configuration file: --experimental-config-file=c.json")
+
+
+def test_a_silent_collection_hook_cannot_discharge_a_named_file(tmp_path):
+    root = tmp_path / "project"
+    (root / "tests").mkdir(parents=True)
+    named = "tests/test_browser.py"
+    (root / named).write_text("def test_unit():\n    assert True\n"
+                              "def test_browser():\n    raise AssertionError('browser ran')\n")
+    (root / "tests" / "conftest.py").write_text(
+        "def pytest_collection_modifyitems(items):\n    items[:] = [i for i in items if i.name != 'test_browser']\n")
+    gate = GateSuite([GateCommand(id="browser", argv=(*PYTEST, named))], cwd=root)
+    session = _session(tmp_path, root, gate, f"R5: MET - {named}")
+    session._snapshot_original_tests()
+    _not_run(session, named)
+    check = _gate(session, "t1", ["R5"])
+    assert check["passed"] and "deselected" not in check["output"]
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+
+
+@needs_node
+def test_a_single_command_gate_keeps_its_cwd(tmp_path):
+    """Session construction binds a gate to the project; one set afterwards,
+    as the reviewer's control does, can run in a subdirectory."""
+    root = _node_project(tmp_path, "const t=require('node:test');t('browser',()=>{});\n")
+    session = _session(tmp_path, root, None, f"R5: MET - {BROWSER}")
+    session.config.integration_gate = IntegrationGate((NODE, "--test", "browser.test.js"), cwd=root / "tests" / "ui")
+    session._snapshot_original_tests()
+    _not_run(session, BROWSER)
+    check = _gate(session, "t1", ["R5"])
+    assert check["receipts"] == [] and check["command_cwd"] == "tests/ui"
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is True
+
+
+@needs_node
+def test_the_joined_primary_receipt_keeps_its_selection(tmp_path, monkeypatch):
+    monkeypatch.setenv("NODE_OPTIONS", "--test-name-pattern=unit")
+    root = _node_project(tmp_path, "const t=require('node:test');t('unit',()=>{});"
+                                   "t('browser',()=>{throw Error('browser ran')});\n")
+    (root / "tests" / "helper.js").write_text("// original helper\n")
+    session = _session(tmp_path, root, IntegrationGate((NODE, "--test", BROWSER), cwd=root), f"R5: MET - {BROWSER}")
+    session._snapshot_original_tests()
+    (root / "tests" / "helper.js").write_text("// changed helper\n")
+    _not_run(session, BROWSER)
+    check = _gate(session, "t1", ["R5"])
+    primary = next(r for r in check["receipts"] if r["id"] == "check")
+    assert primary["selection"].startswith("NODE_OPTIONS=")
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+
+
+def test_an_xfail_that_never_ran_does_not_discharge_a_named_skip(tmp_path):
+    root = tmp_path / "project"
+    (root / "tests").mkdir(parents=True)
+    named = "tests/test_browser.py"
+    body = ("import pytest\ndef test_unit():\n    assert True\n@MARK\n"
+            "def test_browser():\n    raise AssertionError('browser ran')\n")
+    (root / named).write_text("def test_unit():\n    assert True\ndef test_browser():\n    assert True\n")
+    gate = GateSuite([GateCommand(id="browser", argv=(*PYTEST, "-vv", named))], cwd=root)
+    session = _session(tmp_path, root, gate, f"R5: MET - {named}")
+    session._snapshot_original_tests()
+    (root / named).write_text(body.replace("MARK", "pytest.mark.skip(reason='missing browser')"))
+    _gate(session, "t1", ["R5"])
+    assert session.unexecuted_acceptance[-1]["cases"] == [named + "::test_browser"]
+    (root / named).write_text(body.replace("MARK", "pytest.mark.xfail(run=False, reason='still unavailable')"))
+    check = _gate(session, "t2", ["R1"])
+    assert "XFAIL" in check["output"]
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False

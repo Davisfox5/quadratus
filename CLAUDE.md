@@ -567,15 +567,21 @@ Key design decisions already settled:
   check skips anything (`skip_baselines`): a product edit that turns a case
   into a skip counts (Codex review of 81adcc7, R3), a case skipped since
   before the run does not, and the restored-original receipts never record
-  one (R4). New skips are compared by case name where the runner prints
-  names (node spec and TAP, pytest verbose); without names a total above
-  run start's counts, and any skip once test files changed. With no
-  baseline every skip counts. Optional commands never do. Only a *complete
+  one (R4). A skip is historical only when its name is one case in both
+  runs and that case was skipped at run start; names are read from the
+  whole output before its tail is kept (`case_record`, Codex review of
+  67c9fad, S1). A shared name, unknown names or no baseline: every skip
+  counts. A pytest XFAIL is not execution (S5). Optional commands never
+  record one. Only a *complete
   run* discharges a NOT RUN item (Codex review of b6ba3ba, F3, F4, F6): a
   later passing required command, no filter in argv, in pytest's
-  `addopts`/`PYTEST_ADDOPTS` or `NODE_OPTIONS`, and no case reported
-  deselected (R2), cases executed and zero skipped, naming every path of the
-  item as a whole operand read from the command's own cwd (R5). A named skip
+  `addopts`/`PYTEST_ADDOPTS` or `NODE_OPTIONS`, no case reported
+  deselected (R2), no `-p` plugin, no collection or execution hook in a
+  conftest.py pytest would load, no node configuration file (S2), cases
+  executed and zero skipped, naming every path of the item as a whole
+  operand read from the command's own cwd (R5; a single-command gate's cwd
+  and selection are kept on its check and on the receipt synthesized when
+  original tests join, S3 and S4). A named skip
   fact is discharged by a later passing unfiltered run of the same command
   that executed each named case and skipped none of them; an unnamed one by
   such a run skipping nothing. A substring, an optional or skipped receipt, a
