@@ -480,3 +480,63 @@ def test_a_pytest_case_block_ignores_its_neighbours_and_sees_its_decorators(tmp_
     assert _case_block(key, True, old) == _case_block(key, True, old + "def test_new():\n    pass\n")
     assert _case_block(key, True, old) != _case_block(key, True, old.replace("reason='x'", "reason='y'"))
     assert _case_block(key, True, "def test_other():\n    pass\n") is None
+
+
+# Codex review of f2f66ff, W1-W3.
+
+def test_a_case_line_counts_only_for_its_own_runner():
+    from quadratus.integration import case_record, runner_of
+    printed = "tests/ui/browser.test.js::test_browser XFAIL\n✔ unit (0.1ms)\nok 2 - tap-case\n"
+    assert runner_of(["node", "--test", "a.test.js"]) == "node"
+    assert runner_of([sys.executable, "-m", "pytest", "-q"]) == "pytest"
+    assert runner_of(["make", "test"]) is None
+    node = case_record(printed, "node")
+    assert node["qualified"] == [] and node["other"] == {} and node["executed"] == {"unit": 1, "tap-case": 1}
+    pytest_record = case_record(printed, "pytest")
+    assert pytest_record["qualified"] == ["tests/ui/browser.test.js::test_browser"]
+    assert pytest_record["executed"] == {}, "spec and TAP lines are not pytest cases"
+    assert case_record(printed)["qualified"] == [], "an unknown runner qualifies nothing"
+
+
+@needs_node
+def test_a_logged_pytest_line_does_not_qualify_a_node_case(tmp_path):
+    name = "tests/ui/browser.test.js::test_browser"
+    log = f"console.log('{name} XFAIL');"
+    root = _node_project(tmp_path, f"const t=require('node:test');t('{name}',()=>{{}});\n")
+    gate = GateSuite([GateCommand(id="ui", argv=(NODE, "--test", "--test-reporter=spec", UNIT, BROWSER))], cwd=root)
+    session = _session(tmp_path, root, gate, f"R5: MET - {BROWSER}")
+    session._snapshot_original_tests()
+    (root / BROWSER).write_text(f"const t=require('node:test');{log}t('{name}',{{skip:true}},()=>{{}});\n")
+    check = _gate(session, "t1", ["R5"])
+    assert check["receipts"][0]["cases"]["qualified"] == []
+    (root / UNIT).write_text(f"const t=require('node:test');{log}t('unit',()=>{{}});t('{name}',()=>{{}});\n")
+    (root / BROWSER).write_text("const t=require('node:test');t('browser-still-unavailable',{skip:true},()=>{});\n")
+    _gate(session, "t2", ["R1"])
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+
+
+@needs_node
+def test_a_changed_multiline_body_is_not_historical(tmp_path):
+    def browser(body):
+        return f"const t=require('node:test');\nt('browser', {{skip: true}}, () => {{\n  {body}\n}});\n"
+    root = _node_project(tmp_path, browser("const legacy = 'old platform';"))
+    gate = GateSuite([GateCommand(id="ui", argv=(NODE, "--test", UNIT, BROWSER))], cwd=root)
+    session = _session(tmp_path, root, gate, f"R5: MET - {BROWSER}")
+    session._snapshot_original_tests()
+    (root / BROWSER).write_text(browser("throw new Error('required browser acceptance never ran');"))
+    _gate(session, "t1", ["R5"])
+    assert session.unexecuted_acceptance and session.unexecuted_acceptance[-1]["cases"] == ["browser"]
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+
+
+def test_a_pytest_id_resolves_along_its_class_path():
+    from quadratus.session import _case_block
+    source = ("import pytest\nclass TestBrowser:\n    @pytest.mark.skip\n    def test_acceptance(self):\n        a = 1\n"
+              "class TestLegacy:\n    @pytest.mark.skip\n    def test_acceptance(self):\n        b = 2\n")
+    swapped = source.replace("a = 1", "TMP").replace("b = 2", "a = 1").replace("TMP", "b = 2")
+    key = "tests/test_b.py::TestBrowser::test_acceptance"
+    assert _case_block(key, True, source) != _case_block(key, True, swapped)
+    assert _case_block("tests/test_b.py::test_acceptance", True, source) is None, "no module-level test of that name"
+    assert _case_block(key + "[chromium]", True, source) == _case_block(key, True, source)
+    twice = source + "class TestBrowser:\n    pass\n"
+    assert _case_block(key, True, twice) is None, "an ambiguous class is unknown"

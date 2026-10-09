@@ -570,10 +570,13 @@ Key design decisions already settled:
   is historical only when its name is one case in both runs, that case was
   skipped at run start, and the one test file holding it (the file in a pytest
   node id, or the one file with the bare name quoted) is the same file with
-  that case's own definition unchanged since run start: the test function with
-  its decorators for pytest, the quoting lines for a bare name, so tests added
-  beside it do not matter (Codex review of e530b89, U1; 5292fc2, V2); names
-  are read from the whole output before its tail is kept (`case_record`, Codex
+  that case's own definition unchanged since run start: for pytest the test
+  function with its decorators, resolved along its whole class path with each
+  enclosing class's decorators (an ambiguous or missing path is unknown); for
+  a bare name every registration call quoting it, read whole by a bounded
+  bracket scan, so a changed callback body counts and tests added beside it do
+  not (Codex review of e530b89, U1; 5292fc2, V2; f2f66ff, W2, W3); names are
+  read from the whole output before its tail is kept (`case_record`, Codex
   review of 67c9fad, S1), and a name over 300 characters is keyed by its
   SHA256 (`case_key`, d157378 T1). A shared name, a record past its bound (the
   tail is never used as identity, T2) or no baseline: every skip counts. A
@@ -589,12 +592,14 @@ Key design decisions already settled:
   tests join, S3 and S4). A named skip fact is discharged, decided when each
   check runs against that check's source, by a later run of the same command
   whose complete case record shows those cases executed and none skipped. A
-  pytest node id, recorded from pytest's own verbose line, carries its file,
-  so its own execution is enough whatever else was skipped (U2); a `::` in any
-  other name proves nothing (V1); a bare name must be held by the same single
-  test file as when it was recorded, so a name reused in another file never
-  stands in (T4, U1). An unnamed skip fact needs such a run skipping nothing.
-  A substring, an optional or skipped receipt, a filtered run, a lower skip
+  pytest node id, recorded from pytest's own verbose line in a pytest
+  command's output (case lines are read per the command's runner, so text a
+  node test prints is never a pytest case, W1), carries its file, so its own
+  execution is enough whatever else was skipped (U2); a `::` in any other name
+  proves nothing (V1); a bare name must be held by the same single test file
+  as when it was recorded, so a name reused in another file never stands in
+  (T4, U1). An unnamed skip fact needs such a run skipping nothing. A
+  substring, an optional or skipped receipt, a filtered run, a lower skip
   total, or a model's word never does; a report written after a run is a new
   report. An unnamed file is reconciled by a later complete run that names it
   or names a file that names it. Parallel children's reports come back to the

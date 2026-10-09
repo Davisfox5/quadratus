@@ -486,7 +486,7 @@ class IntegrationGate:
             returncode=proc.returncode,
             output=combined[-_TAIL_CHARS:],
             report=report,
-            cases=case_record(combined),
+            cases=case_record(combined, runner_of(self.command)),
         )
 
 
@@ -729,7 +729,7 @@ class GateSuite:
                         status, reason = 'failed', 'fewer tests than required'
                 receipt = GateReceipt(**base, status=status, reason=reason,
                                       returncode=proc.returncode, output=output[-_TAIL_CHARS:], tests=count,
-                                      report=report, cases=case_record(output))
+                                      report=report, cases=case_record(output, runner_of(command.argv)))
             except subprocess.TimeoutExpired:
                 receipt = GateReceipt(**base, status='error', reason=f'timed out after {command.timeout}s')
             except OSError as exc:
@@ -1046,38 +1046,55 @@ def case_key(name: str) -> str:
     return f"{name[:200]}\u2026sha256:{hashlib.sha256(name.encode('utf-8', 'surrogatepass')).hexdigest()}"
 
 
-def _case_lines(output: str):
+def runner_of(argv) -> Optional[str]:
+    """Which test runner a command starts: 'pytest', 'node' (``node
+    --test``) or None when neither can be told from its argv."""
+    argv = [str(a) for a in argv]
+    if _is_pytest(argv):
+        return 'pytest'
+    if argv and Path(argv[0]).name.startswith('node') and '--test' in argv:
+        return 'node'
+    return None
+
+
+def _case_lines(output: str, runner: Optional[str] = None):
     """``(name, kind, qualified)`` for each case line the runner printed,
-    ``kind`` skipped, executed or other, ``qualified`` True only for a pytest
-    verbose line, whose ``path::name`` names the case's file. A node name may
-    contain ``::`` too; it is never qualified (Codex review of 5292fc2, V1). Node's spec reporter (``\u2714``/``\u2716``/
+    ``kind`` skipped, executed or other. Which lines count follows the
+    command's own runner: a pytest command reads only pytest verbose lines,
+    a node command only spec and TAP lines, so text a test prints that merely
+    looks like another runner's record is not a case (Codex review of
+    f2f66ff, W1). ``qualified`` is True only for a pytest line from a pytest
+    command, whose ``path::name`` names the case's file; a node name may
+    contain ``::`` too and is never qualified (5292fc2, V1). Node's spec reporter (``\u2714``/``\u2716``/
     ``\ufe63``), TAP (``ok N - name # SKIP``) and pytest's verbose lines. A
     todo case and a pytest XFAIL are other: XFAIL does not say whether the
     body ran, and ``xfail(run=False)`` never runs it (Codex review of
     67c9fad, S5)."""
+    node_lines, pytest_lines = runner in (None, 'node'), runner in (None, 'pytest')
     for line in (output or '').splitlines():
-        spec = _SPEC_CASE.match(line)
+        spec = _SPEC_CASE.match(line) if node_lines else None
         if spec:
             mark, name, directive = spec.group(1), spec.group(2), (spec.group(3) or '')
             yield name, ('other' if directive.upper().startswith('TODO')
                          else 'skipped' if mark == '\ufe63' else 'executed'), False
             continue
-        tap = _TAP_CASE.match(line)
+        tap = _TAP_CASE.match(line) if node_lines else None
         if tap:
             directive = (tap.group(3) or '').upper()
             yield tap.group(2), {'SKIP': 'skipped', '': 'executed'}.get(directive, 'other'), False
             continue
-        case = _PYTEST_CASE.match(line)
+        case = _PYTEST_CASE.match(line) if pytest_lines else None
         if case:
-            yield case.group(1), {'SKIPPED': 'skipped', 'XFAIL': 'other'}.get(case.group(2), 'executed'), True
+            yield case.group(1), {'SKIPPED': 'skipped', 'XFAIL': 'other'}.get(case.group(2), 'executed'), \
+                runner == 'pytest'
 
 
-def case_outcomes(output: str):
+def case_outcomes(output: str, runner: Optional[str] = None):
     """``(skipped, executed)`` case names the runner printed, as Counters.
     Names, not file-qualified: node's spec output carries no file per case."""
     from collections import Counter
     skipped, executed = Counter(), Counter()
-    for name, kind, _ in _case_lines(output):
+    for name, kind, _ in _case_lines(output, runner):
         if kind == 'skipped':
             skipped[case_key(name)] += 1
         elif kind == 'executed':
@@ -1089,14 +1106,14 @@ def case_outcomes(output: str):
 _MAX_CASES = 20_000
 
 
-def case_record(output: str) -> Optional[dict]:
+def case_record(output: str, runner: Optional[str] = None) -> Optional[dict]:
     """Every case the whole output prints, by kind (skipped, executed,
     other), as ``case_key``-to-count maps; None past ``_MAX_CASES`` lines.
     None is unknown identity, which callers never rebuild from the output
     tail (Codex review of d157378, T2)."""
     record = dict(skipped={}, executed={}, other={})
     qualified = set()
-    for i, (name, kind, from_pytest) in enumerate(_case_lines(output)):
+    for i, (name, kind, from_pytest) in enumerate(_case_lines(output, runner)):
         if i >= _MAX_CASES:
             return None
         key = case_key(name)

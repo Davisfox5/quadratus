@@ -1259,26 +1259,102 @@ def _case_files(key: str, texts: dict, qualified: bool):
 
 def _case_block(key: str, qualified: bool, text: str):
     """The source that defines one case in its file, or None when it cannot
-    be found: for a pytest id, each test function of that name with its
-    decorators (read with ``ast``); for any other name, the lines that quote
-    it. Comparing this, not the whole file, tells an unchanged old case from
-    a file that merely gained another test (V2)."""
+    be found unambiguously. Comparing this, not the whole file, tells an
+    unchanged old case from a file that merely gained another test (Codex
+    review of 5292fc2, V2).
+
+    A pytest id is resolved along its whole path (``path::Class::test``,
+    parameters dropped): exactly one class or function must match at each
+    step, and the block is the test function with its decorators plus each
+    enclosing class's decorators and header, so the same method name in two
+    classes is two cases (f2f66ff, W3). Any other name is defined by every
+    registration call that quotes it, read whole by a bounded bracket scan
+    that skips strings and comments, so a changed callback body on later
+    lines is a changed case (W2); a call that cannot be scanned is None."""
     if qualified:
-        import ast
-        name = key.split("::")[-1].split("[")[0]
-        try:
-            tree = ast.parse(text)
-        except (SyntaxError, ValueError):
+        return _pytest_block(key, text)
+    blocks = []
+    for quote in _QUOTES:
+        literal = quote + key + quote
+        at = text.find(literal)
+        while at != -1:
+            call = _enclosing_call(text, at)
+            if call is None:
+                return None
+            blocks.append(call)
+            at = text.find(literal, at + 1)
+    return tuple(blocks) or None
+
+
+def _pytest_block(key: str, text: str):
+    import ast
+    parts = key.split("::")[1:]
+    if not parts:
+        return None
+    parts[-1] = parts[-1].split("[")[0]
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    lines = text.splitlines()
+
+    def header(node, whole):
+        first = min([node.lineno] + [d.lineno for d in node.decorator_list])
+        last = node.end_lineno if whole else node.lineno
+        return tuple(lines[first - 1:last])
+
+    body, block = tree.body, []
+    for depth, name in enumerate(parts):
+        matches = [n for n in body if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                   and n.name == name]
+        if len(matches) != 1:
             return None
-        lines = text.splitlines()
-        blocks = []
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
-                first = min([node.lineno] + [d.lineno for d in node.decorator_list])
-                blocks.append(tuple(lines[first - 1:node.end_lineno]))
-        return tuple(sorted(blocks)) or None
-    found = tuple(line for line in text.splitlines() if any(q + key + q in line for q in _QUOTES))
-    return found or None
+        node = matches[0]
+        final = depth == len(parts) - 1
+        if final and not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return None
+        block.append(header(node, whole=final))
+        body = node.body
+    return tuple(block)
+
+
+def _enclosing_call(text: str, at: int):
+    """The text of the call whose first argument is the string literal at
+    ``at``: from the identifier before its ``(`` to the matching ``)``.
+    Strings, template literals and comments are skipped while counting
+    brackets. None when the literal is not a call's first argument or the
+    call does not close within 200,000 characters."""
+    open_at = at - 1
+    while open_at >= 0 and text[open_at] in " \t\r\n":
+        open_at -= 1
+    if open_at < 0 or text[open_at] != "(":
+        return None
+    start = open_at
+    while start > 0 and (text[start - 1].isalnum() or text[start - 1] in "_$."):
+        start -= 1
+    depth, i, end = 0, open_at, min(len(text), open_at + 200_000)
+    while i < end:
+        ch = text[i]
+        if ch in "'\"`":
+            i += 1
+            while i < end and text[i] != ch:
+                i += 2 if text[i] == "\\" else 1
+        elif text.startswith("//", i):
+            newline = text.find("\n", i)
+            i = end if newline == -1 else newline
+        elif text.startswith("/*", i):
+            close = text.find("*/", i + 2)
+            if close == -1:
+                return None
+            i = close + 1
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+        i += 1
+    return None
 
 
 def _complete_run(run: dict) -> bool:
