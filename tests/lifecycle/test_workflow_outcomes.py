@@ -92,6 +92,18 @@ def test_j1_a_clean_task_and_done_is_clean_and_complete(tmp_path, monkeypatch):
 
 # -- J2 / J3 product repair ----------------------------------------------------------
 
+def test_a_task_no_peer_reviewed_does_not_record_a_satisfied_review(tmp_path, monkeypatch):
+    """Batch 2 recovery-v2 on 5d9f5ff: three simple tasks drew no
+    collaborator and still recorded review: true."""
+    from quadratus.session import Session
+    monkeypatch.setattr(Session, "collaborators_for", lambda self, spec, lead: [])
+    replay = _run(tmp_path, monkeypatch, Script(orchestrator=_then_done(DECL_T1)), max_tasks=3)
+    t1 = _task(replay, "t1")
+    assert replay.result.completed and t1["closed_as"] == "closed"
+    assert t1["edges"]["review"] is None and t1["edges"]["draft"] is True
+    assert t1["partial"]["note"] == "The task closed with these changes on disk."
+
+
 def test_j2_a_gate_fix_that_works_leaves_the_task_clean_with_its_attempt_counted(tmp_path, monkeypatch):
     def gate_fix(call, replay):
         H.write(call, {"app.py": FIXED})

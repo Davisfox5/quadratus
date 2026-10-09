@@ -460,6 +460,14 @@ Key design decisions already settled:
   never a source change, since `.quadratus` is not project source. A linked
   folder is left alone and named. A capped design review still records the
   delivery: the model ran, so the renders reached its copy.
+- **A task record says what happened, not what the stage list implies**
+  (batch 2 recovery-v2 on 5d9f5ff). Three simple tasks drew no collaborator
+  (`Complexity.collaborator_count`) yet recorded `review: true`, and each
+  clean close carried the stopped-call note "already on disk when the call
+  stopped". The review edge is now `None` when no peer reviewed, and a clean
+  close says "The task closed with these changes on disk"; a capped or
+  failed close keeps the stopped-call wording. Reporting only: who reviews
+  and what completes are unchanged.
 - **A runtime-dependency tree is part of what a check proves**
   (`deptree.py`, contract v2 on #25). Run 19: a lead wrote a
   `node_modules` shim the source checks could not see, and the project's

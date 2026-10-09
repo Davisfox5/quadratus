@@ -1950,8 +1950,13 @@ class Session:
         self._note(f"task {spec.task_id}: {role} stopped at the turn limit; checking what it left")
         return text
 
-    def _inspect_partial_edits(self, before) -> dict:
+    def _inspect_partial_edits(self, before, *, stopped: bool = True) -> dict:
         """What, if anything, the stopped call had already written.
+
+        ``stopped=False`` measures a task that closed normally, with the same
+        figures and a note that says so: batch 2 recovery-v2 on 5d9f5ff
+        recorded "already on disk when the call stopped" on three tasks that
+        each closed clean in one round.
 
         Returns a plain dict rather than a class: this is the in-flight state
         that has to survive into the run report for a resumable handoff, so it
@@ -1980,6 +1985,10 @@ class Session:
         state["inspected"] = True
         state["changed"] = changed_paths(diff)
         state["changed_lines"] = count_change_lines(diff)
+        if not stopped:
+            state["note"] = ("The task closed with these changes on disk." if state["changed"]
+                             else "The task closed without changing the source.")
+            return state
         state["note"] = (
             "These changes were already on disk when the call stopped and have "
             "been preserved. Re-sending the same prompt would apply a second "
@@ -2781,7 +2790,9 @@ class Session:
             raise
         else:
             outcome.closed_as = getattr(summary, "outcome", "closed")
-            self._record_work(outcome, None)
+            # Only a clean close is not a stop: a turn-limited or failed close
+            # keeps the stopped-call wording.
+            self._record_work(outcome, None, stopped=outcome.closed_as != "closed")
             # Every exit carries its outstanding references; an ordinary close
             # is snapshotted again after its own settlement and coverage.
             outcome.open_at_close = self._open_refs(outcome)
@@ -3089,7 +3100,7 @@ class Session:
             return "n/a"
         return self._source_fingerprint() or "unavailable"
 
-    def _record_work(self, outcome: TaskOutcome, measured: Optional[dict]) -> None:
+    def _record_work(self, outcome: TaskOutcome, measured: Optional[dict], *, stopped: bool = True) -> None:
         """What the task left: source identity after, changed paths and lines
         against its start (an explicit uninspected note when that cannot be
         measured, never an implied "no edits"), and the dependency status."""
@@ -3097,7 +3108,7 @@ class Session:
             outcome.source_after = self._source_identity()
             if outcome.partial is None:
                 if measured is None:
-                    measured = (self._inspect_partial_edits(self._task_before) if self.project
+                    measured = (self._inspect_partial_edits(self._task_before, stopped=stopped) if self.project
                                 else dict(changed=[], changed_lines=0, inspected=False,
                                           note="no project: nothing to measure"))
                 outcome.partial = {k: measured.get(k) for k in ("changed", "changed_lines", "inspected", "note")
@@ -3384,7 +3395,11 @@ class Session:
             (p, n) for p, n in notes
             if n.strip().upper().rstrip(".") != "NO FINDINGS" and p not in capped
         ]
-        self._edge("review", True)
+        # Satisfied only when a peer actually reviewed. Complexity can draw no
+        # collaborator (Complexity.collaborator_count), and batch 2 recovery-v2
+        # on 5d9f5ff recorded "review: true" on three tasks no peer read; with
+        # no peer the edge is not applicable (None), never satisfied.
+        self._edge("review", True if collaborators else None)
         if notes:
             self._stage("revision")
             self._count("revision")

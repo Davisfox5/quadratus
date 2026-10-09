@@ -997,3 +997,27 @@ def test_native_children_observed_concurrently_are_still_counted_once(tmp_path):
 
     assert len(ledger.native_children) == 1
     assert ledger.native_tokens() == 127_405 + 7_700
+
+
+def test_a_clean_close_is_not_recorded_as_a_stopped_call(tmp_path):
+    """Batch 2 recovery-v2 on 5d9f5ff: three tasks that each closed clean in
+    one round were recorded as 'already on disk when the call stopped'."""
+    from quadratus.outcome import TaskOutcome
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "a.py").write_text("before\n")
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = Session("goal", store, _null_invoke, config=SessionConfig(project=root, allow_writes=True))
+    session._task_before = session._capture_source()
+    (root / "a.py").write_text("after\n")
+    clean = TaskOutcome("t1", "implementation")
+    session._record_work(clean, None, stopped=False)
+    assert clean.partial["changed"] == ["a.py"] and clean.partial["inspected"] is True
+    assert clean.partial["note"] == "The task closed with these changes on disk."
+    capped = TaskOutcome("t2", "implementation")
+    session._record_work(capped, None)
+    assert "when the call stopped" in capped.partial["note"], "a stop keeps the stopped-call wording"
+    session._task_before = session._capture_source()
+    untouched = TaskOutcome("t3", "implementation")
+    session._record_work(untouched, None, stopped=False)
+    assert untouched.partial["note"] == "The task closed without changing the source."
