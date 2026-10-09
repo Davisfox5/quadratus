@@ -501,6 +501,17 @@ Key design decisions already settled:
   `gui.downloadable_files` copies exactly `RUN_FILES` (regular files, never
   links) into a fresh 0700 temp folder named after the run; `allowed_paths`
   is never widened, which would expose the whole project tree.
+- **The planner reads the harness record before the lead's account**
+  (batch 2 gui-ui-v3 on 5d9f5ff). t6's close-out said the preview failed
+  and R4 was blocked, because its review seat had tried to start the
+  preview inside its own sandbox; the harness had in fact verified both
+  views and Opus had approved. The planner saw only the account, dispatched
+  t7 to capture again (about 680k tokens), and the run ended on the token
+  reserve with every requirement covered. Each ledger entry now opens with
+  the harness's own record for the task (`Session._harness_record`: design
+  capture verified or not and its views, the final reviewer's verdict, the
+  required checks), labelled as measured and as winning over the account.
+  This is the summary-is-an-index rule applied to the harness's facts.
 - **A runtime-dependency tree is part of what a check proves**
   (`deptree.py`, contract v2 on #25). Run 19: a lead wrote a
   `node_modules` shim the source checks could not see, and the project's

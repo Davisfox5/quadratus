@@ -1594,6 +1594,7 @@ class Session:
         self.invoke = invoke
         self._available = available or (lambda _key: True)
         self.memory = PersistentMemory(goal, store, invariants=invariants)
+        self.memory.harness_record = self._harness_record
         self.workers = WorkerPool(
             store=store,
             run=lambda model, prompt, **kw: self._invoke_model(model, prompt, **kw),
@@ -6987,6 +6988,31 @@ class Session:
             )
 
         return latest_fix
+
+    def _harness_record(self, task_id: str) -> List[str]:
+        """What the harness measured for ``task_id``: the latest design
+        check (capture verified or not, views, the final reviewer's verdict)
+        and the task's required checks. Facts from records, never prose."""
+        facts: List[str] = []
+        checks = [r for r in self.design_checks if isinstance(r, dict) and r.get("task") == task_id]
+        if checks:
+            record = checks[-1]
+            views = sorted({Path(str(shot)).parent.name for shot in record.get("screenshots") or ()
+                            if str(shot).endswith(".png")})
+            if record.get("verified"):
+                facts.append("design capture: verified by the harness"
+                             + (f" ({', '.join(views)})" if views else ""))
+            else:
+                facts.append("design capture: not verified"
+                             + (f" ({str(record.get('problem'))[:200]})" if record.get("problem") else ""))
+            review = record.get("final_review") or {}
+            if review.get("verdict"):
+                facts.append(f"final design review by {review.get('reviewer')}: "
+                             f"{str(review['verdict']).splitlines()[0][:200]}")
+        outcome = self._outcome if getattr(self._outcome, "task_id", None) == task_id else None
+        if outcome is not None and "checks" in (outcome.edges or {}):
+            facts.append("required checks: " + ("passed" if outcome.edges["checks"] else "failed"))
+        return facts
 
     def _note_unrun_tests(self, spec, task, gate) -> None:
         """A test file this task added or changed that no required check runs
