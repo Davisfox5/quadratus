@@ -82,6 +82,7 @@ __all__ = [
     "CODEX_NATIVE_DELEGATION_OVERRIDE",
     "cli_provider_classes",
     "codex_override_conflicts",
+    "codex_copy_boundary_conflicts",
     "native_delegation_mode",
     "NativeControlOverride",
 ]
@@ -993,6 +994,16 @@ class CLISpec:
     session_id_flag: Optional[str] = None
     #: Args that make the agent read-only (no file writes, no shell).
     readonly_args: List[str] = field(default_factory=list)
+    #: Args for an ungranted call that runs inside a disposable source copy
+    #: (``runtime.Fleet._invoke``'s snapshot): the copy is the containment
+    #: and is deleted when the call returns, so a vendor whose read-only mode
+    #: also denies its own temporary directory may use a mode that writes
+    #: inside the copy. Codex: under ``--sandbox read-only`` Python found no
+    #: writable temp dir (the macOS per-user dir, /tmp, /var/tmp and the copy
+    #: itself all refused), so a reviewer told to run the project's pytest
+    #: could not, and blocked the task on "cannot run the required check"
+    #: (series b1ff751 f3 and rule-b1ff751 f4). Empty means ``readonly_args``.
+    copy_args: List[str] = field(default_factory=list)
     #: Args added when the caller *has* opted into writes. Some CLIs need an
     #: explicit approval mode or a non-interactive run stalls waiting for a
     #: confirmation nobody is there to give.
@@ -1057,6 +1068,10 @@ class CLISpec:
     #: that re-enables native delegation is a configuration error, not a
     #: preference, and a refusal cannot be mistaken for a bounded run.
     override_conflicts: Optional[Callable[[Sequence[str]], List[str]]] = None
+    #: Operator arguments that would widen or move the policy of an ungranted
+    #: call in a disposable copy (``copy_args``); such a call refuses them
+    #: before dispatch. None where the vendor has no copy policy.
+    copy_boundary_conflicts: Optional[Callable[[Sequence[str]], List[str]]] = None
     #: Optional run-wide denial request for other vendors' native helpers.
     #: This is not proof their CLI honors it; see the Grok specification.
     native_fanout_off_args: List[str] = field(default_factory=list)
@@ -1484,6 +1499,68 @@ def codex_override_conflicts(args: Sequence[str]) -> List[str]:
     return conflicts
 
 
+#: Operator flags that move or widen the sandbox boundary of a codex call:
+#: refused on an ungranted call in a disposable copy (Codex review of 9b8c056
+#: on #52), where the copy must stay the only writable root. ``--cd`` rebases
+#: the working directory the policy is anchored to; the rest change the mode
+#: or add roots. Each is listed in every spelling clap accepts for it.
+CODEX_COPY_BOUNDARY_FLAGS = (
+    "--sandbox", "-s", "--add-dir", "--full-auto", "--yolo",
+    "--dangerously-bypass-approvals-and-sandbox", "--cd", "-C",
+)
+#: ``-c`` keys (and their tables) that do the same through configuration.
+CODEX_COPY_BOUNDARY_KEYS = ("sandbox_mode", "sandbox_workspace_write", "sandbox", "cwd")
+
+
+def codex_copy_boundary_conflicts(args: Sequence[str]) -> List[str]:
+    """Operator arguments that would widen or move a disposable copy's policy.
+
+    ``copy_args`` makes the copy the only writable root; the operator's
+    ``QUADRATUS_CLI_ARGS_OPENAI`` lands after it and would win. So on an
+    ungranted call in a disposable copy any flag or ``-c`` key that touches
+    the sandbox mode, its writable roots, extra directories or the working
+    directory is a refusal before dispatch, whatever its value: an agreeing
+    override is as much of a surprise as a widening one, and the control is
+    not the operator's to restate. A bare ``--`` hides what follows and is
+    refused for the same reason as in :func:`codex_override_conflicts`.
+    """
+    tokens = list(args)
+    conflicts: List[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            conflicts.append(token)
+            index += 1
+            continue
+        if token.startswith("--"):
+            name = token.split("=", 1)[0]
+            if name in CODEX_COPY_BOUNDARY_FLAGS:
+                conflicts.append(name)
+                index += 1 if "=" in token or name in ("--full-auto", "--yolo",
+                                                       "--dangerously-bypass-approvals-and-sandbox") else 2
+                continue
+        elif len(token) >= 2 and token[0] == "-" and token[1] in "sC":
+            # A short option in every clap form: ``-s read-only``, ``-s=x``
+            # and the attached ``-sdanger-full-access`` / ``-C/tmp/outside``
+            # (Codex review of d866a83: the attached form slipped past a
+            # check that split on ``=`` only). Only the flag is reported.
+            conflicts.append(token[:2])
+            index += 2 if len(token) == 2 else 1
+            continue
+        else:
+            name = token
+        payload, span = _config_override_value(tokens, index)
+        if span:
+            key = _override_key(payload) if payload is not None else ""
+            if key in CODEX_COPY_BOUNDARY_KEYS or any(key.startswith(f"{k}.") for k in CODEX_COPY_BOUNDARY_KEYS):
+                conflicts.append(f"{name[:8]} {key}=…")
+            index += span
+            continue
+        index += 1
+    return conflicts
+
+
 def _override_key(payload: str) -> str:
     return re.sub(r"""[\s"']""", "", payload.partition("=")[0])
 
@@ -1526,6 +1603,17 @@ CODEX_SPEC = CLISpec(
     model_flag="--model",
     output_args=["--json"],
     readonly_args=["--sandbox", "read-only"],
+    # A disposable source copy is its own containment: workspace-write there
+    # lets a reviewer run the check it is told to run (see ``copy_args``).
+    # Its writable roots are the copy alone (Codex review of c3abcf0 on #52):
+    # workspace-write adds /tmp and $TMPDIR by default and keeps any
+    # writable_roots from the operator's config, so each is switched off
+    # here. The scratch TMPDIR the provider sets lives under the copy, which
+    # is the working directory, so it stays writable without its own root.
+    copy_args=["--sandbox", "workspace-write",
+               "-c", "sandbox_workspace_write.exclude_slash_tmp=true",
+               "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+               "-c", "sandbox_workspace_write.writable_roots=[]"],
     write_args=["--sandbox", "workspace-write"],
     # codex exposes no effort flag; the config override is the documented
     # route, and it is validated rather than ignored -- a deliberately
@@ -1572,6 +1660,7 @@ CODEX_SPEC = CLISpec(
     # still needs a live probe, so observed children remain in the telemetry.
     control_args=list(CODEX_NATIVE_DELEGATION_CONTROL),
     override_conflicts=codex_override_conflicts,
+    copy_boundary_conflicts=codex_copy_boundary_conflicts,
     # Summary-only form: codex exec has no tool allowlist and no turn cap in
     # this spec, so the bound is ``--sandbox read-only`` plus the native
     # controls plus the caller's 60 s / one-attempt limits. Stated, not
@@ -2059,6 +2148,9 @@ class CLIProvider(LLMProvider):
         #: runtime.Fleet. None sends no flag. A proxy for spend, not a
         #: token ceiling: an 11-turn grok lead still reported 365,138 tokens.
         self.max_turns: Optional[int] = kwargs.pop("max_turns", None)
+        #: Whether this view runs in a disposable source copy; set only by
+        #: ``in_directory(..., disposable=True)`` on an ungranted call.
+        self._disposable: bool = False
         #: The in-session worker tool for this view (``WorkerBridge.spec()``),
         #: set per lead call by runtime.Fleet. None attaches nothing.
         self.worker_tool: Optional[dict] = kwargs.pop("worker_tool", None)
@@ -2155,11 +2247,16 @@ class CLIProvider(LLMProvider):
             _ = self.workdir
         return super().for_model(model)
 
-    def in_directory(self, workdir, *, allow_writes=False):
+    def in_directory(self, workdir, *, allow_writes=False, disposable=False):
+        """A per-call view running in ``workdir``. ``disposable`` marks a
+        source copy the Fleet deletes when the call returns; an ungranted
+        call there may use ``CLISpec.copy_args`` and gets a temp dir inside
+        the copy, since nothing it writes can reach the project."""
         view = copy.copy(self)
         view._workdir = str(workdir)
         view._owned_workdir = None
         view._allow_writes = allow_writes
+        view._disposable = bool(disposable and not allow_writes)
         return view
 
     # -- invocation ----------------------------------------------------------
@@ -2199,9 +2296,12 @@ class CLIProvider(LLMProvider):
                 # tmpfs are the only writable paths either way.
                 argv += list(spec.contained_sandbox_args)
             else:
-                argv += list(
-                    spec.readonly_args if not self._allow_writes else spec.write_args
-                )
+                if self._allow_writes:
+                    argv += list(spec.write_args)
+                elif getattr(self, "_disposable", False) and spec.copy_args:
+                    argv += list(spec.copy_args)
+                else:
+                    argv += list(spec.readonly_args)
                 if self._allow_writes and spec.allowed_tools_flag:
                     rules = []
                     for command in getattr(self, "granted_commands", ()) or ():
@@ -2270,6 +2370,17 @@ class CLIProvider(LLMProvider):
             self._native_fanout_denied = denied
         else:
             self._native_fanout_denied = []
+        if (getattr(self, "_disposable", False) and not self._allow_writes
+                and spec.copy_args and spec.copy_boundary_conflicts is not None):
+            # The copy is the only writable root, and the operator's
+            # arguments land last; an override of the boundary is refused
+            # before the call rather than out-ordered by it.
+            conflicts = spec.copy_boundary_conflicts(extra)
+            if conflicts:
+                raise NativeControlOverride(
+                    f"{self.label}: QUADRATUS_CLI_ARGS_{spec.vendor.upper()} would widen or move the "
+                    f"sandbox of an ungranted call in a disposable source copy ({'; '.join(conflicts)}). "
+                    "The copy is the only writable root there; remove the override, not the control.")
         if spec.override_conflicts is not None:
             conflicts = spec.override_conflicts(extra)
             if conflicts:
@@ -2431,6 +2542,14 @@ class CLIProvider(LLMProvider):
             self.last_session_id = str(uuid.uuid4())
             argv += [self.spec.session_id_flag, self.last_session_id]
         env = {**os.environ, **self.spec.env}
+        if getattr(self, "_disposable", False):
+            # Python's tempfile tries TMPDIR first: pointed inside the copy,
+            # a sandbox that allows writes under the working directory lets a
+            # reviewer's pytest start (series rule-b1ff751 f4: no usable
+            # temporary directory under the vendor's read-only mode).
+            scratch = os.path.join(self.workdir, ".quadratus-tmp")
+            os.makedirs(scratch, exist_ok=True)
+            env["TMPDIR"] = scratch
         if getattr(self, "_native_fanout_denied", None):
             env.update(self.spec.native_fanout_off_env)
         if self.worker_tool_attached and self.spec.worker_tool_style == "claude":

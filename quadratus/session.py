@@ -33,7 +33,7 @@ import re
 import time
 from dataclasses import dataclass, field, replace
 from functools import wraps
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Dict, List, Optional, Sequence
 
 from .artifacts import ArtifactStore
@@ -690,6 +690,81 @@ _HARNESS_CAPTURE = (
     "state show the change, and keep the declared selectors working."
 )
 
+#: The reviewer's exact reply when the renders miss the change (see
+#: ``Session._final_design_review``); read as a capture defect, not a design one.
+_RENDERS_BLIND = "the renders do not show the changed interface"
+
+
+def _renders_blind(verdict: str) -> bool:
+    """Whether the verdict is the blind-render reply and nothing else.
+
+    A reviewer that also names an independent blocker ("BLOCKING: the delete
+    action silently removes saved projects") has judged the work, and a
+    recapture must not clear that judgement (Codex reviews of c3abcf0 and
+    9b8c056 on #52). The reviewer is told to reply with exactly the one line
+    and judge nothing else, so that is what qualifies: the whole response,
+    after harmless formatting is stripped (bold, a list marker, trailing
+    punctuation, case), must equal "BLOCKING: " plus the phrase. A second
+    clause on the same line, a second line of any kind, or any other
+    content means the verdict stands as written.
+    """
+    text = (verdict or "").replace("**", "").replace("`", "").strip()
+    text = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", text)
+    text = text.rstrip(" .!").lower()
+    return text == f"blocking: {_RENDERS_BLIND}"
+
+
+_CAPTURE_LINE = re.compile(r"^\s*CAPTURE\s*:\s*(.*\S)\s*$", re.IGNORECASE)
+
+
+def _parse_capture_line(reply: str, task_id: str):
+    """``(capture, "")`` from a CAPTURE: line, or ``(None, why)``.
+
+    The same syntax as a SCOPE capture (``preview.validate_capture``), and a
+    capture-only fixture must belong to this task. ``CAPTURE: none`` and a
+    missing or malformed line both return None with the reason; the caller
+    keeps the reviewer's verdict in that case.
+    """
+    line = None
+    for raw in (reply or "").splitlines():
+        match = _CAPTURE_LINE.match(raw.replace("`", ""))
+        if match:
+            line = match.group(1)
+    if line is None:
+        return None, "no CAPTURE: line in the reply"
+    if line.strip().lower().rstrip(".") == "none":
+        return None, "the lead declared that no page and steps reach the changed state"
+    try:
+        from .preview import validate_capture
+        capture = validate_capture(json.loads(line))
+    except (ValueError, TypeError) as exc:
+        return None, f"the CAPTURE line did not parse ({str(exc)[:120]})"
+    for step in capture["steps"]:
+        if step.get("action") == "file":
+            parts = PurePosixPath(step["path"]).parts
+            if parts[:2] == (".quadratus", "capture-fixtures") and (len(parts) < 3 or parts[2] != task_id):
+                return None, f"a capture-only fixture must live under .quadratus/capture-fixtures/{task_id}/"
+    return capture, ""
+
+
+def _missing_fixtures(project, capture: dict, task_id: str) -> List[str]:
+    """The file-step paths of ``capture`` that are not usable fixtures in
+    ``project`` now, by the capture's own rule (``design_evidence._fixture``)."""
+    from .design_evidence import _fixture
+    from .project import Project
+    # Not getattr(project, "root"): a Path has a ``root`` too, and it is "/".
+    root = project.root if isinstance(project, Project) else Path(project)
+    missing = []
+    for step in capture.get("steps") or []:
+        if step.get("action") != "file":
+            continue
+        try:
+            _fixture(root, step.get("path") or "", task_id)
+        except ValueError:
+            missing.append(str(step.get("path")))
+    return missing
+
+
 def _capture_fixture_note(spec) -> str:
     """The files the declared capture uploads, stated to the lead as the
     harness's own rule. Diagnostic run 20260930T020711Z: t2, a review-only
@@ -1098,7 +1173,13 @@ _NEGATION_BEFORE = re.compile(r"(?:\bnon-|\bnon |\bnot |\bneither |\bno |\bnothi
 #: A line opening with either marker, in any case: before, UNRESOLVED stopped
 #: in any case too (Codex review 5859031079), and must keep doing so.
 _BLOCKING_LINE = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:BLOCKING|UNRESOLVED)\s*:\s*(.*)$", re.IGNORECASE)
-_EMPTY_FINDING = re.compile(r"(?:none|n/?a|nothing)\b[\s.!]*$", re.IGNORECASE)
+#: "BLOCKING: none found." is a note too (series rule-b1ff751 f6, 2026-10-06:
+#: a verifier that accepted the code closed the task with its own report
+#: filed as the open finding).
+_EMPTY_FINDING = re.compile(r"(?:none|n/?a|nothing)(?:\s+(?:found|identified|observed|noted|detected|"
+                            r"remain(?:s|ing)?|to\s+report))?[\s.!]*$", re.IGNORECASE)
+#: The explicit verdict line the verifier is asked to end with.
+_VERDICT_LINE = re.compile(r"^\s*(?:[-*+]\s+)?\**\s*VERDICT\s*\**\s*:\s*\**\s*(ACCEPT|REJECT)\b", re.IGNORECASE)
 
 
 def _has_security_finding(text: str) -> bool:
@@ -1129,6 +1210,56 @@ def _has_security_finding(text: str) -> bool:
             if not _NEGATION_BEFORE.search(line[:marker.start()]):
                 return True
     return False
+
+
+def _security_verdict_line(text: str) -> Optional[bool]:
+    """The verifier's explicit verdict: True for ACCEPT, False for REJECT,
+    None when it wrote no VERDICT line.
+
+    Series b1ff751 f6 and rule-b1ff751 f6 (2026-10-05/06): the cross-family
+    verifier accepted the work ("Verdict: accept the code change") and the
+    task still closed FindingsOpen, because the only signal read from a prose
+    verdict was whether a marker appeared somewhere in it. A report that
+    discusses blocking in capitals, or writes "BLOCKING: none found.", read
+    as a finding. The verifier is now asked to end with one line, VERDICT:
+    ACCEPT or VERDICT: REJECT, and that line decides. The last such line
+    wins, so a verdict restated after the findings is the one taken.
+    """
+    verdict = None
+    for raw in text.splitlines():
+        match = _VERDICT_LINE.match(raw.replace("**", ""))
+        if match:
+            verdict = match.group(1).upper() == "ACCEPT"
+    return verdict
+
+
+def _has_prefixed_finding(text: str) -> bool:
+    """A line opening with BLOCKING: or UNRESOLVED: that names something.
+
+    Narrower than :func:`_has_security_finding`: markers in prose do not
+    count. Used beside an explicit ACCEPT, where a verifier that still wrote
+    a prefixed finding has contradicted itself and the finding stands.
+    """
+    for raw in text.splitlines():
+        prefixed = _BLOCKING_LINE.match(raw.replace("**", ""))
+        if prefixed and not _EMPTY_FINDING.match(prefixed.group(1).strip()):
+            return True
+    return False
+
+
+def _security_finding_stands(verdict: str) -> bool:
+    """Whether a prose verdict opens a security finding.
+
+    An explicit VERDICT line decides: REJECT opens one; ACCEPT opens one
+    only if the verifier also wrote a prefixed finding with content. Without
+    the line, the marker scan applies as before.
+    """
+    explicit = _security_verdict_line(verdict)
+    if explicit is None:
+        return _has_security_finding(verdict)
+    if explicit:
+        return _has_prefixed_finding(verdict)
+    return True
 
 
 def _has_blocking_finding(text: str) -> bool:
@@ -1368,7 +1499,8 @@ class Session:
                 and spec is not None and '## Role packet' not in prompt):
             # design-fix is the task's own lead editing its work (map G11): it
             # carries the lead's packet, like every other editing role.
-            role = ('lead' if context.get('role') in ('lead', 'revision', 'gate-fix', 'security-fix', 'design-fix')
+            role = ('lead' if context.get('role') in ('lead', 'revision', 'gate-fix', 'security-fix', 'design-fix',
+                                                       'capture-redeclare')
                     else 'verifier'
                     if context.get('role') == 'verifier' else 'reviewer')
             prompt += '\n\n' + self._role_packet(spec, role)
@@ -3265,7 +3397,9 @@ class Session:
                 # A finding is a marker as written, not the word in prose (map
                 # G7): the old substring test read "no BLOCKING findings" as
                 # one. Semantics taken from the reviewed helper on 90cc5d9.
-                if _has_security_finding(verdict):
+                # An explicit VERDICT line decides (series b1ff751 f6 and
+                # rule-b1ff751 f6: an accepting report filed as the finding).
+                if _security_finding_stands(verdict):
                     self._open_finding("security", verdict)
                     self._edge("verification", False)
                 else:
@@ -4437,6 +4571,23 @@ class Session:
                     "unverified", f"Task {spec.task_id} is design work with no reviewer from another vendor available.")
             elif ok:
                 verdict = self._final_design_review(spec, reviewer, shots)
+                if _renders_blind(verdict) and harness and not is_review_only(spec):
+                    # A capture that misses the state is a declaration defect,
+                    # not a design defect: one redeclaration by the lead, one
+                    # recapture, one more review (series b1ff751 f5 on both
+                    # arms and rule-b1ff751 f5: three leads, the same stop).
+                    redone = self._recapture_declared(spec, lead, task, record, verdict)
+                    if redone is not None:
+                        ok, problem, shots, _records = redone
+                        record["recapture"] = dict(capture=spec.scope.capture, verified=ok, problem=problem,
+                                                   screenshots=shots)
+                        if ok:
+                            verdict = self._final_design_review(spec, reviewer, shots)
+                        else:
+                            record.update(verified=False, problem=problem)
+                            self._design_unverified.append((spec.task_id, problem))
+                            verdict = ("BLOCKING: the renders do not show the changed interface, and the "
+                                       f"recapture did not produce clean evidence ({problem})")
                 record["final_review"] = dict(reviewer=reviewer, verdict=verdict[:600])
                 blocking = [line for line in (verdict or "").splitlines() if line.strip().startswith("BLOCKING:")]
                 if (verdict or "").strip() != "APPROVED" and not blocking:
@@ -4451,6 +4602,75 @@ class Session:
                     self._resolution_candidate = self._review_snapshot
         self.design_checks.append(record)
         task.keep(json.dumps(record), kind="design-evidence")
+
+    def _recapture_declared(self, spec, lead, task, record, verdict):
+        """Ask the lead for the page and steps that reach the changed state,
+        recapture once, and return ``(ok, problem, shots, records)``; None
+        when the lead gave no usable new declaration (the verdict stands).
+
+        The capture the orchestrator declared at dispatch is what the harness
+        renders. GameTape's empty-state feature (f5) appears only when a
+        project has no clips, which the declared steps never set up: the
+        renders showed the normal page, the reviewer rightly said the change
+        was not in them, and the task closed with that as an open finding on
+        all three leads that built it. The harness checked that a capture ran,
+        not that it showed the change. The lead built the interface and knows
+        the state it needs, so it redeclares; the same validator and fixture
+        rules as a SCOPE capture apply, and the recapture is bounded to one.
+        """
+        current = spec.scope.capture or {}
+        self._count("recapture")
+        self._note(f"task {spec.task_id}: renders do not show the change; one recapture declaration")
+        prompt = (
+            f"Task: {spec.description}\n\nThe harness captured {current.get('path')} after "
+            f"{len(current.get('steps') or [])} declared interaction step(s) and the design reviewer "
+            f"from another vendor replied: {verdict.strip()[:200]}\n\nThe interface this task changed "
+            "does not appear in those renders, so the declared page or steps do not reach the state "
+            "where it shows. Reply with exactly one line\n"
+            'CAPTURE: {"path": "/route", "steps": [...]}\n'
+            "naming the page and the interaction steps that reach that state, as a user meets it. "
+            "The rules are those of a SCOPE capture: " + _CAPTURE_SCOPE_REQUEST + " A final wait "
+            "must name something only the changed state shows. If no page and steps on this "
+            "preview can reach that state, reply exactly CAPTURE: none and one line saying why. "
+            "Do not change files: this call declares, it does not edit, so a file step may name "
+            "only a sample that already exists in the project (a committed sample, or a fixture "
+            "an earlier call of this task wrote); a sample that does not exist yet cannot be "
+            "declared here."
+        )
+        with invocation(spec.task_id, "capture-redeclare"):
+            reply = self._invoke_model(lead, prompt)
+        task.record("assistant", f"[{lead}] {reply}")
+        task.keep(reply, kind="capture-redeclare", author=lead)
+        capture, why = _parse_capture_line(reply, spec.task_id)
+        if capture is None:
+            self._note(f"task {spec.task_id}: no usable recapture declaration ({why})")
+            record["recapture"] = dict(declared=None, problem=why)
+            return None
+        if capture == current:
+            self._note(f"task {spec.task_id}: the recapture declaration repeats the dispatched capture")
+            record["recapture"] = dict(declared=capture, problem="same page and steps as dispatched")
+            return None
+        missing = _missing_fixtures(self.project, capture, spec.task_id)
+        if missing:
+            # The declaring call cannot write, so a fixture that is not in the
+            # project yet would only fail at capture and spend the one
+            # recapture on nothing (Codex review of 2ffa7f6 on #52).
+            why = "the declaration uploads a sample that does not exist in the project: " + ", ".join(missing)
+            self._note(f"task {spec.task_id}: no usable recapture declaration ({why})")
+            record["recapture"] = dict(declared=capture, problem=why)
+            return None
+        spec.scope = replace(spec.scope, capture=capture)
+        self._note(f"task {spec.task_id}: recapturing {capture['path']} after {len(capture['steps'])} step(s)")
+        self._stage("design")
+        failure = self._harness_capture(spec)
+        if failure:
+            self._hand_off_preview(spec, task, record, failure)
+            return False, str(failure), [], [dict(kind="integrity", message=str(failure))]
+        from .design_evidence import check_records
+        ok, problem, shots, records = check_records(self.project, spec.task_id, self._last_edit_started or 0,
+                                                    expected_source=self._trusted_source())
+        self._refuse_mismatched(spec, record, task, records, True)
+        return ok, problem, shots, records
 
     def _refuse_mismatched(self, spec, record, task, records, harness) -> None:
         """Stop on evidence positively observed not to hold (map J9b): a
@@ -4537,13 +4757,18 @@ class Session:
             + "\n\nReply exactly APPROVED if the delivered interface is acceptable, or one line "
             "per blocking problem starting 'BLOCKING:'. Nothing else."
         )
-        from .runtime import EvidenceNotDelivered
+        from .runtime import EvidenceNotDelivered, ReviewCopyAltered
         try:
             with invocation(spec.task_id, "design-review"):
                 verdict = self._invoke_model(reviewer, prompt)
         except EvidenceNotDelivered as exc:
             self._edge("delivered", False)
             return f"BLOCKING: the renders could not be handed to the reviewer ({str(exc)[:300]})"
+        except ReviewCopyAltered as exc:
+            # Delivered, but judged after the reviewer changed what it was
+            # handed: the verdict is not of the bytes on record.
+            self._edge("delivered", False)
+            return f"BLOCKING: the reviewer altered its copy of the source or renders before judging ({str(exc)[:300]})"
         # Delivered as bound: the files and hashes the copy was checked against.
         self._edge("delivered", True)
         if self._outcome is not None:
@@ -6289,7 +6514,9 @@ class Session:
             "'BLOCKING:' or 'UNRESOLVED:'. The words BLOCKING and UNRESOLVED in capitals "
             "are read as findings wherever they appear, so in prose write them in lower "
             "case; a line 'BLOCKING: none' is read as no finding. Do not redo the work; "
-            "verify it."
+            "verify it. End your reply with exactly one line, VERDICT: ACCEPT or "
+            "VERDICT: REJECT; that line is read as your decision, and a REJECT must "
+            "name at least one BLOCKING: or UNRESOLVED: finding above it."
         )
 
     def _mechanical_close_out(self, lead: str, spec: TaskSpec, task: TaskMemory):
