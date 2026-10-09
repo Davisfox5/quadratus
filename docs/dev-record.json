@@ -2276,7 +2276,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-09T21:57:37Z",
       "acknowledged": false,
       "delivery": {
@@ -2315,6 +2315,21 @@
           ],
           "at": "2026-10-09T22:21:01Z",
           "stale_reason": "delivery moved from 6007353 to c49d9f0"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "c49d9f0d17710e952502fbe9b4b30e187f4cd8c1",
+          "verdict": "cleared",
+          "evidence": "SCOPED CORRECTION CLEARED 6007353..c49d9f0: #57 6090421056 / #35 6090421418 (body ea938af3... untrimmed), report d9bc93fa..., receipt e993f689..., bundle 29fd28be..., gz 08cb84e3..., 3327 files 0 mismatches; 215 independent controls passed; source-scope only",
+          "scope": [
+            "quadratus/monitor.py",
+            "quadratus/monitor_server.py",
+            "tools/dev_record.py",
+            "tests/test_monitor_record_repairs.py",
+            "docs/DEVELOPMENT_PROCESS.md",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-09T22:37:43Z"
         }
       ],
       "blockers": [
@@ -2341,7 +2356,8 @@
         "claude: claude: 178c193 review acked #46 6090105909 (body 4abc798f4e755c6bfdf55967cd15f2803c09be6d8da453a38adf43acf8a14b41). Codex control fails on 178c193 (1F/32P), passes on 6007353 (33P). 178c193 suite 3419 passed 13 env (full17 d73fc9af..., #53 6090067056). 6007353 suite running.",
         "unblocked by claude: Z5 post-integration route fixed at 6007353; Codex independently cleared 178c193..6007353 (#57 6090205373 / #35 6090205718, report 6c7e0e40..., receipt 1ac78263...), its post-integration control passing",
         "claude: claude: clearance acked #46 6090213577 (body d26ed0724ceff39ef73eb33874f73d8d73475156013179415202c0800e30b387). Pending: 6007353 Linux suite and CI. Real-record reconciliation (T-direct-tier contract.py, nine unresolved historical blockers) to be done per task with evidence.",
-        "claude: claude: 6007353 Linux suite 3421 passed 13 env (full18 864985e8..., #53 6090318075), CI 4/4; root 600 source gates acked #46 6090312618 (body 62a9c466...). c49d9f0 delivered (unblock any state; #46 6090301557) with A reconciliation applied; suite running. Environment-bound setup (#35 6090229478, body b629c4f3...; archive 62d1fc7, 187 files 0 mismatches; report feed3985..., receipt 09bfc6e2...) assessed #46 6090338839 (body 7538c39947b83379dc96cadd30a80d0493307feed7fe125f4aa8e6abf7364df5): no P1/P2, prior findings closed in source, four P3s."
+        "claude: claude: 6007353 Linux suite 3421 passed 13 env (full18 864985e8..., #53 6090318075), CI 4/4; root 600 source gates acked #46 6090312618 (body 62a9c466...). c49d9f0 delivered (unblock any state; #46 6090301557) with A reconciliation applied; suite running. Environment-bound setup (#35 6090229478, body b629c4f3...; archive 62d1fc7, 187 files 0 mismatches; report feed3985..., receipt 09bfc6e2...) assessed #46 6090338839 (body 7538c39947b83379dc96cadd30a80d0493307feed7fe125f4aa8e6abf7364df5): no P1/P2, prior findings closed in source, four P3s.",
+        "claude: claude: c49d9f0 clearance acked #46 6090430130. Linux suite and CI pending."
       ]
     }
   ],
