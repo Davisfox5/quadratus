@@ -493,6 +493,14 @@ Key design decisions already settled:
   covers by folder or discovers. Where coverage cannot be told, nothing is
   claimed. Native children named in a transcript count once per vendor call
   id; a refused spawn is the control holding, not a child.
+- **The GUI serves copies of a run's files, never the run folder** (batch 2
+  gui-ui-v3 on 5d9f5ff, the first real GUI run). Gradio serves only its
+  working directory, the system temp directory and `allowed_paths`; the
+  run's files live in the project's `.quadratus/runs/<id>`, so returning
+  them raised InvalidPathError and blanked the report, diff and downloads.
+  `gui.downloadable_files` copies exactly `RUN_FILES` (regular files, never
+  links) into a fresh 0700 temp folder named after the run; `allowed_paths`
+  is never widened, which would expose the whole project tree.
 - **A runtime-dependency tree is part of what a check proves**
   (`deptree.py`, contract v2 on #25). Run 19: a lead wrote a
   `node_modules` shim the source checks could not see, and the project's

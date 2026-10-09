@@ -278,8 +278,47 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
         except Exception as exc:
             yield f"Run failed: {exc}", '', []
             return
-    yield result.report, result.diff, [str(result.run_dir / name)
-                                      for name in ('report.md', 'changes.diff', 'ledger.md', 'result.json')]
+    files, problem = downloadable_files(result.run_dir)
+    report = result.report + (f"\n\n_{problem}_" if problem else "")
+    yield report, result.diff, files
+
+
+#: The run files the Project tab offers for download, by exact name.
+RUN_FILES = ('report.md', 'changes.diff', 'ledger.md', 'result.json')
+
+
+def downloadable_files(run_dir):
+    """Copies of the run's saved files that the GUI may serve, and a note.
+
+    Gradio serves only files under its working directory, the system temp
+    directory or ``allowed_paths``. The run's files live in the selected
+    project's ``.quadratus/runs/<id>``, so returning them directly raised
+    InvalidPathError and blanked the report, diff and downloads together
+    (batch 2 gui-ui-v3 on 5d9f5ff, the first real GUI run). Widening
+    ``allowed_paths`` would expose a whole project tree to the server; this
+    copies exactly these named regular files into a fresh private folder
+    (mode 0700) under the system temp directory, named after the run. The
+    originals stay where they are and are the record. A file that is
+    missing or a link is skipped; a copy that fails leaves the report and
+    diff on screen with a note naming the run folder.
+    """
+    import shutil
+    import tempfile
+    run_dir = Path(run_dir)
+    present = [run_dir / name for name in RUN_FILES
+               if (run_dir / name).is_file() and not (run_dir / name).is_symlink()]
+    if not present:
+        return [], ""
+    try:
+        folder = Path(tempfile.mkdtemp(prefix=f"quadratus-{run_dir.name}-"))
+        copies = []
+        for source in present:
+            target = folder / source.name
+            shutil.copyfile(source, target)
+            copies.append(str(target))
+    except OSError as exc:
+        return [], f"The saved run files could not be offered for download ({exc}); they are in {run_dir}."
+    return copies, ""
 
 
 def policy_preview_ui(folder, paths='', forbid='', writing=False):
