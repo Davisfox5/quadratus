@@ -1,0 +1,1 @@
+Evidence-only future helper preparation. Whole proposed source, diff, control receipts and private fault cases. No engine or live clearance. No engine source or live input changes. Decode gzip JSON then content_base64 per file; verify manifest SHA256.
