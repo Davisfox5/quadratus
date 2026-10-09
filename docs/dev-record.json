@@ -2122,8 +2122,8 @@
       "claimed_at": "2026-10-09T07:38:35Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "81adcc79eab34d4fe12ad0e88be5823cd7c4ee27",
-        "at": "2026-10-09T08:22:54Z"
+        "sha": "67c9fade45b5f5abf872ef7dbcc4c4088e7e8a41",
+        "at": "2026-10-09T09:27:19Z"
       },
       "reviews": [
         {
@@ -2160,7 +2160,8 @@
         "claude: Review of b6ba3ba NOT CLEARED, six P2 (F1-F6). Acknowledged #46 6077070707 and 6077103788. Fixing all six on the next immutable head; held 9ceabd1 is a starting point only.",
         "claude: Corrective head 81adcc7 (9ceabd1 + 81adcc7 on b6ba3ba) for F1-F6; notice #53 6077245847 (body ecfe984c81061175adcebb538ed6b2f6695fb3b4d74706dd300cbac9499dba8c). Reviewer's 21 controls pass locally (11 failed on b6ba3ba); retained drivers same 18 env failures as b6ba3ba; focused 17+22 passed. Full suite and CI pending.",
         "claude: 81adcc7: CI 4/4 success; local full suite 3294 passed/46 skipped/13 failed (same 13 environment failures as b6ba3ba and base here), log 1a2c3589.... Posted #53 6077519896 (body 459c71802e74d9c91259c12415e386113f5a000080caf25cd831ea7169b7a3ee). Review of F1-F6 pending.",
-        "claude: Codex review b6ba3ba..81adcc7 NOT CLEARED, R1-R5 P2 (#53 6077751692 / #35 6077752178, both body 8dc2550b2128aaf9b08a62f167cfd0773615e6aad03850233c29633e83adedc3). Archive 4ea5c5fd: gz 2539be7b..., bundle 41265321..., 140 files 0 mismatches; report 4d3aea81614afbcafe9b6d824e8629316013e432a926b8b01f371d34e74a8760, receipt e290215fbe93816cb6db625de5cf4041d9caa31908a95735eace2111eed8d893. Reproduced 7 failed/4 passed on 81adcc7 (Linux, node 22). Acknowledged #46 6077772838 (body 20798e7308940f9cfe7f2fcfa6a95c95dc4d50ebe64c02ba577221a07c160e08). Repair in progress for the next head."
+        "claude: Codex review b6ba3ba..81adcc7 NOT CLEARED, R1-R5 P2 (#53 6077751692 / #35 6077752178, both body 8dc2550b2128aaf9b08a62f167cfd0773615e6aad03850233c29633e83adedc3). Archive 4ea5c5fd: gz 2539be7b..., bundle 41265321..., 140 files 0 mismatches; report 4d3aea81614afbcafe9b6d824e8629316013e432a926b8b01f371d34e74a8760, receipt e290215fbe93816cb6db625de5cf4041d9caa31908a95735eace2111eed8d893. Reproduced 7 failed/4 passed on 81adcc7 (Linux, node 22). Acknowledged #46 6077772838 (body 20798e7308940f9cfe7f2fcfa6a95c95dc4d50ebe64c02ba577221a07c160e08). Repair in progress for the next head.",
+        "claude: R1-R5 corrective head 67c9fad (tree 0361d000, on 81adcc7) pushed per #35 6078180670; delivery #53 6078193948 (body 8cf96d92c0f0f26fcbe3a02559f305efe4f45fbfa7dcf1fc1979843dd5f408cf). Full suite started 09:13Z on these bytes, pending. Probe sources/raw outcomes for helper findings: #46 6078162283 (body 6886e69f0d3d43d01cf4e422fecad79c7f64d6d0486a5da767d4dd60d7c16bcd); reconciliation ack #46 6078091479 (body 4c26dca7...)."
       ]
     }
   ],
