@@ -1,0 +1,1 @@
+Evidence-only new guard adoption preparation, candidateNULL; six narrow optimized-entry refusal checks. Full report, receipt, failed/pass probes and baseline comparisons are losslessly archived. No engine source or live input changes. Decode gzip JSON then content_base64 per file; verify manifest SHA256.
