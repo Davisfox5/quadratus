@@ -440,9 +440,9 @@ class Fleet:
                     + "\n".join(checks)
                     + "\nRun these commands verbatim from the working directory. Do not add cd, pipes, "
                     "wildcards, shell wrappers or substitute a directory for the listed files. "
-                    "A command that lists test files runs only those files: a new test file no "
-                    "listed command names never runs and its tests stay unverified, so add new "
-                    "tests to a file a listed command already names. "
+                    "A new test file that no listed command names is not shown to have run: unless a "
+                    "listed test file runs it, its tests stay unverified, so add new tests to a "
+                    "file a listed command already names. "
                     "Use Read, Grep and Glob for inspection. If an ungranted command is denied, "
                     "do not retry variants, delegate it or use another tool to execute it. "
                     "Report the unrun check and finish with the edits and available evidence. "

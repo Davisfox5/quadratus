@@ -503,9 +503,11 @@ def _test_family(path: str):
 def uncovered_tests(changed, argvs) -> List[str]:
     """Changed test files no required command runs, where that can be told.
 
-    A command that lists test files explicitly runs only those (batch 2
-    gui-ui-v3 on 5d9f5ff: t2 added tests/ui/project_search.test.js, the
-    frozen Node check named five other files, and the new tests never ran).
+    A command that lists test files explicitly names only those (batch 2
+    gui-ui-v3 on 5d9f5ff: t2 added tests/ui/project_search.test.js and the
+    frozen Node check named five other files). Not named is not proof of not
+    run: a listed file can run another through a wrapper, so callers report
+    the result as unnamed, never as unrun (Codex review of 7515f28).
     A changed test file is uncovered when some command lists files of the
     same folder and kind, and no command lists it, names a folder holding
     it, or discovers it (a pytest command with no test-file operands covers

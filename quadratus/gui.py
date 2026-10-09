@@ -298,10 +298,13 @@ def downloadable_files(run_dir):
     ``allowed_paths`` would expose a whole project tree to the server.
 
     The copy is bound to descriptors, not pathnames (Codex review of
-    7515f28: a link check followed by a pathname copy could be raced). The
-    run folder is resolved once, then every component of it is opened from
-    ``/`` without following links; each named file is opened through that
-    folder handle without following links, must be a regular file, and is
+    7515f28: a link check followed by a pathname copy could be raced, and a
+    static linked parent was followed). The run folder and the two folders
+    above it (``.quadratus/runs/<id>``) must not be links; only the path
+    above them, the project's own location, is resolved once (on macOS
+    ``/var`` and ``/tmp`` are themselves links). Every component is then
+    opened from ``/`` without following links; each named file is opened
+    through that folder handle without following links, must be a regular file, and is
     read from its own descriptor into a new file created exclusively in a
     fresh private folder (mode 0700) under the system temp directory. A
     file that is missing, a link or not regular is skipped (the download
@@ -315,9 +318,11 @@ def downloadable_files(run_dir):
     nofollow = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     copies, fds = [], []
     try:
-        resolved = Path(os.path.realpath(run_dir))
+        absolute = Path(os.path.abspath(run_dir))
+        own = absolute.parts[-3:] if len(absolute.parts) > 3 else absolute.parts[-1:]
+        above = Path(os.path.realpath(absolute.parents[len(own) - 1]))
         fds.append(os.open("/", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)))
-        for part in resolved.parts[1:]:
+        for part in (*above.parts[1:], *own):
             fds.append(os.open(part, flags, dir_fd=fds[-1]))
         folder_fd = fds[-1]
         folder = None

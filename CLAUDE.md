@@ -484,17 +484,17 @@ Key design decisions already settled:
   child with unknown usage: its spend is already inside the parent's
   reported total, so nothing is added, guessed or attributed, and it never
   stops a run. The parent's unattributed auxiliary tokens stay unattributed.
-- **A test the checks do not run is unverified, not passed** (batch 2
-  gui-ui-v3 on 5d9f5ff: t2 added `tests/ui/project_search.test.js`, the
-  frozen Node check names five other files, and the lead's `node --test
+- **A test file no check names is reported as unnamed, never as unrun**
+  (batch 2 gui-ui-v3 on 5d9f5ff: t2 added `tests/ui/project_search.test.js`,
+  the frozen Node check names five other files, and the lead's `node --test
   tests/ui` was correctly refused). Commands are never widened. The lead's
-  approved-commands guidance says a command that lists test files runs only
-  those, so new tests belong in a listed file; and after a task's gate,
-  `integration.uncovered_tests` files an unverified finding for a changed
-  test file of a family some check lists explicitly that no check names,
-  covers by folder or discovers is named as an observation (on the task,
-  the close-out and `result.json` `unnamed_test_files`), never a finding:
-  a wrapper can run a file no check names, so "not named" is not "not run".
+  guidance says a new test file no listed command names is not shown to
+  have run, so new tests belong in a listed file. After a task's gate,
+  `integration.uncovered_tests` finds changed test files of a family some
+  check lists explicitly that no check names, covers by folder or
+  discovers; they are an observation (on the task, the close-out and
+  `result.json` `unnamed_test_files`), never a finding, because a wrapper
+  can run a file no check names (Codex review of 7515f28).
   Native children named in a transcript count once per vendor call id; only
   a successful spawn is a child; a refused, errored or unresolved one is a
   ledger note that says whether it ran is unknown or that none ran.
@@ -504,8 +504,10 @@ Key design decisions already settled:
   run's files live in the project's `.quadratus/runs/<id>`, so returning
   them raised InvalidPathError and blanked the report, diff and downloads.
   `gui.downloadable_files` copies exactly `RUN_FILES` into a fresh 0700 temp
-  folder named after the run, bound to descriptors: the run folder resolved
-  once, every component opened from `/` without following links, each file
+  folder named after the run, bound to descriptors: `.quadratus/runs/<id>`
+  must not contain a link (Codex review of 7515f28), only the project's own
+  location above it is resolved once (macOS `/var` is a link), every
+  component is opened from `/` without following links, each file
   opened through that handle without following links, regular files only,
   read from its own descriptor. `allowed_paths` is never widened, which
   would expose the whole project tree.

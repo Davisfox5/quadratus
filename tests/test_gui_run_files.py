@@ -121,9 +121,28 @@ def test_a_run_folder_swapped_for_a_link_after_it_is_bound_serves_the_original_b
     assert [open(f).read() for f in files] == [f"{name} body\n" for name in gui.RUN_FILES]
 
 
-def test_a_linked_ancestor_of_the_run_folder_is_resolved_once_and_then_bound(tmp_path, monkeypatch):
+def test_a_linked_location_above_the_project_is_resolved_once_and_then_bound(tmp_path, monkeypatch):
+    """macOS keeps /var and /tmp behind links, so the project's own location
+    may be reached through one."""
     run_dir, _ = _layout(tmp_path, monkeypatch)
     alias = tmp_path / "alias"
-    alias.symlink_to(run_dir.parent)
-    files, problem = gui.downloadable_files(alias / run_dir.name)
-    assert problem == "" and len(files) == len(gui.RUN_FILES)
+    alias.symlink_to(tmp_path / "project")
+    files, problem = gui.downloadable_files(alias / ".quadratus" / "runs" / run_dir.name)
+    assert problem == "" and [open(f).read() for f in files] == [f"{name} body\n" for name in gui.RUN_FILES]
+
+
+@pytest.mark.parametrize("linked", [".quadratus", "runs"])
+def test_a_static_link_inside_the_state_path_is_refused(tmp_path, monkeypatch, linked):
+    """Codex review of 7515f28: a symlinked run parent was followed although
+    the run folder itself was not a link."""
+    run_dir, _ = _layout(tmp_path, monkeypatch)
+    project = tmp_path / "project"
+    elsewhere = tmp_path / "elsewhere"
+    if linked == ".quadratus":
+        (project / ".quadratus").rename(elsewhere)
+        (project / ".quadratus").symlink_to(elsewhere)
+    else:
+        (project / ".quadratus" / "runs").rename(elsewhere)
+        (project / ".quadratus" / "runs").symlink_to(elsewhere)
+    files, problem = gui.downloadable_files(run_dir)
+    assert files == [] and str(run_dir) in problem

@@ -59,7 +59,9 @@ def test_the_lead_is_told_new_tests_belong_in_a_listed_file():
     import inspect
 
     from quadratus import runtime
-    assert "never runs and its tests stay unverified" in inspect.getsource(runtime)
+    source = inspect.getsource(runtime)
+    assert "is not shown to have run" in source and "add new tests to a" in source
+    assert "never runs" not in source, "not named is not proof of not run (Codex review of 7515f28)"
 
 
 def test_a_new_test_file_a_run_test_invokes_is_not_claimed(tmp_path):
