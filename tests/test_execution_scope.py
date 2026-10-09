@@ -540,3 +540,57 @@ def test_a_pytest_id_resolves_along_its_class_path():
     assert _case_block(key + "[chromium]", True, source) == _case_block(key, True, source)
     twice = source + "class TestBrowser:\n    pass\n"
     assert _case_block(key, True, twice) is None, "an ambiguous class is unknown"
+
+
+# Codex review of 02accbd, X1-X2.
+
+def test_a_runner_is_read_from_the_executable_not_an_operand():
+    from quadratus.integration import config_selection, runner_of
+    assert runner_of(["node", "--test", "tests/pytest", "tests/ui/b.test.js"]) == "node"
+    assert runner_of(["node", "--test", "pytest"]) == "node"
+    assert runner_of([sys.executable, "-I", "-m", "pytest", "-q"]) == "pytest"
+    assert runner_of(["uv", "run", "pytest", "-q"]) == "pytest"
+    assert runner_of(["make", "pytest"]) is None
+    assert config_selection(["node", "--test", "tests/pytest"], "/nowhere", "/nowhere") == ""
+
+
+@pytest.mark.parametrize("literal", ["/[)}]/", "/a/", "`${x}`"])
+def test_a_call_this_scan_cannot_read_is_unknown(literal):
+    from quadratus.session import _case_block
+    js = f"const t=require('node:test');\nt('browser',{{skip:true}},()=>{{\n  const v={literal};\n  const x=1;\n}});\n"
+    assert _case_block("browser", False, js) is None
+    assert _case_block("browser", False, js.replace(literal, "'[)}]'")) is not None, "brackets in a string are skipped"
+
+
+@needs_node
+def test_a_regex_with_brackets_keeps_a_changed_body_new(tmp_path):
+    def browser(line):
+        return f"const t=require('node:test');\nt('browser', {{skip: true}}, () => {{\n  const re = /[)}}]/;\n  {line}\n}});\n"
+    root = _node_project(tmp_path, browser("const legacy = 'old platform';"))
+    gate = GateSuite([GateCommand(id="ui", argv=(NODE, "--test", UNIT, BROWSER))], cwd=root)
+    session = _session(tmp_path, root, gate, f"R5: MET - {BROWSER}")
+    session._snapshot_original_tests()
+    (root / BROWSER).write_text(browser("throw new Error('required browser acceptance never ran');"))
+    _gate(session, "t1", ["R5"])
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+
+
+@needs_node
+def test_a_node_file_named_pytest_keeps_node_case_identity(tmp_path, monkeypatch):
+    """The reporter comes from NODE_OPTIONS so the operand named pytest sits
+    third in argv, where the old runner check looked."""
+    monkeypatch.setenv("NODE_OPTIONS", "--test-reporter=spec")
+    root = _node_project(tmp_path, "const t=require('node:test');t('browser',()=>{});\n")
+    other = "tests/pytest"
+    (root / other).write_text("const t=require('node:test');t('unit',()=>{});t('old-platform',{skip:true},()=>{});\n")
+    gate = GateSuite([GateCommand(id="ui", argv=(NODE, "--test", other, BROWSER))], cwd=root)
+    session = _session(tmp_path, root, gate, f"R5: MET - {BROWSER}")
+    session._snapshot_original_tests()
+    (root / BROWSER).write_text("const t=require('node:test');t('browser',{skip:true},()=>{});\n")
+    check = _gate(session, "t1", ["R5"])
+    assert check["receipts"][0]["cases"]["skipped"] == {"browser": 1, "old-platform": 1}
+    assert session.unexecuted_acceptance[-1]["cases"] == ["browser"], "the unchanged old skip stays historical"
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+    (root / BROWSER).write_text("const t=require('node:test');t('browser',()=>{});\n")
+    _gate(session, "t2", ["R1"])
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is True, "the browser case ran again"

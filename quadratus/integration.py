@@ -870,10 +870,30 @@ def operand_paths(argv, root=None, cwd='.') -> List[str]:
 _PYTEST_CONFIGS = ('pytest.ini', '.pytest.ini', 'pyproject.toml', 'tox.ini', 'setup.cfg')
 
 
+_PYTEST_NAMES = ('pytest', 'py.test')
+#: Launchers that run their next argument as the command: ``uv run pytest``.
+_RUN_WRAPPERS = ('uv', 'poetry', 'pipenv', 'pdm', 'hatch', 'rye')
+
+
 def _is_pytest(argv) -> bool:
+    """Whether a command starts pytest, read from the executable's position
+    only: ``pytest`` itself, ``<python> [flags] -m pytest``, or a ``run``
+    launcher followed by one of those. A test-file operand named ``pytest``
+    never decides it (Codex review of 02accbd, X2)."""
     argv = [str(a) for a in argv]
-    return (any(Path(a).name in ('pytest', 'py.test') for a in argv[:3])
-            or (len(argv) > 2 and argv[1] == '-m' and argv[2] in ('pytest', 'py.test')))
+    if not argv:
+        return False
+    name = Path(argv[0]).name
+    if name in _PYTEST_NAMES:
+        return True
+    if name.startswith('python'):
+        i = 1
+        while i < len(argv) and argv[i].startswith('-') and argv[i] != '-m':
+            i += 1
+        return i + 1 < len(argv) and argv[i] == '-m' and argv[i + 1] in _PYTEST_NAMES
+    if name in _RUN_WRAPPERS and len(argv) > 2 and argv[1] == 'run':
+        return _is_pytest(argv[2:])
+    return False
 
 
 def _config_addopts(path: Path) -> Optional[str]:

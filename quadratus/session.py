@@ -1321,9 +1321,13 @@ def _pytest_block(key: str, text: str):
 def _enclosing_call(text: str, at: int):
     """The text of the call whose first argument is the string literal at
     ``at``: from the identifier before its ``(`` to the matching ``)``.
-    Strings, template literals and comments are skipped while counting
-    brackets. None when the literal is not a call's first argument or the
-    call does not close within 200,000 characters."""
+    Strings and comments are skipped while matching bracket types. None
+    (unknown) when the literal is not a call's first argument, when the call
+    holds anything this lexical scan cannot read with certainty (a ``/`` that
+    may start a regex literal, whose brackets and quotes are not structural;
+    a template literal with ``${``), when a closer does not match its opener,
+    or when the call does not close within 200,000 characters. A prefix is
+    never returned as the whole call (Codex review of 02accbd, X1)."""
     open_at = at - 1
     while open_at >= 0 and text[open_at] in " \t\r\n":
         open_at -= 1
@@ -1332,13 +1336,19 @@ def _enclosing_call(text: str, at: int):
     start = open_at
     while start > 0 and (text[start - 1].isalnum() or text[start - 1] in "_$."):
         start -= 1
-    depth, i, end = 0, open_at, min(len(text), open_at + 200_000)
+    pairs = {")": "(", "]": "[", "}": "{"}
+    stack, i, end = [], open_at, min(len(text), open_at + 200_000)
     while i < end:
         ch = text[i]
         if ch in "'\"`":
-            i += 1
-            while i < end and text[i] != ch:
-                i += 2 if text[i] == "\\" else 1
+            close = i + 1
+            while close < end and text[close] != ch:
+                if ch == "`" and text.startswith("${", close):
+                    return None
+                close += 2 if text[close] == "\\" else 1
+            if close >= end:
+                return None
+            i = close
         elif text.startswith("//", i):
             newline = text.find("\n", i)
             i = end if newline == -1 else newline
@@ -1347,11 +1357,14 @@ def _enclosing_call(text: str, at: int):
             if close == -1:
                 return None
             i = close + 1
+        elif ch == "/":
+            return None
         elif ch in "([{":
-            depth += 1
+            stack.append(ch)
         elif ch in ")]}":
-            depth -= 1
-            if depth == 0:
+            if not stack or stack.pop() != pairs[ch]:
+                return None
+            if not stack:
                 return text[start:i + 1]
         i += 1
     return None
