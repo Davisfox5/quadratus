@@ -1,0 +1,1 @@
+Evidence-only exacte530..5292fc2 review, NOT CLEARED. Full report, receipt, failed/pass probes and baseline comparisons are losslessly archived. No engine source or live input changes. Decode gzip JSON then content_base64 per file; verify manifest SHA256.
