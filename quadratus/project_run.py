@@ -293,6 +293,12 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     (run_dir / 'gate-plan.json').write_text(json.dumps(plan, indent=2), encoding='utf-8')
     if progress:
         progress('Checks: ' + ('; '.join(f"{g['id']}: {' '.join(g['argv'])}" for g in plan) or 'none'))
+    # The allowance this run was given, saved before any model call so an
+    # interrupted run still says what it was allowed (Codex GUI plan, #35).
+    selected = _selected_limits(max_tasks, run_limits, survey)
+    (run_dir / 'run-limits.json').write_text(json.dumps(selected, indent=2) + '\n', encoding='utf-8')
+    if progress:
+        progress('Run limits: ' + selected['described'])
     gate = (GateSuite(gates, cwd=project.root, exclude=project.exclude) if gates is not None
             else IntegrationGate(command, cwd=project.root,
                                  minimum_tests=1 if _is_test_suite(command) else None) if command else None)
@@ -480,6 +486,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'policy_preview': preview,
         'policy_plans': getattr(session, 'policy_plans', []),
         'budget': budget.snapshot() if budget else None,
+        'selected_limits': selected,
         'delegation': reconcile(delegation.events, delegation.native_children.values()),
         'scope_reports': [
             {'within_scope': r.within_scope, 'out_of_scope': r.out_of_scope,
@@ -492,6 +499,16 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     (run_dir / 'findings.json').write_text(
         json.dumps(list(getattr(session, 'findings', []) or []) if session else [], indent=2), encoding='utf-8')
     return ProjectResult(completed, report, run_dir, diff, error)
+
+
+def _selected_limits(max_tasks, run_limits, survey):
+    from .run_budget import describe_limits
+    return {
+        'max_tasks': max_tasks,
+        'run_limits': dataclasses.asdict(run_limits) if run_limits is not None else None,
+        'survey_recovery_tasks': survey.recovery_tasks if survey is not None else None,
+        'described': describe_limits(run_limits, survey, max_tasks),
+    }
 
 
 def _calls_by_task(session):

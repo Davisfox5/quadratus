@@ -438,6 +438,16 @@ Key design decisions already settled:
   `assertion` now requires it. Expected-exception failures (`pytest.raises`
   with nothing raised, `builtins.Failed`) stay unattributable: that is a
   stated capability gap, not something this change widens.
+- **The GUI can bound a run, and off is the old run** (Codex GUI plan on
+  #35, 2026-10-09). The Project tab's Run limits form builds the existing
+  `RunLimits` and `SurveyConfig` in the callback, refuses a bad field by
+  name before any project or provider is touched, and forwards both through
+  `run_project_ui` to the shared runner. A preset only fills the fields.
+  `project_run` writes `run-limits.json` before the first call and repeats it
+  as `selected_limits` in `result.json`, with one plain wording
+  (`run_budget.describe_limits`) that never calls a post-return threshold a
+  ceiling. Limits off and zero recovery passes `None` for both, exactly the
+  call made before the form existed.
 - **A runtime-dependency tree is part of what a check proves**
   (`deptree.py`, contract v2 on #25). Run 19: a lead wrote a
   `node_modules` shim the source checks could not see, and the project's

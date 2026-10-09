@@ -367,6 +367,10 @@ class SurveyConfig:
     """
     recovery_tasks: int = 6
 
+    def __post_init__(self):
+        if type(self.recovery_tasks) is not int or self.recovery_tasks < 0:
+            raise ValueError('recovery_tasks must be a non-negative whole number')
+
 
 @dataclass
 class SessionConfig:

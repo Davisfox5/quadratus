@@ -24,6 +24,10 @@ _MAX_SOURCE_BYTES = 100 * 1024 * 1024
 class Project:
     def __init__(self, path, *, exclude=()):
         self.root = Path(path).expanduser().resolve()
+        if self.root.exists() and not self.root.is_dir():
+            # Said plainly (Codex GUI diagnostic on 0a99ee2: a file given as
+            # the project folder was reported as missing).
+            raise ValueError(f'Project folder is a file, not a folder: {self.root}')
         if not self.root.is_dir():
             raise ValueError(f'Project folder does not exist: {self.root}')
         self.exclude = {Path(p).resolve() for p in exclude}

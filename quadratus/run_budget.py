@@ -135,6 +135,35 @@ class RunLimits:
             raise ValueError('wall_seconds must be positive and finite')
 
 
+def describe_limits(limits, survey=None, max_tasks=None) -> str:
+    """The selected allowance in plain words, one wording for the GUI form,
+    the progress stream and the saved record (Codex GUI plan on #35,
+    2026-10-09). Token limits are counted from what each CLI reports after a
+    call returns, so the text never calls them a hard ceiling or a cost."""
+    parts = []
+    if max_tasks is not None:
+        parts.append(f'Task limit: {int(max_tasks)}.')
+    if limits is None:
+        parts.append('No shared run allowance: model calls, reported tokens and time are not capped '
+                     'for this run.')
+    else:
+        parts.append(f'At most {limits.max_calls:,} model calls, {limits.max_reported_tokens:,} reported '
+                     f'tokens in total and {limits.wall_seconds:,g} seconds; '
+                     f'{limits.max_concurrent_workers} parallel worker(s).')
+        if limits.reserve_tokens_per_call:
+            parts.append(f'A call starts only while at least {limits.reserve_tokens_per_call:,} tokens '
+                         'of the total remain.')
+        if limits.max_tokens_per_call:
+            parts.append(f'A single call that reports more than {limits.max_tokens_per_call:,} tokens '
+                         'stops the run after it returns; it cannot cut that call short.')
+        parts.append('Token counts are what the CLIs report after each call, not a hard ceiling '
+                     'and not an invoice.')
+    if survey is not None:
+        parts.append(f'Recovery: up to {survey.recovery_tasks} extra continuation or repair task(s) '
+                     'after failures.')
+    return ' '.join(parts)
+
+
 class RunBudget:
     def __init__(self, limits: RunLimits, *, path=None, clock=time.monotonic):
         self.limits = limits

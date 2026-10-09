@@ -260,7 +260,13 @@ http://127.0.0.1:7860. Choose another port with `quadratus-gui --port 8000` or
 `QUADRATUS_GUI_PORT=8000`; a busy port is reported with the command to use
 instead. The Project tab's "UI capture and further checks" section takes the
 same capture profile, further required checks and readiness probes as the
-CLI's `--capture-profile`, `--extra-check` and `--readiness`. Conversation memory, file uploads, and a per-model
+CLI's `--capture-profile`, `--extra-check` and `--readiness`. Its "Run limits"
+section caps one run: model calls, total reported tokens, time, parallel
+workers and extra recovery tasks after failures, with a preset that fills the
+fields. The run shows the effective numbers before any call and saves them as
+`run-limits.json` beside its report. Token limits count what the CLIs report
+after each call returns, so they are not a hard ceiling. Left off, a run has
+no shared allowance, as before. Conversation memory, file uploads, and a per-model
 contribution breakdown. Sharing is disabled while a CLI backend is active.
 
 ## Project layout

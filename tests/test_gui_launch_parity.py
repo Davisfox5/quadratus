@@ -74,3 +74,21 @@ def test_a_busy_port_is_reported_with_the_way_out(monkeypatch, capsys):
         assert gui.main(["--port", str(port)]) == 2
     err = capsys.readouterr().err
     assert f"Port {port} on 127.0.0.1 is already in use" in err and "--port" in err
+
+
+def test_a_file_given_as_the_project_folder_is_named_as_a_file(tmp_path):
+    from quadratus.project import Project
+    (tmp_path / "notes.txt").write_text("x")
+    with pytest.raises(ValueError, match="is a file, not a folder"):
+        Project(tmp_path / "notes.txt")
+    with pytest.raises(ValueError, match="does not exist"):
+        Project(tmp_path / "nowhere")
+
+
+def test_a_missing_or_malformed_readiness_file_is_named(tmp_path):
+    from quadratus.readiness import probes_from
+    with pytest.raises(ValueError, match="readiness probes file could not be read: .*missing.json"):
+        probes_from(str(tmp_path / "missing.json"), tmp_path)
+    (tmp_path / "bad.json").write_text("{not json")
+    with pytest.raises(ValueError, match="readiness probes file is not valid JSON: .*bad.json"):
+        probes_from(str(tmp_path / "bad.json"), tmp_path)
