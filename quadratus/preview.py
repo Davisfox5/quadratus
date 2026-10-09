@@ -199,8 +199,28 @@ _PY_FLAGS = set("bBdEIOPqRsSux")
 #: Node options whose value is the next argument.
 _NODE_VALUED = {"-r", "--require", "--import", "--loader", "--experimental-loader", "-C", "--conditions",
                 "--input-type", "--title", "--env-file", "--redirect-warnings", "--icu-data-dir"}
+#: Node long options that take no value. Any other long option is refused:
+#: an option the grammar does not know may take a value, and then the
+#: script it would name is a guess (Codex review of 0a99ee2..6cf72f4).
+_NODE_FLAGS = {"--enable-source-maps", "--no-warnings", "--no-deprecation", "--trace-warnings",
+               "--trace-deprecation", "--trace-uncaught", "--throw-deprecation", "--pending-deprecation",
+               "--preserve-symlinks", "--preserve-symlinks-main", "--abort-on-uncaught-exception",
+               "--experimental-vm-modules", "--no-experimental-fetch", "--inspect", "--inspect-brk",
+               "--frozen-intrinsics", "--disable-proto=delete", "--no-addons", "--no-global-search-paths"}
+#: Node long options accepted only in their ``--option=value`` form.
+_NODE_EQUALS = {"--inspect", "--inspect-brk", "--inspect-port", "--max-old-space-size", "--stack-size",
+                "--unhandled-rejections", "--disable-proto", "--dns-result-order", "--experimental-specifier-resolution"}
 #: Options that print or open a prompt and exit: never a preview.
 _NOT_A_SERVER = {"-h", "--help", "-V", "-v", "--version", "-i", "--interactive", "-c", "--check", "-"}
+
+
+def _operand(option: str, value: str, name: str) -> None:
+    """``-m``, ``-c``, ``-e`` and ``-p`` run what follows them; with nothing
+    there the interpreter exits with a usage error instead of serving."""
+    if not value.strip() or (option == "-m" and value.startswith("-")):
+        what = "a module name" if option == "-m" else "code to run"
+        raise ValueError(f"capture profile preview runs {name} {option} without {what}; "
+                         f"give it one, or name the project file it serves")
 
 
 def _interpreter_script(argv, root: Optional[Path] = None) -> Optional[str]:
@@ -235,7 +255,8 @@ def _interpreter_script(argv, root: Optional[Path] = None) -> Optional[str]:
         if not arg.startswith("-") or arg == "-":
             break
         if is_python:
-            if arg in ("-m", "-c") or arg[:2] in ("-m", "-c"):
+            if arg[:2] in ("-m", "-c"):
+                _operand(arg[:2], arg[2:] if len(arg) > 2 else (args[i + 1] if i + 1 < len(args) else ""), name)
                 return None                       # a module or inline code, not a file
             if arg in ("-W", "-X"):
                 i += 2
@@ -249,11 +270,13 @@ def _interpreter_script(argv, root: Optional[Path] = None) -> Optional[str]:
         else:
             option = arg.split("=", 1)[0]
             if option in ("-e", "--eval", "-p", "--print"):
+                _operand(option, arg.split("=", 1)[1] if "=" in arg
+                         else (args[i + 1] if i + 1 < len(args) else ""), name)
                 return None
             if option in _NODE_VALUED:
                 i += 1 if "=" in arg else 2
                 continue
-            if arg.startswith("--") and option not in _NOT_A_SERVER:
+            if arg in _NODE_FLAGS or ("=" in arg and option in _NODE_EQUALS and arg.split("=", 1)[1]):
                 i += 1
                 continue
         raise ValueError(f"capture profile preview option {arg[:40]!r} is not one the harness can read; "

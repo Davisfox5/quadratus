@@ -105,6 +105,19 @@ def _server(port, directory="."):
     (dict(preview=["python", "-i", "app.py"]), "is not one the harness can read"),
     (dict(preview=["node", "-i"]), "is not one the harness can read"),
     (dict(preview=["node", "--check", "app.py"]), "is not one the harness can read"),
+    # Codex review of 0a99ee2..6cf72f4: an unknown Node option may take a
+    # value, and a module or inline-code flag with nothing after it serves nothing.
+    (dict(preview=["node", "--frobnicate", "app.py"]), "is not one the harness can read"),
+    (dict(preview=["node", "--inspect-port", "9229", "app.py"]), "is not one the harness can read"),
+    (dict(preview=["node", "--max-old-space-size", "app.py"]), "is not one the harness can read"),
+    (dict(preview=["python", "-m"]), "-m without a module name"),
+    (dict(preview=["python", "-m", "-u"]), "-m without a module name"),
+    (dict(preview=["python", "-c"]), "-c without code to run"),
+    (dict(preview=["python", "-c", " "]), "-c without code to run"),
+    (dict(preview=["node", "-e"]), "-e without code to run"),
+    (dict(preview=["node", "-p"]), "-p without code to run"),
+    (dict(preview=["node", "--eval"]), "--eval without code to run"),
+    (dict(preview=["node", "--print="]), "--print without code to run"),
 ])
 def test_an_unusable_profile_is_refused(tmp_path, data, message):
     (tmp_path / "app.py").write_text("")
@@ -151,6 +164,8 @@ def test_project_placeholders_in_the_preview_command_are_made_project_relative(t
     ["python", "-m", "http.server", "5000"], ["python", "-mhttp.server"], ["python", "-c", "print(1)"],
     ["python", "serve"], ["node", "--no-warnings", "serve"], ["node", "--env-file=.env.local", "serve"],
     ["node", "-e", "require('http')"], ["node", "--require", "app.py", "serve"],
+    ["node", "--eval=require('http')"], ["node", "--inspect=9229", "serve"], ["node", "--inspect", "serve"],
+    ["node", "--max-old-space-size=512", "--enable-source-maps", "serve"],
 ])
 def test_interpreter_options_modules_and_extensionless_scripts_are_read(tmp_path, argv):
     (tmp_path / "app.py").write_text("")
