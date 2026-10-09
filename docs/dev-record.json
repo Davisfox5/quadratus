@@ -2027,6 +2027,13 @@
       "state": "passed",
       "evidence": "Codex root Mac full suite on exact 9a0d7f0e677679fb1f0592f495b5a0afc91ee21b, clean checkout, source unchanged, exit 0: 3229 passed, 44 skipped, 0 failed in 546.99s; executor model calls 0. #35 comment 6074234739, stored full body SHA256 042754fbf88b37ac8112e51686a7fbbe47a652805ed84117817e82ad78c69f7e (GET-read here); raw log SHA256 70fd5f6217d0ff4b2799660d66839d72944d6ee25af9b2bf7ac5c644adbaff40, recomputed here from the published log text with one trailing newline. Skips (44) kept as published. Does not clear the same-source reporting P2/P3 (fixed on 5d9f5ff, under review with its own Mac suite) and is not feature, capture or MVP acceptance. Earlier failed suites stand: Mac 0a99ee2 6/3161/44, Linux CI 0a99ee2 5/3162/44, suite-35 on 3e95645 5 failed.",
       "at": "2026-10-09T04:25:19Z"
+    },
+    {
+      "kind": "full-suite-linux",
+      "sha": "9a0d7f0",
+      "state": "passed",
+      "evidence": "suite-37, immutable detached snapshot at exact 9a0d7f0, clean before and after: lifecycle 557 passed 10 skipped; rest 2652 passed 36 skipped 1 deselected; test_browser.py and test_browser_pilot.py excluded and the wheel test deselected as in every suite of this series; Linux Python 3.11; log SHA256 e755309f0c1d4d79730846065d05d1dc4a11456b3f77a7d2e2acdf5532339ecc. Agrees with the root Mac suite on 9a0d7f0 (3229 passed, 44 skipped). Not clearance: 9a0d7f0 reporting P2/P3 are fixed on 5d9f5ff; suite-38 starts on a 5d9f5ff snapshot.",
+      "at": "2026-10-09T04:27:21Z"
     }
   ]
 }
