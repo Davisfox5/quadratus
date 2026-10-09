@@ -1,0 +1,1 @@
+Evidence-only future driver/helper source preparation and one tiny offline affected control batch. Candidate not admitted, no live qualification. Whole report, source and raw records archived. No engine source or live input changes. Decode gzip JSON then content_base64 per file; verify manifest SHA256.
