@@ -544,11 +544,11 @@ Key design decisions already settled:
   draft; a capped fix is one attempt spent and the checks still decide.
 - **Run-start tests are checked in their run-start form; acceptance that did
   not run is never audited MET** (series rule-119c83f f2, Codex decision D,
-  #35 6076286834). f2's t2 changed the original helper
-  `tests/ui/load_app.js` so new code loaded under it, the gate ran the edited
-  helper and passed, and every original Node test failed against the
-  delivered code; t3 and t4 said their browser scenario did not run and the
-  audit marked all five requirements met. Every test and test-support file
+  #35 6076286834). f2's t2 changed the original helper `tests/ui/load_app.js`
+  so new code loaded under it, the gate ran the edited helper and passed, and
+  every original Node test failed against the delivered code; t3 and t4 said
+  their browser scenario did not run and the audit marked all five
+  requirements met. Every test and test-support file
   (`integration.is_test_support`: test-file patterns, `conftest.py`, anything
   under `tests/`, `test/`, `__tests__/`, `spec(s)/`) is kept at run start.
   When one differs or is gone, the gate's own commands also run in a copy of
@@ -562,37 +562,40 @@ Key design decisions already settled:
   (or `BLOCKED:`) line an editing call wrote, and lowers a MET
   deterministically when every citation is an unnamed test file, or when a
   task covering the requirement reported NOT RUN, or when its required check
-  skipped cases the run-start source did not skip. That baseline is the
-  gate's own commands run once on the run-start source, the first time a
-  check skips anything (`skip_baselines`): a product edit that turns a case
-  into a skip counts (Codex review of 81adcc7, R3), a case skipped since
-  before the run does not, and the restored-original receipts never record
-  one (R4). A skip is historical only when its name is one case in both
-  runs and that case was skipped at run start; names are read from the
-  whole output before its tail is kept (`case_record`, Codex review of
-  67c9fad, S1). A shared name, unknown names or no baseline: every skip
-  counts. A pytest XFAIL is not execution (S5). Optional commands never
-  record one. Only a *complete
-  run* discharges a NOT RUN item (Codex review of b6ba3ba, F3, F4, F6): a
-  later passing required command, no filter in argv, in pytest's
-  `addopts`/`PYTEST_ADDOPTS` or `NODE_OPTIONS`, no case reported
-  deselected (R2), no `-p` plugin, no collection or execution hook in a
-  conftest.py pytest would load, no node configuration file (S2), cases
-  executed and zero skipped, naming every path of the item as a whole
-  operand read from the command's own cwd (R5; a single-command gate's cwd
-  and selection are kept on its check and on the receipt synthesized when
-  original tests join, S3 and S4). A named skip
-  fact is discharged by a later passing unfiltered run of the same command
-  that executed each named case and skipped none of them; an unnamed one by
-  such a run skipping nothing. A substring, an optional or skipped receipt, a
-  filtered run, a lower skip total, or a model's word never does; a report
-  written after a run is a new report. An unnamed file is reconciled by a later complete run
-  that names it or names a file that names it. Parallel children's reports
-  come back to the parent, re-based to its checks (F5). Test-only runner
-  configs (`pytest.ini`, jest/vitest/playwright/mocha configs) are kept and
-  restored with the tests, and one added during the run (or an added
-  `conftest.py`) triggers the original run with it left out (R1); a change to test selection in a mixed file
-  (`pyproject.toml [tool.pytest]`, `setup.cfg`/`tox.ini` pytest sections,
+  skipped cases the run-start source did not skip. That baseline is the gate's
+  own commands run once on the run-start source, the first time a check skips
+  anything (`skip_baselines`): a product edit that turns a case into a skip
+  counts (Codex review of 81adcc7, R3), a case skipped since before the run
+  does not, and the restored-original receipts never record one (R4). A skip
+  is historical only when its name is one case in both runs and that case was
+  skipped at run start; names are read from the whole output before its tail
+  is kept (`case_record`, Codex review of 67c9fad, S1), and a name over 300
+  characters is keyed by its SHA256 (`case_key`, d157378 T1). A shared name, a
+  record past its bound (the tail is never used as identity, T2) or no
+  baseline: every skip counts. A pytest XFAIL is not execution (S5). Optional
+  commands never record one. Only a *complete run* discharges a NOT RUN item
+  (Codex review of b6ba3ba, F3, F4, F6): a later passing required command, no
+  filter in argv, in pytest's `addopts`/`PYTEST_ADDOPTS` or `NODE_OPTIONS`, no
+  case reported deselected (R2), no `-p` plugin or `PYTEST_PLUGINS` (T3), no
+  collection or execution hook in a conftest.py pytest would load, no node
+  configuration file (S2), cases executed and zero skipped, naming every path
+  of the item as a whole operand read from the command's own cwd (R5; a
+  single-command gate's cwd and selection are kept on its check and on the
+  receipt synthesized when original tests join, S3 and S4). A named skip fact
+  is discharged only by a later run of the same command whose complete case
+  record shows those cases executed and none skipped, and which skips nothing
+  beyond that command's run-start baseline: names are not file-qualified, so a
+  case renamed in another file cannot stand in while one is still skipped
+  (T4). An unnamed skip fact needs such a run skipping nothing. A substring,
+  an optional or skipped receipt, a filtered run, a lower skip total, or a
+  model's word never does; a report written after a run is a new report. An
+  unnamed file is reconciled by a later complete run that names it or names a
+  file that names it. Parallel children's reports come back to the parent,
+  re-based to its checks (F5). Test-only runner configs (`pytest.ini`,
+  jest/vitest/playwright/mocha configs) are kept and restored with the tests,
+  and one added during the run (or an added `conftest.py`) triggers the
+  original run with it left out (R1); a change to test selection in a mixed
+  file (`pyproject.toml [tool.pytest]`, `setup.cfg`/`tox.ini` pytest sections,
   `package.json` type/imports/runner keys) means the original suite cannot be
   established: an open unverified finding, never a pass (F1). The project is
   re-read after the copy runs, and a change fails the check (F2). Downward

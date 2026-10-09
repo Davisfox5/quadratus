@@ -327,3 +327,69 @@ def test_an_xfail_that_never_ran_does_not_discharge_a_named_skip(tmp_path):
     check = _gate(session, "t2", ["R1"])
     assert "XFAIL" in check["output"]
     assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+
+
+# Codex review of d157378, T1-T4.
+
+@needs_node
+def test_two_long_names_sharing_a_prefix_are_two_cases(tmp_path):
+    prefix = "x" * 320
+    session = _flagged(tmp_path, "const t=require('node:test');t('unit',()=>{});\n",
+                       FLAGS + f"t('{prefix}-old-platform',{{skip:!flags.old}},()=>{{}});"
+                       f"t('{prefix}-required-browser',{{skip:!flags.browser}},()=>{{}});\n")
+    _gate(session, "t1", ["R5"])
+    assert len(session.unexecuted_acceptance) == 1
+    assert session.unexecuted_acceptance[-1]["cases"][0].endswith(
+        __import__("hashlib").sha256((prefix + "-required-browser").encode()).hexdigest())
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+
+
+@needs_node
+def test_past_the_case_bound_no_skip_is_historical(tmp_path, monkeypatch):
+    """Two cases share a name: the one that runs is printed first and pushed
+    out of the output tail by padding, the skipped one is printed last. A
+    product-only change swaps which acceptance each stands for, and the
+    output is the same both times. Over the bound the record is None, and
+    the tail, which shows one shared-case, never stands in for identity (T2;
+    the bound is lowered here only to keep the test small)."""
+    from quadratus import integration
+    monkeypatch.setattr(integration, "_MAX_CASES", 3)
+    padding = "".join(f"t('padding-{i}-a-long-distinct-case-name-for-the-output-tail',()=>{{}});\n"
+                      for i in range(60))
+    session = _flagged(tmp_path, "const t=require('node:test');t('unit',()=>{});\n",
+                       FLAGS + "t('shared-case',()=>{});\n" + padding
+                       + "t('shared-case',{skip:'one of old or browser is unavailable'},()=>{});\n")
+    check = _gate(session, "t1", ["R5"])
+    receipt = check["receipts"][0]
+    assert receipt["cases"] is None
+    shown = sum(sum(c.values()) for c in integration.case_outcomes(receipt["output"]))
+    assert shown < 62 and integration.case_outcomes(receipt["output"])[0] == {"shared-case": 1}, \
+        "the tail shows only part of the run, the skipped shared-case among it"
+    assert integration.case_outcomes(receipt["output"])[1]["shared-case"] == 0, "the run one is out of the tail"
+    assert session.unexecuted_acceptance and session._audit_requirements(ids=["R5"])["R5"][0] is False
+
+
+def test_pytest_plugins_in_the_environment_is_selection(monkeypatch, tmp_path):
+    argv = [sys.executable, "-m", "pytest", "tests/test_b.py"]
+    monkeypatch.delenv("PYTEST_PLUGINS", raising=False)
+    assert config_selection(argv, tmp_path, tmp_path) == ""
+    monkeypatch.setenv("PYTEST_PLUGINS", "selection_plugin")
+    assert config_selection(argv, tmp_path, tmp_path) == "PYTEST_PLUGINS=selection_plugin"
+    assert config_selection(["node", "--test", "a.test.js"], tmp_path, tmp_path) == ""
+
+
+@needs_node
+def test_a_case_renamed_in_another_file_cannot_discharge_a_named_skip(tmp_path):
+    root = _node_project(tmp_path, "const t=require('node:test');t('browser',()=>{});\n")
+    gate = GateSuite([GateCommand(id="ui", argv=(NODE, "--test", UNIT, BROWSER))], cwd=root)
+    session = _session(tmp_path, root, gate, f"R5: MET - {BROWSER}")
+    session._snapshot_original_tests()
+    (root / BROWSER).write_text("const t=require('node:test');t('browser',{skip:'missing browser'},()=>{});\n")
+    _gate(session, "t1", ["R5"])
+    assert session.unexecuted_acceptance[-1]["cases"] == ["browser"]
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+    (root / UNIT).write_text("const t=require('node:test');t('browser',()=>{});\n")
+    (root / BROWSER).write_text(
+        "const t=require('node:test');t('browser-still-unavailable',{skip:'missing browser'},()=>{});\n")
+    _gate(session, "t2", ["R1"])
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False

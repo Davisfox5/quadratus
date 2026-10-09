@@ -1179,24 +1179,29 @@ def _check_runs(check: dict, root=None) -> List[dict]:
         # of 81adcc7, R2: pytest.ini's addopts = -k unit printed "1 passed, 1
         # deselected" for a named file and looked like a whole run).
         filtered = is_filtered(argv) or bool(row["selection"]) or deselected_count(row["output"]) > 0
-        if isinstance(row["cases"], dict):
-            skipped_names = Counter(row["cases"].get("skipped") or {})
-            executed_names = Counter(row["cases"].get("executed") or {})
-        else:
-            skipped_names, executed_names = case_outcomes(row["output"])
+        names = _receipt_names(row)
+        skipped_names = names[0] if names[0] is not None else case_outcomes(row["output"])[0]
+        every_names = names[1]
+        executed_names = names[2] if names[2] is not None else Counter()
         out.append(dict(id=row["id"], passed=row["passed"], required=row["required"], filtered=filtered,
                         tests=tests, skipped=skipped_count(SimpleNamespace(output=row["output"],
                                                                            report=row["report"])),
                         files=set(operand_paths(argv, root, row["cwd"])),
-                        skipped_names=skipped_names, executed_names=executed_names))
+                        skipped_names=skipped_names, executed_names=executed_names, every_names=every_names))
     return out
 
 
 def _receipt_names(receipt):
-    """``(skipped, every)`` case-name Counters for one receipt (an object or
-    a recorded dict), read from its whole-output ``cases`` record when it has
-    one and from its output tail otherwise; ``(None, None)`` when the names
-    printed do not account for every skip counted (unknown, never none)."""
+    """``(skipped, every, executed)`` case-key Counters for one receipt (an
+    object or a recorded dict).
+
+    Identity comes only from a complete whole-output ``cases`` record: then
+    all three are known. Without one (none recorded, or past its bound) the
+    skipped names may still be read from the output tail for the record's
+    text, but ``every`` and ``executed`` are None, because a tail that lists
+    every skip need not list every case sharing a name (Codex review of
+    d157378, T2). Skipped is None too when the names do not account for every
+    skip counted."""
     from collections import Counter
     from types import SimpleNamespace
 
@@ -1206,13 +1211,27 @@ def _receipt_names(receipt):
     record = get("cases")
     if isinstance(record, dict):
         skipped = Counter(record.get("skipped") or {})
-        every = skipped + Counter(record.get("executed") or {}) + Counter(record.get("other") or {})
+        executed = Counter(record.get("executed") or {})
+        every = skipped + executed + Counter(record.get("other") or {})
     else:
-        skipped, executed = case_outcomes(get("output") or "")
-        every = skipped + executed
+        skipped, every, executed = case_outcomes(get("output") or "")[0], None, None
     if count is None or sum(skipped.values()) != count:
-        return None, None
-    return skipped, every
+        return None, None, None
+    return skipped, every, executed
+
+
+def _new_skips(skipped, every, start):
+    """The skips in ``skipped`` that are not historical against ``start``
+    (``(count, skipped, every)`` from the run-start baseline, or None). A
+    skip is historical only when its key is one case in both runs and that
+    case was skipped at run start; without complete identity on both sides
+    every skip is new (S1, T2)."""
+    from collections import Counter
+    if start is None or every is None or start[2] is None or start[1] is None:
+        return Counter(skipped)
+    start_skipped, start_every = start[1], start[2]
+    return Counter({n: k for n, k in skipped.items()
+                    if not (every[n] == 1 and start_every[n] == 1 and start_skipped[n] == 1)})
 
 
 def _complete_run(run: dict) -> bool:
@@ -5858,7 +5877,6 @@ class Session:
         (F4). Without names, or without a baseline, every skip counts. The first check counts like any
         other; optional commands and the run-start compatibility receipts
         (``original-tests:*``, immutable by design) never record one."""
-        from collections import Counter
 
         from .integration import GateReceipt, skipped_count
         receipts = result.receipts or (GateReceipt(id="check", status="passed" if result.passed else "failed",
@@ -5872,19 +5890,16 @@ class Session:
             count = skipped_count(receipt)
             if not count:
                 continue
-            names, every = _receipt_names(receipt)
+            names, every, _ = _receipt_names(receipt)
             cases = sorted(names.elements()) if names is not None else None
             start = starts.get(keys.get(receipt.id))
-            if start is not None and names is not None and start[1] is not None:
+            if names is not None:
                 # Historical only when the name is one case in both runs and
                 # that case was skipped at run start: a name two cases share,
                 # or one that ran there, says nothing about which skipped now
-                # (Codex review of 67c9fad, S1). Without names on both sides
-                # every skip counts; equal totals and unchanged test bytes do
-                # not show the same case skipped.
-                start_skipped, start_every = start[1], start[2]
-                new = Counter({n: k for n, k in names.items()
-                               if not (every[n] == 1 and start_every[n] == 1 and start_skipped[n] == 1)})
+                # (Codex review of 67c9fad, S1). Without complete identity on
+                # both sides every skip counts (d157378, T2).
+                new = _new_skips(names, every, start)
                 if not new:
                     continue
                 cases = sorted(new.elements())
@@ -5898,7 +5913,13 @@ class Session:
                          item=f"{receipt.id}: {shown}"[:300],
                          why="the required check passed with these cases skipped",
                          requirements=list(self._current_covers), after_check=len(self.checks),
-                         receipt=receipt.id, kind="skipped", cases=cases)
+                         receipt=receipt.id, kind="skipped", cases=cases,
+                         # The run-start baseline this fact was measured
+                         # against, kept so a later discharge reads the same
+                         # one (T4).
+                         baseline=None if start is None else dict(
+                             skipped=None if start[1] is None else dict(start[1]),
+                             every=None if start[2] is None else dict(start[2])))
             self.unexecuted_acceptance.append(entry)
             self._note(f"task {spec.task_id}: {entry['item']}")
 
@@ -5970,14 +5991,26 @@ class Session:
                 runs = [r for r in _check_runs(check, self.project) if _complete_run(r)]
                 if entry.get("kind") == "skipped" and entry.get("cases"):
                     # Named skips are discharged by a later passing, unfiltered
-                    # run of the same command that executed each of them and
-                    # skipped none of them; other cases' skips are not this
-                    # record's (R4).
+                    # run of the same command whose complete case record shows
+                    # each of them executed and none skipped, and which skips
+                    # nothing beyond what that command skipped at run start.
+                    # Names are not file-qualified, so a case renamed in
+                    # another file could otherwise stand in for one still
+                    # skipped (Codex review of d157378, T4); old skips the
+                    # baseline had still do not block (R4).
                     need = Counter(entry["cases"])
-                    ran = any(r["id"] == entry["receipt"] and r["passed"] and r["required"] and not r["filtered"]
-                              and all(r["executed_names"][n] >= k and not r["skipped_names"][n]
-                                      for n, k in need.items())
-                              for r in _check_runs(check, self.project))
+                    base = entry.get("baseline") or None
+                    start = None if base is None else (None, None if base.get("skipped") is None else Counter(
+                        base["skipped"]), None if base.get("every") is None else Counter(base["every"]))
+                    ran = False
+                    for r in _check_runs(check, self.project):
+                        if not (r["id"] == entry["receipt"] and r["passed"] and r["required"]
+                                and not r["filtered"] and r["every_names"] is not None):
+                            continue
+                        if all(r["executed_names"][n] >= k and not r["skipped_names"][n] for n, k in need.items()) \
+                                and not _new_skips(r["skipped_names"], r["every_names"], start):
+                            ran = True
+                            break
                 elif entry.get("kind") == "skipped":
                     ran = any(r["id"] == entry["receipt"] for r in runs)
                 else:

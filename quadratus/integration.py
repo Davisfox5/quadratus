@@ -916,6 +916,10 @@ def config_selection(argv, cwd, root) -> str:
     reading, never grants one (Codex review of 81adcc7, R2)."""
     found = []
     names = ('NODE_OPTIONS', 'PYTEST_ADDOPTS') if _is_pytest(argv) else ('NODE_OPTIONS',)
+    # Plugins named in PYTEST_PLUGINS load into every pytest the gate starts
+    # and can drop collected tests silently (Codex review of d157378, T3).
+    if _is_pytest(argv) and os.environ.get('PYTEST_PLUGINS', '').strip():
+        found.append(f"PYTEST_PLUGINS={os.environ['PYTEST_PLUGINS'].strip()}")
     for name in names:
         value = os.environ.get(name, '')
         if value and (_filters(value) or _NODE_CONFIG.search(value) or (
@@ -1033,6 +1037,15 @@ _TAP_CASE = re.compile(r'^\s*(not ok|ok)\s+\d+\s+-\s+(.*?)(?:\s+#\s*(SKIP|TODO)\
 _PYTEST_CASE = re.compile(r'^(\S+::\S+)\s+(PASSED|FAILED|SKIPPED|XFAIL|XPASS|ERROR)\b')
 
 
+def case_key(name: str) -> str:
+    """A case's identity: its full name, or for a name over 300 characters a
+    readable prefix plus the SHA256 of the whole name, so two distinct long
+    names never share a key (Codex review of d157378, T1)."""
+    if len(name) <= 300:
+        return name
+    return f"{name[:200]}\u2026sha256:{hashlib.sha256(name.encode('utf-8', 'surrogatepass')).hexdigest()}"
+
+
 def _case_lines(output: str):
     """``(name, kind)`` for each case line the runner printed, ``kind``
     skipped, executed or other. Node's spec reporter (``\u2714``/``\u2716``/
@@ -1064,9 +1077,9 @@ def case_outcomes(output: str):
     skipped, executed = Counter(), Counter()
     for name, kind in _case_lines(output):
         if kind == 'skipped':
-            skipped[name] += 1
+            skipped[case_key(name)] += 1
         elif kind == 'executed':
-            executed[name] += 1
+            executed[case_key(name)] += 1
     return skipped, executed
 
 
@@ -1075,14 +1088,16 @@ _MAX_CASES = 20_000
 
 
 def case_record(output: str) -> Optional[dict]:
-    """Every case name the whole output prints, by kind (skipped, executed,
-    other), as name-to-count maps; None past ``_MAX_CASES`` lines."""
+    """Every case the whole output prints, by kind (skipped, executed,
+    other), as ``case_key``-to-count maps; None past ``_MAX_CASES`` lines.
+    None is unknown identity, which callers never rebuild from the output
+    tail (Codex review of d157378, T2)."""
     record = dict(skipped={}, executed={}, other={})
     for i, (name, kind) in enumerate(_case_lines(output)):
         if i >= _MAX_CASES:
             return None
-        name = name[:300]
-        record[kind][name] = record[kind].get(name, 0) + 1
+        key = case_key(name)
+        record[kind][key] = record[kind].get(key, 0) + 1
     return record
 
 
