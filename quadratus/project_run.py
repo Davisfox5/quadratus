@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import fcntl
 import json
+import os
 import re
 import shlex
 import uuid
@@ -537,33 +538,70 @@ def _observe_transcript_children(traces, delegation):
 
 
 def _retire_stale_fixtures(root, run_dir, progress=None):
-    """Move capture-only samples left by an earlier run out of the way.
+    """Retire capture-only samples left by an earlier run, bound to this
+    project's own state directory.
 
     Task ids restart at t1 on every run, and an existing nonempty file under
     ``.quadratus/capture-fixtures/<task id>/`` counts as supplied, so a later
-    run's t1 could upload bytes dictated for a different task, and the bound
-    writer refuses to overwrite them (Codex review comment 4226680384 on
-    #53). The folder is harness state (``.quadratus`` is never project
-    source), so it is moved, not deleted, into this run's own directory
-    before any model call; the bytes stay readable there. A symlink anywhere
-    on the way is left alone and named: the capture refuses linked fixtures
-    on its own. Returns where the old samples went, or None.
+    run's t1 could upload bytes dictated for a different task (Codex review
+    comment 4226680384 on #53). ``.quadratus`` is opened relative to the
+    project root without following links and held as a directory handle;
+    ``capture-fixtures`` is examined and renamed through that handle to
+    ``capture-fixtures.retired-<run id>`` in the same directory. A rename
+    within one directory is atomic, never crosses devices and never follows
+    a link: the first draft checked pathnames and then moved by pathname,
+    so a ``.quadratus`` replaced by a link in between moved another
+    project's fixtures (Codex review of 391f3c8). The retired name is not a
+    fixture path, so nothing in it can be uploaded again; the bytes stay
+    readable there. A linked ``.quadratus`` or ``capture-fixtures`` is left
+    alone and named. Returns the retired folder's project-relative path, or
+    None.
     """
-    import shutil
-    base = Path(root)
-    folder = base / '.quadratus' / 'capture-fixtures'
-    for current in (base / '.quadratus', folder):
-        if current.is_symlink():
-            if progress:
-                progress(f'Stale capture fixtures not moved: {current.relative_to(base).as_posix()} is a symlink')
-            return None
-    if not folder.is_dir() or not any(folder.iterdir()):
+    import errno
+    import stat
+
+    def say(text):
+        if progress:
+            progress(text)
+
+    flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+    nofollow = getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        root_fd = os.open(str(root), flags)
+    except OSError:
         return None
-    target = run_dir / 'stale-capture-fixtures'
-    shutil.move(str(folder), str(target))
-    if progress:
-        progress(f'Capture-only samples from an earlier run moved to {target}')
-    return str(target)
+    try:
+        try:
+            state_fd = os.open('.quadratus', flags | nofollow, dir_fd=root_fd)
+        except OSError as exc:
+            if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                say('Stale capture fixtures not retired: .quadratus is a symlink or not a folder')
+            return None
+        try:
+            try:
+                info = os.stat('capture-fixtures', dir_fd=state_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return None
+            if stat.S_ISLNK(info.st_mode):
+                say('Stale capture fixtures not retired: .quadratus/capture-fixtures is a symlink')
+                return None
+            if not stat.S_ISDIR(info.st_mode):
+                return None
+            folder_fd = os.open('capture-fixtures', flags | nofollow, dir_fd=state_fd)
+            try:
+                if not os.listdir(folder_fd):
+                    return None
+            finally:
+                os.close(folder_fd)
+            retired = f'capture-fixtures.retired-{Path(run_dir).name}'
+            os.rename('capture-fixtures', retired, src_dir_fd=state_fd, dst_dir_fd=state_fd)
+        finally:
+            os.close(state_fd)
+    finally:
+        os.close(root_fd)
+    where = f'.quadratus/{retired}'
+    say(f'Capture-only samples from an earlier run retired to {where}')
+    return where
 
 
 def _selected_limits(max_tasks, run_limits, survey, lead_turns=None, lead_source=None):

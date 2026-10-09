@@ -455,10 +455,13 @@ Key design decisions already settled:
 - **Capture-only samples belong to one run** (Codex review on #53,
   2026-10-09). Task ids restart at t1, so a sample an earlier run left under
   `.quadratus/capture-fixtures/t1/` counted as supplied for the next run's
-  t1. `project_run` moves the folder into the new run's
-  `stale-capture-fixtures/` before any model call: moved, never deleted, and
-  never a source change, since `.quadratus` is not project source. A linked
-  folder is left alone and named. A capped design review still records the
+  t1. Before any model call `project_run` renames it to
+  `.quadratus/capture-fixtures.retired-<run id>`, through a directory handle
+  on the project's own `.quadratus` opened without following links: never
+  deleted, never a source change, never a pathname move (a `.quadratus`
+  swapped for a link between a check and a pathname move relocated another
+  project's fixtures; Codex review of 391f3c8). A linked `.quadratus` or
+  `capture-fixtures` is left alone and named. A capped design review still records the
   delivery: the model ran, so the renders reached its copy.
 - **A task record says what happened, not what the stage list implies**
   (batch 2 recovery-v2 on 5d9f5ff). Three simple tasks drew no collaborator
