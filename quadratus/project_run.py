@@ -410,6 +410,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         traces = build_traces(run_dir, run_dir / 'invocations.jsonl', project.root)
     except Exception:  # noqa: BLE001 -- tracing never fails a run
         traces = []
+    _observe_transcript_children(traces, delegation)
     diff = project.diff(before)
     completed = bool(session and session.completed and not error)
     checks = session.checks if session else []
@@ -501,6 +502,38 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     (run_dir / 'findings.json').write_text(
         json.dumps(list(getattr(session, 'findings', []) or []) if session else [], indent=2), encoding='utf-8')
     return ProjectResult(completed, report, run_dir, diff, error)
+
+
+#: Tool names that start a vendor-native child agent inside one call.
+_FANOUT_TOOLS = {'agent', 'task', 'spawn_subagent'}
+
+
+def _observe_transcript_children(traces, delegation):
+    """Record a native child a call's own transcript names but its output hid.
+
+    Claude's ``--output-format json`` envelope carries no tool calls, so a
+    child an unrestricted seat spawns is invisible to the provider. Batch 2
+    recovery-v2 on 5d9f5ff: the orchestrator's second call ran an ``Agent``
+    child to execute the checks, the trace recorded ``Agent: success``, and
+    the delegation record still said zero native children. Each such call
+    becomes an unidentified child with unknown usage: its spend is already
+    inside the parent call's reported total, so nothing is added and no
+    figure is guessed. Observational only; it never stops a run.
+    """
+    from .delegation import NativeChild
+    for record in traces or ():
+        for n, call in enumerate(record.get('tool_calls') or ()):
+            name = str((call or {}).get('name') or '')
+            if name.lower() not in _FANOUT_TOOLS:
+                continue
+            delegation.observe_native(NativeChild(
+                session_id=f"unidentified:transcript:{record.get('invocation_id') or '?'}:{n}",
+                parent_session_id=record.get('session_id'),
+                tool_name=name,
+                detail=(f"named in the saved transcript of {record.get('task')} {record.get('role')} "
+                        f"{record.get('model')} (outcome {call.get('outcome')}); its usage is inside "
+                        "the parent call's reported total and is not added"),
+            ))
 
 
 def _retire_stale_fixtures(root, run_dir, progress=None):

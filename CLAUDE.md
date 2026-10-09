@@ -468,6 +468,15 @@ Key design decisions already settled:
   close says "The task closed with these changes on disk"; a capped or
   failed close keeps the stopped-call wording. Reporting only: who reviews
   and what completes are unchanged.
+- **A child the transcript names is on the delegation record** (batch 2
+  recovery-v2 on 5d9f5ff). Claude's JSON envelope carries no tool calls, so
+  the orchestrator's `Agent` child (it ran the checks itself) was invisible
+  to the provider while the trace recorded `Agent: success`, and the record
+  said zero native children. `project_run` now files each `Agent`, `Task`
+  or `spawn_subagent` call a saved transcript names as an unidentified
+  child with unknown usage: its spend is already inside the parent's
+  reported total, so nothing is added, guessed or attributed, and it never
+  stops a run. The parent's unattributed auxiliary tokens stay unattributed.
 - **A runtime-dependency tree is part of what a check proves**
   (`deptree.py`, contract v2 on #25). Run 19: a lead wrote a
   `node_modules` shim the source checks could not see, and the project's
