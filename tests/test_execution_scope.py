@@ -552,6 +552,7 @@ def test_a_runner_is_read_from_the_executable_not_an_operand():
     assert runner_of(["uv", "run", "pytest", "-q"]) == "pytest"
     assert runner_of(["make", "pytest"]) is None
     assert config_selection(["node", "--test", "tests/pytest"], "/nowhere", "/nowhere") == ""
+    assert "selection not established" in config_selection(["make", "pytest"], "/nowhere", "/nowhere")
 
 
 @pytest.mark.parametrize("literal", ["/[)}]/", "/a/", "`${x}`"])
@@ -594,3 +595,31 @@ def test_a_node_file_named_pytest_keeps_node_case_identity(tmp_path, monkeypatch
     (root / BROWSER).write_text("const t=require('node:test');t('browser',()=>{});\n")
     _gate(session, "t2", ["R1"])
     assert session._audit_requirements(ids=["R5"])["R5"][0] is True, "the browser case ran again"
+
+
+# Codex review of 0d834bd, Y1.
+
+def test_an_unrecognised_wrapper_cannot_hide_a_collection_hook(tmp_path):
+    """A shell script that execs python runs pytest, conftest hook and all,
+    but its argv names no runner, so none of pytest's selection checks apply.
+    Its selection is unknown and the run is not whole."""
+    import shlex
+    root = tmp_path / "project"
+    (root / "tests").mkdir(parents=True)
+    named = "tests/test_browser.py"
+    (root / named).write_text("def test_unit():\n    assert True\n"
+                              "def test_browser():\n    raise AssertionError('browser ran')\n")
+    (root / "tests" / "conftest.py").write_text(
+        "def pytest_collection_modifyitems(items):\n    items[:] = [i for i in items if i.name != 'test_browser']\n")
+    wrapper = tmp_path / "project-python"
+    wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' "$@"\n')
+    wrapper.chmod(0o755)
+    argv = (str(wrapper), *PYTEST[1:], named)
+    assert "selection not established" in config_selection(argv, root, root)
+    gate = GateSuite([GateCommand(id="browser", argv=argv)], cwd=root)
+    session = _session(tmp_path, root, gate, f"R5: MET - {named}")
+    session._snapshot_original_tests()
+    _not_run(session, named)
+    check = _gate(session, "t1", ["R5"])
+    assert check["passed"] and "1 passed" in check["output"] and "deselected" not in check["output"]
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False

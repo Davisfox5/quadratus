@@ -929,12 +929,19 @@ def config_selection(argv, cwd, root) -> str:
     """Test selection a command takes from outside its argv: ``addopts`` in
     pytest's configuration files from ``cwd`` up to ``root`` and
     ``PYTEST_ADDOPTS`` for a pytest command, ``NODE_OPTIONS`` for any.
-    '' when none of them filters; an unreadable configuration counts.
+    '' when none of them filters; an unreadable configuration counts, and so
+    does a runner ``runner_of`` cannot name.
 
     Every candidate file is read, not only the one pytest would pick, so this
     can name a file pytest ignores: it only ever withholds a "whole file ran"
     reading, never grants one (Codex review of 81adcc7, R2)."""
     found = []
+    # A runner this cannot name has a collection this cannot inspect: a shell
+    # wrapper around python still loads conftest hooks, and none of the pytest
+    # checks below apply to it. Its selection is unknown, never empty (Codex
+    # review of 0d834bd, Y1).
+    if runner_of(argv) is None:
+        found.append('test runner not recognised from argv; selection not established')
     names = ('NODE_OPTIONS', 'PYTEST_ADDOPTS') if _is_pytest(argv) else ('NODE_OPTIONS',)
     # Plugins named in PYTEST_PLUGINS load into every pytest the gate starts
     # and can drop collected tests silently (Codex review of d157378, T3).

@@ -598,7 +598,7 @@ Key design decisions already settled:
   recorded from pytest's own verbose line in a pytest command's output (case
   lines are read per the command's runner, taken from the executable's
   position and never from a test-file operand, so text a node test prints is
-  never a pytest case, W1, X2), carries its file, so its own execution is
+  never a pytest case, W1, X2; a runner the executable does not name, such as a shell wrapper around python, has selection not established and never counts as a whole run, Y1), carries its file, so its own execution is
   enough whatever else was skipped (U2); a `::` in any other name proves
   nothing (V1); a bare name must be held by the same single test file as when
   it was recorded, so a name reused in another file never stands in (T4, U1).
