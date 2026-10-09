@@ -34,7 +34,8 @@ def test_an_earlier_runs_samples_are_retired_before_any_call(tmp_path, monkeypat
     retired = f".quadratus/capture-fixtures.retired-{result.run_dir.name}"
     assert (tmp_path / retired / "t1" / "rows.csv").read_text() == "dictated for a different task\n"
     record = json.loads((result.run_dir / "result.json").read_text())
-    assert record["stale_capture_fixtures"] == retired
+    assert record["stale_capture_fixtures"]["path"] == retired
+    assert record["stale_capture_fixtures"]["resolves"] is True
     assert any("from an earlier run retired" in n for n in notes)
     assert not result.diff, "the samples are harness state, not project source"
 
@@ -93,5 +94,36 @@ def test_a_state_folder_replaced_by_a_link_after_it_is_bound_moves_nothing_forei
     monkeypatch.setattr(project_run.os, "open", real_open)
     assert (other / ".quadratus" / "capture-fixtures" / "t1" / "rows.csv").read_text() == \
         "other project active sample\n", "the foreign project's fixtures are untouched"
-    assert where == ".quadratus/capture-fixtures.retired-run-1"
+    assert where["path"] == ".quadratus/capture-fixtures.retired-run-1"
+    assert where["resolves"] is False, "the path now names the other project's state; the record says so"
     assert (parked / "capture-fixtures.retired-run-1" / "t1" / "rows.csv").read_text() == "owned stale sample\n"
+    info = os.stat(parked)
+    assert where["state_directory"] == {"device": info.st_dev, "inode": info.st_ino}
+
+
+def test_an_unreadable_state_folder_stops_the_run_before_any_call(tmp_path, monkeypatch):
+    """Codex review of 6a338a1: a read-permission failure returned quietly and
+    the session started with the stale samples in place."""
+    import errno
+
+    import pytest
+    project = tmp_path / "project"
+    _sample(project, "stale\n")
+    real_open = os.open
+
+    def refusing_open(path, flags, *args, **kwargs):
+        if path == ".quadratus":
+            raise PermissionError(errno.EACCES, "Permission denied")
+        return real_open(path, flags, *args, **kwargs)
+    monkeypatch.setattr(project_run.os, "open", refusing_open)
+    with pytest.raises(ValueError, match="could not be retired .*PermissionError"):
+        _retire_stale_fixtures(project, tmp_path / "run")
+    monkeypatch.setattr(project_run.os, "open", real_open)
+    assert (project / ".quadratus" / "capture-fixtures" / "t1" / "rows.csv").read_text() == "stale\n"
+
+    calls = []
+    monkeypatch.setattr(project_run.os, "open", refusing_open)
+    monkeypatch.setattr(Session, "run", lambda self, **kw: calls.append(1))
+    with pytest.raises(ValueError, match="could not be retired"):
+        run_project("g", project, Settings(backend="cli"), allow_writes=True)
+    assert calls == [], "no session ran"

@@ -2790,9 +2790,7 @@ class Session:
             raise
         else:
             outcome.closed_as = getattr(summary, "outcome", "closed")
-            # Only a clean close is not a stop: a turn-limited or failed close
-            # keeps the stopped-call wording.
-            self._record_work(outcome, None, stopped=outcome.closed_as != "closed")
+            self._record_work(outcome, None)
             # Every exit carries its outstanding references; an ordinary close
             # is snapshotted again after its own settlement and coverage.
             outcome.open_at_close = self._open_refs(outcome)
@@ -3100,7 +3098,7 @@ class Session:
             return "n/a"
         return self._source_fingerprint() or "unavailable"
 
-    def _record_work(self, outcome: TaskOutcome, measured: Optional[dict], *, stopped: bool = True) -> None:
+    def _record_work(self, outcome: TaskOutcome, measured: Optional[dict]) -> None:
         """What the task left: source identity after, changed paths and lines
         against its start (an explicit uninspected note when that cannot be
         measured, never an implied "no edits"), and the dependency status."""
@@ -3108,6 +3106,9 @@ class Session:
             outcome.source_after = self._source_identity()
             if outcome.partial is None:
                 if measured is None:
+                    # Only a clean close is not a stop: closed_as is set
+                    # before this runs, on both the normal and the raising path.
+                    stopped = getattr(outcome, "closed_as", "") != "closed"
                     measured = (self._inspect_partial_edits(self._task_before, stopped=stopped) if self.project
                                 else dict(changed=[], changed_lines=0, inspected=False,
                                           note="no project: nothing to measure"))
@@ -6976,6 +6977,8 @@ class Session:
         if self._outcome is not None:
             self._outcome.attempts["gate_fix"] = getattr(self, "_gate_fixes_used", 0)
             self._outcome.edge("checks", result.passed)
+        if full:
+            self._note_unrun_tests(spec, task, gate)
         if not result.passed:
             task.record(
                 "user",
@@ -6984,6 +6987,35 @@ class Session:
             )
 
         return latest_fix
+
+    def _note_unrun_tests(self, spec, task, gate) -> None:
+        """A test file this task added or changed that no required check runs
+        is unverified, never passed by the gate's silence (batch 2 gui-ui-v3
+        on 5d9f5ff: a new tests/ui file beside a Node check listing five
+        others). Nothing is widened: the commands stay as configured, and the
+        finding says which file and which checks."""
+        from .integration import uncovered_tests
+        from .scope import changed_paths
+        if not self.project or self._task_before is None:
+            return
+        argvs = ([c.argv for c in gate.commands] if hasattr(gate, "commands")
+                 else [getattr(gate, "command", ())])
+        try:
+            from .project import Project
+            changed = changed_paths(Project(self.project, exclude=self.config.project_excludes)
+                                    .diff(self._task_before))
+        except Exception:  # noqa: BLE001 -- observation never fails a task
+            return
+        unrun = uncovered_tests(changed, argvs)
+        if not unrun:
+            return
+        text = (f"Task {spec.task_id}: {', '.join(unrun)} changed by this task "
+                f"{'is' if len(unrun) == 1 else 'are'} not run by any required check (the checks "
+                "list their test files and do not name "
+                f"{'it' if len(unrun) == 1 else 'them'}); those tests are unverified, not passed.")
+        self._open_finding("unverified", text)
+        task.record("user", text)
+        self._note(f"task {spec.task_id}: unrun test file(s) {', '.join(unrun)}")
 
     def _handoff_unattributable(self, gate, result, task) -> None:
         """Stop, with diagnostics and no repair call, on a failure that is not

@@ -26,7 +26,7 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Literal, Optional, Sequence
+from typing import List, Literal, Optional, Sequence
 
 __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateSuite", "REPORT_TOKEN",
            "CheckUnattributable", "attribute", "read_report", "model_facing"]
@@ -484,6 +484,57 @@ class IntegrationGate:
             output=combined[-_TAIL_CHARS:],
             report=report,
         )
+
+
+#: A file a test runner would run, by the conventions the checks here use.
+_TEST_FILE = re.compile(r'(?:^|/)(?:test_[^/]*\.py|[^/]*_test\.py|[^/]*(\.(?:test|spec)\.[cm]?[jt]sx?))$')
+
+
+def _test_family(path: str):
+    """(folder, kind) of a test file, or None: kind is ``py`` or the JS tail
+    such as ``.test.js``."""
+    match = _TEST_FILE.search(path)
+    if not match:
+        return None
+    folder = path.rsplit('/', 1)[0] if '/' in path else ''
+    return folder, (match.group(1) or 'py')
+
+
+def uncovered_tests(changed, argvs) -> List[str]:
+    """Changed test files no required command runs, where that can be told.
+
+    A command that lists test files explicitly runs only those (batch 2
+    gui-ui-v3 on 5d9f5ff: t2 added tests/ui/project_search.test.js, the
+    frozen Node check named five other files, and the new tests never ran).
+    A changed test file is uncovered when some command lists files of the
+    same folder and kind, and no command lists it, names a folder holding
+    it, or discovers it (a pytest command with no test-file operands covers
+    every Python test file). Where no command lists that family, nothing is
+    claimed: unknown is not uncovered.
+    """
+    listed, folders, discovers_py = set(), [], False
+    families = set()
+    for argv in argvs:
+        argv = [str(a) for a in argv]
+        operands = [a for a in argv[1:] if not a.startswith('-')]
+        tests = [a for a in operands if _test_family(a)]
+        listed.update(tests)
+        families.update(_test_family(a) for a in tests)
+        folders += [a.rstrip('/') + '/' for a in operands
+                    if not _test_family(a) and not a.endswith(('.py', '.js', '.cjs', '.mjs', '.ts'))]
+        if 'pytest' in ' '.join(argv[:3]) and not any(_test_family(a) and a.endswith('.py') for a in tests):
+            discovers_py = True
+    found = []
+    for path in sorted(set(changed or ())):
+        family = _test_family(path)
+        if family is None or family not in families or path in listed:
+            continue
+        if any(path.startswith(folder) for folder in folders):
+            continue
+        if family[1] == 'py' and discovers_py:
+            continue
+        found.append(path)
+    return found
 
 
 @dataclass(frozen=True)

@@ -461,7 +461,9 @@ Key design decisions already settled:
   deleted, never a source change, never a pathname move (a `.quadratus`
   swapped for a link between a check and a pathname move relocated another
   project's fixtures; Codex review of 391f3c8). A linked `.quadratus` or
-  `capture-fixtures` is left alone and named. A capped design review still records the
+  `capture-fixtures` is left alone and named; any other failure stops the
+  run before a model call, and the record says whether the retired path
+  still leads to the samples (Codex review of 6a338a1). A capped design review still records the
   delivery: the model ran, so the renders reached its copy.
 - **A task record says what happened, not what the stage list implies**
   (batch 2 recovery-v2 on 5d9f5ff). Three simple tasks drew no collaborator
@@ -480,6 +482,17 @@ Key design decisions already settled:
   child with unknown usage: its spend is already inside the parent's
   reported total, so nothing is added, guessed or attributed, and it never
   stops a run. The parent's unattributed auxiliary tokens stay unattributed.
+- **A test the checks do not run is unverified, not passed** (batch 2
+  gui-ui-v3 on 5d9f5ff: t2 added `tests/ui/project_search.test.js`, the
+  frozen Node check names five other files, and the lead's `node --test
+  tests/ui` was correctly refused). Commands are never widened. The lead's
+  approved-commands guidance says a command that lists test files runs only
+  those, so new tests belong in a listed file; and after a task's gate,
+  `integration.uncovered_tests` files an unverified finding for a changed
+  test file of a family some check lists explicitly that no check names,
+  covers by folder or discovers. Where coverage cannot be told, nothing is
+  claimed. Native children named in a transcript count once per vendor call
+  id; a refused spawn is the control holding, not a child.
 - **A runtime-dependency tree is part of what a check proves**
   (`deptree.py`, contract v2 on #25). Run 19: a lead wrote a
   `node_modules` shim the source checks could not see, and the project's

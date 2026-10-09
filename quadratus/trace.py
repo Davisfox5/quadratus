@@ -165,14 +165,18 @@ def _claude(path: Path) -> dict:
             elif row.get("type") == "assistant" and block.get("type") == "thinking":
                 trace["reasoning"].append(block.get("thinking") or "")
             elif block.get("type") == "tool_use":
-                calls.append((block.get("id"), block.get("name"), _target(block.get("input"))))
+                # A streamed transcript can restate the same block; one call
+                # is one call (Codex review of 6a338a1).
+                if block.get("id") is None or all(block.get("id") != c[0] for c in calls):
+                    calls.append((block.get("id"), block.get("name"), _target(block.get("input"))))
             elif block.get("type") == "tool_result":
                 text = json.dumps(block.get("content"))[:400]
                 denied = bool(re.search(r"(?i)permission|not allowed|denied", text)) and block.get("is_error")
                 results[block.get("tool_use_id")] = "denied" if denied else (
                     "error" if block.get("is_error") else "success")
     for cid, name, target in calls:
-        trace["tool_calls"].append(dict(name=name, target=target, outcome=results.get(cid, "unknown")))
+        trace["tool_calls"].append(dict(name=name, target=target, outcome=results.get(cid, "unknown"),
+                                        **({"id": cid} if cid else {})))
     return trace
 
 
@@ -338,7 +342,10 @@ def shareable(record: dict) -> dict:
     if "tool_calls" in record:
         out["tool_calls"] = [dict(name=c.get("name"), outcome=c.get("outcome"),
                                   **({"path": c["target"]} if c.get("name") in _FILE_TOOLS
-                                     and c.get("target") and _ABS_PATH.fullmatch(c["target"]) else {}))
+                                     and c.get("target") and _ABS_PATH.fullmatch(c["target"]) else {}),
+                                  # An opaque vendor call id, never free text.
+                                  **({"id": c["id"]} if isinstance(c.get("id"), str)
+                                     and re.fullmatch(r"[A-Za-z0-9_.:-]{1,80}", c["id"]) else {}))
                              for c in record.get("tool_calls") or []]
         out["commands"] = [dict(program=_program(c.get("command")), exit=c.get("exit"),
                                 outcome=c.get("outcome")) for c in record.get("commands") or []]

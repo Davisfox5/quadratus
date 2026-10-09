@@ -486,7 +486,7 @@ class DelegationLedger:
 
     def render_report(self) -> str:
         lines = ["# Delegation and invocation record", ""]
-        if not self.events and not self.native_children:
+        if not self.events and not self.native_children and not self.blind_spots:
             lines.append("No invocations recorded.")
             return "\n".join(lines)
 

@@ -521,19 +521,34 @@ def _observe_transcript_children(traces, delegation):
     inside the parent call's reported total, so nothing is added and no
     figure is guessed. Observational only; it never stops a run.
     """
+    from .cli_providers import ATTEMPTED_DELEGATION
     from .delegation import NativeChild
     for record in traces or ():
         for n, call in enumerate(record.get('tool_calls') or ()):
             name = str((call or {}).get('name') or '')
             if name.lower() not in _FANOUT_TOOLS:
                 continue
+            outcome = str(call.get('outcome') or 'unknown')
+            where = (f"{record.get('task')} {record.get('role')} {record.get('model')} "
+                     f"(session {record.get('session_id')})")
+            if outcome.startswith('denied'):
+                # The control holding: a refused spawn ran nothing (Codex
+                # review of 6a338a1), so it is noted, never filed as a child.
+                delegation.note_blind_spot(f'{name} call refused by permissions in {where}; no child ran')
+                continue
+            # Keyed by the vendor's call id within the parent session, so a
+            # transcript read twice (a resumed session, a repeated streamed
+            # block) files one child, not two.
+            key = call.get('id') or f"{record.get('invocation_id') or '?'}:{n}"
+            ran = outcome == 'success'
             delegation.observe_native(NativeChild(
-                session_id=f"unidentified:transcript:{record.get('invocation_id') or '?'}:{n}",
+                session_id=f"unidentified:transcript:{record.get('session_id') or '?'}:{key}",
                 parent_session_id=record.get('session_id'),
                 tool_name=name,
-                detail=(f"named in the saved transcript of {record.get('task')} {record.get('role')} "
-                        f"{record.get('model')} (outcome {call.get('outcome')}); its usage is inside "
-                        "the parent call's reported total and is not added"),
+                detail=((f"named in the saved transcript of {where}; it ran" if ran else
+                         f"{ATTEMPTED_DELEGATION}: named in the saved transcript of {where} with outcome "
+                         f"{outcome}; whether it executed is unknown")
+                        + "; its usage is inside the parent call's reported total and is not added"),
             ))
 
 
@@ -554,8 +569,14 @@ def _retire_stale_fixtures(root, run_dir, progress=None):
     project's fixtures (Codex review of 391f3c8). The retired name is not a
     fixture path, so nothing in it can be uploaded again; the bytes stay
     readable there. A linked ``.quadratus`` or ``capture-fixtures`` is left
-    alone and named. Returns the retired folder's project-relative path, or
-    None.
+    alone and named. Only an absent folder means there is nothing to do:
+    any other failure to read or rename raises before any model call
+    (Codex review of 6a338a1: an unreadable state directory let the session
+    start with the stale samples still in place). Returns None, or the
+    retired folder's project-relative ``path``, whether ``.quadratus`` still
+    names the directory it was retired in (``resolves``), and that
+    directory's ``state_directory`` identity: after a parent swap the bytes
+    are safe but the path leads elsewhere, and the record says so.
     """
     import errno
     import stat
@@ -566,17 +587,25 @@ def _retire_stale_fixtures(root, run_dir, progress=None):
 
     flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
     nofollow = getattr(os, 'O_NOFOLLOW', 0)
+    def refuse(exc):
+        return ValueError('Capture-only samples from an earlier run could not be retired '
+                          f'({type(exc).__name__}: {exc}); the run stops before any model call '
+                          'rather than start with them in place.')
+
     try:
         root_fd = os.open(str(root), flags)
-    except OSError:
-        return None
+    except OSError as exc:
+        raise refuse(exc) from exc
     try:
         try:
             state_fd = os.open('.quadratus', flags | nofollow, dir_fd=root_fd)
+        except FileNotFoundError:
+            return None
         except OSError as exc:
             if exc.errno in (errno.ELOOP, errno.ENOTDIR):
                 say('Stale capture fixtures not retired: .quadratus is a symlink or not a folder')
-            return None
+                return None
+            raise refuse(exc) from exc
         try:
             try:
                 info = os.stat('capture-fixtures', dir_fd=state_fd, follow_symlinks=False)
@@ -595,13 +624,30 @@ def _retire_stale_fixtures(root, run_dir, progress=None):
                 os.close(folder_fd)
             retired = f'capture-fixtures.retired-{Path(run_dir).name}'
             os.rename('capture-fixtures', retired, src_dir_fd=state_fd, dst_dir_fd=state_fd)
+            held = os.fstat(state_fd)
+            # The locator is true only while .quadratus still names the
+            # directory the rename happened in (Codex review of 6a338a1: after
+            # a parent swap the bytes were safe but the path led elsewhere).
+            try:
+                now = os.stat('.quadratus', dir_fd=root_fd, follow_symlinks=False)
+                resolves = (stat.S_ISDIR(now.st_mode)
+                            and (now.st_dev, now.st_ino) == (held.st_dev, held.st_ino))
+            except OSError:
+                resolves = False
+        except OSError as exc:
+            raise refuse(exc) from exc
         finally:
             os.close(state_fd)
     finally:
         os.close(root_fd)
     where = f'.quadratus/{retired}'
-    say(f'Capture-only samples from an earlier run retired to {where}')
-    return where
+    if resolves:
+        say(f'Capture-only samples from an earlier run retired to {where}')
+    else:
+        say(f'Capture-only samples from an earlier run retired as {retired} inside the state directory '
+            f'that was at .quadratus (device {held.st_dev}, inode {held.st_ino}); .quadratus no longer '
+            'names that directory, so the path does not lead to them')
+    return dict(path=where, resolves=resolves, state_directory=dict(device=held.st_dev, inode=held.st_ino))
 
 
 def _selected_limits(max_tasks, run_limits, survey, lead_turns=None, lead_source=None):

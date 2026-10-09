@@ -1011,13 +1011,16 @@ def test_a_clean_close_is_not_recorded_as_a_stopped_call(tmp_path):
     session._task_before = session._capture_source()
     (root / "a.py").write_text("after\n")
     clean = TaskOutcome("t1", "implementation")
-    session._record_work(clean, None, stopped=False)
+    clean.closed_as = "closed"
+    session._record_work(clean, None)
     assert clean.partial["changed"] == ["a.py"] and clean.partial["inspected"] is True
     assert clean.partial["note"] == "The task closed with these changes on disk."
     capped = TaskOutcome("t2", "implementation")
+    capped.closed_as = "turn_limited"
     session._record_work(capped, None)
     assert "when the call stopped" in capped.partial["note"], "a stop keeps the stopped-call wording"
     session._task_before = session._capture_source()
     untouched = TaskOutcome("t3", "implementation")
-    session._record_work(untouched, None, stopped=False)
+    untouched.closed_as = "closed"
+    session._record_work(untouched, None)
     assert untouched.partial["note"] == "The task closed without changing the source."
