@@ -1842,8 +1842,8 @@
       "claimed_at": "2026-10-07T12:39:19Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "5a55b6e",
-        "at": "2026-10-09T05:02:43Z"
+        "sha": "6a338a1",
+        "at": "2026-10-09T05:05:23Z"
       },
       "reviews": [
         {
@@ -1921,6 +1921,36 @@
             "tests/test_preview.py"
           ],
           "stale_reason": "delivery moved from 5d9f5ff to 391f3c8"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "391f3c8069863ee7f5b5e8fd2da1da5bb3adcb25",
+          "verdict": "stale",
+          "evidence": "Codex scoped review of 5d9f5ff..391f3c8 NOT CLEARED (#53 comment 6074611872 and #35 comment 6074612178, identical, stored body SHA256 1e6bdf7be3226a40e31b59fc4397af914ff95a7fc7586985b502f9d3a7582526 GET-read; bundle 0763d0691a8be5b6c76029f2fd7c123923a96d87ee854d6c939671c99f86fd77, report 88b15f9e8ae0212a530d2226bc2fd44dbb2020d269bf5aa71803308f7e6385fb, receipt d877b1debb3c2652b8e7abb0e1500c3effc754159a5e79186cb641564b6edf40; 204 current and 1268/275/166/24/172/13/24/78 prior artifacts matched by root). One P2: retirement checked pathnames then moved by pathname, so a .quadratus replaced by a link moved another project's fixtures (helper and public-runner reproductions). Passed: ordinary retirement, project-lock refusal, separate projects, static links left alone, interrupted session, genuine furnished-copy cap delivery with UNFINISHED verdict. Kept: failed-move and cross-device partial controls, inherited direct-helper missing-file precondition (normal gate refuses first), 61 correction, 14/2 and 2/1 boundaries (19 unique, 16 pass, 3 raw failures), 11 delivery, 197/1 retained, 205/26 capture. Fixed in 6a338a1.",
+          "scope": [
+            "quadratus/project_run.py",
+            "quadratus/session.py",
+            "tests/test_stale_capture_fixtures.py",
+            "tests/test_review_seat_cap.py",
+            "CLAUDE.md"
+          ],
+          "at": "2026-10-09T05:05:22Z",
+          "coverage": "partial",
+          "uncovered": [
+            "README.md",
+            "quadratus/browser.py",
+            "quadratus/design_evidence.py",
+            "quadratus/gui.py",
+            "quadratus/preview.py",
+            "quadratus/run_budget.py",
+            "tests/lifecycle/test_workflow_outcomes.py",
+            "tests/test_declaration_recapture.py",
+            "tests/test_gui_run_limits.py",
+            "tests/test_preview.py",
+            "tests/test_reliability_repair.py",
+            "tests/test_transcript_children.py"
+          ],
+          "stale_reason": "reviewed 391f3c8 but the delivery is 5a55b6e"
         }
       ],
       "blockers": [
@@ -1993,7 +2023,8 @@
         "claude: scope extended to tests/lifecycle/test_workflow_outcomes.py, tests/test_reliability_repair.py",
         "claude: Recovery-v2 terminal acknowledged and independently assessed: #35 comment 6074525331, stored body SHA256 d2c743315dc041cf84a5b56eac3b619aa4cf0b3e024d3aad9b9bc42d76e82d43, decoded bundle ee744a4e885356072b4cf8c4b6e3f4a0d025957d648861e1c3f40720832fbc8a (172,996 bytes) recomputed. Run 20261009T044624Z-f242cdb1 completed, 3 tasks, checks passed (9 Python, all Node leaves), R1-R5 met (audited by Sol), survey 0 of 4, 10 reservations, 1,202,342 reported tokens, 299 s, no stop; 137 observed identities absent, lock unowned, no kernel containment claim. Diff matches the requirements; no new test files (seed tests encode the feature). Engine findings: (1) review edge true with no collaborator and (2) stopped-call note on clean closes, both fixed in 5188cb82a4ad47f80618775984eda90fd52bdc7f (range 391f3c8..5188cb8, reporting only); (3) orchestrator call 2: prompt 32,200 bytes and zero native children rule out prompt bloat and subagents; 6 Read calls against an envelope turn count of 1; 673,566 tokens in modelUsage rows beyond top-level usage filed as unattributed auxiliary; budget correct, record mislabels; fix proposed, raw envelope requested; (4) scope reports duplicated per assessment point without stage label; (5) auditor read the operator's personal Codex plugin SKILL.md outside the project (personal settings in effect by freeze). Assessment #35 comment 6074594938, stored body SHA256 26714e073981b5b543a71d99dffc165a30ea8d6caf50495bf77c052130942a0d. Suite-39 on a 5188cb8 snapshot running. Diagnostic evidence, not acceptance.",
         "claude: scope extended to tests/test_transcript_children.py",
-        "claude: Codex forensic projection acknowledged: #35 comment 6074576328, stored body SHA256 981327f85fe3d94ffe2b75dfe4e4253812aead2f19969f69d1dbbf06186474eb, projection 6db5f6d3ec2004364a849289ceede32ac40a6beba51d2246b66a3d86e972ff0d (34,574 bytes) recomputed: prompt 32,200 bytes; 13 usage blocks over 6 message IDs (deduplicated 233,071 tokens, not a complete ledger); an Agent child a4428604bfcbedebf (Fable 5.1) ran the checks; 673,566 auxiliary tokens stay unattributed; invoice null. Correction on #35 comment 6074633076 (stored body SHA256 37cc6f64d3a778984ca91fb7764f88a2e3def9349fee2f55596123e9179d2abe): my assessment wrongly said no native child ran. Delivered 5a55b6ee7b2e2dd946caddfde982da75538ad906 (range 5188cb8..5a55b6e): project_run files each Agent/Task/spawn_subagent call a saved transcript names as an unidentified native child with unknown usage; nothing added, guessed or attributed; observational only. 107 delegation and trace tests pass. Dropped the proposed seat attribution of modelUsage rows. Open design question for reconciliation: the orchestrator seat re-ran the checks through a subagent."
+        "claude: Codex forensic projection acknowledged: #35 comment 6074576328, stored body SHA256 981327f85fe3d94ffe2b75dfe4e4253812aead2f19969f69d1dbbf06186474eb, projection 6db5f6d3ec2004364a849289ceede32ac40a6beba51d2246b66a3d86e972ff0d (34,574 bytes) recomputed: prompt 32,200 bytes; 13 usage blocks over 6 message IDs (deduplicated 233,071 tokens, not a complete ledger); an Agent child a4428604bfcbedebf (Fable 5.1) ran the checks; 673,566 auxiliary tokens stay unattributed; invoice null. Correction on #35 comment 6074633076 (stored body SHA256 37cc6f64d3a778984ca91fb7764f88a2e3def9349fee2f55596123e9179d2abe): my assessment wrongly said no native child ran. Delivered 5a55b6ee7b2e2dd946caddfde982da75538ad906 (range 5188cb8..5a55b6e): project_run files each Agent/Task/spawn_subagent call a saved transcript names as an unidentified native child with unknown usage; nothing added, guessed or attributed; observational only. 107 delegation and trace tests pass. Dropped the proposed seat attribution of modelUsage rows. Open design question for reconciliation: the orchestrator seat re-ran the checks through a subagent.",
+        "claude: Delivered 6a338a18226df215d00340d50820a5b5b55cb1da (range 391f3c8..6a338a1 with 5188cb8 and 5a55b6e): stale-sample retirement is a renameat within the project's own .quadratus held through an O_NOFOLLOW directory handle, to capture-fixtures.retired-<run id>; no pathname move, copy or delete fallback; linked .quadratus or capture-fixtures left alone and named; swap-after-bind test passes. #53 comment 6074658828, stored body SHA256 bbb9f40973eae698cd87d4a25d72d629b7b679274ea41a7f8e95016632b29d7e. Codex recovery-v2 assessment acknowledged: #35 comment 6074612463, stored body SHA256 ee8b88c947b9a1260c8c09a459f2e2cef9df39862afa000ca95de8930215d365, bundle 4fbf5ad9730b4b2fe26f154393f05e4ddde7fb9001bd2123978a1e82977227cc, whole review b5c1f75700b27b9602d089b2d66a44041c7ae64be017da9293deb38e11f3c020, markdown 204bfd727da8ab5af420af5c20ed3790c82c01f930d8398e1ee4b0bcf9738536, receipt 3487f25889b7f59288418e6a0ecb28f835a69f8cae4cce097039ef3c565315cf, all recomputed: scoped diagnostic feature PASS, private 5/5, final-source binding, failed-gate repair not exercised (recovery_used 0), 673,566 auxiliary unattributed, invoice null, process observation limits. Reconciliation #35 comment 6074659166 (stored body SHA256 bead26c9333f485b4ee04f26b9b470ac9ae19802997980e7cceefd92db1a5ebb): full agreement on the run; my child claim corrected; my record defects added; recommendation that a recovery-v3 with a seed whose first gate fails would exercise the unproven repair path (root's call)."
       ]
     }
   ],
