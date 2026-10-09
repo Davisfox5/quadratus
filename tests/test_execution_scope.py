@@ -440,3 +440,43 @@ def test_a_file_qualified_case_recovers_its_own_requirement(tmp_path, unit_skip)
     assert session._audit_requirements(ids=["R5"])["R5"][0] is True, "the browser case ran under its own file"
     if unit_skip == "new":
         assert session._audit_requirements(ids=["R1"])["R1"][0] is False, "the new unit skip still blocks R1"
+
+
+# Codex review of 5292fc2, V1-V2.
+
+@needs_node
+def test_a_node_name_with_colons_is_not_a_pytest_id(tmp_path):
+    name = "browser::acceptance"
+    root = _node_project(tmp_path, f"const t=require('node:test');t('{name}',()=>{{}});\n")
+    gate = GateSuite([GateCommand(id="ui", argv=(NODE, "--test", UNIT, BROWSER))], cwd=root)
+    session = _session(tmp_path, root, gate, f"R5: MET - {BROWSER}")
+    session._snapshot_original_tests()
+    (root / BROWSER).write_text(f"const t=require('node:test');t('{name}',{{skip:true}},()=>{{}});\n")
+    check = _gate(session, "t1", ["R5"])
+    assert check["receipts"][0]["cases"]["qualified"] == []
+    assert session.unexecuted_acceptance[-1]["case_files"] == {name: [BROWSER]}
+    (root / UNIT).write_text(f"const t=require('node:test');t('unit',()=>{{}});t('{name}',()=>{{}});\n")
+    (root / BROWSER).write_text("const t=require('node:test');t('browser-later',{skip:true},()=>{});\n")
+    _gate(session, "t2", ["R1"])
+    assert session._audit_requirements(ids=["R5"])["R5"][0] is False
+
+
+@needs_node
+def test_an_unchanged_old_skip_beside_a_new_test_stays_historical(tmp_path):
+    root = _node_project(tmp_path, "const t=require('node:test');t('old-platform',{skip:true},()=>{});\n")
+    gate = GateSuite([GateCommand(id="ui", argv=(NODE, "--test", UNIT, BROWSER))], cwd=root)
+    session = _session(tmp_path, root, gate, f"R1: MET - {BROWSER}")
+    session._snapshot_original_tests()
+    (root / BROWSER).write_text((root / BROWSER).read_text() + "t('new-unit-acceptance',()=>{});\n")
+    _gate(session, "t1", ["R1"])
+    assert session.unexecuted_acceptance == []
+    assert session._audit_requirements(ids=["R1"])["R1"][0] is True
+
+
+def test_a_pytest_case_block_ignores_its_neighbours_and_sees_its_decorators(tmp_path):
+    from quadratus.session import _case_block
+    key = "tests/test_b.py::test_old"
+    old = "import pytest\n@pytest.mark.skip(reason='x')\ndef test_old():\n    pass\n"
+    assert _case_block(key, True, old) == _case_block(key, True, old + "def test_new():\n    pass\n")
+    assert _case_block(key, True, old) != _case_block(key, True, old.replace("reason='x'", "reason='y'"))
+    assert _case_block(key, True, "def test_other():\n    pass\n") is None

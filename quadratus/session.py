@@ -1182,12 +1182,14 @@ def _check_runs(check: dict, root=None) -> List[dict]:
         names = _receipt_names(row)
         skipped_names = names[0] if names[0] is not None else case_outcomes(row["output"])[0]
         every_names = names[1]
+        qualified_names = set((row["cases"] or {}).get("qualified") or ()) if isinstance(row["cases"], dict) else set()
         executed_names = names[2] if names[2] is not None else Counter()
         out.append(dict(id=row["id"], passed=row["passed"], required=row["required"], filtered=filtered,
                         tests=tests, skipped=skipped_count(SimpleNamespace(output=row["output"],
                                                                            report=row["report"])),
                         files=set(operand_paths(argv, root, row["cwd"])),
-                        skipped_names=skipped_names, executed_names=executed_names, every_names=every_names))
+                        skipped_names=skipped_names, executed_names=executed_names, every_names=every_names,
+                        qualified_names=qualified_names))
     return out
 
 
@@ -1239,17 +1241,43 @@ def _new_skips(skipped, every, start, stable):
 _QUOTES = ("'", '"', "`")
 
 
-def _case_files(key: str, texts: dict):
+def _case_files(key: str, texts: dict, qualified: bool):
     """The test files that hold one case, as a frozenset, or None when that
-    cannot be read. A pytest node id names its file (``path::name``); a bare
-    name (node's runner prints no file) is held by the test files whose text
-    has it as a quoted string. A hashed long key cannot be searched for."""
+    cannot be read. A key a pytest verbose line printed (``qualified``) names
+    its file as ``path::name``; any other name, whatever punctuation it holds
+    (a node name may contain ``::``, Codex review of 5292fc2, V1), is held by
+    the test files whose text has it as a quoted string. A hashed long key
+    cannot be searched for."""
     if "\u2026sha256:" in key:
         return None
-    if "::" in key:
+    if qualified:
         path = key.split("::", 1)[0]
         return frozenset([path]) if path in texts else None
     found = frozenset(path for path, text in texts.items() if any(q + key + q in text for q in _QUOTES))
+    return found or None
+
+
+def _case_block(key: str, qualified: bool, text: str):
+    """The source that defines one case in its file, or None when it cannot
+    be found: for a pytest id, each test function of that name with its
+    decorators (read with ``ast``); for any other name, the lines that quote
+    it. Comparing this, not the whole file, tells an unchanged old case from
+    a file that merely gained another test (V2)."""
+    if qualified:
+        import ast
+        name = key.split("::")[-1].split("[")[0]
+        try:
+            tree = ast.parse(text)
+        except (SyntaxError, ValueError):
+            return None
+        lines = text.splitlines()
+        blocks = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+                first = min([node.lineno] + [d.lineno for d in node.decorator_list])
+                blocks.append(tuple(lines[first - 1:node.end_lineno]))
+        return tuple(sorted(blocks)) or None
+    found = tuple(line for line in text.splitlines() if any(q + key + q in line for q in _QUOTES))
     return found or None
 
 
@@ -5913,13 +5941,15 @@ class Session:
             names, every, _ = _receipt_names(receipt)
             cases = sorted(names.elements()) if names is not None else None
             start = starts.get(keys.get(receipt.id))
+            record = receipt.cases if isinstance(receipt.cases, dict) else {}
+            qualified = set(record.get("qualified") or ())
             if names is not None:
                 # Historical only when the name is one case in both runs and
                 # that case was skipped at run start: a name two cases share,
                 # or one that ran there, says nothing about which skipped now
                 # (Codex review of 67c9fad, S1). Without complete identity on
                 # both sides every skip counts (d157378, T2).
-                new = _new_skips(names, every, start, stable)
+                new = _new_skips(names, every, start, lambda n, q=frozenset(qualified): stable(n, n in q))
                 if not new:
                     continue
                 cases = sorted(new.elements())
@@ -5938,7 +5968,8 @@ class Session:
                          # recorded, so a later discharge can tell the same
                          # case from a name reused elsewhere (U1).
                          case_files=None if not cases else {
-                             n: sorted(_case_files(n, texts) or ()) for n in set(cases)},
+                             n: sorted(_case_files(n, texts, n in qualified) or ()) for n in set(cases)},
+                         qualified_cases=sorted(n for n in set(cases or ()) if n in qualified),
                          # The run-start baseline this fact was measured
                          # against, kept so a later discharge reads the same
                          # one (T4).
@@ -5950,8 +5981,10 @@ class Session:
 
     def _case_texts(self):
         """``(texts, stable)``: the current test and support files' text, and
-        a predicate for a case key whose one holding file is the same file,
-        byte-identical to run start (_new_skips)."""
+        a predicate ``stable(key, qualified)`` for a case whose one holding
+        file is the same file as at run start, with the case's own definition
+        (``_case_block``) unchanged there (_new_skips). Other tests added to
+        or changed in that file do not matter (Codex review of 5292fc2, V2)."""
         from .integration import is_test_support
         from .project import Project
         originals = self._original_tests or {}
@@ -5962,21 +5995,26 @@ class Session:
         texts = {n: d.decode("utf-8", "replace") for n, d in contents.items() if is_test_support(n)}
         start = {n: d.decode("utf-8", "replace") for n, d in originals.items()}
 
-        def stable(key):
-            now, then = _case_files(key, texts), _case_files(key, start)
-            return (now is not None and now == then and len(now) == 1
-                    and all(contents.get(f) == originals.get(f) for f in now))
+        def stable(key, qualified):
+            now, then = _case_files(key, texts, qualified), _case_files(key, start, qualified)
+            if now is None or now != then or len(now) != 1:
+                return False
+            (path,) = now
+            block = _case_block(key, qualified, texts[path])
+            return block is not None and block == _case_block(key, qualified, start[path])
         return texts, stable
 
     def _discharge_named(self) -> None:
         """Decide, for the check just recorded, which named skip facts it
         discharges: a passing, required, unfiltered run of the same command
         whose complete case record shows each named case executed and none
-        of them skipped. A pytest node id carries its file, so its execution
-        is enough, whatever else that command skipped (Codex review of
-        e530b89, U2). A bare name must be held by the same single test file
-        as when it was recorded, read from this check's source, so a name
-        reused in another file never stands in (T4, U1)."""
+        of them skipped. A pytest node id, printed by pytest itself both when
+        the skip was recorded and now, carries its file, so its execution is
+        enough, whatever else that command skipped (Codex review of e530b89,
+        U2); a ``::`` in any other name proves nothing (5292fc2, V1). A bare
+        name must be held by the same single test file as when it was
+        recorded, read from this check's source, so a name reused in another
+        file never stands in (T4, U1)."""
         from collections import Counter
         index = len(self.checks) - 1
         pending = [e for e in self.unexecuted_acceptance if e.get("kind") == "skipped" and e.get("cases")
@@ -5988,13 +6026,15 @@ class Session:
         for entry in pending:
             need = Counter(entry["cases"])
             files = entry.get("case_files") or {}
+            qualified = set(entry.get("qualified_cases") or ())
             for run in runs:
                 if not (run["id"] == entry["receipt"] and run["passed"] and run["required"]
                         and not run["filtered"] and run["every_names"] is not None):
                     continue
                 if not all(run["executed_names"][n] >= k and not run["skipped_names"][n] for n, k in need.items()):
                     continue
-                if all("::" in n or (files.get(n) and _case_files(n, texts) == frozenset(files[n]))
+                if all((n in qualified and n in run["qualified_names"])
+                       or (files.get(n) and _case_files(n, texts, False) == frozenset(files[n]))
                        for n in need):
                     entry["discharged_at"] = index
                     break

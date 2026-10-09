@@ -1047,8 +1047,10 @@ def case_key(name: str) -> str:
 
 
 def _case_lines(output: str):
-    """``(name, kind)`` for each case line the runner printed, ``kind``
-    skipped, executed or other. Node's spec reporter (``\u2714``/``\u2716``/
+    """``(name, kind, qualified)`` for each case line the runner printed,
+    ``kind`` skipped, executed or other, ``qualified`` True only for a pytest
+    verbose line, whose ``path::name`` names the case's file. A node name may
+    contain ``::`` too; it is never qualified (Codex review of 5292fc2, V1). Node's spec reporter (``\u2714``/``\u2716``/
     ``\ufe63``), TAP (``ok N - name # SKIP``) and pytest's verbose lines. A
     todo case and a pytest XFAIL are other: XFAIL does not say whether the
     body ran, and ``xfail(run=False)`` never runs it (Codex review of
@@ -1058,16 +1060,16 @@ def _case_lines(output: str):
         if spec:
             mark, name, directive = spec.group(1), spec.group(2), (spec.group(3) or '')
             yield name, ('other' if directive.upper().startswith('TODO')
-                         else 'skipped' if mark == '\ufe63' else 'executed')
+                         else 'skipped' if mark == '\ufe63' else 'executed'), False
             continue
         tap = _TAP_CASE.match(line)
         if tap:
             directive = (tap.group(3) or '').upper()
-            yield tap.group(2), {'SKIP': 'skipped', '': 'executed'}.get(directive, 'other')
+            yield tap.group(2), {'SKIP': 'skipped', '': 'executed'}.get(directive, 'other'), False
             continue
         case = _PYTEST_CASE.match(line)
         if case:
-            yield case.group(1), {'SKIPPED': 'skipped', 'XFAIL': 'other'}.get(case.group(2), 'executed')
+            yield case.group(1), {'SKIPPED': 'skipped', 'XFAIL': 'other'}.get(case.group(2), 'executed'), True
 
 
 def case_outcomes(output: str):
@@ -1075,7 +1077,7 @@ def case_outcomes(output: str):
     Names, not file-qualified: node's spec output carries no file per case."""
     from collections import Counter
     skipped, executed = Counter(), Counter()
-    for name, kind in _case_lines(output):
+    for name, kind, _ in _case_lines(output):
         if kind == 'skipped':
             skipped[case_key(name)] += 1
         elif kind == 'executed':
@@ -1093,11 +1095,16 @@ def case_record(output: str) -> Optional[dict]:
     None is unknown identity, which callers never rebuild from the output
     tail (Codex review of d157378, T2)."""
     record = dict(skipped={}, executed={}, other={})
-    for i, (name, kind) in enumerate(_case_lines(output)):
+    qualified = set()
+    for i, (name, kind, from_pytest) in enumerate(_case_lines(output)):
         if i >= _MAX_CASES:
             return None
         key = case_key(name)
         record[kind][key] = record[kind].get(key, 0) + 1
+        if from_pytest:
+            qualified.add(key)
+    # Keys a pytest verbose line printed: only these carry their file (V1).
+    record['qualified'] = sorted(qualified)
     return record
 
 
