@@ -2121,7 +2121,9 @@
         "quadratus/runtime.py",
         "quadratus/project_run.py",
         "tests/test_original_tests.py",
-        "tests/test_unexecuted_acceptance.py"
+        "tests/test_unexecuted_acceptance.py",
+        "CLAUDE.md",
+        "tests/test_execution_scope.py"
       ],
       "author": "claude",
       "reviewer": "codex",
@@ -2148,6 +2150,26 @@
           ],
           "at": "2026-10-09T08:13:14Z",
           "stale_reason": "delivery moved from b6ba3ba to 81adcc7"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "c043393ceaf8cb1b49955eba31f55b144f635f80",
+          "verdict": "cleared",
+          "evidence": "scoped correction 0d834bd..c043393 CLEARED in reviewed scope: #53 6081687589 / #35 6081688128 (body d54a53f1...), report c582bff0..., receipt 3610a672..., bundle 84aea20c... (gz f8394c1e..., 107 files 0 mismatches); 166 independent controls 0 failures; two known historical failures explicit; not whole-PR, MVP, install or live acceptance",
+          "scope": [
+            "CLAUDE.md",
+            "quadratus/integration.py",
+            "tests/test_execution_scope.py"
+          ],
+          "at": "2026-10-09T13:20:34Z",
+          "coverage": "partial",
+          "uncovered": [
+            "quadratus/project_run.py",
+            "quadratus/runtime.py",
+            "quadratus/session.py",
+            "tests/test_original_tests.py",
+            "tests/test_unexecuted_acceptance.py"
+          ]
         }
       ],
       "blockers": [
@@ -2181,7 +2203,9 @@
         "claude: f2f66ff local full suite (dedicated worktree): 3323 passed, 46 skipped, 13 env failures (same ids as 5292), full11.log 755fd159d20f1067f788bca82f893d534b17b667bee0e99e4bfd4503efeebd0a; CI 4/4 success. #53 6080298140 (body b08fe5bc80fec268bf9a397f8c4f1f21e37010fcaf5457c2fefc2f04bb710ddb).",
         "claude: Codex review 5292fc2..f2f66ff NOT CLEARED, W1-W3 (#53 6080410102 / #35 6080410720, body f4f41f0f169e80bb4c1ab44301e233611824a175968278767b317b1244a5ff70; archive b774af23: gz 34aab52b..., bundle e0357d09..., 124 files 0 mismatches; report 5e3be76c..., receipt ce61adfd...). Ack #46 6080441170 (body a855aa0be7213ba8e8d13761c0157c0c0164b566a0a8ebf8320c8bbbf965e342). Corrective head 02accbd (tree 0f7d1887) delivered #53 6080611356 (body 8c23c4277c1b2c32b5025ad2b32667406c282456c04f47a9ad0d2fb3c1e90a06); dedicated-worktree suite started 12:10:45Z. Guard-adoption probe bytes #46 6080624223 (body 3c94bff39283fd7173b7e18c4e60e6d4ef20c82432754c87d1310f7be5c8d857, gz ac82967e...).",
         "claude: Codex review f2f66ff..02accbd NOT CLEARED, X1-X2 (#53 6080827630 / #35 6080828064, body 2d57409e44e0edf602f935c7b5ff5857e086f997de4fe549ace707b3cb0a9981; archive 5b4b0a49: gz 8dcf3bb6..., bundle 0b28bf9d..., 121 files 0 mismatches; report b0ffeda1..., receipt 75412ae7...). Ack #46 6080845457 (body 2ed46c0b5b59ac5cbd8d8545782bb5a5ac88b5716a36cf8370ab37cd74946e3f). 02accbd local suite 3327 passed 46 skipped 13 env (full12.log 62e8e939...), CI 4/4. Corrective head 0d834bd (tree 35424c1a) delivered #53 6081086395 (body 5786c8b6ea6bee23d07e59b8d42789636d4dc65bb845d4e7b765888307b64680); dedicated suite running.",
-        "claude: claude: Codex review 02accbd..0d834bd NOT CLEARED, Y1 (#53 6081216975 / #35 6081217589, body ba33645a; archive 1d861741, bundle eadf954b, 114 files 0 mismatches; report 90a57fd0, receipt 439c1e98). Ack #46 6081234171 (body 070c37808efdead5746ee55ce6519fbe54fd1de762000edb971be7a0e99c8ebc). 0d834bd dedicated-worktree suite 3333 passed 46 skipped 13 env, FAILED ids identical to full12 (full13.log bd4bf98ca25097773bacc828af5899dc02f88ea3d2976157ff86da4691494ec1), CI 4/4. Corrective head c043393 (tree 341b604a): unrecognised runner leaves selection not established; delivered #53 6081432325 (body cb45e115c117a9950c605de60f63bd6ac2ed28b29c7bddbc050796ba455c304c); dedicated suite running."
+        "claude: claude: Codex review 02accbd..0d834bd NOT CLEARED, Y1 (#53 6081216975 / #35 6081217589, body ba33645a; archive 1d861741, bundle eadf954b, 114 files 0 mismatches; report 90a57fd0, receipt 439c1e98). Ack #46 6081234171 (body 070c37808efdead5746ee55ce6519fbe54fd1de762000edb971be7a0e99c8ebc). 0d834bd dedicated-worktree suite 3333 passed 46 skipped 13 env, FAILED ids identical to full12 (full13.log bd4bf98ca25097773bacc828af5899dc02f88ea3d2976157ff86da4691494ec1), CI 4/4. Corrective head c043393 (tree 341b604a): unrecognised runner leaves selection not established; delivered #53 6081432325 (body cb45e115c117a9950c605de60f63bd6ac2ed28b29c7bddbc050796ba455c304c); dedicated suite running.",
+        "claude: scope extended to CLAUDE.md, tests/test_execution_scope.py",
+        "claude: claude: Codex scoped review of c043393 CLEARED (Y1 corrected). Ack #46 6081707038 (body f3d45750d3e3b2fa0c945efe2f576d9b573957dd761a69eec65cfc8d69528c9d). Root Mac full suite 3349 passed 44 skipped (stdout 5614e22a...). c043393 held as exact head, no source change, during root fresh install, qualification and freeze admission. Scope extended (coordinator --resolve; CLAUDE.md shared with T-scope-elision on the same #53 branch) to CLAUDE.md and tests/test_execution_scope.py, which R1 through Y1 changed. Claude Linux dedicated suite full14 running."
       ]
     }
   ],
