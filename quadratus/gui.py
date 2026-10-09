@@ -306,17 +306,20 @@ def downloadable_files(run_dir):
     opened from ``/`` without following links; each named file is opened
     through that folder handle without following links, must be a regular file, and is
     read from its own descriptor into a new file created exclusively in a
-    fresh private folder (mode 0700) under the system temp directory. A
-    file that is missing, a link or not regular is skipped (the download
-    list shows what was offered); a failure leaves the report and diff on
-    screen with a note naming the run folder.
+    fresh private folder (mode 0700) under the system temp directory. Each
+    file is examined without opening it first, then opened non-blocking and
+    checked to be the same regular file before any byte is read: a FIFO in
+    a file's slot blocked the open itself (Codex review of 35f198e). A
+    missing file is simply not offered; a link, a non-regular file or one
+    that cannot be read is not offered and is named in the note, with the
+    run folder. A failure leaves the report and diff on screen.
     """
     import stat
     import tempfile
     run_dir = Path(run_dir)
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    nofollow = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    copies, fds = [], []
+    nofollow = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    copies, fds, skipped = [], [], []
     try:
         absolute = Path(os.path.abspath(run_dir))
         own = absolute.parts[-3:] if len(absolute.parts) > 3 else absolute.parts[-1:]
@@ -328,11 +331,27 @@ def downloadable_files(run_dir):
         folder = None
         for name in RUN_FILES:
             try:
-                fd = os.open(name, nofollow, dir_fd=folder_fd)
-            except OSError:
+                seen = os.stat(name, dir_fd=folder_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                skipped.append(f"{name} (could not be examined: {exc.strerror or exc})")
+                continue
+            if stat.S_ISLNK(seen.st_mode):
+                skipped.append(f"{name} (a link)")
+                continue
+            if not stat.S_ISREG(seen.st_mode):
+                skipped.append(f"{name} (not a regular file)")
                 continue
             try:
-                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                fd = os.open(name, nofollow, dir_fd=folder_fd)
+            except OSError as exc:
+                skipped.append(f"{name} (could not be opened: {exc.strerror or exc})")
+                continue
+            try:
+                held = os.fstat(fd)
+                if not stat.S_ISREG(held.st_mode) or (held.st_dev, held.st_ino) != (seen.st_dev, seen.st_ino):
+                    skipped.append(f"{name} (replaced while it was being opened)")
                     continue
                 if folder is None:
                     folder = Path(tempfile.mkdtemp(prefix=f"quadratus-{run_dir.name}-"))
@@ -346,6 +365,11 @@ def downloadable_files(run_dir):
                         view = memoryview(chunk)
                         while view:
                             view = view[os.write(out, view):]
+                except OSError as exc:
+                    # A partial copy is never offered.
+                    os.unlink(target)
+                    skipped.append(f"{name} (could not be read: {exc.strerror or exc})")
+                    continue
                 finally:
                     os.close(out)
                 copies.append(str(target))
@@ -359,6 +383,8 @@ def downloadable_files(run_dir):
                 os.close(fd)
             except OSError:
                 pass
+    if skipped:
+        return copies, f"Not offered for download: {', '.join(skipped)}; the run's files are in {run_dir}."
     return copies, ""
 
 

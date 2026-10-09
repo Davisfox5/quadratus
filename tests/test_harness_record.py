@@ -55,3 +55,28 @@ def test_the_ledger_entry_keeps_the_record_and_older_callers_still_work():
     entry = ledger.append(task_id="t2", author="a", summary="s", reasoning="r", harness=["required checks: failed"])
     assert "Harness record" in entry.render().splitlines()[2]
     assert entry.render().splitlines()[3] == "- required checks: failed"
+
+
+def test_a_later_blocking_line_is_never_hidden_behind_a_first_line_approval(tmp_path):
+    """Codex review of 35f198e: the record showed only the verdict's first
+    line, so 'APPROVED' followed by a BLOCKING line read as an approval."""
+    session = _session(tmp_path)
+    verdict = "APPROVED\n" + "context " * 120 + "\nBLOCKING: the delete button overlaps the count on mobile"
+    session.design_checks.append({
+        "task": "t6", "verified": True, "problem": "", "screenshots": [],
+        "final_review": {"reviewer": "claude:opus", "verdict": verdict[:600], "approved": False,
+                         "blocking": ["BLOCKING: the delete button overlaps the count on mobile"]}})
+    facts = session._harness_record("t6")
+    line = next(f for f in facts if f.startswith("final design review"))
+    assert "APPROVED" not in line
+    assert line.endswith("not approved: BLOCKING: the delete button overlaps the count on mobile")
+
+
+def test_an_older_record_is_read_by_the_same_rule():
+    from quadratus.session import _review_reading
+    assert _review_reading({"verdict": "APPROVED"}) == "APPROVED"
+    assert _review_reading({"verdict": "APPROVED\nBLOCKING: x"}) == "not approved: BLOCKING: x"
+    assert _review_reading({"verdict": "looks fine"}).startswith("not approved: BLOCKING: the final design "
+                                                                "review gave no verdict")
+    many = {"verdict": "", "blocking": [f"BLOCKING: {n}" for n in range(7)]}
+    assert _review_reading(many).endswith("BLOCKING: 4; and 2 more BLOCKING lines")

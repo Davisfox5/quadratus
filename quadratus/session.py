@@ -1412,6 +1412,26 @@ def _check_for_models(check: dict) -> dict:
 
 
 #: The marker as a verifier writes it: the uppercase word, not the English one.
+def _review_reading(review) -> str:
+    """The whole decision of a final design review, never its first line.
+
+    APPROVED only when the review approved; otherwise every BLOCKING line
+    (at most five shown, the rest counted). A record without the stored
+    decision is read from its verdict text by the same rule the session
+    applies when it records one."""
+    verdict = str(review.get("verdict") or "")
+    blocking = review.get("blocking")
+    if blocking is None:
+        blocking = [line.strip() for line in verdict.splitlines() if line.strip().startswith("BLOCKING:")]
+        if verdict.strip() != "APPROVED" and not blocking:
+            blocking = [f"BLOCKING: the final design review gave no verdict ({verdict[:120]})"]
+    if not blocking:
+        return "APPROVED"
+    shown = "; ".join(str(line)[:300] for line in blocking[:5])
+    more = f"; and {len(blocking) - 5} more BLOCKING lines" if len(blocking) > 5 else ""
+    return f"not approved: {shown}{more}"
+
+
 _FINDING_MARKER = re.compile(r"\b(?:BLOCKING|UNRESOLVED)\b")
 #: A marker directly after one of these is a note about findings, not one.
 _NEGATION_BEFORE = re.compile(r"(?:\bnon-|\bnon |\bnot |\bneither |\bno |\bnothing )$", re.IGNORECASE)
@@ -4976,10 +4996,16 @@ class Session:
                             self._design_unverified.append((spec.task_id, problem))
                             verdict = ("BLOCKING: the renders do not show the changed interface, and the "
                                        f"recapture did not produce clean evidence ({problem})")
-                record["final_review"] = dict(reviewer=reviewer, verdict=verdict[:600])
                 blocking = [line for line in (verdict or "").splitlines() if line.strip().startswith("BLOCKING:")]
                 if (verdict or "").strip() != "APPROVED" and not blocking:
                     blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
+                # The decision travels with the text: a reader of the first
+                # line or of the stored 600 characters must not take an
+                # APPROVED that a later BLOCKING line overrode (Codex review
+                # of 35f198e).
+                record["final_review"] = dict(reviewer=reviewer, verdict=verdict[:600],
+                                              approved=not blocking,
+                                              blocking=[line.strip()[:300] for line in blocking])
                 for line in blocking:
                     self._open_finding("unverified", f"Task {spec.task_id} design: {line.strip()}")
                 self._edge("reviewer", not blocking)
@@ -5605,7 +5631,7 @@ class Session:
             + (("\n\n## Rendered design evidence\n" + "\n".join(
                 f"- {d['task']}: " + (", ".join(d.get('screenshots') or []) or d.get('problem', ''))
                 + (f"; independent design review by {d['final_review'].get('reviewer')}: "
-                   f"{(d['final_review'].get('verdict') or '')[:200]}" if d.get('final_review') else
+                   f"{_review_reading(d['final_review'])}" if d.get('final_review') else
                    "; no independent design review verdict on record")
                 for d in self.design_checks)
                 + "\nA design review verdict listed above is the independent approval of that task's "
@@ -7006,9 +7032,8 @@ class Session:
                 facts.append("design capture: not verified"
                              + (f" ({str(record.get('problem'))[:200]})" if record.get("problem") else ""))
             review = record.get("final_review") or {}
-            if review.get("verdict"):
-                facts.append(f"final design review by {review.get('reviewer')}: "
-                             f"{str(review['verdict']).splitlines()[0][:200]}")
+            if review.get("verdict") or review.get("blocking"):
+                facts.append(f"final design review by {review.get('reviewer')}: {_review_reading(review)}")
         outcome = self._outcome if getattr(self._outcome, "task_id", None) == task_id else None
         if outcome is not None and "checks" in (outcome.edges or {}):
             facts.append("required checks: " + ("passed" if outcome.edges["checks"] else "failed"))

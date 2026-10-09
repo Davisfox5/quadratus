@@ -146,3 +146,41 @@ def test_a_static_link_inside_the_state_path_is_refused(tmp_path, monkeypatch, l
         (project / ".quadratus" / "runs").symlink_to(elsewhere)
     files, problem = gui.downloadable_files(run_dir)
     assert files == [] and str(run_dir) in problem
+
+
+def test_a_fifo_in_a_file_slot_never_blocks_and_is_named(tmp_path, monkeypatch):
+    """Codex review of 35f198e: a FIFO in place of a run file blocked the
+    open before its type was checked."""
+    import os
+    import threading
+    run_dir, _ = _layout(tmp_path, monkeypatch)
+    (run_dir / "ledger.md").unlink()
+    os.mkfifo(run_dir / "ledger.md")
+    result = {}
+    worker = threading.Thread(target=lambda: result.update(out=gui.downloadable_files(run_dir)), daemon=True)
+    worker.start()
+    worker.join(10)
+    assert not worker.is_alive(), "the export blocked on a FIFO"
+    files, problem = result["out"]
+    assert [f.rsplit("/", 1)[1] for f in files] == ["report.md", "changes.diff", "result.json"]
+    assert "ledger.md (not a regular file)" in problem and str(run_dir) in problem
+
+
+def test_an_unreadable_or_linked_file_is_named_and_a_missing_one_is_not(tmp_path, monkeypatch):
+    import os
+    run_dir, _ = _layout(tmp_path, monkeypatch)
+    (run_dir / "changes.diff").unlink()
+    (run_dir / "ledger.md").unlink()
+    (run_dir / "ledger.md").symlink_to(tmp_path / "elsewhere")
+    real_open = os.open
+
+    def refusing(path, flags, *args, **kwargs):
+        if path == "result.json":
+            raise PermissionError(13, "Permission denied")
+        return real_open(path, flags, *args, **kwargs)
+    monkeypatch.setattr(gui.os, "open", refusing)
+    files, problem = gui.downloadable_files(run_dir)
+    monkeypatch.setattr(gui.os, "open", real_open)
+    assert [f.rsplit("/", 1)[1] for f in files] == ["report.md"]
+    assert "ledger.md (a link)" in problem and "result.json (could not be opened: Permission denied)" in problem
+    assert "changes.diff" not in problem

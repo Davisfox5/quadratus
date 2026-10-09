@@ -507,9 +507,12 @@ Key design decisions already settled:
   folder named after the run, bound to descriptors: `.quadratus/runs/<id>`
   must not contain a link (Codex review of 7515f28), only the project's own
   location above it is resolved once (macOS `/var` is a link), every
-  component is opened from `/` without following links, each file
-  opened through that handle without following links, regular files only,
-  read from its own descriptor. `allowed_paths` is never widened, which
+  component is opened from `/` without following links; each file is
+  examined first, then opened non-blocking and confirmed as the same regular
+  file (a FIFO in a file's slot blocked the open; Codex review of 35f198e),
+  and a linked, non-regular or unreadable file is named in a note while a
+  missing one is simply not offered. Bytes are read from the held
+  descriptor and a partial copy is never offered. `allowed_paths` is never widened, which
   would expose the whole project tree.
 - **The planner reads the harness record before the lead's account**
   (batch 2 gui-ui-v3 on 5d9f5ff). t6's close-out said the preview failed
@@ -522,6 +525,11 @@ Key design decisions already settled:
   capture verified or not and its views, the final reviewer's verdict, the
   required checks), labelled as measured and as winning over the account.
   This is the summary-is-an-index rule applied to the harness's facts.
+  The design review is read whole (`session._review_reading`): APPROVED
+  only when the review approved, otherwise every BLOCKING line; the record
+  stores the decision beside the 600-character text, because a first-line
+  APPROVED followed by a BLOCKING line read as an approval (Codex review of
+  35f198e). The audit prompt uses the same reading.
 - **A runtime-dependency tree is part of what a check proves**
   (`deptree.py`, contract v2 on #25). Run 19: a lead wrote a
   `node_modules` shim the source checks could not see, and the project's
