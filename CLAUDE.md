@@ -950,6 +950,15 @@ Key design decisions already settled:
   Named again as frontend, the label stands and capture applies in full:
   this is a correction, never a waiver. A frontend task with no declared
   paths is unchanged.
+- **A capture profile is checked at load as far as it can be without
+  running it** (UI diagnostic lane on 4a273a3: the operator wrote
+  `{project}` in the preview command, which `env` accepts but the command
+  ran literally; it exited 2 at the first preview, after 1.48M tokens of
+  editing and review). The preview command now resolves `{project}` and
+  `{project}/relative` to project-relative paths, the way `env` does,
+  refuses any other `{name}`, and refuses a script an interpreter is told
+  to run (`python x.py`, `node x.mjs`) that is not a file in the project.
+  The profile loads before any model call, so these cost nothing.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

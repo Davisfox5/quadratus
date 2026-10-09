@@ -194,6 +194,23 @@ def _timeout(value, name: str) -> float:
     return float(value)
 
 
+def _project_relative(argument: str) -> str:
+    """A preview argument with ``{project}`` written the way ``env`` accepts
+    it, made project-relative: the preview runs in the project, so
+    ``{project}/x`` is ``x`` and ``{project}`` alone is ``.``. Any other
+    ``{name}`` is refused, because nothing substitutes it and it would reach
+    the command literally (UI diagnostic lane on 4a273a3)."""
+    head, sep, value = argument.partition("=") if argument.startswith("-") else ("", "", argument)
+    if value == "{project}":
+        value = "."
+    elif value.startswith("{project}/"):
+        value = value[len("{project}/"):] or "."
+    if re.search(r"\{[^{}]*\}", head + value):
+        raise ValueError(f"capture profile preview argument {argument[:60]!r} has a placeholder nothing "
+                         "substitutes; write {project} or {project}/relative, or a project-relative path")
+    return head + sep + value
+
+
 def profile_from_dict(data, root) -> CaptureProfile:
     """Validate an operator profile against the selected project ``root``.
 
@@ -210,6 +227,7 @@ def profile_from_dict(data, root) -> CaptureProfile:
     if (not isinstance(argv, list) or not argv
             or any(not isinstance(a, str) or not a or _SHELL.search(a) for a in argv)):
         raise ValueError("capture profile preview must be an argv list with no shell syntax")
+    argv = [_project_relative(a) for a in argv]
     first = argv[0]
     # A conventional interpreter may live outside the project (its absolute
     # path, by basename); any other executable is a project file.
@@ -231,6 +249,15 @@ def profile_from_dict(data, root) -> CaptureProfile:
             problem = _path_problem(value, root)
             if problem:
                 raise ValueError(f"capture profile preview argument {argument[:60]!r} is {problem}")
+    script = argv[1] if len(argv) > 1 and re.fullmatch(r"python[\d.]*|node", Path(first).name) else None
+    if script is not None and not script.startswith("-") and (
+            "/" in script or PurePosixPath(script).suffix in (".py", ".js", ".mjs", ".cjs", ".ts")):
+        # The script an interpreter is told to run must be in the project
+        # now: a wrong path otherwise surfaces only when the harness first
+        # previews, after every editing and review call of the task has been
+        # spent (UI diagnostic lane on 4a273a3: 1.48M tokens, then exit 2).
+        if not (root / script).is_file():
+            raise ValueError(f"capture profile preview script {script[:80]!r} is not a file in the project")
     origin = data.get("origin")
     match = _ORIGIN.fullmatch(origin) if isinstance(origin, str) else None
     if not match or not 1024 <= int(match.group(2)) <= 65535:

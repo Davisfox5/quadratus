@@ -83,6 +83,11 @@ def _server(port, directory="."):
     (dict(env={"APP_X": "$(id)"}), "plain string"),
     (dict(ready_status=404), "2xx"),
     (dict(total_timeout=0), "total_timeout"),
+    (dict(preview=["python", "{root}/app.py"]), "placeholder nothing substitutes"),
+    (dict(preview=["python", "app.py", "--dir={home}"]), "placeholder nothing substitutes"),
+    (dict(preview=["python", "{project}/../outside.py"]), "outside the project"),
+    (dict(preview=["python", "missing/preview.py"]), "is not a file in the project"),
+    (dict(preview=["node", "server.mjs"]), "is not a file in the project"),
 ])
 def test_an_unusable_profile_is_refused(tmp_path, data, message):
     (tmp_path / "app.py").write_text("")
@@ -108,6 +113,20 @@ def test_operator_env_is_resolved_and_reaches_only_the_preview(tmp_path):
         pass
     assert (tmp_path / "seen.txt").read_text() == f"{port} {tmp_path.resolve()}"
     assert "APP_PORT" not in os.environ
+
+
+def test_project_placeholders_in_the_preview_command_are_made_project_relative(tmp_path):
+    """UI diagnostic lane on 4a273a3: the operator wrote {project}, which env
+    accepts, in the preview command, which ran it literally and exited 2
+    after the task's editing and review calls had all been spent."""
+    (tmp_path / "diagnostic").mkdir()
+    (tmp_path / "diagnostic" / "preview.py").write_text("")
+    profile = profile_from_dict(dict(preview=["python", "{project}/diagnostic/preview.py", "--root={project}"],
+                                     origin="http://127.0.0.1:5000"), tmp_path)
+    assert profile.preview == ("python", "diagnostic/preview.py", "--root=.")
+    profile = profile_from_dict(dict(preview=["python", "-m", "http.server", "5000"],
+                                     origin="http://127.0.0.1:5000"), tmp_path)
+    assert profile.preview == ("python", "-m", "http.server", "5000"), "a module run names no script"
 
 
 def test_a_usable_profile_is_accepted(tmp_path):
