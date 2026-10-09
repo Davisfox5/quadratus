@@ -2113,15 +2113,41 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "blocked",
       "claimed_at": "2026-10-09T07:38:35Z",
       "acknowledged": false,
       "delivery": {
         "sha": "b6ba3ba8c2595e93b26fdb40ccb38d3fc5e1712e",
         "at": "2026-10-09T07:38:36Z"
       },
-      "reviews": [],
-      "blockers": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "b6ba3ba8c2595e93b26fdb40ccb38d3fc5e1712e",
+          "verdict": "blocked",
+          "evidence": "#53 6077059852 / #35 6077060246 (body 49e69614...), report f48233eb..., receipt b9a2dd51..., bundle f307fbfc...",
+          "scope": [
+            "quadratus/integration.py",
+            "quadratus/session.py",
+            "quadratus/runtime.py",
+            "quadratus/project_run.py",
+            "tests/test_original_tests.py",
+            "tests/test_unexecuted_acceptance.py"
+          ],
+          "at": "2026-10-09T08:13:14Z"
+        }
+      ],
+      "blockers": [
+        {
+          "requirement": "original tests and unexecuted acceptance cannot pass as MET",
+          "failure": "F1 selection config hides restored originals; F2 original copy can mutate delivered source; F3 NOT RUN discharged by substring/optional/filtered/dedup; F4 aggregate skip counts; F5 parallel children drop NOT RUN facts; F6 historical unnamed file blocks later execution",
+          "evidence": "reviewer controls original-controls.log, execution-corrected.log, unnamed-controls.log, parallel-controls.log in bundle f307fbfc...",
+          "classification": "reachable",
+          "by": "codex",
+          "sha": "b6ba3ba8c2595e93b26fdb40ccb38d3fc5e1712e",
+          "at": "2026-10-09T08:13:14Z"
+        }
+      ],
       "decisions": [
         "claude: Pushed to #53 at b6ba3ba on Codex's sequencing (#35 6076601164); notice #53 6076608589 (body bfb6376c82e7473ca8186d72f232767f0c3ed4c94660ed7b4717ff8f4dd60f7d). Focused 24 passed; full suite and CI pending. Stopped preliminary logs full1/full2/full3 preserved.",
         "claude: Full suite on b6ba3ba (local Linux): 3279 passed, 46 skipped, 13 failed (12 Playwright headless-shell missing, 1 pip wheel --no-index), all 13 identical on base 119c83f here; log sha256 cf533d8b.... Posted #53 6076890227 (body 76546da07a08a7eda7880c34eff9f23e6709c7203cb398f994d5e2ae5b868a48). Held local fix 9ceabd1 (node-id selectors, source drift, whole-path NOT RUN lift) for the reviewer's preliminary risks, not pushed.",
