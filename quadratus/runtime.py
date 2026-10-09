@@ -258,6 +258,27 @@ class Fleet:
                                "to the exact API model ID for this seat.")
         return alias_for(key)
 
+    def fork(self, root) -> "Fleet":
+        """A Fleet for one parallel task's copy of the project at ``root``,
+        sharing this run's budget, meter and invocation ledger, and carrying
+        the same granted check commands: a child lead denied a required
+        check, or a write, must be classified exactly as the parent's would
+        (Codex review of f09c832: the fork copied progress and accounting but
+        not ``check_commands``, so a child passed no allow rules and read a
+        denied check as an ordinary outcome)."""
+        from .project import Project
+        child = type(self)(self.settings,
+                           project=Project(root, exclude=self.project.exclude),
+                           allow_writes=self.allow_writes, usage_meter=self.usage_meter,
+                           delegation_ledger=self.delegation_ledger,
+                           **({"run_budget": self.run_budget} if self.run_budget else {}))
+        for name in ("progress", "check_commands"):
+            try:
+                setattr(child, name, getattr(self, name, None if name == "progress" else ()))
+            except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
+                pass
+        return child
+
     # -- liveness ------------------------------------------------------------
     def lead_can_run(self, key: str, command: str) -> bool:
         """Whether an editing call on ``key`` could run ``command`` unaided:
@@ -374,10 +395,34 @@ class Fleet:
             raise ProviderError("Project sessions require CLI transport with filesystem access.")
         if allow_writes and not provider.restricted:
             view = provider.in_directory(self.project.root, allow_writes=True)
+            checks = tuple(getattr(self, "check_commands", ()) or ())
+            # The checks the harness itself will run are the commands this
+            # granted call may run unapproved (CLAUDE_SPEC.allowed_tools_flag).
+            try:
+                view.granted_commands = checks
+            except AttributeError:  # a fake view without attributes (tests)
+                pass
             if lead_turns:
                 view.max_turns = lead_turns
             if lead_tool:
                 view.worker_tool = lead_tool
+            if checks and getattr(getattr(view, "spec", None), "editing_commands", None) == "granted":
+                # Native delegation let a denied check escape the lead's
+                # accounting during Stage B. The budgeted worker tool remains
+                # available; vendor agents and cross-session tools do not.
+                view.native_fanout_off = True
+            check_instructions = ""
+            if checks:
+                check_instructions = (
+                    "\nAPPROVED CHECK COMMANDS (this list governs even when the task asks for another command):\n"
+                    + "\n".join(checks)
+                    + "\nRun these commands verbatim from the working directory. Do not add cd, pipes, "
+                    "wildcards, shell wrappers or substitute a directory for the listed files. "
+                    "Use Read, Grep and Glob for inspection. If an ungranted command is denied, "
+                    "do not retry variants, delegate it or use another tool to execute it. "
+                    "Report the unrun check and finish with the edits and available evidence. "
+                    "Do not change permissions."
+                )
             before = self.project.contents()
             try:
                 reply = self._generate(model_key, view, prompt, role +
@@ -387,23 +432,24 @@ class Fleet:
                                   'closing line CHANGED: ["relative/path"] listing every file this '
                                   'call added, changed or deleted. Use CHANGED: [] for no changes. '
                                   'A standalone FETCH, CONSULT or WORKER request may omit the line; '
-                                  'any files you changed before it are kept.')
+                                  'any files you changed before it are kept.' + check_instructions)
             except TurnLimitReached as exc:
                 # A capped call may have spent its rounds on exactly the
                 # denied command; that is the capability stop, not an
                 # ordinary continuation (Codex review of 3a55d82). A refusal
                 # never reaches here, so it keeps its precedence.
                 denied = _relevant_denials(getattr(view, "last_tool_failures", None),
-                                           getattr(self, "check_commands", ()) or ())
+                                           getattr(self, "check_commands", ()) or (), writes_granted=True)
                 if denied:
                     from .session import CapabilityUnavailable
                     raise CapabilityUnavailable(
                         f"{model_key} reached its turn limit after being denied a command the harness "
-                        "itself requires: " + "; ".join(c[:160] for c in denied[:3])
-                        + ". Declare it as a check or a capture profile. Work preserved.") from exc
+                        "itself requires or a write it was granted: " + "; ".join(c[:160] for c in denied[:3])
+                        + ". Declare the command as a check or a capture profile; a denied write is the "
+                        "transport's permission mode. Work preserved.") from exc
                 raise
             denied = _relevant_denials(getattr(view, "last_tool_failures", None),
-                                       getattr(self, "check_commands", ()) or ())
+                                       getattr(self, "check_commands", ()) or (), writes_granted=True)
             if denied:
                 # After the one invocation, never replayed or rerouted; the
                 # edits stay for inspection (Codex, Run 18).
@@ -476,8 +522,9 @@ class Fleet:
                 role += ("\nYou are a bounded editor. Return exactly PATCH: followed by a fenced "
                          "diff containing a standard unified diff with a/ and b/ paths. "
                          "The harness applies it to the persistent project. For no required edits, "
-                         "return NO CHANGES: with a reason. FETCH, CONSULT and WORKER requests "
-                         "may be returned alone before the patch. You have no write tools.")
+                         "return NO CHANGES: with a reason. You cannot hire, consult or fetch: a "
+                         "reply beginning FETCH, CONSULT or WORKER is refused as a failed errand. "
+                         "You have no write tools.")
                 from .workers import worker_loop_control
                 if worker_loop_control.get() is not None:
                     role += '\nDuring this bounded errand only, CONTINUE: may request another read step.'
@@ -766,17 +813,8 @@ def new_session(goal, store, *, fleet=None, config=None, invariants=None, settin
     if conf.fork is None and getattr(active, "project", None) is not None and isinstance(active, Fleet):
         def fork(root):
             """A Fleet for one parallel task's copy of the project, sharing
-            this run's budget, meter and invocation ledger."""
-            from .project import Project
-            child = type(active)(active.settings,
-                                 project=Project(root, exclude=active.project.exclude),
-                                 allow_writes=active.allow_writes, usage_meter=active.usage_meter,
-                                 delegation_ledger=active.delegation_ledger,
-                                 **({"run_budget": active.run_budget} if active.run_budget else {}))
-            try:
-                child.progress = getattr(active, "progress", None)
-            except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
-                pass
+            this run's budget, meter, invocation ledger and granted checks."""
+            child = active.fork(root)
             return child.invoke, child.close
         conf = replace(conf, fork=fork)
     return Session(
@@ -855,9 +893,12 @@ def _looks_like_request(reply: str) -> bool:
     return any(_is_request_line(line.strip()) for line in (reply or "").splitlines())
 
 
-def _relevant_denials(failures, checks) -> List[str]:
+def _relevant_denials(failures, checks, *, writes_granted: bool = False) -> List[str]:
     """Denied commands the harness itself named: a configured check exactly,
-    or the harness's own capture command. Other denials (exploration) are
+    or the harness's own capture command. With ``writes_granted``, a denied
+    file tool as well: a call granted writes that cannot write has lost the
+    capability the grant exists for (Stage B, 2026-10-03), and burning its
+    turns on retries is not a model outcome. Other denials (exploration) are
     only recorded in the ledger."""
     out = []
     for entry in failures if isinstance(failures, list) else ():
@@ -866,6 +907,8 @@ def _relevant_denials(failures, checks) -> List[str]:
         command = entry.get("command")
         if isinstance(command, str) and (command in checks or _is_capture_invocation(command)):
             out.append(command)
+        elif writes_granted and entry.get("tool") and not command:
+            out.append(f"{entry['tool']} {entry.get('path') or ''}".strip())
     return out
 
 

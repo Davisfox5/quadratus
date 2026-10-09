@@ -20,6 +20,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# External routing decider (quadratus.decisions): TypeSafe AI's Jev.
+decisions = [
+    "typesafe-sdk>=0.7",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
@@ -51,7 +55,9 @@ target-version = "py311"
 # Published evidence bundles carry scripts exactly as they ran (sys.path
 # before import, Mac paths); they are records, not project code, and CI was
 # red from the first bundle until they were excluded.
-extend-exclude = ["docs/handoffs"]
+# The Stage B graders carry the GameTape baseline tests copied verbatim
+# from 1cd9264 and hashed as frozen inputs; they are a record, not code to lint.
+extend-exclude = ["docs/handoffs", "tools/jev_stage_b/graders/baseline"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B"]

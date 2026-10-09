@@ -359,3 +359,67 @@ def test_the_meter_is_not_attached_twice(built, tmp_path):
     )
     session.next_task()
     assert len(meter.records) == 1
+
+
+# ---- 2026-10-03: a denied write on a granted call is a capability failure
+
+def test_a_denied_file_tool_counts_only_when_writes_were_granted():
+    from quadratus.runtime import _relevant_denials
+    failures = [dict(kind="permission_denied", tool="Write", status="denied", path="/p/app.py"),
+                dict(kind="permission_denied", command="ls -la", status="denied"),
+                dict(kind="permission_denied", command="python -m pytest -q", status="denied")]
+    assert _relevant_denials(failures, ("python -m pytest -q",)) == ["python -m pytest -q"]
+    assert _relevant_denials(failures, ("python -m pytest -q",), writes_granted=True) == [
+        "Write /p/app.py", "python -m pytest -q"]
+
+
+# ---- Codex review of f09c832: a forked fleet carries the granted checks
+
+def test_a_forked_fleet_carries_the_granted_check_commands(tmp_path, monkeypatch):
+    from quadratus.config import Settings
+    from quadratus.project import Project
+    from quadratus.runtime import Fleet
+    monkeypatch.setattr("shutil.which", lambda name: f"/fake/bin/{name}")
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "app.py").write_text("x\n")
+    parent = Fleet(Settings(backend="cli"), project=Project(root), allow_writes=True)
+    parent.check_commands = ("python -m pytest -q",)
+    parent.progress = lambda m: None
+    child_root = tmp_path / "child"
+    child_root.mkdir()
+    child = parent.fork(child_root)
+    assert child.check_commands == ("python -m pytest -q",)
+    assert child.project.root == child_root.resolve() and child.allow_writes is True
+    assert child.usage_meter is parent.usage_meter and child.delegation_ledger is parent.delegation_ledger
+    assert child.progress is parent.progress
+
+
+def test_editing_call_receives_exact_checks_and_blocks_native_delegation(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from quadratus import cli_providers
+    from quadratus.cli_providers import ClaudeCLIProvider
+    from quadratus.project import Project
+
+    monkeypatch.setattr("shutil.which", lambda name: f"/fake/bin/{name}")
+    provider = ClaudeCLIProvider(model="opus")
+    monkeypatch.setattr("quadratus.runtime.build_provider", lambda *a, **k: provider)
+    observed = {}
+
+    def launch(argv, **kwargs):
+        observed["argv"] = argv
+        return SimpleNamespace(stdout='{"result": "CHANGED: []", "is_error": false}', stderr="", returncode=0)
+
+    monkeypatch.setattr(cli_providers, "_launch", launch)
+    fleet = Fleet(Settings(backend="cli"), project=Project(tmp_path), allow_writes=True)
+    command = "node --test tests/ui/a.test.js tests/ui/b.test.js"
+    fleet.check_commands = (command,)
+    fleet.invoke(OPUS, "Run node --test tests/ui/", allow_writes=True)
+    argv = observed["argv"]
+    system = argv[argv.index("--system-prompt") + 1]
+    assert command in system and "this list governs even when the task asks for another command" in system
+    assert "do not retry variants, delegate it" in system
+    assert f"Bash({command})" in argv
+    assert "Agent" in argv[argv.index("--disallowed-tools") + 1]
+    assert not getattr(provider, "native_fanout_off", False), "the restriction belongs to the editing view"

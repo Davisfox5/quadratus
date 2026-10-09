@@ -154,6 +154,8 @@ def fixture_dir(root, task_id: str) -> Path:
 
 #: Bounds on an interactive capture: steps, per step, and per capture.
 MAX_STEPS = 12
+#: The longest selector a step may carry (preview.validate_capture holds the same bound).
+MAX_SELECTOR_CHARS = 300
 STEP_TIMEOUT_MS = 5000
 CAPTURE_SECONDS = 90
 _ACTIONS = ("click", "wait", "file")
@@ -277,8 +279,8 @@ def validate_steps(steps: List[dict], target: str, root, task_id: Optional[str] 
         action, selector = step.get("action"), step.get("selector")
         if action not in _ACTIONS:
             raise ValueError(f"unknown step {action!r}; use --click, --wait or --file")
-        if not isinstance(selector, str) or not selector.strip() or len(selector) > 300:
-            raise ValueError("each step needs a selector of at most 300 characters")
+        if not isinstance(selector, str) or not selector.strip() or len(selector) > MAX_SELECTOR_CHARS:
+            raise ValueError(f"each step needs a selector of at most {MAX_SELECTOR_CHARS} characters")
         item = dict(action=action, selector=selector.strip())
         if action == "file":
             path = _fixture(root, step.get("path") or "", task_id)

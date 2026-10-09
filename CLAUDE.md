@@ -2,13 +2,11 @@
 
 ## Communication
 
-**Lead with a TL;DR on anything long or technical.** Plain language, bullets,
-no jargon, at the very top — what it means and what the decision is. Put the
-technical detail below it for when it's wanted. Don't make the summary an
-afterthought at the bottom; it goes first.
-
-This applies to design discussions, research findings, architecture proposals,
-and post-change reports. A short answer to a short question doesn't need one.
+**No TL;DRs. Ever.** Davis's standing instruction (2026-10-01): explain
+everything in succinct, simple, plain English. One short explanation, not
+a summary followed by the same thing again. Lead with the answer, keep it
+short, no headers or bullet walls on short replies, no closing offers.
+Technical detail only when it changes what Davis does next.
 
 ## Project context
 
@@ -454,6 +452,129 @@ Key design decisions already settled:
   committed non-hidden project sample exactly as the capture itself
   (`design_evidence._fixture`) and the lead's instructions already did. Three
   gates with three rules was the defect; there is one rule now.
+- **A task that breaks its own rules fails the task, not the run**
+  (operator ruling, 2026-09-28; `session.TaskFailed`). Two live runs each
+  ended on the first task-level fault, so every later task's faults stayed
+  unseen and each run could teach one lesson. Scope overrun, a reply that is
+  neither a request nor a delivery, a lead channel that does not converge,
+  and a transport stop after writes now take the capped-task path: work
+  kept, a terminal `failed` fact on the task, the orchestrator told to name
+  the remaining work with CONTINUES, a clean continuation recovering the
+  fact, and two unfinished tasks in a row tripping the same breaker a cap
+  does. What still stops the run is what no re-plan repairs: a refusal, a
+  denied capability, a tree the harness cannot inspect, dependency or
+  evidence integrity, a spent budget, an operator question, and the
+  orchestrator's own stalls.
+- **A check that still fails after its fix round is requirement debt, not
+  a run stop** (survey plan, 2026-09-30; `_record_check_debt`). With the
+  ledger on and a COVERS line, the task's requirements go NOT MET under a
+  `check.failed` finding, the orchestrator sees it with the check's output
+  artifact and names a RESOLVES task, and that task settles it when its own
+  integration check passes and it closes with no new finding; no renders
+  are asked for. The original task keeps its failed check on record; its
+  `product` facts become history when the finding resolves. Without the
+  ledger or a COVERS line the `CheckFailing` stop stands. Unverified design
+  evidence is not routed this way yet: map G8 says only the task's own
+  renders discharge it.
+- **A survey run continues through failures and reports them apart from
+  acceptance** (Davis, 2026-09-30; `SessionConfig.survey`, `quadratus
+  --survey-recovery N`). Synthesis of Davis's idea with Codex's and Claude's
+  answers on #39: the orchestrator gets no discretion over budget. The
+  operator sets a recovery allowance of N continuation or repair tasks in
+  advance and the harness spends it; the next repair past it is
+  `SurveyAllowanceSpent`. The two-unfinished breaker gives way to a
+  same-cause repeat stop (`SurveyRepeatStop`: a continuation that fails
+  the same way as its predecessor with nothing newly changed), so distinct
+  failures keep the run going. Every re-plan after an unfinished task or an
+  open finding must carry `HYPOTHESIS: <what the failure showed and what
+  changes>`, kept as an artifact and in `result.json`'s `survey` section
+  beside the harness's own record, never acted on. The acceptance verdict
+  is computed exactly as on an ordinary run; the survey section (unique
+  causes, recovered vs open, repeats, allowance spent, hypotheses) is
+  diagnostic data, not success.
+- **Prompt parity is audited, not assumed** (2026-09-28). An inventory of
+  every site that rejects or stops on how a reply is written, checked
+  against the prompt each seat receives, found 15 rules never stated, 24
+  stated in part and 3 stated backwards (the bounded editor was offered
+  lead channels the worker pool refuses; the verifier was told prose is a
+  note while capitalised BLOCKING in prose counts). All are stated now, the
+  bounds are quoted from the constants the parsers enforce
+  (`MAX_PREFACE_LINES`, `MAX_REQUEST_PREFACE_LINES`, `MAX_STEPS`,
+  `MAX_SELECTOR_CHARS`, `_MAX_ASKS_PER_DECISION`, the parallel limit from
+  config), and `tests/test_prompt_rule_parity.py` pins each statement to its
+  parser. A new enforcement site gets its prompt sentence and its guard test
+  in the same change.
+- **The direct execution tier is opt-in and admitted by facts, never by
+  the label** (first slice, 2026-09-30; `--direct-tier`, `Required.tier`).
+  The diagnostic run's favicon task spent a draft collaborator, a revision
+  round and a model close-out on a four-file change. The orchestrator may
+  label a task `TIER: direct`; `_direct_refusal` admits it only when writes
+  are granted, SCOPE names exact paths outside dependency trees and
+  policy-denied or sensitive paths, `max_lines` is within
+  `direct_max_lines`, the task is not an audit, security, review, RESOLVES
+  or CONTINUES task, and the run has a check. The tier is fixed on the
+  contract at dispatch with the refusal reason; an admitted task draws no
+  draft collaborator (so no revision round), gets a harness-written
+  close-out (no map notes), and keeps every check, the harness capture, the
+  cross-vendor design review where it applies, scope measurement and every
+  stop. `result.json.workflow.calls_by_task` records calls, tokens and
+  seconds per task and role, so a saving is read from what ran.
+- **Direct edits bind to exact file identities** (Codex on #42, P2). A
+  bare directory in SCOPE is a prefix grant, so admission refuses a path
+  spelled with a trailing slash or that exists as a directory, and an
+  admitted task's scope is marked `TaskScope.exact`: each permitted path
+  permits only itself, so a declared file that becomes a directory puts
+  every descendant out of scope. The normal tier keeps prefix grants.
+- **The explicit-task entry runs the operator's list with zero orchestrator
+  calls** (`run_project(tasks=[...])`, `--tasks FILE`, 2026-09-30). Each
+  text is read by the orchestrator reply's own parsers (KIND, SCOPE, TIER,
+  COVERS) under the runner's lifecycle: lock, gate plan, budget, readiness,
+  dependency watch, every per-task check and stop. No planner call, no
+  acknowledgment call, no task the list did not name; a text the loop would
+  send back is `TaskListInvalid`, found for the whole list before any call
+  with every problem named at once (live run 20260930T134226Z: the ledger
+  is on by default, so the first text needs a `REQUIREMENTS:` block and
+  every text a `COVERS:` line, and the operator's list had neither; the
+  refusal landed after launch and the record said the task "ran"). `ran`
+  is now recorded at dispatch, and a list longer than `max_tasks` is
+  refused because the cap's goal question is an orchestrator call. The
+  list ending is not a DONE: `completed` means every listed task closed
+  clean and every requirement a listed task claimed audited met;
+  requirements no task claimed are recorded as `requirements_unclaimed`
+  and left unjudged (live run 20260930T141209Z: the favicon task closed
+  clean on the direct tier with zero orchestrator calls and the
+  end-of-list audit marked the goal's baseline requirements NOT MET), and
+  `result.json.explicit_tasks` says `goal_judged: false`. Task completion
+  and whole-goal proof stay distinct. The same run showed the audit prompt
+  never carried the design review's verdict, so the auditor reported
+  approval absent; each design evidence line now names the reviewer and
+  verdict.
+- **An external decider answers only what the orchestrator left
+  unlabelled** (2026-09-30, `quadratus/decisions.py`,
+  `docs/decisions-api.md`). Decision-only models (TypeSafe AI's Jev; OpenAI's
+  Decisions API) return one of a fixed answer set with probabilities, which
+  is the shape of three routing decisions here: task difficulty, task kind,
+  worker escalation. None of the parsers and not the tier admission: those
+  are rules the prompts state and the tests pin. `--decider jev` is wired
+  against the vendor SDK's contract (`typesafe-sdk`, `TYPESAFE_API_KEY`,
+  billed and metered under `jev:<model>`), consulted for kind and
+  difficulty only on a defaulted or degraded route, never overriding a
+  stated label; every verdict or refusal is on `result.json.decisions` and
+  in the task's record, and a refusal keeps the rule's default. OpenAI's
+  Decisions API (DevDay, 2026-09-29) has no published endpoint, schema,
+  model id or pricing, so its decider is a placeholder that refuses with
+  what is missing until the contract lands.
+- **The decider is asked with definitions, never bare names**
+  (`quadratus/decision_labels.py`, 2026-10-01). The first live run sent
+  twenty label names with null criteria and got `backend` for a favicon
+  task that touched a route, an SVG, a template and a test. Every kind and
+  difficulty answer now carries a one-line definition with an example from
+  this repository, the question carries a stated tie-break for mixed work,
+  difficulty is defined by reasoning burden and dependencies rather than
+  line count, and `LABELS_VERSION` rides on every decision record. The docs
+  section is rendered from the same table and a test holds them equal.
+  Routing, stated-label precedence, admission and the budget are unchanged:
+  this changes the question, not what the engine does with the answer.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
@@ -476,6 +597,17 @@ Key design decisions already settled:
   way onto a phone, and the Gradio GUI is never exposed that way because
   its Project tab can run commands. The page has no controls at all, which
   is what makes it the thing that may be reached from another device.
+
+## How development is coordinated
+
+`docs/DEVELOPMENT_PROCESS.md` carries the short rules adopted on
+2026-10-01 from the plan published on #35; `docs/dev-record.json` is the one
+shared development record (candidate SHA, gate, each task's scope, author,
+independent reviewer, delivery and review SHAs, blockers), edited only
+through `tools/dev_record.py` (`claim`, `deliver`, `review`, `receipt`,
+`ready`, `render`, `candidate`, `note`, `extend`). Claude coordinates and integrates; Codex is the root
+reviewer and owns local execution and live runs. The acceptance manifest and
+the workflow scorecard keep their own evidence.
 
 ## Model routing: this repo is build-time tooling
 

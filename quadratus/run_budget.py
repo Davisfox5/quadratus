@@ -52,6 +52,15 @@ class RunLimits:
     max_concurrent_workers: int = 2
     max_cost_usd: float | None = None
     api_cost_rates: tuple[APICostRate, ...] = ()
+    #: Pre-call gate (Stage B, 2026-10-03: single agentic calls ran 0.5M to
+    #: 3.4M tokens and ten of ten cells overshot the post-return threshold by
+    #: up to 1.7M in one call). No attempt starts unless the remaining token
+    #: budget covers this many tokens; 0 keeps the old post-return-only rule.
+    reserve_tokens_per_call: int = 0
+    #: Post-return ceiling naming an oversized call: a single attempt that
+    #: reports more than this stops the run with ``call_token_ceiling``.
+    #: None is no ceiling. It cannot cut a call short; it says which one.
+    max_tokens_per_call: int | None = None
 
     def __post_init__(self):
         if self.max_cost_usd is not None and (
@@ -67,6 +76,13 @@ class RunLimits:
             value = getattr(self, name)
             if type(value) is not int or value < 1:
                 raise ValueError(f'{name} must be a positive integer')
+        if type(self.reserve_tokens_per_call) is not int or self.reserve_tokens_per_call < 0:
+            raise ValueError('reserve_tokens_per_call must be a non-negative integer')
+        if self.reserve_tokens_per_call > self.max_reported_tokens:
+            raise ValueError('reserve_tokens_per_call cannot exceed max_reported_tokens')
+        if self.max_tokens_per_call is not None and (
+                type(self.max_tokens_per_call) is not int or self.max_tokens_per_call < 1):
+            raise ValueError('max_tokens_per_call must be a positive integer or None')
         if (isinstance(self.wall_seconds, bool)
                 or not isinstance(self.wall_seconds, (int, float))
                 or not math.isfinite(self.wall_seconds) or self.wall_seconds <= 0):
@@ -88,6 +104,7 @@ class RunBudget:
         self._input = self._output = self._unknown = 0
         self._reason = ''
         self._responses = []
+        self._oversized = []
 
     def _snapshot(self):
         return {
@@ -103,6 +120,10 @@ class RunBudget:
             'preserved_responses': list(self._responses),
             'elapsed_seconds': max(0, self._clock() - self._started),
             'token_boundary': 'post-return threshold; in-flight calls can overshoot',
+            'reserve_boundary': ('no attempt starts unless the remaining token budget covers '
+                                 'reserve_tokens_per_call; a call that reports more than '
+                                 'max_tokens_per_call stops the run after it returns'),
+            'oversized_calls': list(self._oversized),
             'input_boundary': 'normalized provider input includes cached input; do not add it again',
             'wall_boundary': 'attempt timeout plus required external process supervisor',
         }
@@ -144,6 +165,12 @@ class RunBudget:
             if self._calls >= self.limits.max_calls:
                 self._reason = 'call_limit'
                 self._check()
+            reserve = self.limits.reserve_tokens_per_call
+            if reserve and self.limits.max_reported_tokens - (self._input + self._output) < reserve:
+                # Refused before the call: the budget left could not hold a
+                # call of the size the operator said to expect.
+                self._reason = 'reported_token_reserve'
+                self._check()
             self._calls += 1
             ticket = self._calls
             self._active[ticket] = (transport, price_key)
@@ -170,6 +197,11 @@ class RunBudget:
                 # Provider normalization already folds in cache where needed.
                 self._input += counts[0]
                 self._output += counts[1]
+                ceiling = self.limits.max_tokens_per_call
+                if ceiling is not None and counts[0] + counts[1] > ceiling:
+                    self._oversized.append(dict(attempt=ticket, reported_tokens=counts[0] + counts[1],
+                                                ceiling=ceiling))
+                    self._reason = self._reason or 'call_token_ceiling'
                 if self._input + self._output >= self.limits.max_reported_tokens:
                     self._reason = self._reason or 'reported_token_threshold'
             if self.limits.max_cost_usd is not None and transport == 'api':

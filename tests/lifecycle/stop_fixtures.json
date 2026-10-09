@@ -214,12 +214,12 @@
     {
       "completed": false,
       "done_accepted": true,
-      "stop_reason": "DoneWithOpenWork: the orchestrator reported DONE, but capped task(s) t1 not continued to completion. Work preserved.",
-      "result_error": "DoneWithOpenWork: the orchestrator reported DONE, but capped task(s) t1 not continued to completion. Work preserved.",
+      "stop_reason": "DoneWithOpenWork: the orchestrator reported DONE, but capped or failed task(s) t1 not continued to completion. Work preserved.",
+      "result_error": "DoneWithOpenWork: the orchestrator reported DONE, but capped or failed task(s) t1 not continued to completion. Work preserved.",
       "stop_fact": {
         "kind": "cap",
         "legacy": "DoneWithOpenWork",
-        "detail": "DoneWithOpenWork: the orchestrator reported DONE, but capped task(s) t1 not continued to completion. Work preserved.",
+        "detail": "DoneWithOpenWork: the orchestrator reported DONE, but capped or failed task(s) t1 not continued to completion. Work preserved.",
         "full": null
       },
       "stops": [
@@ -347,12 +347,12 @@
     {
       "completed": false,
       "done_accepted": false,
-      "stop_reason": "GoalUnconfirmedAtCap: the task cap (1) was reached, but capped task(s) t1 not continued to completion. Work preserved.",
-      "result_error": "GoalUnconfirmedAtCap: the task cap (1) was reached, but capped task(s) t1 not continued to completion. Work preserved.",
+      "stop_reason": "GoalUnconfirmedAtCap: the task cap (1) was reached, but capped or failed task(s) t1 not continued to completion. Work preserved.",
+      "result_error": "GoalUnconfirmedAtCap: the task cap (1) was reached, but capped or failed task(s) t1 not continued to completion. Work preserved.",
       "stop_fact": {
         "kind": "cap",
         "legacy": "GoalUnconfirmedAtCap",
-        "detail": "GoalUnconfirmedAtCap: the task cap (1) was reached, but capped task(s) t1 not continued to completion. Work preserved.",
+        "detail": "GoalUnconfirmedAtCap: the task cap (1) was reached, but capped or failed task(s) t1 not continued to completion. Work preserved.",
         "full": null
       },
       "stops": [

@@ -218,7 +218,12 @@ class Outcome:
 
     @property
     def outcome(self) -> str:
-        return type(self.error).__name__ if self.error is not None else "completed"
+        if self.error is not None:
+            return type(self.error).__name__
+        unfinished = getattr(self.result, "outcome", "closed")
+        # A task the harness closed as unfinished (capped or failed) is its
+        # own outcome, not "completed": the run went on without the task.
+        return f"task_{unfinished}" if unfinished in ("turn_limited", "failed") else "completed"
 
 
 def execute(case: dict, tmp_path: Path) -> Outcome:
@@ -379,6 +384,17 @@ def check(expect: dict, out: Outcome) -> List[str]:
                 failures.append(f"in_flight.changed lacks {rel!r}: {sorted(changed)}")
         if spec.get("inspected") is not None and session.in_flight.get("inspected") != spec["inspected"]:
             failures.append(f"in_flight.inspected: {session.in_flight.get('inspected')}")
+    if "failed_tasks" in expect and list(session.failed) != list(expect["failed_tasks"]):
+        failures.append(f"failed_tasks: expected {expect['failed_tasks']}, got {session.failed}")
+    if "task_failed" in expect:
+        spec = expect["task_failed"]
+        record = session.failed_records.get(spec.get("task", "t1")) or {}
+        if "cause" in spec and record.get("cause") != spec["cause"]:
+            failures.append(f"task_failed.cause: expected {spec['cause']}, got {record.get('cause')}")
+        changed = set(record.get("changed") or [])
+        for rel in _list(spec.get("changed_contains", [])):
+            if rel not in changed:
+                failures.append(f"task_failed.changed lacks {rel!r}: {sorted(changed)}")
     if "store_contains" in expect:
         texts = "\n".join(_store_texts(session))
         for needle in _list(expect["store_contains"]):

@@ -59,6 +59,7 @@ import signal
 import subprocess
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -988,6 +989,8 @@ class CLISpec:
     model_flag: Optional[str] = None
     #: Extra args requesting machine-readable output.
     output_args: List[str] = field(default_factory=list)
+    #: Allocate trace identity before launch, including calls with no stdout.
+    session_id_flag: Optional[str] = None
     #: Args that make the agent read-only (no file writes, no shell).
     readonly_args: List[str] = field(default_factory=list)
     #: Args added when the caller *has* opted into writes. Some CLIs need an
@@ -1063,6 +1066,14 @@ class CLISpec:
     #: argued with either.
     native_fanout_off_env: Dict[str, str] = field(default_factory=dict)
     disallowed_tools_flag: str = ""
+    #: The flag that names what an editing call may run without approval, and
+    #: the rule each granted command becomes. Claude: ``--allowedTools
+    #: "Bash(python -m pytest -q)"`` grants exactly that command in headless
+    #: ``-p`` and leaves every other Bash denied ("This command requires
+    #: approval"), verified on claude 2.1.288 (2026-10-03). Empty when the
+    #: vendor's sandbox runs commands instead (codex, grok).
+    allowed_tools_flag: str = ""
+    allow_rule_template: str = "Bash({command})"
     #: How this CLI attaches the in-session ``commission_worker`` tool
     #: (``worker_bridge``): "claude", "codex", "grok", or "" for none. Each
     #: form was probed on 2026-09-25; see ``_worker_tool_argv``.
@@ -1217,10 +1228,24 @@ def _extract_claude_denials(stdout: str) -> List[Dict[str, object]]:
         if not isinstance(entry, dict):
             continue
         name = entry.get("tool_name") or entry.get("toolName") or entry.get("name")
-        command = (entry.get("tool_input") or {}).get("command") if isinstance(entry.get("tool_input"), dict) else None
+        tool_input = entry.get("tool_input") if isinstance(entry.get("tool_input"), dict) else {}
+        command = tool_input.get("command")
         if name == "Bash" and isinstance(command, str) and command.strip():
             out.append(dict(kind="permission_denied", command=command.strip(), status="denied"))
+        elif name in CLAUDE_WRITE_TOOLS:
+            # A denied project edit (Stage B series b332951, 2026-10-03: every
+            # Edit/Write of ten Opus lead calls was denied in permissionMode
+            # default and the ledger showed only budget stops). The path is
+            # the file the call tried to write; nothing from its content.
+            path = tool_input.get("file_path") or tool_input.get("notebook_path")
+            out.append(dict(kind="permission_denied", tool=str(name), status="denied",
+                            path=str(path)[:300] if isinstance(path, str) else ""))
     return out
+
+
+#: The claude tools that change files; a denial of any of these on a call
+#: that was granted writes is a capability failure, not a model choice.
+CLAUDE_WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 
 
 #: Verified against claude 2.1.228. ``--system-prompt`` fully replaces the
@@ -1235,7 +1260,18 @@ CLAUDE_SPEC = CLISpec(
     system_flag="--system-prompt",
     model_flag="--model",
     output_args=["--output-format", "json"],
+    session_id_flag="--session-id",
     readonly_args=["--disallowed-tools", "Bash Edit Write NotebookEdit"],
+    # The write grant (2026-10-03). Without it a lead with writes launched in
+    # permissionMode default, and claude -p denies every project Edit/Write
+    # there: Stage B series b332951 spent ten Opus lead calls on denials the
+    # ledger recorded only as token-threshold stops. ``acceptEdits`` approves
+    # the file tools; Bash stays denied except for the exact commands the
+    # harness grants through ``allowed_tools_flag`` (see ``_build_argv``).
+    # Verified live on claude 2.1.288: default denies Write, acceptEdits
+    # writes, ``Bash(python3 -V)`` grants that command and denies ``python3 -c``.
+    write_args=["--permission-mode", "acceptEdits"],
+    allowed_tools_flag="--allowedTools",
     # Levels verified on claude 2.1.269: low, medium, high, xhigh, max.
     effort_flag="--effort",
     # A worker call. Task is the expensive one -- each subagent is a fresh
@@ -2026,6 +2062,12 @@ class CLIProvider(LLMProvider):
         #: The in-session worker tool for this view (``WorkerBridge.spec()``),
         #: set per lead call by runtime.Fleet. None attaches nothing.
         self.worker_tool: Optional[dict] = kwargs.pop("worker_tool", None)
+        #: The commands a granted editing call may run unapproved (the
+        #: project's checks), set per view by runtime.Fleet from the gate
+        #: plan. Each becomes one allow rule, exact and with a ``:*`` prefix
+        #: form so the same check with extra arguments still runs. Only read
+        #: when writes are granted and the spec has an ``allowed_tools_flag``.
+        self.granted_commands: tuple = tuple(kwargs.pop("granted_commands", ()) or ())
         #: Per-run neutral mode from Settings; None falls back to the env var.
         self.neutral: Optional[bool] = None
         self._worker_tool_files: List[str] = []
@@ -2160,6 +2202,17 @@ class CLIProvider(LLMProvider):
                 argv += list(
                     spec.readonly_args if not self._allow_writes else spec.write_args
                 )
+                if self._allow_writes and spec.allowed_tools_flag:
+                    rules = []
+                    for command in getattr(self, "granted_commands", ()) or ():
+                        command = str(command).strip()
+                        if command:
+                            rules.append(spec.allow_rule_template.format(command=command))
+                            rules.append(spec.allow_rule_template.format(command=command + ":*"))
+                    if rules:
+                        # Variadic like --disallowed-tools; the prompt is on
+                        # stdin for claude, so nothing after it is swallowed.
+                        argv += [spec.allowed_tools_flag, *rules]
         # Operator overrides go last, so they can also correct something the
         # spec got wrong above -- most CLIs let a later flag win. The one
         # thing they may not correct is the control: it is checked against
@@ -2374,6 +2427,9 @@ class CLIProvider(LLMProvider):
         self.last_tool_failures = []
         composed = self._compose_prompt(prompt, system, history)
         argv = self._build_argv(composed, system)
+        if self.spec.session_id_flag:
+            self.last_session_id = str(uuid.uuid4())
+            argv += [self.spec.session_id_flag, self.last_session_id]
         env = {**os.environ, **self.spec.env}
         if getattr(self, "_native_fanout_denied", None):
             env.update(self.spec.native_fanout_off_env)

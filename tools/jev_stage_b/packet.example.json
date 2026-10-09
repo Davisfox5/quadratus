@@ -1,0 +1,180 @@
+{
+  "_note": "Template. Bind repo path, base_sha, check, capture_profile and each task's declared_paths to the real GameTape tree in the IDE before prepare. Every task is planned (goal only, no text): the orchestrator decomposes it, survey_recovery lets it continue through failures with a logged HYPOTHESIS each time, and no KIND line appears anywhere.",
+  "project": {
+    "repo": "/ABS/PATH/TO/gametape",
+    "base_sha": "1cd9264edb4429f00cde43a04a1944d0dca37f11"
+  },
+  "engine_sha": "<the candidate SHA carrying decider_labels; set after #50 integrates>",
+  "jev_model": "jev-1.13.0",
+  "goal": "REQUIREMENTS:\nR1 <the feature, one sentence>\n",
+  "check": "python -m pytest -q",
+  "extra_checks": [
+    [
+      "node",
+      "tests/ui/import_preview.test.js"
+    ]
+  ],
+  "capture_profile": "/ABS/PATH/TO/preview-profile.json",
+  "graders": {
+    "_note": "Frozen independent graders, one script per feature, in a directory outside the GameTape repo so no builder can edit them. Each runs from this directory with STAGE_B_PROJECT, STAGE_B_ARM and STAGE_B_RUN_DIR in the environment; exit 0 is a pass. Written and hashed before either arm runs.",
+    "dir": "/ABS/PATH/TO/stage-b-graders",
+    "timeout_seconds": 600,
+    "tasks": {
+      "f1-preview-errors": [
+        [
+          "python3",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f1.py"
+        ]
+      ],
+      "f2-project-search": [
+        [
+          "python3",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f2.py"
+        ]
+      ],
+      "f3-project-rename": [
+        [
+          "python3",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f3.py"
+        ]
+      ],
+      "f4-tags-export": [
+        [
+          "python3",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f4.py"
+        ]
+      ],
+      "f5-empty-state": [
+        [
+          "python3",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f5.py"
+        ]
+      ],
+      "f6-download-guard": [
+        [
+          "python3",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f6.py"
+        ]
+      ],
+      "f7-projects-migration": [
+        [
+          "python3",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f7.py"
+        ]
+      ]
+    }
+  },
+  "limits": {
+    "max_calls": 90,
+    "max_reported_tokens": 2500000,
+    "wall_seconds": 3600,
+    "max_concurrent_workers": 2,
+    "reserve_tokens_per_call": 500000,
+    "max_tokens_per_call": 1500000
+  },
+  "max_tasks": 10,
+  "survey_recovery": 4,
+  "lead_max_turns": null,
+  "repeats": 1,
+  "tasks": [
+    {
+      "id": "f1-preview-errors",
+      "goal": "REQUIREMENTS:\nR1 The import preview lists every malformed row under its summary with the line number and the reason, in file order\nR2 The preview offers 'import the valid rows' which imports every well-formed row and reports how many were skipped\nR3 The malformed rows can be downloaded as a CSV with columns line,reason,raw\nR4 Each behaviour has a test, and the preview page renders without console errors\n",
+      "declared_paths": [
+        "app.py",
+        "templates/",
+        "static/",
+        "tests/"
+      ]
+    },
+    {
+      "id": "f2-project-search",
+      "goal": "REQUIREMENTS:\nR1 A search box above the project list filters cards by name and by tag as the user types, without a reload\nR2 The list shows 'n of m projects' while a filter is active, and a clear control resets it\nR3 The current query is kept in the URL hash so a reload restores the same filtered view\nR4 A query with no matches shows a one-line message instead of an empty area\nR5 The behaviours have UI tests and the page renders without console errors\n",
+      "declared_paths": [
+        "templates/",
+        "static/",
+        "tests/"
+      ]
+    },
+    {
+      "id": "f3-project-rename",
+      "goal": "REQUIREMENTS:\nR1 PATCH /api/projects/<id> accepts {name}, trims it, and rejects an empty, over-long or duplicate name with a 400 JSON error naming the rule\nR2 A renamed project persists through _save_projects and survives a reload\nR3 Each card has an inline rename control: Enter saves, Escape cancels, and a rejected name shows the server's reason beside the field\nR4 Renaming keeps every tag and recording attached to the project\nR5 Endpoint, persistence and UI behaviours each have a test\n",
+      "declared_paths": [
+        "app.py",
+        "templates/",
+        "static/",
+        "tests/"
+      ]
+    },
+    {
+      "id": "f4-tags-export",
+      "goal": "REQUIREMENTS:\nR1 GET /api/projects/<id>/tags.csv returns the project's tags as CSV with exactly the columns the import preview accepts\nR2 GET /api/tags.csv returns every project's tags with a leading project column\nR3 Values containing commas, quotes or newlines are quoted so the file re-imports unchanged\nR4 The response carries a Content-Disposition filename, and each card links to its export\nR5 A test round-trips an export through the import preview with no malformed rows\n",
+      "declared_paths": [
+        "app.py",
+        "templates/",
+        "static/",
+        "tests/"
+      ]
+    },
+    {
+      "id": "f5-empty-state",
+      "goal": "REQUIREMENTS:\nR1 With no projects, the list area shows an empty-state panel with a one-line explanation and a button that focuses the create form\nR2 The panel disappears the moment the first project is created, without a reload\nR3 Deleting the last project brings the panel back\nR4 The panel has a UI test for each transition and renders without console errors\n",
+      "declared_paths": [
+        "templates/",
+        "static/",
+        "tests/"
+      ]
+    },
+    {
+      "id": "f6-download-guard",
+      "goal": "REQUIREMENTS:\nR1 Any video or recording download whose resolved path falls outside the configured videos directory is refused with 403 and a JSON body whose error is denied\nR2 Traversal segments, absolute paths, URL-encoded separators and a symlink pointing outside the directory are all refused\nR3 A refused request is logged once with the client address and the fact of refusal, never echoing the requested path\nR4 Normal downloads keep working unchanged\nR5 A test covers every refused shape and one normal download\n",
+      "declared_paths": [
+        "app.py",
+        "tests/"
+      ]
+    },
+    {
+      "id": "f7-projects-migration",
+      "goal": "REQUIREMENTS:\nR1 The projects JSON file carries a top-level schema version\nR2 A file without a version is migrated in memory to version 1 with every project, tag and recording reference preserved exactly, and written back once\nR3 Before the write-back the original file is copied to a timestamped backup beside it\nR4 The write is atomic: a crash mid-write leaves either the old file or the new one, never a partial file\nR5 A file with a version newer than the code knows is refused at startup with a clear error naming both versions\nR6 A test covers each shape: unversioned, version 1, newer, and the backup\n",
+      "declared_paths": [
+        "app.py",
+        "tests/"
+      ]
+    }
+  ]
+}
