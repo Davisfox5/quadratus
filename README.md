@@ -1,0 +1,1 @@
+Evidence-only candidate-null operator correction and source-gate normalizer drafts. All full source/private examiner/report/receipt bytes losslessly archived. No launch or runtime acceptance. No engine source or live input changes. Decode gzip JSON then content_base64 per file; verify manifest SHA256.
