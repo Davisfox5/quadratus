@@ -295,29 +295,65 @@ def downloadable_files(run_dir):
     project's ``.quadratus/runs/<id>``, so returning them directly raised
     InvalidPathError and blanked the report, diff and downloads together
     (batch 2 gui-ui-v3 on 5d9f5ff, the first real GUI run). Widening
-    ``allowed_paths`` would expose a whole project tree to the server; this
-    copies exactly these named regular files into a fresh private folder
-    (mode 0700) under the system temp directory, named after the run. The
-    originals stay where they are and are the record. A file that is
-    missing or a link is skipped; a copy that fails leaves the report and
-    diff on screen with a note naming the run folder.
+    ``allowed_paths`` would expose a whole project tree to the server.
+
+    The copy is bound to descriptors, not pathnames (Codex review of
+    7515f28: a link check followed by a pathname copy could be raced). The
+    run folder is resolved once, then every component of it is opened from
+    ``/`` without following links; each named file is opened through that
+    folder handle without following links, must be a regular file, and is
+    read from its own descriptor into a new file created exclusively in a
+    fresh private folder (mode 0700) under the system temp directory. A
+    file that is missing, a link or not regular is skipped (the download
+    list shows what was offered); a failure leaves the report and diff on
+    screen with a note naming the run folder.
     """
-    import shutil
+    import stat
     import tempfile
     run_dir = Path(run_dir)
-    present = [run_dir / name for name in RUN_FILES
-               if (run_dir / name).is_file() and not (run_dir / name).is_symlink()]
-    if not present:
-        return [], ""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    nofollow = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    copies, fds = [], []
     try:
-        folder = Path(tempfile.mkdtemp(prefix=f"quadratus-{run_dir.name}-"))
-        copies = []
-        for source in present:
-            target = folder / source.name
-            shutil.copyfile(source, target)
-            copies.append(str(target))
+        resolved = Path(os.path.realpath(run_dir))
+        fds.append(os.open("/", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)))
+        for part in resolved.parts[1:]:
+            fds.append(os.open(part, flags, dir_fd=fds[-1]))
+        folder_fd = fds[-1]
+        folder = None
+        for name in RUN_FILES:
+            try:
+                fd = os.open(name, nofollow, dir_fd=folder_fd)
+            except OSError:
+                continue
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    continue
+                if folder is None:
+                    folder = Path(tempfile.mkdtemp(prefix=f"quadratus-{run_dir.name}-"))
+                target = folder / name
+                out = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+                try:
+                    while True:
+                        chunk = os.read(fd, 1 << 20)
+                        if not chunk:
+                            break
+                        view = memoryview(chunk)
+                        while view:
+                            view = view[os.write(out, view):]
+                finally:
+                    os.close(out)
+                copies.append(str(target))
+            finally:
+                os.close(fd)
     except OSError as exc:
         return [], f"The saved run files could not be offered for download ({exc}); they are in {run_dir}."
+    finally:
+        for fd in reversed(fds):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
     return copies, ""
 
 

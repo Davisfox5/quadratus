@@ -7040,13 +7040,18 @@ class Session:
         unrun = [path for path in unrun if not self._named_by_a_run_test(path, argvs)]
         if not unrun:
             return
+        # An observation, not a finding: a check can run a file it does not
+        # name through a wrapper, so "not named" never proves "not run"
+        # (Codex review of 7515f28). It reaches the lead, the close-out and
+        # result.json; it does not decide completion.
         text = (f"Task {spec.task_id}: {', '.join(unrun)} changed by this task "
-                f"{'is' if len(unrun) == 1 else 'are'} not run by any required check (the checks "
-                "list their test files and do not name "
-                f"{'it' if len(unrun) == 1 else 'them'}); those tests are unverified, not passed.")
-        self._open_finding("unverified", text)
+                f"{'is' if len(unrun) == 1 else 'are'} not named by any required check (the checks "
+                "list their test files); whether a check runs "
+                f"{'it' if len(unrun) == 1 else 'them'} indirectly is unknown, so "
+                f"{'its' if len(unrun) == 1 else 'their'} tests are not shown to have passed.")
+        self.unnamed_test_files = list(dict.fromkeys([*getattr(self, "unnamed_test_files", []), *unrun]))
         task.record("user", text)
-        self._note(f"task {spec.task_id}: unrun test file(s) {', '.join(unrun)}")
+        self._note(f"task {spec.task_id}: test file(s) no required check names: {', '.join(unrun)}")
 
     def _named_by_a_run_test(self, path: str, argvs, *, limit: int = 2000) -> bool:
         """Whether a test file some required check runs names ``path``: a

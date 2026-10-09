@@ -490,17 +490,23 @@ Key design decisions already settled:
   those, so new tests belong in a listed file; and after a task's gate,
   `integration.uncovered_tests` files an unverified finding for a changed
   test file of a family some check lists explicitly that no check names,
-  covers by folder or discovers. Where coverage cannot be told, nothing is
-  claimed. Native children named in a transcript count once per vendor call
-  id; a refused spawn is the control holding, not a child.
+  covers by folder or discovers is named as an observation (on the task,
+  the close-out and `result.json` `unnamed_test_files`), never a finding:
+  a wrapper can run a file no check names, so "not named" is not "not run".
+  Native children named in a transcript count once per vendor call id; only
+  a successful spawn is a child; a refused, errored or unresolved one is a
+  ledger note that says whether it ran is unknown or that none ran.
 - **The GUI serves copies of a run's files, never the run folder** (batch 2
   gui-ui-v3 on 5d9f5ff, the first real GUI run). Gradio serves only its
   working directory, the system temp directory and `allowed_paths`; the
   run's files live in the project's `.quadratus/runs/<id>`, so returning
   them raised InvalidPathError and blanked the report, diff and downloads.
-  `gui.downloadable_files` copies exactly `RUN_FILES` (regular files, never
-  links) into a fresh 0700 temp folder named after the run; `allowed_paths`
-  is never widened, which would expose the whole project tree.
+  `gui.downloadable_files` copies exactly `RUN_FILES` into a fresh 0700 temp
+  folder named after the run, bound to descriptors: the run folder resolved
+  once, every component opened from `/` without following links, each file
+  opened through that handle without following links, regular files only,
+  read from its own descriptor. `allowed_paths` is never widened, which
+  would expose the whole project tree.
 - **The planner reads the harness record before the lead's account**
   (batch 2 gui-ui-v3 on 5d9f5ff). t6's close-out said the preview failed
   and R4 was blocked, because its review seat had tried to start the

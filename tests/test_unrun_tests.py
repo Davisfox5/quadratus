@@ -36,7 +36,9 @@ def test_an_explicit_pytest_file_list_does_not_cover_a_new_python_test():
     assert uncovered_tests(["tests/test_a.py"], [listed]) == []
 
 
-def test_the_session_files_an_unverified_finding_and_widens_nothing(tmp_path):
+def test_the_session_names_the_file_without_claiming_it_did_not_run(tmp_path):
+    """Codex review of 7515f28: a wrapper can run a file no check names, so
+    the observation never becomes a finding that it did not run."""
     root = tmp_path / "project"
     (root / "tests" / "ui").mkdir(parents=True)
     (root / "tests" / "ui" / "load_app.test.js").write_text("// existing\n")
@@ -48,8 +50,8 @@ def test_the_session_files_an_unverified_finding_and_widens_nothing(tmp_path):
     task = TaskMemory("t2", "claude:opus", session.store)
     spec = SimpleNamespace(task_id="t2")
     session._note_unrun_tests(spec, task, gate)
-    (finding,) = session.open_findings
-    assert "tests/ui/project_search.test.js" in finding and "unverified" in finding
+    assert session.open_findings == [], "not named is not proof of not run"
+    assert session.unnamed_test_files == ["tests/ui/project_search.test.js"]
     assert gate.commands[1].argv == NODE, "the configured commands are unchanged"
 
 

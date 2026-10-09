@@ -46,11 +46,16 @@ def test_a_refused_spawn_is_the_control_holding_not_a_child(tmp_path, monkeypatc
     assert "refused by permissions" in ledger and "no child ran" in ledger
 
 
-def test_an_unresolved_spawn_is_an_attempt_not_a_run(tmp_path, monkeypatch):
+def test_an_errored_or_unresolved_spawn_is_an_attempt_never_a_child_that_ran(tmp_path, monkeypatch):
+    """Codex review of 7515f28: errored and unknown calls still reached the
+    ledger as children that ran."""
     record, ledger = _run_with(tmp_path, monkeypatch, [
         {"invocation_id": "i1", "task": "t1", "role": "lead", "model": "claude:opus", "session_id": "s1",
-         "tool_calls": [{"name": "Task", "outcome": "unknown", "id": "toolu_2"}]}])
-    assert record["unidentified_native_activity"] == 1 and record["native_child_tokens"] == 0
+         "tool_calls": [{"name": "Task", "outcome": "unknown", "id": "toolu_2"},
+                        {"name": "Agent", "outcome": "error", "id": "toolu_3"}]}])
+    assert record["unidentified_native_activity"] == 0 and record["native_child_tokens"] == 0
+    assert "Vendor-native children" not in ledger and " ran outside" not in ledger
+    assert ledger.count("whether a child ran is unknown") == 2
 
 
 def test_one_call_read_twice_is_one_child(tmp_path, monkeypatch):

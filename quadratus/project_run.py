@@ -490,6 +490,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'policy_plans': getattr(session, 'policy_plans', []),
         'budget': budget.snapshot() if budget else None,
         'selected_limits': selected,
+        'unnamed_test_files': list(getattr(session, 'unnamed_test_files', []) or []) if session else [],
         'stale_capture_fixtures': stale_fixtures,
         'delegation': reconcile(delegation.events, delegation.native_children.values()),
         'scope_reports': [
@@ -521,7 +522,6 @@ def _observe_transcript_children(traces, delegation):
     inside the parent call's reported total, so nothing is added and no
     figure is guessed. Observational only; it never stops a run.
     """
-    from .cli_providers import ATTEMPTED_DELEGATION
     from .delegation import NativeChild
     for record in traces or ():
         for n, call in enumerate(record.get('tool_calls') or ()):
@@ -536,21 +536,25 @@ def _observe_transcript_children(traces, delegation):
                 # review of 6a338a1), so it is noted, never filed as a child.
                 delegation.note_blind_spot(f'{name} call refused by permissions in {where}; no child ran')
                 continue
+            if outcome != 'success':
+                # Errored or unresolved: an attempt whose execution is
+                # unknown, never filed as a child the record would say ran
+                # (Codex review of 7515f28).
+                delegation.note_blind_spot(f'{name} call with outcome {outcome} in {where}: attempted; '
+                                           'whether a child ran is unknown')
+                continue
             # Keyed by the vendor's call id within the parent session, else
             # by the call's position in that session's transcript (stable
             # across rereads of one growing transcript), never by the parent
             # invocation: two invocations sharing a session read the same
             # calls (Codex review of 6a338a1).
             key = call.get('id') or f"#{n}"
-            ran = outcome == 'success'
             delegation.observe_native(NativeChild(
                 session_id=f"unidentified:transcript:{record.get('session_id') or '?'}:{key}",
                 parent_session_id=record.get('session_id'),
                 tool_name=name,
-                detail=((f"named in the saved transcript of {where}; it ran" if ran else
-                         f"{ATTEMPTED_DELEGATION}: named in the saved transcript of {where} with outcome "
-                         f"{outcome}; whether it executed is unknown")
-                        + "; its usage is inside the parent call's reported total and is not added"),
+                detail=(f"named in the saved transcript of {where} with a successful result; its usage "
+                        "is inside the parent call's reported total and is not added"),
             ))
 
 

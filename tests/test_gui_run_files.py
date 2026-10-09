@@ -69,11 +69,9 @@ def test_run_project_ui_yields_servable_copies(tmp_path, monkeypatch):
 
 def test_missing_files_and_links_are_not_offered_and_a_failed_copy_is_named(tmp_path, monkeypatch):
     run_dir, _ = _layout(tmp_path, monkeypatch)
-    import shutil
-
     def failing(*a, **k):
         raise PermissionError(13, "Permission denied")
-    monkeypatch.setattr(shutil, "copyfile", failing)
+    monkeypatch.setattr(tempfile, "mkdtemp", failing)
     files, problem = gui.downloadable_files(run_dir)
     assert files == [] and "could not be offered" in problem and str(run_dir) in problem
     monkeypatch.undo()
@@ -94,3 +92,38 @@ def test_a_linked_run_file_is_never_copied(tmp_path, monkeypatch):
     (run_dir / "ledger.md").symlink_to(secret)
     files, _ = gui.downloadable_files(run_dir)
     assert [f.rsplit("/", 1)[1] for f in files] == ["report.md", "changes.diff", "result.json"]
+
+
+
+def test_a_run_folder_swapped_for_a_link_after_it_is_bound_serves_the_original_bytes(tmp_path, monkeypatch):
+    """Codex review of 7515f28: a link check followed by a pathname copy
+    could be raced, and the replacement reached the download."""
+    import os
+    run_dir, _ = _layout(tmp_path, monkeypatch)
+    evil = tmp_path / "evil"
+    evil.mkdir()
+    for name in gui.RUN_FILES:
+        (evil / name).write_text("foreign\n")
+    parked = tmp_path / "parked"
+    real_open = os.open
+    swapped = []
+
+    def swapping_open(path, flags, *args, **kwargs):
+        if path == "report.md" and not swapped:
+            os.rename(run_dir, parked)
+            os.symlink(evil, run_dir)
+            swapped.append(1)
+        return real_open(path, flags, *args, **kwargs)
+    monkeypatch.setattr(gui.os, "open", swapping_open)
+    files, problem = gui.downloadable_files(run_dir)
+    monkeypatch.setattr(gui.os, "open", real_open)
+    assert swapped and problem == ""
+    assert [open(f).read() for f in files] == [f"{name} body\n" for name in gui.RUN_FILES]
+
+
+def test_a_linked_ancestor_of_the_run_folder_is_resolved_once_and_then_bound(tmp_path, monkeypatch):
+    run_dir, _ = _layout(tmp_path, monkeypatch)
+    alias = tmp_path / "alias"
+    alias.symlink_to(run_dir.parent)
+    files, problem = gui.downloadable_files(alias / run_dir.name)
+    assert problem == "" and len(files) == len(gui.RUN_FILES)
