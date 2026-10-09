@@ -45,7 +45,7 @@ def test_scope_stop_records_provider_success_and_failed_acceptance(tmp_path, mon
     invoked = [row for row in rows if row['invoked']]
     lead = next(row for row in invoked if row['role'] == 'lead')
     assert not result.completed
-    assert lead['outcome'] == 'PartialWorkStopped'
+    assert lead['outcome'] == 'TaskFailed'
     assert lead['provider_outcome'] == 'ok'
     assert lead['post_return_failure'] is True
     assert lead['input_tokens'] == 11 and lead['output_tokens'] == 3
@@ -55,4 +55,5 @@ def test_scope_stop_records_provider_success_and_failed_acceptance(tmp_path, mon
     assert invoked[0]['outcome'] == 'ok'
     assert (tmp_path / 'mine.txt').read_text() == 'operator work\n'
     assert (tmp_path / ('outside.py' if breach == 'path' else 'a.py')).exists()
-    assert 'PartialWorkStopped' in result.report
+    data = json.loads((result.run_dir / 'result.json').read_text())
+    assert data['failed_tasks'] == ['t1'] and 'exceeded its declared scope' in result.report

@@ -1,0 +1,1686 @@
+{
+  "format": 1,
+  "packet": {
+    "_note": "Stage B packet bound to the real GameTape tree on Davis's Mac (2026-10-03). engine_sha is filled by the launch step from the engine checkout's HEAD into the out-dir copy that prepare reads; everything else is final here. Every task is planned (goal only): the orchestrator decomposes it under max_tasks with declared_paths as the fence, survey_recovery keeps it going through failures with a logged HYPOTHESIS, and no KIND line appears anywhere. One grader argv per requirement: the grade is requirements passed over requirements total.",
+    "project": {
+      "repo": "/Users/davisfox/Documents/GitHub/sports-video-tagger",
+      "base_sha": "1cd9264edb4429f00cde43a04a1944d0dca37f11"
+    },
+    "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+    "jev_model": "jev-1.13.0",
+    "goal": "REQUIREMENTS:\nR1 <unused: every task carries its own goal>\n",
+    "check": "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python -m pytest -q -p no:cacheprovider",
+    "extra_checks": [
+      [
+        "node",
+        "--test",
+        "tests/ui/bulk_coverage.test.js",
+        "tests/ui/bulk_keyboard.test.js",
+        "tests/ui/bulk_serialization.test.js",
+        "tests/ui/import_preview.test.js",
+        "tests/ui/load_app.test.js"
+      ]
+    ],
+    "capture_profiles": {
+      "jev": "/Users/davisfox/Documents/GitHub/stage-b/preview-profile-jev.json",
+      "rule": "/Users/davisfox/Documents/GitHub/stage-b/preview-profile-rule.json"
+    },
+    "graders": {
+      "_note": "Frozen independent graders in the engine repo, outside the GameTape repo so no builder can edit them. Each argv is one requirement; it runs from graders.dir with STAGE_B_PROJECT, STAGE_B_ARM and STAGE_B_RUN_DIR set and exit 0 is a pass. The baseline regression requirement runs the 1cd9264 tests frozen under graders/baseline against the cell's code; the UI requirements drive the cell's app in real Chromium through the grader-owned serve.py.",
+      "dir": "/Users/davisfox/Documents/GitHub/quadratus/tools/jev_stage_b/graders",
+      "timeout_seconds": 600,
+      "tasks": {
+        "f1-preview-errors": [
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f1.py",
+            "-k",
+            "R1"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f1.py",
+            "-k",
+            "R2"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f1.py",
+            "-k",
+            "R3"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f1.py",
+            "-k",
+            "R4"
+          ]
+        ],
+        "f2-project-search": [
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f2.py",
+            "-k",
+            "R1"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f2.py",
+            "-k",
+            "R2"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f2.py",
+            "-k",
+            "R3"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f2.py",
+            "-k",
+            "R4"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f2.py",
+            "-k",
+            "R5"
+          ]
+        ],
+        "f3-project-rename": [
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f3.py",
+            "-k",
+            "R1"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f3.py",
+            "-k",
+            "R2"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f3.py",
+            "-k",
+            "R3"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f3.py",
+            "-k",
+            "R4"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f3.py",
+            "-k",
+            "R5"
+          ]
+        ],
+        "f4-tags-export": [
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f4.py",
+            "-k",
+            "R1"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f4.py",
+            "-k",
+            "R2"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f4.py",
+            "-k",
+            "R3"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f4.py",
+            "-k",
+            "R4"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f4.py",
+            "-k",
+            "R5"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f4.py",
+            "-k",
+            "R6"
+          ]
+        ],
+        "f5-empty-state": [
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f5.py",
+            "-k",
+            "R1"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f5.py",
+            "-k",
+            "R2"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f5.py",
+            "-k",
+            "R3"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f5.py",
+            "-k",
+            "R4"
+          ]
+        ],
+        "f6-download-guard": [
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f6.py",
+            "-k",
+            "R1"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f6.py",
+            "-k",
+            "R2"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f6.py",
+            "-k",
+            "R3"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f6.py",
+            "-k",
+            "R4"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f6.py",
+            "-k",
+            "R5"
+          ]
+        ],
+        "f7-projects-migration": [
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f7.py",
+            "-k",
+            "R1"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f7.py",
+            "-k",
+            "R2"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f7.py",
+            "-k",
+            "R3"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f7.py",
+            "-k",
+            "R4"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f7.py",
+            "-k",
+            "R5"
+          ],
+          [
+            "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "grade_f7.py",
+            "-k",
+            "R6"
+          ]
+        ]
+      }
+    },
+    "limits": {
+      "max_calls": 90,
+      "max_reported_tokens": 2500000,
+      "wall_seconds": 3600,
+      "max_concurrent_workers": 2
+    },
+    "max_tasks": 10,
+    "survey_recovery": 4,
+    "repeats": 1,
+    "tasks": [
+      {
+        "id": "f1-preview-errors",
+        "goal": "REQUIREMENTS:\nR1 POST /api/projects/<id>/clips/import_preview adds a top-level \"errors\" list to its JSON: one object per malformed row in file order with an integer \"line\", \"reasons\" (that row's reason strings) and \"raw\" (the row's original text as it appeared in the file, without its line ending); valid and duplicate rows never appear in it, and \"rows\" and \"summary\" are unchanged\nR2 Under #import-preview-summary a table #import-preview-errors lists one <tr data-line=\"<line>\"> per malformed row showing the line number and its reasons joined by \"; \", in file order; the table carries the hidden attribute whenever the last preview had no malformed rows\nR3 A link #import-preview-errors-download with download=\"import-errors.csv\" points at a CSV of the last preview's malformed rows (header line,reason,raw; one row per malformed row with several reasons joined by \"; \"; values quoted by the CSV rules); it is hidden whenever the table is\nR4 The existing tests under tests/ still pass and the preview flow (open a project, choose a CSV with malformed rows) logs no browser console errors\n",
+        "declared_paths": [
+          "app.py",
+          "templates/",
+          "static/",
+          "tests/"
+        ]
+      },
+      {
+        "id": "f2-project-search",
+        "goal": "REQUIREMENTS:\nR1 An input #project-search inside #project-list-screen, placed before #projects-container, filters the rendered .project-card elements as the user types: cards whose .name contains the query case-insensitively stay, the rest get the hidden attribute; no request goes to the server and the page does not reload\nR2 A span #project-search-count reads \"<shown> of <total> projects\" while the query is non-empty and is empty otherwise; a button #btn-project-search-clear empties the query, shows every card and empties the count\nR3 The query is mirrored into location.hash as \"#q=<URL-encoded query>\" and the hash is removed when the query is empty; loading the page with such a hash fills the input and applies the filter\nR4 When no card matches a non-empty query, #project-search-empty is shown with a one-line message; it is hidden whenever at least one card matches or the query is empty\nR5 The existing tests under tests/ still pass and the project list with a search in progress logs no browser console errors\n",
+        "declared_paths": [
+          "templates/",
+          "static/",
+          "tests/"
+        ]
+      },
+      {
+        "id": "f3-project-rename",
+        "goal": "REQUIREMENTS:\nR1 PATCH /api/projects/<id> with JSON {\"name\": ...} trims the name and returns 200 with the full updated project; it returns 400 with a JSON \"error\" naming the rule when the trimmed name is empty, longer than 80 characters, or equal case-insensitively to another project's name (a project may keep its own name); an unknown id returns 404\nR2 The new name is persisted through _save_projects: a fresh _load_projects() and GET /api/projects both show it, and no .projects-*.tmp file is left beside projects.json\nR3 Each .project-card has a button .rename-btn; clicking it shows an input .rename-input prefilled with the name; Enter sends the PATCH and updates the card's .name without a reload; Escape restores the card unchanged and sends nothing; a 400 shows the server's \"error\" text in an element .rename-error inside the card and leaves the name unchanged\nR4 Renaming changes nothing but \"name\": id, video_filename, tag_types, players, clips (with their recordings) and filter_presets are identical before and after\nR5 The existing tests under tests/ still pass and the rename flow logs no browser console errors\n",
+        "declared_paths": [
+          "app.py",
+          "templates/",
+          "static/",
+          "tests/"
+        ]
+      },
+      {
+        "id": "f4-tags-export",
+        "goal": "REQUIREMENTS:\nR1 GET /api/projects/<id>/export/manifest.csv returns 200 text/csv whose header is exactly \"Clip ID,Tag Type,Start (s),End (s),Label,Notes,Players\" with one row per clip in the project's clip order; an unknown id returns 404 JSON\nR2 GET /api/export/manifest.csv returns every project's clips with a leading \"Project\" column (the project name) before the same columns, projects in list order\nR3 Values containing commas, quotes or newlines are quoted so the csv module reads back the original text; Players uses the import preview's form: \"#<number> <name>\" per player (bare \"<name>\" when the player has no number), joined by \"; \"\nR4 Both responses carry Content-Disposition: attachment with filename \"<project name with spaces as _>_manifest.csv\" (\"all_projects_manifest.csv\" for the global export), and each .project-card has an anchor .export-manifest whose href is that project's export URL\nR5 Round trip: uploading a project's export to the import preview of a project with the same tag types and players and no clips yields summary.malformed 0 and summary.valid equal to the exported clip count\nR6 The existing tests under tests/ still pass\n",
+        "declared_paths": [
+          "app.py",
+          "templates/",
+          "static/",
+          "tests/"
+        ]
+      },
+      {
+        "id": "f5-empty-state",
+        "goal": "REQUIREMENTS:\nR1 With no projects, #projects-container holds a panel #projects-empty with a one-line explanation and a button #btn-projects-empty-create that moves focus to #new-project-name; the old inline \"No projects yet\" paragraph is gone\nR2 Creating the first project through the form hides the panel (hidden attribute) and shows its card without a reload\nR3 Deleting the last project through its card shows the panel again without a reload\nR4 The existing tests under tests/ still pass and both transitions log no browser console errors\n",
+        "declared_paths": [
+          "templates/",
+          "static/",
+          "tests/"
+        ]
+      },
+      {
+        "id": "f6-download-guard",
+        "goal": "REQUIREMENTS:\nR1 GET /videos/<name> and GET /recordings/<name> resolve the requested name against VIDEOS_DIR or RECORDINGS_DIR and refuse any request whose real path is outside that directory or passes through a symlink with status 403 and the JSON body {\"error\": \"denied\"}\nR2 The refused shapes include a \"..\" segment (../projects.json), the same with URL-encoded dots (%2e%2e/projects.json), a nested one (sub/../../projects.json), a symlink inside the directory whose target lies outside it, and a symlinked directory; the route must accept names containing \"/\" so the guard, not routing, answers them\nR3 Every refusal is logged exactly once through app.logger at WARNING level with the client address and the word \"denied\", and the message never contains the requested name\nR4 A regular file inside the directory is served unchanged with status 200 and its bytes; a missing regular name still returns 404\nR5 The existing tests under tests/ still pass\n",
+        "declared_paths": [
+          "app.py",
+          "tests/"
+        ]
+      },
+      {
+        "id": "f7-projects-migration",
+        "goal": "REQUIREMENTS:\nR1 _save_projects writes projects.json as {\"schema_version\": 1, \"projects\": {<id>: <project>, ...}} and _load_projects returns the projects mapping alone\nR2 A legacy file holding the bare projects mapping is loaded with every project, tag type, player, clip and recording reference preserved exactly and rewritten once in the versioned shape on that first load; a second load rewrites nothing\nR3 Before that rewrite the legacy file's bytes are copied to projects.json.bak-<UTC timestamp YYYYmmddTHHMMSSZ> in the same directory\nR4 The rewrite is atomic: if os.replace fails mid-write, projects.json still holds the legacy bytes and no partial or temporary file is left\nR5 A file whose schema_version is greater than 1 makes _load_projects raise an error naming both versions, and GET /api/projects answers 500 with a JSON \"error\" naming both\nR6 The existing tests under tests/ still pass\n",
+        "declared_paths": [
+          "app.py",
+          "tests/"
+        ]
+      }
+    ]
+  },
+  "packet_digest": "006894d640356b14f3b1bac18605e255bb98e68c666156acc7507125e0358e40",
+  "out": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells",
+  "prepared_at": "2026-10-03T11:36:17Z",
+  "cells": [
+    {
+      "task": "f1-preview-errors",
+      "arm": "jev",
+      "repeat": 0,
+      "position": 0,
+      "name": "f1-preview-errors/jev-r0",
+      "text": "",
+      "goal": "REQUIREMENTS:\nR1 POST /api/projects/<id>/clips/import_preview adds a top-level \"errors\" list to its JSON: one object per malformed row in file order with an integer \"line\", \"reasons\" (that row's reason strings) and \"raw\" (the row's original text as it appeared in the file, without its line ending); valid and duplicate rows never appear in it, and \"rows\" and \"summary\" are unchanged\nR2 Under #import-preview-summary a table #import-preview-errors lists one <tr data-line=\"<line>\"> per malformed row showing the line number and its reasons joined by \"; \", in file order; the table carries the hidden attribute whenever the last preview had no malformed rows\nR3 A link #import-preview-errors-download with download=\"import-errors.csv\" points at a CSV of the last preview's malformed rows (header line,reason,raw; one row per malformed row with several reasons joined by \"; \"; values quoted by the CSV rules); it is hidden whenever the table is\nR4 The existing tests under tests/ still pass and the preview flow (open a project, choose a CSV with malformed rows) logs no browser console errors\n",
+      "declared_paths": [
+        "app.py",
+        "templates/",
+        "static/",
+        "tests/"
+      ],
+      "entry": "planned",
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f1-preview-errors/jev-r0",
+      "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f1-preview-errors/jev-r0.goal.txt",
+      "state": "ran",
+      "started_at": "2026-10-03T11:49:17Z",
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f1-preview-errors/jev-r0/.quadratus/runs/20261003T114917Z-e599b988",
+      "completed": false,
+      "seconds": 849.1,
+      "finished_at": "2026-10-03T12:03:26Z",
+      "grade": {
+        "passed": 2,
+        "total": 4,
+        "results": [
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f1.py",
+              "-k",
+              "R1"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 3 deselected in 0.09s\n",
+            "seconds": 0.2
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f1.py",
+              "-k",
+              "R2"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": "ite-packages/playwright/sync_api/_generated.py:9061: in wait_for_selector\n    self._sync(\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_page.py:429: in wait_for_selector\n    return await self._main_frame.wait_for_selector(**locals_to_params(locals()))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_frame.py:395: in wait_for_selector\n    await self._channel.send(\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:76: in send\n    return await self._connection.wrap_api_call(\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <playwright._impl._connection.Connection object at 0x10a51d5e0>\ncb = <function Channel.send.<locals>.<lambda> at 0x10a542c00>\nis_internal = False, title = None\n\n    async def wrap_api_call(\n        self, cb: Callable[[], Any], is_internal: bool = False, title: str = None\n    ) -> Any:\n        if self._api_zone.get():\n            return await cb()\n        task = asyncio.current_task(self._loop)\n        parsed_st = _attach_api_call_information(\n            getattr(task, \"__pw_stack__\", None) or _capture_stack_trace(),\n            is_internal,\n            title,\n        )\n        self._api_zone.set(parsed_st)\n        try:\n            return await cb()\n        except Exception as error:\n>           raise rewrite_error(error, f\"{parsed_st['apiName']}: {error}\") from None\nE           playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 5000ms exceeded.\nE           Call log:\nE             - waiting for locator(\"#import-preview-errors\")\n\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:632: TimeoutError\n=========================== short test summary info ============================\nFAILED grade_f1.py::test_R2_error_table_under_the_summary_lists_malformed_rows_in_order\n1 failed, 3 deselected in 5.89s\n",
+            "seconds": 6.0
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f1.py",
+              "-k",
+              "R3"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": "2/site-packages/playwright/sync_api/_generated.py:9061: in wait_for_selector\n    self._sync(\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_page.py:429: in wait_for_selector\n    return await self._main_frame.wait_for_selector(**locals_to_params(locals()))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_frame.py:395: in wait_for_selector\n    await self._channel.send(\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:76: in send\n    return await self._connection.wrap_api_call(\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <playwright._impl._connection.Connection object at 0x108557ec0>\ncb = <function Channel.send.<locals>.<lambda> at 0x108f44860>\nis_internal = False, title = None\n\n    async def wrap_api_call(\n        self, cb: Callable[[], Any], is_internal: bool = False, title: str = None\n    ) -> Any:\n        if self._api_zone.get():\n            return await cb()\n        task = asyncio.current_task(self._loop)\n        parsed_st = _attach_api_call_information(\n            getattr(task, \"__pw_stack__\", None) or _capture_stack_trace(),\n            is_internal,\n            title,\n        )\n        self._api_zone.set(parsed_st)\n        try:\n            return await cb()\n        except Exception as error:\n>           raise rewrite_error(error, f\"{parsed_st['apiName']}: {error}\") from None\nE           playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 5000ms exceeded.\nE           Call log:\nE             - waiting for locator(\"#import-preview-errors-download\")\n\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:632: TimeoutError\n=========================== short test summary info ============================\nFAILED grade_f1.py::test_R3_download_link_carries_the_malformed_rows_as_csv\n1 failed, 3 deselected in 5.57s\n",
+            "seconds": 5.7
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f1.py",
+              "-k",
+              "R4"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 3 deselected in 3.35s\n",
+            "seconds": 3.4
+          }
+        ]
+      }
+    },
+    {
+      "task": "f1-preview-errors",
+      "arm": "rule",
+      "repeat": 0,
+      "position": 1,
+      "name": "f1-preview-errors/rule-r0",
+      "text": "",
+      "goal": "REQUIREMENTS:\nR1 POST /api/projects/<id>/clips/import_preview adds a top-level \"errors\" list to its JSON: one object per malformed row in file order with an integer \"line\", \"reasons\" (that row's reason strings) and \"raw\" (the row's original text as it appeared in the file, without its line ending); valid and duplicate rows never appear in it, and \"rows\" and \"summary\" are unchanged\nR2 Under #import-preview-summary a table #import-preview-errors lists one <tr data-line=\"<line>\"> per malformed row showing the line number and its reasons joined by \"; \", in file order; the table carries the hidden attribute whenever the last preview had no malformed rows\nR3 A link #import-preview-errors-download with download=\"import-errors.csv\" points at a CSV of the last preview's malformed rows (header line,reason,raw; one row per malformed row with several reasons joined by \"; \"; values quoted by the CSV rules); it is hidden whenever the table is\nR4 The existing tests under tests/ still pass and the preview flow (open a project, choose a CSV with malformed rows) logs no browser console errors\n",
+      "declared_paths": [
+        "app.py",
+        "templates/",
+        "static/",
+        "tests/"
+      ],
+      "entry": "planned",
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f1-preview-errors/rule-r0",
+      "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f1-preview-errors/rule-r0.goal.txt",
+      "state": "ran",
+      "started_at": "2026-10-03T11:49:17Z",
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f1-preview-errors/rule-r0/.quadratus/runs/20261003T114917Z-22462685",
+      "completed": false,
+      "seconds": 1133.1,
+      "finished_at": "2026-10-03T12:08:10Z",
+      "grade": {
+        "passed": 2,
+        "total": 4,
+        "results": [
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f1.py",
+              "-k",
+              "R1"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 3 deselected in 0.06s\n",
+            "seconds": 0.2
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f1.py",
+              "-k",
+              "R2"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": "ite-packages/playwright/sync_api/_generated.py:9061: in wait_for_selector\n    self._sync(\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_page.py:429: in wait_for_selector\n    return await self._main_frame.wait_for_selector(**locals_to_params(locals()))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_frame.py:395: in wait_for_selector\n    await self._channel.send(\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:76: in send\n    return await self._connection.wrap_api_call(\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <playwright._impl._connection.Connection object at 0x1067a7b00>\ncb = <function Channel.send.<locals>.<lambda> at 0x107488900>\nis_internal = False, title = None\n\n    async def wrap_api_call(\n        self, cb: Callable[[], Any], is_internal: bool = False, title: str = None\n    ) -> Any:\n        if self._api_zone.get():\n            return await cb()\n        task = asyncio.current_task(self._loop)\n        parsed_st = _attach_api_call_information(\n            getattr(task, \"__pw_stack__\", None) or _capture_stack_trace(),\n            is_internal,\n            title,\n        )\n        self._api_zone.set(parsed_st)\n        try:\n            return await cb()\n        except Exception as error:\n>           raise rewrite_error(error, f\"{parsed_st['apiName']}: {error}\") from None\nE           playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 5000ms exceeded.\nE           Call log:\nE             - waiting for locator(\"#import-preview-errors\")\n\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:632: TimeoutError\n=========================== short test summary info ============================\nFAILED grade_f1.py::test_R2_error_table_under_the_summary_lists_malformed_rows_in_order\n1 failed, 3 deselected in 5.79s\n",
+            "seconds": 5.9
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f1.py",
+              "-k",
+              "R3"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": "2/site-packages/playwright/sync_api/_generated.py:9061: in wait_for_selector\n    self._sync(\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_page.py:429: in wait_for_selector\n    return await self._main_frame.wait_for_selector(**locals_to_params(locals()))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_frame.py:395: in wait_for_selector\n    await self._channel.send(\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:76: in send\n    return await self._connection.wrap_api_call(\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <playwright._impl._connection.Connection object at 0x108c25760>\ncb = <function Channel.send.<locals>.<lambda> at 0x108caeb60>\nis_internal = False, title = None\n\n    async def wrap_api_call(\n        self, cb: Callable[[], Any], is_internal: bool = False, title: str = None\n    ) -> Any:\n        if self._api_zone.get():\n            return await cb()\n        task = asyncio.current_task(self._loop)\n        parsed_st = _attach_api_call_information(\n            getattr(task, \"__pw_stack__\", None) or _capture_stack_trace(),\n            is_internal,\n            title,\n        )\n        self._api_zone.set(parsed_st)\n        try:\n            return await cb()\n        except Exception as error:\n>           raise rewrite_error(error, f\"{parsed_st['apiName']}: {error}\") from None\nE           playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 5000ms exceeded.\nE           Call log:\nE             - waiting for locator(\"#import-preview-errors-download\")\n\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:632: TimeoutError\n=========================== short test summary info ============================\nFAILED grade_f1.py::test_R3_download_link_carries_the_malformed_rows_as_csv\n1 failed, 3 deselected in 5.56s\n",
+            "seconds": 5.7
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f1.py",
+              "-k",
+              "R4"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 3 deselected in 3.31s\n",
+            "seconds": 3.4
+          }
+        ]
+      }
+    },
+    {
+      "task": "f2-project-search",
+      "arm": "rule",
+      "repeat": 0,
+      "position": 0,
+      "name": "f2-project-search/rule-r0",
+      "text": "",
+      "goal": "REQUIREMENTS:\nR1 An input #project-search inside #project-list-screen, placed before #projects-container, filters the rendered .project-card elements as the user types: cards whose .name contains the query case-insensitively stay, the rest get the hidden attribute; no request goes to the server and the page does not reload\nR2 A span #project-search-count reads \"<shown> of <total> projects\" while the query is non-empty and is empty otherwise; a button #btn-project-search-clear empties the query, shows every card and empties the count\nR3 The query is mirrored into location.hash as \"#q=<URL-encoded query>\" and the hash is removed when the query is empty; loading the page with such a hash fills the input and applies the filter\nR4 When no card matches a non-empty query, #project-search-empty is shown with a one-line message; it is hidden whenever at least one card matches or the query is empty\nR5 The existing tests under tests/ still pass and the project list with a search in progress logs no browser console errors\n",
+      "declared_paths": [
+        "templates/",
+        "static/",
+        "tests/"
+      ],
+      "entry": "planned",
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f2-project-search/rule-r0",
+      "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f2-project-search/rule-r0.goal.txt",
+      "state": "ran",
+      "started_at": "2026-10-03T12:08:25Z",
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f2-project-search/rule-r0/.quadratus/runs/20261003T120825Z-e841d40d",
+      "completed": false,
+      "seconds": 902.6,
+      "finished_at": "2026-10-03T12:23:28Z",
+      "grade": {
+        "passed": 4,
+        "total": 5,
+        "results": [
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f2.py",
+              "-k",
+              "R1"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 4 deselected in 0.57s\n",
+            "seconds": 0.7
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f2.py",
+              "-k",
+              "R2"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 4 deselected in 0.43s\n",
+            "seconds": 0.5
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f2.py",
+              "-k",
+              "R3"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": " _ \n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/sync_api/_generated.py:12809: in wait_for_function\n    self._sync(\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_page.py:1153: in wait_for_function\n    return await self._main_frame.wait_for_function(**locals_to_params(locals()))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_frame.py:941: in wait_for_function\n    await self._channel.send(\"waitForFunction\", self._timeout, params)\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:76: in send\n    return await self._connection.wrap_api_call(\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <playwright._impl._connection.Connection object at 0x108d92750>\ncb = <function Channel.send.<locals>.<lambda> at 0x109c21580>\nis_internal = False, title = None\n\n    async def wrap_api_call(\n        self, cb: Callable[[], Any], is_internal: bool = False, title: str = None\n    ) -> Any:\n        if self._api_zone.get():\n            return await cb()\n        task = asyncio.current_task(self._loop)\n        parsed_st = _attach_api_call_information(\n            getattr(task, \"__pw_stack__\", None) or _capture_stack_trace(),\n            is_internal,\n            title,\n        )\n        self._api_zone.set(parsed_st)\n        try:\n            return await cb()\n        except Exception as error:\n>           raise rewrite_error(error, f\"{parsed_st['apiName']}: {error}\") from None\nE           playwright._impl._errors.TimeoutError: Page.wait_for_function: Timeout 5000ms exceeded.\n\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:632: TimeoutError\n=========================== short test summary info ============================\nFAILED grade_f2.py::test_R3_the_query_lives_in_the_url_hash_and_is_restored_on_load\n1 failed, 4 deselected in 5.49s\n",
+            "seconds": 5.6
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f2.py",
+              "-k",
+              "R4"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 4 deselected in 0.36s\n",
+            "seconds": 0.4
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f2.py",
+              "-k",
+              "R5"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 4 deselected in 3.30s\n",
+            "seconds": 3.4
+          }
+        ]
+      }
+    },
+    {
+      "task": "f2-project-search",
+      "arm": "jev",
+      "repeat": 0,
+      "position": 1,
+      "name": "f2-project-search/jev-r0",
+      "text": "",
+      "goal": "REQUIREMENTS:\nR1 An input #project-search inside #project-list-screen, placed before #projects-container, filters the rendered .project-card elements as the user types: cards whose .name contains the query case-insensitively stay, the rest get the hidden attribute; no request goes to the server and the page does not reload\nR2 A span #project-search-count reads \"<shown> of <total> projects\" while the query is non-empty and is empty otherwise; a button #btn-project-search-clear empties the query, shows every card and empties the count\nR3 The query is mirrored into location.hash as \"#q=<URL-encoded query>\" and the hash is removed when the query is empty; loading the page with such a hash fills the input and applies the filter\nR4 When no card matches a non-empty query, #project-search-empty is shown with a one-line message; it is hidden whenever at least one card matches or the query is empty\nR5 The existing tests under tests/ still pass and the project list with a search in progress logs no browser console errors\n",
+      "declared_paths": [
+        "templates/",
+        "static/",
+        "tests/"
+      ],
+      "entry": "planned",
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f2-project-search/jev-r0",
+      "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f2-project-search/jev-r0.goal.txt",
+      "state": "ran",
+      "started_at": "2026-10-03T12:08:25Z",
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f2-project-search/jev-r0/.quadratus/runs/20261003T120825Z-321860d7",
+      "completed": false,
+      "seconds": 1050.0,
+      "finished_at": "2026-10-03T12:25:55Z",
+      "grade": {
+        "passed": 4,
+        "total": 5,
+        "results": [
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f2.py",
+              "-k",
+              "R1"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 4 deselected in 0.51s\n",
+            "seconds": 0.6
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f2.py",
+              "-k",
+              "R2"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 4 deselected in 0.42s\n",
+            "seconds": 0.5
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f2.py",
+              "-k",
+              "R3"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": " _ \n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/sync_api/_generated.py:12809: in wait_for_function\n    self._sync(\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_page.py:1153: in wait_for_function\n    return await self._main_frame.wait_for_function(**locals_to_params(locals()))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_frame.py:941: in wait_for_function\n    await self._channel.send(\"waitForFunction\", self._timeout, params)\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:76: in send\n    return await self._connection.wrap_api_call(\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <playwright._impl._connection.Connection object at 0x107555490>\ncb = <function Channel.send.<locals>.<lambda> at 0x10757ad40>\nis_internal = False, title = None\n\n    async def wrap_api_call(\n        self, cb: Callable[[], Any], is_internal: bool = False, title: str = None\n    ) -> Any:\n        if self._api_zone.get():\n            return await cb()\n        task = asyncio.current_task(self._loop)\n        parsed_st = _attach_api_call_information(\n            getattr(task, \"__pw_stack__\", None) or _capture_stack_trace(),\n            is_internal,\n            title,\n        )\n        self._api_zone.set(parsed_st)\n        try:\n            return await cb()\n        except Exception as error:\n>           raise rewrite_error(error, f\"{parsed_st['apiName']}: {error}\") from None\nE           playwright._impl._errors.TimeoutError: Page.wait_for_function: Timeout 5000ms exceeded.\n\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:632: TimeoutError\n=========================== short test summary info ============================\nFAILED grade_f2.py::test_R3_the_query_lives_in_the_url_hash_and_is_restored_on_load\n1 failed, 4 deselected in 5.49s\n",
+            "seconds": 5.6
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f2.py",
+              "-k",
+              "R4"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 4 deselected in 0.36s\n",
+            "seconds": 0.4
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f2.py",
+              "-k",
+              "R5"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 4 deselected in 3.24s\n",
+            "seconds": 3.3
+          }
+        ]
+      }
+    },
+    {
+      "task": "f3-project-rename",
+      "arm": "jev",
+      "repeat": 0,
+      "position": 0,
+      "name": "f3-project-rename/jev-r0",
+      "text": "",
+      "goal": "REQUIREMENTS:\nR1 PATCH /api/projects/<id> with JSON {\"name\": ...} trims the name and returns 200 with the full updated project; it returns 400 with a JSON \"error\" naming the rule when the trimmed name is empty, longer than 80 characters, or equal case-insensitively to another project's name (a project may keep its own name); an unknown id returns 404\nR2 The new name is persisted through _save_projects: a fresh _load_projects() and GET /api/projects both show it, and no .projects-*.tmp file is left beside projects.json\nR3 Each .project-card has a button .rename-btn; clicking it shows an input .rename-input prefilled with the name; Enter sends the PATCH and updates the card's .name without a reload; Escape restores the card unchanged and sends nothing; a 400 shows the server's \"error\" text in an element .rename-error inside the card and leaves the name unchanged\nR4 Renaming changes nothing but \"name\": id, video_filename, tag_types, players, clips (with their recordings) and filter_presets are identical before and after\nR5 The existing tests under tests/ still pass and the rename flow logs no browser console errors\n",
+      "declared_paths": [
+        "app.py",
+        "templates/",
+        "static/",
+        "tests/"
+      ],
+      "entry": "planned",
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f3-project-rename/jev-r0",
+      "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f3-project-rename/jev-r0.goal.txt",
+      "state": "ran",
+      "started_at": "2026-10-03T12:26:06Z",
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f3-project-rename/jev-r0/.quadratus/runs/20261003T122606Z-57397da3",
+      "completed": false,
+      "seconds": 1105.7,
+      "finished_at": "2026-10-03T12:44:32Z",
+      "grade": {
+        "passed": 3,
+        "total": 5,
+        "results": [
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f3.py",
+              "-k",
+              "R1"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": "  for bad, needle in ((\"   \", \"empty\"), (\"x\" * 81, \"long\"), (\"second\", \"\")):\n            rv = _patch(client, first[\"id\"], bad)\n            assert rv.status_code == 400, (bad[:10], rv.status_code, rv.data[:200])\n            err = rv.get_json(silent=True)\n            assert isinstance(err, dict) and isinstance(err.get(\"error\"), str) and err[\"error\"], rv.data[:200]\n            if needle:\n                assert needle in err[\"error\"].lower() or (\"required\" in err[\"error\"].lower() and needle == \"empty\") \\\n                    or (\"80\" in err[\"error\"] and needle == \"long\"), err\n        rv = _patch(client, first[\"id\"], \"SECOND\")\n        assert rv.status_code == 400, \"a duplicate is matched case-insensitively\"\n>       assert \"second\" in rv.get_json()[\"error\"].lower() or \"duplicate\" in rv.get_json()[\"error\"].lower() or \"exists\" in rv.get_json()[\"error\"].lower()\nE       AssertionError: assert ('second' in 'project name is already in use' or 'duplicate' in 'project name is already in use' or 'exists' in 'project name is already in use')\nE        +  where 'project name is already in use' = <built-in method lower of str object at 0x1099d0cb0>()\nE        +    where <built-in method lower of str object at 0x1099d0cb0> = 'Project name is already in use'.lower\nE        +  and   'project name is already in use' = <built-in method lower of str object at 0x1099d0bc0>()\nE        +    where <built-in method lower of str object at 0x1099d0bc0> = 'Project name is already in use'.lower\nE        +  and   'project name is already in use' = <built-in method lower of str object at 0x1099d0f30>()\nE        +    where <built-in method lower of str object at 0x1099d0f30> = 'Project name is already in use'.lower\n\n/Users/davisfox/Documents/GitHub/quadratus/tools/jev_stage_b/graders/grade_f3.py:31: AssertionError\n=========================== short test summary info ============================\nFAILED grade_f3.py::test_R1_patch_trims_validates_and_answers_with_the_project\n1 failed, 4 deselected in 0.08s\n",
+            "seconds": 0.2
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f3.py",
+              "-k",
+              "R2"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 4 deselected in 0.07s\n",
+            "seconds": 0.2
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f3.py",
+              "-k",
+              "R3"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": ")\n        first = page.locator(\".project-card\").first\n        first.locator(\".rename-btn\").click()\n        box = first.locator(\".rename-input\")\n        box.wait_for(state=\"visible\", timeout=5000)\n        assert box.input_value() == \"One\"\n        box.fill(\"One renamed\")\n        box.press(\"Enter\")\n        page.wait_for_function(\"() => document.querySelector('.project-card .name').textContent.trim() === 'One renamed'\", timeout=5000)\n        assert len(patches) == 1, patches\n        assert page.evaluate(\"() => window.__graderMarker\") == \"kept\", \"the page reloaded\"\n        assert [p[\"name\"] for p in live.api(\"/api/projects\")][0] == \"One renamed\"\n        first = page.locator(\".project-card\").first\n        first.locator(\".rename-btn\").click()\n        box = first.locator(\".rename-input\")\n        box.wait_for(state=\"visible\", timeout=5000)\n        box.fill(\"Should not stick\")\n        box.press(\"Escape\")\n        page.wait_for_timeout(300)\n        assert page.evaluate(\"() => document.querySelector('.project-card .name').textContent.trim()\") == \"One renamed\"\n        assert len(patches) == 1, \"Escape must not send a request\"\n        first.locator(\".rename-btn\").click()\n        box = first.locator(\".rename-input\")\n        box.wait_for(state=\"visible\", timeout=5000)\n        box.fill(\"two\")\n        box.press(\"Enter\")\n        err = first.locator(\".rename-error\")\n        err.wait_for(state=\"visible\", timeout=5000)\n        shown = err.inner_text().strip()\n        assert shown, \"the server's error text must be shown\"\n        assert len(patches) == 2\n>       assert page.evaluate(\"() => document.querySelector('.project-card .name').textContent.trim()\") == \"One renamed\"\nE       AssertionError: assert '' == 'One renamed'\nE         \nE         - One renamed\n\ngrade_f3.py:91: AssertionError\n=========================== short test summary info ============================\nFAILED grade_f3.py::test_R3_inline_rename_control_enter_saves_escape_cancels_and_errors_show\n1 failed, 4 deselected in 0.90s\n",
+            "seconds": 1.0
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f3.py",
+              "-k",
+              "R4"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 4 deselected in 0.05s\n",
+            "seconds": 0.1
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f3.py",
+              "-k",
+              "R5"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 4 deselected in 3.07s\n",
+            "seconds": 3.2
+          }
+        ]
+      }
+    },
+    {
+      "task": "f3-project-rename",
+      "arm": "rule",
+      "repeat": 0,
+      "position": 1,
+      "name": "f3-project-rename/rule-r0",
+      "text": "",
+      "goal": "REQUIREMENTS:\nR1 PATCH /api/projects/<id> with JSON {\"name\": ...} trims the name and returns 200 with the full updated project; it returns 400 with a JSON \"error\" naming the rule when the trimmed name is empty, longer than 80 characters, or equal case-insensitively to another project's name (a project may keep its own name); an unknown id returns 404\nR2 The new name is persisted through _save_projects: a fresh _load_projects() and GET /api/projects both show it, and no .projects-*.tmp file is left beside projects.json\nR3 Each .project-card has a button .rename-btn; clicking it shows an input .rename-input prefilled with the name; Enter sends the PATCH and updates the card's .name without a reload; Escape restores the card unchanged and sends nothing; a 400 shows the server's \"error\" text in an element .rename-error inside the card and leaves the name unchanged\nR4 Renaming changes nothing but \"name\": id, video_filename, tag_types, players, clips (with their recordings) and filter_presets are identical before and after\nR5 The existing tests under tests/ still pass and the rename flow logs no browser console errors\n",
+      "declared_paths": [
+        "app.py",
+        "templates/",
+        "static/",
+        "tests/"
+      ],
+      "entry": "planned",
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f3-project-rename/rule-r0",
+      "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f3-project-rename/rule-r0.goal.txt",
+      "state": "ran",
+      "started_at": "2026-10-03T12:26:06Z",
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f3-project-rename/rule-r0/.quadratus/runs/20261003T122606Z-3a03f56f",
+      "completed": false,
+      "seconds": 868.3,
+      "finished_at": "2026-10-03T12:40:34Z",
+      "grade": {
+        "passed": 2,
+        "total": 5,
+        "results": [
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f3.py",
+              "-k",
+              "R1"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": "econd\", \"\")):\n            rv = _patch(client, first[\"id\"], bad)\n            assert rv.status_code == 400, (bad[:10], rv.status_code, rv.data[:200])\n            err = rv.get_json(silent=True)\n            assert isinstance(err, dict) and isinstance(err.get(\"error\"), str) and err[\"error\"], rv.data[:200]\n            if needle:\n                assert needle in err[\"error\"].lower() or (\"required\" in err[\"error\"].lower() and needle == \"empty\") \\\n                    or (\"80\" in err[\"error\"] and needle == \"long\"), err\n        rv = _patch(client, first[\"id\"], \"SECOND\")\n        assert rv.status_code == 400, \"a duplicate is matched case-insensitively\"\n>       assert \"second\" in rv.get_json()[\"error\"].lower() or \"duplicate\" in rv.get_json()[\"error\"].lower() or \"exists\" in rv.get_json()[\"error\"].lower()\nE       AssertionError: assert ('second' in 'another project already has that name' or 'duplicate' in 'another project already has that name' or 'exists' in 'another project already has that name')\nE        +  where 'another project already has that name' = <built-in method lower of str object at 0x10977ccb0>()\nE        +    where <built-in method lower of str object at 0x10977ccb0> = 'Another project already has that name'.lower\nE        +  and   'another project already has that name' = <built-in method lower of str object at 0x10977cee0>()\nE        +    where <built-in method lower of str object at 0x10977cee0> = 'Another project already has that name'.lower\nE        +  and   'another project already has that name' = <built-in method lower of str object at 0x10977cf30>()\nE        +    where <built-in method lower of str object at 0x10977cf30> = 'Another project already has that name'.lower\n\n/Users/davisfox/Documents/GitHub/quadratus/tools/jev_stage_b/graders/grade_f3.py:31: AssertionError\n=========================== short test summary info ============================\nFAILED grade_f3.py::test_R1_patch_trims_validates_and_answers_with_the_project\n1 failed, 4 deselected in 0.10s\n",
+            "seconds": 0.2
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f3.py",
+              "-k",
+              "R2"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 4 deselected in 0.07s\n",
+            "seconds": 0.2
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f3.py",
+              "-k",
+              "R3"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": "t/sync_api/_generated.py:18032: in click\n    self._sync(\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_locator.py:165: in click\n    return await self._frame._click(self._selector, strict=True, **params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_frame.py:594: in _click\n    await self._channel.send(\"click\", self._timeout, locals_to_params(locals()))\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:76: in send\n    return await self._connection.wrap_api_call(\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <playwright._impl._connection.Connection object at 0x10b17de20>\ncb = <function Channel.send.<locals>.<lambda> at 0x10ba04b80>\nis_internal = False, title = None\n\n    async def wrap_api_call(\n        self, cb: Callable[[], Any], is_internal: bool = False, title: str = None\n    ) -> Any:\n        if self._api_zone.get():\n            return await cb()\n        task = asyncio.current_task(self._loop)\n        parsed_st = _attach_api_call_information(\n            getattr(task, \"__pw_stack__\", None) or _capture_stack_trace(),\n            is_internal,\n            title,\n        )\n        self._api_zone.set(parsed_st)\n        try:\n            return await cb()\n        except Exception as error:\n>           raise rewrite_error(error, f\"{parsed_st['apiName']}: {error}\") from None\nE           playwright._impl._errors.TimeoutError: Locator.click: Timeout 5000ms exceeded.\nE           Call log:\nE             - waiting for locator(\".project-card\").first.locator(\".rename-btn\")\n\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:632: TimeoutError\n=========================== short test summary info ============================\nFAILED grade_f3.py::test_R3_inline_rename_control_enter_saves_escape_cancels_and_errors_show\n1 failed, 4 deselected in 5.73s\n",
+            "seconds": 5.8
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f3.py",
+              "-k",
+              "R4"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 4 deselected in 0.05s\n",
+            "seconds": 0.1
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f3.py",
+              "-k",
+              "R5"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": "nc_api/_generated.py:18032: in click\n    self._sync(\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_locator.py:165: in click\n    return await self._frame._click(self._selector, strict=True, **params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_frame.py:594: in _click\n    await self._channel.send(\"click\", self._timeout, locals_to_params(locals()))\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:76: in send\n    return await self._connection.wrap_api_call(\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <playwright._impl._connection.Connection object at 0x106f20b00>\ncb = <function Channel.send.<locals>.<lambda> at 0x107de4b80>\nis_internal = False, title = None\n\n    async def wrap_api_call(\n        self, cb: Callable[[], Any], is_internal: bool = False, title: str = None\n    ) -> Any:\n        if self._api_zone.get():\n            return await cb()\n        task = asyncio.current_task(self._loop)\n        parsed_st = _attach_api_call_information(\n            getattr(task, \"__pw_stack__\", None) or _capture_stack_trace(),\n            is_internal,\n            title,\n        )\n        self._api_zone.set(parsed_st)\n        try:\n            return await cb()\n        except Exception as error:\n>           raise rewrite_error(error, f\"{parsed_st['apiName']}: {error}\") from None\nE           playwright._impl._errors.TimeoutError: Locator.click: Timeout 5000ms exceeded.\nE           Call log:\nE             - waiting for locator(\".project-card\").first.locator(\".rename-btn\")\n\n../../../../stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:632: TimeoutError\n=========================== short test summary info ============================\nFAILED grade_f3.py::test_R5_baseline_tests_still_pass_and_the_rename_flow_logs_no_console_errors\n1 failed, 4 deselected in 5.46s\n",
+            "seconds": 5.5
+          }
+        ]
+      }
+    },
+    {
+      "task": "f4-tags-export",
+      "arm": "rule",
+      "repeat": 0,
+      "position": 0,
+      "name": "f4-tags-export/rule-r0",
+      "text": "",
+      "goal": "REQUIREMENTS:\nR1 GET /api/projects/<id>/export/manifest.csv returns 200 text/csv whose header is exactly \"Clip ID,Tag Type,Start (s),End (s),Label,Notes,Players\" with one row per clip in the project's clip order; an unknown id returns 404 JSON\nR2 GET /api/export/manifest.csv returns every project's clips with a leading \"Project\" column (the project name) before the same columns, projects in list order\nR3 Values containing commas, quotes or newlines are quoted so the csv module reads back the original text; Players uses the import preview's form: \"#<number> <name>\" per player (bare \"<name>\" when the player has no number), joined by \"; \"\nR4 Both responses carry Content-Disposition: attachment with filename \"<project name with spaces as _>_manifest.csv\" (\"all_projects_manifest.csv\" for the global export), and each .project-card has an anchor .export-manifest whose href is that project's export URL\nR5 Round trip: uploading a project's export to the import preview of a project with the same tag types and players and no clips yields summary.malformed 0 and summary.valid equal to the exported clip count\nR6 The existing tests under tests/ still pass\n",
+      "declared_paths": [
+        "app.py",
+        "templates/",
+        "static/",
+        "tests/"
+      ],
+      "entry": "planned",
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f4-tags-export/rule-r0",
+      "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f4-tags-export/rule-r0.goal.txt",
+      "state": "ran",
+      "started_at": "2026-10-03T12:44:36Z",
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f4-tags-export/rule-r0/.quadratus/runs/20261003T124436Z-f9125ef0",
+      "completed": false,
+      "seconds": 775.7,
+      "finished_at": "2026-10-03T12:57:32Z",
+      "grade": {
+        "passed": 1,
+        "total": 6,
+        "results": [
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f4.py",
+              "-k",
+              "R1"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_____ test_R1_per_project_export_has_the_exact_header_and_one_row_per_clip _____\n\nclient = <FlaskClient <Flask 'app'>>\n\n    def test_R1_per_project_export_has_the_exact_header_and_one_row_per_clip(client):\n        project = _seed(client)\n        rv = client.get(f\"/api/projects/{project['id']}/export/manifest.csv\")\n>       assert rv.status_code == 200, rv.data[:200]\nE       AssertionError: b'<!doctype html>\nE         <html lang=en>\nE         <title>404 Not Found</title>\nE         <h1>Not Found</h1>\nE         <p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try agai'\nE       assert 404 == 200\nE        +  where 404 = <WrapperTestResponse streamed [404 NOT FOUND]>.status_code\n\n/Users/davisfox/Documents/GitHub/quadratus/tools/jev_stage_b/graders/grade_f4.py:28: AssertionError\n=========================== short test summary info ============================\nFAILED grade_f4.py::test_R1_per_project_export_has_the_exact_header_and_one_row_per_clip\n1 failed, 5 deselected in 0.10s\n",
+            "seconds": 0.2
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f4.py",
+              "-k",
+              "R2"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________ test_R2_global_export_prefixes_the_project_name ________________\n\nclient = <FlaskClient <Flask 'app'>>\n\n    def test_R2_global_export_prefixes_the_project_name(client):\n        first = _seed(client, \"First game\")\n        second = seed_project(client, \"Second game\", players=PLAYERS,\n                              clips=[{\"tag_type\": \"Pass\", \"start\": 2, \"end\": 3, \"label\": \"s\", \"notes\": \"\", \"players\": []}])\n        rv = client.get(\"/api/export/manifest.csv\")\n>       assert rv.status_code == 200, rv.data[:200]\nE       AssertionError: b'<!doctype html>\nE         <html lang=en>\nE         <title>404 Not Found</title>\nE         <h1>Not Found</h1>\nE         <p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try agai'\nE       assert 404 == 200\nE        +  where 404 = <WrapperTestResponse streamed [404 NOT FOUND]>.status_code\n\n/Users/davisfox/Documents/GitHub/quadratus/tools/jev_stage_b/graders/grade_f4.py:44: AssertionError\n=========================== short test summary info ============================\nFAILED grade_f4.py::test_R2_global_export_prefixes_the_project_name - Asserti...\n1 failed, 5 deselected in 0.06s\n",
+            "seconds": 0.1
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f4.py",
+              "-k",
+              "R3"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n__________ test_R3_values_are_quoted_and_players_use_the_import_form ___________\n\nclient = <FlaskClient <Flask 'app'>>\n\n    def test_R3_values_are_quoted_and_players_use_the_import_form(client):\n        project = _seed(client)\n        rv = client.get(f\"/api/projects/{project['id']}/export/manifest.csv\")\n        rows = parse_csv(rv.data.decode(\"utf-8-sig\"))\n        goal = rows[2]\n>       assert goal[4] == 'say \"hi\", twice', goal\n               ^^^^^^^\nE       IndexError: list index out of range\n\n/Users/davisfox/Documents/GitHub/quadratus/tools/jev_stage_b/graders/grade_f4.py:56: IndexError\n=========================== short test summary info ============================\nFAILED grade_f4.py::test_R3_values_are_quoted_and_players_use_the_import_form\n1 failed, 5 deselected in 0.06s\n",
+            "seconds": 0.1
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f4.py",
+              "-k",
+              "R4"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n__________________ test_R4_content_disposition_and_card_links __________________\n\nclient = <FlaskClient <Flask 'app'>>\nlive_factory = <function live_factory.<locals>.start at 0x107942700>\npage_factory = <function page_factory.<locals>.make at 0x107f70680>\n\n    def test_R4_content_disposition_and_card_links(client, live_factory, page_factory):\n        project = _seed(client, \"My Big Game\")\n        rv = client.get(f\"/api/projects/{project['id']}/export/manifest.csv\")\n        disposition = rv.headers.get(\"Content-Disposition\", \"\")\n>       assert \"attachment\" in disposition and \"My_Big_Game_manifest.csv\" in disposition, disposition\nE       AssertionError: \nE       assert ('attachment' in '')\n\n/Users/davisfox/Documents/GitHub/quadratus/tools/jev_stage_b/graders/grade_f4.py:66: AssertionError\n=========================== short test summary info ============================\nFAILED grade_f4.py::test_R4_content_disposition_and_card_links - AssertionErr...\n1 failed, 5 deselected in 0.43s\n",
+            "seconds": 0.5
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f4.py",
+              "-k",
+              "R5"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n__________ test_R5_the_export_round_trips_through_the_import_preview ___________\n\nclient = <FlaskClient <Flask 'app'>>\n\n    def test_R5_the_export_round_trips_through_the_import_preview(client):\n        project = _seed(client)\n        export = client.get(f\"/api/projects/{project['id']}/export/manifest.csv\").data\n        target = seed_project(client, \"Target\", players=PLAYERS)\n        rv = client.post(f\"/api/projects/{target['id']}/clips/import_preview\",\n                         data={\"file\": (io.BytesIO(export), \"manifest.csv\")}, content_type=\"multipart/form-data\")\n>       assert rv.status_code == 200, rv.data[:300]\nE       AssertionError: b'{\"code\":\"bad_request\",\"error\":\"Missing required header\"}\nE         '\nE       assert 400 == 200\nE        +  where 400 = <WrapperTestResponse streamed [400 BAD REQUEST]>.status_code\n\n/Users/davisfox/Documents/GitHub/quadratus/tools/jev_stage_b/graders/grade_f4.py:85: AssertionError\n=========================== short test summary info ============================\nFAILED grade_f4.py::test_R5_the_export_round_trips_through_the_import_preview\n1 failed, 5 deselected in 0.06s\n",
+            "seconds": 0.1
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f4.py",
+              "-k",
+              "R6"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 5 deselected in 2.36s\n",
+            "seconds": 2.4
+          }
+        ]
+      }
+    },
+    {
+      "task": "f4-tags-export",
+      "arm": "jev",
+      "repeat": 0,
+      "position": 1,
+      "name": "f4-tags-export/jev-r0",
+      "text": "",
+      "goal": "REQUIREMENTS:\nR1 GET /api/projects/<id>/export/manifest.csv returns 200 text/csv whose header is exactly \"Clip ID,Tag Type,Start (s),End (s),Label,Notes,Players\" with one row per clip in the project's clip order; an unknown id returns 404 JSON\nR2 GET /api/export/manifest.csv returns every project's clips with a leading \"Project\" column (the project name) before the same columns, projects in list order\nR3 Values containing commas, quotes or newlines are quoted so the csv module reads back the original text; Players uses the import preview's form: \"#<number> <name>\" per player (bare \"<name>\" when the player has no number), joined by \"; \"\nR4 Both responses carry Content-Disposition: attachment with filename \"<project name with spaces as _>_manifest.csv\" (\"all_projects_manifest.csv\" for the global export), and each .project-card has an anchor .export-manifest whose href is that project's export URL\nR5 Round trip: uploading a project's export to the import preview of a project with the same tag types and players and no clips yields summary.malformed 0 and summary.valid equal to the exported clip count\nR6 The existing tests under tests/ still pass\n",
+      "declared_paths": [
+        "app.py",
+        "templates/",
+        "static/",
+        "tests/"
+      ],
+      "entry": "planned",
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f4-tags-export/jev-r0",
+      "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f4-tags-export/jev-r0.goal.txt",
+      "state": "ran",
+      "started_at": "2026-10-03T12:44:36Z",
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f4-tags-export/jev-r0/.quadratus/runs/20261003T124436Z-6d259913",
+      "completed": false,
+      "seconds": 841.2,
+      "finished_at": "2026-10-03T12:58:37Z",
+      "grade": {
+        "passed": 5,
+        "total": 6,
+        "results": [
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f4.py",
+              "-k",
+              "R1"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 5 deselected in 0.05s\n",
+            "seconds": 0.1
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f4.py",
+              "-k",
+              "R2"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 5 deselected in 0.05s\n",
+            "seconds": 0.1
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f4.py",
+              "-k",
+              "R3"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 5 deselected in 0.07s\n",
+            "seconds": 0.2
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f4.py",
+              "-k",
+              "R4"
+            ],
+            "exit": 1,
+            "passed": false,
+            "output_tail": "visfox/Documents/GitHub/stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_page.py:429: in wait_for_selector\n    return await self._main_frame.wait_for_selector(**locals_to_params(locals()))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/Users/davisfox/Documents/GitHub/stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_frame.py:395: in wait_for_selector\n    await self._channel.send(\n/Users/davisfox/Documents/GitHub/stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:76: in send\n    return await self._connection.wrap_api_call(\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <playwright._impl._connection.Connection object at 0x10b9dbf80>\ncb = <function Channel.send.<locals>.<lambda> at 0x10ba23100>\nis_internal = False, title = None\n\n    async def wrap_api_call(\n        self, cb: Callable[[], Any], is_internal: bool = False, title: str = None\n    ) -> Any:\n        if self._api_zone.get():\n            return await cb()\n        task = asyncio.current_task(self._loop)\n        parsed_st = _attach_api_call_information(\n            getattr(task, \"__pw_stack__\", None) or _capture_stack_trace(),\n            is_internal,\n            title,\n        )\n        self._api_zone.set(parsed_st)\n        try:\n            return await cb()\n        except Exception as error:\n>           raise rewrite_error(error, f\"{parsed_st['apiName']}: {error}\") from None\nE           playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 5000ms exceeded.\nE           Call log:\nE             - waiting for locator(\".project-card .export-manifest\") to be visible\n\n/Users/davisfox/Documents/GitHub/stage-b/venv/lib/python3.12/site-packages/playwright/_impl/_connection.py:632: TimeoutError\n=========================== short test summary info ============================\nFAILED grade_f4.py::test_R4_content_disposition_and_card_links - playwright._...\n1 failed, 5 deselected in 5.58s\n",
+            "seconds": 5.7
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f4.py",
+              "-k",
+              "R5"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 5 deselected in 0.05s\n",
+            "seconds": 0.1
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f4.py",
+              "-k",
+              "R6"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 5 deselected in 2.37s\n",
+            "seconds": 2.5
+          }
+        ]
+      }
+    },
+    {
+      "task": "f5-empty-state",
+      "arm": "jev",
+      "repeat": 0,
+      "position": 0,
+      "name": "f5-empty-state/jev-r0",
+      "text": "",
+      "goal": "REQUIREMENTS:\nR1 With no projects, #projects-container holds a panel #projects-empty with a one-line explanation and a button #btn-projects-empty-create that moves focus to #new-project-name; the old inline \"No projects yet\" paragraph is gone\nR2 Creating the first project through the form hides the panel (hidden attribute) and shows its card without a reload\nR3 Deleting the last project through its card shows the panel again without a reload\nR4 The existing tests under tests/ still pass and both transitions log no browser console errors\n",
+      "declared_paths": [
+        "templates/",
+        "static/",
+        "tests/"
+      ],
+      "entry": "planned",
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f5-empty-state/jev-r0",
+      "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f5-empty-state/jev-r0.goal.txt",
+      "state": "ran",
+      "started_at": "2026-10-03T12:58:46Z",
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f5-empty-state/jev-r0/.quadratus/runs/20261003T125846Z-fd635af7",
+      "completed": false,
+      "seconds": 1007.5,
+      "finished_at": "2026-10-03T13:15:34Z",
+      "integrity": "before grading: RuntimeError: the engine checkout /Users/davisfox/Documents/GitHub/quadratus has uncommitted changes; a cell must run on one SHA",
+      "grade": null,
+      "grade_withheld": "RuntimeError: the engine checkout /Users/davisfox/Documents/GitHub/quadratus has uncommitted changes; a cell must run on one SHA"
+    },
+    {
+      "task": "f5-empty-state",
+      "arm": "rule",
+      "repeat": 0,
+      "position": 1,
+      "name": "f5-empty-state/rule-r0",
+      "text": "",
+      "goal": "REQUIREMENTS:\nR1 With no projects, #projects-container holds a panel #projects-empty with a one-line explanation and a button #btn-projects-empty-create that moves focus to #new-project-name; the old inline \"No projects yet\" paragraph is gone\nR2 Creating the first project through the form hides the panel (hidden attribute) and shows its card without a reload\nR3 Deleting the last project through its card shows the panel again without a reload\nR4 The existing tests under tests/ still pass and both transitions log no browser console errors\n",
+      "declared_paths": [
+        "templates/",
+        "static/",
+        "tests/"
+      ],
+      "entry": "planned",
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f5-empty-state/rule-r0",
+      "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f5-empty-state/rule-r0.goal.txt",
+      "state": "ran",
+      "started_at": "2026-10-03T12:58:46Z",
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f5-empty-state/rule-r0/.quadratus/runs/20261003T125846Z-62dfa605",
+      "completed": false,
+      "seconds": 562.3,
+      "finished_at": "2026-10-03T13:08:08Z",
+      "grade": {
+        "passed": 4,
+        "total": 4,
+        "results": [
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f5.py",
+              "-k",
+              "R1"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 3 deselected in 0.66s\n",
+            "seconds": 0.8
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f5.py",
+              "-k",
+              "R2"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 3 deselected in 0.46s\n",
+            "seconds": 0.6
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f5.py",
+              "-k",
+              "R3"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 3 deselected in 0.45s\n",
+            "seconds": 0.5
+          },
+          {
+            "argv": [
+              "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q",
+              "-p",
+              "no:cacheprovider",
+              "grade_f5.py",
+              "-k",
+              "R4"
+            ],
+            "exit": 0,
+            "passed": true,
+            "output_tail": ".                                                                        [100%]\n1 passed, 3 deselected in 2.35s\n",
+            "seconds": 2.4
+          }
+        ]
+      }
+    },
+    {
+      "task": "f6-download-guard",
+      "arm": "rule",
+      "repeat": 0,
+      "position": 0,
+      "name": "f6-download-guard/rule-r0",
+      "text": "",
+      "goal": "REQUIREMENTS:\nR1 GET /videos/<name> and GET /recordings/<name> resolve the requested name against VIDEOS_DIR or RECORDINGS_DIR and refuse any request whose real path is outside that directory or passes through a symlink with status 403 and the JSON body {\"error\": \"denied\"}\nR2 The refused shapes include a \"..\" segment (../projects.json), the same with URL-encoded dots (%2e%2e/projects.json), a nested one (sub/../../projects.json), a symlink inside the directory whose target lies outside it, and a symlinked directory; the route must accept names containing \"/\" so the guard, not routing, answers them\nR3 Every refusal is logged exactly once through app.logger at WARNING level with the client address and the word \"denied\", and the message never contains the requested name\nR4 A regular file inside the directory is served unchanged with status 200 and its bytes; a missing regular name still returns 404\nR5 The existing tests under tests/ still pass\n",
+      "declared_paths": [
+        "app.py",
+        "tests/"
+      ],
+      "entry": "planned",
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f6-download-guard/rule-r0",
+      "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f6-download-guard/rule-r0.goal.txt",
+      "state": "prepared"
+    },
+    {
+      "task": "f6-download-guard",
+      "arm": "jev",
+      "repeat": 0,
+      "position": 1,
+      "name": "f6-download-guard/jev-r0",
+      "text": "",
+      "goal": "REQUIREMENTS:\nR1 GET /videos/<name> and GET /recordings/<name> resolve the requested name against VIDEOS_DIR or RECORDINGS_DIR and refuse any request whose real path is outside that directory or passes through a symlink with status 403 and the JSON body {\"error\": \"denied\"}\nR2 The refused shapes include a \"..\" segment (../projects.json), the same with URL-encoded dots (%2e%2e/projects.json), a nested one (sub/../../projects.json), a symlink inside the directory whose target lies outside it, and a symlinked directory; the route must accept names containing \"/\" so the guard, not routing, answers them\nR3 Every refusal is logged exactly once through app.logger at WARNING level with the client address and the word \"denied\", and the message never contains the requested name\nR4 A regular file inside the directory is served unchanged with status 200 and its bytes; a missing regular name still returns 404\nR5 The existing tests under tests/ still pass\n",
+      "declared_paths": [
+        "app.py",
+        "tests/"
+      ],
+      "entry": "planned",
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f6-download-guard/jev-r0",
+      "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f6-download-guard/jev-r0.goal.txt",
+      "state": "prepared"
+    },
+    {
+      "task": "f7-projects-migration",
+      "arm": "jev",
+      "repeat": 0,
+      "position": 0,
+      "name": "f7-projects-migration/jev-r0",
+      "text": "",
+      "goal": "REQUIREMENTS:\nR1 _save_projects writes projects.json as {\"schema_version\": 1, \"projects\": {<id>: <project>, ...}} and _load_projects returns the projects mapping alone\nR2 A legacy file holding the bare projects mapping is loaded with every project, tag type, player, clip and recording reference preserved exactly and rewritten once in the versioned shape on that first load; a second load rewrites nothing\nR3 Before that rewrite the legacy file's bytes are copied to projects.json.bak-<UTC timestamp YYYYmmddTHHMMSSZ> in the same directory\nR4 The rewrite is atomic: if os.replace fails mid-write, projects.json still holds the legacy bytes and no partial or temporary file is left\nR5 A file whose schema_version is greater than 1 makes _load_projects raise an error naming both versions, and GET /api/projects answers 500 with a JSON \"error\" naming both\nR6 The existing tests under tests/ still pass\n",
+      "declared_paths": [
+        "app.py",
+        "tests/"
+      ],
+      "entry": "planned",
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f7-projects-migration/jev-r0",
+      "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f7-projects-migration/jev-r0.goal.txt",
+      "state": "prepared"
+    },
+    {
+      "task": "f7-projects-migration",
+      "arm": "rule",
+      "repeat": 0,
+      "position": 1,
+      "name": "f7-projects-migration/rule-r0",
+      "text": "",
+      "goal": "REQUIREMENTS:\nR1 _save_projects writes projects.json as {\"schema_version\": 1, \"projects\": {<id>: <project>, ...}} and _load_projects returns the projects mapping alone\nR2 A legacy file holding the bare projects mapping is loaded with every project, tag type, player, clip and recording reference preserved exactly and rewritten once in the versioned shape on that first load; a second load rewrites nothing\nR3 Before that rewrite the legacy file's bytes are copied to projects.json.bak-<UTC timestamp YYYYmmddTHHMMSSZ> in the same directory\nR4 The rewrite is atomic: if os.replace fails mid-write, projects.json still holds the legacy bytes and no partial or temporary file is left\nR5 A file whose schema_version is greater than 1 makes _load_projects raise an error naming both versions, and GET /api/projects answers 500 with a JSON \"error\" naming both\nR6 The existing tests under tests/ still pass\n",
+      "declared_paths": [
+        "app.py",
+        "tests/"
+      ],
+      "entry": "planned",
+      "project": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f7-projects-migration/rule-r0",
+      "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/series-b332951/cells/f7-projects-migration/rule-r0.goal.txt",
+      "state": "prepared"
+    }
+  ],
+  "frozen": {
+    "graders": {
+      "baseline/SOURCE.txt": "29f8ecb682d635a6856a6b7eecb8d044fe25b3cde7ef27952539316aeb7c9b39",
+      "baseline/tests/test_basic.py": "1151a478d85f92bdec50ac46ec1d8c7005d0150f0c949b07534614d5f06441a5",
+      "baseline/tests/test_bulk_edit.py": "b59108656393e0af5d6f745d562cfbdfd6ad2b74672eda52ee5be715e6c00ed7",
+      "baseline/tests/test_import_preview.py": "4160c5ff7af2f543a9386a97a543b2463e83c0106236ebcf04c1bcab536a0389",
+      "baseline/tests/ui/bulk_coverage.test.js": "4e2824bc70426040e8c262ee685d341236af851d4ac4607fb364a8b97f466834",
+      "baseline/tests/ui/bulk_keyboard.test.js": "0f1cdc6936dc514482d3ce6ea0a32b5c0a7aae7b45f9ded426b8d0b883e42fd6",
+      "baseline/tests/ui/bulk_serialization.test.js": "a00d1cabe06d26d187ffcc91225231854749b34f7c0a677062199e6163a9bdfe",
+      "baseline/tests/ui/fake_dom.js": "465533e3378ca44e1cebb97f6a3be2fd3c4237f63a446046084a1bc1deda530d",
+      "baseline/tests/ui/import_preview.test.js": "aa3e11073e56fb2a9319987b964736f904f081c0b79b3f318c1af504a01aaea3",
+      "baseline/tests/ui/load_app.js": "e97ddc72c31ca82b79aabcd241e6857d56463c084d9cb1a8275c5f87339e35a2",
+      "baseline/tests/ui/load_app.test.js": "599b8cc5d1fc2f0dc868526fd3ff61121d72c427c5a9d594fa8ff8fd256f5ac5",
+      "baseline/tests/ui/mutation_check.js": "6a8fc01ad23925225aa50f7e78dd78bc68ba10c4c3c658622db7b9f13c60fee7",
+      "conftest.py": "e4bec399c6074907723a437038a2affd6ca94c4f56febbeb9dda68d3a43170f1",
+      "grade_f1.py": "26a37bd6bdc8b9f962a33ac0e111b705dc3887e6c0ac37307095c240e58c0057",
+      "grade_f2.py": "a2753537f55ba94e4d768ce7ac914d78ab89139e84e95b291762ff8b37515961",
+      "grade_f3.py": "e7a24d8b4a0990f1cac85d4c2bcc83da47efbae9fc3e888e167d0e5df44f7cf1",
+      "grade_f4.py": "6a99fedba6d098751b16dbe5b121ca4ce11aa8c5ea9c39dadbd9df8137d223ab",
+      "grade_f5.py": "1705f10b684c94322c7d41ca23b75231d9a6033556f40606f8dda139ef140f73",
+      "grade_f6.py": "4ea6d746183d89f18bc2063cb048b01749dc102c3ec96b3ad834ba97c0c8f411",
+      "grade_f7.py": "7011f4fe2294fce7bc438d3b70587333dcceae461dd9b7fee86733dd3ba17009",
+      "serve.py": "b156049c35267f2f43830e4cb7636548d929cbe1d2f4e0df0b07e9adbc5bc220",
+      "support.py": "ab927f85f585c1518b9774ec5ccbdfae77da7a295082063ebd5979cf0c7da8b1"
+    },
+    "capture_profile:jev": "e7f6ca8a436f7a7b10f7a21e59edcc9709904863f6d17d75ba2680e23834ba86",
+    "capture_profile:rule": "07f9c882cd72447107280a037530af2059379e19c770431bf1fdfdd1e1a47775"
+  },
+  "engine": {
+    "root": "/Users/davisfox/Documents/GitHub/quadratus",
+    "sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+    "dirty": false
+  },
+  "launches": [
+    {
+      "at": "2026-10-03T11:49:17Z",
+      "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+      "cli_versions": {
+        "claude": "2.1.269 (Claude Code)",
+        "codex": "codex-cli 0.154.0",
+        "grok": "grok 1.0.30 (04b7ffed98c6)"
+      },
+      "arm": null,
+      "only": null
+    }
+  ],
+  "stopped": {
+    "reason": "integrity-failure: before grading: RuntimeError: the engine checkout /Users/davisfox/Documents/GitHub/quadratus has uncommitted changes; a cell must run on one SHA",
+    "after": "f5-empty-state/jev-r0",
+    "also": [],
+    "at": "2026-10-03T13:15:34Z"
+  }
+}

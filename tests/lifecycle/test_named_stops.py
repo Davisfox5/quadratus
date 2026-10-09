@@ -68,7 +68,7 @@ def test_done_with_a_capped_task_never_continued_is_named(tmp_path, monkeypatch)
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=orchestrator, lead=_capped_lead), files=FILES,
                    max_tasks=4, settings=_settings())
     assert not replay.result.completed
-    assert replay.result.error == ("DoneWithOpenWork: the orchestrator reported DONE, but capped task(s) t1 not "
+    assert replay.result.error == ("DoneWithOpenWork: the orchestrator reported DONE, but capped or failed task(s) t1 not "
                                    "continued to completion. Work preserved.")
     assert _stop(replay)["legacy"] == "DoneWithOpenWork"
     assert H.result_json(replay)["turn_limited_tasks"] == ["t1"] and (replay.project / "app.py").read_text() == FIXED
@@ -88,7 +88,7 @@ def test_the_cap_with_a_capped_task_never_continued_is_named(tmp_path, monkeypat
     replay = H.run(tmp_path, monkeypatch, Script(lead=_capped_lead), files=FILES, max_tasks=1,
                    settings=_settings())
     assert not replay.result.completed
-    assert replay.result.error == ("GoalUnconfirmedAtCap: the task cap (1) was reached, but capped task(s) t1 not "
+    assert replay.result.error == ("GoalUnconfirmedAtCap: the task cap (1) was reached, but capped or failed task(s) t1 not "
                                    "continued to completion. Work preserved.")
     assert len(replay.of("orchestrator")) == 1, "the goal question is not asked over capped debt"
 

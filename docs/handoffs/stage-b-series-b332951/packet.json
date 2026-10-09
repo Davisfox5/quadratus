@@ -1,0 +1,507 @@
+{
+  "_note": "Stage B packet bound to the real GameTape tree on Davis's Mac (2026-10-03). engine_sha is filled by the launch step from the engine checkout's HEAD into the out-dir copy that prepare reads; everything else is final here. Every task is planned (goal only): the orchestrator decomposes it under max_tasks with declared_paths as the fence, survey_recovery keeps it going through failures with a logged HYPOTHESIS, and no KIND line appears anywhere. One grader argv per requirement: the grade is requirements passed over requirements total.",
+  "project": {
+    "repo": "/Users/davisfox/Documents/GitHub/sports-video-tagger",
+    "base_sha": "1cd9264edb4429f00cde43a04a1944d0dca37f11"
+  },
+  "engine_sha": "b3329518b009d2ede6e4acf2d9f90ce5a3a63748",
+  "jev_model": "jev-1.13.0",
+  "goal": "REQUIREMENTS:\nR1 <unused: every task carries its own goal>\n",
+  "check": "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python -m pytest -q -p no:cacheprovider",
+  "extra_checks": [
+    [
+      "node",
+      "--test",
+      "tests/ui/bulk_coverage.test.js",
+      "tests/ui/bulk_keyboard.test.js",
+      "tests/ui/bulk_serialization.test.js",
+      "tests/ui/import_preview.test.js",
+      "tests/ui/load_app.test.js"
+    ]
+  ],
+  "capture_profiles": {
+    "jev": "/Users/davisfox/Documents/GitHub/stage-b/preview-profile-jev.json",
+    "rule": "/Users/davisfox/Documents/GitHub/stage-b/preview-profile-rule.json"
+  },
+  "graders": {
+    "_note": "Frozen independent graders in the engine repo, outside the GameTape repo so no builder can edit them. Each argv is one requirement; it runs from graders.dir with STAGE_B_PROJECT, STAGE_B_ARM and STAGE_B_RUN_DIR set and exit 0 is a pass. The baseline regression requirement runs the 1cd9264 tests frozen under graders/baseline against the cell's code; the UI requirements drive the cell's app in real Chromium through the grader-owned serve.py.",
+    "dir": "/Users/davisfox/Documents/GitHub/quadratus/tools/jev_stage_b/graders",
+    "timeout_seconds": 600,
+    "tasks": {
+      "f1-preview-errors": [
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f1.py",
+          "-k",
+          "R1"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f1.py",
+          "-k",
+          "R2"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f1.py",
+          "-k",
+          "R3"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f1.py",
+          "-k",
+          "R4"
+        ]
+      ],
+      "f2-project-search": [
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f2.py",
+          "-k",
+          "R1"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f2.py",
+          "-k",
+          "R2"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f2.py",
+          "-k",
+          "R3"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f2.py",
+          "-k",
+          "R4"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f2.py",
+          "-k",
+          "R5"
+        ]
+      ],
+      "f3-project-rename": [
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f3.py",
+          "-k",
+          "R1"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f3.py",
+          "-k",
+          "R2"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f3.py",
+          "-k",
+          "R3"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f3.py",
+          "-k",
+          "R4"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f3.py",
+          "-k",
+          "R5"
+        ]
+      ],
+      "f4-tags-export": [
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f4.py",
+          "-k",
+          "R1"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f4.py",
+          "-k",
+          "R2"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f4.py",
+          "-k",
+          "R3"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f4.py",
+          "-k",
+          "R4"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f4.py",
+          "-k",
+          "R5"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f4.py",
+          "-k",
+          "R6"
+        ]
+      ],
+      "f5-empty-state": [
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f5.py",
+          "-k",
+          "R1"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f5.py",
+          "-k",
+          "R2"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f5.py",
+          "-k",
+          "R3"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f5.py",
+          "-k",
+          "R4"
+        ]
+      ],
+      "f6-download-guard": [
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f6.py",
+          "-k",
+          "R1"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f6.py",
+          "-k",
+          "R2"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f6.py",
+          "-k",
+          "R3"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f6.py",
+          "-k",
+          "R4"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f6.py",
+          "-k",
+          "R5"
+        ]
+      ],
+      "f7-projects-migration": [
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f7.py",
+          "-k",
+          "R1"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f7.py",
+          "-k",
+          "R2"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f7.py",
+          "-k",
+          "R3"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f7.py",
+          "-k",
+          "R4"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f7.py",
+          "-k",
+          "R5"
+        ],
+        [
+          "/Users/davisfox/Documents/GitHub/stage-b/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "grade_f7.py",
+          "-k",
+          "R6"
+        ]
+      ]
+    }
+  },
+  "limits": {
+    "max_calls": 90,
+    "max_reported_tokens": 2500000,
+    "wall_seconds": 3600,
+    "max_concurrent_workers": 2
+  },
+  "max_tasks": 10,
+  "survey_recovery": 4,
+  "repeats": 1,
+  "tasks": [
+    {
+      "id": "f1-preview-errors",
+      "goal": "REQUIREMENTS:\nR1 POST /api/projects/<id>/clips/import_preview adds a top-level \"errors\" list to its JSON: one object per malformed row in file order with an integer \"line\", \"reasons\" (that row's reason strings) and \"raw\" (the row's original text as it appeared in the file, without its line ending); valid and duplicate rows never appear in it, and \"rows\" and \"summary\" are unchanged\nR2 Under #import-preview-summary a table #import-preview-errors lists one <tr data-line=\"<line>\"> per malformed row showing the line number and its reasons joined by \"; \", in file order; the table carries the hidden attribute whenever the last preview had no malformed rows\nR3 A link #import-preview-errors-download with download=\"import-errors.csv\" points at a CSV of the last preview's malformed rows (header line,reason,raw; one row per malformed row with several reasons joined by \"; \"; values quoted by the CSV rules); it is hidden whenever the table is\nR4 The existing tests under tests/ still pass and the preview flow (open a project, choose a CSV with malformed rows) logs no browser console errors\n",
+      "declared_paths": [
+        "app.py",
+        "templates/",
+        "static/",
+        "tests/"
+      ]
+    },
+    {
+      "id": "f2-project-search",
+      "goal": "REQUIREMENTS:\nR1 An input #project-search inside #project-list-screen, placed before #projects-container, filters the rendered .project-card elements as the user types: cards whose .name contains the query case-insensitively stay, the rest get the hidden attribute; no request goes to the server and the page does not reload\nR2 A span #project-search-count reads \"<shown> of <total> projects\" while the query is non-empty and is empty otherwise; a button #btn-project-search-clear empties the query, shows every card and empties the count\nR3 The query is mirrored into location.hash as \"#q=<URL-encoded query>\" and the hash is removed when the query is empty; loading the page with such a hash fills the input and applies the filter\nR4 When no card matches a non-empty query, #project-search-empty is shown with a one-line message; it is hidden whenever at least one card matches or the query is empty\nR5 The existing tests under tests/ still pass and the project list with a search in progress logs no browser console errors\n",
+      "declared_paths": [
+        "templates/",
+        "static/",
+        "tests/"
+      ]
+    },
+    {
+      "id": "f3-project-rename",
+      "goal": "REQUIREMENTS:\nR1 PATCH /api/projects/<id> with JSON {\"name\": ...} trims the name and returns 200 with the full updated project; it returns 400 with a JSON \"error\" naming the rule when the trimmed name is empty, longer than 80 characters, or equal case-insensitively to another project's name (a project may keep its own name); an unknown id returns 404\nR2 The new name is persisted through _save_projects: a fresh _load_projects() and GET /api/projects both show it, and no .projects-*.tmp file is left beside projects.json\nR3 Each .project-card has a button .rename-btn; clicking it shows an input .rename-input prefilled with the name; Enter sends the PATCH and updates the card's .name without a reload; Escape restores the card unchanged and sends nothing; a 400 shows the server's \"error\" text in an element .rename-error inside the card and leaves the name unchanged\nR4 Renaming changes nothing but \"name\": id, video_filename, tag_types, players, clips (with their recordings) and filter_presets are identical before and after\nR5 The existing tests under tests/ still pass and the rename flow logs no browser console errors\n",
+      "declared_paths": [
+        "app.py",
+        "templates/",
+        "static/",
+        "tests/"
+      ]
+    },
+    {
+      "id": "f4-tags-export",
+      "goal": "REQUIREMENTS:\nR1 GET /api/projects/<id>/export/manifest.csv returns 200 text/csv whose header is exactly \"Clip ID,Tag Type,Start (s),End (s),Label,Notes,Players\" with one row per clip in the project's clip order; an unknown id returns 404 JSON\nR2 GET /api/export/manifest.csv returns every project's clips with a leading \"Project\" column (the project name) before the same columns, projects in list order\nR3 Values containing commas, quotes or newlines are quoted so the csv module reads back the original text; Players uses the import preview's form: \"#<number> <name>\" per player (bare \"<name>\" when the player has no number), joined by \"; \"\nR4 Both responses carry Content-Disposition: attachment with filename \"<project name with spaces as _>_manifest.csv\" (\"all_projects_manifest.csv\" for the global export), and each .project-card has an anchor .export-manifest whose href is that project's export URL\nR5 Round trip: uploading a project's export to the import preview of a project with the same tag types and players and no clips yields summary.malformed 0 and summary.valid equal to the exported clip count\nR6 The existing tests under tests/ still pass\n",
+      "declared_paths": [
+        "app.py",
+        "templates/",
+        "static/",
+        "tests/"
+      ]
+    },
+    {
+      "id": "f5-empty-state",
+      "goal": "REQUIREMENTS:\nR1 With no projects, #projects-container holds a panel #projects-empty with a one-line explanation and a button #btn-projects-empty-create that moves focus to #new-project-name; the old inline \"No projects yet\" paragraph is gone\nR2 Creating the first project through the form hides the panel (hidden attribute) and shows its card without a reload\nR3 Deleting the last project through its card shows the panel again without a reload\nR4 The existing tests under tests/ still pass and both transitions log no browser console errors\n",
+      "declared_paths": [
+        "templates/",
+        "static/",
+        "tests/"
+      ]
+    },
+    {
+      "id": "f6-download-guard",
+      "goal": "REQUIREMENTS:\nR1 GET /videos/<name> and GET /recordings/<name> resolve the requested name against VIDEOS_DIR or RECORDINGS_DIR and refuse any request whose real path is outside that directory or passes through a symlink with status 403 and the JSON body {\"error\": \"denied\"}\nR2 The refused shapes include a \"..\" segment (../projects.json), the same with URL-encoded dots (%2e%2e/projects.json), a nested one (sub/../../projects.json), a symlink inside the directory whose target lies outside it, and a symlinked directory; the route must accept names containing \"/\" so the guard, not routing, answers them\nR3 Every refusal is logged exactly once through app.logger at WARNING level with the client address and the word \"denied\", and the message never contains the requested name\nR4 A regular file inside the directory is served unchanged with status 200 and its bytes; a missing regular name still returns 404\nR5 The existing tests under tests/ still pass\n",
+      "declared_paths": [
+        "app.py",
+        "tests/"
+      ]
+    },
+    {
+      "id": "f7-projects-migration",
+      "goal": "REQUIREMENTS:\nR1 _save_projects writes projects.json as {\"schema_version\": 1, \"projects\": {<id>: <project>, ...}} and _load_projects returns the projects mapping alone\nR2 A legacy file holding the bare projects mapping is loaded with every project, tag type, player, clip and recording reference preserved exactly and rewritten once in the versioned shape on that first load; a second load rewrites nothing\nR3 Before that rewrite the legacy file's bytes are copied to projects.json.bak-<UTC timestamp YYYYmmddTHHMMSSZ> in the same directory\nR4 The rewrite is atomic: if os.replace fails mid-write, projects.json still holds the legacy bytes and no partial or temporary file is left\nR5 A file whose schema_version is greater than 1 makes _load_projects raise an error naming both versions, and GET /api/projects answers 500 with a JSON \"error\" naming both\nR6 The existing tests under tests/ still pass\n",
+      "declared_paths": [
+        "app.py",
+        "tests/"
+      ]
+    }
+  ]
+}

@@ -18,7 +18,7 @@ from quadratus.project_run import run_project
 from quadratus.providers import LLMProvider, ProviderError
 from quadratus.runtime import Fleet
 from quadratus.scope import TaskScope, read_scope
-from quadratus.session import PartialWorkStopped, RunStalled, Session, SessionConfig, TaskSpec
+from quadratus.session import RunStalled, Session, SessionConfig, TaskSpec
 from tests._process_liveness import process_stopped
 
 FABLE = 'claude:fable'
@@ -75,14 +75,14 @@ def test_revision_scope_breach_stops_before_closeout_and_keeps_user_work(tmp_pat
         pytest.fail('Scope breach must prevent closeout')
     session = Session('fix', ArtifactStore(tmp_path / '.quadratus'), invoke,
                       config=SessionConfig(project=tmp_path, allow_writes=True))
-    with pytest.raises(PartialWorkStopped):
-        session.run_task(TaskSpec('t1', 'fix', complexity='standard', scope=TaskScope(**SCOPE)))
-    assert session.in_flight['task'] == 't1'
-    assert session.in_flight['invocation']['role'] == 'revision'
-    assert 'outside.py' in session.in_flight['changed']
+    summary = session.run_task(TaskSpec('t1', 'fix', complexity='standard', scope=TaskScope(**SCOPE)))
+    assert summary.outcome == 'failed', "the task fails; the run is not stopped"
+    record = session.failed_records['t1']
+    assert record['cause'] == 'scope' and record['role'] == 'revision'
+    assert 'outside.py' in record['changed']
     assert (tmp_path / 'mine.txt').read_text() == 'operator\n'
     assert (tmp_path / 'outside.py').exists()
-    assert not session.history
+    assert [h.outcome for h in session.history] == ['failed']
 
 
 def test_selection_identity_is_canonical_and_task_specific():

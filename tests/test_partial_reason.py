@@ -41,7 +41,7 @@ def _readers(session):
 ])
 def test_both_readers_name_the_union(tmp_path, typed, legacy, named):
     session_reasons, decision_reasons = _readers(_session(tmp_path, typed, legacy))
-    expected = [f"capped task(s) {named} not continued to completion"]
+    expected = [f"capped or failed task(s) {named} not continued to completion"]
     assert session_reasons == expected
     assert decision_reasons == session_reasons, "the two readers agree"
 

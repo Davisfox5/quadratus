@@ -20,7 +20,7 @@ import pytest
 from quadratus.artifacts import ArtifactStore
 from quadratus.outcome import TaskOutcome
 from quadratus.scope import TaskScope
-from quadratus.session import RunStalled, Session, SessionConfig, TaskSpec
+from quadratus.session import Session, SessionConfig, TaskSpec
 
 LEAD = "claude:opus"
 EDIT = "edit method in your role"
@@ -96,7 +96,8 @@ def test_a_worker_write_request_after_removal_is_refused(tmp_path):
 
     from quadratus.memory import TaskMemory
     request = "WORKER " + json.dumps(dict(errand="code", instruction="Fix add.", write=True, needs=["patch"]))
-    with pytest.raises(RunStalled, match="without an operator write grant"):
+    from quadratus.session import TaskFailed
+    with pytest.raises(TaskFailed, match="without an operator write grant"):
         session._serve_worker(request, LEAD, _spec(), TaskMemory("t1", LEAD), {})
 
 

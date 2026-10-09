@@ -3,7 +3,7 @@
  "shape": "resume",
  "family": "harness-maintainer",
  "grader": false,
- "source": "Report, Quadratus role hierarchy: a failed lead is replaced once, only when the source is verifiably unchanged; changed or unverified source stops with the work preserved.",
+ "source": "Report, Quadratus role hierarchy: a failed lead is replaced once, only when the source is verifiably unchanged; changed or unverified source stops with the work preserved. Contract change 2026-09-28 (session.TaskFailed): a changed tree fails the task, not the run; an uninspectable tree still stops.",
  "session": {
   "project": true,
   "allow_writes": false
@@ -71,10 +71,17 @@
     }
    ],
    "expect": {
-    "outcome": "PartialWorkStopped",
-    "error_contains": [
-     "source is changed or unverified"
+    "outcome": "task_failed",
+    "failed_tasks": [
+     "t1"
     ],
+    "task_failed": {
+     "task": "t1",
+     "cause": "transport",
+     "changed_contains": [
+      "app.py"
+     ]
+    },
     "files": {
      "app.py": {
       "equals": "x = 2\n"
