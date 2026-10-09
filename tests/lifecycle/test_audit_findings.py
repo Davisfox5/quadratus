@@ -399,6 +399,7 @@ def test_a_refused_audit_lead_is_todays_refusal_stop(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("mutation, reason", [
     ("evidence", "replaced after they were reviewed"),
+    ("json", "replaced after they were reviewed"),
     ("source", "different source tree"),
     ("state", "different state"),
 ])
@@ -413,6 +414,11 @@ def test_renders_changed_between_approval_and_settlement_do_not_resolve(tmp_path
             pass
         elif mutation == "evidence":
             H.evidence(root, spec.task_id, age=0, measured={"mobile": 391})
+        elif mutation == "json":
+            # Only the render record changes (Codex review of 2e57e94: the
+            # approval snapshot covered summary and screenshots alone).
+            record = root / ".quadratus" / "design-evidence" / spec.task_id / "desktop" / "evidence.json"
+            record.write_text(record.read_text() + " ")
         elif mutation == "source":
             (root / "README.md").write_text("# app\n\nchanged in the interval\n")
         else:
@@ -424,7 +430,7 @@ def test_renders_changed_between_approval_and_settlement_do_not_resolve(tmp_path
     f1 = replay.findings[0]
     assert f1["status"] == "open" and "did not hold until it closed" in f1["last_attempt"]
     assert reason in f1["last_attempt"]
-    if mutation == "evidence":
+    if mutation in ("evidence", "json"):
         # Map J9b: the approved digests no longer hold, an observed identity
         # mismatch (was FindingsUnresolved before the J9b follow-up).
         _settlement_mismatch(replay)

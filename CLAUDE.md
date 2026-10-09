@@ -912,6 +912,19 @@ Key design decisions already settled:
   view folder, and a sibling refused in a partial merge because its bytes
   changed is recorded under `not_kept` with `mismatch=True`, which the
   check reports ahead of the incomplete set it leaves behind.
+- **An absent receipt refuses; a new attempt retires the old one first**
+  (Codex review of 2e57e94). `_capture_receipt` returns an empty receipt
+  for a harness task with none, so every view reads as unmeasured; only a
+  self-capture gets None. `_harness_capture` adds the task to
+  `_harness_tasks` and drops its receipt before the eligibility and
+  profile checks, so no exit leaves an older measurement standing, and
+  settlement asks the same accessor. Reuse is held to the receipt too: the
+  harness passes `--measured VIEW FILE SHA256` for the views it has taken
+  and `_kept_views` keeps a sibling only when its digests equal them. A
+  refusal names the file and both digests (`file`, `recorded`,
+  `observed`), never inventing an observed digest for a missing file, and
+  the approval snapshot (`_capture_state`, `_snapshot_files`) covers each
+  view's `evidence.json` beside its screenshot.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

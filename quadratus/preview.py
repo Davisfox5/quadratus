@@ -420,10 +420,13 @@ def running(profile: CaptureProfile, root, deadline: Optional[float] = None):
 
 
 def capture_argv(profile: CaptureProfile, task_id: str, capture: dict, view: Optional[str] = None,
-                 attempt: Optional[str] = None) -> List[str]:
+                 attempt: Optional[str] = None, measured: Optional[dict] = None) -> List[str]:
     """The harness's own capture command for a task's declared capture;
     ``view`` renders that one width only, under the capture's ``attempt``
-    token so the views of one attempt combine and nothing older does."""
+    token so the views of one attempt combine and nothing older does, and
+    ``measured`` hands the capture the harness's receipt for the views
+    already taken, so a sibling is reused only when it still carries
+    exactly those digests."""
     target = profile.origin + _web_path(capture.get("path", "/"), "capture path")
     # -P and a working directory outside the project: a project folder named
     # quadratus can never stand in for the harness's own capture module
@@ -437,6 +440,10 @@ def capture_argv(profile: CaptureProfile, task_id: str, capture: dict, view: Opt
             argv += ["--confirm", step["selector"], step["message"]]
         else:
             argv += [f"--{step['action']}", step["selector"]]
+    for name, files in sorted((measured or {}).items()):
+        for leaf, digest in sorted((files or {}).items()):
+            if isinstance(digest, str):
+                argv += ["--measured", name, leaf, digest]
     if view:
         argv += ["--view", view]
     if attempt:
@@ -473,13 +480,18 @@ def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict,
         # views, beside the one total deadline (Codex review of 4a51291:
         # each view had been granted the full allowance again).
         allowance = float(profile.capture_timeout)
+        taken: dict = {}
         for view in VIEWPORTS:
-            failure, spent = _capture_once(profile, root, capture_argv(profile, task_id, capture, view, attempt),
+            # The views already measured travel with the next capture, so a
+            # sibling is reused only against the harness's own receipt.
+            failure, spent = _capture_once(profile, root,
+                                           capture_argv(profile, task_id, capture, view, attempt, measured=taken),
                                            deadline, allowance)
             if failure:
                 return failure
+            taken[view] = view_receipt(root, task_id, view)
             if receipt is not None:
-                receipt[view] = view_receipt(root, task_id, view)
+                receipt[view] = taken[view]
             allowance -= spent
         return ""
     failure, _ = _capture_once(profile, root, capture_argv(profile, task_id, capture), deadline,

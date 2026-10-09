@@ -743,7 +743,7 @@ def test_a_state_changing_capture_gets_one_preview_per_view(tmp_path, monkeypatc
                                         "pathlib.Path('argv.log').open('a').write(' '.join(sys.argv[1:]) + '\\n')\n")
     real_argv = preview.capture_argv
 
-    def argv(profile, task_id, capture, view=None, attempt=None):
+    def argv(profile, task_id, capture, view=None, attempt=None, measured=None):
         runs.append(real_argv(profile, task_id, capture, view, attempt)[-4:-2] if view else ["(both)"])
         assert (attempt is None) == (view is None), "the views of one attempt carry its token"
         return [sys.executable, str(tmp_path / "record.py"), *(["--view", view] if view else [])]

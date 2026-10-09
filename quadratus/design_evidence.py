@@ -311,7 +311,8 @@ def validate_steps(steps: List[dict], target: str, root, task_id: Optional[str] 
 
 
 def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = None, *,
-            pinned: bool = False, views: Optional[List[str]] = None, attempt: Optional[str] = None) -> dict:
+            pinned: bool = False, views: Optional[List[str]] = None, attempt: Optional[str] = None,
+            measured: Optional[dict] = None) -> dict:
     """Render ``target`` at each width into the task's evidence folder.
 
     With ``steps``, each width runs them on a fresh page before its
@@ -327,9 +328,13 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
     fingerprint, the same checked steps, every step passed, and their files
     present; anything else is history, not a sibling (Codex review of
     4a51291: a kept view was relabelled with the new render's identity, and
-    a stale failed sibling ended the next attempt). The returned dict holds
-    only the views rendered now; a run that raises part-way still leaves
-    nothing standing.
+    a stale failed sibling ended the next attempt). ``measured`` is the
+    harness's own receipt for the views it has already captured in this
+    attempt ({view: {file: sha256}}); with it, a sibling is kept only when
+    its recorded digests equal that measurement, so reuse is checked
+    against something outside the mutable summary (Codex review of
+    2e57e94). The returned dict holds only the views rendered now; a run
+    that raises part-way still leaves nothing standing.
     """
     from .browser import render_page
     folder = evidence_dir(root, task_id)
@@ -359,7 +364,7 @@ def capture(target: str, task_id: str, root=".", steps: Optional[List[dict]] = N
     source = source_fingerprint(root)
     declared = [{k: v for k, v in s.items() if k != "path"} for s in checked]
     kept, not_kept = (_kept_views(folder, previous, set(VIEWPORTS) - set(wanted), target=target, attempt=attempt,
-                                  source=source, declared=declared) if views else ({}, {}))
+                                  source=source, declared=declared, measured=measured) if views else ({}, {}))
     try:
         _source_excludes(Path(root))
         identity_error = None
@@ -465,35 +470,55 @@ def _symlinked_component(folder: Path) -> Optional[Path]:
     return None
 
 
-def _files_problem(folder: Path, view) -> Optional[Tuple[str, bool]]:
+def _files_problem(folder: Path, view) -> Optional[dict]:
     """Why a view's files do not stand as the capture wrote them, if they do
-    not: ``(problem, mismatch)``. The entry must record a well-formed digest
-    for every file a render writes and nothing else, no folder on the way
-    to them may be a symlink, and each file must hash to its digest now.
-    Only a symlink or a digest that disagrees with the bytes is an observed
-    mismatch; a missing or malformed record is unverified, never a match."""
+    not: ``{"problem", "mismatch"}``, plus ``file``, ``recorded`` and
+    ``observed`` when a digest was read and disagreed (Codex review of
+    2e57e94: the refusal kept neither identity). The entry must record a
+    well-formed digest for every file a render writes and nothing else, no
+    folder on the way to them may be a symlink, and each file must hash to
+    its digest now. Only a symlink or a digest that disagrees with the
+    bytes is an observed mismatch; a missing or malformed record is
+    unverified, never a match, and never invents an observed digest."""
     files = view.get("files") if isinstance(view, dict) else None
     if not isinstance(files, dict):
-        return "carries no record of its files' digests", False
+        return dict(problem="carries no record of its files' digests", mismatch=False)
     for leaf in VIEW_FILES:
         if leaf not in files:
-            return f"carries no record of its {leaf} digest", False
+            return dict(problem=f"carries no record of its {leaf} digest", mismatch=False)
     for leaf, recorded in files.items():
         if (leaf not in VIEW_FILES or not isinstance(recorded, str)
                 or not re.fullmatch(r"[0-9a-f]{64}", recorded)):
-            return f"carries a malformed digest record ({str(leaf)[:40]})", False
+            return dict(problem=f"carries a malformed digest record ({str(leaf)[:40]})", mismatch=False)
     linked = _symlinked_component(folder)
     if linked is not None:
-        return f"folder {linked.name} is a symlink, not a capture folder", True
+        return dict(problem=f"folder {linked.name} is a symlink, not a capture folder", mismatch=True,
+                    file=linked.name)
     for leaf, recorded in files.items():
         path = folder / leaf
         if path.is_symlink():
-            return f"{leaf} is a symlink, not a capture", True
+            return dict(problem=f"{leaf} is a symlink, not a capture", mismatch=True, file=leaf, recorded=recorded)
         now = _digest(path)
         if now is None:
-            return f"{leaf} is missing or unreadable", False
+            return dict(problem=f"{leaf} is missing or unreadable", mismatch=False, file=leaf, recorded=recorded)
         if now != recorded:
-            return f"{leaf} {_FILE_CHANGED}", True
+            return dict(problem=f"{leaf} {_FILE_CHANGED}", mismatch=True, file=leaf, recorded=recorded, observed=now)
+    return None
+
+
+def _measurement_problem(view, measured) -> Optional[dict]:
+    """Why a view's recorded digests do not match the harness's own
+    measurement of its files, if they do not: ``measured`` is one view's
+    entry of a receipt (``view_receipt``). A view the harness never
+    measured is unverified; a disagreeing digest is an observed mismatch
+    naming the file and both identities."""
+    if not isinstance(measured, dict) or any(not isinstance(measured.get(leaf), str) for leaf in VIEW_FILES):
+        return dict(problem="was not measured by the harness in this attempt", mismatch=False)
+    files = view.get("files") if isinstance(view, dict) else {}
+    for leaf in VIEW_FILES:
+        if files.get(leaf) != measured[leaf]:
+            return dict(problem=f"{leaf} differs from the harness's measurement of it", mismatch=True,
+                        file=leaf, recorded=files.get(leaf), observed=measured[leaf])
     return None
 
 
@@ -505,16 +530,20 @@ def view_receipt(root, task_id: str, name: str) -> dict:
     return {leaf: _digest(folder / leaf) for leaf in VIEW_FILES}
 
 
-def _kept_views(folder: Path, previous, names, *, target: str, attempt: Optional[str], source, declared) -> dict:
+def _kept_views(folder: Path, previous, names, *, target: str, attempt: Optional[str], source, declared,
+                measured: Optional[dict] = None) -> tuple:
     """The named views' entries from the previous summary, kept for a
     partial render only as siblings: the previous summary finished under
     the same attempt token, for the same target, the same source
     fingerprint and the same checked steps, with every step of each kept
     view passed and its files present and hashing to the digests its entry
     records; otherwise nothing. A view that fails any of these is history
-    and never joins this attempt. Returns ``(kept, refused)``: ``refused``
-    names each sibling candidate whose files did not stand, with the
-    problem and whether it was an observed mismatch."""
+    and never joins this attempt. With ``measured`` (the harness's receipt
+    for the views it already captured), a candidate must also carry exactly
+    the digests the harness measured. Returns ``(kept, refused)``:
+    ``refused`` names each sibling candidate whose files did not stand,
+    with the problem, whether it was an observed mismatch, and the file and
+    both digests when they were read."""
     if not names:
         return {}, {}
     if (not previous or not attempt or previous.get("attempt") != attempt or previous.get("target") != target
@@ -533,8 +562,10 @@ def _kept_views(folder: Path, previous, names, *, target: str, attempt: Optional
         # the record says "replaced", never merely "missing" (Codex review
         # of 180012d).
         problem = _files_problem(folder / name, view)
+        if problem is None and measured is not None:
+            problem = _measurement_problem(view, measured.get(name) if isinstance(measured, dict) else None)
         if problem:
-            refused[name] = dict(problem=problem[0], mismatch=problem[1])
+            refused[name] = problem
         elif all(isinstance(s, dict) and s.get("ok") is True for s in view.get("steps", [])):
             kept[name] = view
     return (kept if len(kept) == len(set(names)) else {}), refused
@@ -692,7 +723,8 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
     for name, entry in (not_kept.items() if isinstance(not_kept, dict) else []):
         if isinstance(entry, dict) and entry.get("mismatch") is True and isinstance(entry.get("problem"), str):
             add("integrity", f"the {str(name)[:20]} render of this attempt was not kept: {entry['problem'][:160]}",
-                mismatch=True)
+                mismatch=True, view=str(name)[:20],
+                **{k: str(entry[k])[:80] for k in ("file", "recorded", "observed") if isinstance(entry.get(k), str)})
     if (not isinstance(summary, dict) or not isinstance(summary.get("target"), str) or not summary["target"]
             or not isinstance(summary.get("views"), dict)
             or set(summary["views"]) != set(VIEWPORTS)
@@ -758,18 +790,14 @@ def _check(root, task_id: str, since: float, expected_source: Optional[str] = No
         # The files must still be the bytes the capture recorded for this
         # view; a record without digests is no evidence of what was rendered.
         problem = _files_problem(folder / name, summary["views"].get(name))
+        if problem is None and receipt is not None:
+            problem = _measurement_problem(summary["views"][name],
+                                           receipt.get(name) if isinstance(receipt, dict) else None)
         if problem:
-            add("integrity", f"the {name} render {problem[0]}", **(dict(mismatch=True) if problem[1] else {}))
+            add("integrity", f"the {name} render {problem['problem']}",
+                **(dict(mismatch=True) if problem["mismatch"] else {}),
+                **{k: str(problem[k])[:80] for k in ("file", "recorded", "observed") if isinstance(problem.get(k), str)})
             continue
-        if receipt is not None:
-            measured = receipt.get(name) if isinstance(receipt, dict) else None
-            if not isinstance(measured, dict) or any(not isinstance(measured.get(leaf), str) for leaf in VIEW_FILES):
-                add("integrity", f"the {name} render was not measured by the harness in this attempt")
-                continue
-            if summary["views"][name]["files"] != {leaf: measured[leaf] for leaf in VIEW_FILES}:
-                add("integrity", f"the {name} render's record does not match the harness's measurement of "
-                                 "its files", mismatch=True)
-                continue
         if abs(width - viewport["width"]) > 64:
             view = summary["views"].get(name) or {}
             offenders = [o for o in (view.get("overflow") or []) if isinstance(o, dict)][:5]
@@ -839,6 +867,20 @@ def main(argv=None) -> int:
             return 2
         views = (views or []) + [argv[at + 1]]
         del argv[at:at + 2]
+    measured = None
+    while "--measured" in argv:
+        at = argv.index("--measured")
+        if len(argv) < at + 4:
+            print("error: --measured needs VIEW FILE SHA256", file=sys.stderr)
+            return 2
+        name, leaf, digest = argv[at + 1:at + 4]
+        if name not in VIEWPORTS or leaf not in VIEW_FILES or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            print(f"error: --measured takes a view ({'|'.join(VIEWPORTS)}), a file ({'|'.join(VIEW_FILES)}) "
+                  "and a sha256", file=sys.stderr)
+            return 2
+        measured = measured or {}
+        measured.setdefault(name, {})[leaf] = digest
+        del argv[at:at + 4]
     attempt = None
     if "--attempt" in argv:
         at = argv.index("--attempt")
@@ -855,11 +897,11 @@ def main(argv=None) -> int:
     if len(positional) not in (2, 3):
         print("usage: python -m quadratus.design_evidence <url-or-html-file> <task-id> [project-root] "
               "[--click SEL] [--wait SEL] [--confirm SEL MESSAGE] [--upload SEL path] [--file SEL=path] "
-              "[--view desktop|mobile] [--attempt HEX]", file=sys.stderr)
+              "[--view desktop|mobile] [--attempt HEX] [--measured VIEW FILE SHA256 ...]", file=sys.stderr)
         return 2
     try:
         out = capture(positional[0], positional[1], positional[2] if len(positional) == 3 else ".", steps,
-                      pinned=pinned, views=views, attempt=attempt)
+                      pinned=pinned, views=views, attempt=attempt, measured=measured)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

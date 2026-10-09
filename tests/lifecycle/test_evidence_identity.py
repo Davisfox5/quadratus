@@ -211,7 +211,7 @@ def test_a_manifest_rewritten_beside_replaced_bytes_stops_against_the_harness_re
     build = _decl("KIND: frontend standard", dict(REPAIR_SCOPE, capture=CAPTURE), "Add the toolbar.")
     replay = _run(tmp_path, monkeypatch, [REQS + build], {"t1": _fix}, profile=profile)
     result = replay.result
-    needle = "desktop render's record does not match the harness's measurement"
+    needle = "desktop render page.png differs from the harness's measurement"
     assert not result.completed
     assert result.error.startswith("EvidenceIdentityMismatch: task t1") and needle in result.error, result.error
     stop = replay.workflow["run"]["facts"][-1]

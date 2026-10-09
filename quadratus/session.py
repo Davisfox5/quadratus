@@ -1128,6 +1128,7 @@ def _snapshot_files(snapshot) -> Dict[str, str]:
     folder = evidence["summary"].rsplit("/", 1)[0]
     files = {evidence["summary"]: evidence["sha256"]}
     files.update({f"{folder}/{view}/page.png": digest for view, digest in evidence["screenshots"].items()})
+    files.update({f"{folder}/{view}/evidence.json": digest for view, digest in (evidence.get("records") or {}).items()})
     return files
 
 
@@ -1631,6 +1632,10 @@ class Session:
         #: view's files right after its own capture; the summary is held to
         #: it on every check of a harness capture (Codex review of 180012d).
         self._capture_receipts: Dict[str, dict] = {}
+        #: task ids whose renders the harness has attempted to capture: for
+        #: them an absent receipt means a failed or unmeasured attempt and
+        #: refuses, never a self-capture (Codex review of 2e57e94).
+        self._harness_tasks: set = set()
         self._task_started: Optional[float] = None
         #: When the most recent editing call that changed source began:
         #: renders older than this show a tree that has since changed.
@@ -5770,7 +5775,7 @@ class Session:
                 return problem, now_evidence
             return problem, None
         ok, problem, _, _records = check_records(self.project, task_id, 0, expected_source=self._trusted_source(),
-                                                 receipt=self._capture_receipts.get(task_id))
+                                                 receipt=self._capture_receipt(task_id, task_id in self._harness_tasks))
         return ("" if ok else problem), None
 
     def _findings_block_done(self) -> bool:
@@ -5810,7 +5815,10 @@ class Session:
                  for s in (requested if isinstance(requested, list) else []) if isinstance(s, dict)]
         evidence = dict(summary=(folder / "summary.json").relative_to(root).as_posix(),
                         sha256=digest(folder / "summary.json"),
-                        screenshots={name: digest(folder / name / "page.png") for name in VIEWPORTS})
+                        screenshots={name: digest(folder / name / "page.png") for name in VIEWPORTS},
+                        # The render record beside each screenshot is part of
+                        # what was approved too (Codex review of 2e57e94).
+                        records={name: digest(folder / name / "evidence.json") for name in VIEWPORTS})
         return (summary.get("target") if isinstance(summary, dict) else None), steps, evidence
 
     def _harness_captures(self, spec) -> bool:
@@ -6038,6 +6046,11 @@ class Session:
         "" on success or why not. Only after the last gate passed, and the
         source must be the same before and after (the preview is not a
         writer)."""
+        # A new attempt retires the previous receipt before anything can
+        # stop it: a failed, ineligible or unprofiled attempt leaves no
+        # measurement that an older render could be accepted against.
+        self._harness_tasks.add(spec.task_id)
+        self._capture_receipts.pop(spec.task_id, None)
         ineligible = self._capture_ineligible()
         if ineligible:
             return f"the harness did not capture because {ineligible}"
@@ -6048,7 +6061,6 @@ class Session:
         self._verify_dependencies(f"before preview ({spec.task_id})")
         before = self._source_fingerprint()
         receipt: dict = {}
-        self._capture_receipts.pop(spec.task_id, None)
         failure = capture_task(profile, self.project, spec.task_id, spec.scope.capture, receipt=receipt)
         self._verify_dependencies(f"during preview ({spec.task_id})")
         if before is None or self._source_fingerprint() != before:
@@ -6059,8 +6071,11 @@ class Session:
 
     def _capture_receipt(self, task_id, harness) -> Optional[dict]:
         """The harness's measurement of a task's capture, for the check to
-        hold the summary to; None for a self-capture, which has none."""
-        return self._capture_receipts.get(task_id) if harness else None
+        hold the summary to. None only for a self-capture, which has none;
+        a harness task with no receipt gets an empty one, which refuses
+        every view as unmeasured (an absent receipt was weaker than an
+        empty one: Codex review of 2e57e94)."""
+        return self._capture_receipts.get(task_id, {}) if harness else None
 
     def _hand_off_preview(self, spec, task, record, failure) -> None:
         """Stop as an operator handoff when the capture failure's origin is

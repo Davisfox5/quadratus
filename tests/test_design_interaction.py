@@ -1487,20 +1487,28 @@ def test_a_sibling_refused_for_changed_bytes_keeps_its_mismatch_classification(t
     steps = [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]
     page = str(root / "index.html")
     capture(page, "t1", root, steps, views=["desktop"], attempt="ab" * 8)
+    recorded_desktop = _read_summary(root)["views"]["desktop"]["files"]["page.png"]
     (evidence_dir(root, "t1") / "desktop" / "page.png").write_bytes(b"\x89PNG" + b"\0")
     capture(page, "t1", root, steps, views=["mobile"], attempt="ab" * 8)
     summary = _read_summary(root)
     assert set(summary["views"]) == {"mobile"}
-    assert summary["not_kept"] == {"desktop": dict(problem="page.png changed after the capture", mismatch=True)}
+    refused = summary["not_kept"]["desktop"]
+    assert refused["problem"] == "page.png changed after the capture" and refused["mismatch"] is True
+    assert refused["file"] == "page.png" and refused["recorded"] == recorded_desktop, "the captured identity survives"
+    assert refused["observed"] == hashlib.sha256(b"\x89PNG\0").hexdigest(), "and the observed one"
     ok, problem, _, records = check_records(root, "t1", 0)
     assert not ok and problem == "the desktop render of this attempt was not kept: page.png changed after the capture"
     assert records[0].get("mismatch") is True and "no well-formed summary.json" in records[1]["message"]
+    assert (records[0]["file"], records[0]["recorded"], records[0]["observed"]) == (
+        "page.png", refused["recorded"], refused["observed"])
     # A sibling refused for a missing file is unverified, not a mismatch, and
     # a clean merge carries no not_kept at all.
     capture(page, "t1", root, steps, views=["desktop"], attempt="ac" * 8)
     (evidence_dir(root, "t1") / "desktop" / "evidence.json").unlink()
     capture(page, "t1", root, steps, views=["mobile"], attempt="ac" * 8)
-    assert _read_summary(root)["not_kept"]["desktop"]["mismatch"] is False
+    missing = _read_summary(root)["not_kept"]["desktop"]
+    assert missing["mismatch"] is False and missing["file"] == "evidence.json" and "observed" not in missing, \
+        "a missing file never invents an observed digest"
     ok, problem, _, records = check_records(root, "t1", 0)
     assert not ok and not any(r.get("mismatch") for r in records)
     capture(page, "t1", root, steps, views=["desktop"], attempt="ad" * 8)
@@ -1529,8 +1537,10 @@ def test_the_check_holds_the_summary_to_the_harness_receipt(tmp_path):
     ok, problem, *_ = check_records(tmp_path, "t1", 0)
     assert ok, "without a receipt the rewritten manifest agrees with the bytes"
     ok, problem, _, records = check_records(tmp_path, "t1", 0, receipt=receipt)
-    assert not ok and "desktop render's record does not match the harness's measurement" in problem
+    assert not ok and "desktop render page.png differs from the harness's measurement" in problem
     assert any(r.get("mismatch") for r in records)
+    assert records[0]["file"] == "page.png" and records[0]["observed"] == receipt["desktop"]["page.png"]
+    assert records[0]["recorded"] == summary["views"]["desktop"]["files"]["page.png"]
     ok, problem, _, records = check_records(tmp_path, "t1", 0, receipt={"mobile": receipt["mobile"]})
     assert not ok and "desktop render was not measured by the harness in this attempt" in problem
     assert not any(r.get("mismatch") for r in records)
@@ -1564,3 +1574,133 @@ def test_capture_task_fills_the_receipt_from_each_views_files(tmp_path, monkeypa
     receipt = {}
     assert preview.capture_task(profile, tmp_path, "t1", confirm, receipt=receipt).startswith("the capture exited")
     assert receipt == {}, "a failed attempt leaves no receipt"
+
+
+def test_a_sibling_is_reused_only_against_the_harness_measurement(tmp_path, monkeypatch):
+    """Codex review of 2e57e94: the sibling rule read only the mutable
+    summary, so the receipt protected acceptance but not reuse. The harness
+    hands the capture its measurement of the views already taken."""
+    from quadratus import browser
+    from quadratus.design_evidence import check_records, view_receipt
+    root = _project(tmp_path)
+    monkeypatch.setattr(browser, "render_page", _fake_render(root))
+    steps = [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]
+    page = str(root / "index.html")
+    capture(page, "t1", root, steps, views=["desktop"], attempt="ba" * 8)
+    taken = {"desktop": view_receipt(root, "t1", "desktop")}
+    capture(page, "t1", root, steps, views=["mobile"], attempt="ba" * 8, measured=taken)
+    assert set(_read_summary(root)["views"]) == {"desktop", "mobile"}, "measured and unchanged: kept"
+    capture(page, "t1", root, steps, views=["desktop"], attempt="bb" * 8)
+    taken = {"desktop": view_receipt(root, "t1", "desktop")}
+    shot = evidence_dir(root, "t1") / "desktop" / "page.png"
+    shot.write_bytes(b"\x89PNG" + b"\0")
+    path = evidence_dir(root, "t1") / "summary.json"
+    summary = json.loads(path.read_text())
+    summary["views"]["desktop"]["files"]["page.png"] = hashlib.sha256(shot.read_bytes()).hexdigest()
+    path.write_text(json.dumps(summary))
+    capture(page, "t1", root, steps, views=["mobile"], attempt="bb" * 8, measured=taken)
+    summary = _read_summary(root)
+    assert set(summary["views"]) == {"mobile"}, "a rewritten manifest beside replaced bytes is not a sibling"
+    refused = summary["not_kept"]["desktop"]
+    assert refused["mismatch"] is True and refused["file"] == "page.png"
+    assert refused["recorded"] == hashlib.sha256(shot.read_bytes()).hexdigest()
+    assert refused["observed"] == taken["desktop"]["page.png"]
+    ok, problem, _, records = check_records(root, "t1", 0, receipt=taken)
+    assert not ok and records[0]["mismatch"] is True and "differs from the harness's measurement" in problem
+    capture(page, "t1", root, steps, views=["desktop"], attempt="bc" * 8)
+    capture(page, "t1", root, steps, views=["mobile"], attempt="bc" * 8, measured={})
+    assert set(_read_summary(root)["views"]) == {"mobile"}
+    assert _read_summary(root)["not_kept"]["desktop"] == dict(
+        problem="was not measured by the harness in this attempt", mismatch=False)
+
+
+def test_the_capture_command_carries_and_checks_the_measurement(tmp_path, monkeypatch):
+    from quadratus import browser
+    from quadratus import design_evidence as de
+    from quadratus.design_evidence import view_receipt
+    from quadratus.preview import CaptureProfile, capture_argv
+    profile = CaptureProfile(preview=("true",), origin="http://127.0.0.1:1")
+    capture_decl = {"path": "/", "steps": [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]}
+    argv = capture_argv(profile, "t1", capture_decl, "mobile", "ab" * 8,
+                        measured={"desktop": {"page.png": "0" * 64, "evidence.json": "1" * 64}})
+    tail = argv[-12:]
+    assert tail[:8] == ["--measured", "desktop", "evidence.json", "1" * 64, "--measured", "desktop", "page.png", "0" * 64]
+    assert tail[8:] == ["--view", "mobile", "--attempt", "ab" * 8]
+    root = _project(tmp_path)
+    monkeypatch.setattr(browser, "render_page", _fake_render(root))
+    page = str(root / "index.html")
+    base = [page, "t1", str(root), "--confirm", ".delete-btn", CONFIRM["message"], "--wait", "#projects-empty"]
+    assert de.main(base + ["--view", "desktop", "--attempt", "cd" * 8]) == 0
+    taken = view_receipt(root, "t1", "desktop")
+    assert de.main(base + ["--measured", "desktop", "page.png", taken["page.png"], "--measured", "desktop",
+                           "evidence.json", taken["evidence.json"], "--view", "mobile", "--attempt", "cd" * 8]) == 0
+    assert set(_read_summary(root)["views"]) == {"desktop", "mobile"}
+    assert de.main(base + ["--measured", "desktop", "page.png", "nothex", "--view", "mobile"]) == 2
+    assert de.main(base + ["--measured", "tablet", "page.png", "0" * 64, "--view", "mobile"]) == 2
+    assert de.main(base + ["--measured", "desktop", "other.txt", "0" * 64, "--view", "mobile"]) == 2
+    assert de.main(base + ["--measured", "desktop", "page.png"]) == 2
+
+
+def test_capture_task_hands_each_view_the_measurement_of_the_earlier_ones(tmp_path, monkeypatch):
+    from quadratus import preview
+    from quadratus.design_evidence import view_receipt
+    seen = []
+
+    def fake_capture(profile, root, argv, deadline, allowance):
+        seen.append(list(argv))
+        view = argv[argv.index("--view") + 1]
+        folder = evidence_dir(root, "t1") / view
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "page.png").write_bytes(b"\x89PNG" + view.encode())
+        (folder / "evidence.json").write_text("{}")
+        return "", 1.0
+    monkeypatch.setattr(preview, "_capture_once", fake_capture)
+    profile = preview.CaptureProfile(preview=("true",), origin="http://127.0.0.1:1", ready_timeout=1,
+                                     capture_timeout=90)
+    confirm = {"path": "/", "steps": [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]}
+    assert preview.capture_task(profile, tmp_path, "t1", confirm, receipt={}) == ""
+    assert "--measured" not in seen[0], "the first view has nothing to be held to"
+    desktop = view_receipt(tmp_path, "t1", "desktop")
+    assert seen[1][seen[1].index("--measured"):][:8] == [
+        "--measured", "desktop", "evidence.json", desktop["evidence.json"],
+        "--measured", "desktop", "page.png", desktop["page.png"]]
+
+
+def test_a_harness_task_without_a_receipt_is_refused_not_treated_as_a_self_capture(tmp_path, monkeypatch):
+    """Codex review of 2e57e94: an absent receipt was weaker than an empty
+    one, and a failed or ineligible new attempt left the old receipt in
+    place for an older render to be accepted against."""
+    from types import SimpleNamespace
+
+    from quadratus.design_evidence import check_records
+    from quadratus.session import Session
+    from tests.lifecycle.harness import evidence
+    session = Session.__new__(Session)
+    session._capture_receipts, session._harness_tasks = {}, set()
+    assert session._capture_receipt("t1", False) is None, "a self-capture has no receipt to be held to"
+    assert session._capture_receipt("t1", True) == {}, "a harness task with no receipt is held to an empty one"
+    evidence(tmp_path, "t1", age=0)
+    ok, problem, *_ = check_records(tmp_path, "t1", 0, receipt=session._capture_receipt("t1", True))
+    assert not ok and "was not measured by the harness in this attempt" in problem
+    session._capture_receipts["t1"] = {"desktop": {"page.png": "0" * 64, "evidence.json": "1" * 64}}
+    monkeypatch.setattr(Session, "_capture_ineligible", lambda self: "the task has no dispatch record")
+    failure = Session._harness_capture(session, SimpleNamespace(task_id="t1"))
+    assert failure == "the harness did not capture because the task has no dispatch record"
+    assert session._capture_receipts == {} and "t1" in session._harness_tasks, \
+        "a new attempt retires the old receipt before any exit"
+    assert session._capture_receipt("t1", "t1" in session._harness_tasks) == {}
+
+
+def test_the_approval_snapshot_covers_the_render_record_beside_each_screenshot(tmp_path):
+    from quadratus.session import Session, _snapshot_files
+    from tests.lifecycle.harness import evidence
+    evidence(tmp_path, "t1", age=0)
+    session = Session.__new__(Session)
+    session.project = str(tmp_path)
+    target, steps, state = Session._capture_state(session, "t1")
+    assert set(state["records"]) == {"desktop", "mobile"} and all(len(d) == 64 for d in state["records"].values())
+    files = _snapshot_files(("t1", target, steps, state))
+    assert ".quadratus/design-evidence/t1/desktop/evidence.json" in files
+    assert files[".quadratus/design-evidence/t1/mobile/evidence.json"] == state["records"]["mobile"]
+    (evidence_dir(tmp_path, "t1") / "mobile" / "evidence.json").unlink()
+    assert Session._capture_state(session, "t1")[2]["records"]["mobile"] is None, "unreadable is None, never invented"
