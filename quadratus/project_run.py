@@ -491,6 +491,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'budget': budget.snapshot() if budget else None,
         'selected_limits': selected,
         'unnamed_test_files': list(getattr(session, 'unnamed_test_files', []) or []) if session else [],
+        'original_test_runs': list(getattr(session, 'original_test_runs', []) or []) if session else [],
+        'unexecuted_acceptance': list(getattr(session, 'unexecuted_acceptance', []) or []) if session else [],
         'stale_capture_fixtures': stale_fixtures,
         'delegation': reconcile(delegation.events, delegation.native_children.values()),
         'scope_reports': [

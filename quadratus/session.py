@@ -1130,6 +1130,9 @@ _PARALLEL_REQUEST = _parallel_request(3)
 _REQ_BLOCK = re.compile(r"^\s*REQUIREMENTS:\s*\n((?:\s*R\d+\s*[:.)-].*\n?)+)", re.MULTILINE)
 _REQ_LINE = re.compile(r"^\s*(R\d+)\s*[:.)-]\s*(.+?)\s*$", re.MULTILINE)
 _COVERS = re.compile(r"^\s*COVERS:\s*(.+?)\s*$", re.MULTILINE)
+#: An editing call's own account of acceptance it could not run (runtime
+#: check guidance). Read only to lower an audit verdict, never to raise one.
+_NOT_RUN_LINE = re.compile(r"^\s*NOT RUN:\s*(.+?)\s*$", re.MULTILINE)
 _AUDIT_LINE = re.compile(r"^\s*(R\d+)\s*:\s*(MET|NOT MET)\b[\s:—-]*(.*)$", re.MULTILINE | re.IGNORECASE)
 
 
@@ -1711,6 +1714,14 @@ class Session:
         self._last_changed_report: Optional[dict] = None
         self.requirement_audits: List[dict] = []
         self.requirement_reviews: List[dict] = []
+        #: Run-start bytes of every test and test-support file
+        #: (integration.original_tests), or None before a project run starts.
+        self._original_tests: Optional[dict] = None
+        #: Each run of the gate's commands against those bytes.
+        self.original_test_runs: List[dict] = []
+        #: Acceptance an editing call said it did not run ('NOT RUN:' lines):
+        #: evidence that can only lower an audit verdict, never raise one.
+        self.unexecuted_acceptance: List[dict] = []
 
     def _open_finding(self, kind: str, text: str, *, legacy_route: bool = False) -> None:
         """Append a legacy open finding and record it as a typed fact.
@@ -1723,6 +1734,12 @@ class Session:
             self._outcome.note(kind, text, legacy_route=legacy_route)
         else:
             self.run_outcome.note(kind, text)
+
+    def _unverified_once(self, text: str) -> None:
+        """An open unverified finding, recorded once however often the same
+        check repeats it (a gate runs again after every fix round)."""
+        if text not in self.open_findings:
+            self._open_finding("unverified", text)
 
     def _note_replaced_evidence(self) -> bool:
         """An approved delivery whose files no longer hold the approved bytes
@@ -1900,6 +1917,7 @@ class Session:
             report = self._last_changed_report
             if report and report.get("status") != "match":
                 self._record_changed_report(key, role, reply, report)
+            self._record_not_run(key, role, reply)
             return reply
         except TurnLimitReached as exc:
             if capped is None:
@@ -4429,6 +4447,7 @@ class Session:
             self.dependency_watch = DependencyWatch(DependencyGuard(
                 self.project, exempt=self.config.dependency_cache_exemptions))
             self.dependency_watch.start()
+            self._snapshot_original_tests()
         if self.config.readiness_probes:
             self._run_readiness()
         if self.config.plan_gate is not None and self._explicit_tasks is not None:
@@ -5511,6 +5530,11 @@ class Session:
         run; that is recorded, not invented.
         """
         ledger = self.memory.ledger
+        refusal = self._original_tests_at_done()
+        if refusal:
+            self._done_refusal = refusal
+            self._note("DONE sent back: the original tests fail against the delivered source")
+            return False
         if not self.config.requirements_ledger:
             return True
         if not ledger.requirements:
@@ -5637,6 +5661,7 @@ class Session:
                 + "\nA design review verdict listed above is the independent approval of that task's "
                 "renders; where one reads APPROVED, do not report the approval as absent.")
                if self.design_checks else "")
+            + self._not_run_block()
             + "\n\nYou are an independent auditor. The project in your working directory is the "
             "delivered work. For each requirement, check the delivered files themselves: code, "
             "interface, tests and documentation. Documentation must agree with the goal, not only "
@@ -5673,10 +5698,96 @@ class Session:
                 if not resolved:
                     met, why = False, f"MET claimed without a file or test that exists in the project ({why[:100]})"
             found[m.group(1).upper()] = (met, why)
+        lowered = self._lower_unexecuted(found)
         verdicts = {r: found.get(r, (False, "the auditor gave no verdict")) for r in audited}
         self.requirement_audits.append(dict(auditor=auditor, verdicts={r: dict(met=ok, why=why)
-                                                                       for r, (ok, why) in verdicts.items()}))
+                                                                       for r, (ok, why) in verdicts.items()},
+                                            lowered=lowered))
         return verdicts
+
+    def _record_not_run(self, key, role, reply) -> None:
+        """Keep each 'NOT RUN:' line an editing call wrote, with the
+        requirements its task covers (series rule-119c83f f2: t3 and t4 said
+        their browser scenario and search commands did not run, and the audit
+        still found all five requirements met)."""
+        task = getattr(self._active_spec, "task_id", "run")
+        for match in _NOT_RUN_LINE.finditer(reply or ""):
+            item, _, why = match.group(1).partition(" - ")
+            item = item.strip().strip("`")
+            if not item or item.lower() in ("none", "nothing", "n/a"):
+                continue
+            entry = dict(task=task, role=role, author=key, item=item[:300], why=why.strip()[:300],
+                         requirements=list(self._current_covers), after_check=len(self.checks))
+            if not any(e["task"] == task and e["item"] == entry["item"] for e in self.unexecuted_acceptance):
+                self.unexecuted_acceptance.append(entry)
+                self._note(f"task {task}: {role} reported NOT RUN: {entry['item'][:120]}")
+
+    def _standing_not_run(self) -> List[dict]:
+        """Reported NOT RUN items no later passing required check ran. Only a
+        measured run lifts one: a later check that passed and whose command
+        names the item. A later model's word never does."""
+        standing = []
+        for entry in self.unexecuted_acceptance:
+            ran = False
+            for check in self.checks[entry["after_check"]:]:
+                if not check.get("passed"):
+                    continue
+                commands = [str(check.get("command") or "")] + [
+                    str(r.get("command") or "") for r in check.get("receipts") or ()]
+                if len(entry["item"]) >= 3 and any(entry["item"] in c for c in commands):
+                    ran = True
+                    break
+            if not ran:
+                standing.append(entry)
+        return standing
+
+    def _not_run_block(self) -> str:
+        """The audit's view of what is not shown to have run."""
+        unrun = list(getattr(self, "unnamed_test_files", []) or [])
+        standing = self._standing_not_run()
+        if not unrun and not standing:
+            return ""
+        lines = []
+        if unrun:
+            lines.append("- test files no required check names (not shown to have run): " + ", ".join(unrun))
+        for entry in standing:
+            lines.append(f"- task {entry['task']} ({entry['role']}) reported NOT RUN: {entry['item']}"
+                         + (f" - {entry['why']}" if entry["why"] else "")
+                         + (f" (covers {', '.join(entry['requirements'])})" if entry["requirements"] else ""))
+        return ("\n\n## Not shown to have run (harness records)\n" + "\n".join(lines)
+                + "\nA requirement whose only evidence is a file listed here is NOT MET, and so is a "
+                "requirement a task covering it reported NOT RUN: name what did not run.")
+
+    def _lower_unexecuted(self, found: dict) -> List[dict]:
+        """Turn a MET into NOT MET where the record shows its acceptance did
+        not run, whatever the auditor wrote; never the other way.
+
+        A MET whose resolved citations are all test files no required check
+        names is not shown (integration.uncovered_tests; files outside those
+        families are not classified, so citing them is not lowered here). A
+        requirement a task covering it reported NOT RUN for is not met while
+        that report stands, even when the MET also cites a file that did run:
+        a unit file that ran does not stand in for a scenario that did not.
+        """
+        unrun = set(getattr(self, "unnamed_test_files", []) or [])
+        standing = self._standing_not_run()
+        lowered = []
+        for rid, (met, why) in list(found.items()):
+            if not met:
+                continue
+            cited = sorted({c.split("::")[0] for c in self._resolve_citations(why)})
+            reason = ""
+            if unrun and cited and all(c in unrun for c in cited):
+                reason = (f"MET cites only test files no required check names ({', '.join(cited)}); "
+                          "not shown to have run")
+            blockers = [e for e in standing if rid in e["requirements"]]
+            if blockers:
+                reason = ("acceptance reported NOT RUN by the covering task: "
+                          + "; ".join(f"{e['task']}: {e['item']}" for e in blockers))[:300]
+            if reason:
+                found[rid] = (False, reason)
+                lowered.append(dict(requirement=rid, auditor_said=why[:200], reason=reason))
+        return lowered
 
     def _confirm_goal_met(self) -> bool:
         """After the cap: ask once whether the goal is met, and never act on it.
@@ -6790,8 +6901,30 @@ class Session:
             + _review_subject_note(spec)
             + (_DESIGN_REVIEW_LENS + (self._design_note or "")
                if self._collaboration_applicable(spec) else "")
+            + self._changed_originals_note()
             + self._review_turn_budget_note(peer)
         )
+
+    def _changed_originals_note(self) -> str:
+        """For a reviewer: run-start test or support files that now differ.
+        f2's t2 changed the original helper tests/ui/load_app.js to fit the
+        new code and its review approved it without the edit being named."""
+        from .integration import changed_originals
+        from .project import Project
+        if not self._original_tests or not self.project:
+            return ""
+        try:
+            current = Project(self.project, exclude=self.config.project_excludes).contents()
+        except Exception:  # noqa: BLE001 -- a note, never a failure
+            return ""
+        changed = changed_originals(self._original_tests, current)
+        if not changed:
+            return ""
+        shown = ", ".join(changed[:20]) + (f" and {len(changed) - 20} more" if len(changed) > 20 else "")
+        return ("\n\nHarness record: these test or test-support files existed when the run started and "
+                f"now differ or are gone: {shown}. Their run-start versions are run against this code "
+                "separately. Judge each edit: a test or helper changed to fit the code is not evidence "
+                "that the code meets the original tests.")
 
     def _revision_prompt(self, spec: TaskSpec, draft: str, notes: List[str]) -> str:
         joined = "\n\n".join(notes)
@@ -7205,7 +7338,123 @@ class Session:
             after = project.contents()
             if before != after:
                 return replace(result, passed=False, output=_describe_tree_change(before, after))
+            return self._with_original_tests(gate, result, after)
         return result
+
+    def _snapshot_original_tests(self) -> None:
+        """Keep the run-start bytes of every test and support file.
+
+        Series rule-119c83f f2: t2 changed the original helper
+        tests/ui/load_app.js so the new code loaded under it, the gate ran the
+        edited helper and passed, and the original tests failed against the
+        delivered code. The bytes kept here are what a later check restores
+        (Codex decision D, #35 6076286834)."""
+        from .integration import original_tests
+        from .project import Project
+        try:
+            self._original_tests = original_tests(
+                Project(self.project, exclude=self.config.project_excludes).contents())
+        except Exception as exc:  # noqa: BLE001 -- recorded, never a silent pass
+            self._original_tests = None
+            self._unverified_once("The run-start test files could not be read, so changes to "
+                                             f"them cannot be checked: {type(exc).__name__}: {str(exc)[:160]}")
+
+    def _with_original_tests(self, gate, result, current: dict):
+        """The gate's result, joined by the original tests when a run-start
+        test or support file now differs.
+
+        Unchanged originals need no second run: the gate already ran them as
+        they are. When any changed or was removed, the same commands run in a
+        copy of the current source with the run-start bytes restored
+        (integration.run_original_tests), and a failure there fails the check
+        with its own receipts, so the ordinary repair and attribution rules
+        apply to it. A copy that cannot be checked is an open unverified
+        finding, never a pass."""
+        from .integration import GateReceipt, changed_originals, run_original_tests
+        originals = self._original_tests
+        if not originals:
+            return result
+        changed = changed_originals(originals, current)
+        if not changed:
+            return result
+        task = getattr(self._active_spec, "task_id", "run")
+        baseline, problem = run_original_tests(gate, self.project, originals, current)
+        self._verify_dependencies(f"during original tests ({task})")
+        skipped = [r for r in (baseline.receipts if baseline else ()) if r.status == "skipped"]
+        self.original_test_runs.append(dict(
+            task=task, changed=changed, passed=None if baseline is None else baseline.passed,
+            problem=problem, receipts=[dict(id=r.id, status=r.status, reason=r.reason, tests=r.tests)
+                                       for r in (baseline.receipts if baseline else ())]))
+        for receipt in skipped:
+            self._unverified_once(f"Task {task}: {receipt.id} did not run against the run-start "
+                                             f"test files: {receipt.reason}")
+        if baseline is None:
+            self._unverified_once(f"Task {task}: run-start test files changed "
+                                             f"({', '.join(changed)}) and the original tests were not run: {problem}")
+            return result
+        self._note(f"task {task}: original tests {'passed' if baseline.passed else 'FAILED'} against the "
+                   f"current source (changed run-start files: {', '.join(changed)})")
+        inner = result.receipts or (GateReceipt(
+            id="check", status="passed" if result.passed else "failed",
+            reason="exit 0" if result.passed else "nonzero exit", required=True,
+            command=result.command, returncode=result.returncode, output=result.output,
+            report=result.report),)
+        heading = (f"Original tests (run-start versions of {', '.join(changed)}) against the current "
+                   f"source: {'PASSED' if baseline.passed else 'FAILED'}")
+        return replace(result, passed=result.passed and baseline.passed,
+                       returncode=result.returncode if not result.passed else baseline.returncode,
+                       output=f"{result.output}\n\n{heading}\n{baseline.output}"[-8_000:],
+                       receipts=tuple(inner) + tuple(baseline.receipts))
+
+    def _original_tests_at_done(self) -> str:
+        """At DONE: the original tests again when run-start bytes differ.
+        Returns the refusal text, or '' when they pass or nothing changed;
+        a run that cannot check them is an open unverified finding."""
+        from .integration import changed_originals
+        from .project import Project
+        if not self._original_tests or not self.project:
+            return ""
+        current = Project(self.project, exclude=self.config.project_excludes).contents()
+        changed = changed_originals(self._original_tests, current)
+        if not changed:
+            return ""
+        key = hashlib.sha256(b"".join(n.encode() + b"\0" + hashlib.sha256(d).digest()
+                                      for n, d in sorted(current.items()))).hexdigest()
+        cached = getattr(self, "_done_original_tests", None)
+        if cached and cached[0] == key:
+            return cached[1]
+        refusal = self._run_original_tests_at_done(current, changed)
+        self._done_original_tests = (key, refusal)
+        return refusal
+
+    def _run_original_tests_at_done(self, current: dict, changed: List[str]) -> str:
+        from .integration import run_original_tests
+        gate = self.config.integration_gate
+        if gate is None:
+            self._unverified_once("Run-start test files changed and no check is configured to "
+                                             "run the original tests against the delivered source.")
+            return ""
+        baseline, problem = run_original_tests(gate, self.project, self._original_tests, current)
+        self._verify_dependencies("during original tests (DONE)")
+        self.original_test_runs.append(dict(
+            task="DONE", changed=changed, passed=None if baseline is None else baseline.passed,
+            problem=problem, receipts=[dict(id=r.id, status=r.status, reason=r.reason, tests=r.tests)
+                                       for r in (baseline.receipts if baseline else ())]))
+        if baseline is None:
+            self._unverified_once(f"At DONE: run-start test files changed ({', '.join(changed)}) "
+                                             f"and the original tests were not run: {problem}")
+            return ""
+        failed = [r for r in baseline.receipts if r.required and r.status not in ("passed", "skipped")]
+        for receipt in baseline.receipts:
+            if receipt.status == "skipped":
+                self._unverified_once(f"At DONE: {receipt.id} did not run against the run-start "
+                                                 f"test files: {receipt.reason}")
+        if not failed:
+            return ""
+        return ("\n\n--- DONE SENT BACK ---\nThe project's original tests (their run-start versions) fail "
+                "against the delivered source:\n"
+                + "\n".join(f"- {r.id}: {r.status}: {r.reason}" for r in failed)
+                + "\nName a task that makes the code pass the original tests (with COVERS).")
 
     def _verifier_prompt(self, spec: TaskSpec, draft: str, verifier: str) -> str:
         label = resolve(verifier)

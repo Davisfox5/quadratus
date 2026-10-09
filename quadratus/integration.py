@@ -727,3 +727,122 @@ class GateSuite:
         passed = not changed and all(r.status == 'passed' for r in receipts if r.required)
         output = '\n'.join(f'{r.id}: {r.status}: {r.reason}\n{r.output}' for r in receipts)
         return GateResult(passed, 'gate suite', 0 if passed else 1, output, tuple(receipts))
+
+
+#: Folders whose files are test support (helpers, fixtures, harness stubs)
+#: as well as tests. Series rule-119c83f f2: the original helper
+#: tests/ui/load_app.js matched no test-file pattern and was edited to fit the
+#: code, so the gate passed on a harness the original tests never used.
+_TEST_DIRS = frozenset({'tests', 'test', '__tests__', 'spec', 'specs'})
+_TEST_SUPPORT_NAMES = frozenset({'conftest.py'})
+#: Runtime-dependency trees a copy may need; linked, never copied, and
+#: guarded by quadratus.deptree like the project's own checks.
+_DEPENDENCY_DIRS = ('node_modules', '.venv', 'venv', 'env')
+
+
+def is_test_support(path: str) -> bool:
+    """A test file, or a file under a test folder (helpers and fixtures)."""
+    parts = path.split('/')
+    return (_test_family(path) is not None or parts[-1] in _TEST_SUPPORT_NAMES
+            or any(part in _TEST_DIRS for part in parts[:-1]))
+
+
+def original_tests(contents: dict) -> dict:
+    """The run-start bytes of every test and test-support file."""
+    return {name: data for name, data in contents.items() if is_test_support(name)}
+
+
+def changed_originals(originals: dict, current: dict) -> List[str]:
+    """Run-start test or support files whose bytes changed or that are gone."""
+    return sorted(name for name, data in originals.items() if current.get(name) != data)
+
+
+def _gate_commands(gate, root: Path):
+    """The gate's commands with cwd relative to ``root``, or None when they
+    cannot be read (a gate other than these two, or one outside the project)."""
+    if isinstance(gate, GateSuite):
+        base = gate.cwd
+        commands = list(gate.commands)
+    elif isinstance(gate, IntegrationGate):
+        base = Path(gate.cwd or root).resolve()
+        commands = [GateCommand(id='check', argv=tuple(str(a) for a in gate.command),
+                                timeout=gate.timeout, minimum_tests=gate.minimum_tests)]
+    else:
+        return None
+    if not base.is_relative_to(root):
+        return None
+    prefix = base.relative_to(root)
+    return [replace(c, cwd=(prefix / c.cwd).as_posix()) for c in commands]
+
+
+def run_original_tests(gate, root, originals: dict, current: dict):
+    """Run the gate's own commands against the current source with every
+    run-start test and support file restored to its run-start bytes.
+
+    A copy is built from ``current`` (the project as it is now): test and
+    support files added during the run are left out, changed or removed ones
+    are written back from ``originals``, and everything else is the current
+    source. Nothing is written to the project. A command that names a test
+    file added during the run cannot run there and is skipped with that
+    reason; tests the run added are checked by the ordinary gate, not here.
+
+    Returns ``(result, problem)``: a :class:`GateResult` whose receipts are
+    named ``original-tests:<id>``, or ``None`` and why nothing was checked.
+    """
+    root = Path(root).resolve()
+    commands = _gate_commands(gate, root)
+    if commands is None:
+        return None, 'the check commands could not be read for an original-test run'
+    with tempfile.TemporaryDirectory(prefix='quadratus-original-tests-') as directory:
+        copy = Path(directory).resolve()
+        for name, data in current.items():
+            if is_test_support(name) and name not in originals:
+                continue
+            target = copy / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            try:
+                shutil.copymode(root / name, target)
+            except OSError:
+                pass
+        for name, data in originals.items():
+            target = copy / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        for name in _DEPENDENCY_DIRS:
+            source = root / name
+            if source.is_dir() and not source.is_symlink():
+                (copy / name).symlink_to(source, target_is_directory=True)
+        inside = re.compile(re.escape(str(root)) + r'(?=/|$)')
+        mapped = []
+        for command in commands:
+            argv = tuple(inside.sub(str(copy), a) for a in command.argv)
+            added = [a for a in argv[1:] if not a.startswith('-') and _test_family(a)
+                     and _relative(command.cwd, a, copy) not in originals]
+            mapped.append(replace(command, argv=argv, skip_reason=command.skip_reason or (
+                f"names test file(s) added during the run: {', '.join(added)}" if added else '')))
+        suite = GateSuite(mapped, cwd=copy)
+        result = suite.run()
+    receipts = tuple(replace(r, id=f'original-tests:{r.id}', command=inside.sub('<project>', r.command)
+                             .replace(str(copy), '<original-tests>'),
+                             output=r.output.replace(str(copy), '<original-tests>'))
+                     for r in result.receipts)
+    if not any(r.status != 'skipped' for r in receipts):
+        reasons = '; '.join(f'{r.id}: {r.reason}' for r in receipts) or 'no command'
+        return None, f'no check command could run against the original tests ({reasons})'
+    output = '\n'.join(f'{r.id}: {r.status}: {r.reason}\n{r.output}' for r in receipts)
+    passed = all(r.status in ('passed', 'skipped') for r in receipts if r.required) and any(
+        r.status == 'passed' for r in receipts)
+    return GateResult(passed, 'original tests', 0 if passed else 1, output, receipts), ''
+
+
+def _relative(cwd: str, operand: str, copy: Path) -> str:
+    """``operand`` as a project-relative path, for a command run in ``cwd``."""
+    path = Path(operand)
+    if path.is_absolute():
+        try:
+            return path.resolve().relative_to(copy).as_posix()
+        except ValueError:
+            return operand
+    import posixpath
+    return posixpath.normpath(posixpath.join(cwd, operand))

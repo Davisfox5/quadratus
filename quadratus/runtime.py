@@ -445,7 +445,10 @@ class Fleet:
                     "file a listed command already names. "
                     "Use Read, Grep and Glob for inspection. If an ungranted command is denied, "
                     "do not retry variants, delegate it or use another tool to execute it. "
-                    "Report the unrun check and finish with the edits and available evidence. "
+                    "Report each check or acceptance step you could not run on its own line "
+                    "'NOT RUN: <command or file> - <why>', above the closing CHANGED line, and finish "
+                    "with the edits and available evidence; a NOT RUN line keeps the requirement it "
+                    "serves open until a check runs it. "
                     "Do not change permissions."
                 )
             before = self.project.contents()

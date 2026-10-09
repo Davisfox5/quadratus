@@ -542,6 +542,31 @@ Key design decisions already settled:
   Nothing outside the project is guarded. The lead's cap
   (`lead_max_turns`) binds revision, gate-fix and design-fix as well as the
   draft; a capped fix is one attempt spent and the checks still decide.
+- **Run-start tests are checked in their run-start form; acceptance that did
+  not run is never audited MET** (series rule-119c83f f2, Codex decision D,
+  #35 6076286834). f2's t2 changed the original helper
+  `tests/ui/load_app.js` so new code loaded under it, the gate ran the edited
+  helper and passed, and every original Node test failed against the
+  delivered code; t3 and t4 said their browser scenario did not run and the
+  audit marked all five requirements met. Every test and test-support file
+  (`integration.is_test_support`: test-file patterns, `conftest.py`, anything
+  under `tests/`, `test/`, `__tests__/`, `spec(s)/`) is kept at run start.
+  When one differs or is gone, the gate's own commands also run in a copy of
+  the current source with those bytes restored and the run's added test files
+  left out (`run_original_tests`); its receipts (`original-tests:<id>`) join
+  the check, so a failure buys the ordinary gate-fix and attribution rules,
+  and DONE runs it again. A command naming a test file the run added cannot
+  run there and is an open unverified finding, as is a gate whose commands
+  cannot be read; neither is a pass. Unchanged originals are not re-run. The
+  audit is shown the unnamed test files and every `NOT RUN: <item> - <why>`
+  line an editing call wrote, and lowers a MET deterministically when every
+  citation is an unnamed test file, or when a task covering the requirement
+  reported NOT RUN and no later passing check's command names the item. A
+  run unit file does not stand in for a scenario that did not run. Downward
+  only: no reply raises a verdict, and prose without the marker is not read.
+  Reviewers are told which run-start test files changed. A goal that
+  legitimately changes behaviour an original test pins will fail this check;
+  there is no exemption and no new grant.
 - **The measured diff is the truth; the CHANGED line is the lead's account of
   it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
   project around every editing call, so it already knows what changed. The
