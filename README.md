@@ -1,0 +1,1 @@
+Evidence-only completed736e94b source-gate supplement. SixP2 NOTCLEARED review retained. Complete root Mac test/install receipts and source/wheel bytes losslessly archived. No engine source or live input changes. Decode gzip JSON then content_base64 per file; verify manifest SHA256.
