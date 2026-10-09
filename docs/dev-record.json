@@ -54,11 +54,26 @@
             "quadratus/session.py"
           ],
           "at": "2026-09-30T15:17:00Z"
+        },
+        {
+          "reviewer": "codex",
+          "sha": "5cdd1e5822d24017c4e1c7831303d89762846b05",
+          "verdict": "cleared",
+          "evidence": "#35 6090442940 (body ae7d65de... untrimmed): SCOPED CONTRACT CORRECTION CLEARED for d78ba0b..5cdd1e5 quadratus/contract.py +9/-1 (039bebb); embedded bundle a59668f4..., report 59aa1063..., receipt 6412e4bb..., 8 files 0 mismatches; 40 independent controls (20 on 5cdd1e5, 20 on c49d9f0). Scope contract.py only; the earlier session.py review is not widened",
+          "scope": [
+            "quadratus/contract.py"
+          ],
+          "at": "2026-10-09T22:39:15Z",
+          "coverage": "partial",
+          "uncovered": [
+            "quadratus/session.py"
+          ]
         }
       ],
       "blockers": [],
       "decisions": [
-        "live confirmation passed: run 20261001T001902Z-537183f7 (#35 comment 5922171568)"
+        "live confirmation passed: run 20261001T001902Z-537183f7 (#35 comment 5922171568)",
+        "claude: claude: contract.py gap reviewed by Codex (#35 6090442940), recorded as a scoped contract.py review of 5cdd1e5 at its real time. No single review covers session.py and contract.py together, so task-level composite coverage stays exposed in ready until a concrete composite review exists; neither review was widened."
       ],
       "integrated": {
         "sha": "5cdd1e5822d24017c4e1c7831303d89762846b05",
