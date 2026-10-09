@@ -278,6 +278,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
+    stale_fixtures = _retire_stale_fixtures(project.root, run_dir, progress)
     before = project.contents()
     scan = scan_repo(project.root)
     code_map = CodebaseMap(state / 'codebase-map.jsonl')
@@ -487,6 +488,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'policy_plans': getattr(session, 'policy_plans', []),
         'budget': budget.snapshot() if budget else None,
         'selected_limits': selected,
+        'stale_capture_fixtures': stale_fixtures,
         'delegation': reconcile(delegation.events, delegation.native_children.values()),
         'scope_reports': [
             {'within_scope': r.within_scope, 'out_of_scope': r.out_of_scope,
@@ -499,6 +501,36 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     (run_dir / 'findings.json').write_text(
         json.dumps(list(getattr(session, 'findings', []) or []) if session else [], indent=2), encoding='utf-8')
     return ProjectResult(completed, report, run_dir, diff, error)
+
+
+def _retire_stale_fixtures(root, run_dir, progress=None):
+    """Move capture-only samples left by an earlier run out of the way.
+
+    Task ids restart at t1 on every run, and an existing nonempty file under
+    ``.quadratus/capture-fixtures/<task id>/`` counts as supplied, so a later
+    run's t1 could upload bytes dictated for a different task, and the bound
+    writer refuses to overwrite them (Codex review comment 4226680384 on
+    #53). The folder is harness state (``.quadratus`` is never project
+    source), so it is moved, not deleted, into this run's own directory
+    before any model call; the bytes stay readable there. A symlink anywhere
+    on the way is left alone and named: the capture refuses linked fixtures
+    on its own. Returns where the old samples went, or None.
+    """
+    import shutil
+    base = Path(root)
+    folder = base / '.quadratus' / 'capture-fixtures'
+    for current in (base / '.quadratus', folder):
+        if current.is_symlink():
+            if progress:
+                progress(f'Stale capture fixtures not moved: {current.relative_to(base).as_posix()} is a symlink')
+            return None
+    if not folder.is_dir() or not any(folder.iterdir()):
+        return None
+    target = run_dir / 'stale-capture-fixtures'
+    shutil.move(str(folder), str(target))
+    if progress:
+        progress(f'Capture-only samples from an earlier run moved to {target}')
+    return str(target)
 
 
 def _selected_limits(max_tasks, run_limits, survey, lead_turns=None, lead_source=None):

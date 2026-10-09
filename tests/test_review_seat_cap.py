@@ -289,6 +289,30 @@ def test_a_capped_design_review_is_a_review_with_no_verdict(tmp_path, monkeypatc
     assert "the header" not in joined, "the capped reviewer's narration is not a finding"
 
 
+def test_a_capped_design_review_still_records_the_delivery(tmp_path, monkeypatch):
+    """Codex review comment 4226680387 on #53: the capped reviewer ran, so the
+    renders reached its copy; the early return used to skip the delivered
+    edge and the delivery record, reporting delivery as unsatisfied."""
+    from quadratus.memory import TaskMemory
+    from quadratus.outcome import TaskOutcome
+    from tests.test_preferences_in_product import _design_session, _fake_evidence, _ui
+
+    def invoke(model, prompt, **k):
+        role = (invocation_context.get() or {}).get("role")
+        if role == "design-review":
+            raise TurnLimitReached("capped", partial_text="BLOCKING: the header", turns=20)
+        return "tried"
+
+    session = _design_session(tmp_path, invoke)
+    _fake_evidence(tmp_path)
+    monkeypatch.setattr(Session, "_harness_captures", lambda self, spec: False)
+    session._outcome = outcome = TaskOutcome("t6", "ui")
+    session._check_design(_ui(), "grok:default", ["claude:opus"], TaskMemory("t6", "grok:default", session.store))
+    assert outcome.edges.get("delivered") is True
+    assert outcome.delivery and outcome.delivery["reviewer"] == "claude:opus" and outcome.delivery["files"]
+    assert session.design_checks[-1]["final_review"]["verdict"].startswith("UNFINISHED")
+
+
 # -- the lead is told what the harness measures ---------------------------------
 
 

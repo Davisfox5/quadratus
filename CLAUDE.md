@@ -452,6 +452,14 @@ Key design decisions already settled:
   `min(reserve, SUMMARY_CALL_RESERVE_TOKENS)`, and the record carries the
   lead turn cap the session is built with and its source
   (`run_budget.effective_lead_turns`, the same rule the runner applies).
+- **Capture-only samples belong to one run** (Codex review on #53,
+  2026-10-09). Task ids restart at t1, so a sample an earlier run left under
+  `.quadratus/capture-fixtures/t1/` counted as supplied for the next run's
+  t1. `project_run` moves the folder into the new run's
+  `stale-capture-fixtures/` before any model call: moved, never deleted, and
+  never a source change, since `.quadratus` is not project source. A linked
+  folder is left alone and named. A capped design review still records the
+  delivery: the model ran, so the renders reached its copy.
 - **A runtime-dependency tree is part of what a check proves**
   (`deptree.py`, contract v2 on #25). Run 19: a lead wrote a
   `node_modules` shim the source checks could not see, and the project's

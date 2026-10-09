@@ -5151,17 +5151,24 @@ class Session:
             with invocation(spec.task_id, "design-review"):
                 verdict = self._invoke_model(reviewer, prompt + self._review_turn_budget_note(reviewer))
         except TurnLimitReached as exc:
-            # Neither APPROVED nor a BLOCKING line: the caller files it as a
-            # review that gave no verdict (unverified), not as a design defect.
+            # The model ran, so the renders reached its copy: delivery is
+            # recorded before the capped call is filed (Codex review comment
+            # 4226680387 on #53). Neither APPROVED nor a BLOCKING line: the
+            # caller files it as a review that gave no verdict (unverified),
+            # not as a design defect.
+            self._record_delivery(reviewer, hashes)
             return self._capped_review(spec, reviewer, "design review", exc)
         except EvidenceNotDelivered as exc:
             self._edge("delivered", False)
             return f"BLOCKING: the renders could not be handed to the reviewer ({str(exc)[:300]})"
-        # Delivered as bound: the files and hashes the copy was checked against.
+        self._record_delivery(reviewer, hashes)
+        return verdict
+
+    def _record_delivery(self, reviewer, hashes) -> None:
+        """Delivered as bound: the files and hashes the copy was checked against."""
         self._edge("delivered", True)
         if self._outcome is not None:
             self._outcome.delivery = dict(reviewer=reviewer, files=dict(hashes))
-        return verdict
 
     def _parallel_enabled(self) -> bool:
         policy = self.config.repository_policy
