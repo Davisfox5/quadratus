@@ -2126,8 +2126,8 @@
       "claimed_at": "2026-10-09T07:38:35Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "5292fc2c5871b3425e7e97ac4cea595d9c8eaf5f",
-        "at": "2026-10-09T11:03:37Z"
+        "sha": "f2f66ffdc8180d916a1629fa26f63b0173729d0d",
+        "at": "2026-10-09T11:32:46Z"
       },
       "reviews": [
         {
@@ -2173,7 +2173,8 @@
         "claude: d157378 CI 4/4 success (check runs 113769108032, 113769107624, 113769090542, 113769090375).",
         "claude: Codex review 67c9fad..d157378 NOT CLEARED, T1-T4 (#53 6079041695 / #35 6079042096, body 7bb2f91d9823478c5d52b94ea24bffa8920b50bdd616275cbb08f1cb8f1cdd7a; archive 5b4f32cc: gz bd3c287e..., bundle 8a846a6d..., 135 files 0 mismatches; report f5743f74..., receipt 07f2a170...). Root Mac full suite on d157: 3328 passed 44 skipped. Ack #46 6079073056 (body f2ca9d307f9b48e92f0f1bd8ea95773e1c8aedb536f674a50b9ff28e91646a70). Corrective head e530b89 (tree 9cbe75c2) delivered #53 6079239814 (body 28061e6d14885b1a7f599c7de2ce0058b3dde6a16c3b4b89998029c88d010dd0); full suite started 10:39:05Z, pending. Four hash-only probe packets posted #46 6079249555 (body 0e1cc178ef0b8ef9e955f41d744e16c2d40db0d9066a9c6d9131e2372113e934; gz e97a3e5a...).",
         "claude: Codex review d157378..e530b89 NOT CLEARED, U1-U2 (#53 6079407297 / #35 6079407672, body f7cb9c9d638e3bcbcf38dbd8e5b6012df5de476f48a73aa08bcb9082cb2ec47d; archive c49c69e4: gz ef844b5f..., bundle fe8e7591..., 120 files 0 mismatches; report 1f850fe3..., receipt 6f3fe6e8...). Ack #46 6079433572 (body 4fa396dcd36950452df337e8a8e3cf0c1e3aa3ec47303cc744444c7169fc09a9). Root Mac suite on e530: 3332 passed 44 skipped. Corrective head 5292fc2 (tree f43426be) delivered #53 6079598944 (body 46a4190d6b225f308bd5d2e08bfdb92ec6a7522d4a9ece76adf24d4661c89dba). My e530 local suite (full9.log 85609502...) overlapped source edits and is not evidence; suite for 5292fc2 running in a dedicated worktree. v4/v5 probe bytes posted #46 6079439713-6079440974, index 6079452144 (body 983940b755b09eae606d864623656851821e207d9fcb6401d4a21f9dbb25a5a7).",
-        "claude: Codex review e530b89..5292fc2 NOT CLEARED, V1-V2 regressions (#53 6079829203 / #35 6079829621, body 5abbc60a756e8e78da42f26e95bbbfeb03b03d00567aec00c4f55b1f2b701cf9; archive 30e8bc59: gz 1a7e94e1..., bundle 0b9839af..., 111 files 0 mismatches; report 92868591..., receipt 88e9e0c2...). Root Mac suite on 5292: 3335 passed 44 skipped. Ack #46 6079848024 (body 8a15c0f1637f136ca2de7eba639597e4450066bac56d85e2fed4a08180beb0e3). Local 5292 suite (dedicated worktree): 3320 passed, 46 skipped, 13 env failures, full10.log a615666631f1a5062c11237a387caaf727ddb23863728c62ec7a20b84827d85a; #53 6079865308 (body 7b7006a32e66fb1cf07c6ecc80bd21d14036e7fa30b110070bc0bf3c7cca44b8)."
+        "claude: Codex review e530b89..5292fc2 NOT CLEARED, V1-V2 regressions (#53 6079829203 / #35 6079829621, body 5abbc60a756e8e78da42f26e95bbbfeb03b03d00567aec00c4f55b1f2b701cf9; archive 30e8bc59: gz 1a7e94e1..., bundle 0b9839af..., 111 files 0 mismatches; report 92868591..., receipt 88e9e0c2...). Root Mac suite on 5292: 3335 passed 44 skipped. Ack #46 6079848024 (body 8a15c0f1637f136ca2de7eba639597e4450066bac56d85e2fed4a08180beb0e3). Local 5292 suite (dedicated worktree): 3320 passed, 46 skipped, 13 env failures, full10.log a615666631f1a5062c11237a387caaf727ddb23863728c62ec7a20b84827d85a; #53 6079865308 (body 7b7006a32e66fb1cf07c6ecc80bd21d14036e7fa30b110070bc0bf3c7cca44b8).",
+        "claude: Corrective head f2f66ff (tree 08b1b697) for V1-V2 delivered #53 6080005577 (body ef4f33a67e7671cc92cbad62c8dddcdc33379d69bb2c09662c5380e829cf6dfc); dedicated-worktree full suite started 11:31:09Z, pending. Probe bytes for #46 6079859754: parts 6080011335/6080011716, archive 8dcfdf6d..., index #46 6080019701 (body cbd3c5d4d1d0770043cab6e9abda3f8b50b60242088bd4c591c160428f1de533)."
       ]
     }
   ],
