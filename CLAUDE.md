@@ -924,7 +924,11 @@ Key design decisions already settled:
   refusal names the file and both digests (`file`, `recorded`,
   `observed`), never inventing an observed digest for a missing file, and
   the approval snapshot (`_capture_state`, `_snapshot_files`) covers each
-  view's `evidence.json` beside its screenshot.
+  view's `evidence.json` beside its screenshot. A measurement that could
+  not be read is never dropped (Codex review of 4a273a3): `capture_task`
+  stops the attempt unverified when a view's files cannot be measured, and
+  `capture_argv` writes an unreadable digest as `missing`, which the parser
+  keeps as a present measurement that matches nothing.
 - **A frontend label must name something that renders** (recovery
   diagnostic lane, 2026-10-09). The orchestrator picked kinds from bare
   label names and was never told that `frontend` commits a task to a

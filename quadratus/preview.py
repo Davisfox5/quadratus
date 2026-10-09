@@ -419,6 +419,11 @@ def running(profile: CaptureProfile, root, deadline: Optional[float] = None):
         shutil.rmtree(tempdir, ignore_errors=True)
 
 
+#: How a harness measurement that could not be read is written on the
+#: capture command: present, and never a match.
+MISSING_DIGEST = "missing"
+
+
 def capture_argv(profile: CaptureProfile, task_id: str, capture: dict, view: Optional[str] = None,
                  attempt: Optional[str] = None, measured: Optional[dict] = None) -> List[str]:
     """The harness's own capture command for a task's declared capture;
@@ -442,8 +447,10 @@ def capture_argv(profile: CaptureProfile, task_id: str, capture: dict, view: Opt
             argv += [f"--{step['action']}", step["selector"]]
     for name, files in sorted((measured or {}).items()):
         for leaf, digest in sorted((files or {}).items()):
-            if isinstance(digest, str):
-                argv += ["--measured", name, leaf, digest]
+            # A digest that could not be read travels as "missing", never as
+            # nothing: dropping it would turn a held measurement back into
+            # self-capture reuse (Codex review of 4a273a3).
+            argv += ["--measured", name, leaf, digest if isinstance(digest, str) else MISSING_DIGEST]
     if view:
         argv += ["--view", view]
     if attempt:
@@ -492,6 +499,12 @@ def capture_task(profile: CaptureProfile, root, task_id: str, capture: dict,
             taken[view] = view_receipt(root, task_id, view)
             if receipt is not None:
                 receipt[view] = taken[view]
+            unread = sorted(leaf for leaf, digest in taken[view].items() if not isinstance(digest, str))
+            if unread:
+                # A view the harness cannot measure is not a view the next
+                # one may be reused beside: the attempt stops unverified.
+                return (f"the {view} capture left {', '.join(unread)} unreadable, so the harness could not "
+                        "measure it; the attempt stops before the next view")
             allowance -= spent
         return ""
     failure, _ = _capture_once(profile, root, capture_argv(profile, task_id, capture), deadline,

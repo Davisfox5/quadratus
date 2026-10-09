@@ -1704,3 +1704,45 @@ def test_the_approval_snapshot_covers_the_render_record_beside_each_screenshot(t
     assert files[".quadratus/design-evidence/t1/mobile/evidence.json"] == state["records"]["mobile"]
     (evidence_dir(tmp_path, "t1") / "mobile" / "evidence.json").unlink()
     assert Session._capture_state(session, "t1")[2]["records"]["mobile"] is None, "unreadable is None, never invented"
+
+
+def test_an_unreadable_measurement_is_carried_as_missing_never_dropped(tmp_path, monkeypatch):
+    """Codex review of 4a273a3: a desktop measurement whose every digest was
+    unreadable produced no --measured arguments, so the mobile capture
+    reused desktop against its own manifest as if it were a self-capture."""
+    from quadratus import browser
+    from quadratus import design_evidence as de
+    from quadratus.preview import MISSING_DIGEST, CaptureProfile, capture_argv
+    profile = CaptureProfile(preview=("true",), origin="http://127.0.0.1:1")
+    capture_decl = {"path": "/", "steps": [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]}
+    argv = capture_argv(profile, "t1", capture_decl, "mobile", "ab" * 8,
+                        measured={"desktop": {"page.png": None, "evidence.json": None}})
+    assert argv[-12:-4] == ["--measured", "desktop", "evidence.json", MISSING_DIGEST,
+                            "--measured", "desktop", "page.png", MISSING_DIGEST]
+    root = _project(tmp_path)
+    monkeypatch.setattr(browser, "render_page", _fake_render(root))
+    page = str(root / "index.html")
+    base = [page, "t1", str(root), "--confirm", ".delete-btn", CONFIRM["message"], "--wait", "#projects-empty"]
+    assert de.main(base + ["--view", "desktop", "--attempt", "ef" * 8]) == 0
+    assert de.main(base + ["--measured", "desktop", "page.png", "missing", "--measured", "desktop",
+                           "evidence.json", "missing", "--view", "mobile", "--attempt", "ef" * 8]) == 0
+    summary = _read_summary(root)
+    assert set(summary["views"]) == {"mobile"}, "a missing measurement refuses reuse, as an empty one does"
+    assert summary["not_kept"]["desktop"]["mismatch"] is False
+
+
+def test_capture_task_stops_when_a_view_cannot_be_measured(tmp_path, monkeypatch):
+    from quadratus import preview
+    seen = []
+
+    def fake_capture(profile, root, argv, deadline, allowance):
+        seen.append(argv[argv.index("--view") + 1])
+        return "", 1.0                      # reports success but leaves no files to measure
+    monkeypatch.setattr(preview, "_capture_once", fake_capture)
+    profile = preview.CaptureProfile(preview=("true",), origin="http://127.0.0.1:1", ready_timeout=1,
+                                     capture_timeout=90)
+    confirm = {"path": "/", "steps": [dict(CONFIRM), dict(action="wait", selector="#projects-empty")]}
+    receipt = {}
+    failure = preview.capture_task(profile, tmp_path, "t1", confirm, receipt=receipt)
+    assert failure.startswith("the desktop capture left evidence.json, page.png unreadable")
+    assert seen == ["desktop"], "the next view is never started beside an unmeasured one"

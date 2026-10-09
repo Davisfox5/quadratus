@@ -874,12 +874,15 @@ def main(argv=None) -> int:
             print("error: --measured needs VIEW FILE SHA256", file=sys.stderr)
             return 2
         name, leaf, digest = argv[at + 1:at + 4]
-        if name not in VIEWPORTS or leaf not in VIEW_FILES or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        if (name not in VIEWPORTS or leaf not in VIEW_FILES
+                or not (digest == "missing" or re.fullmatch(r"[0-9a-f]{64}", digest))):
             print(f"error: --measured takes a view ({'|'.join(VIEWPORTS)}), a file ({'|'.join(VIEW_FILES)}) "
-                  "and a sha256", file=sys.stderr)
+                  "and a sha256 or 'missing'", file=sys.stderr)
             return 2
         measured = measured or {}
-        measured.setdefault(name, {})[leaf] = digest
+        # "missing" is a measurement that could not be read: present, so the
+        # held-measurement rule applies, and never equal to any digest.
+        measured.setdefault(name, {})[leaf] = None if digest == "missing" else digest
         del argv[at:at + 4]
     attempt = None
     if "--attempt" in argv:
