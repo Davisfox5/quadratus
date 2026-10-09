@@ -103,12 +103,18 @@ def _run(tmp_path, monkeypatch, lead_reply, *, second_visible=False, capture_fai
 
     def harness_capture(self, spec):
         captures.append(dict(spec.scope.capture))
+        # As the real harness capture does: the attempt retires the old
+        # measurement first and records its own once the renders are written.
+        self._harness_tasks.add(spec.task_id)
+        self._capture_receipts.pop(spec.task_id, None)
         if failures:
             return failures.pop(0)
         _fake_evidence(root)
         _postdate(root)
         _steps_summary(root, spec.scope.capture["steps"],
                        visible_before=(len(captures) == 1) or second_visible)
+        from quadratus.design_evidence import view_receipt
+        self._capture_receipts[spec.task_id] = {v: view_receipt(root, spec.task_id, v) for v in ("desktop", "mobile")}
         return ""
     monkeypatch.setattr(Session, "_harness_capture", harness_capture)
     monkeypatch.setattr(Session, "_harness_captures", lambda self, spec: True)

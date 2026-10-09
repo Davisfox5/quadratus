@@ -61,10 +61,16 @@ def _run(tmp_path, monkeypatch, reviews, lead_reply, *, capture_failure=""):
 
     def harness_capture(self, spec):
         captures.append(dict(spec.scope.capture))
+        # As the real harness capture does: the attempt retires the old
+        # measurement first and records its own once the renders are written.
+        self._harness_tasks.add(spec.task_id)
+        self._capture_receipts.pop(spec.task_id, None)
         if capture_failure and len(captures) > 1:
             return capture_failure
         _fake_evidence(root)
         _postdate(root)
+        from quadratus.design_evidence import view_receipt
+        self._capture_receipts[spec.task_id] = {v: view_receipt(root, spec.task_id, v) for v in ("desktop", "mobile")}
         return ""
     monkeypatch.setattr(Session, "_harness_capture", harness_capture)
     monkeypatch.setattr(Session, "_harness_captures", lambda self, spec: True)
