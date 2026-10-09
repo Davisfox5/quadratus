@@ -499,6 +499,12 @@ class Fleet:
                 raise EvidenceNotDelivered(
                     "design evidence was not all delivered to the review copy: "
                     + ", ".join(str(p) for p in declared if p not in copied))
+            # What the copy held when the call began: the source and the
+            # evidence, by bytes. The disposable copy may be written inside
+            # (codex workspace-write, so a reviewer's pytest can run), so a
+            # verdict is accepted only if what it judged is what was handed
+            # over (Codex review of 2ffa7f6 on #52).
+            handed = _copy_digests(directory)
             view = provider.in_directory(directory, allow_writes=False, disposable=True)
             if verifying:
                 view.native_fanout_off = True
@@ -529,6 +535,12 @@ class Fleet:
                 if worker_loop_control.get() is not None:
                     role += '\nDuring this bounded errand only, CONTINUE: may request another read step.'
             reply = self._generate(model_key, view, prompt, role)
+            altered = _copy_altered(directory, handed)
+            if altered:
+                raise ReviewCopyAltered(
+                    f"{model_key} changed or removed files it was handed to read in its source copy "
+                    f"({', '.join(altered[:5])}{', …' if len(altered) > 5 else ''}); its answer is not "
+                    "accepted as a judgement of the delivered source and evidence.")
             # Rewritten while the copy still exists, because its path is the
             # only thing that identifies which references need rewriting. A
             # reviewer that cited the copy by absolute path would otherwise
@@ -1041,6 +1053,50 @@ class EvidenceNotDelivered(ProviderError):
 
     Raised before the model is asked, so no review is made of, and no
     verdict accepted for, a set the reviewer did not receive."""
+
+
+class ReviewCopyAltered(ProviderError):
+    """A copy-bound call changed or removed a file it was handed to read.
+
+    The disposable copy is the containment, not a read-only mount: a codex
+    reviewer runs under workspace-write there so its pytest has somewhere to
+    write (series rule-b1ff751 f4). Files it *creates* are its scratch and
+    are discarded with the copy; a handed file that differs or is gone after
+    the call means the answer was formed on bytes other than the ones the
+    session hashed and will record, so the answer is refused (Codex review
+    of 2ffa7f6 on #52)."""
+
+
+def _copy_digests(directory) -> Dict[str, str]:
+    """sha256 of every regular file under the copy, by relative path."""
+    root = Path(directory)
+    digests: Dict[str, str] = {}
+    for path in root.rglob("*"):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            digests[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            digests[path.relative_to(root).as_posix()] = ""
+    return digests
+
+
+def _copy_altered(directory, handed: Dict[str, str]) -> List[str]:
+    """The handed files that no longer hold their bytes: changed, removed or
+    unreadable. New files under the copy are the call's own scratch and are
+    not reported."""
+    root = Path(directory)
+    altered = []
+    for rel, digest in sorted(handed.items()):
+        path = root / rel
+        try:
+            if path.is_symlink() or not path.is_file():
+                altered.append(rel)
+            elif hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                altered.append(rel)
+        except OSError:
+            altered.append(rel)
+    return altered
 
 
 def _evidence_problem(root: Path, rel: str, task) -> str:

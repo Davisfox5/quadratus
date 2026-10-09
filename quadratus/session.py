@@ -747,6 +747,24 @@ def _parse_capture_line(reply: str, task_id: str):
     return capture, ""
 
 
+def _missing_fixtures(project, capture: dict, task_id: str) -> List[str]:
+    """The file-step paths of ``capture`` that are not usable fixtures in
+    ``project`` now, by the capture's own rule (``design_evidence._fixture``)."""
+    from .design_evidence import _fixture
+    from .project import Project
+    # Not getattr(project, "root"): a Path has a ``root`` too, and it is "/".
+    root = project.root if isinstance(project, Project) else Path(project)
+    missing = []
+    for step in capture.get("steps") or []:
+        if step.get("action") != "file":
+            continue
+        try:
+            _fixture(root, step.get("path") or "", task_id)
+        except ValueError:
+            missing.append(str(step.get("path")))
+    return missing
+
+
 def _capture_fixture_note(spec) -> str:
     """The files the declared capture uploads, stated to the lead as the
     harness's own rule. Diagnostic run 20260930T020711Z: t2, a review-only
@@ -4614,7 +4632,10 @@ class Session:
             "The rules are those of a SCOPE capture: " + _CAPTURE_SCOPE_REQUEST + " A final wait "
             "must name something only the changed state shows. If no page and steps on this "
             "preview can reach that state, reply exactly CAPTURE: none and one line saying why. "
-            "Do not change files: this call declares, it does not edit."
+            "Do not change files: this call declares, it does not edit, so a file step may name "
+            "only a sample that already exists in the project (a committed sample, or a fixture "
+            "an earlier call of this task wrote); a sample that does not exist yet cannot be "
+            "declared here."
         )
         with invocation(spec.task_id, "capture-redeclare"):
             reply = self._invoke_model(lead, prompt)
@@ -4628,6 +4649,15 @@ class Session:
         if capture == current:
             self._note(f"task {spec.task_id}: the recapture declaration repeats the dispatched capture")
             record["recapture"] = dict(declared=capture, problem="same page and steps as dispatched")
+            return None
+        missing = _missing_fixtures(self.project, capture, spec.task_id)
+        if missing:
+            # The declaring call cannot write, so a fixture that is not in the
+            # project yet would only fail at capture and spend the one
+            # recapture on nothing (Codex review of 2ffa7f6 on #52).
+            why = "the declaration uploads a sample that does not exist in the project: " + ", ".join(missing)
+            self._note(f"task {spec.task_id}: no usable recapture declaration ({why})")
+            record["recapture"] = dict(declared=capture, problem=why)
             return None
         spec.scope = replace(spec.scope, capture=capture)
         self._note(f"task {spec.task_id}: recapturing {capture['path']} after {len(capture['steps'])} step(s)")
@@ -4727,13 +4757,18 @@ class Session:
             + "\n\nReply exactly APPROVED if the delivered interface is acceptable, or one line "
             "per blocking problem starting 'BLOCKING:'. Nothing else."
         )
-        from .runtime import EvidenceNotDelivered
+        from .runtime import EvidenceNotDelivered, ReviewCopyAltered
         try:
             with invocation(spec.task_id, "design-review"):
                 verdict = self._invoke_model(reviewer, prompt)
         except EvidenceNotDelivered as exc:
             self._edge("delivered", False)
             return f"BLOCKING: the renders could not be handed to the reviewer ({str(exc)[:300]})"
+        except ReviewCopyAltered as exc:
+            # Delivered, but judged after the reviewer changed what it was
+            # handed: the verdict is not of the bytes on record.
+            self._edge("delivered", False)
+            return f"BLOCKING: the reviewer altered its copy of the source or renders before judging ({str(exc)[:300]})"
         # Delivered as bound: the files and hashes the copy was checked against.
         self._edge("delivered", True)
         if self._outcome is not None:
