@@ -184,7 +184,9 @@ class _Handler(BaseHTTPRequestHandler):
         pass  # quiet: a monitor should not narrate its own polling
 
     def _params(self):
-        query = parse_qs(urlsplit(self.path).query)
+        # keep_blank_values: an explicitly empty field clears the launch default
+        # rather than silently restoring it.
+        query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
         project = (query.get("project") or [self.server.defaults["project"]])[0].strip()
         series = (query.get("series") or [self.server.defaults["series"]])[0].strip()
         return project, series

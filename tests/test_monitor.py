@@ -181,6 +181,23 @@ def test_the_latest_call_gives_task_seat_role_stage_and_the_event_line(tmp_path)
     assert status["calls"] == 2
 
 
+def test_the_call_fields_are_labelled_as_the_last_completed_call_with_its_age(tmp_path):
+    # The engine appends to invocations.jsonl when a call returns, so during a
+    # long call the monitor shows the previous one. The age of the record and
+    # the rendered caveat let a reader tell a stale view from a live one.
+    run_dir = _run_dir(tmp_path)
+    _append(run_dir / "invocations.jsonl", _event(task="T1", role="lead", model="claude:opus"))
+    log = run_dir / "invocations.jsonl"
+    os.utime(log, (log.stat().st_atime, log.stat().st_mtime - 300))
+    status = read_status(tmp_path, now=log.stat().st_mtime + 300)
+    assert status["last_call_ended"].endswith("(5 min ago)")
+    assert "a call in progress is not written until it returns" in render_text(status)
+    assert "**Last call ended:**" in render_markdown(status)
+    assert status["unknown"].get("last_call_ended") is None
+    missing = read_status(tmp_path / "nowhere")
+    assert missing["last_call_ended"] == UNKNOWN
+
+
 def test_every_recorded_role_maps_to_one_of_the_five_stages_or_plan():
     assert set(monitor.ROLE_STAGES.values()) == {"plan", "draft", "review", "gate", "capture", "close-out"}
     for role in ("lead", "revision", "verifier", "gate-fix", "design-fix", "closeout", "orchestrator"):

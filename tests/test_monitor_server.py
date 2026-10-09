@@ -93,6 +93,27 @@ def test_query_parameters_switch_the_watched_project_and_the_form_keeps_them(ser
     assert f'value="{other}"' in body
 
 
+def test_a_blank_parameter_clears_a_launch_default_instead_of_restoring_it(tmp_path):
+    # parse_qs drops blank values unless told to keep them; without that, a
+    # server started with --series could never be pointed at a bare project.
+    series = tmp_path / "series"
+    series.mkdir()
+    (series / "manifest.json").write_text("{}")
+    _project(tmp_path)
+    srv = monitor_server.MonitorServer(0, project=str(tmp_path), series=str(series), history=5)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        _, _, with_default = _get(base + "/status.json")
+        assert json.loads(with_default)["status"]["series"] is not None
+        _, _, cleared = _get(base + f"/status.json?project={tmp_path}&series=")
+        assert json.loads(cleared)["status"]["series"] is None
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 def test_the_manifest_declares_a_standalone_app(server):
     _, base, _ = server
     code, ctype, body = _get(base + "/manifest.webmanifest")

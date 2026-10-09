@@ -26,6 +26,11 @@ Three rules, in order of importance:
   large rather than parsed, and the artifact directory is scanned up to
   ``MAX_ARTIFACT_ENTRIES``. A transcript is never loaded.
 
+Task, stage and seat come from the last *completed* call: the engine appends
+to ``invocations.jsonl`` when a call returns, so a call in progress is not
+visible and a long one keeps showing its predecessor. ``last_call_ended``
+carries the age of that record so the reader can tell.
+
 The stage is inferred: the latest invocation's ``role`` maps to one of plan,
 draft, review, gate, capture, close-out (``ROLE_STAGES``), and an artifact
 written after that call refines it (``ARTIFACT_STAGES``: a check output means
@@ -364,6 +369,7 @@ def read_status(project_root=None, series_dir=None, *, state_dir=None, now=None)
         "reserve_tokens_per_call": UNKNOWN,
         "max_tokens_per_call": UNKNOWN,
         "last_event": UNKNOWN,
+        "last_call_ended": UNKNOWN,
         "finished": UNKNOWN,
         "terminal_status": UNKNOWN,
         "stop_reason": UNKNOWN,
@@ -496,7 +502,7 @@ def _fill(status, mark, project_root, series_dir, state_dir, now) -> None:
     result, result_problem = _read_json(run_dir / "result.json")
     status["finished"] = result is not None or (run_dir / "result.json").exists()
 
-    _fill_calls(status, mark, run_dir)
+    _fill_calls(status, mark, run_dir, now)
     _fill_tokens(status, mark, run_dir)
 
     if status["finished"]:
@@ -518,10 +524,17 @@ def _fill(status, mark, project_root, series_dir, state_dir, now) -> None:
             status["liveness"] = status["unknown"]["live"]
 
 
-def _fill_calls(status, mark, run_dir: Path) -> None:
+def _fill_calls(status, mark, run_dir: Path, now: float) -> None:
+    """Task, stage, seat and the last event, read from ``invocations.jsonl``.
+
+    The engine appends a record when a call *returns*, so these fields
+    describe the last completed call, never one in progress; a long call
+    keeps showing its predecessor until it ends. ``last_call_ended`` says
+    how old that record is, so a reader can tell a stale view from a live one.
+    """
     events, problem = _tail_jsonl(run_dir / "invocations.jsonl")
     if not events:
-        for field in ("task", "stage", "seat", "role", "last_event"):
+        for field in ("task", "stage", "seat", "role", "last_event", "last_call_ended"):
             mark(field, problem)
         return
     latest = events[-1]
@@ -543,6 +556,10 @@ def _fill_calls(status, mark, run_dir: Path) -> None:
         stage = "draft"  # workers are commissioned by the lead while it drafts
     kind, artifact_mtime = _newest_artifact(run_dir)
     calls_mtime = _mtime(run_dir / "invocations.jsonl")
+    if calls_mtime is None:
+        mark("last_call_ended", "invocations.jsonl has no readable mtime")
+    else:
+        status["last_call_ended"] = f"{_iso(calls_mtime)} ({_age(now - calls_mtime)})"
     if (kind in ARTIFACT_STAGES and artifact_mtime is not None
             and (calls_mtime is None or artifact_mtime >= calls_mtime)):
         stage = ARTIFACT_STAGES[kind]
@@ -741,6 +758,7 @@ def render_text(status: Dict[str, Any], history: Optional[List[Dict[str, Any]]] 
         f"Tokens:    {_tokens_line(status)}  calls {_fmt(status['calls'])}",
         f"Per call:  reserve {_fmt(status['reserve_tokens_per_call'])}  ceiling {_fmt(status['max_tokens_per_call'])}",
         f"Last:      {status['last_event']}",
+        f"Recorded:  last call ended {status['last_call_ended']}; a call in progress is not written until it returns",
     ]
     if status.get("finished") is True:
         lines += [f"Ended:     {status['terminal_status']}: {status['stop_reason']}",
@@ -777,6 +795,7 @@ def render_markdown(status: Dict[str, Any]) -> str:
         f"**Per call:** reserve {_fmt(status['reserve_tokens_per_call'])}, "
         f"ceiling {_fmt(status['max_tokens_per_call'])}  ",
         f"**Last event:** {status['last_event']}  ",
+        f"**Last call ended:** {status['last_call_ended']} (a call in progress is not written until it returns)  ",
     ]
     if status.get("finished") is True:
         lines += [f"**Ended:** {status['terminal_status']}: {status['stop_reason']}  ",
