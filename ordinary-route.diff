@@ -1,0 +1,91 @@
+--- /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-installed-preparation/operator/admission_contract.py
++++ /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-login-preparation/operator/admission_contract.py
+@@ -11,7 +11,7 @@
+ LIMITS={'max_calls':90,'max_reported_tokens':5000000,'wall_seconds':3600,'max_concurrent_workers':2,'reserve_tokens_per_call':250000,'max_tokens_per_call':1500000,'max_cost_usd':None,'max_tasks':10,'survey_recovery':4}
+ WALL={'total_seconds':3600,'cleanup_reserve_seconds':4,'effective_execution_seconds':3596,'term_grace_seconds':2,'kill_grace_seconds':1}
+ 
+-ORDINARY_ENVIRONMENT = {'PATH_sha256': '8a6de5cd65682378db9904f634543b8714b9dae1e9b0953c07364eb8b4ed429b', 'ordinary_python3_lookup': '/usr/bin/python3', 'refuse_nonempty_overrides': ['PYTHONOPTIMIZE', 'NODE_PATH', 'GAMETAPE_CHROMIUM', 'GAMETAPE_PYTHON', 'PYTHONPATH', 'NODE_OPTIONS', 'PLAYWRIGHT_BROWSERS_PATH', 'PLAYWRIGHT_NODEJS_PATH', 'DEVELOPER_DIR'], 'require_python_optimization_zero': True, 'activate_or_modify_PATH': False}
++ORDINARY_ENVIRONMENT = {'PATH_sha256': '4db378cd8bc88351f24bc6732b1ddb1986bb252a072511b6d22b193bb5b8316a', 'ordinary_python3_lookup': '/usr/bin/python3', 'refuse_nonempty_overrides': ['PYTHONOPTIMIZE', 'NODE_PATH', 'GAMETAPE_CHROMIUM', 'GAMETAPE_PYTHON', 'PYTHONPATH', 'NODE_OPTIONS', 'PLAYWRIGHT_BROWSERS_PATH', 'PLAYWRIGHT_NODEJS_PATH', 'DEVELOPER_DIR'], 'require_python_optimization_zero': True, 'activate_or_modify_PATH': False}
+ BASELINE_COUNTS = {'python':120,'node':39}
+ 
+ def require_ordinary_environment(freeze,cfg,environment=None):
+--- /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-installed-preparation/operator-cheaper/admission_contract.py
++++ /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-login-preparation/operator-cheaper/admission_contract.py
+@@ -11,7 +11,7 @@
+ LIMITS={'max_calls':20,'max_reported_tokens':2000000,'wall_seconds':1800,'max_concurrent_workers':2,'reserve_tokens_per_call':250000,'max_tokens_per_call':1500000,'max_cost_usd':None,'max_tasks':10,'survey_recovery':4}
+ WALL={'total_seconds':1800,'cleanup_reserve_seconds':4,'effective_execution_seconds':1796,'term_grace_seconds':2,'kill_grace_seconds':1}
+ 
+-ORDINARY_ENVIRONMENT = {'PATH_sha256': '8a6de5cd65682378db9904f634543b8714b9dae1e9b0953c07364eb8b4ed429b', 'ordinary_python3_lookup': '/usr/bin/python3', 'refuse_nonempty_overrides': ['PYTHONOPTIMIZE', 'NODE_PATH', 'GAMETAPE_CHROMIUM', 'GAMETAPE_PYTHON', 'PYTHONPATH', 'NODE_OPTIONS', 'PLAYWRIGHT_BROWSERS_PATH', 'PLAYWRIGHT_NODEJS_PATH', 'DEVELOPER_DIR'], 'require_python_optimization_zero': True, 'activate_or_modify_PATH': False}
++ORDINARY_ENVIRONMENT = {'PATH_sha256': '4db378cd8bc88351f24bc6732b1ddb1986bb252a072511b6d22b193bb5b8316a', 'ordinary_python3_lookup': '/usr/bin/python3', 'refuse_nonempty_overrides': ['PYTHONOPTIMIZE', 'NODE_PATH', 'GAMETAPE_CHROMIUM', 'GAMETAPE_PYTHON', 'PYTHONPATH', 'NODE_OPTIONS', 'PLAYWRIGHT_BROWSERS_PATH', 'PLAYWRIGHT_NODEJS_PATH', 'DEVELOPER_DIR'], 'require_python_optimization_zero': True, 'activate_or_modify_PATH': False}
+ BASELINE_COUNTS = {'python':120,'node':39}
+ 
+ def require_ordinary_environment(freeze,cfg,environment=None):
+--- /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-installed-preparation/qualification-default-discovery/contract.py
++++ /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-login-preparation/qualification-default-discovery/contract.py
+@@ -3,7 +3,7 @@
+ from pathlib import Path
+ HERE=Path(__file__).absolute().parent
+ BASE=Path('/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261009')
+-PROJECT=HERE.parent/'project'
++PROJECT=Path('/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-installed-preparation/project')
+ TRACKER=BASE/'recovery-v2/operator/owned_processes.py'
+ CANDIDATE='319eb96358072ed22ae3a8d88856c7c2d8fd2df6'  # Exact319 source; root/SAME and runtime admission pending.
+ TREE='f7e1c2941522b7958386fed29c984d09ace4471e'
+@@ -54,7 +54,7 @@
+     require(len(inventory)==263 and names==set(inventory),'Exact263 baseline filename set differs')
+     for relative,digest in inventory.items():held(PROJECT/relative,digest)
+     require(not list((PROJECT/'.quadratus/runs').glob('*')),'Baseline already has a run; no qualification replay')
+-ORDINARY_PATH_SHA256='8a6de5cd65682378db9904f634543b8714b9dae1e9b0953c07364eb8b4ed429b'
++ORDINARY_PATH_SHA256='4db378cd8bc88351f24bc6732b1ddb1986bb252a072511b6d22b193bb5b8316a'
+ ORDINARY_PYTHON3='/usr/bin/python3'
+ 
+ def require_ordinary_route():
+--- /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-installed-preparation/private-post-model-examiner/driver.py
++++ /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-login-preparation/private-post-model-examiner/driver.py
+@@ -5,7 +5,7 @@
+ 
+ HERE=Path(__file__).absolute().parent
+ BASE=Path('/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261009')
+-PROJECT=HERE.parent/'project'
++PROJECT=Path('/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-installed-preparation/project')
+ TRACKER=BASE/'recovery-v2/operator/owned_processes.py'
+ TRACKER_SHA='a7fc7e0b7060a0ae3e9a2158ede65287dea01409b6e40c6f9f959d7912c60a81'
+ MAX_BYTES=16*1024*1024
+--- /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-installed-preparation/config.cheaper.PENDING.json
++++ /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-login-preparation/config.cheaper.PENDING.json
+@@ -4,7 +4,7 @@
+     "node": 39,
+     "python": 120
+   },
+-  "capture_profile": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-installed-preparation/capture-profile.json",
++  "capture_profile": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-login-preparation/capture-profile.json",
+   "check": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/installation/final-pr58/venv/bin/python -m pytest -q -p no:cacheprovider --quadratus-report={report}",
+   "declared_paths": [
+     "static/js/app.js",
+@@ -288,13 +288,13 @@
+     "wall_seconds": 1800
+   },
+   "goal": "Add one small usability feature to the existing sorted GameTape project library: a Restore library order button. Preserve current UI and every existing search, sort, count, create/delete confirmation, navigation, player/tagging/preset behavior. No dependency, backend, seed/reset, provider or fixture changes.\n\nG1 Add #btn-project-sort-reset beside the sort controls. A normal click restores original API/library position order, sets #projects-container data-sort=\"original\", and sets readable #project-sort-status to \"Library order\". Repeated reset is harmless. The next ordinary sort click starts A\u2192Z, then Z\u2192A as before. Reset is local: no API request or reload.\nG2 Reset preserves typed search/hash/count and matching cards/no-match vs true-empty. It returns focus to the search field. Normal create/delete still reloads correctly in the active order and navigation uses the same ID. Add meaningful NEW tests only under tests/gui_completion/ for reset from both sort directions, stable library ordering, query/hash/count/focus preservation and no network. All baseline tests remain byte-identical, including the original23.\nG3 Controls work at1280\u00d7800 and390\u00d7844 with no overflow or unexpected browser errors. Declare actual click/wait capture steps on fresh disposable seeded backend: wait for3cards, click sort once, click restore, wait for data-sort=\"original\" and first Alpha Cup, capture desktop/mobile. Report actual capture/reviewer/check findings, blocked/skipped/NOTRUN honestly. Capture clicks do not prove typing; real Node and independent browser controls cover it. Do not claim GUI/report completion before actual harness facts.\n",
+-  "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-installed-preparation/goal.txt",
++  "goal_file": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-login-preparation/goal.txt",
+   "gui_extra_checks_text": "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/node --test --test-reporter-destination={report}",
+   "gui_port": 53117,
+   "max_tasks": 10,
+   "mode": "adversarial",
+   "ordinary_environment": {
+-    "PATH_sha256": "8a6de5cd65682378db9904f634543b8714b9dae1e9b0953c07364eb8b4ed429b",
++    "PATH_sha256": "4db378cd8bc88351f24bc6732b1ddb1986bb252a072511b6d22b193bb5b8316a",
+     "activate_or_modify_PATH": false,
+     "ordinary_python3_lookup": "/usr/bin/python3",
+     "refuse_nonempty_overrides": [
+--- /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-installed-preparation/qualification-default-discovery/auth.example.json
++++ /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-login-preparation/qualification-default-discovery/auth.example.json
+@@ -18,7 +18,7 @@
+     "python": 120
+   },
+   "historical_source_evidence_only": null,
+-  "inherited_PATH_sha256": "8a6de5cd65682378db9904f634543b8714b9dae1e9b0953c07364eb8b4ed429b",
++  "inherited_PATH_sha256": "4db378cd8bc88351f24bc6732b1ddb1986bb252a072511b6d22b193bb5b8316a",
+   "installation_verified": true,
+   "installed_package_directory": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/installation/final-pr58/venv/lib/python3.12/site-packages/quadratus",
+   "installed_runtime_inventory": {

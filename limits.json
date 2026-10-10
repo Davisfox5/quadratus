@@ -1,0 +1,27 @@
+{
+  "P1_P2": 0,
+  "P3_groups": [
+    {
+      "id": "P3-1",
+      "limit": "Same-user writes outside project: candidate venv pytest/playwright and assertion-rewrite pyc remain unheld; -I ignores PYTHONDONTWRITEBYTECODE. Project-local shadow protection is limited to stated trust boundary."
+    },
+    {
+      "id": "P3-2",
+      "limit": "Measured ordinary Python file SHA/inode/device only format-checked; worker PID not compared to spawned PID; actual invoked Node identity/lookup not tied to declared node_sha256."
+    },
+    {
+      "id": "P3-3",
+      "limit": "Examiner refusal list includes extra Python/pytest names; qualifier/operator only nine; inherited PYTHONHOME/non-filtering ADDOPTS/locale/TZ unmeasured. Contract runtime self-comparison harmless only because parent real check remains."
+    },
+    {
+      "id": "P3-4",
+      "limit": "Normalizer held core.excludesFile/unheld info/exclude can hide untracked files; submodule configs not preflighted; shim refusal literal path only. Tracked hashes separate. Normalizer source remains recovery-owned."
+    }
+  ],
+  "assessment_path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261009/gui-completion-c49d9f0-run-preparation/whole-SAME-operator187-assessment-6090338839.json",
+  "assessment_sha256": "87f65adcd01d06d7db2febde7925daab5bbe292b01fa339876f48747ce5f006a",
+  "exact_body_sha256": "7538c39947b83379dc96cadd30a80d0493307feed7fe125f4aa8e6abf7364df5",
+  "not_fixed_or_hidden_in_this_adaptation": true,
+  "prior_findings_closed_in_source": true,
+  "source_only_not_freezeACK_or_runtime_clearance": true
+}

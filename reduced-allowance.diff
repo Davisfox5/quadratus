@@ -1,0 +1,57 @@
+--- /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-preparation/operator/admission_contract.py
++++ /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-preparation/operator-cheaper/admission_contract.py
+@@ -8,8 +8,8 @@
+ from answer_contract import read_stable,digest,OLD_V5,refuse_old_v5,require
+ 
+ DEPENDENCIES=Path('/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261009/future-node-browser-dependencies')
+-LIMITS={'max_calls':90,'max_reported_tokens':5000000,'wall_seconds':3600,'max_concurrent_workers':2,'reserve_tokens_per_call':250000,'max_tokens_per_call':1500000,'max_cost_usd':None,'max_tasks':10,'survey_recovery':4}
+-WALL={'total_seconds':3600,'cleanup_reserve_seconds':4,'effective_execution_seconds':3596,'term_grace_seconds':2,'kill_grace_seconds':1}
++LIMITS={'max_calls':20,'max_reported_tokens':2000000,'wall_seconds':1800,'max_concurrent_workers':2,'reserve_tokens_per_call':250000,'max_tokens_per_call':1500000,'max_cost_usd':None,'max_tasks':10,'survey_recovery':4}
++WALL={'total_seconds':1800,'cleanup_reserve_seconds':4,'effective_execution_seconds':1796,'term_grace_seconds':2,'kill_grace_seconds':1}
+ 
+ ORDINARY_ENVIRONMENT = {'PATH_sha256': '8a6de5cd65682378db9904f634543b8714b9dae1e9b0953c07364eb8b4ed429b', 'ordinary_python3_lookup': '/usr/bin/python3', 'refuse_nonempty_overrides': ['PYTHONOPTIMIZE', 'NODE_PATH', 'GAMETAPE_CHROMIUM', 'GAMETAPE_PYTHON', 'PYTHONPATH', 'NODE_OPTIONS', 'PLAYWRIGHT_BROWSERS_PATH', 'PLAYWRIGHT_NODEJS_PATH', 'DEVELOPER_DIR'], 'require_python_optimization_zero': True, 'activate_or_modify_PATH': False}
+ BASELINE_COUNTS = {'python':120,'node':39}
+--- /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-preparation/operator/browser.py
++++ /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-preparation/operator-cheaper/browser.py
+@@ -63,7 +63,7 @@
+             neutral.set_checked(freeze['neutral_preferences_checkbox'])
+             page.get_by_role('button', name='Preview policy', exact=True).click()
+             summary = page.locator('p').filter(has_text=re.compile('^This run will use:')).first
+-            for phrase in ('Task limit: 10', '90 model calls', '5,000,000 reported tokens', '2 parallel worker(s)', '3,600 seconds', '250,000 tokens', '1,500,000 tokens', 'Recovery: up to 4'):
++            for phrase in ('Task limit: 10', '20 model calls', '2,000,000 reported tokens', '2 parallel worker(s)', '1,800 seconds', '250,000 tokens', '1,500,000 tokens', 'Recovery: up to 4'):
+                 expect(summary).to_contain_text(phrase, timeout=15000)
+             for (key, label) in LABELS.items():
+                 require(float(page.get_by_label(label, exact=True).input_value()) == values[key], 'Explicit safety refusal')
+--- /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-preparation/operator/common.py
++++ /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-preparation/operator-cheaper/common.py
+@@ -6,8 +6,8 @@
+ import socket
+ import subprocess
+ 
+-WALL_CONTRACT = {'total_seconds':3600, 'cleanup_reserve_seconds':4,
+-                 'effective_execution_seconds':3596, 'term_grace_seconds':2,
++WALL_CONTRACT = {'total_seconds':1800, 'cleanup_reserve_seconds':4,
++                 'effective_execution_seconds':1796, 'term_grace_seconds':2,
+                  'kill_grace_seconds':1}
+ 
+ 
+--- /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-preparation/operator/supervise.py
++++ /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-preparation/operator-cheaper/supervise.py
+@@ -44,7 +44,7 @@
+     state = Path(cfg['project']) / '.quadratus' / 'runs'
+     require(not list(state.glob('*')), 'Fresh lane has existing run state')
+     args.runtime.mkdir(parents=True, exist_ok=False)
+-    exclusive_json(args.runtime / 'supervisor-once.json', {'supervisor_pid': os.getpid(), 'at': time.time(), 'freeze_sha256': admitted_freeze_sha, 'whole_process_seconds_from_one_click_intent': 3600, 'GUI_port': cfg['gui_port'], 'preview_port': cfg['preview_port'], 'production_GUI_only': True, 'wall_contract': WALL_CONTRACT})
++    exclusive_json(args.runtime / 'supervisor-once.json', {'supervisor_pid': os.getpid(), 'at': time.time(), 'freeze_sha256': admitted_freeze_sha, 'whole_process_seconds_from_one_click_intent': 1800, 'GUI_port': cfg['gui_port'], 'preview_port': cfg['preview_port'], 'production_GUI_only': True, 'wall_contract': WALL_CONTRACT})
+     spec = importlib.util.spec_from_file_location('canonical_owned_processes', TRACKER)
+     module = importlib.util.module_from_spec(spec)
+     sys.modules[spec.name] = module
+@@ -169,7 +169,7 @@
+         records = guarded('saved_run_inspection', inspect_runs)
+         GUI_port = guarded('GUI_port', lambda : port_open(cfg['gui_port']))
+         preview_port = guarded('preview_port', lambda : port_open(cfg['preview_port']))
+-        save(args.runtime / 'terminal-audit.json', {'reason': reason, 'GUI_exit': gui.returncode if gui else None, 'browser_exit': browser.returncode if browser else None, 'actual_click_intent_present': (args.runtime / 'dispatch-intent.json').exists(), 'no_reclick': True, 'elapsed_after_click': time.monotonic() - dispatch_started if dispatch_started is not None else None, 'wall_contract': WALL_CONTRACT, 'cleanup_started_after_click': cleanup_started - dispatch_started if dispatch_started is not None else None, 'observed_cleanup_start_late_seconds': max(0, cleanup_started - dispatch_started - WALL_CONTRACT['effective_execution_seconds']) if dispatch_started is not None else None, 'cleanup_completed_after_click': cleanup_completed - dispatch_started if dispatch_started is not None else None, 'observed_cleanup_overrun_seconds': max(0, cleanup_completed - dispatch_started - 3600) if dispatch_started is not None else None, 'observed_audit_elapsed_overrun_seconds': max(0, time.monotonic() - dispatch_started - 3600) if dispatch_started is not None else None, 'hard_kernel_containment': False, 'owned_process_report': report, 'owned_survivors_present': survivors_present, 'GUI_port_listening': GUI_port, 'preview_port_listening': preview_port, 'run_count': None if records is None else len(records), 'actual_saved_records': records, 'finalization_errors': finalization_errors, 'invoice_cost': None, 'release_acceptance': False, 'invocation_rows_are_not_actual_call_counts': True, 'pending': 'Root verifies whole process/call/model/evidence audit and both independent assessments.'})
++        save(args.runtime / 'terminal-audit.json', {'reason': reason, 'GUI_exit': gui.returncode if gui else None, 'browser_exit': browser.returncode if browser else None, 'actual_click_intent_present': (args.runtime / 'dispatch-intent.json').exists(), 'no_reclick': True, 'elapsed_after_click': time.monotonic() - dispatch_started if dispatch_started is not None else None, 'wall_contract': WALL_CONTRACT, 'cleanup_started_after_click': cleanup_started - dispatch_started if dispatch_started is not None else None, 'observed_cleanup_start_late_seconds': max(0, cleanup_started - dispatch_started - WALL_CONTRACT['effective_execution_seconds']) if dispatch_started is not None else None, 'cleanup_completed_after_click': cleanup_completed - dispatch_started if dispatch_started is not None else None, 'observed_cleanup_overrun_seconds': max(0, cleanup_completed - dispatch_started - 1800) if dispatch_started is not None else None, 'observed_audit_elapsed_overrun_seconds': max(0, time.monotonic() - dispatch_started - 1800) if dispatch_started is not None else None, 'hard_kernel_containment': False, 'owned_process_report': report, 'owned_survivors_present': survivors_present, 'GUI_port_listening': GUI_port, 'preview_port_listening': preview_port, 'run_count': None if records is None else len(records), 'actual_saved_records': records, 'finalization_errors': finalization_errors, 'invoice_cost': None, 'release_acceptance': False, 'invocation_rows_are_not_actual_call_counts': True, 'pending': 'Root verifies whole process/call/model/evidence audit and both independent assessments.'})
+     return 0 if reason == 'browser_returned' and survivors_present is False and (GUI_port is False) and (preview_port is False) and (not finalization_errors) else 1
+ if __name__ == '__main__':
+     raise SystemExit(main())

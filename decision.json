@@ -1,0 +1,82 @@
+{
+  "state": "ALL_EXACT_SOURCE_INSTALL_BASELINE_GATES_PASS_ONE_RUN_NOTLAUNCHED",
+  "head": "319eb96358072ed22ae3a8d88856c7c2d8fd2df6",
+  "tree": "f7e1c2941522b7958386fed29c984d09ace4471e",
+  "scoped_review": {
+    "path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/pr58-review/receipt.json",
+    "sha256": "a00d93555dda38412b78eac0939b99c5db97bb6054aa091488bb124c6fa6ae6d"
+  },
+  "focused": {
+    "passed": 22,
+    "model_calls": 0
+  },
+  "independent_correction_probes": {
+    "path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/pr58-review/independent-correction-probes.json",
+    "sha256": "c94d2758ec0c51f91a789fbedd64119f897d9b39463efa07694e0135564f2731"
+  },
+  "mac_suite": {
+    "passed": 3459,
+    "skipped": 44,
+    "failed": 0,
+    "source939_unchanged": true,
+    "result": {
+      "path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/pr58-review/mac-fullsuite-result.json",
+      "sha256": "b5910f7598914c588a32c7c73922d0dd749772015fd35f234a89701e5b815f08"
+    },
+    "stdout": {
+      "path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/pr58-review/mac-fullsuite.stdout.log",
+      "sha256": "019ea046b2c746a64f6b819ef5e8017d42ea2bce1486e7bd80face21e4fbb7ea"
+    },
+    "stderr": {
+      "path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/pr58-review/mac-fullsuite.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "fresh_native109": {
+    "path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/installation/final-pr58/fresh-install-receipt.json",
+    "sha256": "395813391e8748ab5ab8729258481b6affe66922fab17dafda999dd699d7f294"
+  },
+  "all_runtime111": {
+    "path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/installation/final-pr58/all-runtime111-supplement.json",
+    "sha256": "85d429b98197d16cf80653fc8008bd2c54127df340e1e09b31fb927e41ae4ed4"
+  },
+  "preparation71": {
+    "path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-login-preparation/manifest.json",
+    "sha256": "ec1d4dbc84e80122d1b0376f44f500b8c4214f548a9f5abd3bcae46727e9455d"
+  },
+  "ordinary_route": {
+    "path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-login-preparation/route-binding-receipt.json",
+    "sha256": "ae6053355389c95587029901c86e99e1d01837d4fade248fab55b6dafab4d320"
+  },
+  "allowance": {
+    "calls": 20,
+    "reported_token_threshold": 2000000,
+    "seconds": 1800,
+    "hard_invoice_or_kernel_cap": false
+  },
+  "runtime_launch_count": 0,
+  "limits": "Truth checker independent code but engine record witnesses; synthetic canaries and baseline checks are not live feature/capture/reviewer/monitor completion. Original failed attempts and all prior P3 limits retained.",
+  "exact_CI": {
+    "four_SUCCESS": true,
+    "receipt_sha256": "fdd7ac3c4d987736fbc61717abeced2048a1364f410c03853830c5d1b6049409"
+  },
+  "merged58": {
+    "merge": "9650201341d5152e9cd2dae1c5a2e5f21ead1fae",
+    "tree_matches_tested319": true,
+    "merged57": "8149f74ffc509793093f9572af1894adbbad0867"
+  },
+  "qualification": {
+    "python120": true,
+    "node39": true,
+    "elapsed_seconds": 7.054025249992264,
+    "zero_skips_errors_failures": true,
+    "owned_survivors_present": false,
+    "nonce": "a28552be7a6d44dea5f1e731bf4db2a5",
+    "authorization_sha256": "5c46cc206d952479994f2748ad049e50519ade7bd88b0ffd71ebebb0eb5af692",
+    "gate_sha256": "cca06b313203f02b149674a8e2cbc9e36318ff66436e2f61ffbcdd34dce20b0d",
+    "observation_sha256": "9ccbe6b1aa8c225d85f5f1304bf203606d312bfa60a3b46dd1e6ad4d79d0501b",
+    "terminal_sha256": "d7521061b7b103b4d11462a12ade89497c1f7018f59ce4a44e37f9878539c26d"
+  },
+  "freeze_sha256": "42afb1f67e81706bef9704bc99b873107f887a78c9e2c444ca656884b9e3fac5",
+  "remaining_P3": "All four187 groups retained, plus snapshot/user-process/outside dependency and normalization limitations; actual new feature completion unverified. Synthetic false-verification controls are not live acceptance."
+}
