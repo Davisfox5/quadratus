@@ -141,6 +141,18 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     decider_labels=decider_labels)
 
 
+def _packet_floor(policy, scope):
+    """Refuse before any model call when the mandatory part of a role packet
+    (the operator's scope and forbidden paths, the family checklist, the
+    gates) is already over the packet cap. A task's own scope only adds to
+    it, so no task of this run could be dispatched (run
+    20261010T135407Z-f3d33e9d: 264 forbidden paths, refused only after the
+    planning and review calls). Reference notes are truncatable and are not
+    part of the floor."""
+    for role in ('lead', 'reviewer'):
+        policy.role_packet(scope, role)
+
+
 #: Flags that change only how much a runner prints, never what it runs.
 _QUIET_FLAGS = {'-q', '--quiet', '-v', '--verbose', '--silent'}
 
@@ -369,6 +381,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     try:
         if preview and preview['blocked']:
             raise ValueError('; '.join(preview['blocked']))
+        if policy is not None:
+            _packet_floor(policy, default_scope)
         if progress:
             progress(f'Project: {project.root}; edits {"enabled" if allow_writes else "disabled"}')
         session = session_factory(

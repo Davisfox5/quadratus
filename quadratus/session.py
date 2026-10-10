@@ -3483,6 +3483,20 @@ class Session:
             spec.scope = policy.scope(spec.scope)
             self.config.integration_gate = task_gate(policy, plan, self._original_gate,
                                                      exclude=self.config.project_excludes)
+        # Every packet this task's calls will carry, built before the first of
+        # them: run 20261010T135407Z-f3d33e9d spent its planning calls, then
+        # the lead's packet was refused. Same builder, same 12,000-byte cap.
+        for role in self._packet_roles(spec):
+            self._role_packet(spec, role)
+
+    def _packet_roles(self, spec: TaskSpec):
+        """The role packets a task's calls carry: lead and reviewer always,
+        verifier on a task classified as security. Read from the spec, not the
+        contract, which is not fixed yet; a verifier packet on a route the
+        contract alone selects is still checked where it is built."""
+        if spec.work_class == WorkClass.SECURITY:
+            return ("lead", "reviewer", "verifier")
+        return ("lead", "reviewer")
 
     def _run_task_recorded(self, spec: TaskSpec) -> TaskSummary:
         self._gate_fixes_used = 0
