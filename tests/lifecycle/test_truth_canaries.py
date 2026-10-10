@@ -86,7 +86,7 @@ def test_screenshots_removed_after_the_run_are_caught_with_the_project(tmp_path,
     for shot in (replay.project / ".quadratus" / "design-evidence").rglob("page.png"):
         shot.unlink()
     result = _judge(replay)
-    assert result["verdict"] == truth.UNVERIFIED and any("screenshot" in r for r in result["unverified"])
+    assert result["verdict"] == truth.UNVERIFIED and any("page.png is missing" in r for r in result["unverified"])
 
 
 def test_direct_task_with_a_failed_cheap_gate_has_no_model_closeout(tmp_path, monkeypatch):
@@ -165,3 +165,76 @@ def test_standing_not_run_is_unverified(tmp_path):
 
 def test_missing_record_is_unverified(tmp_path):
     assert truth.judge(tmp_path)["verdict"] == truth.UNVERIFIED
+
+
+# Codex review of 47bfbfd: two records the first checker called verified.
+
+def _with_not_run(tmp_path, check, **entry):
+    workflow = dict(tasks=[dict(task_id="t1", checks=[dict(passed=True, source="a" * 64, receipts=[
+        dict(id="check", required=True, status="passed", tests=3)])])])
+    standing = dict(task="t1", item="tests/test_flow.py", after_check=0, **entry)
+    return truth.judge(_record(tmp_path, checks=[check], workflow=workflow, unexecuted_acceptance=[standing]))
+
+
+def test_a_command_naming_the_file_does_not_clear_not_run(tmp_path):
+    check = dict(passed=True, command="python unknown_wrapper.py tests/test_flow.py",
+                 receipts=[dict(id="check", status="passed", tests=3)])
+    assert _with_not_run(tmp_path, check)["verdict"] == truth.UNVERIFIED
+
+
+def test_a_discharge_mark_without_execution_does_not_clear_not_run(tmp_path):
+    check = dict(passed=True, command="pytest", cases=dict(executed={"tests/test_other.py::test_a": 1}))
+    assert _with_not_run(tmp_path, check, discharged_at=0)["verdict"] == truth.UNVERIFIED
+
+
+def test_an_executed_case_in_the_reported_file_clears_not_run(tmp_path):
+    check = dict(passed=True, command="pytest", cases=dict(executed={"tests/test_flow.py::test_a": 1}))
+    assert _with_not_run(tmp_path, check)["verdict"] == truth.VERIFIED
+
+
+def _ui_record(tmp_path, shots, *, bound=True):
+    project = tmp_path / "project"
+    folder = project / ".quadratus" / "design-evidence" / "t1"
+    files = {}
+    for view, data in shots.items():
+        (folder / view).mkdir(parents=True)
+        (folder / view / "page.png").write_bytes(data)
+        files[f".quadratus/design-evidence/t1/{view}/page.png"] = __import__("hashlib").sha256(data).hexdigest()
+    task = dict(task_id="t1", checks=[dict(passed=True, source="a" * 64, receipts=[
+        dict(id="check", required=True, status="passed", tests=3)])])
+    if bound:
+        task["delivery"] = dict(reviewer="claude:opus", files=files)
+    run = _record(tmp_path, workflow=dict(tasks=[task]), design_checks=[dict(
+        task="t1", verified=True, final_review=dict(approved=True, verdict="APPROVED"))])
+    (run / "changes.diff").write_text("+++ b/templates/index.html\n")
+    return run, project
+
+
+PNG = b"\x89PNG\r\n\x1a\n"
+
+
+def test_screenshots_replaced_after_approval_are_unverified(tmp_path):
+    run, project = _ui_record(tmp_path, {"desktop": PNG + b"desktop", "mobile": PNG + b"mobile"})
+    for view in ("desktop", "mobile"):
+        (project / ".quadratus/design-evidence/t1" / view / "page.png").write_bytes(PNG + b"not a screenshot")
+    result = truth.judge(run, project)
+    assert result["verdict"] == truth.UNVERIFIED and "approved bytes" in " ".join(result["unverified"])
+
+
+def test_approved_renders_with_no_bound_digest_are_unverified(tmp_path):
+    run, project = _ui_record(tmp_path, {"desktop": PNG + b"x", "mobile": PNG + b"y"}, bound=False)
+    assert truth.judge(run, project)["verdict"] == truth.UNVERIFIED
+    assert truth.judge(run)["verdict"] == truth.UNVERIFIED
+
+
+def test_renders_matching_their_approved_digests_are_verified(tmp_path):
+    run, project = _ui_record(tmp_path, {"desktop": PNG + b"x", "mobile": PNG + b"y"})
+    assert truth.judge(run, project)["verdict"] == truth.VERIFIED
+
+
+def test_a_real_run_whose_screenshot_is_swapped_for_another_png_is_unverified(tmp_path, monkeypatch):
+    replay = _run(tmp_path, monkeypatch, _decl())
+    shot = replay.project / ".quadratus" / "design-evidence" / "t1" / "desktop" / "page.png"
+    shot.write_bytes(shot.read_bytes()[:8] + b"not a screenshot")
+    result = _judge(replay)
+    assert result["verdict"] == truth.UNVERIFIED and "approved bytes" in " ".join(result["unverified"])

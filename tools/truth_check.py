@@ -10,7 +10,8 @@ Three verdicts, and missing evidence is never success:
 - ``verified``: completed, every listed requirement met by an audit, the final
   passing check ran test cases against the final source, nothing required was
   skipped, nothing reported NOT RUN still stands, no finding is open, and every
-  UI change carries approved capture evidence.
+  UI change carries approved capture evidence bound by digest to the bytes
+  the reviewer was handed.
 - ``unverified``: the run says it succeeded but some of that is not shown.
 - ``not-met``: the record itself says the run failed, stopped or left a
   requirement unmet.
@@ -24,6 +25,7 @@ the right source, skipped checks and UI capture evidence, not "a test passed".
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -35,7 +37,6 @@ EXIT = {VERIFIED: 0, UNVERIFIED: 1, NOT_MET: 2}
 #: is an unshown UI claim.
 UI_SUFFIXES = (".html", ".htm", ".css", ".scss", ".sass", ".less", ".jsx", ".tsx", ".vue", ".svelte")
 VIEWS = ("desktop", "mobile")
-PNG = b"\x89PNG\r\n\x1a\n"
 _DIFF_FILE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
 _PATH = re.compile(r"[\w./-]+\.\w+")
 
@@ -68,30 +69,76 @@ def _ui_files(diff: str):
     return sorted({p for p in _DIFF_FILE.findall(diff or "") if p.lower().endswith(UI_SUFFIXES)})
 
 
-def _screens_problem(project: Path, task: str):
-    folder = project / ".quadratus" / "design-evidence" / task
-    for view in VIEWS:
-        shot = folder / view / "page.png"
-        try:
-            if shot.is_symlink() or shot.read_bytes()[:8] != PNG:
-                return f"{view} screenshot is not a PNG capture"
-        except OSError:
-            return f"no {view} screenshot at {shot}"
+def _approved_digests(record, task: str):
+    """The bytes the approving design reviewer was handed, as the record
+    bound them (``workflow.tasks[].delivery.files``), or None."""
+    for entry in (record.get("workflow") or {}).get("tasks") or []:
+        if entry.get("task_id") == task:
+            files = (entry.get("delivery") or {}).get("files")
+            return files if isinstance(files, dict) else None
     return None
 
 
+def _screens_problem(record, project, task: str):
+    """A problem with the renders an approval covers, or None.
+
+    The approval is bound to the digests recorded when the renders were
+    delivered to the reviewer; a render with no recorded digest is not shown
+    to be what was approved, and with ``project`` every bound file must still
+    hold those bytes (a PNG signature alone proves nothing)."""
+    files = _approved_digests(record, task)
+    folder = f".quadratus/design-evidence/{task}"
+    names = [f"{folder}/{view}/page.png" for view in VIEWS]
+    if not files or not all(isinstance(files.get(n), str) for n in names):
+        return "no approved digest of the renders on record"
+    if project is None:
+        return None
+    root = Path(project)
+    for name, expected in sorted(files.items()):
+        if not name.startswith(folder + "/"):
+            continue
+        path = root / name
+        try:
+            if path.is_symlink():
+                return f"{name} is a symlink, not the approved render"
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            return f"{name} is missing"
+        if actual != expected:
+            return f"{name} is not the approved bytes"
+    return None
+
+
+def _executed_keys(check):
+    """Case names a passing check printed as executed, its own and its passed
+    receipts'; names only, never a command line."""
+    keys = set((check.get("cases") or {}).get("executed") or {})
+    for receipt in check.get("receipts") or []:
+        if receipt.get("status") == "passed":
+            keys |= set((receipt.get("cases") or {}).get("executed") or {})
+    return keys
+
+
 def _not_run_cleared(entry, checks) -> bool:
-    if entry.get("discharged_at") is not None:
-        return True
-    paths = _PATH.findall(entry.get("item") or "")
-    if not paths or entry.get("kind") == "skipped":
+    """Cleared only by a later passing check that names the execution: every
+    reported file as the file of an executed case, or every skipped case as
+    executed. A command line that mentions a path, or the engine's own
+    discharge mark, is not execution (Codex review of 47bfbfd)."""
+    if entry.get("kind") == "skipped":
+        wanted = list(entry.get("cases") or [])
+        files = []
+    else:
+        wanted = []
+        files = [p[2:] if p.startswith("./") else p for p in _PATH.findall(entry.get("item") or "")]
+    if not wanted and not files:
         return False
-    for check in checks[entry.get("after_check") or 0:]:
+    start = entry.get("after_check") if isinstance(entry.get("after_check"), int) else 0
+    for check in checks[start:]:
         if not check.get("passed"):
             continue
-        seen = " ".join([check.get("command") or ""] + [r.get("command") or "" for r in check.get("receipts") or []]
-                        + list((check.get("cases") or {}).get("executed") or {}))
-        if all(p in seen for p in paths):
+        keys = _executed_keys(check)
+        ran_files = {k.split("::", 1)[0] for k in keys if "::" in k}
+        if all(c in keys for c in wanted) and all(f in ran_files for f in files):
             return True
     return False
 
@@ -182,8 +229,8 @@ def judge(run_dir, project=None) -> dict:
             unshown.append(f"task {task}: design evidence not verified ({str(design.get('problem'))[:120]})")
         elif not (design.get("final_review") or {}).get("approved"):
             unshown.append(f"task {task}: no approving independent design review")
-        elif project is not None:
-            problem = _screens_problem(Path(project), str(task))
+        else:
+            problem = _screens_problem(record, project, str(task))
             if problem:
                 unshown.append(f"task {task}: {problem}")
     if diff is None:

@@ -98,8 +98,11 @@ Codex's adjustments:
    checks the final passing check ran test cases on the final source, that no
    required check was skipped, that each requirement has an audit verdict of
    met, that nothing reported NOT RUN still stands, that no finding is open
-   and that UI changes carry approved capture evidence (with `--project`, that
-   the screenshots exist).
+   and that UI changes carry approved capture evidence whose recorded digests
+   are the bytes the reviewer was handed (with `--project`, the files must
+   still hold those bytes). A NOT RUN report clears only when a later passing
+   check names the execution: an executed case in each reported file, or each
+   skipped case as executed. A command line that mentions the path does not.
 5. Canaries before runs: `tests/lifecycle/test_truth_canaries.py` drives the
    real run with scripted replies through failing tests, a project with no
    tests, an interrupted run and missing screenshots, and each must come out
