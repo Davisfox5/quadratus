@@ -3644,7 +3644,11 @@ class Session:
             draft = self._run_integration_gate(lead, spec, task, gate=cheap) or draft
             if not self.checks[-1]['passed']:
                 self._open_finding('product', 'Cheap gates failed before review', legacy_route=True)
-                summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
+                # The direct tier closes mechanically on every path; a model
+                # close-out here was an extra call per failed cheap gate
+                # (Codex #35 6090721993, DT-C1).
+                close = self._mechanical_close_out if self._tier(spec) == "direct" else self._close_out
+                summary_text, reasoning, dead_ends = close(lead, spec, task)
                 summary = task.close(summary=summary_text, reasoning=reasoning, dead_ends=dead_ends)
                 self.memory.absorb(summary)
                 self.history.append(summary)

@@ -1149,6 +1149,13 @@ Key design decisions already settled:
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
   reviewers produce judgement.
+- **A run's success claim is judged outside the engine** (`tools/truth_check.py`,
+  2026-10-10). It reads only the run record, imports nothing from
+  `quadratus`, calls no model, and answers verified, unverified or not met;
+  missing evidence is unverified, never success. Offline canaries in
+  `tests/lifecycle/test_truth_canaries.py` drive the real run with scripted
+  replies through the known bad cases. Review priority and batching rules are
+  in `docs/DEVELOPMENT_PROCESS.md` ("Spending less per fix").
 - **The run monitor is read-only, and that is the whole design**
   (`monitor.py`, the GUI's Monitor tab, `quadratus --monitor`). The engine
   already writes everything a human wants to know under
