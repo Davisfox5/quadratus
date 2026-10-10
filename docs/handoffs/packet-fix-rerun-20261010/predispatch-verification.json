@@ -1,0 +1,11 @@
+{
+  "freeze_sha256": "7cd5d5591203e86b2d96fd956a5dced29d712e03adba71d2f9a0ed1c708a4dc4",
+  "head": "8a6e05216e670e8f47dd1d23faeef11b7c2839f4",
+  "all_immutable_files_matched": 1382,
+  "ordinary_route_refusals_and_qualification_bound": true,
+  "full_runtime_qualification_pass": true,
+  "private_key_mode_and_single_link_verified": true,
+  "source_merge_tree_matches": true,
+  "feature_launch_count": 0,
+  "scope": "Actual predispatch admission and key checks only; no GUI/provider/feature run"
+}

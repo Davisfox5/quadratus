@@ -1,0 +1,17 @@
+{
+  "head": "8a6e05216e670e8f47dd1d23faeef11b7c2839f4",
+  "tree": "32c0d7fe6f5d57f4fce2103c74b1dc44d060ec68",
+  "engine": "/Users/davisfox/.codex/worktrees/mvp-packet-fix-execution/quadratus",
+  "python": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+  "source_count": 941,
+  "runtime_count": 111,
+  "manifest": {
+    "path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/manifest.json",
+    "sha256": "2eeb3a600a9453767b3531810f320ea0893fbaf546035ab101b04a6be14bc54b"
+  },
+  "qualification_manifest": {
+    "path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/qualification-default-discovery/manifest.json",
+    "sha256": "598dfabb739c0734c0bf9a73eb2dae75c70270bdea4865a3eef8a34c044695c3"
+  },
+  "no_qualification_or_feature_invoked": true
+}

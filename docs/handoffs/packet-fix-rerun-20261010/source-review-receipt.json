@@ -1,0 +1,36 @@
+{
+  "head": "8a6e05216e670e8f47dd1d23faeef11b7c2839f4",
+  "base": "9650201341d5152e9cd2dae1c5a2e5f21ead1fae",
+  "tree": "32c0d7fe6f5d57f4fce2103c74b1dc44d060ec68",
+  "verdict": "CLEARED_SCOPED_PACKET_FIX",
+  "new_actionable_findings": [],
+  "independent_API_controls_pass": 5,
+  "scope": "Six-file packet-preflight patch only; actual runtime gates pending",
+  "source_permission_seams_unchanged": true,
+  "source_suite_and_CI_pending": false,
+  "prior_findings_limits_terminal_runs_preserved": true,
+  "files": {
+    "pr59.patch": "7b6d4b5f4ff8b26424f74b08a754773c4f8eeb74b5744c2228968ad3f471236c",
+    "CODEX_SOURCE_REVIEW.md": "f1ce5491c41e462fe93b175290cb79bc2425e0fc09f3366f740bd2679732dcfd",
+    "independent-packet-controls.json": "8f917082d61d2fd4b99e42a2eb963eef230ec11f66314681b76d9d7f8b9f1e16",
+    "audit-path-canary.json": "ee0fe25253f9d9b70b3eef14201ee85b7b0925fd273014189243da427ec53f54",
+    "preparation-review.json": "dab6caaecd1c02eae3bc49e13ab6158de1735e38e7a62d459c861adc9c704d56",
+    "preparation-binding.json": "8dfd304dcab1fecfd06c181bcf82cbee6f0887846d93fcb070fae24b7f131d15",
+    "../source-review/mac-fullsuite-result.json": "fbff2798832610b3483ba4e49904a117399413045e5a38734c9868a04edcc636",
+    "../source-review/mac-fullsuite.stdout.log": "da4420d76c2077a41c9a5f211b3567786755acd296868b73874d014fb7fd8d74",
+    "../source-review/mac-fullsuite.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "../source-review/mac-source-before.json": "26126f90c12a482079662d6cb2e1cf5492bd20ad56a9ef660c34c91a7cf2e290",
+    "../source-review/mac-source-after.json": "26126f90c12a482079662d6cb2e1cf5492bd20ad56a9ef660c34c91a7cf2e290",
+    "exact-ci-final.json": "94f0fab1f4bb63a6ef70e40db0df9852cc04c69dc34603420efe53fd92581a73"
+  },
+  "source_full_suite": {
+    "head": "8a6e05216e670e8f47dd1d23faeef11b7c2839f4",
+    "passed": 3463,
+    "skipped": 44,
+    "failed": 0,
+    "source941_unchanged": true,
+    "seconds": 642.7749364169722
+  },
+  "exact_CI_pending": false,
+  "exact_CI_four_success": true
+}

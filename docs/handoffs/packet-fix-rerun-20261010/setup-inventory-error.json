@@ -1,0 +1,7 @@
+{
+  "stage": "inventory seal after all7 successful build/install commands",
+  "error": "AssertionError: required guessed root modules quadratus_cli.py and quadratus_node_reporter.cjs are not packaged",
+  "script_sha256": "eac70fe982152dda8473d61f93a57d59f82abab13e925e8476faa797e3e42b34",
+  "product_wheel_failure": false,
+  "commands_not_repeated": true
+}

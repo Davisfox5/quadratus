@@ -1,0 +1,39 @@
+{
+  "head": "8a6e05216e670e8f47dd1d23faeef11b7c2839f4",
+  "passed": 5,
+  "failed": 0,
+  "scope": "Real API and synthetic in-memory role-specific family controls; no live run, gate, provider or acceptance proof",
+  "packet_cap_unchanged": 12000,
+  "prospective_config_sha256": "0d0b5e4d95030cf1e0dde849a04fec2a74014a230a412e3de911008c5a19fcc7",
+  "contract_selected_verifier_route_remains_checked_at_use": true,
+  "rows": [
+    {
+      "name": "actual compacted prospective scope passes unchanged packet cap",
+      "passed": true,
+      "bytes": {
+        "lead": 12000,
+        "reviewer": 12000
+      }
+    },
+    {
+      "name": "actual saved forbidden list refused by mandatory floor",
+      "passed": true,
+      "error": "Required role packet exceeds 12000 bytes; narrow the task"
+    },
+    {
+      "name": "actual reviewer-only family text rejected at run floor",
+      "passed": true,
+      "error": "Required role packet exceeds 12000 bytes; narrow the task"
+    },
+    {
+      "name": "nonsecurity dispatch does not require unused verifier-only text",
+      "passed": true
+    },
+    {
+      "name": "actual security verifier-only text refused before invoke",
+      "passed": true,
+      "error": "Required role packet exceeds 12000 bytes; narrow the task",
+      "calls": 0
+    }
+  ]
+}

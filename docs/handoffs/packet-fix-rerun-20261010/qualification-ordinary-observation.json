@@ -1,0 +1,42 @@
+{
+  "identity": {
+    "candidate": "8a6e05216e670e8f47dd1d23faeef11b7c2839f4",
+    "candidate_tree": "32c0d7fe6f5d57f4fce2103c74b1dc44d060ec68",
+    "qualification_nonce": "c3e3eaf77dee462c86651b77fe795d6f",
+    "authorization_sha256": "3aa5935cd1e9339f8db9f6cfe91e53ed8b2013c42e61a50a4d69baa12bd3feca",
+    "runtime": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/qualification-once",
+    "candidate_python": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python"
+  },
+  "measured": {
+    "PATH_sha256": "4db378cd8bc88351f24bc6732b1ddb1986bb252a072511b6d22b193bb5b8316a",
+    "ordinary_python3_lookup": "/usr/bin/python3",
+    "worker_sys_executable": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+    "worker_pid": 32238,
+    "worker_optimize": 0,
+    "overrides_present": {
+      "PYTHONOPTIMIZE": false,
+      "NODE_PATH": false,
+      "GAMETAPE_CHROMIUM": false,
+      "GAMETAPE_PYTHON": false,
+      "PYTHONPATH": false,
+      "NODE_OPTIONS": false,
+      "PLAYWRIGHT_BROWSERS_PATH": false,
+      "PLAYWRIGHT_NODEJS_PATH": false,
+      "DEVELOPER_DIR": false
+    },
+    "ordinary_python3_file": {
+      "resolved_path": "/usr/bin/python3",
+      "device": 16777234,
+      "inode": 1152921500312571562,
+      "bytes": 118640,
+      "mtime_ns": 1786589515000000000,
+      "ctime_ns": 1786589515000000000,
+      "sha256": "b8763cf250e607a778bb4603cecb5b90338814d0a3dfcba0d57b1de242f610e9"
+    }
+  },
+  "by_construction": {
+    "PATH_not_assigned_or_activated_by_driver": true,
+    "unapproved_overrides_refused_not_removed": true
+  },
+  "limit": "Lookup/file identity measured; actual Node child startup is established by its existing tests, not by this observation. PATH directory contents and xcrun toolchain outside this executable are not locked."
+}

@@ -1,0 +1,124 @@
+{
+  "state": "ROOT_ADMITTED_ONE_DIAGNOSTIC_PENDING_SAME_MEANINGFUL_DECISION",
+  "head": "8a6e05216e670e8f47dd1d23faeef11b7c2839f4",
+  "merged": "d60b31a0d9be07824bad4128fd6d9a0fe478cbac",
+  "tree": "32c0d7fe6f5d57f4fce2103c74b1dc44d060ec68",
+  "root_scoped_review": "CLEARED_PACKET_FIX",
+  "root_independent_controls": 5,
+  "root_Mac": {
+    "passed": 3463,
+    "skipped": 44,
+    "failed": 0,
+    "source941_unchanged": true
+  },
+  "exact_CI_four_success": true,
+  "fresh_wheel_source_installed_match": 111,
+  "ordinary_baseline": {
+    "python": 120,
+    "node": 39,
+    "failed": 0,
+    "skipped": 0,
+    "owned_survivors": false
+  },
+  "old_run": "20261010T135407Z-f3d33e9d TERMINAL_NOT_MET FOREVER unchanged",
+  "compacted_forbid": "177node literals to node_modules/**;83other literals retained;287finite permissions equivalent,11actual installed API controls pass; scope/policy/deptree seams unchanged. Nested dependencies guarded at run boundaries, not OS isolation.",
+  "root_examiner_fix": "AUDIT_BASE new diagnostic directory; canonical tracker unchanged;5synthetic path/refusal controls only, no private acceptance executed",
+  "install_error": "7build/install stages passed. Root guessed2extra root modules in seal; error preserved; actual111 matched by read-only verification, no build/install repeat.",
+  "author_Linux_full_suite": "Already running, pending; not claimed as passed.",
+  "allowance": {
+    "calls": 20,
+    "reported_tokens": 2000000,
+    "seconds": 1800,
+    "execution": 1796,
+    "cleanup": 4,
+    "workers": 2
+  },
+  "routing": "Unchanged production roster. SAME repair Opus5.5 is distinct from planner; no overrides/fallback/grants/purchases.",
+  "private_acceptance": "10unchanged tests outside feature context, only after actual run and independent shutdown/source audit",
+  "limits": "All prior findings/failed controls/Node-worker limitation/original35 inputs and terminal engines/runs preserved. Contract-only verifier routes retain at-use checking. Synthetic API controls are not live reliability or acceptance. No original35/MVP completion claim.",
+  "decision_requested": "Inspect whole held documents/hashes, give substantive one-run go/no-go with corrections/limits. No ack comment/source repair/provider/new test batch.",
+  "launch_count": 0,
+  "pause_after_one_actual_run_and_independent_assessments": true,
+  "artifacts": {
+    "CODEX_SOURCE_REVIEW.md": {
+      "sha256": "f1ce5491c41e462fe93b175290cb79bc2425e0fc09f3366f740bd2679732dcfd",
+      "bytes": 2591
+    },
+    "source-review-receipt.json": {
+      "sha256": "d33d402a58558a4fdd30b6f467e227bd798298891dd527d86800caafb12d62b3",
+      "bytes": 2053
+    },
+    "independent-packet-controls.json": {
+      "sha256": "8f917082d61d2fd4b99e42a2eb963eef230ec11f66314681b76d9d7f8b9f1e16",
+      "bytes": 1298
+    },
+    "audit-path-canary.json": {
+      "sha256": "ee0fe25253f9d9b70b3eef14201ee85b7b0925fd273014189243da427ec53f54",
+      "bytes": 1697
+    },
+    "preparation-binding.json": {
+      "sha256": "8dfd304dcab1fecfd06c181bcf82cbee6f0887846d93fcb070fae24b7f131d15",
+      "bytes": 904
+    },
+    "predispatch-verification.json": {
+      "sha256": "13c5ffebb3198d2c95ae57bb4dbe678e2ac082b1c396f9b3fec5ffc9cd195d1b",
+      "bytes": 496
+    },
+    "exact-ci-final.json": {
+      "sha256": "94f0fab1f4bb63a6ef70e40db0df9852cc04c69dc34603420efe53fd92581a73",
+      "bytes": 1196
+    },
+    "pr59-merge-receipt.json": {
+      "sha256": "8bd5c7e42b3fa3112a2b0c664df98d9816bfd81c58cd1b0b0ceb478feaaad327",
+      "bytes": 174
+    },
+    "qualification-authorization.json": {
+      "sha256": "3aa5935cd1e9339f8db9f6cfe91e53ed8b2013c42e61a50a4d69baa12bd3feca",
+      "bytes": 28528
+    },
+    "freeze-one-run.json": {
+      "sha256": "7cd5d5591203e86b2d96fd956a5dced29d712e03adba71d2f9a0ed1c708a4dc4",
+      "bytes": 301585
+    },
+    "mac-fullsuite-result.json": {
+      "sha256": "fbff2798832610b3483ba4e49904a117399413045e5a38734c9868a04edcc636",
+      "bytes": 264
+    },
+    "mac-fullsuite.stdout.log": {
+      "sha256": "da4420d76c2077a41c9a5f211b3567786755acd296868b73874d014fb7fd8d74",
+      "bytes": 3965
+    },
+    "installation-runtime111.json": {
+      "sha256": "b724a9001dffedab0b95f0cb54d5431b1a7f7a433c518c4f6873c85ff21b08c2",
+      "bytes": 139385
+    },
+    "qualification-gate-result.json": {
+      "sha256": "6011c2545335143a876c7c78588c256ccaf17f2b340767d351c9205fc3948e0f",
+      "bytes": 22005
+    },
+    "qualification-terminal-audit.json": {
+      "sha256": "71264a18d68311d059a610a6726d79be20597389cb6bb2fc9a0a21e6f859cdc9",
+      "bytes": 31534
+    },
+    "qualification-ordinary-observation.json": {
+      "sha256": "97ebb5df0f9bf5529f32c4cec4323de10228d189c8b64fc392715408b275deb6",
+      "bytes": 1908
+    },
+    "prospective-config.json": {
+      "sha256": "25ecf8a898e8c3b7daa59153919e0cc1b14c4b2a26fbb5190ea14808aaa76011",
+      "bytes": 7331
+    },
+    "scope-compaction.json": {
+      "sha256": "4ae605fc2fa2c4ab61886d2aae922520f8c0c2e072c81cadbfaeabc4a598eb2e",
+      "bytes": 15460
+    },
+    "installed-scope-controls.json": {
+      "sha256": "2354e0156f829ecec6c6cd4897b49399a6d5f87fbc6eea0ac743043935ae8f91",
+      "bytes": 9686
+    },
+    "setup-inventory-error.json": {
+      "sha256": "0eb1db7c46817e3fab5ebb9960077758831cc7c87cb5b83e6effef32478e4125",
+      "bytes": 357
+    }
+  }
+}

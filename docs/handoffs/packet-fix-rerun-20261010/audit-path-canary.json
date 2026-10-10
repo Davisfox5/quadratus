@@ -1,0 +1,41 @@
+{
+  "purpose": "Synthetic offline admission refusal controls only; no actual run or shutdown asserted",
+  "driver_sha256": "f4578ab87283c86126620644f5114cbd88efc33bfd725ee698f47e7e8d4c8b8a",
+  "audit_base": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun",
+  "canonical_tracker": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261009/recovery-v2/operator/owned_processes.py",
+  "tracker_sha256": "a7fc7e0b7060a0ae3e9a2158ede65287dea01409b6e40c6f9f959d7912c60a81",
+  "passed": 5,
+  "failed": 0,
+  "results": [
+    {
+      "name": "fresh audit directory reaches real bounded read",
+      "outcome": "PASS",
+      "observed_type": "FileNotFoundError",
+      "observed": "[Errno 2] No such file or directory: 'intentionally-absent-synthetic-shutdown.json'"
+    },
+    {
+      "name": "historical audit directory refused",
+      "outcome": "PASS",
+      "observed_type": "RuntimeError",
+      "observed": "Audit outside diagnostic base refused"
+    },
+    {
+      "name": "other terminal audit directory refused",
+      "outcome": "PASS",
+      "observed_type": "RuntimeError",
+      "observed": "Audit outside diagnostic base refused"
+    },
+    {
+      "name": "fresh path still requires measured held bytes",
+      "outcome": "PASS",
+      "observed_type": "RuntimeError",
+      "observed": "Held bytes changed: /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/root-admission/synthetic-wrong-digest.json"
+    },
+    {
+      "name": "fresh path symlink refused",
+      "outcome": "PASS",
+      "observed_type": "OSError",
+      "observed": "[Errno 62] Too many levels of symbolic links: 'synthetic-linked-receipt.json'"
+    }
+  ]
+}

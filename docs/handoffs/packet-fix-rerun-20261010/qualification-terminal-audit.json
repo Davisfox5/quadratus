@@ -1,0 +1,662 @@
+{
+  "candidate": "8a6e05216e670e8f47dd1d23faeef11b7c2839f4",
+  "qualification_identity": {
+    "candidate": "8a6e05216e670e8f47dd1d23faeef11b7c2839f4",
+    "candidate_tree": "32c0d7fe6f5d57f4fce2103c74b1dc44d060ec68",
+    "qualification_nonce": "c3e3eaf77dee462c86651b77fe795d6f",
+    "authorization_sha256": "3aa5935cd1e9339f8db9f6cfe91e53ed8b2013c42e61a50a4d69baa12bd3feca",
+    "runtime": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/qualification-once",
+    "candidate_python": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python"
+  },
+  "ordinary_environment_binding": {
+    "identity": {
+      "candidate": "8a6e05216e670e8f47dd1d23faeef11b7c2839f4",
+      "candidate_tree": "32c0d7fe6f5d57f4fce2103c74b1dc44d060ec68",
+      "qualification_nonce": "c3e3eaf77dee462c86651b77fe795d6f",
+      "authorization_sha256": "3aa5935cd1e9339f8db9f6cfe91e53ed8b2013c42e61a50a4d69baa12bd3feca",
+      "runtime": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/qualification-once",
+      "candidate_python": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python"
+    },
+    "path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/qualification-once/ordinary-environment-observation.json",
+    "sha256": "97ebb5df0f9bf5529f32c4cec4323de10228d189c8b64fc392715408b275deb6"
+  },
+  "reason": "worker_returned",
+  "primary_error": null,
+  "worker_exit": 0,
+  "owned_report": {
+    "scans": 182,
+    "observed_owned": [
+      {
+        "identity": {
+          "pid": 32238,
+          "start_sec": 1791647820,
+          "start_usec": 283711,
+          "uid": 501
+        },
+        "method": "direct_spawn",
+        "at": 1791647820.2856488
+      },
+      {
+        "identity": {
+          "pid": 32241,
+          "start_sec": 1791647820,
+          "start_usec": 553418,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647820.606236
+      },
+      {
+        "identity": {
+          "pid": 32261,
+          "start_sec": 1791647821,
+          "start_usec": 808695,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647821.8257082
+      },
+      {
+        "identity": {
+          "pid": 32260,
+          "start_sec": 1791647821,
+          "start_usec": 777795,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647821.825738
+      },
+      {
+        "identity": {
+          "pid": 32274,
+          "start_sec": 1791647825,
+          "start_usec": 821311,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647825.833798
+      },
+      {
+        "identity": {
+          "pid": 32275,
+          "start_sec": 1791647825,
+          "start_usec": 857328,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647825.9000802
+      },
+      {
+        "identity": {
+          "pid": 32292,
+          "start_sec": 1791647829,
+          "start_usec": 880752,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647829.8981729
+      },
+      {
+        "identity": {
+          "pid": 32291,
+          "start_sec": 1791647829,
+          "start_usec": 880467,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647829.8986619
+      },
+      {
+        "identity": {
+          "pid": 32290,
+          "start_sec": 1791647829,
+          "start_usec": 880185,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647829.898922
+      },
+      {
+        "identity": {
+          "pid": 32289,
+          "start_sec": 1791647829,
+          "start_usec": 879852,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647829.8989592
+      },
+      {
+        "identity": {
+          "pid": 32288,
+          "start_sec": 1791647829,
+          "start_usec": 879547,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647829.8989801
+      },
+      {
+        "identity": {
+          "pid": 32287,
+          "start_sec": 1791647829,
+          "start_usec": 879192,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647829.899791
+      },
+      {
+        "identity": {
+          "pid": 32286,
+          "start_sec": 1791647829,
+          "start_usec": 878740,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647829.899817
+      },
+      {
+        "identity": {
+          "pid": 32285,
+          "start_sec": 1791647829,
+          "start_usec": 877758,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647829.899859
+      },
+      {
+        "identity": {
+          "pid": 32284,
+          "start_sec": 1791647829,
+          "start_usec": 843081,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647829.899903
+      },
+      {
+        "identity": {
+          "pid": 32296,
+          "start_sec": 1791647830,
+          "start_usec": 80815,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647830.113528
+      },
+      {
+        "identity": {
+          "pid": 32298,
+          "start_sec": 1791647830,
+          "start_usec": 210970,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647830.238863
+      },
+      {
+        "identity": {
+          "pid": 32297,
+          "start_sec": 1791647830,
+          "start_usec": 201540,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647830.238924
+      },
+      {
+        "identity": {
+          "pid": 32304,
+          "start_sec": 1791647830,
+          "start_usec": 252358,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647830.300788
+      },
+      {
+        "identity": {
+          "pid": 32305,
+          "start_sec": 1791647830,
+          "start_usec": 648832,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647830.6751301
+      },
+      {
+        "identity": {
+          "pid": 32306,
+          "start_sec": 1791647830,
+          "start_usec": 960626,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647830.991335
+      },
+      {
+        "identity": {
+          "pid": 32314,
+          "start_sec": 1791647831,
+          "start_usec": 18979,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647831.056475
+      },
+      {
+        "identity": {
+          "pid": 32308,
+          "start_sec": 1791647831,
+          "start_usec": 4138,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647831.056501
+      },
+      {
+        "identity": {
+          "pid": 32307,
+          "start_sec": 1791647831,
+          "start_usec": 2827,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647831.056524
+      },
+      {
+        "identity": {
+          "pid": 32317,
+          "start_sec": 1791647831,
+          "start_usec": 337657,
+          "uid": 501
+        },
+        "method": "exact_inherited_tag",
+        "at": 1791647831.365349
+      }
+    ],
+    "signals": [],
+    "surviving_observed_owned": [],
+    "same_uid_environment_unreadable_count": 0,
+    "ownership_tag_key": "QUADRATUS_MVP_OWNERSHIP",
+    "environment_values_recorded": false,
+    "containment": "observer, not kernel containment",
+    "limitations": [
+      "A descendant which strips the inherited tag and reparents before observation can be missed.",
+      "PID creation identity is rechecked before each signal; macOS identity check and kill are not atomic.",
+      "Only direct-spawn, exact-tag or live-parent evidence grants ownership; unreadable environments never grant it."
+    ]
+  },
+  "owned_survivors_present": false,
+  "original_baseline_unchanged": true,
+  "tested_private_baseline_unchanged": true,
+  "cases": null,
+  "existing_Node_case_evidence": "Actual stdout/stderr/report only; private screenshots/port/storage observations not generated",
+  "finalization_errors": [],
+  "qualification_pass": true,
+  "wall_seconds": 120,
+  "execution_seconds": 116,
+  "cleanup_reserve_seconds": 4,
+  "cleanup_started_seconds": 11.338867082988145,
+  "elapsed_seconds": 11.717545207997318,
+  "observed_overrun_seconds": 0,
+  "hard_kernel_containment": false,
+  "exact_engine_report": {
+    "candidate": "8a6e05216e670e8f47dd1d23faeef11b7c2839f4",
+    "qualification_identity": {
+      "candidate": "8a6e05216e670e8f47dd1d23faeef11b7c2839f4",
+      "candidate_tree": "32c0d7fe6f5d57f4fce2103c74b1dc44d060ec68",
+      "qualification_nonce": "c3e3eaf77dee462c86651b77fe795d6f",
+      "authorization_sha256": "3aa5935cd1e9339f8db9f6cfe91e53ed8b2013c42e61a50a4d69baa12bd3feca",
+      "runtime": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/qualification-once",
+      "candidate_python": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python"
+    },
+    "ordinary_environment_binding": {
+      "identity": {
+        "candidate": "8a6e05216e670e8f47dd1d23faeef11b7c2839f4",
+        "candidate_tree": "32c0d7fe6f5d57f4fce2103c74b1dc44d060ec68",
+        "qualification_nonce": "c3e3eaf77dee462c86651b77fe795d6f",
+        "authorization_sha256": "3aa5935cd1e9339f8db9f6cfe91e53ed8b2013c42e61a50a4d69baa12bd3feca",
+        "runtime": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/qualification-once",
+        "candidate_python": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python"
+      },
+      "path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/qualification-once/ordinary-environment-observation.json",
+      "sha256": "97ebb5df0f9bf5529f32c4cec4323de10228d189c8b64fc392715408b275deb6"
+    },
+    "route": "ordinary_full_pytest_and_default_Node",
+    "gates": [
+      {
+        "label": "python",
+        "expected_receipt": {
+          "id": "ordinary-baseline-python-default-discovery",
+          "required": true,
+          "command": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python -m pytest -q -p no:cacheprovider '--quadratus-report={report}'",
+          "source_hash": "2f6f191ebdd5717f521d5dda96bb2d50dc13e4938d4fc06b93e918729aa36520",
+          "config_hash": "2199f352c945fd4f68be0e47ab5e944098a7ce744bfe35c7d6d91343e73b39a2",
+          "runner_hash": "fffaa908f83bacf7bf66d6be9d929a4f229d585b16c9f2c9c716621cb95f9c9d",
+          "cwd": ".",
+          "selection": ""
+        },
+        "gate_result": {
+          "passed": true,
+          "command": "gate suite",
+          "returncode": 0,
+          "output": "ordinary-baseline-python-default-discovery: passed: exit 0\n........................................................................ [ 60%]\n................................................                         [100%]\n120 passed in 8.56s",
+          "receipts": [
+            {
+              "id": "ordinary-baseline-python-default-discovery",
+              "status": "passed",
+              "reason": "exit 0",
+              "required": true,
+              "command": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python -m pytest -q -p no:cacheprovider '--quadratus-report={report}'",
+              "returncode": 0,
+              "output": "........................................................................ [ 60%]\n................................................                         [100%]\n120 passed in 8.56s",
+              "cached": false,
+              "tests": 120,
+              "source_hash": "2f6f191ebdd5717f521d5dda96bb2d50dc13e4938d4fc06b93e918729aa36520",
+              "config_hash": "2199f352c945fd4f68be0e47ab5e944098a7ce744bfe35c7d6d91343e73b39a2",
+              "runner_hash": "fffaa908f83bacf7bf66d6be9d929a4f229d585b16c9f2c9c716621cb95f9c9d",
+              "report": {
+                "state": "parsed",
+                "exitstatus": 0,
+                "collected": 120,
+                "collect_errors": 0,
+                "counts": {
+                  "passed": 120,
+                  "failed": 0,
+                  "errors": 0,
+                  "skipped": 0
+                },
+                "failures": [],
+                "truncated": false
+              },
+              "cwd": ".",
+              "selection": "",
+              "cases": {
+                "skipped": {},
+                "executed": {},
+                "other": {},
+                "qualified": []
+              }
+            }
+          ],
+          "report": null,
+          "cases": null
+        },
+        "primary_error": null,
+        "finalization_errors": [],
+        "ordinary_observation": {
+          "report_slots": [
+            {
+              "declared_argv": [
+                "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "--quadratus-report={report}"
+              ],
+              "expanded_argv": [
+                "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "--quadratus-report=/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/quadratus-report-nv5jv0da/report.json"
+              ],
+              "report_path": "/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/quadratus-report-nv5jv0da/report.json",
+              "held_expected_bindings": {
+                "nonce": "db6208f738276365cfc7e8766742bb02",
+                "module_file": "/private/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/quadratus-report-nv5jv0da/quadratus_gate_report_0d864f7ad700ac15.py",
+                "module_sha256": "3082240fc63bf5d8a187fbaa12d868e200efe4405fa3a81f34b01897d6fc221b"
+              },
+              "raw_report_preserved": true,
+              "producer_copy_preserved": true,
+              "raw_report_sha256": "9e3e7df84816a05a3da41323a120abb21929eecbeddc5bee475a92577d3f6a55",
+              "raw_report_bytes": 466,
+              "canonical_report_path": "/private/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/quadratus-report-nv5jv0da/report.json",
+              "measured_module_sha256": "3082240fc63bf5d8a187fbaa12d868e200efe4405fa3a81f34b01897d6fc221b",
+              "report_slot_removed_after_normal_gate_cleanup": true
+            }
+          ],
+          "actual_pinned_node_test_invocations": [
+            {
+              "expanded_argv": [
+                "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "--quadratus-report=/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/quadratus-report-nv5jv0da/report.json"
+              ],
+              "cwd": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/qualification-once/private-baseline",
+              "returncode": 0,
+              "stdout_artifact": {
+                "path": "actual-pytest-01.stdout.log",
+                "sha256": "8268c05128bd008bbe6b7df1c249c20b5b961911a445f5b733cc7521a070cf11",
+                "bytes": 180,
+                "complete_returned_output": true,
+                "timeout_partial": false
+              },
+              "stderr_artifact": {
+                "path": "actual-pytest-01.stderr.log",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "bytes": 0,
+                "complete_returned_output": true,
+                "timeout_partial": false
+              },
+              "exception": null
+            }
+          ],
+          "inspection_errors": [],
+          "additional_slot_or_check_invocations": 0,
+          "observer_changes_to_actual_arguments_or_env": false,
+          "root_owned_nonconcurrent_paths_assumed": true,
+          "filesystem_transaction_or_kernel_containment": false
+        },
+        "actual_producer": "quadratus-pytest/4",
+        "producer_artifact_note": "Base byte-identical observer retains actual-engine-node-producer.mjs filename; Python slot contains actual Python producer bytes, not Node execution",
+        "pass": true,
+        "actual_gate_invocations": 1,
+        "raw_and_full_outputs_required": true,
+        "skips_counted_as_pass": false
+      },
+      {
+        "label": "node",
+        "expected_receipt": {
+          "id": "ordinary-baseline-node-default-discovery",
+          "required": true,
+          "command": "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/node --test '--test-reporter-destination={report}'",
+          "source_hash": "2f6f191ebdd5717f521d5dda96bb2d50dc13e4938d4fc06b93e918729aa36520",
+          "config_hash": "0af7ab9a991a3711bf061d1e78bf22bf512a55a5cdb5d95d8f551cc65e6118fb",
+          "runner_hash": "f8fa23579a89914cffd346ecf12c9ca24a3af8111a1af2beaacdcec55743ce7b",
+          "cwd": ".",
+          "selection": ""
+        },
+        "gate_result": {
+          "passed": true,
+          "command": "gate suite",
+          "returncode": 0,
+          "output": "ordinary-baseline-node-default-discovery: passed: exit 0\n\n# Subtest: M opens preview unless a modal is active; I/O/P/B remain intact\nok 30 - M opens preview unless a modal is active; I/O/P/B remain intact\n  ---\n  duration_ms: 3.253708\n  type: 'test'\n  ...\n# Subtest: newer upload invalidates older\nok 31 - newer upload invalidates older\n  ---\n  duration_ms: 2.12175\n  type: 'test'\n  ...\n# Subtest: close while pending leaves no rows or status and restores focus\nok 32 - close while pending leaves no rows or status and restores focus\n  ---\n  duration_ms: 3.421959\n  type: 'test'\n  ...\n# Subtest: project switch while pending ignores old success and failure\nok 33 - project switch while pending ignores old success and failure\n  ---\n  duration_ms: 2.392041\n  type: 'test'\n  ...\n# Subtest: loads the template and real app, including an APP_JS_PATH override\nok 34 - loads the template and real app, including an APP_JS_PATH override\n  ---\n  duration_ms: 40.304792\n  type: 'test'\n  ...\n# Subtest: filters instantly without fetching and renders markup names as text\nok 35 - filters instantly without fetching and renders markup names as text\n  ---\n  duration_ms: 35.441625\n  type: 'test'\n  ...\n# Subtest: restores encoded and malformed hash queries safely\nok 36 - restores encoded and malformed hash queries safely\n  ---\n  duration_ms: 13.408792\n  type: 'test'\n  ...\n# Subtest: distinguishes no matches from an empty library and clears with focus\nok 37 - distinguishes no matches from an empty library and clears with focus\n  ---\n  duration_ms: 11.529583\n  type: 'test'\n  ...\n# Subtest: delete cancellation and acceptance update filtered results\nok 38 - delete cancellation and acceptance update filtered results\n  ---\n  duration_ms: 11.398125\n  type: 'test'\n  ...\n# Subtest: create from no-match clears search and reveals reloaded cards\nok 39 - create from no-match clears search and reveals reloaded cards\n  ---\n  duration_ms: 5.11625\n  type: 'test'\n  ...\n1..39\n# tests 39\n# suites 0\n# pass 39\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1661.816",
+          "receipts": [
+            {
+              "id": "ordinary-baseline-node-default-discovery",
+              "status": "passed",
+              "reason": "exit 0",
+              "required": true,
+              "command": "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/node --test '--test-reporter-destination={report}'",
+              "returncode": 0,
+              "output": "\n# Subtest: M opens preview unless a modal is active; I/O/P/B remain intact\nok 30 - M opens preview unless a modal is active; I/O/P/B remain intact\n  ---\n  duration_ms: 3.253708\n  type: 'test'\n  ...\n# Subtest: newer upload invalidates older\nok 31 - newer upload invalidates older\n  ---\n  duration_ms: 2.12175\n  type: 'test'\n  ...\n# Subtest: close while pending leaves no rows or status and restores focus\nok 32 - close while pending leaves no rows or status and restores focus\n  ---\n  duration_ms: 3.421959\n  type: 'test'\n  ...\n# Subtest: project switch while pending ignores old success and failure\nok 33 - project switch while pending ignores old success and failure\n  ---\n  duration_ms: 2.392041\n  type: 'test'\n  ...\n# Subtest: loads the template and real app, including an APP_JS_PATH override\nok 34 - loads the template and real app, including an APP_JS_PATH override\n  ---\n  duration_ms: 40.304792\n  type: 'test'\n  ...\n# Subtest: filters instantly without fetching and renders markup names as text\nok 35 - filters instantly without fetching and renders markup names as text\n  ---\n  duration_ms: 35.441625\n  type: 'test'\n  ...\n# Subtest: restores encoded and malformed hash queries safely\nok 36 - restores encoded and malformed hash queries safely\n  ---\n  duration_ms: 13.408792\n  type: 'test'\n  ...\n# Subtest: distinguishes no matches from an empty library and clears with focus\nok 37 - distinguishes no matches from an empty library and clears with focus\n  ---\n  duration_ms: 11.529583\n  type: 'test'\n  ...\n# Subtest: delete cancellation and acceptance update filtered results\nok 38 - delete cancellation and acceptance update filtered results\n  ---\n  duration_ms: 11.398125\n  type: 'test'\n  ...\n# Subtest: create from no-match clears search and reveals reloaded cards\nok 39 - create from no-match clears search and reveals reloaded cards\n  ---\n  duration_ms: 5.11625\n  type: 'test'\n  ...\n1..39\n# tests 39\n# suites 0\n# pass 39\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1661.816",
+              "cached": false,
+              "tests": 39,
+              "source_hash": "2f6f191ebdd5717f521d5dda96bb2d50dc13e4938d4fc06b93e918729aa36520",
+              "config_hash": "0af7ab9a991a3711bf061d1e78bf22bf512a55a5cdb5d95d8f551cc65e6118fb",
+              "runner_hash": "f8fa23579a89914cffd346ecf12c9ca24a3af8111a1af2beaacdcec55743ce7b",
+              "report": {
+                "state": "parsed",
+                "exitstatus": 0,
+                "collected": 39,
+                "collect_errors": 0,
+                "counts": {
+                  "passed": 39,
+                  "failed": 0,
+                  "errors": 0,
+                  "skipped": 0
+                },
+                "failures": [],
+                "truncated": false
+              },
+              "cwd": ".",
+              "selection": "",
+              "cases": {
+                "skipped": {},
+                "executed": {
+                  "typed-query browser review at 1280x800": 1,
+                  "typed-query browser review at 390x844": 1,
+                  "keeps API order, then toggles ascending and descending": 1,
+                  "lowercases names and keeps original tie order both ways": 1,
+                  "sorting preserves the active search state and hash": 1,
+                  "toggle is local and leaves location unchanged": 1,
+                  "active ascending sort survives create and delete reloads": 1,
+                  "a preview that returns after the filter changed is discarded": 1,
+                  "a preview that returns after switching project is discarded": 1,
+                  "another project's preview reaches the server while an apply is pending, and its dialog is released after": 1,
+                  "Confirm refuses a stored preview that belongs to another project": 1,
+                  "focus parked by the app moves to Confirm when the preview succeeds": 1,
+                  "focus the user moved during the request is left alone": 1,
+                  "Tab that lands back on the parked control is still the user's choice": 1,
+                  "closing and reopening the dialog forgets any parked focus": 1,
+                  "a failed preview returns focus to Preview; a conflict moves it to Refresh": 1,
+                  "the preview table joins the Tab cycle only while it has rows": 1,
+                  "Tab wraps eligible controls and modal suppresses shortcuts": 1,
+                  "Escape closes the modal and restores focus": 1,
+                  "Preview recovers focus before its response": 1,
+                  "Confirm and Refresh recover focus while controls disappear": 1,
+                  "committed apply survives change events with captured values": 1,
+                  "dismiss and reopen keeps same-project apply busy": 1,
+                  "another project may preview but cannot confirm during pending apply": 1,
+                  "renders row statuses, summary, player, and escaped cell text": 1,
+                  "shows the empty state": 1,
+                  "shows server and network errors": 1,
+                  "clears stale results and announces loading before fetch resolves": 1,
+                  "resets the file input so the same file can be selected twice": 1,
+                  "M opens preview unless a modal is active; I/O/P/B remain intact": 1,
+                  "newer upload invalidates older": 1,
+                  "close while pending leaves no rows or status and restores focus": 1,
+                  "project switch while pending ignores old success and failure": 1,
+                  "loads the template and real app, including an APP_JS_PATH override": 1,
+                  "filters instantly without fetching and renders markup names as text": 1,
+                  "restores encoded and malformed hash queries safely": 1,
+                  "distinguishes no matches from an empty library and clears with focus": 1,
+                  "delete cancellation and acceptance update filtered results": 1,
+                  "create from no-match clears search and reveals reloaded cards": 1
+                },
+                "other": {},
+                "qualified": []
+              }
+            }
+          ],
+          "report": null,
+          "cases": null
+        },
+        "primary_error": null,
+        "finalization_errors": [],
+        "ordinary_observation": {
+          "report_slots": [
+            {
+              "declared_argv": [
+                "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/node",
+                "--test",
+                "--test-reporter-destination={report}"
+              ],
+              "expanded_argv": [
+                "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/node",
+                "--test",
+                "--test-reporter=tap",
+                "--test-reporter-destination=stdout",
+                "--test-reporter=/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/quadratus-report-d7onz4pe/quadratus_gate_report_be299c705c6c5564.mjs",
+                "--test-reporter-destination=/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/quadratus-report-d7onz4pe/report.json"
+              ],
+              "report_path": "/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/quadratus-report-d7onz4pe/report.json",
+              "held_expected_bindings": {
+                "nonce": "db3f20a95533dca43473dba615a1d790",
+                "module_file": "/private/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/quadratus-report-d7onz4pe/quadratus_gate_report_be299c705c6c5564.mjs",
+                "module_sha256": "a835833b8a9b57b41ff548f23283a867c46ea9242df1834fbccbe6eba111dde2"
+              },
+              "raw_report_preserved": true,
+              "producer_copy_preserved": true,
+              "raw_report_sha256": "157d9a4d6791419caf5311f0afd99fea74ddbc5899dbee982f747a8513ab3dbb",
+              "raw_report_bytes": 437,
+              "canonical_report_path": "/private/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/quadratus-report-d7onz4pe/report.json",
+              "measured_module_sha256": "a835833b8a9b57b41ff548f23283a867c46ea9242df1834fbccbe6eba111dde2",
+              "report_slot_removed_after_normal_gate_cleanup": true
+            }
+          ],
+          "actual_pinned_node_test_invocations": [
+            {
+              "expanded_argv": [
+                "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/node",
+                "--test",
+                "--test-reporter=tap",
+                "--test-reporter-destination=stdout",
+                "--test-reporter=/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/quadratus-report-d7onz4pe/quadratus_gate_report_be299c705c6c5564.mjs",
+                "--test-reporter-destination=/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/quadratus-report-d7onz4pe/report.json"
+              ],
+              "cwd": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/qualification-once/private-baseline",
+              "returncode": 0,
+              "stdout_artifact": {
+                "path": "actual-node-01.stdout.log",
+                "sha256": "431fb6198e1956f0a19935a52a10d612b3ee86599bd4552e31da17d4a0753113",
+                "bytes": 7317,
+                "complete_returned_output": true,
+                "timeout_partial": false
+              },
+              "stderr_artifact": {
+                "path": "actual-node-01.stderr.log",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "bytes": 0,
+                "complete_returned_output": true,
+                "timeout_partial": false
+              },
+              "exception": null
+            }
+          ],
+          "inspection_errors": [],
+          "additional_slot_or_check_invocations": 0,
+          "observer_changes_to_actual_arguments_or_env": false,
+          "root_owned_nonconcurrent_paths_assumed": true,
+          "filesystem_transaction_or_kernel_containment": false
+        },
+        "actual_producer": "quadratus-node/1",
+        "producer_artifact_note": "Base byte-identical observer retains actual-engine-node-producer.mjs filename; Python slot contains actual Python producer bytes, not Node execution",
+        "pass": true,
+        "actual_gate_invocations": 1,
+        "raw_and_full_outputs_required": true,
+        "skips_counted_as_pass": false
+      }
+    ],
+    "primary_error": null,
+    "finalization_errors": [],
+    "source_before": "2f6f191ebdd5717f521d5dda96bb2d50dc13e4938d4fc06b93e918729aa36520",
+    "source_after": "2f6f191ebdd5717f521d5dda96bb2d50dc13e4938d4fc06b93e918729aa36520",
+    "source_unchanged": true,
+    "qualification_pass": true,
+    "elapsed_seconds": 11.091500000009546,
+    "required_runner_slots": 2,
+    "missing_gate_status": "NOTRUN when absent, never passed",
+    "actual_model_seat_access_proved": false,
+    "provider_model_calls": 0,
+    "newResetTested": false,
+    "release_acceptance": false,
+    "private_browser_extra_cases_added": false
+  },
+  "model_provider_calls": 0,
+  "newResetTested": false,
+  "actual_model_seat_access_proved": false,
+  "release_acceptance": false
+}

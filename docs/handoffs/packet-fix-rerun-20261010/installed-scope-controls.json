@@ -1,0 +1,259 @@
+{
+  "status": "PASS",
+  "controls": [
+    {
+      "name": "all263_effective_policy_permissions",
+      "status": "PASS",
+      "detail": {
+        "paths": 263,
+        "permitted": 3,
+        "denied": 260
+      }
+    },
+    {
+      "name": "future_paths_effective_permissions",
+      "status": "PASS",
+      "detail": {
+        "paths": 24,
+        "nested_dependency_note": "Both scopes permit a dependency path under allowed new-tests prefix; DependencyWatch separately refuses it. No grant expansion caused by root node_modules wildcard."
+      }
+    },
+    {
+      "name": "exact_nondependency_and_test_literal_retention",
+      "status": "PASS",
+      "detail": {
+        "retained_literal": 83,
+        "original_test_exclusions": 26,
+        "removed_dependency_literal": 177,
+        "new_wildcard": "node_modules/**"
+      }
+    },
+    {
+      "name": "actual_installed_TaskScope_assess",
+      "status": "PASS",
+      "detail": [
+        {
+          "path": "static/js/app.js",
+          "before_blocking": false,
+          "after_blocking": false,
+          "out_of_scope": []
+        },
+        {
+          "path": "tests/gui_completion/new_reset.test.js",
+          "before_blocking": false,
+          "after_blocking": false,
+          "out_of_scope": []
+        },
+        {
+          "path": "node_modules/future/index.js",
+          "before_blocking": true,
+          "after_blocking": true,
+          "out_of_scope": [
+            "node_modules/future/index.js"
+          ]
+        },
+        {
+          "path": "tests/browser_new.test.js",
+          "before_blocking": true,
+          "after_blocking": true,
+          "out_of_scope": [
+            "tests/browser_new.test.js"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "actual_dependency_watch_unchanged",
+      "status": "PASS",
+      "detail": {
+        "expected_refusal": false,
+        "actual_refusal": false,
+        "watch_record": {
+          "status": "unchanged",
+          "digest": "8f3e4f0d8b4d38b82df82c7193e771b88376f53d5bd01e9b0c1b3a449c6a47db",
+          "entries": 3,
+          "roots": [
+            "node_modules"
+          ],
+          "exemptions": [],
+          "events": [],
+          "boundary": "dependency trees named .venv, env, node_modules, venv inside the project; nothing outside the project is guarded"
+        },
+        "synthetic_only": true
+      }
+    },
+    {
+      "name": "actual_dependency_watch_feature_write",
+      "status": "PASS",
+      "detail": {
+        "expected_refusal": false,
+        "actual_refusal": false,
+        "watch_record": {
+          "status": "unchanged",
+          "digest": "8f3e4f0d8b4d38b82df82c7193e771b88376f53d5bd01e9b0c1b3a449c6a47db",
+          "entries": 3,
+          "roots": [
+            "node_modules"
+          ],
+          "exemptions": [],
+          "events": [],
+          "boundary": "dependency trees named .venv, env, node_modules, venv inside the project; nothing outside the project is guarded"
+        },
+        "synthetic_only": true
+      }
+    },
+    {
+      "name": "actual_dependency_watch_same_length_dependency_write",
+      "status": "PASS",
+      "detail": {
+        "expected_refusal": true,
+        "actual_refusal": true,
+        "watch_record": {
+          "status": "changed",
+          "digest": "8f3e4f0d8b4d38b82df82c7193e771b88376f53d5bd01e9b0c1b3a449c6a47db",
+          "entries": 3,
+          "roots": [
+            "node_modules"
+          ],
+          "exemptions": [],
+          "events": [
+            {
+              "window": "private synthetic mutation",
+              "reason": "changed: node_modules/pkg/index.js",
+              "changed": [
+                "node_modules/pkg/index.js"
+              ]
+            }
+          ],
+          "boundary": "dependency trees named .venv, env, node_modules, venv inside the project; nothing outside the project is guarded"
+        },
+        "synthetic_only": true
+      }
+    },
+    {
+      "name": "actual_dependency_watch_future_root_dependency",
+      "status": "PASS",
+      "detail": {
+        "expected_refusal": true,
+        "actual_refusal": true,
+        "watch_record": {
+          "status": "changed",
+          "digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "entries": 0,
+          "roots": [],
+          "exemptions": [],
+          "events": [
+            {
+              "window": "private synthetic mutation",
+              "reason": "changed: node_modules, node_modules/new, node_modules/new/index.js",
+              "changed": [
+                "node_modules",
+                "node_modules/new",
+                "node_modules/new/index.js"
+              ]
+            }
+          ],
+          "boundary": "dependency trees named .venv, env, node_modules, venv inside the project; nothing outside the project is guarded"
+        },
+        "synthetic_only": true
+      }
+    },
+    {
+      "name": "actual_dependency_watch_future_nested_dependency",
+      "status": "PASS",
+      "detail": {
+        "expected_refusal": true,
+        "actual_refusal": true,
+        "watch_record": {
+          "status": "changed",
+          "digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "entries": 0,
+          "roots": [],
+          "exemptions": [],
+          "events": [
+            {
+              "window": "private synthetic mutation",
+              "reason": "changed: tests/gui_completion/node_modules, tests/gui_completion/node_modules/new, tests/gui_completion/node_modules/new/index.js",
+              "changed": [
+                "tests/gui_completion/node_modules",
+                "tests/gui_completion/node_modules/new",
+                "tests/gui_completion/node_modules/new/index.js"
+              ]
+            }
+          ],
+          "boundary": "dependency trees named .venv, env, node_modules, venv inside the project; nothing outside the project is guarded"
+        },
+        "synthetic_only": true
+      }
+    },
+    {
+      "name": "actual_dependency_watch_dependency_symlink",
+      "status": "PASS",
+      "detail": {
+        "expected_refusal": true,
+        "actual_refusal": true,
+        "watch_record": {
+          "status": "changed",
+          "digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "entries": 0,
+          "roots": [],
+          "exemptions": [],
+          "events": [
+            {
+              "window": "private synthetic mutation",
+              "reason": "changed: node_modules",
+              "changed": [
+                "node_modules"
+              ]
+            }
+          ],
+          "boundary": "dependency trees named .venv, env, node_modules, venv inside the project; nothing outside the project is guarded"
+        },
+        "synthetic_only": true
+      }
+    },
+    {
+      "name": "inspected_enforcement_sources_unchanged",
+      "status": "PASS",
+      "detail": {
+        "before": {
+          "quadratus/scope.py": "8f618025ba1471e567efc52e0273d80d60ee862b34f680b2a8eaa7588396497a",
+          "quadratus/policy.py": "74ea57a56f069095bcb82b3334eafc6881f1f04b41458a3d3e1129e1d943982d",
+          "quadratus/deptree.py": "5d1e432a021fdf5a7c456530698dcc34357dc58b6299a469b9965d1afeb3534a",
+          "quadratus/session.py": "25a7118ec22d3f61ab2ea188bba54dc11a54d2d951d59f7b7b5eea4675f81ded"
+        },
+        "after": {
+          "quadratus/scope.py": "8f618025ba1471e567efc52e0273d80d60ee862b34f680b2a8eaa7588396497a",
+          "quadratus/policy.py": "74ea57a56f069095bcb82b3334eafc6881f1f04b41458a3d3e1129e1d943982d",
+          "quadratus/deptree.py": "5d1e432a021fdf5a7c456530698dcc34357dc58b6299a469b9965d1afeb3534a",
+          "quadratus/session.py": "25a7118ec22d3f61ab2ea188bba54dc11a54d2d951d59f7b7b5eea4675f81ded"
+        }
+      }
+    }
+  ],
+  "counts": {
+    "passed": 11,
+    "failed": 0,
+    "skipped": 0
+  },
+  "permission_rows": 287,
+  "driver_sha256": "c95e2feaf168f65c23befd2b401d0836d8131cb464bad7acdd24e7db98fa55d8",
+  "source_refs_sha256": {
+    "quadratus/scope.py": "8f618025ba1471e567efc52e0273d80d60ee862b34f680b2a8eaa7588396497a",
+    "quadratus/policy.py": "74ea57a56f069095bcb82b3334eafc6881f1f04b41458a3d3e1129e1d943982d",
+    "quadratus/deptree.py": "5d1e432a021fdf5a7c456530698dcc34357dc58b6299a469b9965d1afeb3534a",
+    "quadratus/session.py": "25a7118ec22d3f61ab2ea188bba54dc11a54d2d951d59f7b7b5eea4675f81ded"
+  },
+  "installed_module_bindings": {
+    "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/installation/final-pr58/venv/lib/python3.12/site-packages/quadratus/scope.py": "8f618025ba1471e567efc52e0273d80d60ee862b34f680b2a8eaa7588396497a",
+    "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/installation/final-pr58/venv/lib/python3.12/site-packages/quadratus/deptree.py": "5d1e432a021fdf5a7c456530698dcc34357dc58b6299a469b9965d1afeb3534a",
+    "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/installation/final-pr58/venv/lib/python3.12/site-packages/quadratus/policy.py": "74ea57a56f069095bcb82b3334eafc6881f1f04b41458a3d3e1129e1d943982d"
+  },
+  "engine_reference": "Historical actual installed319 API only; final packet-fix candidate must rebind these unchanged enforcement seams or reassess a changed seam. Not source clearance/qualification.",
+  "limits": [
+    "Finite263+24path comparisons, not exhaustive path-universe proof.",
+    "Scope alone permits nested dependency files under new-tests; actual dependency guard refuses changes.",
+    "Guard detects/preserves mutations at run boundaries, not an OS write sandbox.",
+    "Actual installed offline API imports only; no providers, Node, browser, engine entrypoint, gates or feature invocation."
+  ]
+}
