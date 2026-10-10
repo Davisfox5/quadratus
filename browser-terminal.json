@@ -1,0 +1,26 @@
+{
+  "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/gui-completion-319eb96-installed-preparation/project/.quadratus/runs/20261010T135407Z-f3d33e9d",
+  "result_completed": false,
+  "result_error": "PolicyError: Required role packet exceeds 12000 bytes; narrow the task",
+  "downloads": [
+    {
+      "name": "report.md",
+      "sha256": "fd7829278d437a0da8a68f43961e70ecffa66d255c30e1c36398bd2165594eea"
+    },
+    {
+      "name": "changes.diff",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ledger.md",
+      "sha256": "68e9fa7fb0c80bbb6311d1d95793c55214d887f9518c2719fb76c54d8b4f469e"
+    },
+    {
+      "name": "result.json",
+      "sha256": "d06ef26d3843d214bdabc481a7a970e1a33804a3ec8abf0ad428f7f44bb44b31"
+    }
+  ],
+  "asks_answered": 0,
+  "ASK_acceptance": "not_exercised",
+  "release_acceptance": false
+}
