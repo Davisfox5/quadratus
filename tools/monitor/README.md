@@ -101,3 +101,27 @@ The GUI's Project tab can read local files and run check commands. That
 is the reason `resolve_share` refuses to enable Gradio sharing, and it is
 just as true over a tailnet. The monitor page exists so the thing that is
 exposed has nothing on it that can act.
+
+
+## Following a run in the desktop GUI
+
+Open **Monitor** for recorded activity and the team’s public replies. **Code
+discussion** is a separate snippet chat; it does not display project-run
+conversations. The Monitor refreshes every five seconds and makes no model
+calls. Its summary shows the goal, progress, final check result, and a plain
+explanation when a test times out. Recorded errors and paths remain under
+**Technical details**.
+
+New project runs save `activity.jsonl` before model calls and test commands
+start, as well as after they end. This works for CLI runs and for runs launched
+from another GUI process. It is a best-effort activity record, not a process
+heartbeat or a completion gate. A killed process can leave a start without an
+end; a saved terminal result takes priority. Team replies appear after calls
+return, not token by token. Only public replies are displayed, never prompts
+or private vendor reasoning. Their claims are separate from the recorded run
+result.
+
+Older runs have no activity journal. The view can show their saved public
+drafts and reviews, but cannot reconstruct missing live events. Existing
+run records are not rewritten. To open the GUI directly on a project’s
+Monitor, set `QUADRATUS_MONITOR_PROJECT` to its project folder at startup.

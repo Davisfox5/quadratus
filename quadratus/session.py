@@ -31,6 +31,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from dataclasses import dataclass, field, replace
 from functools import wraps
 from pathlib import Path, PurePosixPath
@@ -441,6 +442,8 @@ class SessionConfig:
     #: only, never load-bearing: a progress callback that raises is a bug in
     #: the caller, not a reason to lose the run, so it is called defensively.
     progress: Optional[Callable[[str], None]] = None
+    #: Optional operator journal. Reporting only; never used for run decisions.
+    activity: Optional[Callable[..., None]] = None
     #: How many lead revisions a task may spend answering blocking findings.
     #: The count is deliberately small and the loop deliberately narrow --
     #: each extra cycle is a reviewer re-checking its own named findings
@@ -2122,6 +2125,10 @@ class Session:
             context = dict(context, prompt_artifact=prompt_ref.id)
         except Exception:  # noqa: BLE001 -- evidence never fails a call
             log.debug("could not keep the prompt", exc_info=True)
+        call_id = uuid.uuid4().hex
+        activity_context = dict(call_id=call_id, task=context.get('task', 'run'),
+                                role=context.get('role', 'direct'), model=key)
+        self._activity('call-started', **activity_context)
         try:
             with capture_invocations(), invocation(**context):
                 if self.project:
@@ -2149,10 +2156,16 @@ class Session:
                     log.debug("could not preserve interrupted prompt", exc_info=True)
             raise
         finally:
+            self._activity('call-ended', **activity_context)
             if edit_started is not None:
                 after = self._source_fingerprint()
                 if source_before is None or after is None or after != source_before:
                     self._last_edit_started = edit_started
+        try:
+            reply_ref = self.store.put(reply, kind='monitor-reply', author=key)
+            self._activity('reply', artifact=reply_ref.id, **activity_context)
+        except Exception:  # operator evidence cannot fail a successful call
+            log.debug('could not keep monitor reply', exc_info=True)
         self._active_call = {}
         return reply
 
@@ -3440,6 +3453,7 @@ class Session:
             outcome.partial = outcome.partial or dict(inspected=False, note=f"unmeasured: {type(exc).__name__}")
 
     def _stage(self, name: str) -> None:
+        self._activity('stage', stage=name, task=getattr(self._active_spec, 'task_id', 'run'))
         if self._outcome is not None:
             self._outcome.stage(name)
 
@@ -6381,6 +6395,13 @@ class Session:
         except Exception:  # noqa: BLE001 -- reporting must not break the run
             log.debug("progress callback raised", exc_info=True)
 
+    def _activity(self, kind, **fields):
+        if self.config.activity is not None:
+            try:
+                self.config.activity(kind, **fields)
+            except Exception:
+                log.debug('activity callback raised', exc_info=True)
+
     # -- prompts -------------------------------------------------------------
     def _absorb_orientation(self, meta, seat: str):
         """Take the orchestrator's ``MAP NOTES`` into the map, off the task.
@@ -7885,7 +7906,11 @@ class Session:
         task = getattr(self._active_spec, "task_id", "run")
         self._verify_dependencies(f"before check ({task})")
         before = project.contents() if project else None
-        result = gate.run()
+        self._activity('check-started', task=task)
+        try:
+            result = gate.run()
+        finally:
+            self._activity('check-ended', task=task)
         # A receipt taken with a changed dependency tree is never accepted.
         self._verify_dependencies(f"during check ({task})")
         if project is not None:
