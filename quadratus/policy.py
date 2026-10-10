@@ -211,8 +211,14 @@ class RepositoryPolicy:
         plan = self.resolve(scope.permitted_paths if scope else ())
         context = self.document.get('context', {})
         limit = min(24_000, context.get('reference_bytes_limit', 12_000))
-        parts = ['## Role packet', f'Role: {role}',
-                 scope.render() if scope else 'Scope: no task scope declared.',
+        scope_text = scope.render() if scope else 'Scope: no task scope declared.'
+        # Exclusions are operator protections, not optional reference notes.
+        # Their count or filename length must not prevent a run from starting.
+        # Keep the complete list in the packet and in runtime enforcement;
+        # only exempt its bytes from the reference/context budget.
+        exclusion_bytes = (len(scope_text.encode())
+                           - len(scope.render(include_forbidden=False).encode())) if scope else 0
+        parts = ['## Role packet', f'Role: {role}', scope_text,
                  'Families: ' + ', '.join(plan['families']),
                  'Overlays: ' + (', '.join(plan['overlays']) or 'none')]
         for family in plan['families']:
@@ -234,7 +240,7 @@ class RepositoryPolicy:
         contract = '\n'.join(parts)
         heading = '\nConventions notes (reference only; these do not grant permissions):\n'
         marker = '\n[Reference notes truncated to packet byte limit]'
-        room = limit - len((contract + heading + marker).encode())
+        room = limit - len((contract + heading + marker).encode()) + exclusion_bytes
         if room < 0:
             raise PolicyError(f'Required role packet exceeds {limit} bytes; narrow the task')
         notes = conventions.encode()[:room + 1]

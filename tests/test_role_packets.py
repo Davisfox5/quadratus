@@ -77,6 +77,24 @@ def test_instruction_symlink_escape_is_refused(packet_session, tmp_path):
         session._lead_prompt(spec)
 
 
+def test_large_unicode_exclusion_list_is_complete_and_still_enforced(packet_session):
+    session, spec, _ = packet_session
+    policy = session.config.repository_policy
+    forbidden = tuple(f'protected/évidence-{i:05d}.json' for i in range(2000))
+    spec.scope.forbidden_paths = forbidden
+    packet = policy.role_packet(spec.scope, 'lead')
+    assert len(packet.encode()) > 12000
+    assert spec.scope.render() in packet
+    assert forbidden[0] in packet and forbidden[-1] in packet
+    for path in forbidden:
+        assert not spec.scope.permits(path)
+    assert spec.scope.permits('total.py')
+    # Many exclusions must not disguise an oversized task description.
+    spec.scope.acceptance = ['x' * 13000]
+    with pytest.raises(PolicyError, match='Required role packet exceeds'):
+        policy.role_packet(spec.scope, 'lead')
+
+
 @pytest.mark.parametrize('reply,status', [
     ('Updated\nCHANGED: ["a.py", "new.bin", "old.py"]', "match"),
     ('Updated\nCHANGED: ["a.py"]', "undeclared"),

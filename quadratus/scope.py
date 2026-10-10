@@ -200,8 +200,13 @@ class TaskScope:
         )
         return report
 
-    def render(self) -> str:
-        """The scope as a prompt block, so the bound is stated before the work."""
+    def render(self, *, include_forbidden: bool = True) -> str:
+        """The scope as a prompt block, so the bound is stated before the work.
+
+        Omitting exclusions is for measuring the reference budget only. The
+        packet sent to a model still carries every exclusion, and permits()
+        always enforces the full list.
+        """
         parts = ["## Scope of this task"]
         if self.intended_result:
             parts.append(f"Intended result: {self.intended_result}")
@@ -211,7 +216,7 @@ class TaskScope:
                 + ", ".join(self.permitted_paths)
                 + ". A change anywhere else will be rejected as out of scope."
             )
-        if self.forbidden_paths:
+        if self.forbidden_paths and include_forbidden:
             parts.append("Never change: " + ", ".join(self.forbidden_paths) + ".")
         if self.acceptance:
             parts.append(
