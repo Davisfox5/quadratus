@@ -224,7 +224,10 @@ def review(record: dict, *, task_id: str, reviewer: str, sha: str, verdict: str,
         raise RecordError(f"{reviewer} authored {task_id}; self-review is not an independent receipt")
     if not evidence:
         raise RecordError("a review names its evidence (a comment URL, a report path)")
-    scope = list(scope or task["owns"])
+    if scope is not None and not scope:
+        raise RecordError("--scope was given with no paths; name what was reviewed, or omit it to "
+                          "review everything the task owns")
+    scope = list(task["owns"] if scope is None else scope)
     outside, uncovered = _coverage(scope, task["owns"])
     if outside:
         raise RecordError(f"scope {', '.join(outside)} is outside what {task_id} owns "
@@ -245,18 +248,53 @@ def review(record: dict, *, task_id: str, reviewer: str, sha: str, verdict: str,
         task["blockers"].append(dict(blocker, by=reviewer, sha=sha, at=_now()))
         task["state"] = "blocked"
     elif entry["verdict"] == "cleared" and not uncovered:
-        task["state"] = "reviewed"
+        if _open_blockers(task):
+            # A cleared review does not resolve a blocker; unblock records
+            # the resolution, and only then can a clearance move the task.
+            entry["note"] = "recorded while a blocker is open; the task stays blocked until unblocked"
+        else:
+            task["state"] = "reviewed"
     task["reviews"].append(entry)
     return entry
+
+
+def _open_blockers(task: dict) -> List[dict]:
+    return [b for b in task.get("blockers", []) if not b.get("resolved")]
+
+
+def _clearance(task: dict, sha: str = "") -> str:
+    """Why the task's record does not support integration now, or ''. The
+    state alone is not trusted: the delivery (or ``sha``, the integrated
+    commit) needs a cleared, non-stale review whose scope covers everything
+    the task owns today, and no blocker may be open."""
+    if _open_blockers(task):
+        return "it has an unresolved blocker; unblock it first"
+    delivery = task.get("delivery")
+    if not delivery:
+        return "it has no delivery"
+    target = sha or delivery["sha"]
+    for review in task.get("reviews", []):
+        if review.get("verdict") != "cleared" or not _same_commit(review.get("sha", ""), target):
+            continue
+        outside, uncovered = _coverage(review.get("scope") or [], task["owns"])
+        if not outside and not uncovered:
+            return ""
+    return (f"no cleared review of {target[:7]} covers everything it owns now "
+            f"({', '.join(task['owns'])})")
 
 
 def unblock(record: dict, *, task_id: str, resolution: str, by: str) -> dict:
     """A blocker was resolved: the resolution is recorded against every open
     blocker and the task returns to claimed (or delivered, if it has a
-    delivery). The blockers stay on the record as history."""
+    delivery). The blockers stay on the record as history. Any task with an
+    open blocker can be unblocked, whatever its state: records written before
+    a cleared review stopped hiding blockers (Z6) hold reviewed tasks with
+    blockers never resolved, and those need a recorded resolution too. The
+    task leaves reviewed for delivered; an earlier clearance stays on the
+    record but is not re-recorded as a new verdict."""
     task = _task(record, task_id)
-    if task["state"] != "blocked":
-        raise RecordError(f"{task_id} is {task['state']}, not blocked")
+    if not _open_blockers(task):
+        raise RecordError(f"{task_id} is {task['state']}, not blocked, and has no open blocker")
     if not resolution:
         raise RecordError("an unblock names its resolution")
     for blocker in task["blockers"]:
@@ -281,6 +319,9 @@ def integrate(record: dict, *, task_id: str, sha: str, candidate: str,
     if task["state"] != "reviewed":
         raise RecordError(f"{task_id} is {task['state']}, not reviewed; integration needs a cleared "
                           "independent review of the delivered SHA")
+    why = _clearance(task)
+    if why:
+        raise RecordError(f"{task_id} cannot be integrated: {why}")
     delivered = task["delivery"]["sha"]
     if not _same_commit(sha, delivered):
         raise RecordError(f"{sha[:7]} is not the reviewed delivery of {task_id} ({delivered[:7]})")
@@ -329,6 +370,14 @@ def extend(record: dict, *, task_id: str, owns: List[str], by: str, resolve: boo
                                   "the coordinator resolves overlaps with --resolve")
     task["owns"].extend(added)
     task["decisions"].append(f"{by}: scope extended to {', '.join(added)}")
+    if task["state"] in ("reviewed", "integrated"):
+        # The cleared review covered the old scope only; the added files
+        # have not been reviewed, so the task is delivered again, even after
+        # integration: the candidate carries files nobody reviewed under this
+        # task. The integration record stays as history.
+        was = task["state"]
+        task["state"] = "delivered"
+        task["decisions"].append(f"{by}: review no longer covers the extended scope; {was} -> delivered")
     return task
 
 
@@ -365,13 +414,22 @@ def readiness(record: dict) -> dict:
         if _same_commit(r["sha"], sha):
             latest[r["kind"]] = r
     receipts = {kind: (latest[kind]["state"] if kind in latest else "missing") for kind in required}
-    blockers = [dict(task=t["id"], blockers=t["blockers"]) for t in record["tasks"] if t["state"] == "blocked"]
+    blockers = [dict(task=t["id"], blockers=_open_blockers(t) or t["blockers"]) for t in record["tasks"]
+                if t["state"] == "blocked" or _open_blockers(t)]
     open_tasks = [t["id"] for t in record["tasks"] if t["state"] in ("claimed", "delivered", "reviewed")]
     stale = [dict(task=t["id"], reviews=[r for r in t["reviews"] if r["verdict"] == "stale"])
              for t in record["tasks"] if any(r["verdict"] == "stale" for r in t["reviews"])]
-    ready = all(state == "passed" for state in receipts.values()) and not blockers and not open_tasks
+    # An integrated task is re-checked against the record, not trusted by its
+    # state: its integrated commit still needs a cleared review covering
+    # everything it owns now (Codex review of 178c193: a scope extended after
+    # integration left ready true on the old review).
+    uncovered = [dict(task=t["id"], reason=why) for t in record["tasks"]
+                 if t["state"] == "integrated" and t.get("integrated")
+                 for why in [_clearance(t, t["integrated"].get("sha", ""))] if why]
+    ready = (all(state == "passed" for state in receipts.values()) and not blockers and not open_tasks
+             and not uncovered)
     return dict(candidate=sha, gate=record["candidate"].get("gate"), ready=ready, receipts=receipts,
-                blockers=blockers, open_tasks=open_tasks, stale_reviews=stale)
+                blockers=blockers, open_tasks=open_tasks, stale_reviews=stale, uncovered_integrations=uncovered)
 
 
 def render(record: dict) -> str:
