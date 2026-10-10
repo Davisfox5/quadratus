@@ -414,7 +414,8 @@ def monitor_view(folder, series='', selected='', limit=MONITOR_HISTORY):
     falls back to the project opened on the Project tab; a blank series
     directory means the Stage B packet is not read.
     """
-    from .monitor import history_rows, read_status, render_markdown, run_history
+    from .monitor import history_rows, read_status, run_history
+    from .monitor_story import render_story
     folder = (folder or '').strip() or (selected or '').strip()
     series = (series or '').strip() or None
     if not folder and not series:
@@ -423,10 +424,10 @@ def monitor_view(folder, series='', selected='', limit=MONITOR_HISTORY):
     status = read_status(folder or None, series)
     project = status.get('project')
     history = run_history(project, limit=limit) if project and project != 'unknown' else []
-    return render_markdown(status), history_rows(history)
+    return render_story(status), history_rows(history)
 
 
-def build_interface(settings: Optional[Settings] = None):
+def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
     import gradio as gr
 
     from .project import Project
@@ -442,7 +443,7 @@ def build_interface(settings: Optional[Settings] = None):
         else:
             gr.Markdown('# Quadratus')
         gr.Markdown('Open a project. Give the team a task. Review the files, diff, and test results.')
-        with gr.Tabs():
+        with gr.Tabs(selected='monitor' if watch_project else None):
             with gr.Tab('Project'):
                 selected = gr.State('')
                 project_path = gr.Textbox(label='Project folder', placeholder='/path/to/project')
@@ -569,7 +570,8 @@ def build_interface(settings: Optional[Settings] = None):
                                                        *limit_inputs],
                                  outputs=[report, diff, downloads], concurrency_limit=1)
             with gr.Tab('Code discussion'):
-                gr.Markdown('Discuss snippets without opening a project. Answers here do not create source files.')
+                gr.Markdown('This is a separate chat for snippets. To follow the team working on your project, '
+                            'open Monitor → Team discussion. Answers here do not create source files.')
                 chatbot = gr.Chatbot(height=420, label='Conversation')
                 msg = gr.Textbox(label='Your message', lines=2)
                 file_upload = gr.File(label='Attach context (optional)',
@@ -602,21 +604,23 @@ def build_interface(settings: Optional[Settings] = None):
                 submit_btn.click(respond, inputs=[msg, chatbot, file_upload], outputs=[chatbot, msg, file_upload])
                 msg.submit(respond, inputs=[msg, chatbot, file_upload], outputs=[chatbot, msg, file_upload])
                 clear_btn.click(lambda: ([], '', None), outputs=[chatbot, msg, file_upload])
-            with gr.Tab('Monitor'):
+            with gr.Tab('Monitor', id='monitor'):
                 from .monitor import HISTORY_COLUMNS
-                gr.Markdown('What the engine is doing, read from the run directory. This tab only '
-                            'reads: it cannot start, stop or change a run.')
-                with gr.Row():
+                gr.Markdown('Follow the latest run: what the team is working on, what happened, and their saved replies. '
+                            'This view refreshes every five seconds. Replies arrive after each call finishes. '
+                            'Watching uses no model calls and cannot start or change a run.')
+                with gr.Accordion('Choose the project to watch', open=False):
                     monitor_folder = gr.Textbox(label='Project folder (blank: the opened project)',
-                                                placeholder='/path/to/project')
+                                                placeholder='/path/to/project', value=watch_project)
                     monitor_series = gr.Textbox(label='Stage B series directory (optional)',
                                                 placeholder='/abs/runs')
                 with gr.Row():
                     monitor_refresh = gr.Button('Refresh now')
                     monitor_auto = gr.Checkbox(label=f'Refresh every {MONITOR_REFRESH_SECONDS} s', value=True)
                 monitor_status = gr.Markdown('Enter a project folder or series directory.')
-                monitor_history = gr.Dataframe(headers=HISTORY_COLUMNS, value=[], interactive=False,
-                                               wrap=True, label=f'Last {MONITOR_HISTORY} runs')
+                with gr.Accordion('Previous runs', open=False):
+                    monitor_history = gr.Dataframe(headers=HISTORY_COLUMNS, value=[], interactive=False,
+                                                   wrap=True, label=f'Last {MONITOR_HISTORY} runs')
                 monitor_timer = gr.Timer(MONITOR_REFRESH_SECONDS, active=True)
                 monitor_inputs = [monitor_folder, monitor_series, selected]
                 monitor_outputs = [monitor_status, monitor_history]
@@ -700,7 +704,7 @@ def main(argv=None) -> int:
         print(f"Port {port} on 127.0.0.1 is already in use. Start on another port with "
               f"{how} (or set QUADRATUS_GUI_PORT).", file=sys.stderr)
         return 2
-    demo = build_interface()
+    demo = build_interface(watch_project=os.environ.get('QUADRATUS_MONITOR_PROJECT', ''))
     favicon = brand_asset("favicon.svg")
     print(f"Quadratus is serving on http://127.0.0.1:{port}", flush=True)
     demo.launch(

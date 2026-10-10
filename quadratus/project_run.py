@@ -291,6 +291,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
+    from .run_activity import RunActivity
+    activity = RunActivity(run_dir, progress)
+    progress = activity
+    activity.record('run-started', goal=str(goal)[:4000])
     stale_fixtures = _retire_stale_fixtures(project.root, run_dir, progress)
     before = project.contents()
     scan = scan_repo(project.root)
@@ -343,7 +347,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         allow_writes=allow_writes, mode=mode, integration_gate=gate,
         lead_max_turns=getattr(settings, 'lead_max_turns', None),
         codebase_map=code_map, ask_operator=ask_operator, plan_gate=plan_gate,
-        progress=progress, delegation_ledger=delegation,
+        progress=progress, activity=activity.record, delegation_ledger=delegation,
         default_scope=default_scope, repository_policy=policy,
         security_verdict_json=security_verdict_json,
         capture_profile=capture_profile,
@@ -847,4 +851,3 @@ def standing_rulings(path, fallback=None):
         from .session import OperatorInputNeeded
         raise OperatorInputNeeded(question)
     return ask
-
