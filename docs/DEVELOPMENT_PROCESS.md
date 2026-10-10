@@ -77,6 +77,43 @@ it is reconciled into the record. A candidate that moved without
 `candidate --reason`, which keeps the previous SHA in the candidate's
 history and leaves the new SHA with no receipts until they are earned.
 
+## Spending less per fix (adopted 2026-10-10)
+
+Davis's direction after a week of review rounds that produced no run, with
+Codex's adjustments:
+
+1. Review looks first for a false success: anything that lets Quadratus
+   report work done, met or passing when it is not. Crashes, stalls and wasted
+   calls are still caught, but by cheap offline controls (scripted model
+   replies, no provider call), not by waiting for a token bill.
+2. Fixes are batched. Findings collected between runs land on one head, are
+   reviewed as a diff against the last verified head, and get one full suite
+   on that final head. A change that only moves constants or paths gets a
+   diff-only check.
+3. No acknowledgement comments and no per-CI-tick status. A comment carries a
+   verdict, a blocker or a decision.
+4. Every run is judged by `tools/truth_check.py`, which reads only the run's
+   record and imports nothing from the engine. It answers verified,
+   unverified or not met; missing evidence is unverified, never success. It
+   checks the final passing check ran test cases on the final source, that no
+   required check was skipped, that each requirement has an audit verdict of
+   met, that nothing reported NOT RUN still stands, that no finding is open
+   and that UI changes carry approved capture evidence whose recorded digests
+   are the bytes the reviewer was handed (with `--project`, the files must
+   still hold those bytes). A NOT RUN report clears only when a later passing
+   check names the execution: an executed case in each reported file, or each
+   skipped case as executed. A command line that mentions the path does not.
+5. Canaries before runs: `tests/lifecycle/test_truth_canaries.py` drives the
+   real run with scripted replies through failing tests, a project with no
+   tests, an interrupted run and missing screenshots, and each must come out
+   unverified or not met while a good run comes out verified. One small,
+   visible live canary then checks the real integration.
+6. Order: truth check and offline canaries, then the batched fixes, then one
+   bounded feature run, then tokens per independently accepted requirement
+   is measured before anything expands. Replay stays narrow: the scripted
+   harness covers failure paths already observed, and is not grown into a
+   general replay system until a run shows the need.
+
 ## Measurement
 
 Coordination time, duplicate or reopened reviews and blocker turnaround are
