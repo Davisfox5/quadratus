@@ -1149,6 +1149,14 @@ Key design decisions already settled:
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
   reviewers produce judgement.
+- **A role packet is sized before the calls that carry it** (run
+  20261010T135407Z-f3d33e9d). The operator's forbidden paths alone put every
+  packet over the 12,000-byte cap, and the run found out only when building
+  t1's lead packet, after planning and requirements review were spent.
+  `project_run._packet_floor` now builds the lead and reviewer packets from
+  the operator scope before any model call, and `_prepare_dispatch` builds
+  every packet a task will carry before its lead is called. Same builder,
+  same cap, nothing truncated.
 - **A run's success claim is judged outside the engine** (`tools/truth_check.py`,
   2026-10-10). It reads only the run record, imports nothing from
   `quadratus`, calls no model, and answers verified, unverified or not met;
