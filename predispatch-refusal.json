@@ -1,0 +1,18 @@
+{
+  "state": "PREDISPATCH_REFUSED_ZERO_LAUNCHES",
+  "original_freeze_sha256": "42afb1f67e81706bef9704bc99b873107f887a78c9e2c444ca656884b9e3fac5",
+  "error": "Canonical owned-process helper must be frozen",
+  "runtime_directory_created": false,
+  "supervisor_once_created": false,
+  "server_or_browser_or_model_started": false,
+  "actual_clicks": 0,
+  "revised_freeze_sha256": "4b09b98577ece807f54bca75f4fa7b5e05556d388cc9f4cd9610d400d50d884d",
+  "delta": {
+    "added_immutable_binding": {
+      "path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261009/recovery-v2/operator/owned_processes.py",
+      "sha256": "a7fc7e0b7060a0ae3e9a2158ede65287dea01409b6e40c6f9f959d7912c60a81"
+    },
+    "external_same_decision_path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/root-admission/same-final-run-decision-v2.json"
+  },
+  "source_helpers_input_bounds_qualification_unchanged": true
+}
