@@ -1,0 +1,26 @@
+{
+  "run_dir": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project/.quadratus/runs/20261010T160802Z-8c1d2343",
+  "result_completed": false,
+  "result_error": "CheckUnattributable: the check failed without an attributable assertion failure (extra-1: error: timed out after 600s); returncode 1; output artifact f2809e16be05. No repair call was made. Work preserved.",
+  "downloads": [
+    {
+      "name": "report.md",
+      "sha256": "b8011037bb47e82e9fb660d91d9989e4874d984d08c9511360b8e72254234fe2"
+    },
+    {
+      "name": "changes.diff",
+      "sha256": "8332d741a96a1bd66a6e9f4465b4eab856e7a4732acb457bf38a9d3f435e2872"
+    },
+    {
+      "name": "ledger.md",
+      "sha256": "4cebe70fc4614bcd1fff9c274b3b40804e72f73fc5581dfa55487d3e48cccd77"
+    },
+    {
+      "name": "result.json",
+      "sha256": "9d2984e6c0555706760eabf392081f2924e13567356533ef3385a8cef4b26c04"
+    }
+  ],
+  "asks_answered": 0,
+  "ASK_acceptance": "not_exercised",
+  "release_acceptance": false
+}

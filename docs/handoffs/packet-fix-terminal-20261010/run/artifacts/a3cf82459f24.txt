@@ -1,0 +1,11 @@
+Add the dedicated GUI-completion tests for the Restore library order control that t1 shipped. Create `tests/gui_completion/project_sort_reset.test.js` using `node:test`, `node:assert/strict` and `const { loadApp } = require("../ui/load_app")`, copying the helper shape from `tests/sorting/project_sort.test.js` (seed of 3 projects Charlie / alpha reserve / Beta Bowl with ids 1–3, `settle`, `cards`, `names`, `type`, `fixture` with recorded `historyCalls`, `clickSort`) and adding `clickReset = app => app.document.getElementById("btn-project-sort-reset").click()`.
+
+Six cases:
+1. reset from asc: `clickSort` then `clickReset` → names `["charlie","alpha reserve","beta bowl"]`, `dataset.sort === "original"`, status "Library order", sort button text matches /A→Z/.
+2. reset from desc: `clickSort` twice then `clickReset` → same assertions.
+3. stable library ordering: use the tied-names seed (Delta/delta/DELTA/apple ids 1–4), sort, reset → delete-btn `dataset.id` sequence `["1","2","3","4"]`; reset again → unchanged.
+4. repeat and toggle: `clickReset` twice from fresh load is harmless (same names, same attrs); then `clickSort` → `"asc"` and ascending names; `clickSort` → `"desc"`.
+5. preservation + focus: fixture with `location: { hash: "#q=ALP" }`, `type(app, "ALP")`, snapshot value/hidden/count/last replaceState call/`#project-search-empty`.hidden/`#projects-empty`.hidden and `historyCalls.length`; `clickReset`; snapshot deep-equals before, `historyCalls.length` unchanged, `app.document.activeElement === #project-search`.
+6. no network: capture `app.evalInApp("window.location.href")`, `clickSort`, `clickReset`, `clickReset` → `app.calls.fetch.length === 1`, href unchanged.
+
+Create `tests/gui_completion/test_project_sort_reset.py` with `def test_project_sort_reset_ui_suite():` mirroring `tests/sorting/test_project_sort.py` but pointing at the new JS file and asserting `# pass 6`. Pytest has no config file and `tests/` has no `__init__.py`, so the basename must stay unique (it is). Run `node --test tests/gui_completion/project_sort_reset.test.js`, `node --test` (expect 45 pass / 0 fail) and `pytest -q -p no:cacheprovider` (expect 121 passed); report the actual counts. Do not touch any existing test file or any source file.

@@ -1,0 +1,122 @@
+{
+  "target": "http://127.0.0.1:53139/",
+  "views": {
+    "desktop": {
+      "screenshot": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project/.quadratus/design-evidence/t1/desktop/page.png",
+      "clean": true,
+      "console_errors": [],
+      "failed_requests": [],
+      "document_width": 1280,
+      "overflow": [],
+      "steps": [
+        {
+          "n": 1,
+          "action": "wait",
+          "selector": "#projects-container .project-card:nth-child(3)",
+          "ok": true,
+          "visible_before_steps": true
+        },
+        {
+          "n": 2,
+          "action": "click",
+          "selector": "#btn-project-sort",
+          "ok": true
+        },
+        {
+          "n": 3,
+          "action": "wait",
+          "selector": "#projects-container[data-sort=\"asc\"]",
+          "ok": true,
+          "visible_before_steps": false
+        },
+        {
+          "n": 4,
+          "action": "click",
+          "selector": "#btn-project-sort-reset",
+          "ok": true
+        },
+        {
+          "n": 5,
+          "action": "wait",
+          "selector": "#projects-container[data-sort=\"original\"] > .project-card:first-child .name",
+          "ok": true,
+          "visible_before_steps": false
+        }
+      ],
+      "files": {
+        "page.png": "a9fd2356fcbd90c38e99298dd7b1de52ed42aa468760c9e830485042f97b2513",
+        "evidence.json": "ba3e74dabac5449f83f7089bc73086f8f79cfccc14f8f1b69b496034b9b1addd"
+      }
+    },
+    "mobile": {
+      "screenshot": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project/.quadratus/design-evidence/t1/mobile/page.png",
+      "clean": true,
+      "console_errors": [],
+      "failed_requests": [],
+      "document_width": 390,
+      "overflow": [],
+      "steps": [
+        {
+          "n": 1,
+          "action": "wait",
+          "selector": "#projects-container .project-card:nth-child(3)",
+          "ok": true,
+          "visible_before_steps": true
+        },
+        {
+          "n": 2,
+          "action": "click",
+          "selector": "#btn-project-sort",
+          "ok": true
+        },
+        {
+          "n": 3,
+          "action": "wait",
+          "selector": "#projects-container[data-sort=\"asc\"]",
+          "ok": true,
+          "visible_before_steps": false
+        },
+        {
+          "n": 4,
+          "action": "click",
+          "selector": "#btn-project-sort-reset",
+          "ok": true
+        },
+        {
+          "n": 5,
+          "action": "wait",
+          "selector": "#projects-container[data-sort=\"original\"] > .project-card:first-child .name",
+          "ok": true,
+          "visible_before_steps": false
+        }
+      ],
+      "files": {
+        "page.png": "fc6598422bb9040820f26500c117b6eeeb939cbe6f17f962484d39f90ffa8549",
+        "evidence.json": "352ab14e1849485707650d7ff83a8846d8cfa5e44a8229a4f056ce3735cc4351"
+      }
+    }
+  },
+  "source_fingerprint": "5177a42edd8da908dd6b13a5dfebb55d6cc8a171754a83e79bed8a56f381e60d",
+  "steps": [
+    {
+      "action": "wait",
+      "selector": "#projects-container .project-card:nth-child(3)"
+    },
+    {
+      "action": "click",
+      "selector": "#btn-project-sort"
+    },
+    {
+      "action": "wait",
+      "selector": "#projects-container[data-sort=\"asc\"]"
+    },
+    {
+      "action": "click",
+      "selector": "#btn-project-sort-reset"
+    },
+    {
+      "action": "wait",
+      "selector": "#projects-container[data-sort=\"original\"] > .project-card:first-child .name"
+    }
+  ]
+}

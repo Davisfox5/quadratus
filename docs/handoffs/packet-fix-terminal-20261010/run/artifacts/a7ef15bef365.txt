@@ -1,0 +1,13 @@
+Added six dedicated restore-order tests plus the pytest wrapper.
+
+Checks:
+
+- Full Node: 43 passed, 0 failed, 2 browser tests skipped because Chromium sandbox launch was denied. All 6 new tests and 5 baseline sort tests passed.
+- Pytest: 121 passed in 2.24s.
+- Prior harness record reports desktop/mobile capture verified and Claude review approved.
+
+NOT RUN: node --test tests/gui_completion/project_sort_reset.test.js - targeted command is not in the approved command list; covered by the approved full Node run
+NOT RUN: node --test tests/sorting/project_sort.test.js - targeted command is not in the approved command list; covered by the approved full Node run
+NOT RUN: deliberate implementation mutation check - would require an out-of-scope source edit or an unapproved alternate harness command
+
+CHANGED: ["tests/gui_completion/project_sort_reset.test.js","tests/gui_completion/test_project_sort_reset.py"]

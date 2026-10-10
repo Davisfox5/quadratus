@@ -1,0 +1,101 @@
+Task: Add the Restore library order control to the project library, frontend only, no tests in this slice (tests are the next task under tests/gui_completion/).
+
+1. templates/index.html, line 25–26: after `<button type="button" id="btn-project-sort" ...>Sort A&rarr;Z</button>` and before `<span id="project-sort-status" ...>`, insert `<button type="button" id="btn-project-sort-reset" aria-describedby="project-sort-status">Restore library order</button>`. Change nothing else in the row.
+
+2. static/js/app.js:
+   - Next to line 27 add `const $btnProjectSortReset = document.getElementById("btn-project-sort-reset");`.
+   - In `applyProjectSort()` (line 134), keep the `projectSortDir === ""` early-return branch byte-for-byte. Add a branch for `projectSortDir === "original"`: take `Array.from($projectsContainer.querySelectorAll(".project-card"))`, sort by `Number(a.dataset.index) - Number(b.dataset.index)`, re-append each card in that order (same appendChild move pattern as the asc/desc path, so `card.hidden` survives), set `$projectsContainer.dataset.sort = "original"`, `setTextIfChanged($btnProjectSort, "Sort A→Z")`, `setTextIfChanged($projectSortStatus, "Library order")`, and return. The asc/desc path below stays unchanged.
+   - Add `function resetProjectSort() { projectSortDir = "original"; applyProjectSort(); $projectSearch.focus(); }` and bind it with `$btnProjectSortReset.addEventListener("click", resetProjectSort);` next to the existing `$btnProjectSort` click binding at line 234. Do not call `applyProjectSearch()`, `syncProjectSearchHash()`, `api()` or `loadProjects()` from the reset path, so the search value, hash, count text, hidden cards and no-match/empty paragraphs are untouched and no network request happens.
+   - The existing sort click handler (`projectSortDir = projectSortDir === "asc" ? "desc" : "asc"`) is left as is: from "original" the first click becomes "asc", then "desc", which is the required sequence. Because `loadProjects()` already ends with `applyProjectSort()`, create/delete reloads after a reset re-render in library order with data-sort="original" and status "Library order" without further changes.
+
+3. static/css/style.css: only touch if the new button causes horizontal overflow at 390px; `.project-search-row` already has `flex-wrap: wrap` and `.project-search-row button { background: #22263a; }` styles the new button, so expect no CSS change.
+
+Verify locally that `node --test tests/sorting/project_sort.test.js` still reports pass 5 / fail 0 and `node --test tests/ui/project_search.test.js` passes, confirming the baseline initial-state contract (data-sort unset on load, status "Original order") is intact.
+
+These are the final renders of this design work, taken after its last source change, copied read-only into your working copy at these paths: .quadratus/design-evidence/t1/desktop/page.png, .quadratus/design-evidence/t1/mobile/page.png, target: http://127.0.0.1:53139/, steps: wait #projects-container .project-card:nth-child(3); click #btn-project-sort; wait #projects-container[data-sort="asc"]; click #btn-project-sort-reset; wait #projects-container[data-sort="original"] > .project-card:first-child .name
+
+This is design work. Besides correctness, judge the design and aesthetic choices: layout and visual hierarchy, consistency with the existing interface, readable text and contrast, keyboard and screen-reader access, and how it holds up at a mobile width. Mark a design problem BLOCKING only when a user would be misled or unable to use the feature.
+
+First check that the renders show the interface this task added or changed. If they show a page where that interface does not appear, reply exactly 'BLOCKING: the renders do not show the changed interface' and judge nothing else: a clean render of an unrelated page is not evidence for this task.
+
+Reply exactly APPROVED if the delivered interface is acceptable, or one line per blocking problem starting 'BLOCKING:'. Nothing else.
+
+This call has at most 20 tool rounds. At round 20 it stops and the review is recorded as unfinished, with nothing you wrote read as a finding. The work is in this prompt; read the files it names, run any approved check once, and write the verdict well inside the budget.
+
+## Role packet
+Role: reviewer
+## Scope of this task
+Intended result: A #btn-project-sort-reset button beside #btn-project-sort whose click handler `function resetProjectSort()` sets projectSortDir to "original", reorders cards by data-index, sets data-sort="original", status "Library order", and focuses #project-search, with no fetch and no history/location change
+You may change only these paths: templates/index.html, static/js/app.js, static/css/style.css. A change anywhere else will be rejected as out of scope.
+Never change: .git/**, .env, .env.*, .quadratus/**, .claude/skills/.df-sync.txt, .claude/skills/code-review/SKILL.md, .claude/skills/code-review/agents/openai.yaml, .claude/skills/df-design/SKILL.md, .claude/skills/df-design/claude-md-design-block.md, .claude/skills/df-design/design-briefs.md, .claude/skills/df-model-routing/SKILL.md, .claude/skills/df-ship-check/SKILL.md, .claude/skills/df-writing/SKILL.md, .claude/skills/df-writing/tells.md, .claude/skills/domain-modeling/ADR-FORMAT.md, .claude/skills/domain-modeling/CONTEXT-FORMAT.md, .claude/skills/domain-modeling/SKILL.md, .claude/skills/domain-modeling/agents/openai.yaml, .claude/skills/grill-with-docs/SKILL.md, .claude/skills/grill-with-docs/agents/openai.yaml, .claude/skills/grilling/SKILL.md, .claude/skills/grilling/agents/openai.yaml, .claude/skills/handoff/SKILL.md, .claude/skills/handoff/agents/openai.yaml, .claude/skills/implement/SKILL.md, .claude/skills/implement/agents/openai.yaml, .claude/skills/setup-matt-pocock-skills/SKILL.md, .claude/skills/setup-matt-pocock-skills/agents/openai.yaml, .claude/skills/setup-matt-pocock-skills/domain.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-github.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-local.md, .claude/skills/setup-matt-pocock-skills/triage-labels.md, .claude/skills/tdd/SKILL.md, .claude/skills/tdd/agents/openai.yaml, .claude/skills/tdd/mocking.md, .claude/skills/tdd/tests.md, .claude/skills/to-spec/SKILL.md, .claude/skills/to-spec/agents/openai.yaml, .claude/skills/to-tickets/SKILL.md, .claude/skills/to-tickets/agents/openai.yaml, .github/workflows/ci-cd.yml, .gitignore, CLAUDE.md, README.md, app.py, diagnostic/preview.py, diagnostic/seed.json, docs/BULK_EDIT.md, docs/CSV_IMPORT.md, docs/JOINT_REPAIR.md, docs/SAVED_FILTERS.md, fail_logs.txt, orchestrator.py, package-lock.json, package.json, requirements.txt, static/favicon.svg, static/js/annotations.js, static/js/recording.js, test_output.log, tests/browser/run.js, tests/browser/scenarios/01-full-flow.js, tests/browser/scenarios/02-late-preview.js, tests/browser/scenarios/03-late-project-preview.js, tests/browser/scenarios/04-apply-race.js, tests/browser/scenarios/05-serialization.js, tests/browser/scenarios/06-keyboard.js, tests/browser/scenarios/07-preview-focus.js, tests/browser/scenarios/08-presets.js, tests/browser/server.py, tests/sorting/browser_typed_query.test.js, tests/sorting/project_sort.test.js, tests/sorting/test_project_sort.py, tests/test_basic.py, tests/test_bulk_edit.py, tests/test_import_preview.py, tests/test_ui_project_search.py, tests/ui/bulk_coverage.test.js, tests/ui/bulk_keyboard.test.js, tests/ui/bulk_serialization.test.js, tests/ui/fake_dom.js, tests/ui/import_preview.test.js, tests/ui/load_app.js, tests/ui/load_app.test.js, tests/ui/mutation_check.js, tests/ui/project_search.test.js, node_modules/**.
+This task is finished when:
+  - templates/index.html contains <button type="button" id="btn-project-sort-reset"> immediately after #btn-project-sort inside .project-search-row
+  - `function resetProjectSort()` exists in static/js/app.js and is bound via $btnProjectSortReset.addEventListener("click", resetProjectSort)
+  - applyProjectSort() handles projectSortDir === "original": cards reordered by Number(dataset.index) ascending, $projectsContainer.dataset.sort = "original", button text "Sort A→Z", status text "Library order"
+  - The projectSortDir === "" branch of applyProjectSort() is unchanged so initial load still leaves data-sort unset and status "Original order"
+  - Existing toggle `projectSortDir === "asc" ? "desc" : "asc"` is unchanged, so the first sort click after reset yields asc
+  - resetProjectSort() does not call api()/fetch, syncProjectSearchHash(), or applyProjectSearch() with a changed value; card.hidden states persist because cards are moved, not rebuilt
+  - node --test tests/sorting/project_sort.test.js and tests/ui/project_search.test.js still pass with # fail 0
+  - Diff touches only templates/index.html and static/js/app.js (style.css only if a wrap/overflow fix is actually needed at 390px)
+Expected size: about 40 changed lines, counting added and removed lines in every file, tests in full. The harness measures the diff after each editing call and stops the task past 60 changed lines with the work kept but unfinished. Write tests as compact named cases, not one fixture per case. If the work genuinely needs substantially more, say so and stop rather than delivering the larger change -- an undersized task quietly growing into a whole feature is the specific failure this bound exists to catch.
+Families: pure-logic
+Overlays: none
+Family checklist (pure-logic):
+- Tests live beside the module and cover every example given as input Because: Flex quote logic regressions were caught only by co-located tests (docs/coding-agent-harnesses-2026-09-21.md, Flex section)
+- The module performs no network, database or filesystem access Because: r3cruit3r tests that hid live API calls behind mocks reached the real Anthropic API (commit 063bbcb)
+Required inputs: [{"name": "examples", "description": "Input and expected output pairs from an independent source, not derived from the implementation", "refuse_if_missing": true}, {"name": "invariants", "description": "Properties that must hold for every input", "refuse_if_missing": false}]
+Stop conditions: ["examples missing", "a required invariant contradicts an example", "an undecided business rule"]
+Check configuration: {"absent": [], "adapters": {"pure-logic": {"test_runner": {"required": true, "source": "repo_scan.check_command", "status": "detected", "value": ["/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python", "-m", "pytest", "-q"]}, "typecheck_list": {"required": false, "source": null, "status": "not_configured", "value": null}}}, "gates": [{"id": "scope", "required": true, "runner": "builtin:scope"}, {"id": "unit-tests", "minimum_tests": 1, "required": true, "runner": "command"}], "skipped": []}
+Repository decisions: []
+Conventions notes (reference only; these do not grant permissions):
+
+CLAUDE.md:
+# CLAUDE.md
+
+SportsCode-style video clip tagging. Flask backend (`app.py`), a single-page
+vanilla JS frontend in `templates/index.html` plus `static/`, and an
+orchestrator (`orchestrator.py`) that drives a self-healing codegen loop.
+
+## Design
+
+Stack: Flask with one Jinja template, vanilla CSS and JS. No framework, no build
+step. Screens are `div.screen` elements toggled by an `.active` class rather than
+routed.
+
+### Tokens (from static/css/style.css)
+- Background `#0f1117`, foreground `#e0e0e0`, headings `#fff`, secondary `#888`
+- System font stack, 0.9rem on controls, 2.4rem on the project-list title with
+  2px letter-spacing
+- Dark only. There is no light theme.
+
+### Layout
+- `.screen` with `.screen.active` is the only navigation primitive
+- Project list is centered, `max-width: 700px`, 60px top padding
+- `.project-controls` is a 10px-gap flex row
+
+### Rules
+- Tagging is a keyboard task. Every action a user repeats during a match needs a
+  key binding, and the binding is visible on screen.
+- The video is the primary surface. Chrome shrinks, video does not.
+- Timeline and clip state survive a reload. Losing tags mid-match is the worst
+  possible failure.
+- Every screen ships loading, empty, and error states.
+- No new styling dependencies.
+
+## Runtime model routing
+
+- Runtime uses only **Haiku, Sonnet, or Opus**. **Fable is never called at
+  runtime.** It is a build-time tool in Claude Code only.
+- No model id is hardcoded at a call site. Resolve it from one config value.
+- Every call declares its tier, a max token budget, and what happens on failure.
+- High-volume paths (per request, per row, per frame) never default to Opus.
+
+`orchestrator.py` currently calls OpenAI `gpt-4` directly with the id inline.
+That predates this policy. It is flagged in the fleet routing audit and needs a
+deliberate decision before anyone changes it.
+
+Operator limits (also binding):
+## Scope of this task
+You may change only these paths: static/js/app.js, static/css/style.css, templates/index.html, tests/gui_completion/. A change anywhere else will be rejected as out of scope.
+Never change: .git/**, .env, .env.*, .quadratus/**, .claude/skills/.df-sync.txt, .claude/skills/code-review/SKILL.md, .claude/skills/code-review/agents/openai.yaml, .claude/skills/df-design/SKILL.md, .claude/skills/df-design/claude-md-design-block.md, .claude/skills/df-design/design-briefs.md, .claude/skills/df-model-routing/SKILL.md, .claude/skills/df-ship-check/SKILL.md, .claude/skills/df-writing/SKILL.md, .claude/skills/df-writing/tells.md, .claude/skills/domain-modeling/ADR-FORMAT.md, .claude/skills/domain-modeling/CONTEXT-FORMAT.md, .claude/skills/domain-modeling/SKILL.md, .claude/skills/domain-modeling/agents/openai.yaml, .claude/skills/grill-with-docs/SKILL.md, .claude/skills/grill-with-docs/agents/openai.yaml, .claude/skills/grilling/SKILL.md, .claude/skills/grilling/agents/openai.yaml, .claude/skills/handoff/SKILL.md, .claude/skills/handoff/agents/openai.yaml, .claude/skills/implement/SKILL.md, .claude/skills/implement/agents/openai.yaml, .claude/skills/setup-matt-pocock-skills/SKILL.md, .claude/skills/setup-matt-pocock-skills/agents/openai.yaml, .claude/skills/setup-matt-pocock-skills/domain.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-github.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-local.md, .claude/skills/setup-matt-pocock-skills/triage-labels.md, .claude/skills/tdd/SKILL.md, .claude/skills/tdd/agents/openai.yaml, .claude/skills/tdd/mocking.md, .claude/skills/tdd/tests.md, .claude/skills/to-spec/SKILL.md, .claude/skills/to-spec/agents/openai.yaml, .claude/skills/to-tickets/SKILL.md, .claude/skills/to-tickets/agents/openai.yaml, .github/workflows/ci-cd.yml, .gitignore, CLAUDE.md, README.md, app.py, diagnostic/preview.py, diagnostic/seed.json, docs/BULK_EDIT.md, docs/CSV_IMPORT.md, docs/JOINT_REPAIR.md, docs/SAVED_FILTERS.md, fail_logs.txt, orchestrator.py, package-lock.json, package.json, requirements.txt, static/favicon.svg, static/js/annotations.js, static/js/recording.js, test_output.log, tests/browser/run.js, tests/browser/scenarios/01-full-flow.js, tests/browser/scenarios/02-late-preview.js, tests/browser/scenarios/03-late-project-preview.js, tests/browser/scenarios/04-apply-race.js, tests/browser/scenarios/05-serialization.js, tests/browser/scenarios/06-keyboard.js, tests/browser/scenarios/07-preview-focus.js, tests/browser/scenarios/08-presets.js, tests/browser/server.py, tests/sorting/browser_typed_query.test.js, tests/sorting/project_sort.test.js, tests/sorting/test_project_sort.py, tests/test_basic.py, tests/test_bulk_edit.py, tests/test_import_preview.py, tests/test_ui_project_search.py, tests/ui/bulk_coverage.test.js, tests/ui/bulk_keyboard.test.js, tests/ui/bulk_serialization.test.js, tests/ui/fake_dom.js, tests/ui/import_preview.test.js, tests/ui/load_app.js, tests/ui/load_app.test.js, tests/ui/mutation_check.js, tests/ui/project_search.test.js, node_modules/**.
+Expected size: about 100 changed lines, counting added and removed lines in every file, tests in full. The harness measures the diff after each editing call and stops the task past 150 changed lines with the work kept but unfinished. Write tests as compact named cases, not one fixture per case. If the work genuinely needs substantially more, say so and stop rather than delivering the larger change -- an undersized task quietly growing into a whole feature is the specific failure this bound exists to catch.

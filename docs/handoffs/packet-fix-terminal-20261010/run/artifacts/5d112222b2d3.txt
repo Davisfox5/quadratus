@@ -1,0 +1,12 @@
+Added the independent Chromium reset control for desktop and mobile. It covers typed query/hash/count/visibility, original seed order, focus, repeated reset, next-sort behavior, overflow, button dimensions, and browser errors.
+
+- Node: `# pass 43`, `# skip 4`, `# fail 0` (47 total).
+- 1280×800: SKIPPED — Chromium launch denied by sandbox (`Permission denied (1100)`).
+- 390×844: SKIPPED — same sandbox denial.
+- Pytest: `121 passed in 2.26s`.
+- No independent reviewer was run.
+
+NOT RUN: /Users/davisfox/.nvm/versions/node/v24.15.0/bin/node --test tests/gui_completion/browser_sort_reset.test.js - targeted command is not approved; full approved Node discovery ran it
+NOT RUN: deliberate implementation mutation - both new real-browser cases were skipped because Chromium could not launch, so mutation sensitivity could not be demonstrated
+
+CHANGED: ["tests/gui_completion/browser_sort_reset.test.js"]

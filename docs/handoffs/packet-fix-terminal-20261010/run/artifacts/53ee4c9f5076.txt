@@ -1,0 +1,144 @@
+Task: Add the Restore library order control to the project library, frontend only, no tests in this slice (tests are the next task under tests/gui_completion/).
+
+1. templates/index.html, line 25–26: after `<button type="button" id="btn-project-sort" ...>Sort A&rarr;Z</button>` and before `<span id="project-sort-status" ...>`, insert `<button type="button" id="btn-project-sort-reset" aria-describedby="project-sort-status">Restore library order</button>`. Change nothing else in the row.
+
+2. static/js/app.js:
+   - Next to line 27 add `const $btnProjectSortReset = document.getElementById("btn-project-sort-reset");`.
+   - In `applyProjectSort()` (line 134), keep the `projectSortDir === ""` early-return branch byte-for-byte. Add a branch for `projectSortDir === "original"`: take `Array.from($projectsContainer.querySelectorAll(".project-card"))`, sort by `Number(a.dataset.index) - Number(b.dataset.index)`, re-append each card in that order (same appendChild move pattern as the asc/desc path, so `card.hidden` survives), set `$projectsContainer.dataset.sort = "original"`, `setTextIfChanged($btnProjectSort, "Sort A→Z")`, `setTextIfChanged($projectSortStatus, "Library order")`, and return. The asc/desc path below stays unchanged.
+   - Add `function resetProjectSort() { projectSortDir = "original"; applyProjectSort(); $projectSearch.focus(); }` and bind it with `$btnProjectSortReset.addEventListener("click", resetProjectSort);` next to the existing `$btnProjectSort` click binding at line 234. Do not call `applyProjectSearch()`, `syncProjectSearchHash()`, `api()` or `loadProjects()` from the reset path, so the search value, hash, count text, hidden cards and no-match/empty paragraphs are untouched and no network request happens.
+   - The existing sort click handler (`projectSortDir = projectSortDir === "asc" ? "desc" : "asc"`) is left as is: from "original" the first click becomes "asc", then "desc", which is the required sequence. Because `loadProjects()` already ends with `applyProjectSort()`, create/delete reloads after a reset re-render in library order with data-sort="original" and status "Library order" without further changes.
+
+3. static/css/style.css: only touch if the new button causes horizontal overflow at 390px; `.project-search-row` already has `flex-wrap: wrap` and `.project-search-row button { background: #22263a; }` styles the new button, so expect no CSS change.
+
+Verify locally that `node --test tests/sorting/project_sort.test.js` still reports pass 5 / fail 0 and `node --test tests/ui/project_search.test.js` passes, confirming the baseline initial-state contract (data-sort unset on load, status "Original order") is intact.
+
+Your draft:
+I have the sort-row and `applyProjectSort` sources from the prompt. I'll add the restore button and local reset handler only in the allowed files.Edits are in. I’ll re-read the sort/reset sections, then run the approved Node and pytest checks.Restore library order is wired on the project list. The empty-string sort branch is unchanged, so load still leaves `data-sort` unset and status “Original order”. CSS was not touched (row already wraps).
+
+**UI**
+- `#btn-project-sort-reset` sits beside `#btn-project-sort` in `.project-search-row`.
+- Click sets `projectSortDir = "original"`, reorders cards by `data-index`, sets `data-sort="original"` and status “Library order”, then focuses `#project-search`.
+- Reset does not call `api()`, `loadProjects()`, `applyProjectSearch()`, or `syncProjectSearchHash()`.
+- Next `#btn-project-sort` click still goes A→Z then Z→A.
+
+**Checks**
+- `node --test`: 39 pass / 0 fail (includes `project_sort.test.js` 5/0 and `project_search.test.js`).
+- `pytest -q -p no:cacheprovider`: 120 passed in 2.32s.
+
+**Capture / reviewer**
+Declared steps for the harness (this call did not start a server or capture): wait for 3 `.project-card`; click `#btn-project-sort` once; click `#btn-project-sort-reset`; wait for `#projects-container[data-sort="original"]` with first card Alpha Cup; capture 1280×800 and 390×844.  
+NOT RUN: live capture/reviewer at http://127.0.0.1:53139/ — forbidden here; harness owns those shots. Typed-search preservation on reset is covered by Node baseline, not by capture clicks; dedicated `tests/gui_completion/` cases are the next slice.
+
+CHANGED: ["templates/index.html", "static/js/app.js"]
+
+Independent reviews of it:
+[Reviewer A]
+I read `templates/index.html` (lines 22–29), `static/js/app.js` (state, DOM refs, `applyProjectSort`, bindings), `static/css/style.css` (project-list and `.project-search-row` rules), and the three tests that pin the contract (`tests/sorting/project_sort.test.js`, `tests/sorting/browser_typed_query.test.js`, `tests/ui/load_app.js`).
+
+**Correctness: the slice does what it claims.** The `projectSortDir === ""` branch is byte-identical to the baseline (status "Original order", no `data-sort` write, early return), so `project_sort.test.js` line 36 (`container.dataset.sort === undefined`) still holds. The "original" branch reuses the `appendChild` move pattern, so `card.hidden` and the delete-button listeners survive; `resetProjectSort()` touches no `api()`/`fetch`, hash or search value; and the untouched toggle yields `"original" → "asc"` on the next click. `tests/ui/load_app.js` builds its DOM from the real template body, so `$btnProjectSortReset` resolves and the `addEventListener` cannot throw under the Node harness.
+
+Findings, each with severity and confidence. None are blocking.
+
+1. **Focus jump to the search box is the wrong destination for this control** — design/a11y, medium severity, high confidence. `static/js/app.js:252` sends focus to `#project-search` after a reorder that has nothing to do with the search field. Three consequences: a keyboard user loses their place in the button row and must shift-tab back to reach `#btn-project-sort`; moving focus immediately after writing to the `aria-live="polite"` region at `templates/index.html:27` can cause screen readers to drop the "Library order" announcement in favour of the focus-change announcement, so the one piece of feedback the feature produces may never be heard; and at 390px tapping the button raises the on-screen keyboard and scrolls the list the user just asked to see back out of view. `clearProjectSearch()` focusing the input is correct because it owns the input — this handler does not. Leaving focus on the activated button (or not moving it at all) would be the consistent choice. Noting this is required verbatim by the task's completion criteria, so it is a spec-level objection, not an implementation defect.
+
+2. **Two different labels for one state** — design, medium severity, high confidence. On load the status reads "Original order" (`templates/index.html:27`); after Restore it reads "Library order" (`static/js/app.js:147`) for a visually identical ordering. The button itself says "Restore library order", so a user looking at a fresh load has no way to tell that "Original order" is the state the button restores. Pressing Restore from a fresh load also flips the status text and sets `data-sort="original"` while nothing visible changes, which reads as "something happened" when nothing did. One vocabulary ("Library order" in both places) would fix it. Again fixed by the acceptance criteria, so flagging rather than demanding.
+
+3. **No feedback at all on a repeat press** — design, low severity, high confidence. `setTextIfChanged` means a second Restore click mutates nothing, so the live region stays silent and the button offers no pressed/current state. A sighted user sees the row unchanged; a screen-reader user hears nothing. An `aria-pressed`/disabled treatment keyed to `projectSortDir === "original" || projectSortDir === ""` would communicate "already here", at the cost of lines this budget probably cannot spare.
+
+4. **Status text likely separates from the buttons it describes at 390px** — design, low-to-medium severity, medium confidence (not measured; see the unrun check below). Inside `#project-list-screen` (`static/css/style.css:19-24`, `max-width: 700px`, `padding: 60px 20px`) the usable width at 390px is 350px. With `flex-wrap: wrap` and 10px gaps, the hypothetical sizes put the input and "Clear" on line 1, "Sort A→Z" plus the ~190px "Restore library order" on line 2, and `#project-sort-status` plus "Esc clears" pushed to a third line. The two `aria-describedby` targets then sit a full line away from their buttons, and the control row grows a line taller on the narrowest screen. No horizontal overflow, so the "expect no CSS change" call is right; the hierarchy cost is real but modest.
+
+5. **Longest label on the least-used control** — design, low severity, high confidence. "Clear" / "Sort A→Z" / "Restore library order" gives the rarely-pressed escape hatch roughly twice the visual weight of the primary sort toggle, in identical `#22263a` styling. "Library order" alone would carry the same meaning next to a button already labelled "Sort A→Z". Contrast is fine (white 600-weight on `#22263a`).
+
+6. **Duplicated reorder block and a shadowed `const cards`** — simplification, low severity, high confidence. `static/js/app.js:142-144` repeats the sort/append sequence from lines 150-159 and re-declares `cards` in an inner block that shadows the function-scoped binding below. It is legal (the inner declaration shadows before the outer one's TDZ matters) but a reader has to prove that. A single `reorderBy(compare)` helper would collapse both paths.
+
+7. **New repeated control ships without a key binding** — consistency with CLAUDE.md, low severity, medium confidence. CLAUDE.md requires a visible binding for every repeated action, and the row already advertises "Esc clears". The pre-existing `#btn-project-sort` has no binding either, so this is consistent with the surrounding code rather than a regression — worth recording only because the rule is explicit and the project-library screen is where the convention is already thinnest.
+
+8. **Both approved checks are unrun in this review call** — process, informational, high confidence. This reviewer invocation has no command-execution tool, so neither `python -m pytest -q -p no:cacheprovider` nor `node --test` could be run; I did not delegate or substitute. The implementer's "39 pass / 0 fail, 120 passed" is therefore unverified here, as is the 390px layout claim — `tests/sorting/browser_typed_query.test.js` self-skips without Playwright (lines 56-66), so the repo's only overflow assertion (`noOverflow`, line 105) very likely did not execute in the implementer's run either. My judgement on items 4 and the no-CSS-change decision rests on reading the cascade, not on a capture.
+
+REVIEW: COMPLETE
+
+Revise your work. Address every finding explicitly: fix it, or rebut it with a reason -- silence is not a response. A finding you cannot decide goes to the record as an open question, not into the void. Update the project using the edit method in your role instructions.
+
+Size: this task's change is 18 lines now (tests count in full) against a stated bound of ~40, and the run stops at 60. You have 42 lines of room for this revision. Make the fixes that fit. For a finding whose fix does not fit, do not make it: write a line 'BLOCKER: <finding> needs about N more lines' so it goes to the record as an open question.
+Files this task has already changed (kept; build on them, do not redo them): static/js/app.js, templates/index.html.
+Your CHANGED line lists only files this call itself adds, changes or deletes. Files the task changed before this call are already recorded; do not list them again unless this call changes them again. If you change nothing, end with exactly CHANGED: [].
+Requests are not served in this call: a FETCH, CONSULT or WORKER reply is filed as your revision text, unserved. Finish with what you have.
+
+## Role packet
+Role: lead
+## Scope of this task
+Intended result: A #btn-project-sort-reset button beside #btn-project-sort whose click handler `function resetProjectSort()` sets projectSortDir to "original", reorders cards by data-index, sets data-sort="original", status "Library order", and focuses #project-search, with no fetch and no history/location change
+You may change only these paths: templates/index.html, static/js/app.js, static/css/style.css. A change anywhere else will be rejected as out of scope.
+Never change: .git/**, .env, .env.*, .quadratus/**, .claude/skills/.df-sync.txt, .claude/skills/code-review/SKILL.md, .claude/skills/code-review/agents/openai.yaml, .claude/skills/df-design/SKILL.md, .claude/skills/df-design/claude-md-design-block.md, .claude/skills/df-design/design-briefs.md, .claude/skills/df-model-routing/SKILL.md, .claude/skills/df-ship-check/SKILL.md, .claude/skills/df-writing/SKILL.md, .claude/skills/df-writing/tells.md, .claude/skills/domain-modeling/ADR-FORMAT.md, .claude/skills/domain-modeling/CONTEXT-FORMAT.md, .claude/skills/domain-modeling/SKILL.md, .claude/skills/domain-modeling/agents/openai.yaml, .claude/skills/grill-with-docs/SKILL.md, .claude/skills/grill-with-docs/agents/openai.yaml, .claude/skills/grilling/SKILL.md, .claude/skills/grilling/agents/openai.yaml, .claude/skills/handoff/SKILL.md, .claude/skills/handoff/agents/openai.yaml, .claude/skills/implement/SKILL.md, .claude/skills/implement/agents/openai.yaml, .claude/skills/setup-matt-pocock-skills/SKILL.md, .claude/skills/setup-matt-pocock-skills/agents/openai.yaml, .claude/skills/setup-matt-pocock-skills/domain.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-github.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-local.md, .claude/skills/setup-matt-pocock-skills/triage-labels.md, .claude/skills/tdd/SKILL.md, .claude/skills/tdd/agents/openai.yaml, .claude/skills/tdd/mocking.md, .claude/skills/tdd/tests.md, .claude/skills/to-spec/SKILL.md, .claude/skills/to-spec/agents/openai.yaml, .claude/skills/to-tickets/SKILL.md, .claude/skills/to-tickets/agents/openai.yaml, .github/workflows/ci-cd.yml, .gitignore, CLAUDE.md, README.md, app.py, diagnostic/preview.py, diagnostic/seed.json, docs/BULK_EDIT.md, docs/CSV_IMPORT.md, docs/JOINT_REPAIR.md, docs/SAVED_FILTERS.md, fail_logs.txt, orchestrator.py, package-lock.json, package.json, requirements.txt, static/favicon.svg, static/js/annotations.js, static/js/recording.js, test_output.log, tests/browser/run.js, tests/browser/scenarios/01-full-flow.js, tests/browser/scenarios/02-late-preview.js, tests/browser/scenarios/03-late-project-preview.js, tests/browser/scenarios/04-apply-race.js, tests/browser/scenarios/05-serialization.js, tests/browser/scenarios/06-keyboard.js, tests/browser/scenarios/07-preview-focus.js, tests/browser/scenarios/08-presets.js, tests/browser/server.py, tests/sorting/browser_typed_query.test.js, tests/sorting/project_sort.test.js, tests/sorting/test_project_sort.py, tests/test_basic.py, tests/test_bulk_edit.py, tests/test_import_preview.py, tests/test_ui_project_search.py, tests/ui/bulk_coverage.test.js, tests/ui/bulk_keyboard.test.js, tests/ui/bulk_serialization.test.js, tests/ui/fake_dom.js, tests/ui/import_preview.test.js, tests/ui/load_app.js, tests/ui/load_app.test.js, tests/ui/mutation_check.js, tests/ui/project_search.test.js, node_modules/**.
+This task is finished when:
+  - templates/index.html contains <button type="button" id="btn-project-sort-reset"> immediately after #btn-project-sort inside .project-search-row
+  - `function resetProjectSort()` exists in static/js/app.js and is bound via $btnProjectSortReset.addEventListener("click", resetProjectSort)
+  - applyProjectSort() handles projectSortDir === "original": cards reordered by Number(dataset.index) ascending, $projectsContainer.dataset.sort = "original", button text "Sort A→Z", status text "Library order"
+  - The projectSortDir === "" branch of applyProjectSort() is unchanged so initial load still leaves data-sort unset and status "Original order"
+  - Existing toggle `projectSortDir === "asc" ? "desc" : "asc"` is unchanged, so the first sort click after reset yields asc
+  - resetProjectSort() does not call api()/fetch, syncProjectSearchHash(), or applyProjectSearch() with a changed value; card.hidden states persist because cards are moved, not rebuilt
+  - node --test tests/sorting/project_sort.test.js and tests/ui/project_search.test.js still pass with # fail 0
+  - Diff touches only templates/index.html and static/js/app.js (style.css only if a wrap/overflow fix is actually needed at 390px)
+Expected size: about 40 changed lines, counting added and removed lines in every file, tests in full. The harness measures the diff after each editing call and stops the task past 60 changed lines with the work kept but unfinished. Write tests as compact named cases, not one fixture per case. If the work genuinely needs substantially more, say so and stop rather than delivering the larger change -- an undersized task quietly growing into a whole feature is the specific failure this bound exists to catch.
+Families: pure-logic
+Overlays: none
+Family checklist (pure-logic):
+- Tests live beside the module and cover every example given as input Because: Flex quote logic regressions were caught only by co-located tests (docs/coding-agent-harnesses-2026-09-21.md, Flex section)
+- The module performs no network, database or filesystem access Because: r3cruit3r tests that hid live API calls behind mocks reached the real Anthropic API (commit 063bbcb)
+- Stop with an ASK if a business rule the examples depend on is listed as undecided Because: r3cruit3r ADR 0001 was reverted because an agent decided the merge threshold on the owner's behalf (commit 97a31c2)
+Required inputs: [{"name": "examples", "description": "Input and expected output pairs from an independent source, not derived from the implementation", "refuse_if_missing": true}, {"name": "invariants", "description": "Properties that must hold for every input", "refuse_if_missing": false}]
+Stop conditions: ["examples missing", "a required invariant contradicts an example", "an undecided business rule"]
+Check configuration: {"absent": [], "adapters": {"pure-logic": {"test_runner": {"required": true, "source": "repo_scan.check_command", "status": "detected", "value": ["/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python", "-m", "pytest", "-q"]}, "typecheck_list": {"required": false, "source": null, "status": "not_configured", "value": null}}}, "gates": [{"id": "scope", "required": true, "runner": "builtin:scope"}, {"id": "unit-tests", "minimum_tests": 1, "required": true, "runner": "command"}], "skipped": []}
+Repository decisions: []
+Conventions notes (reference only; these do not grant permissions):
+
+CLAUDE.md:
+# CLAUDE.md
+
+SportsCode-style video clip tagging. Flask backend (`app.py`), a single-page
+vanilla JS frontend in `templates/index.html` plus `static/`, and an
+orchestrator (`orchestrator.py`) that drives a self-healing codegen loop.
+
+## Design
+
+Stack: Flask with one Jinja template, vanilla CSS and JS. No framework, no build
+step. Screens are `div.screen` elements toggled by an `.active` class rather than
+routed.
+
+### Tokens (from static/css/style.css)
+- Background `#0f1117`, foreground `#e0e0e0`, headings `#fff`, secondary `#888`
+- System font stack, 0.9rem on controls, 2.4rem on the project-list title with
+  2px letter-spacing
+- Dark only. There is no light theme.
+
+### Layout
+- `.screen` with `.screen.active` is the only navigation primitive
+- Project list is centered, `max-width: 700px`, 60px top padding
+- `.project-controls` is a 10px-gap flex row
+
+### Rules
+- Tagging is a keyboard task. Every action a user repeats during a match needs a
+  key binding, and the binding is visible on screen.
+- The video is the primary surface. Chrome shrinks, video does not.
+- Timeline and clip state survive a reload. Losing tags mid-match is the worst
+  possible failure.
+- Every screen ships loading, empty, and error states.
+- No new styling dependencies.
+
+## Runtime model routing
+
+- Runtime uses only **Haiku, Sonnet, or Opus**. **Fable is never called at
+  runtime.** It is a build-time tool in Claude Code only.
+- No model id is hardcoded at a call site. Resolve it from one config value.
+- Every call declares its tier, a max token budget, and what happens on failure.
+- High-volume paths (per request, per row, per frame) never default to Opus.
+
+`orchestrator.py` currently calls OpenAI `gpt-4` directly with the id inline.
+That predates this policy. It is flagged in the fleet routing audit and needs a
+deliberate decision before anyone changes it.
+
+Operator limits (also binding):
+## Scope of this task
+You may change only these paths: static/js/app.js, static/css/style.css, templates/index.html, tests/gui_completion/. A change anywhere else will be rejected as out of scope.
+Never change: .git/**, .env, .env.*, .quadratus/**, .claude/skills/.df-sync.txt, .claude/skills/code-review/SKILL.md, .claude/skills/code-review/agents/openai.yaml, .claude/skills/df-design/SKILL.md, .claude/skills/df-design/claude-md-design-block.md, .claude/skills/df-design/design-briefs.md, .claude/skills/df-model-routing/SKILL.md, .claude/skills/df-ship-check/SKILL.md, .claude/skills/df-writing/SKILL.md, .claude/skills/df-writing/tells.md, .claude/skills/domain-modeling/ADR-FORMAT.md, .claude/skills/domain-modeling/CONTEXT-FORMAT.md, .claude/skills/domain-modeling/SKILL.md, .claude/skills/domain-modeling/agents/openai.yaml, .claude/skills/grill-with-docs/SKILL.md, .claude/skills/grill-with-docs/agents/openai.yaml, .claude/skills/grilling/SKILL.md, .claude/skills/grilling/agents/openai.yaml, .claude/skills/handoff/SKILL.md, .claude/skills/handoff/agents/openai.yaml, .claude/skills/implement/SKILL.md, .claude/skills/implement/agents/openai.yaml, .claude/skills/setup-matt-pocock-skills/SKILL.md, .claude/skills/setup-matt-pocock-skills/agents/openai.yaml, .claude/skills/setup-matt-pocock-skills/domain.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-github.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-local.md, .claude/skills/setup-matt-pocock-skills/triage-labels.md, .claude/skills/tdd/SKILL.md, .claude/skills/tdd/agents/openai.yaml, .claude/skills/tdd/mocking.md, .claude/skills/tdd/tests.md, .claude/skills/to-spec/SKILL.md, .claude/skills/to-spec/agents/openai.yaml, .claude/skills/to-tickets/SKILL.md, .claude/skills/to-tickets/agents/openai.yaml, .github/workflows/ci-cd.yml, .gitignore, CLAUDE.md, README.md, app.py, diagnostic/preview.py, diagnostic/seed.json, docs/BULK_EDIT.md, docs/CSV_IMPORT.md, docs/JOINT_REPAIR.md, docs/SAVED_FILTERS.md, fail_logs.txt, orchestrator.py, package-lock.json, package.json, requirements.txt, static/favicon.svg, static/js/annotations.js, static/js/recording.js, test_output.log, tests/browser/run.js, tests/browser/scenarios/01-full-flow.js, tests/browser/scenarios/02-late-preview.js, tests/browser/scenarios/03-late-project-preview.js, tests/browser/scenarios/04-apply-race.js, tests/browser/scenarios/05-serialization.js, tests/browser/scenarios/06-keyboard.js, tests/browser/scenarios/07-preview-focus.js, tests/browser/scenarios/08-presets.js, tests/browser/server.py, tests/sorting/browser_typed_query.test.js, tests/sorting/project_sort.test.js, tests/sorting/test_project_sort.py, tests/test_basic.py, tests/test_bulk_edit.py, tests/test_import_preview.py, tests/test_ui_project_search.py, tests/ui/bulk_coverage.test.js, tests/ui/bulk_keyboard.test.js, tests/ui/bulk_serialization.test.js, tests/ui/fake_dom.js, tests/ui/import_preview.test.js, tests/ui/load_app.js, tests/ui/load_app.test.js, tests/ui/mutation_check.js, tests/ui/project_search.test.js, node_modules/**.
+Expected size: about 100 changed lines, counting added and removed lines in every file, tests in full. The harness measures the diff after each editing call and stops the task past 150 changed lines with the work kept but unfinished. Write tests as compact named cases, not one fixture per case. If the work genuinely needs substantially more, say so and stop rather than delivering the larger change -- an undersized task quietly growing into a whole feature is the specific failure this bound exists to catch.

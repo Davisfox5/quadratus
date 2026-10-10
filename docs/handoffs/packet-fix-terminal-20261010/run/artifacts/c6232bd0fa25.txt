@@ -1,0 +1,67 @@
+[assistant] I have the sort-row and `applyProjectSort` sources from the prompt. I'll add the restore button and local reset handler only in the allowed files.Edits are in. I’ll re-read the sort/reset sections, then run the approved Node and pytest checks.Restore library order is wired on the project list. The empty-string sort branch is unchanged, so load still leaves `data-sort` unset and status “Original order”. CSS was not touched (row already wraps).
+
+**UI**
+- `#btn-project-sort-reset` sits beside `#btn-project-sort` in `.project-search-row`.
+- Click sets `projectSortDir = "original"`, reorders cards by `data-index`, sets `data-sort="original"` and status “Library order”, then focuses `#project-search`.
+- Reset does not call `api()`, `loadProjects()`, `applyProjectSearch()`, or `syncProjectSearchHash()`.
+- Next `#btn-project-sort` click still goes A→Z then Z→A.
+
+**Checks**
+- `node --test`: 39 pass / 0 fail (includes `project_sort.test.js` 5/0 and `project_search.test.js`).
+- `pytest -q -p no:cacheprovider`: 120 passed in 2.32s.
+
+**Capture / reviewer**
+Declared steps for the harness (this call did not start a server or capture): wait for 3 `.project-card`; click `#btn-project-sort` once; click `#btn-project-sort-reset`; wait for `#projects-container[data-sort="original"]` with first card Alpha Cup; capture 1280×800 and 390×844.  
+NOT RUN: live capture/reviewer at http://127.0.0.1:53139/ — forbidden here; harness owns those shots. Typed-search preservation on reset is covered by Node baseline, not by capture clicks; dedicated `tests/gui_completion/` cases are the next slice.
+
+CHANGED: ["templates/index.html", "static/js/app.js"]
+
+[assistant] [Reviewer A] I read `templates/index.html` (lines 22–29), `static/js/app.js` (state, DOM refs, `applyProjectSort`, bindings), `static/css/style.css` (project-list and `.project-search-row` rules), and the three tests that pin the contract (`tests/sorting/project_sort.test.js`, `tests/sorting/browser_typed_query.test.js`, `tests/ui/load_app.js`).
+
+**Correctness: the slice does what it claims.** The `projectSortDir === ""` branch is byte-identical to the baseline (status "Original order", no `data-sort` write, early return), so `project_sort.test.js` line 36 (`container.dataset.sort === undefined`) still holds. The "original" branch reuses the `appendChild` move pattern, so `card.hidden` and the delete-button listeners survive; `resetProjectSort()` touches no `api()`/`fetch`, hash or search value; and the untouched toggle yields `"original" → "asc"` on the next click. `tests/ui/load_app.js` builds its DOM from the real template body, so `$btnProjectSortReset` resolves and the `addEventListener` cannot throw under the Node harness.
+
+Findings, each with severity and confidence. None are blocking.
+
+1. **Focus jump to the search box is the wrong destination for this control** — design/a11y, medium severity, high confidence. `static/js/app.js:252` sends focus to `#project-search` after a reorder that has nothing to do with the search field. Three consequences: a keyboard user loses their place in the button row and must shift-tab back to reach `#btn-project-sort`; moving focus immediately after writing to the `aria-live="polite"` region at `templates/index.html:27` can cause screen readers to drop the "Library order" announcement in favour of the focus-change announcement, so the one piece of feedback the feature produces may never be heard; and at 390px tapping the button raises the on-screen keyboard and scrolls the list the user just asked to see back out of view. `clearProjectSearch()` focusing the input is correct because it owns the input — this handler does not. Leaving focus on the activated button (or not moving it at all) would be the consistent choice. Noting this is required verbatim by the task's completion criteria, so it is a spec-level objection, not an implementation defect.
+
+2. **Two different labels for one state** — design, medium severity, high confidence. On load the status reads "Original order" (`templates/index.html:27`); after Restore it reads "Library order" (`static/js/app.js:147`) for a visually identical ordering. The button itself says "Restore library order", so a user looking at a fresh load has no way to tell that "Original order" is the state the button restores. Pressing Restore from a fresh load also flips the status text and sets `data-sort="original"` while nothing visible changes, which reads as "something happened" when nothing did. One vocabulary ("Library order" in both places) would fix it. Again fixed by the acceptance criteria, so flagging rather than demanding.
+
+3. **No feedback at all on a repeat press** — design, low severity, high confidence. `setTextIfChanged` means a second Restore click mutates nothing, so the live region stays silent and the button offers no pressed/current state. A sighted user sees the row unchanged; a screen-reader user hears nothing. An `aria-pressed`/disabled treatment keyed to `projectSortDir === "original" || projectSortDir === ""` would communicate "already here", at the cost of lines this budget probably cannot spare.
+
+4. **Status text likely separates from the buttons it describes at 390px** — design, low-to-medium severity, medium confidence (not measured; see the unrun check below). Inside `#project-list-screen` (`static/css/style.css:19-24`, `max-width: 700px`, `padding: 60px 20px`) the usable width at 390px is 350px. With `flex-wrap: wrap` and 10px gaps, the hypothetical sizes put the input and "Clear" on line 1, "Sort A→Z" plus the ~190px "Restore library order" on line 2, and `#project-sort-status` plus "Esc clears" pushed to a third line. The two `aria-describedby` targets then sit a full line away from their buttons, and the control row grows a line taller on the narrowest screen. No horizontal overflow, so the "expect no CSS change" call is right; the hierarchy cost is real but modest.
+
+5. **Longest label on the least-used control** — design, low severity, high confidence. "Clear" / "Sort A→Z" / "Restore library order" gives the rarely-pressed escape hatch roughly twice the visual weight of the primary sort toggle, in identical `#22263a` styling. "Library order" alone would carry the same meaning next to a button already labelled "Sort A→Z". Contrast is fine (white 600-weight on `#22263a`).
+
+6. **Duplicated reorder block and a shadowed `const cards`** — simplification, low severity, high confidence. `static/js/app.js:142-144` repeats the sort/append sequence from lines 150-159 and re-declares `cards` in an inner block that shadows the function-scoped binding below. It is legal (the inner declaration shadows before the outer one's TDZ matters) but a reader has to prove that. A single `reorderBy(compare)` helper would collapse both paths.
+
+7. **New repeated control ships without a key binding** — consistency with CLAUDE.md, low severity, medium confidence. CLAUDE.md requires a visible binding for every repeated action, and the row already advertises "Esc clears". The pre-existing `#btn-project-sort` has no binding either, so this is consistent with the surrounding code rather than a regression — worth recording only because the rule is explicit and the project-library screen is where the convention is already thinnest.
+
+8. **Both approved checks are unrun in this review call** — process, informational, high confidence. This reviewer invocation has no command-execution tool, so neither `python -m pytest -q -p no:cacheprovider` nor `node --test` could be run; I did not delegate or substitute. The implementer's "39 pass / 0 fail, 120 passed" is therefore unverified here, as is the 390px layout claim — `tests/sorting/browser_typed_query.test.js` self-skips without Playwright (lines 56-66), so the repo's only overflow assertion (`noOverflow`, line 105) very likely did not execute in the implementer's run either. My judgement on items 4 and the no-CSS-change decision rests on reading the cascade, not on a capture.
+
+REVIEW: COMPLETE
+
+[assistant] The review conflicts with the required restore contract in a few places. I’ll read the sort/reset code and the tests that pin it, then fix only what still fits that contract.The restore path matches the required contract. I’ll run the approved checks, then answer each review finding against that contract instead of changing specified behavior.No code change. Each finding either contradicts the restore contract or is already covered by the checks that just passed.
+
+1. **Focus on `#project-search` — rebut.** `resetProjectSort()` must focus `#project-search` after the reorder. That is the finished-when behavior for this control, same as the role packet. Leaving focus on the button would fail the slice. The screen-reader and 390px keyboard costs are a spec objection, not a defect to patch here.
+
+2. **“Original order” vs “Library order” — rebut.** Load stays on the `projectSortDir === ""` branch: no `data-sort`, status “Original order”. Restore uses the `"original"` branch: `data-sort="original"`, status “Library order”. Those two strings are the contract. Unifying them would change the initial-state assertion in `tests/sorting/project_sort.test.js`.
+
+3. **Repeat-press silence — rebut.** `setTextIfChanged` is the existing status path, and a second Restore is a no-op on purpose. `aria-pressed` or disabling the button for `""` or `"original"` would either edit the byte-identical `""` branch or block the required click that moves a fresh load from `""` to `"original"`. Not in this slice.
+
+4. **390px wrap — rebut.** No horizontal overflow, so `static/css/style.css` stays untouched. `node --test` ran `typed-query browser review at 390x844` against the live template (the new button is in that row) and `noOverflow` passed. A taller wrapped row is allowed; the status still has a box.
+
+5. **Long button label — rebut.** The control text is specified as “Restore library order”. Shortening it would miss the template requirement. Shared `#22263a` styling is the row rule already applied to every button there.
+
+6. **Duplicated reorder / shadowed `cards` — rebut.** The inner `const cards` is block-scoped and that branch returns before the outer `cards` binding is used, so there is no TDZ hit. A `reorderBy` helper would rewrite the asc/desc path, which must stay as it is.
+
+7. **No key binding — rebut.** The match-tagging rule does not add a shortcut for this library control. `#btn-project-sort` has none either, and the row may only gain this button. A new binding would also collide with Esc, which already clears search.
+
+8. **Checks were unverified — closed.** Ran both approved commands from this tree.
+- `node --test`: 39 pass / 0 fail (includes `project_sort.test.js` 5/0, `project_search.test.js`, and both viewport reviews; nothing skipped).
+- `pytest -q -p no:cacheprovider`: 120 passed in 5.86s.
+
+CHANGED: []
+
+[user] Integration gate PASSED: check, extra-1
+check: passed: exit 0 (120 tests)
+extra-1: passed: exit 0 (39 tests)

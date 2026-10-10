@@ -1,0 +1,28 @@
+[
+  {
+    "id": "check",
+    "argv": [
+      "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "-p",
+      "no:cacheprovider",
+      "--quadratus-report={report}"
+    ],
+    "cwd": ".",
+    "required": true,
+    "minimum_tests": 1
+  },
+  {
+    "id": "extra-1",
+    "argv": [
+      "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/node",
+      "--test",
+      "--test-reporter-destination={report}"
+    ],
+    "cwd": ".",
+    "required": true,
+    "minimum_tests": 1
+  }
+]

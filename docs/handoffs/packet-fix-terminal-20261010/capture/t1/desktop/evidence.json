@@ -1,0 +1,45 @@
+{
+  "url": "http://127.0.0.1:53139/",
+  "title": "GameTape - Sports Video Tagging",
+  "screenshot_path": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project/.quadratus/design-evidence/t1/desktop/page.png",
+  "console_errors": [],
+  "failed_requests": [],
+  "clean": true,
+  "steps": [
+    {
+      "n": 1,
+      "action": "wait",
+      "selector": "#projects-container .project-card:nth-child(3)",
+      "ok": true,
+      "visible_before_steps": true
+    },
+    {
+      "n": 2,
+      "action": "click",
+      "selector": "#btn-project-sort",
+      "ok": true
+    },
+    {
+      "n": 3,
+      "action": "wait",
+      "selector": "#projects-container[data-sort=\"asc\"]",
+      "ok": true,
+      "visible_before_steps": false
+    },
+    {
+      "n": 4,
+      "action": "click",
+      "selector": "#btn-project-sort-reset",
+      "ok": true
+    },
+    {
+      "n": 5,
+      "action": "wait",
+      "selector": "#projects-container[data-sort=\"original\"] > .project-card:first-child .name",
+      "ok": true,
+      "visible_before_steps": false
+    }
+  ],
+  "document_width": 1280,
+  "overflow": []
+}

@@ -1,0 +1,27 @@
+{
+  "info": {
+    "id": "01a12693-e584-7892-9b8a-e7767b26b534",
+    "cwd": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project"
+  },
+  "agent_id": "ag1.c81b2f2ae8824bf484cae87bf5ce6453",
+  "attempt_id": "at1.60a4133bcbae4613bcd166ad4dd71074",
+  "session_summary": "Add Restore library order button",
+  "created_at": "2026-10-10T16:09:49.206734Z",
+  "updated_at": "2026-10-10T16:11:24.800868Z",
+  "num_messages": 38,
+  "num_chat_messages": 20,
+  "current_model_id": "grok-4.6",
+  "next_trace_turn": 1,
+  "chat_format_version": 1,
+  "session_kind": "headless",
+  "git_root_dir": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project/",
+  "head_commit": "01d7e2735c41b19057e154e2cfdbf2c571f588d4",
+  "head_branch": "main",
+  "request_id": "53cb563e-a295-477c-a809-84146e5cf5d3",
+  "grok_home": "/Users/davisfox/.grok",
+  "last_active_at": "2026-10-10T16:11:24.800868Z",
+  "generated_title": "Add Restore library order button",
+  "agent_name": "grok-build-plan",
+  "sandbox_profile": "off",
+  "reasoning_effort": "high"
+}

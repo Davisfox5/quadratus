@@ -1,0 +1,1141 @@
+## Goal (verbatim, unchanged)
+
+Add one small usability feature to the existing sorted GameTape project library: a Restore library order button. Preserve current UI and every existing search, sort, count, create/delete confirmation, navigation, player/tagging/preset behavior. No dependency, backend, seed/reset, provider or fixture changes.
+
+G1 Add #btn-project-sort-reset beside the sort controls. A normal click restores original API/library position order, sets #projects-container data-sort="original", and sets readable #project-sort-status to "Library order". Repeated reset is harmless. The next ordinary sort click starts A→Z, then Z→A as before. Reset is local: no API request or reload.
+G2 Reset preserves typed search/hash/count and matching cards/no-match vs true-empty. It returns focus to the search field. Normal create/delete still reloads correctly in the active order and navigation uses the same ID. Add meaningful NEW tests only under tests/gui_completion/ for reset from both sort directions, stable library ordering, query/hash/count/focus preservation and no network. All baseline tests remain byte-identical, including the original23.
+G3 Controls work at1280×800 and390×844 with no overflow or unexpected browser errors. Declare actual click/wait capture steps on fresh disposable seeded backend: wait for3cards, click sort once, click restore, wait for data-sort="original" and first Alpha Cup, capture desktop/mobile. Report actual capture/reviewer/check findings, blocked/skipped/NOTRUN honestly. Capture clicks do not prove typing; real Node and independent browser controls cover it. Do not claim GUI/report completion before actual harness facts.
+
+## Standing rules (always in force)
+
+- Project source is available in the working directory. Use actual files as evidence. Do not commit or publish changes.
+
+## Requirements (numbered from the goal; the run is done only when every one is met)
+
+- R1: templates/index.html gains `<button type="button" id="btn-project-sort-reset">` placed beside #btn-project-sort in `.project-search-row`, with existing controls, labels and layout otherwise unchanged. [open]
+- R2: Clicking #btn-project-sort-reset reorders `.project-card` elements back to API/library position (ascending `data-index`), sets `#projects-container` `data-sort="original"`, and sets #project-sort-status text to "Library order". [open]
+- R3: Repeated reset clicks are harmless (same order, same attributes); the next #btn-project-sort click after a reset sorts A→Z (data-sort="asc"), then Z→A, exactly as the baseline toggle does. [open]
+- R4: Reset is local: it issues no fetch/API request and does not reload or change window.location. [open]
+- R5: Reset preserves the typed search value, the #q= hash (no new replaceState call), #project-search-count text, each card's hidden state, and the visibility of #project-search-empty vs #projects-empty. [open]
+- R6: After reset, document.activeElement is #project-search. [open]
+- R7: Create and delete (with confirm) still call loadProjects and re-render in the currently active order, including "original" after a reset; card click still navigates with the same project id. [open]
+- R8: New tests exist only under tests/gui_completion/ and cover: reset from asc, reset from desc, stable library ordering (ids by data-index), query/hash/count/focus preservation, and no network on reset; a pytest wrapper runs them with the project's node harness. [open]
+- R9: No existing test file is modified (all baseline tests, including the original 23, stay byte-identical); no files outside static/js/app.js, static/css/style.css, templates/index.html, tests/gui_completion/ change. [open]
+- R10: Controls render without horizontal overflow or console errors at 1280×800 and 390×844. [open]
+- R11: Capture is declared and run on a fresh seeded backend with steps: wait for 3 cards, click sort once, click restore, wait for data-sort="original" with first card Alpha Cup; desktop and mobile shots reported honestly (blocked/skipped/NOTRUN stated as such). [open]
+- R12: No new dependency, backend, seed/reset, provider or fixture changes; all existing search, sort, count, create/delete confirmation, navigation, player/tagging/preset behaviour unchanged. [open]
+- R13: Use real Node and independent browser controls to verify typed-search preservation; capture clicks alone are insufficient evidence. [open (added by the requirements review)]
+- R14: Report the actual capture, reviewer, and check findings, stating blocked, skipped, or NOTRUN honestly. [open (added by the requirements review)]
+
+## Completed work
+
+_Nothing completed yet._
+
+## Now
+
+Add the Restore library order control to the project library, frontend only, no tests in this slice (tests are the next task under tests/gui_completion/).
+
+1. templates/index.html, line 25–26: after `<button type="button" id="btn-project-sort" ...>Sort A&rarr;Z</button>` and before `<span id="project-sort-status" ...>`, insert `<button type="button" id="btn-project-sort-reset" aria-describedby="project-sort-status">Restore library order</button>`. Change nothing else in the row.
+
+2. static/js/app.js:
+   - Next to line 27 add `const $btnProjectSortReset = document.getElementById("btn-project-sort-reset");`.
+   - In `applyProjectSort()` (line 134), keep the `projectSortDir === ""` early-return branch byte-for-byte. Add a branch for `projectSortDir === "original"`: take `Array.from($projectsContainer.querySelectorAll(".project-card"))`, sort by `Number(a.dataset.index) - Number(b.dataset.index)`, re-append each card in that order (same appendChild move pattern as the asc/desc path, so `card.hidden` survives), set `$projectsContainer.dataset.sort = "original"`, `setTextIfChanged($btnProjectSort, "Sort A→Z")`, `setTextIfChanged($projectSortStatus, "Library order")`, and return. The asc/desc path below stays unchanged.
+   - Add `function resetProjectSort() { projectSortDir = "original"; applyProjectSort(); $projectSearch.focus(); }` and bind it with `$btnProjectSortReset.addEventListener("click", resetProjectSort);` next to the existing `$btnProjectSort` click binding at line 234. Do not call `applyProjectSearch()`, `syncProjectSearchHash()`, `api()` or `loadProjects()` from the reset path, so the search value, hash, count text, hidden cards and no-match/empty paragraphs are untouched and no network request happens.
+   - The existing sort click handler (`projectSortDir = projectSortDir === "asc" ? "desc" : "asc"`) is left as is: from "original" the first click becomes "asc", then "desc", which is the required sequence. Because `loadProjects()` already ends with `applyProjectSort()`, create/delete reloads after a reset re-render in library order with data-sort="original" and status "Library order" without further changes.
+
+3. static/css/style.css: only touch if the new button causes horizontal overflow at 390px; `.project-search-row` already has `flex-wrap: wrap` and `.project-search-row button { background: #22263a; }` styles the new button, so expect no CSS change.
+
+Verify locally that `node --test tests/sorting/project_sort.test.js` still reports pass 5 / fail 0 and `node --test tests/ui/project_search.test.js` passes, confirming the baseline initial-state contract (data-sort unset on load, status "Original order") is intact.
+
+## Codebase map (persists across sessions)
+
+**stack**
+- Primary language: JavaScript (23 files), Python (9 files), HTML (1 files) _(scan, scan)_
+
+**layout**
+- Top-level directories: diagnostic, docs, static, templates, tests _(scan, scan)_
+- Largest source files: static/js/app.js (1790 lines), app.py (1682 lines), static/css/style.css (1281 lines), static/js/annotations.js (358 lines), templates/index.html (329 lines), static/js/recording.js (180 lines) _(scan, scan)_
+
+**tests**
+- Test files live under: tests/ui/, tests/browser/scenarios/, tests/ _(scan, scan)_
+
+**dependencies**
+- Manifests present: requirements.txt, package.json _(scan, scan)_
+
+**checks**
+- The project's own check command is: /Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python -m pytest -q _(scan, scan)_
+
+**sort code**
+- static/js/app.js applyProjectSort() at ~134-156, projectSortDir state at line 15 ("" | "asc" | "desc"), sort click binding at ~234; loadProjects() at 176 ends with applyProjectSort _(claude:fable, decomposition)_
+
+**template**
+- templates/index.html lines 22-28 hold .project-search-row with #project-search, #btn-project-search-clear, #btn-project-sort, #project-sort-status span, .preset-keys span _(claude:fable, decomposition)_
+
+**test harness**
+- tests/ui/load_app.js loadApp({routes, location, history, confirmResult}) runs real app.js in a VM over tests/ui/fake_dom.js; fake_dom supports focus()/document.activeElement, datas _(claude:fable, decomposition)_
+
+**test convention**
+- tests/sorting/project_sort.test.js uses node:test + a seed() of 3 projects and clickSort helper; tests/sorting/test_project_sort.py wraps it via subprocess node --test --test-repor _(claude:fable, decomposition)_
+
+You are leading this task. Produce the complete work.
+
+This task changes or reviews what users see. The harness itself starts the preview and captures http://127.0.0.1:53139/ (after 5 declared interaction steps) at a desktop and a mobile width once your work and the checks are done, and the design review judges those renders. Do not start servers or run capture commands. Make the declared page and state show the change, and keep the declared selectors working.
+
+## Role packet
+Role: lead
+## Scope of this task
+Intended result: A #btn-project-sort-reset button beside #btn-project-sort whose click handler `function resetProjectSort()` sets projectSortDir to "original", reorders cards by data-index, sets data-sort="original", status "Library order", and focuses #project-search, with no fetch and no history/location change
+You may change only these paths: templates/index.html, static/js/app.js, static/css/style.css. A change anywhere else will be rejected as out of scope.
+Never change: .git/**, .env, .env.*, .quadratus/**, .claude/skills/.df-sync.txt, .claude/skills/code-review/SKILL.md, .claude/skills/code-review/agents/openai.yaml, .claude/skills/df-design/SKILL.md, .claude/skills/df-design/claude-md-design-block.md, .claude/skills/df-design/design-briefs.md, .claude/skills/df-model-routing/SKILL.md, .claude/skills/df-ship-check/SKILL.md, .claude/skills/df-writing/SKILL.md, .claude/skills/df-writing/tells.md, .claude/skills/domain-modeling/ADR-FORMAT.md, .claude/skills/domain-modeling/CONTEXT-FORMAT.md, .claude/skills/domain-modeling/SKILL.md, .claude/skills/domain-modeling/agents/openai.yaml, .claude/skills/grill-with-docs/SKILL.md, .claude/skills/grill-with-docs/agents/openai.yaml, .claude/skills/grilling/SKILL.md, .claude/skills/grilling/agents/openai.yaml, .claude/skills/handoff/SKILL.md, .claude/skills/handoff/agents/openai.yaml, .claude/skills/implement/SKILL.md, .claude/skills/implement/agents/openai.yaml, .claude/skills/setup-matt-pocock-skills/SKILL.md, .claude/skills/setup-matt-pocock-skills/agents/openai.yaml, .claude/skills/setup-matt-pocock-skills/domain.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-github.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-local.md, .claude/skills/setup-matt-pocock-skills/triage-labels.md, .claude/skills/tdd/SKILL.md, .claude/skills/tdd/agents/openai.yaml, .claude/skills/tdd/mocking.md, .claude/skills/tdd/tests.md, .claude/skills/to-spec/SKILL.md, .claude/skills/to-spec/agents/openai.yaml, .claude/skills/to-tickets/SKILL.md, .claude/skills/to-tickets/agents/openai.yaml, .github/workflows/ci-cd.yml, .gitignore, CLAUDE.md, README.md, app.py, diagnostic/preview.py, diagnostic/seed.json, docs/BULK_EDIT.md, docs/CSV_IMPORT.md, docs/JOINT_REPAIR.md, docs/SAVED_FILTERS.md, fail_logs.txt, orchestrator.py, package-lock.json, package.json, requirements.txt, static/favicon.svg, static/js/annotations.js, static/js/recording.js, test_output.log, tests/browser/run.js, tests/browser/scenarios/01-full-flow.js, tests/browser/scenarios/02-late-preview.js, tests/browser/scenarios/03-late-project-preview.js, tests/browser/scenarios/04-apply-race.js, tests/browser/scenarios/05-serialization.js, tests/browser/scenarios/06-keyboard.js, tests/browser/scenarios/07-preview-focus.js, tests/browser/scenarios/08-presets.js, tests/browser/server.py, tests/sorting/browser_typed_query.test.js, tests/sorting/project_sort.test.js, tests/sorting/test_project_sort.py, tests/test_basic.py, tests/test_bulk_edit.py, tests/test_import_preview.py, tests/test_ui_project_search.py, tests/ui/bulk_coverage.test.js, tests/ui/bulk_keyboard.test.js, tests/ui/bulk_serialization.test.js, tests/ui/fake_dom.js, tests/ui/import_preview.test.js, tests/ui/load_app.js, tests/ui/load_app.test.js, tests/ui/mutation_check.js, tests/ui/project_search.test.js, node_modules/**.
+This task is finished when:
+  - templates/index.html contains <button type="button" id="btn-project-sort-reset"> immediately after #btn-project-sort inside .project-search-row
+  - `function resetProjectSort()` exists in static/js/app.js and is bound via $btnProjectSortReset.addEventListener("click", resetProjectSort)
+  - applyProjectSort() handles projectSortDir === "original": cards reordered by Number(dataset.index) ascending, $projectsContainer.dataset.sort = "original", button text "Sort A→Z", status text "Library order"
+  - The projectSortDir === "" branch of applyProjectSort() is unchanged so initial load still leaves data-sort unset and status "Original order"
+  - Existing toggle `projectSortDir === "asc" ? "desc" : "asc"` is unchanged, so the first sort click after reset yields asc
+  - resetProjectSort() does not call api()/fetch, syncProjectSearchHash(), or applyProjectSearch() with a changed value; card.hidden states persist because cards are moved, not rebuilt
+  - node --test tests/sorting/project_sort.test.js and tests/ui/project_search.test.js still pass with # fail 0
+  - Diff touches only templates/index.html and static/js/app.js (style.css only if a wrap/overflow fix is actually needed at 390px)
+Expected size: about 40 changed lines, counting added and removed lines in every file, tests in full. The harness measures the diff after each editing call and stops the task past 60 changed lines with the work kept but unfinished. Write tests as compact named cases, not one fixture per case. If the work genuinely needs substantially more, say so and stop rather than delivering the larger change -- an undersized task quietly growing into a whole feature is the specific failure this bound exists to catch.
+Families: pure-logic
+Overlays: none
+Family checklist (pure-logic):
+- Tests live beside the module and cover every example given as input Because: Flex quote logic regressions were caught only by co-located tests (docs/coding-agent-harnesses-2026-09-21.md, Flex section)
+- The module performs no network, database or filesystem access Because: r3cruit3r tests that hid live API calls behind mocks reached the real Anthropic API (commit 063bbcb)
+- Stop with an ASK if a business rule the examples depend on is listed as undecided Because: r3cruit3r ADR 0001 was reverted because an agent decided the merge threshold on the owner's behalf (commit 97a31c2)
+Required inputs: [{"name": "examples", "description": "Input and expected output pairs from an independent source, not derived from the implementation", "refuse_if_missing": true}, {"name": "invariants", "description": "Properties that must hold for every input", "refuse_if_missing": false}]
+Stop conditions: ["examples missing", "a required invariant contradicts an example", "an undecided business rule"]
+Check configuration: {"absent": [], "adapters": {"pure-logic": {"test_runner": {"required": true, "source": "repo_scan.check_command", "status": "detected", "value": ["/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python", "-m", "pytest", "-q"]}, "typecheck_list": {"required": false, "source": null, "status": "not_configured", "value": null}}}, "gates": [{"id": "scope", "required": true, "runner": "builtin:scope"}, {"id": "unit-tests", "minimum_tests": 1, "required": true, "runner": "command"}], "skipped": []}
+Repository decisions: []
+Conventions notes (reference only; these do not grant permissions):
+
+CLAUDE.md:
+# CLAUDE.md
+
+SportsCode-style video clip tagging. Flask backend (`app.py`), a single-page
+vanilla JS frontend in `templates/index.html` plus `static/`, and an
+orchestrator (`orchestrator.py`) that drives a self-healing codegen loop.
+
+## Design
+
+Stack: Flask with one Jinja template, vanilla CSS and JS. No framework, no build
+step. Screens are `div.screen` elements toggled by an `.active` class rather than
+routed.
+
+### Tokens (from static/css/style.css)
+- Background `#0f1117`, foreground `#e0e0e0`, headings `#fff`, secondary `#888`
+- System font stack, 0.9rem on controls, 2.4rem on the project-list title with
+  2px letter-spacing
+- Dark only. There is no light theme.
+
+### Layout
+- `.screen` with `.screen.active` is the only navigation primitive
+- Project list is centered, `max-width: 700px`, 60px top padding
+- `.project-controls` is a 10px-gap flex row
+
+### Rules
+- Tagging is a keyboard task. Every action a user repeats during a match needs a
+  key binding, and the binding is visible on screen.
+- The video is the primary surface. Chrome shrinks, video does not.
+- Timeline and clip state survive a reload. Losing tags mid-match is the worst
+  possible failure.
+- Every screen ships loading, empty, and error states.
+- No new styling dependencies.
+
+## Runtime model routing
+
+- Runtime uses only **Haiku, Sonnet, or Opus**. **Fable is never called at
+  runtime.** It is a build-time tool in Claude Code only.
+- No model id is hardcoded at a call site. Resolve it from one config value.
+- Every call declares its tier, a max token budget, and what happens on failure.
+- High-volume paths (per request, per row, per frame) never default to Opus.
+
+`orchestrator.py` currently calls OpenAI `gpt-4` directly with the id inline.
+That predates this policy. It is flagged in the fleet routing audit and needs a
+deliberate decision before anyone changes it.
+
+
+Worker bees (one instruction each, no memory; several may run at once). Pick by errand:
+- lookup: live web / anything current -> Grok
+- read: long document or file -> Luna
+- visual: screenshot, PDF, image -> Haiku
+- check: verify a fact or claim, sanity-check code -> Haiku (accurate, but its knowledge is old -- current things go to lookup)
+- code: small snippet or explanation -> Haiku
+- format / draft: extract, tag, boilerplate -> Luna
+- demanding: the errand defeated the base worker but the skill still fits -> same family, one tier up (Haiku->Sonnet, Luna->Terra, Grok worker->Grok expert). Sparingly.
+
+What a worker can do, before you write the errand. Every worker reads a fresh source copy. With write:false it answers in text. With write:true it is a bounded editor: it returns a patch the harness applies. No worker on any vendor can run a command or write a file itself, so an errand that needs a shell is yours to do. Declare the errand's needs and the harness checks the fit before the call is spent: a mismatch costs you this sentence, not a window.
+If an errand fails: rewrite it, re-send it unchanged to a different worker, or mark it demanding -- never the same instruction to the same worker twice. A worker that lacked a tool it needed will say NEED TOOL; reissue that one errand with the grant. That reissue is the whole escalation -- two calls, not four.
+
+To commission one worker, reply only WORKER followed by JSON: {"errand":"code","instruction":"one bounded request","demanding":false,"write":false,"needs":[]}. errand is one of the menu names above (demanding is a boolean flag, not an errand); instruction is a non-empty string; write and demanding are booleans; needs is a list of strings. A WORKER reply that does not parse this way, a helper that nests another helper, or write:true without an edit grant fails this task. needs states what the errand must be able to do: "patch" to change files, "execute" to run commands, "direct-write" to write a file the harness cannot patch, [] for an answer in text. Set write:true exactly when needs contains patch. The harness checks the fit before the call is made and refuses a mismatch for free. Workers cannot delegate. After a failed errand, a retry may add "retry_of":"failed-label" and one "helper" object with its own errand, instruction, needs and demanding fields. The helper is always read-only; both are siblings reporting to you. Optional steps (up to 3) and token_limit (up to 50000 reported tokens) bound a worker continuation; the configured budget may be stricter. Defaults remain one shot.
+
+If a commission_worker tool is available in this session, use it for read-only errands instead of a WORKER reply: you keep your session and the answer comes back as the tool result, where a WORKER reply ends your call and you start over. Keep the WORKER reply for write errands, or if the tool is not listed. A request written in your reasoning or mid-answer is not served; only the tool call or a whole WORKER reply is.
+
+The project source is in your working directory. Implement this task using the edit method in your role instructions; prose alone is not implementation.
+
+If you cannot read, edit or run something, say so with evidence: quote the exact command or tool call you attempted, its exit status, and the verbatim error text. A blocked report without those three is read as unverified by whoever checks the work. Never describe test output you did not see.
+
+To read a filed artifact in full before working, reply with exactly 'FETCH: <artifact-id>' and nothing else -- you will get the content and be asked again. A request (FETCH, CONSULT or WORKER) closes the reply: at most 20 lines of preface may precede it, and a reply that carries a CHANGED line is a delivery, never a request. There is no ASK channel for you: a reply beginning ASK:, or a request line that does not parse, fails this task. Report a blocker in words instead.
+
+If one specific question outside your strengths blocks you, reply with only 'CONSULT <member>: <question>' -- the member answers blind and their answer comes back to you. Members you may consult: Claude Opus, GPT-5.6 Sol. At most 2 per task; a consult is a question, not a conversation.
+
+This kind of work carries known failure modes. Treat each of these as a requirement:
+- Reach for a rendered-page check (quadratus.browser.render_page: screenshot, console errors, failed requests from a real headless browser) before reasoning about this. Measured evidence beats an inference here, and models specifically do badly at this kind of work.
+- Verify the rendered result visually before claiming it works; a frontend change that compiles is not a frontend change that works. Late console errors count: frameworks routinely throw after load.
+
+## Project files, read by the harness just before this call
+
+Current contents from the working tree, so there is no need to open these again to learn what they say. Read a file yourself only for a part not shown here, or after you change it.
+
+### templates/index.html (329 lines, sha256 1bee6da8c78e; cut at 243 of 329 lines, read the rest yourself if you need it)
+```
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GameTape - Sports Video Tagging</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<!-- ── Project List Screen ──────────────────────────────────────────── -->
+<div id="project-list-screen" class="screen active">
+  <header>
+    <h1>GameTape</h1>
+    <p class="subtitle">Sports Video Tagging</p>
+  </header>
+  <div class="project-controls">
+    <input type="text" id="new-project-name" placeholder="New project name...">
+    <button id="btn-create-project">+ New Project</button>
+  </div>
+  <div class="project-controls project-search-row">
+    <input type="search" id="project-search" placeholder="Search projects..." aria-label="Search projects">
+    <button type="button" id="btn-project-search-clear">Clear</button>
+    <button type="button" id="btn-project-sort" aria-describedby="project-sort-status">Sort A&rarr;Z</button>
+    <span id="project-sort-status" aria-live="polite">Original order</span>
+    <span class="preset-keys" title="Keyboard shortcuts">Esc clears</span>
+  </div>
+  <p id="project-search-count" aria-live="polite"></p>
+  <p id="project-search-empty" hidden aria-live="polite">No projects match your search.</p>
+  <p id="projects-empty" hidden>No projects yet. Create one above.</p>
+  <div id="projects-container"></div>
+</div>
+
+<!-- ── Tagging Screen ───────────────────────────────────────────────── -->
+<div id="tagging-screen" class="screen">
+  <nav class="top-bar">
+    <button id="btn-back">&larr; Projects</button>
+    <h2 id="project-title"></h2>
+    <button id="btn-edit-video">Edit Video</button>
+    <button id="btn-manage-players">Players</button>
+    <button id="btn-manage-tags">Manage Tag Types</button>
+  </nav>
+
+  <div class="main-layout">
+    <!-- Left: Video + Controls -->
+    <div class="video-panel">
+      <div class="video-wrapper">
+        <div id="no-video-msg" class="placeholder-msg">
+          <p>No video loaded. Upload a game video to get started.</p>
+          <label class="upload-btn">
+            Choose Video
+            <input type="file" id="video-upload" accept="video/*" hidden>
+          </label>
+        </div>
+        <video id="game-video" controls></video>
+        <canvas id="annotation-canvas"></canvas>
+      </div>
+
+      <!-- Annotation Toolbar -->
+      <div id="ann-toolbar" class="ann-toolbar">
+        <div class="ann-tools-row">
+          <button class="ann-tool-btn active" data-tool="arrow" title="Arrow">&#8599;</button>
+          <button class="ann-tool-btn" data-tool="rect" title="Rectangle">&#9633;</button>
+          <button class="ann-tool-btn" data-tool="circle" title="Circle">&#9675;</button>
+          <button class="ann-tool-btn" data-tool="freehand" title="Freehand">&#9998;</button>
+          <button class="ann-tool-btn" data-tool="text" title="Text">T</button>
+          <span class="ann-sep"></span>
+          <input type="color" id="ann-color" value="#ff0000" title="Color">
+          <select id="ann-width" title="Line width">
+            <option value="2">Thin</option>
+            <option value="3" selected>Medium</option>
+            <option value="5">Thick</option>
+            <option value="8">Extra thick</option>
+          </select>
+          <span class="ann-sep"></span>
+          <button id="btn-ann-freeze" class="ann-action-btn" title="Freeze frame: annotations drawn will show for a fixed duration at this timestamp">Freeze Frame</button>
+          <label class="ann-freeze-dur" title="Freeze duration (seconds)">
+            <input type="number" id="ann-freeze-dur" value="2" min="0.5" max="10" step="0.5">s
+          </label>
+          <span class="ann-sep"></span>
+          <button id="btn-ann-clear" class="ann-action-btn ann-danger" title="Remove all annotations from this clip">Clear All</button>
+          <button id="btn-ann-done" class="ann-action-btn ann-done-btn">Done</button>
+        </div>
+        <div id="ann-list" class="ann-list"></div>
+        <div id="rec-controls" class="rec-controls">
+          <button id="btn-rec-start" class="rec-btn rec-start-btn" title="Record analysis session with voiceover">Record</button>
+          <button id="btn-rec-stop" class="rec-btn rec-stop-btn" title="Stop recording" style="display:none">Stop</button>
+          <span id="rec-timer" class="rec-timer" style="display:none">0:00</span>
+          <span id="rec-status" class="rec-status"></span>
+        </div>
+      </div>
+
+      <!-- Tagging controls -->
+      <div class="tag-controls">
+        <div class="mark-row">
+          <button id="btn-mark-in" class="mark-btn">Mark IN</button>
+          <span id="mark-in-display" class="time-display">--:--</span>
+          <button id="btn-mark-out" class="mark-btn">Mark OUT</button>
+          <span id="mark-out-display" class="time-display">--:--</span>
+        </div>
+        <div class="tag-row">
+          <select id="clip-tag-type"></select>
+          <input type="text" id="clip-label" placeholder="Label (optional)">
+          <button id="btn-save-clip" class="save-btn">Save Clip</button>
+        </div>
+        <div class="tag-row">
+          <input type="text" id="clip-notes" placeholder="Notes (optional)" style="flex:1">
+        </div>
+        <div class="tag-row players-row">
+          <label class="players-label">Players:</label>
+          <div id="player-checkboxes" class="player-checkboxes"></div>
+        </div>
+      </div>
+
+      <!-- Timeline -->
+      <div class="timeline-container">
+        <div id="timeline" class="timeline">
+          <div id="timeline-playhead" class="playhead"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Clip list + filters -->
+    <div class="clips-panel">
+      <h3>Clips</h3>
+      <div class="filter-bar">
+        <label>Filter:</label>
+        <select id="filter-tag-type" aria-label="Filter by tag type">
+          <option value="">All Types</option>
+        </select>
+        <select id="filter-player" aria-label="Filter by player">
+          <option value="">All Players</option>
+        </select>
+        <input type="text" id="filter-search" placeholder="Search labels..." aria-label="Search clips">
+      </div>
+      <div class="preset-bar" role="group" aria-labelledby="preset-bar-label">
+        <span id="preset-bar-label" class="preset-label">Saved:</span>
+        <select id="filter-preset-select" aria-label="Saved filter presets" title="Restore a saved filter (P)">
+          <option value="">No saved filters</option>
+        </select>
+        <input type="text" id="filter-preset-name" maxlength="60" placeholder="Preset name" aria-label="Preset name" title="Name, then Enter to save">
+        <button type="button" id="btn-preset-save" class="preset-btn" title="Save current filters">Save</button>
+        <button type="button" id="btn-preset-rename" class="preset-btn" title="Rename selected preset">Rename</button>
+        <button type="button" id="btn-preset-delete" class="preset-btn" title="Delete selected preset">Delete</button>
+        <span class="preset-keys" title="Keyboard shortcuts">P select · Enter save</span>
+        <span id="preset-status" class="preset-status" role="status" aria-live="polite"></span>
+      </div>
+      <div class="bulk-bar">
+        <button type="button" id="btn-bulk-edit" class="preset-btn" title="Bulk edit filtered clips (B)">Bulk edit</button>
+        <span class="preset-keys">B bulk edit</span>
+      </div>
+      <div id="clips-list"></div>
+      <div class="clip-count"><span id="clip-count-num">0</span> clips</div>
+      <div class="export-bar">
+        <span class="export-label">Export:</span>
+        <button id="btn-export-csv" class="export-btn">CSV</button>
+        <button id="btn-export-json" class="export-btn">JSON</button>
+        <button id="btn-export-video" class="export-btn">Video</button>
+      </div>
+      <div class="import-preview-bar">
+        <button type="button" id="btn-import-preview" class="export-btn" title="Preview a CSV clip manifest (M)">Import preview</button>
+        <input type="file" id="import-preview-file" accept=".csv,text/csv" class="visually-hidden-input" tabindex="-1" aria-label="CSV clip manifest">
+        <span class="preset-keys">M import preview</span>
+      </div>
+      <section id="import-preview" hidden aria-labelledby="import-preview-heading">
+        <h3 id="import-preview-heading">Import preview</h3>
+        <span id="import-preview-summary"></span>
+        <div id="import-preview-status" class="preset-status" role="status" aria-live="polite"></div>
+        <div class="import-preview-wrap" tabindex="0" aria-label="Import preview rows">
+          <table id="import-preview-table">
+            <thead>
+              <tr>
+                <th>Line</th>
+                <th>Status</th>
+                <th>Tag type</th>
+                <th>Start</th>
+                <th>End</th>
+                <th>Label</th>
+                <th>Players</th>
+                <th>Reasons</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <button id="btn-import-preview-close" class="export-btn">Close</button>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- ── Bulk Edit Modal ──────────────────────────────────────────────── -->
+<div id="bulk-modal" class="modal-overlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="bulk-modal-title">
+    <h3 id="bulk-modal-title">Bulk edit <span id="bulk-affected">0</span> filtered clips</h3>
+    <div class="bulk-form">
+      <label for="bulk-tag-type">Tag type</label>
+      <select id="bulk-tag-type">
+        <option value="">Keep tag type</option>
+      </select>
+      <label for="bulk-player">Set players to</label>
+      <select id="bulk-player">
+        <option value="">Keep players</option>
+        <option value="__clear__">Clear players</option>
+      </select>
+    </div>
+    <div id="bulk-preview-wrap" class="bulk-preview-wrap" tabindex="0" role="region" aria-label="Preview of affected clips (scrollable)">
+      <table id="bulk-preview-table" class="bulk-preview-table" aria-label="Affected clips before and after">
+        <thead>
+          <tr>
+            <th>Clip</th>
+            <th>Before</th>
+            <th>After</th>
+          </tr>
+        </thead>
+        <tbody id="bulk-preview-body"></tbody>
+      </table>
+    </div>
+    <div id="bulk-status" class="preset-status" role="status" aria-live="polite"></div>
+    <div class="bulk-actions">
+      <button type="button" id="btn-bulk-preview" class="preset-btn">Preview</button>
+      <button type="button" id="btn-bulk-confirm" class="preset-btn" disabled>Confirm</button>
+      <button type="button" id="btn-bulk-refresh" class="preset-btn" hidden>Refresh</button>
+      <button type="button" id="btn-bulk-cancel" class="preset-btn">Cancel (Esc)</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Tag Type Manager Modal ───────────────────────────────────────── -->
+<div id="tag-modal" class="modal-overlay">
+  <div class="modal">
+    <h3>Manage Tag Types</h3>
+    <div id="tag-type-list"></div>
+    <div class="add-tag-row">
+      <input type="text" id="new-tag-name" placeholder="New tag name">
+      <input type="color" id="new-tag-color" value="#e74c3c">
+      <button id="btn-add-tag-type">Add</button>
+    </div>
+    <button id="btn-close-modal" class="close-modal-btn">Done</button>
+  </div>
+</div>
+```
+
+### static/js/app.js (1790 lines, sha256 c7ee5f685e03; cut at 308 of 1790 lines, read the rest yourself if you need it)
+```
+/* ── State ─────────────────────────────────────────────────────────── */
+let currentProject = null;
+let markIn = null;
+let markOut = null;
+let filterPresets = [];
+let selectedPresetId = "";
+let applyingPreset = false;
+let projectViewVersion = 0;
+let bulkPreview = null;
+let bulkPreviewGeneration = 0;
+let bulkApplyPending = null;
+// The control keepBulkFocusInside() parked focus on while a request was in
+// flight, or null when focus was left where the user put it.
+let bulkAutoFocused = null;
+let projectSortDir = "";
+const BULK_APPLY_STATUS = "Applying… wait for the current batch";
+
+/* ── DOM refs ─────────────────────────────────────────────────────── */
+const $projectListScreen = document.getElementById("project-list-screen");
+const $taggingScreen     = document.getElementById("tagging-screen");
+const $projectsContainer = document.getElementById("projects-container");
+const $projectSearch       = document.getElementById("project-search");
+const $projectSearchCount  = document.getElementById("project-search-count");
+const $projectSearchEmpty  = document.getElementById("project-search-empty");
+const $projectsEmpty       = document.getElementById("projects-empty");
+const $btnProjectSearchClear = document.getElementById("btn-project-search-clear");
+const $btnProjectSort = document.getElementById("btn-project-sort");
+const $projectSortStatus = document.getElementById("project-sort-status");
+const $newProjectName    = document.getElementById("new-project-name");
+const $projectTitle      = document.getElementById("project-title");
+
+const $video        = document.getElementById("game-video");
+const $noVideoMsg   = document.getElementById("no-video-msg");
+const $videoUpload  = document.getElementById("video-upload");
+
+const $btnMarkIn    = document.getElementById("btn-mark-in");
+const $btnMarkOut   = document.getElementById("btn-mark-out");
+const $markInDisp   = document.getElementById("mark-in-display");
+const $markOutDisp  = document.getElementById("mark-out-display");
+const $clipTagType  = document.getElementById("clip-tag-type");
+const $clipLabel    = document.getElementById("clip-label");
+const $clipNotes    = document.getElementById("clip-notes");
+const $btnSaveClip  = document.getElementById("btn-save-clip");
+
+const $timeline     = document.getElementById("timeline");
+const $playhead     = document.getElementById("timeline-playhead");
+
+const $filterType   = document.getElementById("filter-tag-type");
+const $filterSearch = document.getElementById("filter-search");
+const $clipsList    = document.getElementById("clips-list");
+const $clipCount    = document.getElementById("clip-count-num");
+
+const $filterPlayer = document.getElementById("filter-player");
+const $playerChecks = document.getElementById("player-checkboxes");
+
+const $presetSelect = document.getElementById("filter-preset-select");
+const $presetName   = document.getElementById("filter-preset-name");
+const $presetStatus = document.getElementById("preset-status");
+const $btnPresetSave   = document.getElementById("btn-preset-save");
+const $btnPresetRename = document.getElementById("btn-preset-rename");
+const $btnPresetDelete = document.getElementById("btn-preset-delete");
+
+const $bulkModal      = document.getElementById("bulk-modal");
+const $bulkTagType    = document.getElementById("bulk-tag-type");
+const $bulkPlayer     = document.getElementById("bulk-player");
+const $bulkAffected   = document.getElementById("bulk-affected");
+const $bulkPreviewWrap = document.getElementById("bulk-preview-wrap");
+const $bulkPreviewBody = document.getElementById("bulk-preview-body");
+const $bulkStatus     = document.getElementById("bulk-status");
+const $btnBulkEdit    = document.getElementById("btn-bulk-edit");
+const $btnBulkPreview = document.getElementById("btn-bulk-preview");
+const $btnBulkConfirm = document.getElementById("btn-bulk-confirm");
+const $btnBulkRefresh = document.getElementById("btn-bulk-refresh");
+const $btnBulkCancel  = document.getElementById("btn-bulk-cancel");
+
+const $tagModal     = document.getElementById("tag-modal");
+const $tagTypeList  = document.getElementById("tag-type-list");
+
+const $playerModal  = document.getElementById("player-modal");
+const $playerList   = document.getElementById("player-list");
+
+/* ── Utilities ────────────────────────────────────────────────────── */
+function fmt(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json", ...opts.headers },
+    ...opts,
+  });
+  return res.json();
+}
+
+function getTagColor(typeName) {
+  if (!currentProject) return "#555";
+  const tt = currentProject.tag_types.find(t => t.name === typeName);
+  return tt ? tt.color : "#555";
+}
+
+/* ── Project List ─────────────────────────────────────────────────── */
+function readProjectSearchHash() {
+  const hash = String((window.location && window.location.hash) || "");
+  const m = hash.match(/^#q=(.*)$/);
+  if (!m) return "";
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return m[1];
+  }
+}
+
+function applyProjectSearch() {
+  const q = $projectSearch.value.trim().toLowerCase();
+  const cards = $projectsContainer.querySelectorAll(".project-card");
+  let shown = 0;
+  cards.forEach(card => {
+    const hide = q !== "" && !(card.dataset.name || "").includes(q);
+    card.hidden = hide;
+    if (!hide) shown++;
+  });
+  const total = cards.length;
+  $projectSearchCount.textContent = q ? `${shown} of ${total} projects` : "";
+  $projectSearchEmpty.hidden = !(q && total > 0 && shown === 0);
+  $projectsEmpty.hidden = total !== 0;
+}
+
+function setTextIfChanged(el, text) {
+  if (el.textContent !== text) el.textContent = text;
+}
+
+function applyProjectSort() {
+  if (projectSortDir === "") {
+    setTextIfChanged($btnProjectSort, "Sort A→Z");
+    setTextIfChanged($projectSortStatus, "Original order");
+    return;
+  }
+  const cards = Array.from($projectsContainer.querySelectorAll(".project-card"));
+  cards.sort((a, b) => {
+    const an = a.dataset.name;
+    const bn = b.dataset.name;
+    if (an === bn) return Number(a.dataset.index) - Number(b.dataset.index);
+    // Code-unit `<`/`>` on the already-lowercased name. Not localeCompare.
+    const cmp = an < bn ? -1 : 1;
+    return projectSortDir === "desc" ? -cmp : cmp;
+  });
+  cards.forEach(card => $projectsContainer.appendChild(card));
+  $projectsContainer.dataset.sort = projectSortDir;
+  setTextIfChanged($btnProjectSort, projectSortDir === "asc" ? "Sort Z→A" : "Sort A→Z");
+  setTextIfChanged(
+    $projectSortStatus,
+    projectSortDir === "asc" ? "Sorted by name A→Z" : "Sorted by name Z→A"
+  );
+}
+
+function syncProjectSearchHash() {
+  const trimmed = $projectSearch.value.trim();
+  const desired = trimmed ? `#q=${encodeURIComponent(trimmed)}` : "";
+  if (window.history && window.history.replaceState) {
+    const loc = window.location || {};
+    window.history.replaceState(null, "", desired || `${loc.pathname || ""}${loc.search || ""}`);
+  } else if (window.location) {
+    window.location.hash = desired;
+  }
+}
+
+function clearProjectSearch() {
+  $projectSearch.value = "";
+  applyProjectSearch();
+  syncProjectSearchHash();
+  $projectSearch.focus();
+}
+
+async function loadProjects() {
+  const projects = await api("/api/projects");
+  $projectsContainer.innerHTML = "";
+  projects.forEach((p, i) => {
+    const card = document.createElement("div");
+    card.className = "project-card";
+    card.dataset.name = String(p.name || "").toLowerCase();
+    card.dataset.index = String(i);
+    card.innerHTML = `
+      <div>
+        <div class="name">${esc(p.name)}</div>
+        <div class="meta">${p.clips.length} clips &middot; ${p.video_filename ? "Video loaded" : "No video"}</div>
+      </div>
+      <button class="delete-btn" data-id="${p.id}" title="Delete project">&times;</button>
+    `;
+    card.addEventListener("click", (e) => {
+      if (e.target.classList.contains("delete-btn")) return;
+      openProject(p.id);
+    });
+    card.querySelector(".delete-btn").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (confirm(`Delete project "${p.name}"?`)) {
+        await api(`/api/projects/${p.id}`, { method: "DELETE" });
+        loadProjects();
+      }
+    });
+    $projectsContainer.appendChild(card);
+  });
+  applyProjectSort();
+  applyProjectSearch();
+}
+
+document.getElementById("btn-create-project").addEventListener("click", async () => {
+  const name = $newProjectName.value.trim();
+  if (!name) return;
+  await api("/api/projects", { method: "POST", body: JSON.stringify({ name }) });
+  $newProjectName.value = "";
+  $projectSearch.value = "";
+  syncProjectSearchHash();
+  loadProjects();
+});
+
+$newProjectName.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("btn-create-project").click();
+});
+
+$projectSearch.addEventListener("input", () => {
+  applyProjectSearch();
+  syncProjectSearchHash();
+});
+$projectSearch.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    clearProjectSearch();
+  }
+});
+$btnProjectSearchClear.addEventListener("click", clearProjectSearch);
+
+$btnProjectSort.addEventListener("click", () => {
+  projectSortDir = projectSortDir === "asc" ? "desc" : "asc";
+  applyProjectSort();
+});
+
+/* ── Open / Close Project ─────────────────────────────────────────── */
+async function openProject(id) {
+  const version = ++projectViewVersion;
+  $bulkModal.classList.remove("active");
+  $taggingScreen.inert = false;
+  invalidateBulkPreview();
+  const project = await api(`/api/projects/${id}`);
+  if (version !== projectViewVersion) return;
+  currentProject = project;
+  closeImportPreview();
+  $projectTitle.textContent = currentProject.name;
+  $projectListScreen.classList.remove("active");
+  $taggingScreen.classList.add("active");
+
+  // Video
+  if (currentProject.video_filename) {
+    $video.src = `/videos/${currentProject.video_filename}`;
+    $video.classList.add("visible");
+    $noVideoMsg.classList.add("hidden");
+  } else {
+    $video.src = "";
+    $video.classList.remove("visible");
+    $noVideoMsg.classList.remove("hidden");
+  }
+
+  markIn = null;
+  markOut = null;
+  $markInDisp.textContent = "--:--";
+  $markOutDisp.textContent = "--:--";
+
+  if (!currentProject.players) currentProject.players = [];
+
+  // Never leak the previous project's filters or selected preset.
+  filterPresets = [];
+  selectedPresetId = "";
+  applyingPreset = false;
+  $filterType.value = "";
+  $filterPlayer.value = "";
+  $filterSearch.value = "";
+  $presetName.value = "";
+  $presetSelect.innerHTML = '<option value="">No saved filters</option>';
+  setPresetStatus("");
+
+  populateTagSelectors();
+  populatePlayerSelectors();
+  $filterType.value = "";
+  $filterPlayer.value = "";
+  renderClips();
+  loadFilterPresets();
+}
+
+function closeProject() {
+  projectViewVersion++;
+  $bulkModal.classList.remove("active");
+  $taggingScreen.inert = false;
+  invalidateBulkPreview();
+  exitAnnotationMode();
+  closeImportPreview();
+  currentProject = null;
+  filterPresets = [];
+  selectedPresetId = "";
+  $filterType.value = "";
+  $filterPlayer.value = "";
+  $filterSearch.value = "";
+  $presetName.value = "";
+  $presetSelect.innerHTML = '<option value="">No saved filters</option>';
+  setPresetStatus("");
+  $video.pause();
+  $video.src = "";
+  $taggingScreen.classList.remove("active");
+```
+
+### static/css/style.css (1281 lines, sha256 c265b1cdc28e; cut at 364 of 1281 lines, read the rest yourself if you need it)
+```
+/* ── Reset & Base ──────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #0f1117;
+  color: #e0e0e0;
+  min-height: 100vh;
+}
+
+button { cursor: pointer; }
+input, select, button { font-family: inherit; font-size: 0.9rem; }
+
+.screen { display: none; }
+.screen.active { display: block; }
+[hidden] { display: none !important; }
+
+/* ── Project List ─────────────────────────────────────────────────── */
+#project-list-screen {
+  max-width: 700px;
+  margin: 0 auto;
+  padding: 60px 20px;
+  text-align: center;
+}
+
+#project-list-screen h1 {
+  font-size: 2.4rem;
+  color: #fff;
+  letter-spacing: 2px;
+}
+
+.subtitle {
+  color: #888;
+  margin-bottom: 40px;
+}
+
+.project-controls {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 30px;
+}
+
+.project-controls input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 14px;
+  border-radius: 6px;
+  border: 1px solid #333;
+  background: #1a1d27;
+  color: #fff;
+}
+
+.project-controls button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 6px;
+  background: #3498db;
+  color: #fff;
+  font-weight: 600;
+}
+
+.project-controls button:hover { background: #2980b9; }
+
+.project-search-row { flex-wrap: wrap; margin-bottom: 12px; }
+.project-search-row input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; display: none; }
+.project-search-row button { background: #22263a; }
+.project-search-row button:hover { background: #2a2d3a; }
+.project-search-row .preset-keys { align-self: center; }
+#project-sort-status { align-self: center; color: #888; font-size: 0.9rem; }
+#project-search-count, #project-search-empty, #projects-empty { color: #888; font-size: 0.9rem; margin: 0 0 16px; }
+
+.project-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: #1a1d27;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.project-card:hover { background: #22263a; }
+
+.project-card .name { font-weight: 600; font-size: 1.05rem; }
+
+.project-card .meta { color: #888; font-size: 0.85rem; }
+
+.project-card .delete-btn {
+  background: none;
+  border: none;
+  color: #e74c3c;
+  font-size: 1.1rem;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.project-card .delete-btn:hover { background: rgba(231,76,60,0.15); }
+
+/* ── Top Bar ──────────────────────────────────────────────────────── */
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+  background: #161821;
+  border-bottom: 1px solid #2a2d3a;
+}
+
+.top-bar h2 { flex: 1; font-size: 1.1rem; }
+
+.top-bar button {
+  padding: 6px 14px;
+  border: 1px solid #444;
+  border-radius: 6px;
+  background: transparent;
+  color: #ccc;
+}
+
+.top-bar button:hover { background: #2a2d3a; }
+
+/* ── Main Layout ──────────────────────────────────────────────────── */
+.main-layout {
+  display: flex;
+  height: calc(100vh - 50px);
+}
+
+.video-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  min-width: 0;
+}
+
+.clips-panel {
+  width: 340px;
+  border-left: 1px solid #2a2d3a;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+/* ── Video ────────────────────────────────────────────────────────── */
+.video-wrapper {
+  position: relative;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+#game-video {
+  width: 100%;
+  max-height: 50vh;
+  display: none;
+}
+
+#game-video.visible { display: block; }
+
+.placeholder-msg {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  color: #888;
+}
+
+.placeholder-msg.hidden { display: none; }
+
+.upload-btn {
+  display: inline-block;
+  margin-top: 16px;
+  padding: 10px 24px;
+  background: #3498db;
+  color: #fff;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.upload-btn:hover { background: #2980b9; }
+
+/* ── Tag Controls ─────────────────────────────────────────────────── */
+.tag-controls {
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mark-row, .tag-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.mark-btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  color: #fff;
+}
+
+#btn-mark-in { background: #27ae60; }
+#btn-mark-in:hover { background: #219a52; }
+#btn-mark-out { background: #c0392b; }
+#btn-mark-out:hover { background: #a93226; }
+
+.time-display {
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 0.95rem;
+  color: #aaa;
+  min-width: 60px;
+}
+
+.tag-row select,
+.tag-row input {
+  padding: 8px 10px;
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: #1a1d27;
+  color: #fff;
+}
+
+.tag-row select { min-width: 140px; }
+.tag-row input { flex: 1; }
+
+.save-btn {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 6px;
+  background: #3498db;
+  color: #fff;
+  font-weight: 600;
+}
+
+.save-btn:hover { background: #2980b9; }
+
+/* ── Timeline ─────────────────────────────────────────────────────── */
+.timeline-container {
+  flex: 1;
+  min-height: 80px;
+  padding: 8px 0;
+}
+
+.timeline {
+  position: relative;
+  height: 60px;
+  background: #1a1d27;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.timeline .clip-bar {
+  position: absolute;
+  top: 4px;
+  height: 52px;
+  border-radius: 3px;
+  opacity: 0.7;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.timeline .clip-bar:hover { opacity: 1; }
+
+.timeline .clip-bar .clip-bar-label {
+  font-size: 0.7rem;
+  padding: 2px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+}
+
+.playhead {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2px;
+  height: 100%;
+  background: #fff;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* ── Clips Panel ──────────────────────────────────────────────────── */
+.clips-panel h3 {
+  margin-bottom: 10px;
+  font-size: 1rem;
+}
+
+.filter-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.filter-bar label { font-size: 0.85rem; color: #888; }
+
+.filter-bar select,
+.filter-bar input {
+  padding: 6px 8px;
+  border: 1px solid #333;
+  border-radius: 5px;
+  background: #1a1d27;
+  color: #fff;
+  font-size: 0.85rem;
+}
+
+.filter-bar input { flex: 1; min-width: 100px; }
+
+.preset-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.preset-label { font-size: 0.85rem; color: #888; }
+
+.preset-bar select,
+.preset-bar input {
+  padding: 6px 8px;
+  border: 1px solid #333;
+  border-radius: 5px;
+  background: #1a1d27;
+  color: #fff;
+  font-size: 0.85rem;
+}
+
+.preset-bar select { flex: 1 1 120px; min-width: 110px; }
+.preset-bar input { flex: 1 1 100px; min-width: 90px; }
+
+.preset-btn {
+  padding: 5px 10px;
+  border: 1px solid #444;
+  border-radius: 5px;
+  background: transparent;
+  color: #ccc;
+  font-size: 0.8rem;
+}
+
+.preset-btn:hover { background: #2a2d3a; }
+.preset-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.preset-keys {
+  font-size: 0.72rem;
+  color: #aaa;
+  letter-spacing: 0.2px;
+}
+
+.preset-status {
+  flex: 1 1 100%;
+  font-size: 0.78rem;
+```
+
+## Your round budget
+This call has at most 20 tool rounds. At round 20 it stops with whatever is on disk, and the task goes back unfinished, unreviewed and unchecked. Plan against it: finish reading by about round 6, starting from the files and notes in this prompt, which are current; have the edit written by about round 13; keep the last rounds for running the project's check and fixing what it shows.
+
+Exploring costs you far more than it looks. Every step of your own loop re-sends everything before it, so the cost of your call grows with the square of how many steps you take: a measured task took 9 steps and 241,700 tokens, and the same work at 15 steps took 450,602. A whole file you read early is re-sent on every step after it. A worker does not work that way -- it answers in one step and its cost is flat, and a measured worker answer came back for 7,337 tokens.
+So when what you need is *knowledge about the code* rather than a change to it -- how a module is laid out, what is already imported, what convention the surrounding code follows, whether something already exists -- commission a worker for it first and work from the answer. Ask for what you would otherwise have gone looking for, and ask narrowly; a worker reads the project and reports back. Do your own reading for the part you are actually editing, where you need the exact text.
+
+Before finishing, re-read your task, restated verbatim, and confirm every part of it is addressed:
+
+Add the Restore library order control to the project library, frontend only, no tests in this slice (tests are the next task under tests/gui_completion/).
+
+1. templates/index.html, line 25–26: after `<button type="button" id="btn-project-sort" ...>Sort A&rarr;Z</button>` and before `<span id="project-sort-status" ...>`, insert `<button type="button" id="btn-project-sort-reset" aria-describedby="project-sort-status">Restore library order</button>`. Change nothing else in the row.
+
+2. static/js/app.js:
+   - Next to line 27 add `const $btnProjectSortReset = document.getElementById("btn-project-sort-reset");`.
+   - In `applyProjectSort()` (line 134), keep the `projectSortDir === ""` early-return branch byte-for-byte. Add a branch for `projectSortDir === "original"`: take `Array.from($projectsContainer.querySelectorAll(".project-card"))`, sort by `Number(a.dataset.index) - Number(b.dataset.index)`, re-append each card in that order (same appendChild move pattern as the asc/desc path, so `card.hidden` survives), set `$projectsContainer.dataset.sort = "original"`, `setTextIfChanged($btnProjectSort, "Sort A→Z")`, `setTextIfChanged($projectSortStatus, "Library order")`, and return. The asc/desc path below stays unchanged.
+   - Add `function resetProjectSort() { projectSortDir = "original"; applyProjectSort(); $projectSearch.focus(); }` and bind it with `$btnProjectSortReset.addEventListener("click", resetProjectSort);` next to the existing `$btnProjectSort` click binding at line 234. Do not call `applyProjectSearch()`, `syncProjectSearchHash()`, `api()` or `loadProjects()` from the reset path, so the search value, hash, count text, hidden cards and no-match/empty paragraphs are untouched and no network request happens.
+   - The existing sort click handler (`projectSortDir = projectSortDir === "asc" ? "desc" : "asc"`) is left as is: from "original" the first click becomes "asc", then "desc", which is the required sequence. Because `loadProjects()` already ends with `applyProjectSort()`, create/delete reloads after a reset re-render in library order with data-sort="original" and status "Library order" without further changes.
+
+3. static/css/style.css: only touch if the new button causes horizontal overflow at 390px; `.project-search-row` already has `flex-wrap: wrap` and `.project-search-row button { background: #22263a; }` styles the new button, so expect no CSS change.
+
+Verify locally that `node --test tests/sorting/project_sort.test.js` still reports pass 5 / fail 0 and `node --test tests/ui/project_search.test.js` passes, confirming the baseline initial-state contract (data-sort unset on load, status "Original order") is intact.
+Operator limits (also binding):
+## Scope of this task
+You may change only these paths: static/js/app.js, static/css/style.css, templates/index.html, tests/gui_completion/. A change anywhere else will be rejected as out of scope.
+Never change: .git/**, .env, .env.*, .quadratus/**, .claude/skills/.df-sync.txt, .claude/skills/code-review/SKILL.md, .claude/skills/code-review/agents/openai.yaml, .claude/skills/df-design/SKILL.md, .claude/skills/df-design/claude-md-design-block.md, .claude/skills/df-design/design-briefs.md, .claude/skills/df-model-routing/SKILL.md, .claude/skills/df-ship-check/SKILL.md, .claude/skills/df-writing/SKILL.md, .claude/skills/df-writing/tells.md, .claude/skills/domain-modeling/ADR-FORMAT.md, .claude/skills/domain-modeling/CONTEXT-FORMAT.md, .claude/skills/domain-modeling/SKILL.md, .claude/skills/domain-modeling/agents/openai.yaml, .claude/skills/grill-with-docs/SKILL.md, .claude/skills/grill-with-docs/agents/openai.yaml, .claude/skills/grilling/SKILL.md, .claude/skills/grilling/agents/openai.yaml, .claude/skills/handoff/SKILL.md, .claude/skills/handoff/agents/openai.yaml, .claude/skills/implement/SKILL.md, .claude/skills/implement/agents/openai.yaml, .claude/skills/setup-matt-pocock-skills/SKILL.md, .claude/skills/setup-matt-pocock-skills/agents/openai.yaml, .claude/skills/setup-matt-pocock-skills/domain.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-github.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md, .claude/skills/setup-matt-pocock-skills/issue-tracker-local.md, .claude/skills/setup-matt-pocock-skills/triage-labels.md, .claude/skills/tdd/SKILL.md, .claude/skills/tdd/agents/openai.yaml, .claude/skills/tdd/mocking.md, .claude/skills/tdd/tests.md, .claude/skills/to-spec/SKILL.md, .claude/skills/to-spec/agents/openai.yaml, .claude/skills/to-tickets/SKILL.md, .claude/skills/to-tickets/agents/openai.yaml, .github/workflows/ci-cd.yml, .gitignore, CLAUDE.md, README.md, app.py, diagnostic/preview.py, diagnostic/seed.json, docs/BULK_EDIT.md, docs/CSV_IMPORT.md, docs/JOINT_REPAIR.md, docs/SAVED_FILTERS.md, fail_logs.txt, orchestrator.py, package-lock.json, package.json, requirements.txt, static/favicon.svg, static/js/annotations.js, static/js/recording.js, test_output.log, tests/browser/run.js, tests/browser/scenarios/01-full-flow.js, tests/browser/scenarios/02-late-preview.js, tests/browser/scenarios/03-late-project-preview.js, tests/browser/scenarios/04-apply-race.js, tests/browser/scenarios/05-serialization.js, tests/browser/scenarios/06-keyboard.js, tests/browser/scenarios/07-preview-focus.js, tests/browser/scenarios/08-presets.js, tests/browser/server.py, tests/sorting/browser_typed_query.test.js, tests/sorting/project_sort.test.js, tests/sorting/test_project_sort.py, tests/test_basic.py, tests/test_bulk_edit.py, tests/test_import_preview.py, tests/test_ui_project_search.py, tests/ui/bulk_coverage.test.js, tests/ui/bulk_keyboard.test.js, tests/ui/bulk_serialization.test.js, tests/ui/fake_dom.js, tests/ui/import_preview.test.js, tests/ui/load_app.js, tests/ui/load_app.test.js, tests/ui/mutation_check.js, tests/ui/project_search.test.js, node_modules/**.
+Expected size: about 100 changed lines, counting added and removed lines in every file, tests in full. The harness measures the diff after each editing call and stops the task past 150 changed lines with the work kept but unfinished. Write tests as compact named cases, not one fixture per case. If the work genuinely needs substantially more, say so and stop rather than delivering the larger change -- an undersized task quietly growing into a whole feature is the specific failure this bound exists to catch.

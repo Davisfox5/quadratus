@@ -1,0 +1,17 @@
+I have the sort-row and `applyProjectSort` sources from the prompt. I'll add the restore button and local reset handler only in the allowed files.Edits are in. I’ll re-read the sort/reset sections, then run the approved Node and pytest checks.Restore library order is wired on the project list. The empty-string sort branch is unchanged, so load still leaves `data-sort` unset and status “Original order”. CSS was not touched (row already wraps).
+
+**UI**
+- `#btn-project-sort-reset` sits beside `#btn-project-sort` in `.project-search-row`.
+- Click sets `projectSortDir = "original"`, reorders cards by `data-index`, sets `data-sort="original"` and status “Library order”, then focuses `#project-search`.
+- Reset does not call `api()`, `loadProjects()`, `applyProjectSearch()`, or `syncProjectSearchHash()`.
+- Next `#btn-project-sort` click still goes A→Z then Z→A.
+
+**Checks**
+- `node --test`: 39 pass / 0 fail (includes `project_sort.test.js` 5/0 and `project_search.test.js`).
+- `pytest -q -p no:cacheprovider`: 120 passed in 2.32s.
+
+**Capture / reviewer**
+Declared steps for the harness (this call did not start a server or capture): wait for 3 `.project-card`; click `#btn-project-sort` once; click `#btn-project-sort-reset`; wait for `#projects-container[data-sort="original"]` with first card Alpha Cup; capture 1280×800 and 390×844.  
+NOT RUN: live capture/reviewer at http://127.0.0.1:53139/ — forbidden here; harness owns those shots. Typed-search preservation on reset is covered by Node baseline, not by capture clicks; dedicated `tests/gui_completion/` cases are the next slice.
+
+CHANGED: ["templates/index.html", "static/js/app.js"]

@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "repository_id": "local/project",
+  "policy_source": "built-in",
+  "policy_hash": "4409739bd1db7905bd63b6bc1f01861807a4e0de0bedcb79dc0bcd8f727efd8a",
+  "library_version": "pilot-1",
+  "library_digest": "59573800c79c8114b6f024d09c95f397a85605b78642764f79007a194bd975ab",
+  "declared_paths": [
+    "static/css/style.css",
+    "static/js/app.js",
+    "templates/index.html",
+    "tests/gui_completion/"
+  ],
+  "primary_family": "pure-logic",
+  "families": [
+    "pure-logic"
+  ],
+  "family_source": "built-in default: the project has no .quadratus/policy.json",
+  "overlays": [],
+  "gates": [
+    {
+      "id": "scope",
+      "runner": "builtin:scope",
+      "required": true
+    },
+    {
+      "id": "unit-tests",
+      "runner": "command",
+      "required": true,
+      "argv": [
+        "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+        "-m",
+        "pytest",
+        "-q"
+      ],
+      "cwd": ".",
+      "minimum_tests": 1
+    }
+  ],
+  "absent_gates": [],
+  "skipped_gates": [],
+  "adapters": {
+    "pure-logic": {
+      "test_runner": {
+        "status": "detected",
+        "value": [
+          "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q"
+        ],
+        "source": "repo_scan.check_command",
+        "required": true
+      },
+      "typecheck_list": {
+        "status": "not_configured",
+        "value": null,
+        "source": null,
+        "required": false
+      }
+    }
+  },
+  "deny_write": [
+    ".git/**",
+    ".env",
+    ".env.*",
+    ".quadratus/**",
+    ".claude/skills/.df-sync.txt",
+    ".claude/skills/code-review/SKILL.md",
+    ".claude/skills/code-review/agents/openai.yaml",
+    ".claude/skills/df-design/SKILL.md",
+    ".claude/skills/df-design/claude-md-design-block.md",
+    ".claude/skills/df-design/design-briefs.md",
+    ".claude/skills/df-model-routing/SKILL.md",
+    ".claude/skills/df-ship-check/SKILL.md",
+    ".claude/skills/df-writing/SKILL.md",
+    ".claude/skills/df-writing/tells.md",
+    ".claude/skills/domain-modeling/ADR-FORMAT.md",
+    ".claude/skills/domain-modeling/CONTEXT-FORMAT.md",
+    ".claude/skills/domain-modeling/SKILL.md",
+    ".claude/skills/domain-modeling/agents/openai.yaml",
+    ".claude/skills/grill-with-docs/SKILL.md",
+    ".claude/skills/grill-with-docs/agents/openai.yaml",
+    ".claude/skills/grilling/SKILL.md",
+    ".claude/skills/grilling/agents/openai.yaml",
+    ".claude/skills/handoff/SKILL.md",
+    ".claude/skills/handoff/agents/openai.yaml",
+    ".claude/skills/implement/SKILL.md",
+    ".claude/skills/implement/agents/openai.yaml",
+    ".claude/skills/setup-matt-pocock-skills/SKILL.md",
+    ".claude/skills/setup-matt-pocock-skills/agents/openai.yaml",
+    ".claude/skills/setup-matt-pocock-skills/domain.md",
+    ".claude/skills/setup-matt-pocock-skills/issue-tracker-github.md",
+    ".claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md",
+    ".claude/skills/setup-matt-pocock-skills/issue-tracker-local.md",
+    ".claude/skills/setup-matt-pocock-skills/triage-labels.md",
+    ".claude/skills/tdd/SKILL.md",
+    ".claude/skills/tdd/agents/openai.yaml",
+    ".claude/skills/tdd/mocking.md",
+    ".claude/skills/tdd/tests.md",
+    ".claude/skills/to-spec/SKILL.md",
+    ".claude/skills/to-spec/agents/openai.yaml",
+    ".claude/skills/to-tickets/SKILL.md",
+    ".claude/skills/to-tickets/agents/openai.yaml",
+    ".github/workflows/ci-cd.yml",
+    ".gitignore",
+    "CLAUDE.md",
+    "README.md",
+    "app.py",
+    "diagnostic/preview.py",
+    "diagnostic/seed.json",
+    "docs/BULK_EDIT.md",
+    "docs/CSV_IMPORT.md",
+    "docs/JOINT_REPAIR.md",
+    "docs/SAVED_FILTERS.md",
+    "fail_logs.txt",
+    "orchestrator.py",
+    "package-lock.json",
+    "package.json",
+    "requirements.txt",
+    "static/favicon.svg",
+    "static/js/annotations.js",
+    "static/js/recording.js",
+    "test_output.log",
+    "tests/browser/run.js",
+    "tests/browser/scenarios/01-full-flow.js",
+    "tests/browser/scenarios/02-late-preview.js",
+    "tests/browser/scenarios/03-late-project-preview.js",
+    "tests/browser/scenarios/04-apply-race.js",
+    "tests/browser/scenarios/05-serialization.js",
+    "tests/browser/scenarios/06-keyboard.js",
+    "tests/browser/scenarios/07-preview-focus.js",
+    "tests/browser/scenarios/08-presets.js",
+    "tests/browser/server.py",
+    "tests/sorting/browser_typed_query.test.js",
+    "tests/sorting/project_sort.test.js",
+    "tests/sorting/test_project_sort.py",
+    "tests/test_basic.py",
+    "tests/test_bulk_edit.py",
+    "tests/test_import_preview.py",
+    "tests/test_ui_project_search.py",
+    "tests/ui/bulk_coverage.test.js",
+    "tests/ui/bulk_keyboard.test.js",
+    "tests/ui/bulk_serialization.test.js",
+    "tests/ui/fake_dom.js",
+    "tests/ui/import_preview.test.js",
+    "tests/ui/load_app.js",
+    "tests/ui/load_app.test.js",
+    "tests/ui/mutation_check.js",
+    "tests/ui/project_search.test.js",
+    "node_modules/**"
+  ],
+  "sensitive": [],
+  "defaults": {
+    "family": "pure-logic",
+    "required_gates": [
+      "scope"
+    ],
+    "scope_max_lines": 100,
+    "overrun_ratio": 1.5,
+    "worker_depth": 1
+  },
+  "capability_policy": {
+    "deny_write": [
+      ".git/**",
+      ".env",
+      ".env.*",
+      ".quadratus/**"
+    ],
+    "external_effects": "deny",
+    "native_delegation": "deny",
+    "sensitive": []
+  },
+  "blocked": [],
+  "hash": "21d41fedb95076f9cf432fbafd61a698e7c8ef7f7ee26fdd775ef95adb46dc94"
+}

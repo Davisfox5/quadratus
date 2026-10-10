@@ -1,0 +1,16 @@
+{
+  "summary": "This run will use: Task limit: 10. At most 20 model calls and 2,000,000 reported tokens in total; 2 parallel worker(s). Time limit 1,800 seconds: no call starts after it and each call gets only the time left, but checks and captures between calls are not cut off. An ordinary call starts only while at least 250,000 tokens of the total remain; a one-turn summary call on a CLI whose flags hold it to one turn (Claude, Grok) needs 64,000. A single call that reports more than 1,500,000 tokens stops the run after it returns; it cannot cut that call short. Token counts are what the CLIs report after each call, not a hard ceiling and not an invoice. Lead turn cap: 20 rounds per lead or reviewer call (derived from the 1,500,000-token per-call threshold); Codex seats have no turn flag and are not held to it. Recovery: up to 4 extra continuation or repair task(s) after failures.",
+  "fields": {
+    "max_calls": 20,
+    "max_concurrent_workers": 2,
+    "max_cost_usd": null,
+    "max_reported_tokens": 2000000,
+    "max_tasks": 10,
+    "max_tokens_per_call": 1500000,
+    "reserve_tokens_per_call": 250000,
+    "survey_recovery": 4,
+    "wall_seconds": 1800
+  },
+  "effective_lead_cap_expected": 20,
+  "freeze_sha256": "7cd5d5591203e86b2d96fd956a5dced29d712e03adba71d2f9a0ed1c708a4dc4"
+}

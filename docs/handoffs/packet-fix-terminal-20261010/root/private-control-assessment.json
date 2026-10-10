@@ -1,0 +1,1062 @@
+{
+  "candidate": "8a6e05216e670e8f47dd1d23faeef11b7c2839f4",
+  "run_id": "20261010T160802Z-8c1d2343",
+  "one_post_run_examiner": true,
+  "cases": 10,
+  "pass": 8,
+  "fail": 2,
+  "skip": 0,
+  "errors": 0,
+  "failed_case_names": [
+    "test_unicode_literal_text_malformed_hash_and_clear[desktop]",
+    "test_unicode_literal_text_malformed_hash_and_clear[mobile]"
+  ],
+  "failure_summary": "Same-document malformed hash navigation leaves prior typed query in both desktop/mobile. Restore/query/hash/focus checks before this navigation passed.",
+  "regression_attribution": "Not established. readProjectSearchHash is byte-identical to baseline; neither baseline nor final code has hashchange listener. No baseline runtime rerun was performed.",
+  "static_baseline_function_sha256": "c49505b55157ba2b92e1f6e21cbf6800754f0a6090b81d380971bcada08ffbf0",
+  "terminal_audit_sha256": "ff4a018a301d441dba9b96efacc77b817de7fc302e4817f6d34ec2fe70015283",
+  "raw_junit_sha256": "049852a8278e4a7b7877515def7a5b62d9c4490d39b4b7f3778766399870955b",
+  "whole_junit_root_counts": {
+    "name": "pytest",
+    "errors": "0",
+    "failures": "2",
+    "skipped": "0",
+    "tests": "10",
+    "time": "28.218",
+    "timestamp": "2026-10-10T12:34:11.972076-04:00",
+    "hostname": "Daviss-MacBook-Air.local"
+  },
+  "raw_failed_log_sha256": "dd8da2c9f4f82652b4f720a7198d51b10986b078e5e258e03c4c23c8a7c6173d",
+  "driver_exit": 1,
+  "driver_counts": null,
+  "driver_result_inspection_refusal": "JUnit whole-suite counts differ",
+  "no_cleanup_error": true,
+  "private_source_and_original_unchanged": true,
+  "observed_private_identity_count": 102,
+  "observations": [
+    {
+      "observed_identity": {
+        "pid": 55619,
+        "start_sec": 1791650051,
+        "start_usec": 790595,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55623,
+        "start_sec": 1791650051,
+        "start_usec": 982509,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55624,
+        "start_sec": 1791650052,
+        "start_usec": 84213,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55625,
+        "start_sec": 1791650052,
+        "start_usec": 208829,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55630,
+        "start_sec": 1791650052,
+        "start_usec": 272349,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55640,
+        "start_sec": 1791650052,
+        "start_usec": 392507,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55639,
+        "start_sec": 1791650052,
+        "start_usec": 391957,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55638,
+        "start_sec": 1791650052,
+        "start_usec": 376150,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55637,
+        "start_sec": 1791650052,
+        "start_usec": 374458,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55643,
+        "start_sec": 1791650052,
+        "start_usec": 504866,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55642,
+        "start_sec": 1791650052,
+        "start_usec": 504590,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55641,
+        "start_sec": 1791650052,
+        "start_usec": 479728,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55652,
+        "start_sec": 1791650053,
+        "start_usec": 771279,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55653,
+        "start_sec": 1791650053,
+        "start_usec": 856221,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55654,
+        "start_sec": 1791650053,
+        "start_usec": 975319,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55663,
+        "start_sec": 1791650054,
+        "start_usec": 71511,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55662,
+        "start_sec": 1791650054,
+        "start_usec": 71007,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55661,
+        "start_sec": 1791650054,
+        "start_usec": 57567,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55660,
+        "start_sec": 1791650054,
+        "start_usec": 56447,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55666,
+        "start_sec": 1791650054,
+        "start_usec": 162232,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55665,
+        "start_sec": 1791650054,
+        "start_usec": 161838,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55664,
+        "start_sec": 1791650054,
+        "start_usec": 140469,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55672,
+        "start_sec": 1791650055,
+        "start_usec": 398465,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55673,
+        "start_sec": 1791650055,
+        "start_usec": 483365,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55674,
+        "start_sec": 1791650055,
+        "start_usec": 603495,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55683,
+        "start_sec": 1791650055,
+        "start_usec": 698914,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55682,
+        "start_sec": 1791650055,
+        "start_usec": 698514,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55681,
+        "start_sec": 1791650055,
+        "start_usec": 685328,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55680,
+        "start_sec": 1791650055,
+        "start_usec": 684029,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55686,
+        "start_sec": 1791650055,
+        "start_usec": 793234,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55685,
+        "start_sec": 1791650055,
+        "start_usec": 792873,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55684,
+        "start_sec": 1791650055,
+        "start_usec": 771104,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55692,
+        "start_sec": 1791650057,
+        "start_usec": 217215,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55693,
+        "start_sec": 1791650057,
+        "start_usec": 302413,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55697,
+        "start_sec": 1791650057,
+        "start_usec": 424414,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55706,
+        "start_sec": 1791650057,
+        "start_usec": 518973,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55705,
+        "start_sec": 1791650057,
+        "start_usec": 518703,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55704,
+        "start_sec": 1791650057,
+        "start_usec": 505295,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55703,
+        "start_sec": 1791650057,
+        "start_usec": 504015,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55707,
+        "start_sec": 1791650057,
+        "start_usec": 593176,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55709,
+        "start_sec": 1791650057,
+        "start_usec": 616039,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55708,
+        "start_sec": 1791650057,
+        "start_usec": 615611,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55712,
+        "start_sec": 1791650059,
+        "start_usec": 54675,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55713,
+        "start_sec": 1791650059,
+        "start_usec": 140178,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55714,
+        "start_sec": 1791650059,
+        "start_usec": 260327,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55723,
+        "start_sec": 1791650059,
+        "start_usec": 356887,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55722,
+        "start_sec": 1791650059,
+        "start_usec": 356634,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55721,
+        "start_sec": 1791650059,
+        "start_usec": 343112,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55720,
+        "start_sec": 1791650059,
+        "start_usec": 341812,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55729,
+        "start_sec": 1791650059,
+        "start_usec": 453341,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55728,
+        "start_sec": 1791650059,
+        "start_usec": 452971,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55727,
+        "start_sec": 1791650059,
+        "start_usec": 430187,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55730,
+        "start_sec": 1791650060,
+        "start_usec": 975973,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55731,
+        "start_sec": 1791650061,
+        "start_usec": 61866,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55732,
+        "start_sec": 1791650061,
+        "start_usec": 181641,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55741,
+        "start_sec": 1791650061,
+        "start_usec": 274975,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55740,
+        "start_sec": 1791650061,
+        "start_usec": 274665,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55739,
+        "start_sec": 1791650061,
+        "start_usec": 261340,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55738,
+        "start_sec": 1791650061,
+        "start_usec": 260110,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55742,
+        "start_sec": 1791650061,
+        "start_usec": 348043,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55744,
+        "start_sec": 1791650061,
+        "start_usec": 370073,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55743,
+        "start_sec": 1791650061,
+        "start_usec": 369729,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55750,
+        "start_sec": 1791650062,
+        "start_usec": 892779,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55751,
+        "start_sec": 1791650062,
+        "start_usec": 979754,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55752,
+        "start_sec": 1791650063,
+        "start_usec": 101469,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55761,
+        "start_sec": 1791650063,
+        "start_usec": 195449,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55760,
+        "start_sec": 1791650063,
+        "start_usec": 195146,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55759,
+        "start_sec": 1791650063,
+        "start_usec": 181736,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55758,
+        "start_sec": 1791650063,
+        "start_usec": 180529,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55764,
+        "start_sec": 1791650063,
+        "start_usec": 285376,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55763,
+        "start_sec": 1791650063,
+        "start_usec": 284939,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55762,
+        "start_sec": 1791650063,
+        "start_usec": 262039,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55774,
+        "start_sec": 1791650064,
+        "start_usec": 967334,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55775,
+        "start_sec": 1791650065,
+        "start_usec": 52968,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55776,
+        "start_sec": 1791650065,
+        "start_usec": 174317,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55785,
+        "start_sec": 1791650065,
+        "start_usec": 267902,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55784,
+        "start_sec": 1791650065,
+        "start_usec": 267550,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55783,
+        "start_sec": 1791650065,
+        "start_usec": 254269,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55782,
+        "start_sec": 1791650065,
+        "start_usec": 252956,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55788,
+        "start_sec": 1791650065,
+        "start_usec": 361395,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55787,
+        "start_sec": 1791650065,
+        "start_usec": 361084,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55786,
+        "start_sec": 1791650065,
+        "start_usec": 340438,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55793,
+        "start_sec": 1791650066,
+        "start_usec": 995997,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55794,
+        "start_sec": 1791650067,
+        "start_usec": 80993,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55795,
+        "start_sec": 1791650067,
+        "start_usec": 202853,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55802,
+        "start_sec": 1791650067,
+        "start_usec": 281636,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55801,
+        "start_sec": 1791650067,
+        "start_usec": 280411,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55804,
+        "start_sec": 1791650067,
+        "start_usec": 295446,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55803,
+        "start_sec": 1791650067,
+        "start_usec": 295171,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55807,
+        "start_sec": 1791650067,
+        "start_usec": 385356,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55806,
+        "start_sec": 1791650067,
+        "start_usec": 385071,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55805,
+        "start_sec": 1791650067,
+        "start_usec": 363106,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55821,
+        "start_sec": 1791650073,
+        "start_usec": 621968,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55822,
+        "start_sec": 1791650073,
+        "start_usec": 707025,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55823,
+        "start_sec": 1791650073,
+        "start_usec": 826139,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55832,
+        "start_sec": 1791650073,
+        "start_usec": 920346,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55831,
+        "start_sec": 1791650073,
+        "start_usec": 920011,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55830,
+        "start_sec": 1791650073,
+        "start_usec": 906783,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55829,
+        "start_sec": 1791650073,
+        "start_usec": 905631,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55833,
+        "start_sec": 1791650073,
+        "start_usec": 994697,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55835,
+        "start_sec": 1791650074,
+        "start_usec": 17173,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    },
+    {
+      "observed_identity": {
+        "pid": 55834,
+        "start_sec": 1791650074,
+        "start_usec": 16802,
+        "uid": 501
+      },
+      "current_identity": null,
+      "same_identity_alive": false
+    }
+  ],
+  "all_private_observed_identities_absent": true,
+  "provider_model_calls": 0,
+  "private_grader_contents_remain_outside_provider_context": true,
+  "private_acceptance": false
+}

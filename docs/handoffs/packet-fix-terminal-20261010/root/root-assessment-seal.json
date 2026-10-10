@@ -1,0 +1,7 @@
+{
+  "assessment_sha256": "b8cbb1de0137c92bd4ce417b1919a9ec46d8f7725d04446f5d6db9f5219e951e",
+  "token_accounting_sha256": "688511e17bd82c4e04d6227b114ef34ed7e794fd8ce6a6a5bdf8c271a055a076",
+  "private_assessment_sha256": "0fc746925b9b6beb97c4dd2eeeb9f2f0d821ea698ea6c46552450671335e7bcc",
+  "truth_sha256": "eafcaac48c14f0ccd9dcdd6f0da870a4a06cde1ff0c171cac9a71e29b9759994",
+  "sealed_before_SAME_raw_evidence_review": true
+}

@@ -1,0 +1,2596 @@
+{
+  "project": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project",
+  "goal": "Add one small usability feature to the existing sorted GameTape project library: a Restore library order button. Preserve current UI and every existing search, sort, count, create/delete confirmation, navigation, player/tagging/preset behavior. No dependency, backend, seed/reset, provider or fixture changes.\n\nG1 Add #btn-project-sort-reset beside the sort controls. A normal click restores original API/library position order, sets #projects-container data-sort=\"original\", and sets readable #project-sort-status to \"Library order\". Repeated reset is harmless. The next ordinary sort click starts A\u2192Z, then Z\u2192A as before. Reset is local: no API request or reload.\nG2 Reset preserves typed search/hash/count and matching cards/no-match vs true-empty. It returns focus to the search field. Normal create/delete still reloads correctly in the active order and navigation uses the same ID. Add meaningful NEW tests only under tests/gui_completion/ for reset from both sort directions, stable library ordering, query/hash/count/focus preservation and no network. All baseline tests remain byte-identical, including the original23.\nG3 Controls work at1280\u00d7800 and390\u00d7844 with no overflow or unexpected browser errors. Declare actual click/wait capture steps on fresh disposable seeded backend: wait for3cards, click sort once, click restore, wait for data-sort=\"original\" and first Alpha Cup, capture desktop/mobile. Report actual capture/reviewer/check findings, blocked/skipped/NOTRUN honestly. Capture clicks do not prove typing; real Node and independent browser controls cover it. Do not claim GUI/report completion before actual harness facts.\n",
+  "completed": false,
+  "allow_writes": true,
+  "error": "CheckUnattributable: the check failed without an attributable assertion failure (extra-1: error: timed out after 600s); returncode 1; output artifact f2809e16be05. No repair call was made. Work preserved.",
+  "checks": [
+    {
+      "passed": true,
+      "command": "gate suite",
+      "output": "check: passed: exit 0\n........................................................................ [ 60%]\n................................................                         [100%]\n120 passed in 2.52s\nextra-1: passed: exit 0\nSubtest: M opens preview unless a modal is active; I/O/P/B remain intact\nok 30 - M opens preview unless a modal is active; I/O/P/B remain intact\n  ---\n  duration_ms: 2.875167\n  type: 'test'\n  ...\n# Subtest: newer upload invalidates older\nok 31 - newer upload invalidates older\n  ---\n  duration_ms: 2.010917\n  type: 'test'\n  ...\n# Subtest: close while pending leaves no rows or status and restores focus\nok 32 - close while pending leaves no rows or status and restores focus\n  ---\n  duration_ms: 1.942542\n  type: 'test'\n  ...\n# Subtest: project switch while pending ignores old success and failure\nok 33 - project switch while pending ignores old success and failure\n  ---\n  duration_ms: 2.605708\n  type: 'test'\n  ...\n# Subtest: loads the template and real app, including an APP_JS_PATH override\nok 34 - loads the template and real app, including an APP_JS_PATH override\n  ---\n  duration_ms: 71.187416\n  type: 'test'\n  ...\n# Subtest: filters instantly without fetching and renders markup names as text\nok 35 - filters instantly without fetching and renders markup names as text\n  ---\n  duration_ms: 65.806834\n  type: 'test'\n  ...\n# Subtest: restores encoded and malformed hash queries safely\nok 36 - restores encoded and malformed hash queries safely\n  ---\n  duration_ms: 11.017459\n  type: 'test'\n  ...\n# Subtest: distinguishes no matches from an empty library and clears with focus\nok 37 - distinguishes no matches from an empty library and clears with focus\n  ---\n  duration_ms: 6.935083\n  type: 'test'\n  ...\n# Subtest: delete cancellation and acceptance update filtered results\nok 38 - delete cancellation and acceptance update filtered results\n  ---\n  duration_ms: 11.48975\n  type: 'test'\n  ...\n# Subtest: create from no-match clears search and reveals reloaded cards\nok 39 - create from no-match clears search and reveals reloaded cards\n  ---\n  duration_ms: 3.880834\n  type: 'test'\n  ...\n1..39\n# tests 39\n# suites 0\n# pass 39\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1611.795333",
+      "cwd": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project",
+      "selection": "",
+      "command_cwd": ".",
+      "cases": null,
+      "receipts": [
+        {
+          "id": "check",
+          "status": "passed",
+          "reason": "exit 0",
+          "required": true,
+          "command": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python -m pytest -q -p no:cacheprovider '--quadratus-report={report}'",
+          "returncode": 0,
+          "output": "........................................................................ [ 60%]\n................................................                         [100%]\n120 passed in 2.52s",
+          "cached": false,
+          "tests": 120,
+          "source_hash": "5177a42edd8da908dd6b13a5dfebb55d6cc8a171754a83e79bed8a56f381e60d",
+          "config_hash": "edc896880245f8d8f888888bdbe1eb8197710e5303b8f232bc9348979240298f",
+          "runner_hash": "fffaa908f83bacf7bf66d6be9d929a4f229d585b16c9f2c9c716621cb95f9c9d",
+          "report": {
+            "state": "parsed",
+            "exitstatus": 0,
+            "collected": 120,
+            "collect_errors": 0,
+            "counts": {
+              "passed": 120,
+              "failed": 0,
+              "errors": 0,
+              "skipped": 0
+            },
+            "failures": [],
+            "truncated": false
+          },
+          "cwd": ".",
+          "selection": "",
+          "cases": {
+            "skipped": {},
+            "executed": {},
+            "other": {},
+            "qualified": []
+          }
+        },
+        {
+          "id": "extra-1",
+          "status": "passed",
+          "reason": "exit 0",
+          "required": true,
+          "command": "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/node --test '--test-reporter-destination={report}'",
+          "returncode": 0,
+          "output": "Subtest: M opens preview unless a modal is active; I/O/P/B remain intact\nok 30 - M opens preview unless a modal is active; I/O/P/B remain intact\n  ---\n  duration_ms: 2.875167\n  type: 'test'\n  ...\n# Subtest: newer upload invalidates older\nok 31 - newer upload invalidates older\n  ---\n  duration_ms: 2.010917\n  type: 'test'\n  ...\n# Subtest: close while pending leaves no rows or status and restores focus\nok 32 - close while pending leaves no rows or status and restores focus\n  ---\n  duration_ms: 1.942542\n  type: 'test'\n  ...\n# Subtest: project switch while pending ignores old success and failure\nok 33 - project switch while pending ignores old success and failure\n  ---\n  duration_ms: 2.605708\n  type: 'test'\n  ...\n# Subtest: loads the template and real app, including an APP_JS_PATH override\nok 34 - loads the template and real app, including an APP_JS_PATH override\n  ---\n  duration_ms: 71.187416\n  type: 'test'\n  ...\n# Subtest: filters instantly without fetching and renders markup names as text\nok 35 - filters instantly without fetching and renders markup names as text\n  ---\n  duration_ms: 65.806834\n  type: 'test'\n  ...\n# Subtest: restores encoded and malformed hash queries safely\nok 36 - restores encoded and malformed hash queries safely\n  ---\n  duration_ms: 11.017459\n  type: 'test'\n  ...\n# Subtest: distinguishes no matches from an empty library and clears with focus\nok 37 - distinguishes no matches from an empty library and clears with focus\n  ---\n  duration_ms: 6.935083\n  type: 'test'\n  ...\n# Subtest: delete cancellation and acceptance update filtered results\nok 38 - delete cancellation and acceptance update filtered results\n  ---\n  duration_ms: 11.48975\n  type: 'test'\n  ...\n# Subtest: create from no-match clears search and reveals reloaded cards\nok 39 - create from no-match clears search and reveals reloaded cards\n  ---\n  duration_ms: 3.880834\n  type: 'test'\n  ...\n1..39\n# tests 39\n# suites 0\n# pass 39\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1611.795333",
+          "cached": false,
+          "tests": 39,
+          "source_hash": "5177a42edd8da908dd6b13a5dfebb55d6cc8a171754a83e79bed8a56f381e60d",
+          "config_hash": "8375175eaa05d94bd988cebcf7719572691a85aa342fe45f91356d24b9387021",
+          "runner_hash": "f8fa23579a89914cffd346ecf12c9ca24a3af8111a1af2beaacdcec55743ce7b",
+          "report": {
+            "state": "parsed",
+            "exitstatus": 0,
+            "collected": 39,
+            "collect_errors": 0,
+            "counts": {
+              "passed": 39,
+              "failed": 0,
+              "errors": 0,
+              "skipped": 0
+            },
+            "failures": [],
+            "truncated": false
+          },
+          "cwd": ".",
+          "selection": "",
+          "cases": {
+            "skipped": {},
+            "executed": {
+              "typed-query browser review at 1280x800": 1,
+              "typed-query browser review at 390x844": 1,
+              "keeps API order, then toggles ascending and descending": 1,
+              "lowercases names and keeps original tie order both ways": 1,
+              "sorting preserves the active search state and hash": 1,
+              "toggle is local and leaves location unchanged": 1,
+              "active ascending sort survives create and delete reloads": 1,
+              "a preview that returns after the filter changed is discarded": 1,
+              "a preview that returns after switching project is discarded": 1,
+              "another project's preview reaches the server while an apply is pending, and its dialog is released after": 1,
+              "Confirm refuses a stored preview that belongs to another project": 1,
+              "focus parked by the app moves to Confirm when the preview succeeds": 1,
+              "focus the user moved during the request is left alone": 1,
+              "Tab that lands back on the parked control is still the user's choice": 1,
+              "closing and reopening the dialog forgets any parked focus": 1,
+              "a failed preview returns focus to Preview; a conflict moves it to Refresh": 1,
+              "the preview table joins the Tab cycle only while it has rows": 1,
+              "Tab wraps eligible controls and modal suppresses shortcuts": 1,
+              "Escape closes the modal and restores focus": 1,
+              "Preview recovers focus before its response": 1,
+              "Confirm and Refresh recover focus while controls disappear": 1,
+              "committed apply survives change events with captured values": 1,
+              "dismiss and reopen keeps same-project apply busy": 1,
+              "another project may preview but cannot confirm during pending apply": 1,
+              "renders row statuses, summary, player, and escaped cell text": 1,
+              "shows the empty state": 1,
+              "shows server and network errors": 1,
+              "clears stale results and announces loading before fetch resolves": 1,
+              "resets the file input so the same file can be selected twice": 1,
+              "M opens preview unless a modal is active; I/O/P/B remain intact": 1,
+              "newer upload invalidates older": 1,
+              "close while pending leaves no rows or status and restores focus": 1,
+              "project switch while pending ignores old success and failure": 1,
+              "loads the template and real app, including an APP_JS_PATH override": 1,
+              "filters instantly without fetching and renders markup names as text": 1,
+              "restores encoded and malformed hash queries safely": 1,
+              "distinguishes no matches from an empty library and clears with focus": 1,
+              "delete cancellation and acceptance update filtered results": 1,
+              "create from no-match clears search and reveals reloaded cards": 1
+            },
+            "other": {},
+            "qualified": []
+          }
+        }
+      ]
+    },
+    {
+      "passed": true,
+      "command": "gate suite",
+      "output": "check: passed: exit 0\n........................................................................ [ 59%]\n.................................................                        [100%]\n121 passed in 2.58s\nextra-1: passed: exit 0\n..\n# Subtest: M opens preview unless a modal is active; I/O/P/B remain intact\nok 36 - M opens preview unless a modal is active; I/O/P/B remain intact\n  ---\n  duration_ms: 3.246417\n  type: 'test'\n  ...\n# Subtest: newer upload invalidates older\nok 37 - newer upload invalidates older\n  ---\n  duration_ms: 1.886709\n  type: 'test'\n  ...\n# Subtest: close while pending leaves no rows or status and restores focus\nok 38 - close while pending leaves no rows or status and restores focus\n  ---\n  duration_ms: 1.295167\n  type: 'test'\n  ...\n# Subtest: project switch while pending ignores old success and failure\nok 39 - project switch while pending ignores old success and failure\n  ---\n  duration_ms: 4.275792\n  type: 'test'\n  ...\n# Subtest: loads the template and real app, including an APP_JS_PATH override\nok 40 - loads the template and real app, including an APP_JS_PATH override\n  ---\n  duration_ms: 33.834208\n  type: 'test'\n  ...\n# Subtest: filters instantly without fetching and renders markup names as text\nok 41 - filters instantly without fetching and renders markup names as text\n  ---\n  duration_ms: 31.551\n  type: 'test'\n  ...\n# Subtest: restores encoded and malformed hash queries safely\nok 42 - restores encoded and malformed hash queries safely\n  ---\n  duration_ms: 9.1535\n  type: 'test'\n  ...\n# Subtest: distinguishes no matches from an empty library and clears with focus\nok 43 - distinguishes no matches from an empty library and clears with focus\n  ---\n  duration_ms: 8.332292\n  type: 'test'\n  ...\n# Subtest: delete cancellation and acceptance update filtered results\nok 44 - delete cancellation and acceptance update filtered results\n  ---\n  duration_ms: 10.669041\n  type: 'test'\n  ...\n# Subtest: create from no-match clears search and reveals reloaded cards\nok 45 - create from no-match clears search and reveals reloaded cards\n  ---\n  duration_ms: 4.236458\n  type: 'test'\n  ...\n1..45\n# tests 45\n# suites 0\n# pass 45\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1494.747417",
+      "cwd": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project",
+      "selection": "",
+      "command_cwd": ".",
+      "cases": null,
+      "receipts": [
+        {
+          "id": "check",
+          "status": "passed",
+          "reason": "exit 0",
+          "required": true,
+          "command": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python -m pytest -q -p no:cacheprovider '--quadratus-report={report}'",
+          "returncode": 0,
+          "output": "........................................................................ [ 59%]\n.................................................                        [100%]\n121 passed in 2.58s",
+          "cached": false,
+          "tests": 121,
+          "source_hash": "005e288e7bf66e8d874aa560481d27be06095b25296b18939e3a2b4aaedf9f69",
+          "config_hash": "edc896880245f8d8f888888bdbe1eb8197710e5303b8f232bc9348979240298f",
+          "runner_hash": "fffaa908f83bacf7bf66d6be9d929a4f229d585b16c9f2c9c716621cb95f9c9d",
+          "report": {
+            "state": "parsed",
+            "exitstatus": 0,
+            "collected": 121,
+            "collect_errors": 0,
+            "counts": {
+              "passed": 121,
+              "failed": 0,
+              "errors": 0,
+              "skipped": 0
+            },
+            "failures": [],
+            "truncated": false
+          },
+          "cwd": ".",
+          "selection": "",
+          "cases": {
+            "skipped": {},
+            "executed": {},
+            "other": {},
+            "qualified": []
+          }
+        },
+        {
+          "id": "extra-1",
+          "status": "passed",
+          "reason": "exit 0",
+          "required": true,
+          "command": "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/node --test '--test-reporter-destination={report}'",
+          "returncode": 0,
+          "output": "..\n# Subtest: M opens preview unless a modal is active; I/O/P/B remain intact\nok 36 - M opens preview unless a modal is active; I/O/P/B remain intact\n  ---\n  duration_ms: 3.246417\n  type: 'test'\n  ...\n# Subtest: newer upload invalidates older\nok 37 - newer upload invalidates older\n  ---\n  duration_ms: 1.886709\n  type: 'test'\n  ...\n# Subtest: close while pending leaves no rows or status and restores focus\nok 38 - close while pending leaves no rows or status and restores focus\n  ---\n  duration_ms: 1.295167\n  type: 'test'\n  ...\n# Subtest: project switch while pending ignores old success and failure\nok 39 - project switch while pending ignores old success and failure\n  ---\n  duration_ms: 4.275792\n  type: 'test'\n  ...\n# Subtest: loads the template and real app, including an APP_JS_PATH override\nok 40 - loads the template and real app, including an APP_JS_PATH override\n  ---\n  duration_ms: 33.834208\n  type: 'test'\n  ...\n# Subtest: filters instantly without fetching and renders markup names as text\nok 41 - filters instantly without fetching and renders markup names as text\n  ---\n  duration_ms: 31.551\n  type: 'test'\n  ...\n# Subtest: restores encoded and malformed hash queries safely\nok 42 - restores encoded and malformed hash queries safely\n  ---\n  duration_ms: 9.1535\n  type: 'test'\n  ...\n# Subtest: distinguishes no matches from an empty library and clears with focus\nok 43 - distinguishes no matches from an empty library and clears with focus\n  ---\n  duration_ms: 8.332292\n  type: 'test'\n  ...\n# Subtest: delete cancellation and acceptance update filtered results\nok 44 - delete cancellation and acceptance update filtered results\n  ---\n  duration_ms: 10.669041\n  type: 'test'\n  ...\n# Subtest: create from no-match clears search and reveals reloaded cards\nok 45 - create from no-match clears search and reveals reloaded cards\n  ---\n  duration_ms: 4.236458\n  type: 'test'\n  ...\n1..45\n# tests 45\n# suites 0\n# pass 45\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1494.747417",
+          "cached": false,
+          "tests": 45,
+          "source_hash": "005e288e7bf66e8d874aa560481d27be06095b25296b18939e3a2b4aaedf9f69",
+          "config_hash": "8375175eaa05d94bd988cebcf7719572691a85aa342fe45f91356d24b9387021",
+          "runner_hash": "f8fa23579a89914cffd346ecf12c9ca24a3af8111a1af2beaacdcec55743ce7b",
+          "report": {
+            "state": "parsed",
+            "exitstatus": 0,
+            "collected": 45,
+            "collect_errors": 0,
+            "counts": {
+              "passed": 45,
+              "failed": 0,
+              "errors": 0,
+              "skipped": 0
+            },
+            "failures": [],
+            "truncated": false
+          },
+          "cwd": ".",
+          "selection": "",
+          "cases": {
+            "skipped": {},
+            "executed": {
+              "reset from ascending restores library order": 1,
+              "reset from descending restores library order": 1,
+              "reset restores stable library ordering by data index": 1,
+              "repeated reset is harmless and sort restarts ascending": 1,
+              "reset preserves typed search hash count visibility and focus": 1,
+              "reset makes no network request and leaves location unchanged": 1,
+              "typed-query browser review at 1280x800": 1,
+              "typed-query browser review at 390x844": 1,
+              "keeps API order, then toggles ascending and descending": 1,
+              "lowercases names and keeps original tie order both ways": 1,
+              "sorting preserves the active search state and hash": 1,
+              "toggle is local and leaves location unchanged": 1,
+              "active ascending sort survives create and delete reloads": 1,
+              "a preview that returns after the filter changed is discarded": 1,
+              "a preview that returns after switching project is discarded": 1,
+              "another project's preview reaches the server while an apply is pending, and its dialog is released after": 1,
+              "Confirm refuses a stored preview that belongs to another project": 1,
+              "focus parked by the app moves to Confirm when the preview succeeds": 1,
+              "focus the user moved during the request is left alone": 1,
+              "Tab that lands back on the parked control is still the user's choice": 1,
+              "closing and reopening the dialog forgets any parked focus": 1,
+              "a failed preview returns focus to Preview; a conflict moves it to Refresh": 1,
+              "the preview table joins the Tab cycle only while it has rows": 1,
+              "Tab wraps eligible controls and modal suppresses shortcuts": 1,
+              "Escape closes the modal and restores focus": 1,
+              "Preview recovers focus before its response": 1,
+              "Confirm and Refresh recover focus while controls disappear": 1,
+              "committed apply survives change events with captured values": 1,
+              "dismiss and reopen keeps same-project apply busy": 1,
+              "another project may preview but cannot confirm during pending apply": 1,
+              "renders row statuses, summary, player, and escaped cell text": 1,
+              "shows the empty state": 1,
+              "shows server and network errors": 1,
+              "clears stale results and announces loading before fetch resolves": 1,
+              "resets the file input so the same file can be selected twice": 1,
+              "M opens preview unless a modal is active; I/O/P/B remain intact": 1,
+              "newer upload invalidates older": 1,
+              "close while pending leaves no rows or status and restores focus": 1,
+              "project switch while pending ignores old success and failure": 1,
+              "loads the template and real app, including an APP_JS_PATH override": 1,
+              "filters instantly without fetching and renders markup names as text": 1,
+              "restores encoded and malformed hash queries safely": 1,
+              "distinguishes no matches from an empty library and clears with focus": 1,
+              "delete cancellation and acceptance update filtered results": 1,
+              "create from no-match clears search and reveals reloaded cards": 1
+            },
+            "other": {},
+            "qualified": []
+          }
+        }
+      ]
+    },
+    {
+      "passed": false,
+      "command": "gate suite",
+      "output": "check: passed: exit 0\n........................................................................ [ 59%]\n.................................................                        [100%]\n121 passed in 2.56s\nextra-1: error: timed out after 600s\n",
+      "cwd": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project",
+      "selection": "",
+      "command_cwd": ".",
+      "cases": null,
+      "receipts": [
+        {
+          "id": "check",
+          "status": "passed",
+          "reason": "exit 0",
+          "required": true,
+          "command": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python -m pytest -q -p no:cacheprovider '--quadratus-report={report}'",
+          "returncode": 0,
+          "output": "........................................................................ [ 59%]\n.................................................                        [100%]\n121 passed in 2.56s",
+          "cached": false,
+          "tests": 121,
+          "source_hash": "a060cbb3299f488e5de075413794a333ed10314bcc035921f85a6d11a880b470",
+          "config_hash": "edc896880245f8d8f888888bdbe1eb8197710e5303b8f232bc9348979240298f",
+          "runner_hash": "fffaa908f83bacf7bf66d6be9d929a4f229d585b16c9f2c9c716621cb95f9c9d",
+          "report": {
+            "state": "parsed",
+            "exitstatus": 0,
+            "collected": 121,
+            "collect_errors": 0,
+            "counts": {
+              "passed": 121,
+              "failed": 0,
+              "errors": 0,
+              "skipped": 0
+            },
+            "failures": [],
+            "truncated": false
+          },
+          "cwd": ".",
+          "selection": "",
+          "cases": {
+            "skipped": {},
+            "executed": {},
+            "other": {},
+            "qualified": []
+          }
+        },
+        {
+          "id": "extra-1",
+          "status": "error",
+          "reason": "timed out after 600s",
+          "required": true,
+          "command": "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/node --test '--test-reporter-destination={report}'",
+          "returncode": null,
+          "output": "",
+          "cached": false,
+          "tests": null,
+          "source_hash": "a060cbb3299f488e5de075413794a333ed10314bcc035921f85a6d11a880b470",
+          "config_hash": "8375175eaa05d94bd988cebcf7719572691a85aa342fe45f91356d24b9387021",
+          "runner_hash": "f8fa23579a89914cffd346ecf12c9ca24a3af8111a1af2beaacdcec55743ce7b",
+          "report": null,
+          "cwd": ".",
+          "selection": "",
+          "cases": null
+        }
+      ]
+    }
+  ],
+  "source_changed": true,
+  "source_fingerprint": "a060cbb3299f488e5de075413794a333ed10314bcc035921f85a6d11a880b470",
+  "tasks": 2,
+  "turn_limited_tasks": [],
+  "failed_tasks": [],
+  "personal_preferences": {
+    "requested": "personal configuration not suppressed",
+    "note": "each CLI loaded whatever user configuration and account rules it has"
+  },
+  "requirements": {
+    "listed": {
+      "R1": "templates/index.html gains `<button type=\"button\" id=\"btn-project-sort-reset\">` placed beside #btn-project-sort in `.project-search-row`, with existing controls, labels and layout otherwise unchanged.",
+      "R2": "Clicking #btn-project-sort-reset reorders `.project-card` elements back to API/library position (ascending `data-index`), sets `#projects-container` `data-sort=\"original\"`, and sets #project-sort-status text to \"Library order\".",
+      "R3": "Repeated reset clicks are harmless (same order, same attributes); the next #btn-project-sort click after a reset sorts A\u2192Z (data-sort=\"asc\"), then Z\u2192A, exactly as the baseline toggle does.",
+      "R4": "Reset is local: it issues no fetch/API request and does not reload or change window.location.",
+      "R5": "Reset preserves the typed search value, the #q= hash (no new replaceState call), #project-search-count text, each card's hidden state, and the visibility of #project-search-empty vs #projects-empty.",
+      "R6": "After reset, document.activeElement is #project-search.",
+      "R7": "Create and delete (with confirm) still call loadProjects and re-render in the currently active order, including \"original\" after a reset; card click still navigates with the same project id.",
+      "R8": "New tests exist only under tests/gui_completion/ and cover: reset from asc, reset from desc, stable library ordering (ids by data-index), query/hash/count/focus preservation, and no network on reset; a pytest wrapper runs them with the project's node harness.",
+      "R9": "No existing test file is modified (all baseline tests, including the original 23, stay byte-identical); no files outside static/js/app.js, static/css/style.css, templates/index.html, tests/gui_completion/ change.",
+      "R10": "Controls render without horizontal overflow or console errors at 1280\u00d7800 and 390\u00d7844.",
+      "R11": "Capture is declared and run on a fresh seeded backend with steps: wait for 3 cards, click sort once, click restore, wait for data-sort=\"original\" with first card Alpha Cup; desktop and mobile shots reported honestly (blocked/skipped/NOTRUN stated as such).",
+      "R12": "No new dependency, backend, seed/reset, provider or fixture changes; all existing search, sort, count, create/delete confirmation, navigation, player/tagging/preset behaviour unchanged.",
+      "R13": "Use real Node and independent browser controls to verify typed-search preservation; capture clicks alone are insufficient evidence.",
+      "R14": "Report the actual capture, reviewer, and check findings, stating blocked, skipped, or NOTRUN honestly."
+    },
+    "status": {
+      "R13": "covered by t2",
+      "R14": "open (added by the requirements review)",
+      "R1": "covered by t1",
+      "R2": "covered by t1",
+      "R3": "covered by t1",
+      "R4": "covered by t1",
+      "R5": "covered by t1",
+      "R6": "covered by t1",
+      "R7": "covered by t1",
+      "R10": "covered by t1",
+      "R11": "covered by t1",
+      "R12": "covered by t1",
+      "R8": "covered by t2",
+      "R9": "covered by t2"
+    },
+    "ambiguous": {},
+    "decided_by_orchestrator": {},
+    "operator_rulings": [],
+    "reviews": [
+      {
+        "reviewer": "openai:gpt-5.6-sol",
+        "result": "reviewed",
+        "added": [
+          "Use real Node and independent browser controls to verify typed-search preservation; capture clicks alone are insufficient evidence.",
+          "Report the actual capture, reviewer, and check findings, stating blocked, skipped, or NOTRUN honestly."
+        ],
+        "ambiguous": []
+      }
+    ],
+    "audits": []
+  },
+  "design_checks": [
+    {
+      "task": "t1",
+      "verified": true,
+      "problem": "",
+      "screenshots": [
+        "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project/.quadratus/design-evidence/t1/desktop/page.png",
+        "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project/.quadratus/design-evidence/t1/mobile/page.png",
+        "target: http://127.0.0.1:53139/",
+        "steps: wait #projects-container .project-card:nth-child(3); click #btn-project-sort; wait #projects-container[data-sort=\"asc\"]; click #btn-project-sort-reset; wait #projects-container[data-sort=\"original\"] > .project-card:first-child .name"
+      ],
+      "final_review": {
+        "reviewer": "claude:opus",
+        "verdict": "APPROVED",
+        "approved": true,
+        "blocking": []
+      }
+    }
+  ],
+  "findings": [],
+  "dependency_identity": {
+    "status": "unchanged",
+    "digest": "51cfcf59634d199f8e34820f0dec3319dd5855cc5a45e871e54da0552ca86037",
+    "entries": 217,
+    "roots": [
+      "node_modules"
+    ],
+    "exemptions": [],
+    "events": [],
+    "boundary": "dependency trees named .venv, env, node_modules, venv inside the project; nothing outside the project is guarded"
+  },
+  "workflow": {
+    "tasks": [
+      {
+        "task_id": "t1",
+        "intent": "implementation",
+        "lead": "grok:default",
+        "covers": [
+          "R1",
+          "R2",
+          "R3",
+          "R4",
+          "R5",
+          "R6",
+          "R7",
+          "R10",
+          "R11",
+          "R12"
+        ],
+        "resolves": [],
+        "continues": "",
+        "stages": [
+          "dispatch",
+          "draft",
+          "review",
+          "revision",
+          "checks",
+          "design",
+          "closeout"
+        ],
+        "edges": {
+          "draft": true,
+          "review": true,
+          "checks": true,
+          "delivered": true,
+          "reviewer": true,
+          "evidence": true,
+          "closeout": true
+        },
+        "attempts": {
+          "revision": 1,
+          "gate_fix": 0
+        },
+        "checks": [
+          {
+            "passed": true,
+            "returncode": 0,
+            "gate": "full",
+            "output_artifact": "f0eeb68b3c32",
+            "output_artifact_error": null,
+            "source": "5177a42edd8da908dd6b13a5dfebb55d6cc8a171754a83e79bed8a56f381e60d",
+            "receipts": [
+              {
+                "id": "check",
+                "status": "passed",
+                "reason": "exit 0",
+                "tests": 120,
+                "returncode": 0,
+                "cached": false,
+                "source_hash": "5177a42edd8da908dd6b13a5dfebb55d6cc8a171754a83e79bed8a56f381e60d",
+                "runner_hash": "fffaa908f83bacf7bf66d6be9d929a4f229d585b16c9f2c9c716621cb95f9c9d",
+                "report": {
+                  "state": "parsed",
+                  "exitstatus": 0,
+                  "collected": 120,
+                  "collect_errors": 0,
+                  "counts": {
+                    "passed": 120,
+                    "failed": 0,
+                    "errors": 0,
+                    "skipped": 0
+                  },
+                  "failures": [],
+                  "truncated": false
+                }
+              },
+              {
+                "id": "extra-1",
+                "status": "passed",
+                "reason": "exit 0",
+                "tests": 39,
+                "returncode": 0,
+                "cached": false,
+                "source_hash": "5177a42edd8da908dd6b13a5dfebb55d6cc8a171754a83e79bed8a56f381e60d",
+                "runner_hash": "f8fa23579a89914cffd346ecf12c9ca24a3af8111a1af2beaacdcec55743ce7b",
+                "report": {
+                  "state": "parsed",
+                  "exitstatus": 0,
+                  "collected": 39,
+                  "collect_errors": 0,
+                  "counts": {
+                    "passed": 39,
+                    "failed": 0,
+                    "errors": 0,
+                    "skipped": 0
+                  },
+                  "failures": [],
+                  "truncated": false
+                }
+              }
+            ],
+            "report": null,
+            "attempt": 1
+          }
+        ],
+        "evidence": {
+          "task": "t1",
+          "verified": true,
+          "problem": "",
+          "screenshots": [
+            "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project/.quadratus/design-evidence/t1/desktop/page.png",
+            "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project/.quadratus/design-evidence/t1/mobile/page.png",
+            "target: http://127.0.0.1:53139/",
+            "steps: wait #projects-container .project-card:nth-child(3); click #btn-project-sort; wait #projects-container[data-sort=\"asc\"]; click #btn-project-sort-reset; wait #projects-container[data-sort=\"original\"] > .project-card:first-child .name"
+          ],
+          "final_review": {
+            "reviewer": "claude:opus",
+            "verdict": "APPROVED",
+            "approved": true,
+            "blocking": []
+          }
+        },
+        "delivery": {
+          "reviewer": "claude:opus",
+          "files": {
+            ".quadratus/design-evidence/t1/summary.json": "87a21f0eb53011c7b249c1c8d56a8a05e498eedfce39e5d343d28cd6145a910d",
+            ".quadratus/design-evidence/t1/desktop/page.png": "a9fd2356fcbd90c38e99298dd7b1de52ed42aa468760c9e830485042f97b2513",
+            ".quadratus/design-evidence/t1/desktop/evidence.json": "ba3e74dabac5449f83f7089bc73086f8f79cfccc14f8f1b69b496034b9b1addd",
+            ".quadratus/design-evidence/t1/mobile/page.png": "fc6598422bb9040820f26500c117b6eeeb939cbe6f17f962484d39f90ffa8549",
+            ".quadratus/design-evidence/t1/mobile/evidence.json": "352ab14e1849485707650d7ff83a8846d8cfa5e44a8229a4f056ce3735cc4351"
+          }
+        },
+        "partial": {
+          "changed": [
+            "static/js/app.js",
+            "templates/index.html"
+          ],
+          "changed_lines": 18,
+          "inspected": true,
+          "note": "The task closed with these changes on disk."
+        },
+        "source_before": "2f6f191ebdd5717f521d5dda96bb2d50dc13e4938d4fc06b93e918729aa36520",
+        "source_after": "5177a42edd8da908dd6b13a5dfebb55d6cc8a171754a83e79bed8a56f381e60d",
+        "dependency": "unchanged",
+        "open_at_close": {
+          "findings": [],
+          "requirements": []
+        },
+        "facts": [],
+        "contract": {
+          "task_id": "t1",
+          "intent": "implementation",
+          "owner": "grok:default",
+          "covers": [
+            "R1",
+            "R2",
+            "R3",
+            "R4",
+            "R5",
+            "R6",
+            "R7",
+            "R10",
+            "R11",
+            "R12"
+          ],
+          "resolves": [],
+          "continues": "",
+          "scope": {
+            "acceptance": [
+              "templates/index.html contains <button type=\"button\" id=\"btn-project-sort-reset\"> immediately after #btn-project-sort inside .project-search-row",
+              "`function resetProjectSort()` exists in static/js/app.js and is bound via $btnProjectSortReset.addEventListener(\"click\", resetProjectSort)",
+              "applyProjectSort() handles projectSortDir === \"original\": cards reordered by Number(dataset.index) ascending, $projectsContainer.dataset.sort = \"original\", button text \"Sort A\u2192Z\", status text \"Library order\"",
+              "The projectSortDir === \"\" branch of applyProjectSort() is unchanged so initial load still leaves data-sort unset and status \"Original order\"",
+              "Existing toggle `projectSortDir === \"asc\" ? \"desc\" : \"asc\"` is unchanged, so the first sort click after reset yields asc",
+              "resetProjectSort() does not call api()/fetch, syncProjectSearchHash(), or applyProjectSearch() with a changed value; card.hidden states persist because cards are moved, not rebuilt",
+              "node --test tests/sorting/project_sort.test.js and tests/ui/project_search.test.js still pass with # fail 0",
+              "Diff touches only templates/index.html and static/js/app.js (style.css only if a wrap/overflow fix is actually needed at 390px)"
+            ],
+            "capture": {
+              "path": "/",
+              "steps": [
+                {
+                  "action": "wait",
+                  "selector": "#projects-container .project-card:nth-child(3)"
+                },
+                {
+                  "action": "click",
+                  "selector": "#btn-project-sort"
+                },
+                {
+                  "action": "wait",
+                  "selector": "#projects-container[data-sort=\"asc\"]"
+                },
+                {
+                  "action": "click",
+                  "selector": "#btn-project-sort-reset"
+                },
+                {
+                  "action": "wait",
+                  "selector": "#projects-container[data-sort=\"original\"] > .project-card:first-child .name"
+                }
+              ]
+            },
+            "forbidden_paths": [
+              ".git/**",
+              ".env",
+              ".env.*",
+              ".quadratus/**",
+              ".claude/skills/.df-sync.txt",
+              ".claude/skills/code-review/SKILL.md",
+              ".claude/skills/code-review/agents/openai.yaml",
+              ".claude/skills/df-design/SKILL.md",
+              ".claude/skills/df-design/claude-md-design-block.md",
+              ".claude/skills/df-design/design-briefs.md",
+              ".claude/skills/df-model-routing/SKILL.md",
+              ".claude/skills/df-ship-check/SKILL.md",
+              ".claude/skills/df-writing/SKILL.md",
+              ".claude/skills/df-writing/tells.md",
+              ".claude/skills/domain-modeling/ADR-FORMAT.md",
+              ".claude/skills/domain-modeling/CONTEXT-FORMAT.md",
+              ".claude/skills/domain-modeling/SKILL.md",
+              ".claude/skills/domain-modeling/agents/openai.yaml",
+              ".claude/skills/grill-with-docs/SKILL.md",
+              ".claude/skills/grill-with-docs/agents/openai.yaml",
+              ".claude/skills/grilling/SKILL.md",
+              ".claude/skills/grilling/agents/openai.yaml",
+              ".claude/skills/handoff/SKILL.md",
+              ".claude/skills/handoff/agents/openai.yaml",
+              ".claude/skills/implement/SKILL.md",
+              ".claude/skills/implement/agents/openai.yaml",
+              ".claude/skills/setup-matt-pocock-skills/SKILL.md",
+              ".claude/skills/setup-matt-pocock-skills/agents/openai.yaml",
+              ".claude/skills/setup-matt-pocock-skills/domain.md",
+              ".claude/skills/setup-matt-pocock-skills/issue-tracker-github.md",
+              ".claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md",
+              ".claude/skills/setup-matt-pocock-skills/issue-tracker-local.md",
+              ".claude/skills/setup-matt-pocock-skills/triage-labels.md",
+              ".claude/skills/tdd/SKILL.md",
+              ".claude/skills/tdd/agents/openai.yaml",
+              ".claude/skills/tdd/mocking.md",
+              ".claude/skills/tdd/tests.md",
+              ".claude/skills/to-spec/SKILL.md",
+              ".claude/skills/to-spec/agents/openai.yaml",
+              ".claude/skills/to-tickets/SKILL.md",
+              ".claude/skills/to-tickets/agents/openai.yaml",
+              ".github/workflows/ci-cd.yml",
+              ".gitignore",
+              "CLAUDE.md",
+              "README.md",
+              "app.py",
+              "diagnostic/preview.py",
+              "diagnostic/seed.json",
+              "docs/BULK_EDIT.md",
+              "docs/CSV_IMPORT.md",
+              "docs/JOINT_REPAIR.md",
+              "docs/SAVED_FILTERS.md",
+              "fail_logs.txt",
+              "orchestrator.py",
+              "package-lock.json",
+              "package.json",
+              "requirements.txt",
+              "static/favicon.svg",
+              "static/js/annotations.js",
+              "static/js/recording.js",
+              "test_output.log",
+              "tests/browser/run.js",
+              "tests/browser/scenarios/01-full-flow.js",
+              "tests/browser/scenarios/02-late-preview.js",
+              "tests/browser/scenarios/03-late-project-preview.js",
+              "tests/browser/scenarios/04-apply-race.js",
+              "tests/browser/scenarios/05-serialization.js",
+              "tests/browser/scenarios/06-keyboard.js",
+              "tests/browser/scenarios/07-preview-focus.js",
+              "tests/browser/scenarios/08-presets.js",
+              "tests/browser/server.py",
+              "tests/sorting/browser_typed_query.test.js",
+              "tests/sorting/project_sort.test.js",
+              "tests/sorting/test_project_sort.py",
+              "tests/test_basic.py",
+              "tests/test_bulk_edit.py",
+              "tests/test_import_preview.py",
+              "tests/test_ui_project_search.py",
+              "tests/ui/bulk_coverage.test.js",
+              "tests/ui/bulk_keyboard.test.js",
+              "tests/ui/bulk_serialization.test.js",
+              "tests/ui/fake_dom.js",
+              "tests/ui/import_preview.test.js",
+              "tests/ui/load_app.js",
+              "tests/ui/load_app.test.js",
+              "tests/ui/mutation_check.js",
+              "tests/ui/project_search.test.js",
+              "node_modules/**"
+            ],
+            "intended_result": "A #btn-project-sort-reset button beside #btn-project-sort whose click handler `function resetProjectSort()` sets projectSortDir to \"original\", reorders cards by data-index, sets data-sort=\"original\", status \"Library order\", and focuses #project-search, with no fetch and no history/location change",
+            "max_lines": 40,
+            "permitted_paths": [
+              "templates/index.html",
+              "static/js/app.js",
+              "static/css/style.css"
+            ]
+          },
+          "authority": {
+            "write_grant": "operator",
+            "edits": "scoped:40"
+          },
+          "capabilities": [],
+          "required_checks": [
+            "check",
+            "extra-1"
+          ],
+          "intended_state": {
+            "page": "/",
+            "steps": [
+              [
+                "wait",
+                "#projects-container .project-card:nth-child(3)"
+              ],
+              [
+                "click",
+                "#btn-project-sort"
+              ],
+              [
+                "wait",
+                "#projects-container[data-sort=\"asc\"]"
+              ],
+              [
+                "click",
+                "#btn-project-sort-reset"
+              ],
+              [
+                "wait",
+                "#projects-container[data-sort=\"original\"] > .project-card:first-child .name"
+              ]
+            ]
+          },
+          "acceptance": [
+            "templates/index.html contains <button type=\"button\" id=\"btn-project-sort-reset\"> immediately after #btn-project-sort inside .project-search-row",
+            "`function resetProjectSort()` exists in static/js/app.js and is bound via $btnProjectSortReset.addEventListener(\"click\", resetProjectSort)",
+            "applyProjectSort() handles projectSortDir === \"original\": cards reordered by Number(dataset.index) ascending, $projectsContainer.dataset.sort = \"original\", button text \"Sort A\u2192Z\", status text \"Library order\"",
+            "The projectSortDir === \"\" branch of applyProjectSort() is unchanged so initial load still leaves data-sort unset and status \"Original order\"",
+            "Existing toggle `projectSortDir === \"asc\" ? \"desc\" : \"asc\"` is unchanged, so the first sort click after reset yields asc",
+            "resetProjectSort() does not call api()/fetch, syncProjectSearchHash(), or applyProjectSearch() with a changed value; card.hidden states persist because cards are moved, not rebuilt",
+            "node --test tests/sorting/project_sort.test.js and tests/ui/project_search.test.js still pass with # fail 0",
+            "Diff touches only templates/index.html and static/js/app.js (style.css only if a wrap/overflow fix is actually needed at 390px)"
+          ],
+          "required": {
+            "checks": true,
+            "design_evidence": "harness",
+            "design_review": true,
+            "security_verification": false,
+            "settlement": false,
+            "design_collaboration_applicable": true,
+            "design_instruction": "harness",
+            "security_verdict": "none",
+            "operator_limits": "sha256:fda8ee6fd94d1f4bb785f0c113b91bad20629930eb0d49fe64e2386d9fb030bb",
+            "requirements_ledger": true,
+            "tier": "normal",
+            "tier_refused": ""
+          },
+          "allowed_next": [
+            "draft",
+            "review",
+            "checks",
+            "design",
+            "closeout"
+          ],
+          "inherits": null,
+          "capture_page": "http://127.0.0.1:53139/",
+          "capture_profile": "sha256:107a370cea71faba7a119fb2d34773ca25306eb67fefec4f5b2799e1dd68c080",
+          "digest": "19b7b01203437eb883959b27717f6f50041672e993f881d0857939ded4872c07"
+        },
+        "dispatch": {
+          "state": "dispatched",
+          "owner": "grok:default"
+        },
+        "owner_changes": [],
+        "mismatches": [],
+        "closed_as": "closed",
+        "primary": "clean",
+        "secondary": [],
+        "unsatisfied": [],
+        "invoked_owner": "grok:default"
+      },
+      {
+        "task_id": "t2",
+        "intent": "implementation",
+        "lead": "openai:gpt-5.6-sol",
+        "covers": [
+          "R8",
+          "R9",
+          "R13"
+        ],
+        "resolves": [],
+        "continues": "",
+        "stages": [
+          "dispatch",
+          "draft",
+          "review",
+          "checks",
+          "closeout"
+        ],
+        "edges": {
+          "draft": true,
+          "review": null,
+          "checks": true,
+          "closeout": true
+        },
+        "attempts": {
+          "gate_fix": 0
+        },
+        "checks": [
+          {
+            "passed": true,
+            "returncode": 0,
+            "gate": "full",
+            "output_artifact": "0b6dbe7cd472",
+            "output_artifact_error": null,
+            "source": "005e288e7bf66e8d874aa560481d27be06095b25296b18939e3a2b4aaedf9f69",
+            "receipts": [
+              {
+                "id": "check",
+                "status": "passed",
+                "reason": "exit 0",
+                "tests": 121,
+                "returncode": 0,
+                "cached": false,
+                "source_hash": "005e288e7bf66e8d874aa560481d27be06095b25296b18939e3a2b4aaedf9f69",
+                "runner_hash": "fffaa908f83bacf7bf66d6be9d929a4f229d585b16c9f2c9c716621cb95f9c9d",
+                "report": {
+                  "state": "parsed",
+                  "exitstatus": 0,
+                  "collected": 121,
+                  "collect_errors": 0,
+                  "counts": {
+                    "passed": 121,
+                    "failed": 0,
+                    "errors": 0,
+                    "skipped": 0
+                  },
+                  "failures": [],
+                  "truncated": false
+                }
+              },
+              {
+                "id": "extra-1",
+                "status": "passed",
+                "reason": "exit 0",
+                "tests": 45,
+                "returncode": 0,
+                "cached": false,
+                "source_hash": "005e288e7bf66e8d874aa560481d27be06095b25296b18939e3a2b4aaedf9f69",
+                "runner_hash": "f8fa23579a89914cffd346ecf12c9ca24a3af8111a1af2beaacdcec55743ce7b",
+                "report": {
+                  "state": "parsed",
+                  "exitstatus": 0,
+                  "collected": 45,
+                  "collect_errors": 0,
+                  "counts": {
+                    "passed": 45,
+                    "failed": 0,
+                    "errors": 0,
+                    "skipped": 0
+                  },
+                  "failures": [],
+                  "truncated": false
+                }
+              }
+            ],
+            "report": null,
+            "attempt": 1
+          }
+        ],
+        "evidence": null,
+        "delivery": null,
+        "partial": {
+          "changed": [
+            "tests/gui_completion/project_sort_reset.test.js",
+            "tests/gui_completion/test_project_sort_reset.py"
+          ],
+          "changed_lines": 112,
+          "inspected": true,
+          "note": "The task closed with these changes on disk."
+        },
+        "source_before": "5177a42edd8da908dd6b13a5dfebb55d6cc8a171754a83e79bed8a56f381e60d",
+        "source_after": "005e288e7bf66e8d874aa560481d27be06095b25296b18939e3a2b4aaedf9f69",
+        "dependency": "unchanged",
+        "open_at_close": {
+          "findings": [],
+          "requirements": []
+        },
+        "facts": [],
+        "contract": {
+          "task_id": "t2",
+          "intent": "implementation",
+          "owner": "openai:gpt-5.6-sol",
+          "covers": [
+            "R8",
+            "R9",
+            "R13"
+          ],
+          "resolves": [],
+          "continues": "",
+          "scope": {
+            "acceptance": [
+              "tests/gui_completion/project_sort_reset.test.js exists, requires ../ui/load_app exactly like tests/sorting/project_sort.test.js, and defines 6 node:test cases: reset from asc, reset from desc, stable library ordering by delete-btn data-id after reset, repeated reset harmless then next sort click gives data-sort=\"asc\" then \"desc\", typed search/hash/count/hidden/empty-state/focus preserved on reset with document.activeElement === #project-search, reset issues no fetch and leaves window.location.href unchanged",
+              "Every case asserts #projects-container dataset.sort === \"original\" and #project-sort-status textContent === \"Library order\" after clicking #btn-project-sort-reset",
+              "tests/gui_completion/test_project_sort_reset.py defines `def test_project_sort_reset_ui_suite():` mirroring tests/sorting/test_project_sort.py (shutil.which node, pytest.skip if absent, subprocess node --test --test-reporter=tap on the new file, asserts returncode 0, ^# pass 6$ and ^# fail 0$)",
+              "node --test tests/gui_completion/project_sort_reset.test.js reports 6 pass 0 fail; node --test tests/sorting/project_sort.test.js still 5 pass; full pytest -q passes with count 121 (120 baseline + 1)",
+              "Diff touches only the two new files under tests/gui_completion/; no file under tests/sorting, tests/ui, tests/browser or tests/*.py changes"
+            ],
+            "forbidden_paths": [
+              ".git/**",
+              ".env",
+              ".env.*",
+              ".quadratus/**",
+              ".claude/skills/.df-sync.txt",
+              ".claude/skills/code-review/SKILL.md",
+              ".claude/skills/code-review/agents/openai.yaml",
+              ".claude/skills/df-design/SKILL.md",
+              ".claude/skills/df-design/claude-md-design-block.md",
+              ".claude/skills/df-design/design-briefs.md",
+              ".claude/skills/df-model-routing/SKILL.md",
+              ".claude/skills/df-ship-check/SKILL.md",
+              ".claude/skills/df-writing/SKILL.md",
+              ".claude/skills/df-writing/tells.md",
+              ".claude/skills/domain-modeling/ADR-FORMAT.md",
+              ".claude/skills/domain-modeling/CONTEXT-FORMAT.md",
+              ".claude/skills/domain-modeling/SKILL.md",
+              ".claude/skills/domain-modeling/agents/openai.yaml",
+              ".claude/skills/grill-with-docs/SKILL.md",
+              ".claude/skills/grill-with-docs/agents/openai.yaml",
+              ".claude/skills/grilling/SKILL.md",
+              ".claude/skills/grilling/agents/openai.yaml",
+              ".claude/skills/handoff/SKILL.md",
+              ".claude/skills/handoff/agents/openai.yaml",
+              ".claude/skills/implement/SKILL.md",
+              ".claude/skills/implement/agents/openai.yaml",
+              ".claude/skills/setup-matt-pocock-skills/SKILL.md",
+              ".claude/skills/setup-matt-pocock-skills/agents/openai.yaml",
+              ".claude/skills/setup-matt-pocock-skills/domain.md",
+              ".claude/skills/setup-matt-pocock-skills/issue-tracker-github.md",
+              ".claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md",
+              ".claude/skills/setup-matt-pocock-skills/issue-tracker-local.md",
+              ".claude/skills/setup-matt-pocock-skills/triage-labels.md",
+              ".claude/skills/tdd/SKILL.md",
+              ".claude/skills/tdd/agents/openai.yaml",
+              ".claude/skills/tdd/mocking.md",
+              ".claude/skills/tdd/tests.md",
+              ".claude/skills/to-spec/SKILL.md",
+              ".claude/skills/to-spec/agents/openai.yaml",
+              ".claude/skills/to-tickets/SKILL.md",
+              ".claude/skills/to-tickets/agents/openai.yaml",
+              ".github/workflows/ci-cd.yml",
+              ".gitignore",
+              "CLAUDE.md",
+              "README.md",
+              "app.py",
+              "diagnostic/preview.py",
+              "diagnostic/seed.json",
+              "docs/BULK_EDIT.md",
+              "docs/CSV_IMPORT.md",
+              "docs/JOINT_REPAIR.md",
+              "docs/SAVED_FILTERS.md",
+              "fail_logs.txt",
+              "orchestrator.py",
+              "package-lock.json",
+              "package.json",
+              "requirements.txt",
+              "static/favicon.svg",
+              "static/js/annotations.js",
+              "static/js/recording.js",
+              "test_output.log",
+              "tests/browser/run.js",
+              "tests/browser/scenarios/01-full-flow.js",
+              "tests/browser/scenarios/02-late-preview.js",
+              "tests/browser/scenarios/03-late-project-preview.js",
+              "tests/browser/scenarios/04-apply-race.js",
+              "tests/browser/scenarios/05-serialization.js",
+              "tests/browser/scenarios/06-keyboard.js",
+              "tests/browser/scenarios/07-preview-focus.js",
+              "tests/browser/scenarios/08-presets.js",
+              "tests/browser/server.py",
+              "tests/sorting/browser_typed_query.test.js",
+              "tests/sorting/project_sort.test.js",
+              "tests/sorting/test_project_sort.py",
+              "tests/test_basic.py",
+              "tests/test_bulk_edit.py",
+              "tests/test_import_preview.py",
+              "tests/test_ui_project_search.py",
+              "tests/ui/bulk_coverage.test.js",
+              "tests/ui/bulk_keyboard.test.js",
+              "tests/ui/bulk_serialization.test.js",
+              "tests/ui/fake_dom.js",
+              "tests/ui/import_preview.test.js",
+              "tests/ui/load_app.js",
+              "tests/ui/load_app.test.js",
+              "tests/ui/mutation_check.js",
+              "tests/ui/project_search.test.js",
+              "node_modules/**"
+            ],
+            "intended_result": "A new node:test file tests/gui_completion/project_sort_reset.test.js (6 cases) plus a pytest wrapper `def test_project_sort_reset_ui_suite():` in tests/gui_completion/test_project_sort_reset.py that runs it via `node --test --test-reporter=tap` and asserts `# pass 6` / `# fail 0`",
+            "max_lines": 100,
+            "permitted_paths": [
+              "tests/gui_completion/project_sort_reset.test.js",
+              "tests/gui_completion/test_project_sort_reset.py"
+            ]
+          },
+          "authority": {
+            "write_grant": "operator",
+            "edits": "scoped:100"
+          },
+          "capabilities": [],
+          "required_checks": [
+            "check",
+            "extra-1"
+          ],
+          "intended_state": null,
+          "acceptance": [
+            "tests/gui_completion/project_sort_reset.test.js exists, requires ../ui/load_app exactly like tests/sorting/project_sort.test.js, and defines 6 node:test cases: reset from asc, reset from desc, stable library ordering by delete-btn data-id after reset, repeated reset harmless then next sort click gives data-sort=\"asc\" then \"desc\", typed search/hash/count/hidden/empty-state/focus preserved on reset with document.activeElement === #project-search, reset issues no fetch and leaves window.location.href unchanged",
+            "Every case asserts #projects-container dataset.sort === \"original\" and #project-sort-status textContent === \"Library order\" after clicking #btn-project-sort-reset",
+            "tests/gui_completion/test_project_sort_reset.py defines `def test_project_sort_reset_ui_suite():` mirroring tests/sorting/test_project_sort.py (shutil.which node, pytest.skip if absent, subprocess node --test --test-reporter=tap on the new file, asserts returncode 0, ^# pass 6$ and ^# fail 0$)",
+            "node --test tests/gui_completion/project_sort_reset.test.js reports 6 pass 0 fail; node --test tests/sorting/project_sort.test.js still 5 pass; full pytest -q passes with count 121 (120 baseline + 1)",
+            "Diff touches only the two new files under tests/gui_completion/; no file under tests/sorting, tests/ui, tests/browser or tests/*.py changes"
+          ],
+          "required": {
+            "checks": true,
+            "design_evidence": "none",
+            "design_review": false,
+            "security_verification": false,
+            "settlement": false,
+            "design_collaboration_applicable": false,
+            "design_instruction": "none",
+            "security_verdict": "none",
+            "operator_limits": "sha256:fda8ee6fd94d1f4bb785f0c113b91bad20629930eb0d49fe64e2386d9fb030bb",
+            "requirements_ledger": true,
+            "tier": "normal",
+            "tier_refused": ""
+          },
+          "allowed_next": [
+            "draft",
+            "review",
+            "checks",
+            "closeout"
+          ],
+          "inherits": null,
+          "capture_page": null,
+          "capture_profile": null,
+          "digest": "02dff4945d83651d0c9e0b5297113ebbc4f1e59ce14fbe4c114072ade304a538"
+        },
+        "dispatch": {
+          "state": "dispatched",
+          "owner": "openai:gpt-5.6-sol"
+        },
+        "owner_changes": [],
+        "mismatches": [],
+        "closed_as": "closed",
+        "primary": "clean",
+        "secondary": [],
+        "unsatisfied": [],
+        "invoked_owner": "openai:gpt-5.6-sol"
+      },
+      {
+        "task_id": "t3",
+        "intent": "implementation",
+        "lead": "openai:gpt-5.6-sol",
+        "covers": [
+          "R10",
+          "R13"
+        ],
+        "resolves": [],
+        "continues": "",
+        "stages": [
+          "dispatch",
+          "draft",
+          "review",
+          "checks"
+        ],
+        "edges": {
+          "draft": true,
+          "review": null,
+          "checks": false
+        },
+        "attempts": {},
+        "checks": [
+          {
+            "passed": false,
+            "returncode": 1,
+            "gate": "full",
+            "output_artifact": "f2809e16be05",
+            "output_artifact_error": null,
+            "source": "a060cbb3299f488e5de075413794a333ed10314bcc035921f85a6d11a880b470",
+            "receipts": [
+              {
+                "id": "check",
+                "status": "passed",
+                "reason": "exit 0",
+                "tests": 121,
+                "returncode": 0,
+                "cached": false,
+                "source_hash": "a060cbb3299f488e5de075413794a333ed10314bcc035921f85a6d11a880b470",
+                "runner_hash": "fffaa908f83bacf7bf66d6be9d929a4f229d585b16c9f2c9c716621cb95f9c9d",
+                "report": {
+                  "state": "parsed",
+                  "exitstatus": 0,
+                  "collected": 121,
+                  "collect_errors": 0,
+                  "counts": {
+                    "passed": 121,
+                    "failed": 0,
+                    "errors": 0,
+                    "skipped": 0
+                  },
+                  "failures": [],
+                  "truncated": false
+                }
+              },
+              {
+                "id": "extra-1",
+                "status": "error",
+                "reason": "timed out after 600s",
+                "tests": null,
+                "returncode": null,
+                "cached": false,
+                "source_hash": "a060cbb3299f488e5de075413794a333ed10314bcc035921f85a6d11a880b470",
+                "runner_hash": "f8fa23579a89914cffd346ecf12c9ca24a3af8111a1af2beaacdcec55743ce7b",
+                "report": null
+              }
+            ],
+            "report": null,
+            "attribution": {
+              "product": false,
+              "reasons": [
+                "extra-1: error: timed out after 600s"
+              ]
+            },
+            "attempt": 1
+          }
+        ],
+        "evidence": null,
+        "delivery": null,
+        "partial": {
+          "changed": [
+            "tests/gui_completion/browser_sort_reset.test.js"
+          ],
+          "changed_lines": 116,
+          "inspected": true,
+          "note": "These changes were already on disk when the call stopped and have been preserved. Re-sending the same prompt would apply a second pass on top of them, not repeat the first."
+        },
+        "source_before": "005e288e7bf66e8d874aa560481d27be06095b25296b18939e3a2b4aaedf9f69",
+        "source_after": "a060cbb3299f488e5de075413794a333ed10314bcc035921f85a6d11a880b470",
+        "dependency": "unchanged",
+        "open_at_close": {
+          "findings": [],
+          "requirements": []
+        },
+        "facts": [
+          {
+            "kind": "operator",
+            "detail": "check attempt 1 failed",
+            "stage": "checks",
+            "terminal": true,
+            "recovered": false,
+            "legacy_route": false,
+            "legacy": null,
+            "full": null
+          },
+          {
+            "kind": "operator",
+            "detail": "CheckUnattributable: the check failed without an attributable assertion failure (extra-1: error: timed out after 600s); returncode 1; output artifact f2809e16be05. No repair call was made. Work preserved.",
+            "stage": "checks",
+            "terminal": true,
+            "recovered": false,
+            "legacy_route": false,
+            "legacy": null,
+            "full": null
+          }
+        ],
+        "contract": {
+          "task_id": "t3",
+          "intent": "implementation",
+          "owner": "openai:gpt-5.6-sol",
+          "covers": [
+            "R10",
+            "R13"
+          ],
+          "resolves": [],
+          "continues": "",
+          "scope": {
+            "acceptance": [
+              "tests/gui_completion/browser_sort_reset.test.js exists and mirrors tests/sorting/browser_typed_query.test.js: same loadPlaywright()/startPreview() pattern, t.skip() with the attempted lookup and GAMETAPE_CHROMIUM value when playwright is missing or chromium launch fails, preview killed in finally",
+              "`async function reviewResetViewport(t, width, height)` is defined once and registered as test(\"restore-order browser review at 1280x800\", ...) and test(\"restore-order browser review at 390x844\", ...)",
+              "After typing 'alp' and clicking #btn-project-sort it asserts sort asc with visible ['alpha cup','alpha reserve']; after clicking #btn-project-sort-reset it asserts value 'alp', count '2 of 3 projects', hash '#q=alp', sort 'original', hidden ['beta bowl'], visible in seed order, #project-sort-status textContent 'Library order', document.activeElement === #project-search, and #project-search-empty/#projects-empty both hidden",
+              "It records page console errors and pageerror events and asserts the list is empty, and asserts document.scrollingElement.scrollWidth <= clientWidth plus #btn-project-sort-reset getBoundingClientRect width and height > 0",
+              "A second reset click leaves the same assertions true and a following #btn-project-sort click yields data-sort 'asc' with value/hash still 'alp'/'#q=alp'",
+              "node --test tests/gui_completion/browser_sort_reset.test.js exits 0 with 2 pass (or 2 skip with the skip reason printed when Chromium cannot launch); node --test reports 47 tests total with 0 fail; pytest -q still 121 passed",
+              "Diff adds only tests/gui_completion/browser_sort_reset.test.js; no other file changes",
+              "The close-out states for each of the two viewport tests whether it actually ran, was skipped, or was blocked, quoting the node tap summary lines"
+            ],
+            "forbidden_paths": [
+              ".git/**",
+              ".env",
+              ".env.*",
+              ".quadratus/**",
+              ".claude/skills/.df-sync.txt",
+              ".claude/skills/code-review/SKILL.md",
+              ".claude/skills/code-review/agents/openai.yaml",
+              ".claude/skills/df-design/SKILL.md",
+              ".claude/skills/df-design/claude-md-design-block.md",
+              ".claude/skills/df-design/design-briefs.md",
+              ".claude/skills/df-model-routing/SKILL.md",
+              ".claude/skills/df-ship-check/SKILL.md",
+              ".claude/skills/df-writing/SKILL.md",
+              ".claude/skills/df-writing/tells.md",
+              ".claude/skills/domain-modeling/ADR-FORMAT.md",
+              ".claude/skills/domain-modeling/CONTEXT-FORMAT.md",
+              ".claude/skills/domain-modeling/SKILL.md",
+              ".claude/skills/domain-modeling/agents/openai.yaml",
+              ".claude/skills/grill-with-docs/SKILL.md",
+              ".claude/skills/grill-with-docs/agents/openai.yaml",
+              ".claude/skills/grilling/SKILL.md",
+              ".claude/skills/grilling/agents/openai.yaml",
+              ".claude/skills/handoff/SKILL.md",
+              ".claude/skills/handoff/agents/openai.yaml",
+              ".claude/skills/implement/SKILL.md",
+              ".claude/skills/implement/agents/openai.yaml",
+              ".claude/skills/setup-matt-pocock-skills/SKILL.md",
+              ".claude/skills/setup-matt-pocock-skills/agents/openai.yaml",
+              ".claude/skills/setup-matt-pocock-skills/domain.md",
+              ".claude/skills/setup-matt-pocock-skills/issue-tracker-github.md",
+              ".claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md",
+              ".claude/skills/setup-matt-pocock-skills/issue-tracker-local.md",
+              ".claude/skills/setup-matt-pocock-skills/triage-labels.md",
+              ".claude/skills/tdd/SKILL.md",
+              ".claude/skills/tdd/agents/openai.yaml",
+              ".claude/skills/tdd/mocking.md",
+              ".claude/skills/tdd/tests.md",
+              ".claude/skills/to-spec/SKILL.md",
+              ".claude/skills/to-spec/agents/openai.yaml",
+              ".claude/skills/to-tickets/SKILL.md",
+              ".claude/skills/to-tickets/agents/openai.yaml",
+              ".github/workflows/ci-cd.yml",
+              ".gitignore",
+              "CLAUDE.md",
+              "README.md",
+              "app.py",
+              "diagnostic/preview.py",
+              "diagnostic/seed.json",
+              "docs/BULK_EDIT.md",
+              "docs/CSV_IMPORT.md",
+              "docs/JOINT_REPAIR.md",
+              "docs/SAVED_FILTERS.md",
+              "fail_logs.txt",
+              "orchestrator.py",
+              "package-lock.json",
+              "package.json",
+              "requirements.txt",
+              "static/favicon.svg",
+              "static/js/annotations.js",
+              "static/js/recording.js",
+              "test_output.log",
+              "tests/browser/run.js",
+              "tests/browser/scenarios/01-full-flow.js",
+              "tests/browser/scenarios/02-late-preview.js",
+              "tests/browser/scenarios/03-late-project-preview.js",
+              "tests/browser/scenarios/04-apply-race.js",
+              "tests/browser/scenarios/05-serialization.js",
+              "tests/browser/scenarios/06-keyboard.js",
+              "tests/browser/scenarios/07-preview-focus.js",
+              "tests/browser/scenarios/08-presets.js",
+              "tests/browser/server.py",
+              "tests/sorting/browser_typed_query.test.js",
+              "tests/sorting/project_sort.test.js",
+              "tests/sorting/test_project_sort.py",
+              "tests/test_basic.py",
+              "tests/test_bulk_edit.py",
+              "tests/test_import_preview.py",
+              "tests/test_ui_project_search.py",
+              "tests/ui/bulk_coverage.test.js",
+              "tests/ui/bulk_keyboard.test.js",
+              "tests/ui/bulk_serialization.test.js",
+              "tests/ui/fake_dom.js",
+              "tests/ui/import_preview.test.js",
+              "tests/ui/load_app.js",
+              "tests/ui/load_app.test.js",
+              "tests/ui/mutation_check.js",
+              "tests/ui/project_search.test.js",
+              "node_modules/**"
+            ],
+            "intended_result": "A new real-Chromium node:test file tests/gui_completion/browser_sort_reset.test.js defining `async function reviewResetViewport(t, width, height)` that, against a fresh diagnostic/preview.py seeded backend, types 'alp', clicks #btn-project-sort, clicks #btn-project-sort-reset and asserts typed value/count/hash/hidden cards preserved, data-sort=\"original\", status 'Library order', focus on #project-search, no horizontal overflow and no console/page errors, registered as two tests at 1280x800 and 390x844",
+            "max_lines": 100,
+            "permitted_paths": [
+              "tests/gui_completion/browser_sort_reset.test.js"
+            ]
+          },
+          "authority": {
+            "write_grant": "operator",
+            "edits": "scoped:100"
+          },
+          "capabilities": [],
+          "required_checks": [
+            "check",
+            "extra-1"
+          ],
+          "intended_state": null,
+          "acceptance": [
+            "tests/gui_completion/browser_sort_reset.test.js exists and mirrors tests/sorting/browser_typed_query.test.js: same loadPlaywright()/startPreview() pattern, t.skip() with the attempted lookup and GAMETAPE_CHROMIUM value when playwright is missing or chromium launch fails, preview killed in finally",
+            "`async function reviewResetViewport(t, width, height)` is defined once and registered as test(\"restore-order browser review at 1280x800\", ...) and test(\"restore-order browser review at 390x844\", ...)",
+            "After typing 'alp' and clicking #btn-project-sort it asserts sort asc with visible ['alpha cup','alpha reserve']; after clicking #btn-project-sort-reset it asserts value 'alp', count '2 of 3 projects', hash '#q=alp', sort 'original', hidden ['beta bowl'], visible in seed order, #project-sort-status textContent 'Library order', document.activeElement === #project-search, and #project-search-empty/#projects-empty both hidden",
+            "It records page console errors and pageerror events and asserts the list is empty, and asserts document.scrollingElement.scrollWidth <= clientWidth plus #btn-project-sort-reset getBoundingClientRect width and height > 0",
+            "A second reset click leaves the same assertions true and a following #btn-project-sort click yields data-sort 'asc' with value/hash still 'alp'/'#q=alp'",
+            "node --test tests/gui_completion/browser_sort_reset.test.js exits 0 with 2 pass (or 2 skip with the skip reason printed when Chromium cannot launch); node --test reports 47 tests total with 0 fail; pytest -q still 121 passed",
+            "Diff adds only tests/gui_completion/browser_sort_reset.test.js; no other file changes",
+            "The close-out states for each of the two viewport tests whether it actually ran, was skipped, or was blocked, quoting the node tap summary lines"
+          ],
+          "required": {
+            "checks": true,
+            "design_evidence": "none",
+            "design_review": false,
+            "security_verification": false,
+            "settlement": false,
+            "design_collaboration_applicable": false,
+            "design_instruction": "none",
+            "security_verdict": "none",
+            "operator_limits": "sha256:fda8ee6fd94d1f4bb785f0c113b91bad20629930eb0d49fe64e2386d9fb030bb",
+            "requirements_ledger": true,
+            "tier": "normal",
+            "tier_refused": ""
+          },
+          "allowed_next": [
+            "draft",
+            "review",
+            "checks",
+            "closeout"
+          ],
+          "inherits": null,
+          "capture_page": null,
+          "capture_profile": null,
+          "digest": "c7dd466f0cfa9a2464806b6dc8fb483266a91643d051df0c1f1383414d25f040"
+        },
+        "dispatch": {
+          "state": "dispatched",
+          "owner": "openai:gpt-5.6-sol"
+        },
+        "owner_changes": [],
+        "mismatches": [],
+        "closed_as": "stopped:CheckUnattributable",
+        "primary": "operator",
+        "secondary": [
+          "operator"
+        ],
+        "unsatisfied": [
+          "checks"
+        ],
+        "invoked_owner": "openai:gpt-5.6-sol"
+      }
+    ],
+    "calls_by_task": {
+      "run": {
+        "orchestrator": {
+          "calls": 3,
+          "input_tokens": 474320,
+          "output_tokens": 14666,
+          "seconds": 198.5,
+          "unknown_usage": 0
+        }
+      },
+      "plan": {
+        "requirements-review": {
+          "calls": 1,
+          "input_tokens": 41758,
+          "output_tokens": 685,
+          "seconds": 18.4,
+          "unknown_usage": 0
+        }
+      },
+      "t1": {
+        "lead": {
+          "calls": 1,
+          "input_tokens": 111166,
+          "output_tokens": 4737,
+          "seconds": 96.7,
+          "unknown_usage": 0
+        },
+        "collaborator": {
+          "calls": 1,
+          "input_tokens": 303190,
+          "output_tokens": 9698,
+          "seconds": 152.6,
+          "unknown_usage": 0
+        },
+        "revision": {
+          "calls": 1,
+          "input_tokens": 161888,
+          "output_tokens": 9185,
+          "seconds": 173.5,
+          "unknown_usage": 0
+        },
+        "design-review": {
+          "calls": 1,
+          "input_tokens": 174870,
+          "output_tokens": 2586,
+          "seconds": 37.4,
+          "unknown_usage": 0
+        },
+        "closeout": {
+          "calls": 1,
+          "input_tokens": 11788,
+          "output_tokens": 1971,
+          "seconds": 24.2,
+          "unknown_usage": 0
+        }
+      },
+      "t2": {
+        "lead": {
+          "calls": 1,
+          "input_tokens": 180138,
+          "output_tokens": 2887,
+          "seconds": 66.8,
+          "unknown_usage": 0
+        },
+        "closeout": {
+          "calls": 1,
+          "input_tokens": 22279,
+          "output_tokens": 426,
+          "seconds": 13.9,
+          "unknown_usage": 0
+        }
+      },
+      "t3": {
+        "lead": {
+          "calls": 1,
+          "input_tokens": 243669,
+          "output_tokens": 3180,
+          "seconds": 51.4,
+          "unknown_usage": 0
+        }
+      }
+    },
+    "run": {
+      "facts": [
+        {
+          "kind": "operator",
+          "detail": "CheckUnattributable: the check failed without an attributable assertion failure (extra-1: error: timed out after 600s); returncode 1; output artifact f2809e16be05. No repair call was made. Work preserved.",
+          "stage": "run",
+          "terminal": true,
+          "recovered": false,
+          "legacy_route": false,
+          "legacy": "CheckUnattributable",
+          "full": null
+        }
+      ],
+      "done_accepted": false,
+      "readiness": []
+    },
+    "parity": {
+      "agree": true,
+      "problems": [],
+      "complete": true,
+      "missing": [],
+      "typed_completed": false,
+      "primary": "operator"
+    }
+  },
+  "survey": {
+    "recovery_tasks": 4,
+    "recovery_used": 0,
+    "failures": [],
+    "unique_causes": [],
+    "recovered": [],
+    "open": [],
+    "findings": [],
+    "repeats": [],
+    "hypotheses": [],
+    "completed": false
+  },
+  "explicit_tasks": null,
+  "parallel_batches": [],
+  "trace": {
+    "calls": 12,
+    "transcripts_found": 12,
+    "calls_outside_project": 0,
+    "unserved_requests": 0,
+    "injected_rules": [
+      "grok account user_rules"
+    ]
+  },
+  "decisions": [],
+  "in_flight": {
+    "changed": [
+      "tests/gui_completion/browser_sort_reset.test.js"
+    ],
+    "changed_lines": 116,
+    "inspected": true,
+    "note": "These changes were already on disk when the call stopped and have been preserved. Re-sending the same prompt would apply a second pass on top of them, not repeat the first.",
+    "task": "t3",
+    "description": "Add an independent real-browser control for the Restore library order feature. The six t2 cases run `static/js/app.js` over `tests/ui/fake_dom.js`, so they do not prove that a real Chromium preserves the typed query, hash and card visibility across a reset, nor that the new button fits at 390\u00d7844 without overflow or console errors. The baseline `tests/sorting/browser_typed_query.test.js` already proves exactly this for the sort toggle but never clicks reset and must stay byte-identical, so copy its structure into a new file under `tests/gui_completion/` rather than extend it.\n\nFlow per viewport: launch Chromium (skip honestly if unavailable, as the baseline does), start `diagnostic/preview.py ROOT diagnostic/seed.json`, open `/`, wait for `.project-card:nth-child(3)`, click `#project-search`, type `alp`, click `#btn-project-sort` and assert asc; click `#btn-project-sort-reset` and assert the preserved search state plus `data-sort=\"original\"`, status \"Library order\", focus on the search field and the seed-order visible list; click reset again (same assertions), then click `#btn-project-sort` and assert `asc` with the query intact. Collect console errors and pageerrors for the whole session and assert none. Measure `noOverflow` and the reset button's rect after the reset. Seed names in `diagnostic/seed.json` are the ones the baseline uses (`alpha cup`, `alpha reserve`, `beta bowl`, lower-cased in `data-name`); read the seed to confirm the original-order visible list before hard-coding it.\n\nRun `node --test` on the new file and on the whole suite, and `pytest -q`. In the close-out report the tap `# pass`/`# skip`/`# fail` lines verbatim and say for each viewport whether Chromium really launched; a sandbox-denied skip is reported as SKIPPED, not as a pass. No pytest wrapper is needed: `node --test` already discovers `tests/gui_completion/*.test.js` (t2's gate went from 39 to 45).",
+    "needs": [
+      "execute",
+      "patch"
+    ],
+    "scope": {
+      "permitted_paths": [
+        "tests/gui_completion/browser_sort_reset.test.js"
+      ],
+      "forbidden_paths": [
+        ".git/**",
+        ".env",
+        ".env.*",
+        ".quadratus/**",
+        ".claude/skills/.df-sync.txt",
+        ".claude/skills/code-review/SKILL.md",
+        ".claude/skills/code-review/agents/openai.yaml",
+        ".claude/skills/df-design/SKILL.md",
+        ".claude/skills/df-design/claude-md-design-block.md",
+        ".claude/skills/df-design/design-briefs.md",
+        ".claude/skills/df-model-routing/SKILL.md",
+        ".claude/skills/df-ship-check/SKILL.md",
+        ".claude/skills/df-writing/SKILL.md",
+        ".claude/skills/df-writing/tells.md",
+        ".claude/skills/domain-modeling/ADR-FORMAT.md",
+        ".claude/skills/domain-modeling/CONTEXT-FORMAT.md",
+        ".claude/skills/domain-modeling/SKILL.md",
+        ".claude/skills/domain-modeling/agents/openai.yaml",
+        ".claude/skills/grill-with-docs/SKILL.md",
+        ".claude/skills/grill-with-docs/agents/openai.yaml",
+        ".claude/skills/grilling/SKILL.md",
+        ".claude/skills/grilling/agents/openai.yaml",
+        ".claude/skills/handoff/SKILL.md",
+        ".claude/skills/handoff/agents/openai.yaml",
+        ".claude/skills/implement/SKILL.md",
+        ".claude/skills/implement/agents/openai.yaml",
+        ".claude/skills/setup-matt-pocock-skills/SKILL.md",
+        ".claude/skills/setup-matt-pocock-skills/agents/openai.yaml",
+        ".claude/skills/setup-matt-pocock-skills/domain.md",
+        ".claude/skills/setup-matt-pocock-skills/issue-tracker-github.md",
+        ".claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md",
+        ".claude/skills/setup-matt-pocock-skills/issue-tracker-local.md",
+        ".claude/skills/setup-matt-pocock-skills/triage-labels.md",
+        ".claude/skills/tdd/SKILL.md",
+        ".claude/skills/tdd/agents/openai.yaml",
+        ".claude/skills/tdd/mocking.md",
+        ".claude/skills/tdd/tests.md",
+        ".claude/skills/to-spec/SKILL.md",
+        ".claude/skills/to-spec/agents/openai.yaml",
+        ".claude/skills/to-tickets/SKILL.md",
+        ".claude/skills/to-tickets/agents/openai.yaml",
+        ".github/workflows/ci-cd.yml",
+        ".gitignore",
+        "CLAUDE.md",
+        "README.md",
+        "app.py",
+        "diagnostic/preview.py",
+        "diagnostic/seed.json",
+        "docs/BULK_EDIT.md",
+        "docs/CSV_IMPORT.md",
+        "docs/JOINT_REPAIR.md",
+        "docs/SAVED_FILTERS.md",
+        "fail_logs.txt",
+        "orchestrator.py",
+        "package-lock.json",
+        "package.json",
+        "requirements.txt",
+        "static/favicon.svg",
+        "static/js/annotations.js",
+        "static/js/recording.js",
+        "test_output.log",
+        "tests/browser/run.js",
+        "tests/browser/scenarios/01-full-flow.js",
+        "tests/browser/scenarios/02-late-preview.js",
+        "tests/browser/scenarios/03-late-project-preview.js",
+        "tests/browser/scenarios/04-apply-race.js",
+        "tests/browser/scenarios/05-serialization.js",
+        "tests/browser/scenarios/06-keyboard.js",
+        "tests/browser/scenarios/07-preview-focus.js",
+        "tests/browser/scenarios/08-presets.js",
+        "tests/browser/server.py",
+        "tests/sorting/browser_typed_query.test.js",
+        "tests/sorting/project_sort.test.js",
+        "tests/sorting/test_project_sort.py",
+        "tests/test_basic.py",
+        "tests/test_bulk_edit.py",
+        "tests/test_import_preview.py",
+        "tests/test_ui_project_search.py",
+        "tests/ui/bulk_coverage.test.js",
+        "tests/ui/bulk_keyboard.test.js",
+        "tests/ui/bulk_serialization.test.js",
+        "tests/ui/fake_dom.js",
+        "tests/ui/import_preview.test.js",
+        "tests/ui/load_app.js",
+        "tests/ui/load_app.test.js",
+        "tests/ui/mutation_check.js",
+        "tests/ui/project_search.test.js",
+        "node_modules/**"
+      ],
+      "intended_result": "A new real-Chromium node:test file tests/gui_completion/browser_sort_reset.test.js defining `async function reviewResetViewport(t, width, height)` that, against a fresh diagnostic/preview.py seeded backend, types 'alp', clicks #btn-project-sort, clicks #btn-project-sort-reset and asserts typed value/count/hash/hidden cards preserved, data-sort=\"original\", status 'Library order', focus on #project-search, no horizontal overflow and no console/page errors, registered as two tests at 1280x800 and 390x844",
+      "acceptance": [
+        "tests/gui_completion/browser_sort_reset.test.js exists and mirrors tests/sorting/browser_typed_query.test.js: same loadPlaywright()/startPreview() pattern, t.skip() with the attempted lookup and GAMETAPE_CHROMIUM value when playwright is missing or chromium launch fails, preview killed in finally",
+        "`async function reviewResetViewport(t, width, height)` is defined once and registered as test(\"restore-order browser review at 1280x800\", ...) and test(\"restore-order browser review at 390x844\", ...)",
+        "After typing 'alp' and clicking #btn-project-sort it asserts sort asc with visible ['alpha cup','alpha reserve']; after clicking #btn-project-sort-reset it asserts value 'alp', count '2 of 3 projects', hash '#q=alp', sort 'original', hidden ['beta bowl'], visible in seed order, #project-sort-status textContent 'Library order', document.activeElement === #project-search, and #project-search-empty/#projects-empty both hidden",
+        "It records page console errors and pageerror events and asserts the list is empty, and asserts document.scrollingElement.scrollWidth <= clientWidth plus #btn-project-sort-reset getBoundingClientRect width and height > 0",
+        "A second reset click leaves the same assertions true and a following #btn-project-sort click yields data-sort 'asc' with value/hash still 'alp'/'#q=alp'",
+        "node --test tests/gui_completion/browser_sort_reset.test.js exits 0 with 2 pass (or 2 skip with the skip reason printed when Chromium cannot launch); node --test reports 47 tests total with 0 fail; pytest -q still 121 passed",
+        "Diff adds only tests/gui_completion/browser_sort_reset.test.js; no other file changes",
+        "The close-out states for each of the two viewport tests whether it actually ran, was skipped, or was blocked, quoting the node tap summary lines"
+      ],
+      "max_lines": 100
+    },
+    "invocation": {}
+  },
+  "policy_preview": {
+    "schema_version": 1,
+    "repository_id": "local/project",
+    "policy_source": "built-in",
+    "policy_hash": "4409739bd1db7905bd63b6bc1f01861807a4e0de0bedcb79dc0bcd8f727efd8a",
+    "library_version": "pilot-1",
+    "library_digest": "59573800c79c8114b6f024d09c95f397a85605b78642764f79007a194bd975ab",
+    "declared_paths": [
+      "static/css/style.css",
+      "static/js/app.js",
+      "templates/index.html",
+      "tests/gui_completion/"
+    ],
+    "primary_family": "pure-logic",
+    "families": [
+      "pure-logic"
+    ],
+    "family_source": "built-in default: the project has no .quadratus/policy.json",
+    "overlays": [],
+    "gates": [
+      {
+        "id": "scope",
+        "runner": "builtin:scope",
+        "required": true
+      },
+      {
+        "id": "unit-tests",
+        "runner": "command",
+        "required": true,
+        "argv": [
+          "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+          "-m",
+          "pytest",
+          "-q"
+        ],
+        "cwd": ".",
+        "minimum_tests": 1
+      }
+    ],
+    "absent_gates": [],
+    "skipped_gates": [],
+    "adapters": {
+      "pure-logic": {
+        "test_runner": {
+          "status": "detected",
+          "value": [
+            "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q"
+          ],
+          "source": "repo_scan.check_command",
+          "required": true
+        },
+        "typecheck_list": {
+          "status": "not_configured",
+          "value": null,
+          "source": null,
+          "required": false
+        }
+      }
+    },
+    "deny_write": [
+      ".git/**",
+      ".env",
+      ".env.*",
+      ".quadratus/**",
+      ".claude/skills/.df-sync.txt",
+      ".claude/skills/code-review/SKILL.md",
+      ".claude/skills/code-review/agents/openai.yaml",
+      ".claude/skills/df-design/SKILL.md",
+      ".claude/skills/df-design/claude-md-design-block.md",
+      ".claude/skills/df-design/design-briefs.md",
+      ".claude/skills/df-model-routing/SKILL.md",
+      ".claude/skills/df-ship-check/SKILL.md",
+      ".claude/skills/df-writing/SKILL.md",
+      ".claude/skills/df-writing/tells.md",
+      ".claude/skills/domain-modeling/ADR-FORMAT.md",
+      ".claude/skills/domain-modeling/CONTEXT-FORMAT.md",
+      ".claude/skills/domain-modeling/SKILL.md",
+      ".claude/skills/domain-modeling/agents/openai.yaml",
+      ".claude/skills/grill-with-docs/SKILL.md",
+      ".claude/skills/grill-with-docs/agents/openai.yaml",
+      ".claude/skills/grilling/SKILL.md",
+      ".claude/skills/grilling/agents/openai.yaml",
+      ".claude/skills/handoff/SKILL.md",
+      ".claude/skills/handoff/agents/openai.yaml",
+      ".claude/skills/implement/SKILL.md",
+      ".claude/skills/implement/agents/openai.yaml",
+      ".claude/skills/setup-matt-pocock-skills/SKILL.md",
+      ".claude/skills/setup-matt-pocock-skills/agents/openai.yaml",
+      ".claude/skills/setup-matt-pocock-skills/domain.md",
+      ".claude/skills/setup-matt-pocock-skills/issue-tracker-github.md",
+      ".claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md",
+      ".claude/skills/setup-matt-pocock-skills/issue-tracker-local.md",
+      ".claude/skills/setup-matt-pocock-skills/triage-labels.md",
+      ".claude/skills/tdd/SKILL.md",
+      ".claude/skills/tdd/agents/openai.yaml",
+      ".claude/skills/tdd/mocking.md",
+      ".claude/skills/tdd/tests.md",
+      ".claude/skills/to-spec/SKILL.md",
+      ".claude/skills/to-spec/agents/openai.yaml",
+      ".claude/skills/to-tickets/SKILL.md",
+      ".claude/skills/to-tickets/agents/openai.yaml",
+      ".github/workflows/ci-cd.yml",
+      ".gitignore",
+      "CLAUDE.md",
+      "README.md",
+      "app.py",
+      "diagnostic/preview.py",
+      "diagnostic/seed.json",
+      "docs/BULK_EDIT.md",
+      "docs/CSV_IMPORT.md",
+      "docs/JOINT_REPAIR.md",
+      "docs/SAVED_FILTERS.md",
+      "fail_logs.txt",
+      "orchestrator.py",
+      "package-lock.json",
+      "package.json",
+      "requirements.txt",
+      "static/favicon.svg",
+      "static/js/annotations.js",
+      "static/js/recording.js",
+      "test_output.log",
+      "tests/browser/run.js",
+      "tests/browser/scenarios/01-full-flow.js",
+      "tests/browser/scenarios/02-late-preview.js",
+      "tests/browser/scenarios/03-late-project-preview.js",
+      "tests/browser/scenarios/04-apply-race.js",
+      "tests/browser/scenarios/05-serialization.js",
+      "tests/browser/scenarios/06-keyboard.js",
+      "tests/browser/scenarios/07-preview-focus.js",
+      "tests/browser/scenarios/08-presets.js",
+      "tests/browser/server.py",
+      "tests/sorting/browser_typed_query.test.js",
+      "tests/sorting/project_sort.test.js",
+      "tests/sorting/test_project_sort.py",
+      "tests/test_basic.py",
+      "tests/test_bulk_edit.py",
+      "tests/test_import_preview.py",
+      "tests/test_ui_project_search.py",
+      "tests/ui/bulk_coverage.test.js",
+      "tests/ui/bulk_keyboard.test.js",
+      "tests/ui/bulk_serialization.test.js",
+      "tests/ui/fake_dom.js",
+      "tests/ui/import_preview.test.js",
+      "tests/ui/load_app.js",
+      "tests/ui/load_app.test.js",
+      "tests/ui/mutation_check.js",
+      "tests/ui/project_search.test.js",
+      "node_modules/**"
+    ],
+    "sensitive": [],
+    "defaults": {
+      "family": "pure-logic",
+      "required_gates": [
+        "scope"
+      ],
+      "scope_max_lines": 100,
+      "overrun_ratio": 1.5,
+      "worker_depth": 1
+    },
+    "capability_policy": {
+      "deny_write": [
+        ".git/**",
+        ".env",
+        ".env.*",
+        ".quadratus/**"
+      ],
+      "external_effects": "deny",
+      "native_delegation": "deny",
+      "sensitive": []
+    },
+    "blocked": [],
+    "hash": "21d41fedb95076f9cf432fbafd61a698e7c8ef7f7ee26fdd775ef95adb46dc94"
+  },
+  "policy_plans": [
+    {
+      "task_id": "t1",
+      "schema_version": 1,
+      "repository_id": "local/project",
+      "policy_source": "built-in",
+      "policy_hash": "4409739bd1db7905bd63b6bc1f01861807a4e0de0bedcb79dc0bcd8f727efd8a",
+      "library_version": "pilot-1",
+      "library_digest": "59573800c79c8114b6f024d09c95f397a85605b78642764f79007a194bd975ab",
+      "declared_paths": [
+        "static/css/style.css",
+        "static/js/app.js",
+        "templates/index.html"
+      ],
+      "primary_family": "pure-logic",
+      "families": [
+        "pure-logic"
+      ],
+      "family_source": "built-in default: the project has no .quadratus/policy.json",
+      "overlays": [],
+      "gates": [
+        {
+          "id": "scope",
+          "runner": "builtin:scope",
+          "required": true
+        },
+        {
+          "id": "unit-tests",
+          "runner": "command",
+          "required": true,
+          "argv": [
+            "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q"
+          ],
+          "cwd": ".",
+          "minimum_tests": 1
+        }
+      ],
+      "absent_gates": [],
+      "skipped_gates": [],
+      "adapters": {
+        "pure-logic": {
+          "test_runner": {
+            "status": "detected",
+            "value": [
+              "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q"
+            ],
+            "source": "repo_scan.check_command",
+            "required": true
+          },
+          "typecheck_list": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": false
+          }
+        }
+      },
+      "deny_write": [
+        ".git/**",
+        ".env",
+        ".env.*",
+        ".quadratus/**",
+        ".claude/skills/.df-sync.txt",
+        ".claude/skills/code-review/SKILL.md",
+        ".claude/skills/code-review/agents/openai.yaml",
+        ".claude/skills/df-design/SKILL.md",
+        ".claude/skills/df-design/claude-md-design-block.md",
+        ".claude/skills/df-design/design-briefs.md",
+        ".claude/skills/df-model-routing/SKILL.md",
+        ".claude/skills/df-ship-check/SKILL.md",
+        ".claude/skills/df-writing/SKILL.md",
+        ".claude/skills/df-writing/tells.md",
+        ".claude/skills/domain-modeling/ADR-FORMAT.md",
+        ".claude/skills/domain-modeling/CONTEXT-FORMAT.md",
+        ".claude/skills/domain-modeling/SKILL.md",
+        ".claude/skills/domain-modeling/agents/openai.yaml",
+        ".claude/skills/grill-with-docs/SKILL.md",
+        ".claude/skills/grill-with-docs/agents/openai.yaml",
+        ".claude/skills/grilling/SKILL.md",
+        ".claude/skills/grilling/agents/openai.yaml",
+        ".claude/skills/handoff/SKILL.md",
+        ".claude/skills/handoff/agents/openai.yaml",
+        ".claude/skills/implement/SKILL.md",
+        ".claude/skills/implement/agents/openai.yaml",
+        ".claude/skills/setup-matt-pocock-skills/SKILL.md",
+        ".claude/skills/setup-matt-pocock-skills/agents/openai.yaml",
+        ".claude/skills/setup-matt-pocock-skills/domain.md",
+        ".claude/skills/setup-matt-pocock-skills/issue-tracker-github.md",
+        ".claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md",
+        ".claude/skills/setup-matt-pocock-skills/issue-tracker-local.md",
+        ".claude/skills/setup-matt-pocock-skills/triage-labels.md",
+        ".claude/skills/tdd/SKILL.md",
+        ".claude/skills/tdd/agents/openai.yaml",
+        ".claude/skills/tdd/mocking.md",
+        ".claude/skills/tdd/tests.md",
+        ".claude/skills/to-spec/SKILL.md",
+        ".claude/skills/to-spec/agents/openai.yaml",
+        ".claude/skills/to-tickets/SKILL.md",
+        ".claude/skills/to-tickets/agents/openai.yaml",
+        ".github/workflows/ci-cd.yml",
+        ".gitignore",
+        "CLAUDE.md",
+        "README.md",
+        "app.py",
+        "diagnostic/preview.py",
+        "diagnostic/seed.json",
+        "docs/BULK_EDIT.md",
+        "docs/CSV_IMPORT.md",
+        "docs/JOINT_REPAIR.md",
+        "docs/SAVED_FILTERS.md",
+        "fail_logs.txt",
+        "orchestrator.py",
+        "package-lock.json",
+        "package.json",
+        "requirements.txt",
+        "static/favicon.svg",
+        "static/js/annotations.js",
+        "static/js/recording.js",
+        "test_output.log",
+        "tests/browser/run.js",
+        "tests/browser/scenarios/01-full-flow.js",
+        "tests/browser/scenarios/02-late-preview.js",
+        "tests/browser/scenarios/03-late-project-preview.js",
+        "tests/browser/scenarios/04-apply-race.js",
+        "tests/browser/scenarios/05-serialization.js",
+        "tests/browser/scenarios/06-keyboard.js",
+        "tests/browser/scenarios/07-preview-focus.js",
+        "tests/browser/scenarios/08-presets.js",
+        "tests/browser/server.py",
+        "tests/sorting/browser_typed_query.test.js",
+        "tests/sorting/project_sort.test.js",
+        "tests/sorting/test_project_sort.py",
+        "tests/test_basic.py",
+        "tests/test_bulk_edit.py",
+        "tests/test_import_preview.py",
+        "tests/test_ui_project_search.py",
+        "tests/ui/bulk_coverage.test.js",
+        "tests/ui/bulk_keyboard.test.js",
+        "tests/ui/bulk_serialization.test.js",
+        "tests/ui/fake_dom.js",
+        "tests/ui/import_preview.test.js",
+        "tests/ui/load_app.js",
+        "tests/ui/load_app.test.js",
+        "tests/ui/mutation_check.js",
+        "tests/ui/project_search.test.js",
+        "node_modules/**"
+      ],
+      "sensitive": [],
+      "defaults": {
+        "family": "pure-logic",
+        "required_gates": [
+          "scope"
+        ],
+        "scope_max_lines": 100,
+        "overrun_ratio": 1.5,
+        "worker_depth": 1
+      },
+      "capability_policy": {
+        "deny_write": [
+          ".git/**",
+          ".env",
+          ".env.*",
+          ".quadratus/**"
+        ],
+        "external_effects": "deny",
+        "native_delegation": "deny",
+        "sensitive": []
+      },
+      "blocked": [],
+      "hash": "6dcfb3b1c83ff5b97265e55223c25231bc228dbfd4596925be0605e4595bb343"
+    },
+    {
+      "task_id": "t2",
+      "schema_version": 1,
+      "repository_id": "local/project",
+      "policy_source": "built-in",
+      "policy_hash": "4409739bd1db7905bd63b6bc1f01861807a4e0de0bedcb79dc0bcd8f727efd8a",
+      "library_version": "pilot-1",
+      "library_digest": "59573800c79c8114b6f024d09c95f397a85605b78642764f79007a194bd975ab",
+      "declared_paths": [
+        "tests/gui_completion/project_sort_reset.test.js",
+        "tests/gui_completion/test_project_sort_reset.py"
+      ],
+      "primary_family": "pure-logic",
+      "families": [
+        "pure-logic"
+      ],
+      "family_source": "built-in default: the project has no .quadratus/policy.json",
+      "overlays": [],
+      "gates": [
+        {
+          "id": "scope",
+          "runner": "builtin:scope",
+          "required": true
+        },
+        {
+          "id": "unit-tests",
+          "runner": "command",
+          "required": true,
+          "argv": [
+            "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q"
+          ],
+          "cwd": ".",
+          "minimum_tests": 1
+        }
+      ],
+      "absent_gates": [],
+      "skipped_gates": [],
+      "adapters": {
+        "pure-logic": {
+          "test_runner": {
+            "status": "detected",
+            "value": [
+              "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q"
+            ],
+            "source": "repo_scan.check_command",
+            "required": true
+          },
+          "typecheck_list": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": false
+          }
+        }
+      },
+      "deny_write": [
+        ".git/**",
+        ".env",
+        ".env.*",
+        ".quadratus/**",
+        ".claude/skills/.df-sync.txt",
+        ".claude/skills/code-review/SKILL.md",
+        ".claude/skills/code-review/agents/openai.yaml",
+        ".claude/skills/df-design/SKILL.md",
+        ".claude/skills/df-design/claude-md-design-block.md",
+        ".claude/skills/df-design/design-briefs.md",
+        ".claude/skills/df-model-routing/SKILL.md",
+        ".claude/skills/df-ship-check/SKILL.md",
+        ".claude/skills/df-writing/SKILL.md",
+        ".claude/skills/df-writing/tells.md",
+        ".claude/skills/domain-modeling/ADR-FORMAT.md",
+        ".claude/skills/domain-modeling/CONTEXT-FORMAT.md",
+        ".claude/skills/domain-modeling/SKILL.md",
+        ".claude/skills/domain-modeling/agents/openai.yaml",
+        ".claude/skills/grill-with-docs/SKILL.md",
+        ".claude/skills/grill-with-docs/agents/openai.yaml",
+        ".claude/skills/grilling/SKILL.md",
+        ".claude/skills/grilling/agents/openai.yaml",
+        ".claude/skills/handoff/SKILL.md",
+        ".claude/skills/handoff/agents/openai.yaml",
+        ".claude/skills/implement/SKILL.md",
+        ".claude/skills/implement/agents/openai.yaml",
+        ".claude/skills/setup-matt-pocock-skills/SKILL.md",
+        ".claude/skills/setup-matt-pocock-skills/agents/openai.yaml",
+        ".claude/skills/setup-matt-pocock-skills/domain.md",
+        ".claude/skills/setup-matt-pocock-skills/issue-tracker-github.md",
+        ".claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md",
+        ".claude/skills/setup-matt-pocock-skills/issue-tracker-local.md",
+        ".claude/skills/setup-matt-pocock-skills/triage-labels.md",
+        ".claude/skills/tdd/SKILL.md",
+        ".claude/skills/tdd/agents/openai.yaml",
+        ".claude/skills/tdd/mocking.md",
+        ".claude/skills/tdd/tests.md",
+        ".claude/skills/to-spec/SKILL.md",
+        ".claude/skills/to-spec/agents/openai.yaml",
+        ".claude/skills/to-tickets/SKILL.md",
+        ".claude/skills/to-tickets/agents/openai.yaml",
+        ".github/workflows/ci-cd.yml",
+        ".gitignore",
+        "CLAUDE.md",
+        "README.md",
+        "app.py",
+        "diagnostic/preview.py",
+        "diagnostic/seed.json",
+        "docs/BULK_EDIT.md",
+        "docs/CSV_IMPORT.md",
+        "docs/JOINT_REPAIR.md",
+        "docs/SAVED_FILTERS.md",
+        "fail_logs.txt",
+        "orchestrator.py",
+        "package-lock.json",
+        "package.json",
+        "requirements.txt",
+        "static/favicon.svg",
+        "static/js/annotations.js",
+        "static/js/recording.js",
+        "test_output.log",
+        "tests/browser/run.js",
+        "tests/browser/scenarios/01-full-flow.js",
+        "tests/browser/scenarios/02-late-preview.js",
+        "tests/browser/scenarios/03-late-project-preview.js",
+        "tests/browser/scenarios/04-apply-race.js",
+        "tests/browser/scenarios/05-serialization.js",
+        "tests/browser/scenarios/06-keyboard.js",
+        "tests/browser/scenarios/07-preview-focus.js",
+        "tests/browser/scenarios/08-presets.js",
+        "tests/browser/server.py",
+        "tests/sorting/browser_typed_query.test.js",
+        "tests/sorting/project_sort.test.js",
+        "tests/sorting/test_project_sort.py",
+        "tests/test_basic.py",
+        "tests/test_bulk_edit.py",
+        "tests/test_import_preview.py",
+        "tests/test_ui_project_search.py",
+        "tests/ui/bulk_coverage.test.js",
+        "tests/ui/bulk_keyboard.test.js",
+        "tests/ui/bulk_serialization.test.js",
+        "tests/ui/fake_dom.js",
+        "tests/ui/import_preview.test.js",
+        "tests/ui/load_app.js",
+        "tests/ui/load_app.test.js",
+        "tests/ui/mutation_check.js",
+        "tests/ui/project_search.test.js",
+        "node_modules/**"
+      ],
+      "sensitive": [],
+      "defaults": {
+        "family": "pure-logic",
+        "required_gates": [
+          "scope"
+        ],
+        "scope_max_lines": 100,
+        "overrun_ratio": 1.5,
+        "worker_depth": 1
+      },
+      "capability_policy": {
+        "deny_write": [
+          ".git/**",
+          ".env",
+          ".env.*",
+          ".quadratus/**"
+        ],
+        "external_effects": "deny",
+        "native_delegation": "deny",
+        "sensitive": []
+      },
+      "blocked": [],
+      "hash": "de45ca6b59ce5b222329f741b752c41947ec2fc994509b56f259eee7c8038537"
+    },
+    {
+      "task_id": "t3",
+      "schema_version": 1,
+      "repository_id": "local/project",
+      "policy_source": "built-in",
+      "policy_hash": "4409739bd1db7905bd63b6bc1f01861807a4e0de0bedcb79dc0bcd8f727efd8a",
+      "library_version": "pilot-1",
+      "library_digest": "59573800c79c8114b6f024d09c95f397a85605b78642764f79007a194bd975ab",
+      "declared_paths": [
+        "tests/gui_completion/browser_sort_reset.test.js"
+      ],
+      "primary_family": "pure-logic",
+      "families": [
+        "pure-logic"
+      ],
+      "family_source": "built-in default: the project has no .quadratus/policy.json",
+      "overlays": [],
+      "gates": [
+        {
+          "id": "scope",
+          "runner": "builtin:scope",
+          "required": true
+        },
+        {
+          "id": "unit-tests",
+          "runner": "command",
+          "required": true,
+          "argv": [
+            "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+            "-m",
+            "pytest",
+            "-q"
+          ],
+          "cwd": ".",
+          "minimum_tests": 1
+        }
+      ],
+      "absent_gates": [],
+      "skipped_gates": [],
+      "adapters": {
+        "pure-logic": {
+          "test_runner": {
+            "status": "detected",
+            "value": [
+              "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/installation/venv/bin/python",
+              "-m",
+              "pytest",
+              "-q"
+            ],
+            "source": "repo_scan.check_command",
+            "required": true
+          },
+          "typecheck_list": {
+            "status": "not_configured",
+            "value": null,
+            "source": null,
+            "required": false
+          }
+        }
+      },
+      "deny_write": [
+        ".git/**",
+        ".env",
+        ".env.*",
+        ".quadratus/**",
+        ".claude/skills/.df-sync.txt",
+        ".claude/skills/code-review/SKILL.md",
+        ".claude/skills/code-review/agents/openai.yaml",
+        ".claude/skills/df-design/SKILL.md",
+        ".claude/skills/df-design/claude-md-design-block.md",
+        ".claude/skills/df-design/design-briefs.md",
+        ".claude/skills/df-model-routing/SKILL.md",
+        ".claude/skills/df-ship-check/SKILL.md",
+        ".claude/skills/df-writing/SKILL.md",
+        ".claude/skills/df-writing/tells.md",
+        ".claude/skills/domain-modeling/ADR-FORMAT.md",
+        ".claude/skills/domain-modeling/CONTEXT-FORMAT.md",
+        ".claude/skills/domain-modeling/SKILL.md",
+        ".claude/skills/domain-modeling/agents/openai.yaml",
+        ".claude/skills/grill-with-docs/SKILL.md",
+        ".claude/skills/grill-with-docs/agents/openai.yaml",
+        ".claude/skills/grilling/SKILL.md",
+        ".claude/skills/grilling/agents/openai.yaml",
+        ".claude/skills/handoff/SKILL.md",
+        ".claude/skills/handoff/agents/openai.yaml",
+        ".claude/skills/implement/SKILL.md",
+        ".claude/skills/implement/agents/openai.yaml",
+        ".claude/skills/setup-matt-pocock-skills/SKILL.md",
+        ".claude/skills/setup-matt-pocock-skills/agents/openai.yaml",
+        ".claude/skills/setup-matt-pocock-skills/domain.md",
+        ".claude/skills/setup-matt-pocock-skills/issue-tracker-github.md",
+        ".claude/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md",
+        ".claude/skills/setup-matt-pocock-skills/issue-tracker-local.md",
+        ".claude/skills/setup-matt-pocock-skills/triage-labels.md",
+        ".claude/skills/tdd/SKILL.md",
+        ".claude/skills/tdd/agents/openai.yaml",
+        ".claude/skills/tdd/mocking.md",
+        ".claude/skills/tdd/tests.md",
+        ".claude/skills/to-spec/SKILL.md",
+        ".claude/skills/to-spec/agents/openai.yaml",
+        ".claude/skills/to-tickets/SKILL.md",
+        ".claude/skills/to-tickets/agents/openai.yaml",
+        ".github/workflows/ci-cd.yml",
+        ".gitignore",
+        "CLAUDE.md",
+        "README.md",
+        "app.py",
+        "diagnostic/preview.py",
+        "diagnostic/seed.json",
+        "docs/BULK_EDIT.md",
+        "docs/CSV_IMPORT.md",
+        "docs/JOINT_REPAIR.md",
+        "docs/SAVED_FILTERS.md",
+        "fail_logs.txt",
+        "orchestrator.py",
+        "package-lock.json",
+        "package.json",
+        "requirements.txt",
+        "static/favicon.svg",
+        "static/js/annotations.js",
+        "static/js/recording.js",
+        "test_output.log",
+        "tests/browser/run.js",
+        "tests/browser/scenarios/01-full-flow.js",
+        "tests/browser/scenarios/02-late-preview.js",
+        "tests/browser/scenarios/03-late-project-preview.js",
+        "tests/browser/scenarios/04-apply-race.js",
+        "tests/browser/scenarios/05-serialization.js",
+        "tests/browser/scenarios/06-keyboard.js",
+        "tests/browser/scenarios/07-preview-focus.js",
+        "tests/browser/scenarios/08-presets.js",
+        "tests/browser/server.py",
+        "tests/sorting/browser_typed_query.test.js",
+        "tests/sorting/project_sort.test.js",
+        "tests/sorting/test_project_sort.py",
+        "tests/test_basic.py",
+        "tests/test_bulk_edit.py",
+        "tests/test_import_preview.py",
+        "tests/test_ui_project_search.py",
+        "tests/ui/bulk_coverage.test.js",
+        "tests/ui/bulk_keyboard.test.js",
+        "tests/ui/bulk_serialization.test.js",
+        "tests/ui/fake_dom.js",
+        "tests/ui/import_preview.test.js",
+        "tests/ui/load_app.js",
+        "tests/ui/load_app.test.js",
+        "tests/ui/mutation_check.js",
+        "tests/ui/project_search.test.js",
+        "node_modules/**"
+      ],
+      "sensitive": [],
+      "defaults": {
+        "family": "pure-logic",
+        "required_gates": [
+          "scope"
+        ],
+        "scope_max_lines": 100,
+        "overrun_ratio": 1.5,
+        "worker_depth": 1
+      },
+      "capability_policy": {
+        "deny_write": [
+          ".git/**",
+          ".env",
+          ".env.*",
+          ".quadratus/**"
+        ],
+        "external_effects": "deny",
+        "native_delegation": "deny",
+        "sensitive": []
+      },
+      "blocked": [],
+      "hash": "d53603b2c9a82b0d106d52fe3ccb68a4d7eeb88f056d6111755b02f6d8ffb922"
+    }
+  ],
+  "budget": {
+    "limits": {
+      "max_calls": 20,
+      "max_reported_tokens": 2000000,
+      "wall_seconds": 1800,
+      "max_concurrent_workers": 2,
+      "max_cost_usd": null,
+      "api_cost_rates": [],
+      "reserve_tokens_per_call": 250000,
+      "max_tokens_per_call": 1500000
+    },
+    "reserved_attempts": 12,
+    "api_cost_usd": 0.0,
+    "api_cost_overshoot_usd": 0.0,
+    "unknown_api_cost_attempts": 0,
+    "cost_boundary": "configured API upper-rate threshold; in-flight calls can overshoot; CLI excluded",
+    "in_flight": 0,
+    "input_tokens": 1725066,
+    "output_tokens": 50021,
+    "reported_tokens": 1775087,
+    "unknown_usage_attempts": 0,
+    "stop_reason": "",
+    "preserved_responses": [],
+    "elapsed_seconds": 1453.7902813330002,
+    "token_boundary": "post-return threshold; in-flight calls can overshoot",
+    "reserve_boundary": "no attempt starts unless the remaining token budget covers reserve_tokens_per_call; a call that reports more than max_tokens_per_call stops the run after it returns",
+    "oversized_calls": [],
+    "shaped_reservations": 1,
+    "shape_boundary": "a summary-only call whose CLI argv enforces one model turn reserves min(reserve_tokens_per_call, SUMMARY_CALL_RESERVE_TOKENS), a measured allowance (largest saved close-out 24,006 reported tokens), not a hard bound: output tokens are not capped at the CLI; every other call, including a summary call on a CLI with no turn flag, reserves reserve_tokens_per_call in full",
+    "input_boundary": "normalized provider input includes cached input; do not add it again",
+    "wall_boundary": "attempt timeout plus required external process supervisor"
+  },
+  "selected_limits": {
+    "max_tasks": 10,
+    "run_limits": {
+      "max_calls": 20,
+      "max_reported_tokens": 2000000,
+      "wall_seconds": 1800,
+      "max_concurrent_workers": 2,
+      "max_cost_usd": null,
+      "api_cost_rates": [],
+      "reserve_tokens_per_call": 250000,
+      "max_tokens_per_call": 1500000
+    },
+    "summary_call_reserve_tokens": 64000,
+    "lead_max_turns": 20,
+    "lead_max_turns_source": "derived from the 1,500,000-token per-call threshold",
+    "survey_recovery_tasks": 4,
+    "described": "Task limit: 10. At most 20 model calls and 2,000,000 reported tokens in total; 2 parallel worker(s). Time limit 1,800 seconds: no call starts after it and each call gets only the time left, but checks and captures between calls are not cut off. An ordinary call starts only while at least 250,000 tokens of the total remain; a one-turn summary call on a CLI whose flags hold it to one turn (Claude, Grok) needs 64,000. A single call that reports more than 1,500,000 tokens stops the run after it returns; it cannot cut that call short. Token counts are what the CLIs report after each call, not a hard ceiling and not an invoice. Lead turn cap: 20 rounds per lead or reviewer call (derived from the 1,500,000-token per-call threshold); Codex seats have no turn flag and are not held to it. Recovery: up to 4 extra continuation or repair task(s) after failures."
+  },
+  "unnamed_test_files": [],
+  "original_test_runs": [],
+  "skip_baselines": [],
+  "unexecuted_acceptance": [
+    {
+      "task": "t1",
+      "role": "lead",
+      "author": "grok:default",
+      "item": "live capture/reviewer at http://127.0.0.1:53139/ \u2014 forbidden here; harness owns those shots. Typed-search preservation on reset is covered by Node baseline, not by capture clicks; dedicated `tests/gui_completion/` cases are the next slice.",
+      "why": "",
+      "requirements": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R10",
+        "R11",
+        "R12"
+      ],
+      "after_check": 0
+    },
+    {
+      "task": "t2",
+      "role": "lead",
+      "author": "openai:gpt-5.6-sol",
+      "item": "node --test tests/gui_completion/project_sort_reset.test.js",
+      "why": "targeted command is not in the approved command list; covered by the approved full Node run",
+      "requirements": [
+        "R8",
+        "R9",
+        "R13"
+      ],
+      "after_check": 1
+    },
+    {
+      "task": "t2",
+      "role": "lead",
+      "author": "openai:gpt-5.6-sol",
+      "item": "node --test tests/sorting/project_sort.test.js",
+      "why": "targeted command is not in the approved command list; covered by the approved full Node run",
+      "requirements": [
+        "R8",
+        "R9",
+        "R13"
+      ],
+      "after_check": 1
+    },
+    {
+      "task": "t2",
+      "role": "lead",
+      "author": "openai:gpt-5.6-sol",
+      "item": "deliberate implementation mutation check",
+      "why": "would require an out-of-scope source edit or an unapproved alternate harness command",
+      "requirements": [
+        "R8",
+        "R9",
+        "R13"
+      ],
+      "after_check": 1
+    },
+    {
+      "task": "t3",
+      "role": "lead",
+      "author": "openai:gpt-5.6-sol",
+      "item": "/Users/davisfox/.nvm/versions/node/v24.15.0/bin/node --test tests/gui_completion/browser_sort_reset.test.js",
+      "why": "targeted command is not approved; full approved Node discovery ran it",
+      "requirements": [
+        "R10",
+        "R13"
+      ],
+      "after_check": 2
+    },
+    {
+      "task": "t3",
+      "role": "lead",
+      "author": "openai:gpt-5.6-sol",
+      "item": "deliberate implementation mutation",
+      "why": "both new real-browser cases were skipped because Chromium could not launch, so mutation sensitivity could not be demonstrated",
+      "requirements": [
+        "R10",
+        "R13"
+      ],
+      "after_check": 2
+    }
+  ],
+  "stale_capture_fixtures": null,
+  "delegation": {
+    "controlled_tokens": 1775087,
+    "native_child_tokens": 0,
+    "auxiliary_tokens": 0,
+    "auxiliary_tokens_scope": "Explicit auxiliary InvocationEvent rows only; vendor aggregates are not included.",
+    "combined_reported_tokens": 1775087,
+    "parent_child_overlap": "not_applicable",
+    "known_minimum_tokens": 1775087,
+    "unknown_invocations": 0,
+    "unknown_detail": [],
+    "native_children": 0,
+    "unidentified_native_activity": 0,
+    "note": "Subscription usage including cached and repeated input. Native children counted once at their highest cumulative reading, never summed across updates. The combined sum assumes child counters are additional to parent counters; that overlap is unverified. known_minimum_tokens is a deprecated compatibility key for that conditional sum, not an established lower bound. Auxiliary usage covers explicit auxiliary event rows only, not vendor aggregates. Unknown usage is unknown, not zero."
+  },
+  "scope_reports": [
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js",
+        "templates/index.html"
+      ],
+      "changed_lines": 18,
+      "max_lines": 40,
+      "code_lines": 18,
+      "test_lines": 0,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js",
+        "templates/index.html"
+      ],
+      "changed_lines": 18,
+      "max_lines": 40,
+      "code_lines": 18,
+      "test_lines": 0,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js",
+        "templates/index.html"
+      ],
+      "changed_lines": 18,
+      "max_lines": 40,
+      "code_lines": 18,
+      "test_lines": 0,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "static/js/app.js",
+        "templates/index.html"
+      ],
+      "changed_lines": 18,
+      "max_lines": 40,
+      "code_lines": 18,
+      "test_lines": 0,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/gui_completion/project_sort_reset.test.js",
+        "tests/gui_completion/test_project_sort_reset.py"
+      ],
+      "changed_lines": 112,
+      "max_lines": 100,
+      "code_lines": 0,
+      "test_lines": 112,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/gui_completion/project_sort_reset.test.js",
+        "tests/gui_completion/test_project_sort_reset.py"
+      ],
+      "changed_lines": 112,
+      "max_lines": 100,
+      "code_lines": 0,
+      "test_lines": 112,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/gui_completion/project_sort_reset.test.js",
+        "tests/gui_completion/test_project_sort_reset.py"
+      ],
+      "changed_lines": 112,
+      "max_lines": 100,
+      "code_lines": 0,
+      "test_lines": 112,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/gui_completion/browser_sort_reset.test.js"
+      ],
+      "changed_lines": 116,
+      "max_lines": 100,
+      "code_lines": 0,
+      "test_lines": 116,
+      "oversized": false
+    },
+    {
+      "within_scope": true,
+      "out_of_scope": [],
+      "changed": [
+        "tests/gui_completion/browser_sort_reset.test.js"
+      ],
+      "changed_lines": 116,
+      "max_lines": 100,
+      "code_lines": 0,
+      "test_lines": 116,
+      "oversized": false
+    }
+  ]
+}

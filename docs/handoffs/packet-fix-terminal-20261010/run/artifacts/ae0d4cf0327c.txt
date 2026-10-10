@@ -1,0 +1,24 @@
+## Goal (verbatim)
+
+Add one small usability feature to the existing sorted GameTape project library: a Restore library order button. Preserve current UI and every existing search, sort, count, create/delete confirmation, navigation, player/tagging/preset behavior. No dependency, backend, seed/reset, provider or fixture changes.
+
+G1 Add #btn-project-sort-reset beside the sort controls. A normal click restores original API/library position order, sets #projects-container data-sort="original", and sets readable #project-sort-status to "Library order". Repeated reset is harmless. The next ordinary sort click starts A→Z, then Z→A as before. Reset is local: no API request or reload.
+G2 Reset preserves typed search/hash/count and matching cards/no-match vs true-empty. It returns focus to the search field. Normal create/delete still reloads correctly in the active order and navigation uses the same ID. Add meaningful NEW tests only under tests/gui_completion/ for reset from both sort directions, stable library ordering, query/hash/count/focus preservation and no network. All baseline tests remain byte-identical, including the original23.
+G3 Controls work at1280×800 and390×844 with no overflow or unexpected browser errors. Declare actual click/wait capture steps on fresh disposable seeded backend: wait for3cards, click sort once, click restore, wait for data-sort="original" and first Alpha Cup, capture desktop/mobile. Report actual capture/reviewer/check findings, blocked/skipped/NOTRUN honestly. Capture clicks do not prove typing; real Node and independent browser controls cover it. Do not claim GUI/report completion before actual harness facts.
+
+## Numbered requirements
+
+R1: templates/index.html gains `<button type="button" id="btn-project-sort-reset">` placed beside #btn-project-sort in `.project-search-row`, with existing controls, labels and layout otherwise unchanged.
+R2: Clicking #btn-project-sort-reset reorders `.project-card` elements back to API/library position (ascending `data-index`), sets `#projects-container` `data-sort="original"`, and sets #project-sort-status text to "Library order".
+R3: Repeated reset clicks are harmless (same order, same attributes); the next #btn-project-sort click after a reset sorts A→Z (data-sort="asc"), then Z→A, exactly as the baseline toggle does.
+R4: Reset is local: it issues no fetch/API request and does not reload or change window.location.
+R5: Reset preserves the typed search value, the #q= hash (no new replaceState call), #project-search-count text, each card's hidden state, and the visibility of #project-search-empty vs #projects-empty.
+R6: After reset, document.activeElement is #project-search.
+R7: Create and delete (with confirm) still call loadProjects and re-render in the currently active order, including "original" after a reset; card click still navigates with the same project id.
+R8: New tests exist only under tests/gui_completion/ and cover: reset from asc, reset from desc, stable library ordering (ids by data-index), query/hash/count/focus preservation, and no network on reset; a pytest wrapper runs them with the project's node harness.
+R9: No existing test file is modified (all baseline tests, including the original 23, stay byte-identical); no files outside static/js/app.js, static/css/style.css, templates/index.html, tests/gui_completion/ change.
+R10: Controls render without horizontal overflow or console errors at 1280×800 and 390×844.
+R11: Capture is declared and run on a fresh seeded backend with steps: wait for 3 cards, click sort once, click restore, wait for data-sort="original" with first card Alpha Cup; desktop and mobile shots reported honestly (blocked/skipped/NOTRUN stated as such).
+R12: No new dependency, backend, seed/reset, provider or fixture changes; all existing search, sort, count, create/delete confirmation, navigation, player/tagging/preset behaviour unchanged.
+
+Compare the list with the goal. Reply exactly COMPLETE if it covers everything the goal asks for and forbids. Otherwise reply only with lines 'ADD: <one testable requirement the list misses>' (deliverables, interfaces, user interface, documentation, compatibility with existing behaviour, and must-not constraints) and 'AMBIGUOUS: R<n> - <the two readings>'. Mark a requirement ambiguous only when the goal supports readings that would build different things: an ambiguous requirement needs an operator ruling before the run can finish.

@@ -1,0 +1,75 @@
+check: passed: exit 0
+........................................................................ [ 59%]
+.................................................                        [100%]
+121 passed in 2.58s
+extra-1: passed: exit 0
+..
+# Subtest: M opens preview unless a modal is active; I/O/P/B remain intact
+ok 36 - M opens preview unless a modal is active; I/O/P/B remain intact
+  ---
+  duration_ms: 3.246417
+  type: 'test'
+  ...
+# Subtest: newer upload invalidates older
+ok 37 - newer upload invalidates older
+  ---
+  duration_ms: 1.886709
+  type: 'test'
+  ...
+# Subtest: close while pending leaves no rows or status and restores focus
+ok 38 - close while pending leaves no rows or status and restores focus
+  ---
+  duration_ms: 1.295167
+  type: 'test'
+  ...
+# Subtest: project switch while pending ignores old success and failure
+ok 39 - project switch while pending ignores old success and failure
+  ---
+  duration_ms: 4.275792
+  type: 'test'
+  ...
+# Subtest: loads the template and real app, including an APP_JS_PATH override
+ok 40 - loads the template and real app, including an APP_JS_PATH override
+  ---
+  duration_ms: 33.834208
+  type: 'test'
+  ...
+# Subtest: filters instantly without fetching and renders markup names as text
+ok 41 - filters instantly without fetching and renders markup names as text
+  ---
+  duration_ms: 31.551
+  type: 'test'
+  ...
+# Subtest: restores encoded and malformed hash queries safely
+ok 42 - restores encoded and malformed hash queries safely
+  ---
+  duration_ms: 9.1535
+  type: 'test'
+  ...
+# Subtest: distinguishes no matches from an empty library and clears with focus
+ok 43 - distinguishes no matches from an empty library and clears with focus
+  ---
+  duration_ms: 8.332292
+  type: 'test'
+  ...
+# Subtest: delete cancellation and acceptance update filtered results
+ok 44 - delete cancellation and acceptance update filtered results
+  ---
+  duration_ms: 10.669041
+  type: 'test'
+  ...
+# Subtest: create from no-match clears search and reveals reloaded cards
+ok 45 - create from no-match clears search and reveals reloaded cards
+  ---
+  duration_ms: 4.236458
+  type: 'test'
+  ...
+1..45
+# tests 45
+# suites 0
+# pass 45
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1494.747417

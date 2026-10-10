@@ -1,0 +1,50 @@
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -25,6 +25,7 @@
+ const $projectsEmpty       = document.getElementById("projects-empty");
+ const $btnProjectSearchClear = document.getElementById("btn-project-search-clear");
+ const $btnProjectSort = document.getElementById("btn-project-sort");
++const $btnProjectSortReset = document.getElementById("btn-project-sort-reset");
+ const $projectSortStatus = document.getElementById("project-sort-status");
+ const $newProjectName    = document.getElementById("new-project-name");
+ const $projectTitle      = document.getElementById("project-title");
+@@ -135,6 +136,15 @@
+   if (projectSortDir === "") {
+     setTextIfChanged($btnProjectSort, "Sort A→Z");
+     setTextIfChanged($projectSortStatus, "Original order");
++    return;
++  }
++  if (projectSortDir === "original") {
++    const cards = Array.from($projectsContainer.querySelectorAll(".project-card"));
++    cards.sort((a, b) => Number(a.dataset.index) - Number(b.dataset.index));
++    cards.forEach(card => $projectsContainer.appendChild(card));
++    $projectsContainer.dataset.sort = "original";
++    setTextIfChanged($btnProjectSort, "Sort A→Z");
++    setTextIfChanged($projectSortStatus, "Library order");
+     return;
+   }
+   const cards = Array.from($projectsContainer.querySelectorAll(".project-card"));
+@@ -235,6 +245,13 @@
+   projectSortDir = projectSortDir === "asc" ? "desc" : "asc";
+   applyProjectSort();
+ });
++
++function resetProjectSort() {
++  projectSortDir = "original";
++  applyProjectSort();
++  $projectSearch.focus();
++}
++$btnProjectSortReset.addEventListener("click", resetProjectSort);
+ 
+ /* ── Open / Close Project ─────────────────────────────────────────── */
+ async function openProject(id) {
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -23,6 +23,7 @@
+     <input type="search" id="project-search" placeholder="Search projects..." aria-label="Search projects">
+     <button type="button" id="btn-project-search-clear">Clear</button>
+     <button type="button" id="btn-project-sort" aria-describedby="project-sort-status">Sort A&rarr;Z</button>
++    <button type="button" id="btn-project-sort-reset" aria-describedby="project-sort-status">Restore library order</button>
+     <span id="project-sort-status" aria-live="polite">Original order</span>
+     <span class="preset-keys" title="Keyboard shortcuts">Esc clears</span>
+   </div>

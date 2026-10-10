@@ -1,0 +1,34 @@
+{
+  "verdict": "not-met",
+  "run": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project/.quadratus/runs/20261010T160802Z-8c1d2343",
+  "not_met": [
+    "the run did not complete",
+    "the run stopped with an error: CheckUnattributable: the check failed without an attributable assertion failure (extra-1: error: timed out after 600s); returncode 1; output artifact f2809e16be05. No repair call was made. Work preser",
+    "work was still in flight when the run stopped",
+    "the last check failed: gate suite"
+  ],
+  "unverified": [
+    "the latest recorded check did not pass",
+    "required check extra-1 error: timed out after 600s",
+    "R1 has no met status (covered by t1)",
+    "R10 has no met status (covered by t1)",
+    "R11 has no met status (covered by t1)",
+    "R12 has no met status (covered by t1)",
+    "R13 has no met status (covered by t2)",
+    "R14 has no met status (open (added by the requirements review))",
+    "R2 has no met status (covered by t1)",
+    "R3 has no met status (covered by t1)",
+    "R4 has no met status (covered by t1)",
+    "R5 has no met status (covered by t1)",
+    "R6 has no met status (covered by t1)",
+    "R7 has no met status (covered by t1)",
+    "R8 has no met status (covered by t2)",
+    "R9 has no met status (covered by t2)",
+    "task t1 reported NOT RUN and no later check shows it ran: live capture/reviewer at http://127.0.0.1:53139/ \u2014 forbidden here; harness owns those shots. Typed-search preservation o",
+    "task t2 reported NOT RUN and no later check shows it ran: node --test tests/gui_completion/project_sort_reset.test.js",
+    "task t2 reported NOT RUN and no later check shows it ran: node --test tests/sorting/project_sort.test.js",
+    "task t2 reported NOT RUN and no later check shows it ran: deliberate implementation mutation check",
+    "task t3 reported NOT RUN and no later check shows it ran: /Users/davisfox/.nvm/versions/node/v24.15.0/bin/node --test tests/gui_completion/browser_sort_reset.test.js",
+    "task t3 reported NOT RUN and no later check shows it ran: deliberate implementation mutation"
+  ]
+}

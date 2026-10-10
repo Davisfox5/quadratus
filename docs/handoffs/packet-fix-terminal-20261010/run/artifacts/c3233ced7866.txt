@@ -1,0 +1,21 @@
+The review conflicts with the required restore contract in a few places. I’ll read the sort/reset code and the tests that pin it, then fix only what still fits that contract.The restore path matches the required contract. I’ll run the approved checks, then answer each review finding against that contract instead of changing specified behavior.No code change. Each finding either contradicts the restore contract or is already covered by the checks that just passed.
+
+1. **Focus on `#project-search` — rebut.** `resetProjectSort()` must focus `#project-search` after the reorder. That is the finished-when behavior for this control, same as the role packet. Leaving focus on the button would fail the slice. The screen-reader and 390px keyboard costs are a spec objection, not a defect to patch here.
+
+2. **“Original order” vs “Library order” — rebut.** Load stays on the `projectSortDir === ""` branch: no `data-sort`, status “Original order”. Restore uses the `"original"` branch: `data-sort="original"`, status “Library order”. Those two strings are the contract. Unifying them would change the initial-state assertion in `tests/sorting/project_sort.test.js`.
+
+3. **Repeat-press silence — rebut.** `setTextIfChanged` is the existing status path, and a second Restore is a no-op on purpose. `aria-pressed` or disabling the button for `""` or `"original"` would either edit the byte-identical `""` branch or block the required click that moves a fresh load from `""` to `"original"`. Not in this slice.
+
+4. **390px wrap — rebut.** No horizontal overflow, so `static/css/style.css` stays untouched. `node --test` ran `typed-query browser review at 390x844` against the live template (the new button is in that row) and `noOverflow` passed. A taller wrapped row is allowed; the status still has a box.
+
+5. **Long button label — rebut.** The control text is specified as “Restore library order”. Shortening it would miss the template requirement. Shared `#22263a` styling is the row rule already applied to every button there.
+
+6. **Duplicated reorder / shadowed `cards` — rebut.** The inner `const cards` is block-scoped and that branch returns before the outer `cards` binding is used, so there is no TDZ hit. A `reorderBy` helper would rewrite the asc/desc path, which must stay as it is.
+
+7. **No key binding — rebut.** The match-tagging rule does not add a shortcut for this library control. `#btn-project-sort` has none either, and the row may only gain this button. A new binding would also collide with Esc, which already clears search.
+
+8. **Checks were unverified — closed.** Ran both approved commands from this tree.
+- `node --test`: 39 pass / 0 fail (includes `project_sort.test.js` 5/0, `project_search.test.js`, and both viewport reviews; nothing skipped).
+- `pytest -q -p no:cacheprovider`: 120 passed in 5.86s.
+
+CHANGED: []

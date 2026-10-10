@@ -1,0 +1,32 @@
+{
+  "limits": {
+    "max_calls": 20,
+    "max_reported_tokens": 2000000,
+    "wall_seconds": 1800,
+    "max_concurrent_workers": 2,
+    "max_cost_usd": null,
+    "api_cost_rates": [],
+    "reserve_tokens_per_call": 250000,
+    "max_tokens_per_call": 1500000
+  },
+  "reserved_attempts": 12,
+  "api_cost_usd": 0.0,
+  "api_cost_overshoot_usd": 0.0,
+  "unknown_api_cost_attempts": 0,
+  "cost_boundary": "configured API upper-rate threshold; in-flight calls can overshoot; CLI excluded",
+  "in_flight": 0,
+  "input_tokens": 1725066,
+  "output_tokens": 50021,
+  "reported_tokens": 1775087,
+  "unknown_usage_attempts": 0,
+  "stop_reason": "",
+  "preserved_responses": [],
+  "elapsed_seconds": 850.3202701249975,
+  "token_boundary": "post-return threshold; in-flight calls can overshoot",
+  "reserve_boundary": "no attempt starts unless the remaining token budget covers reserve_tokens_per_call; a call that reports more than max_tokens_per_call stops the run after it returns",
+  "oversized_calls": [],
+  "shaped_reservations": 1,
+  "shape_boundary": "a summary-only call whose CLI argv enforces one model turn reserves min(reserve_tokens_per_call, SUMMARY_CALL_RESERVE_TOKENS), a measured allowance (largest saved close-out 24,006 reported tokens), not a hard bound: output tokens are not capped at the CLI; every other call, including a summary call on a CLI with no turn flag, reserves reserve_tokens_per_call in full",
+  "input_boundary": "normalized provider input includes cached input; do not add it again",
+  "wall_boundary": "attempt timeout plus required external process supervisor"
+}

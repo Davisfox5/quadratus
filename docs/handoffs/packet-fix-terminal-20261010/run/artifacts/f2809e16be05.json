@@ -1,0 +1,1 @@
+{"author": "harness", "chars": 239, "id": "f2809e16be05", "kind": "check-output", "lines": 5, "preview": "check: passed: exit 0\n........................................................................ [ 59%]\n.................................................                        [100%]\n121 passed in 2.56s\nextra-1: error: timed out after 600s"}

@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GameTape - Sports Video Tagging</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<!-- ── Project List Screen ──────────────────────────────────────────── -->
+<div id="project-list-screen" class="screen active">
+  <header>
+    <h1>GameTape</h1>
+    <p class="subtitle">Sports Video Tagging</p>
+  </header>
+  <div class="project-controls">
+    <input type="text" id="new-project-name" placeholder="New project name...">
+    <button id="btn-create-project">+ New Project</button>
+  </div>
+  <div class="project-controls project-search-row">
+    <input type="search" id="project-search" placeholder="Search projects..." aria-label="Search projects">
+    <button type="button" id="btn-project-search-clear">Clear</button>
+    <button type="button" id="btn-project-sort" aria-describedby="project-sort-status">Sort A&rarr;Z</button>
+    <button type="button" id="btn-project-sort-reset" aria-describedby="project-sort-status">Restore library order</button>
+    <span id="project-sort-status" aria-live="polite">Original order</span>
+    <span class="preset-keys" title="Keyboard shortcuts">Esc clears</span>
+  </div>
+  <p id="project-search-count" aria-live="polite"></p>
+  <p id="project-search-empty" hidden aria-live="polite">No projects match your search.</p>
+  <p id="projects-empty" hidden>No projects yet. Create one above.</p>
+  <div id="projects-container"></div>
+</div>
+
+<!-- ── Tagging Screen ───────────────────────────────────────────────── -->
+<div id="tagging-screen" class="screen">
+  <nav class="top-bar">
+    <button id="btn-back">&larr; Projects</button>
+    <h2 id="project-title"></h2>
+    <button id="btn-edit-video">Edit Video</button>
+    <button id="btn-manage-players">Players</button>
+    <button id="btn-manage-tags">Manage Tag Types</button>
+  </nav>
+
+  <div class="main-layout">
+    <!-- Left: Video + Controls -->
+    <div class="video-panel">
+      <div class="video-wrapper">
+        <div id="no-video-msg" class="placeholder-msg">
+          <p>No video loaded. Upload a game video to get started.</p>
+          <label class="upload-btn">
+            Choose Video
+            <input type="file" id="video-upload" accept="video/*" hidden>
+          </label>
+        </div>
+        <video id="game-video" controls></video>
+        <canvas id="annotation-canvas"></canvas>
+      </div>
+
+      <!-- Annotation Toolbar -->
+      <div id="ann-toolbar" class="ann-toolbar">
+        <div class="ann-tools-row">
+          <button class="ann-tool-btn active" data-tool="arrow" title="Arrow">&#8599;</button>
+          <button class="ann-tool-btn" data-tool="rect" title="Rectangle">&#9633;</button>
+          <button class="ann-tool-btn" data-tool="circle" title="Circle">&#9675;</button>
+          <button class="ann-tool-btn" data-tool="freehand" title="Freehand">&#9998;</button>
+          <button class="ann-tool-btn" data-tool="text" title="Text">T</button>
+          <span class="ann-sep"></span>
+          <input type="color" id="ann-color" value="#ff0000" title="Color">
+          <select id="ann-width" title="Line width">
+            <option value="2">Thin</option>
+            <option value="3" selected>Medium</option>
+            <option value="5">Thick</option>
+            <option value="8">Extra thick</option>
+          </select>
+          <span class="ann-sep"></span>
+          <button id="btn-ann-freeze" class="ann-action-btn" title="Freeze frame: annotations drawn will show for a fixed duration at this timestamp">Freeze Frame</button>
+          <label class="ann-freeze-dur" title="Freeze duration (seconds)">
+            <input type="number" id="ann-freeze-dur" value="2" min="0.5" max="10" step="0.5">s
+          </label>
+          <span class="ann-sep"></span>
+          <button id="btn-ann-clear" class="ann-action-btn ann-danger" title="Remove all annotations from this clip">Clear All</button>
+          <button id="btn-ann-done" class="ann-action-btn ann-done-btn">Done</button>
+        </div>
+        <div id="ann-list" class="ann-list"></div>
+        <div id="rec-controls" class="rec-controls">
+          <button id="btn-rec-start" class="rec-btn rec-start-btn" title="Record analysis session with voiceover">Record</button>
+          <button id="btn-rec-stop" class="rec-btn rec-stop-btn" title="Stop recording" style="display:none">Stop</button>
+          <span id="rec-timer" class="rec-timer" style="display:none">0:00</span>
+          <span id="rec-status" class="rec-status"></span>
+        </div>
+      </div>
+
+      <!-- Tagging controls -->
+      <div class="tag-controls">
+        <div class="mark-row">
+          <button id="btn-mark-in" class="mark-btn">Mark IN</button>
+          <span id="mark-in-display" class="time-display">--:--</span>
+          <button id="btn-mark-out" class="mark-btn">Mark OUT</button>
+          <span id="mark-out-display" class="time-display">--:--</span>
+        </div>
+        <div class="tag-row">
+          <select id="clip-tag-type"></select>
+          <input type="text" id="clip-label" placeholder="Label (optional)">
+          <button id="btn-save-clip" class="save-btn">Save Clip</button>
+        </div>
+        <div class="tag-row">
+          <input type="text" id="clip-notes" placeholder="Notes (optional)" style="flex:1">
+        </div>
+        <div class="tag-row players-row">
+          <label class="players-label">Players:</label>
+          <div id="player-checkboxes" class="player-checkboxes"></div>
+        </div>
+      </div>
+
+      <!-- Timeline -->
+      <div class="timeline-container">
+        <div id="timeline" class="timeline">
+          <div id="timeline-playhead" class="playhead"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Clip list + filters -->
+    <div class="clips-panel">
+      <h3>Clips</h3>
+      <div class="filter-bar">
+        <label>Filter:</label>
+        <select id="filter-tag-type" aria-label="Filter by tag type">
+          <option value="">All Types</option>
+        </select>
+        <select id="filter-player" aria-label="Filter by player">
+          <option value="">All Players</option>
+        </select>
+        <input type="text" id="filter-search" placeholder="Search labels..." aria-label="Search clips">
+      </div>
+      <div class="preset-bar" role="group" aria-labelledby="preset-bar-label">
+        <span id="preset-bar-label" class="preset-label">Saved:</span>
+        <select id="filter-preset-select" aria-label="Saved filter presets" title="Restore a saved filter (P)">
+          <option value="">No saved filters</option>
+        </select>
+        <input type="text" id="filter-preset-name" maxlength="60" placeholder="Preset name" aria-label="Preset name" title="Name, then Enter to save">
+        <button type="button" id="btn-preset-save" class="preset-btn" title="Save current filters">Save</button>
+        <button type="button" id="btn-preset-rename" class="preset-btn" title="Rename selected preset">Rename</button>
+        <button type="button" id="btn-preset-delete" class="preset-btn" title="Delete selected preset">Delete</button>
+        <span class="preset-keys" title="Keyboard shortcuts">P select · Enter save</span>
+        <span id="preset-status" class="preset-status" role="status" aria-live="polite"></span>
+      </div>
+      <div class="bulk-bar">
+        <button type="button" id="btn-bulk-edit" class="preset-btn" title="Bulk edit filtered clips (B)">Bulk edit</button>
+        <span class="preset-keys">B bulk edit</span>
+      </div>
+      <div id="clips-list"></div>
+      <div class="clip-count"><span id="clip-count-num">0</span> clips</div>
+      <div class="export-bar">
+        <span class="export-label">Export:</span>
+        <button id="btn-export-csv" class="export-btn">CSV</button>
+        <button id="btn-export-json" class="export-btn">JSON</button>
+        <button id="btn-export-video" class="export-btn">Video</button>
+      </div>
+      <div class="import-preview-bar">
+        <button type="button" id="btn-import-preview" class="export-btn" title="Preview a CSV clip manifest (M)">Import preview</button>
+        <input type="file" id="import-preview-file" accept=".csv,text/csv" class="visually-hidden-input" tabindex="-1" aria-label="CSV clip manifest">
+        <span class="preset-keys">M import preview</span>
+      </div>
+      <section id="import-preview" hidden aria-labelledby="import-preview-heading">
+        <h3 id="import-preview-heading">Import preview</h3>
+        <span id="import-preview-summary"></span>
+        <div id="import-preview-status" class="preset-status" role="status" aria-live="polite"></div>
+        <div class="import-preview-wrap" tabindex="0" aria-label="Import preview rows">
+          <table id="import-preview-table">
+            <thead>
+              <tr>
+                <th>Line</th>
+                <th>Status</th>
+                <th>Tag type</th>
+                <th>Start</th>
+                <th>End</th>
+                <th>Label</th>
+                <th>Players</th>
+                <th>Reasons</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <button id="btn-import-preview-close" class="export-btn">Close</button>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- ── Bulk Edit Modal ──────────────────────────────────────────────── -->
+<div id="bulk-modal" class="modal-overlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="bulk-modal-title">
+    <h3 id="bulk-modal-title">Bulk edit <span id="bulk-affected">0</span> filtered clips</h3>
+    <div class="bulk-form">
+      <label for="bulk-tag-type">Tag type</label>
+      <select id="bulk-tag-type">
+        <option value="">Keep tag type</option>
+      </select>
+      <label for="bulk-player">Set players to</label>
+      <select id="bulk-player">
+        <option value="">Keep players</option>
+        <option value="__clear__">Clear players</option>
+      </select>
+    </div>
+    <div id="bulk-preview-wrap" class="bulk-preview-wrap" tabindex="0" role="region" aria-label="Preview of affected clips (scrollable)">
+      <table id="bulk-preview-table" class="bulk-preview-table" aria-label="Affected clips before and after">
+        <thead>
+          <tr>
+            <th>Clip</th>
+            <th>Before</th>
+            <th>After</th>
+          </tr>
+        </thead>
+        <tbody id="bulk-preview-body"></tbody>
+      </table>
+    </div>
+    <div id="bulk-status" class="preset-status" role="status" aria-live="polite"></div>
+    <div class="bulk-actions">
+      <button type="button" id="btn-bulk-preview" class="preset-btn">Preview</button>
+      <button type="button" id="btn-bulk-confirm" class="preset-btn" disabled>Confirm</button>
+      <button type="button" id="btn-bulk-refresh" class="preset-btn" hidden>Refresh</button>
+      <button type="button" id="btn-bulk-cancel" class="preset-btn">Cancel (Esc)</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Tag Type Manager Modal ───────────────────────────────────────── -->
+<div id="tag-modal" class="modal-overlay">
+  <div class="modal">
+    <h3>Manage Tag Types</h3>
+    <div id="tag-type-list"></div>
+    <div class="add-tag-row">
+      <input type="text" id="new-tag-name" placeholder="New tag name">
+      <input type="color" id="new-tag-color" value="#e74c3c">
+      <button id="btn-add-tag-type">Add</button>
+    </div>
+    <button id="btn-close-modal" class="close-modal-btn">Done</button>
+  </div>
+</div>
+
+<!-- ── Player Manager Modal ──────────────────────────────────────────── -->
+<div id="player-modal" class="modal-overlay">
+  <div class="modal">
+    <h3>Manage Players</h3>
+    <div id="player-list"></div>
+    <div class="add-tag-row">
+      <input type="text" id="new-player-number" placeholder="#" style="flex:0 0 50px">
+      <input type="text" id="new-player-name" placeholder="Player name">
+      <button id="btn-add-player">Add</button>
+    </div>
+    <div class="import-roster-row">
+      <label class="import-roster-btn">
+        Import Roster (.xlsx / .csv)
+        <input type="file" id="roster-upload" accept=".xlsx,.xls,.csv" hidden>
+      </label>
+      <span id="import-status" class="import-status"></span>
+    </div>
+    <button id="btn-close-player-modal" class="close-modal-btn">Done</button>
+  </div>
+</div>
+
+<!-- ── Recordings Modal ──────────────────────────────────────────────── -->
+<div id="rec-modal" class="modal-overlay">
+  <div class="modal">
+    <h3>Clip Recordings</h3>
+    <div id="rec-list"></div>
+    <button id="btn-close-rec-modal" class="close-modal-btn">Done</button>
+  </div>
+</div>
+
+<!-- ── Video Editor Modal ────────────────────────────────────────────── -->
+<div id="editor-modal" class="modal-overlay">
+  <div class="modal modal-wide">
+    <h3>Edit Video</h3>
+    <div class="editor-tabs">
+      <button class="editor-tab active" data-tab="trim">Trim</button>
+      <button class="editor-tab" data-tab="split">Split</button>
+      <button class="editor-tab" data-tab="cut">Cut Section</button>
+    </div>
+
+    <div id="editor-tab-trim" class="editor-pane active">
+      <p class="editor-desc">Keep only a portion of the video. Everything before the start and after the end will be removed.</p>
+      <div class="editor-fields">
+        <label>Start: <input type="number" id="trim-start" min="0" step="0.1" value="0"> s
+          <button class="editor-use-current" data-target="trim-start">Use current</button>
+        </label>
+        <label>End: <input type="number" id="trim-end" min="0" step="0.1" value="0"> s
+          <button class="editor-use-current" data-target="trim-end">Use current</button>
+        </label>
+      </div>
+      <button id="btn-do-trim" class="editor-action-btn">Trim Video</button>
+    </div>
+
+    <div id="editor-tab-split" class="editor-pane">
+      <p class="editor-desc">Split the video at a point into two separate projects. Useful for separating two games in one recording.</p>
+      <div class="editor-fields">
+        <label>Split at: <input type="number" id="split-at" min="0" step="0.1" value="0"> s
+          <button class="editor-use-current" data-target="split-at">Use current</button>
+        </label>
+      </div>
+      <button id="btn-do-split" class="editor-action-btn">Split into Two Projects</button>
+    </div>
+
+    <div id="editor-tab-cut" class="editor-pane">
+      <p class="editor-desc">Remove a section from the video (e.g., halftime, pregame). The parts before and after will be joined together.</p>
+      <div class="editor-fields">
+        <label>Cut from: <input type="number" id="cut-start" min="0" step="0.1" value="0"> s
+          <button class="editor-use-current" data-target="cut-start">Use current</button>
+        </label>
+        <label>Cut to: <input type="number" id="cut-end" min="0" step="0.1" value="0"> s
+          <button class="editor-use-current" data-target="cut-end">Use current</button>
+        </label>
+      </div>
+      <button id="btn-do-cut" class="editor-action-btn">Remove Section</button>
+    </div>
+
+    <div id="editor-status" class="editor-status"></div>
+    <button id="btn-close-editor" class="close-modal-btn">Close</button>
+  </div>
+</div>
+
+<script src="/static/js/annotations.js"></script>
+<script src="/static/js/recording.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

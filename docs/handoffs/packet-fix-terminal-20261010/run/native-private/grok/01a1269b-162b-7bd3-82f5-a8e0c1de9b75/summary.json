@@ -1,0 +1,24 @@
+{
+  "info": {
+    "id": "01a1269b-162b-7bd3-82f5-a8e0c1de9b75",
+    "cwd": "/private/var/folders/_n/10qf_9vn1c5_1gccy0h9hxyr0000gn/T/quadratus-closeout-rr__ctsv"
+  },
+  "agent_id": "ag1.11fd870e599465b985d3117fc2e7b05",
+  "attempt_id": "at1.74f688a01e8c4fe9b25141d939b14adf",
+  "session_summary": "Restore library order button frontend slice",
+  "created_at": "2026-10-10T16:17:40.405335Z",
+  "updated_at": "2026-10-10T16:18:03.707035Z",
+  "num_messages": 4,
+  "num_chat_messages": 6,
+  "current_model_id": "grok-4.7",
+  "next_trace_turn": 1,
+  "chat_format_version": 1,
+  "session_kind": "headless",
+  "request_id": "928f760d-ee46-41c0-88f8-cb8f37813cf7",
+  "grok_home": "/Users/davisfox/.grok",
+  "last_active_at": "2026-10-10T16:18:03.707035Z",
+  "generated_title": "Restore library order button frontend slice",
+  "agent_name": "grok-build-plan",
+  "sandbox_profile": "off",
+  "reasoning_effort": "low"
+}

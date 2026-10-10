@@ -1,0 +1,4291 @@
+{
+  "scans": 21509,
+  "observed_owned": [
+    {
+      "identity": {
+        "pid": 49646,
+        "start_sec": 1791648468,
+        "start_usec": 453681,
+        "uid": 501
+      },
+      "method": "direct_spawn",
+      "at": 1791648468.454737
+    },
+    {
+      "identity": {
+        "pid": 49676,
+        "start_sec": 1791648478,
+        "start_usec": 155785,
+        "uid": 501
+      },
+      "method": "direct_spawn",
+      "at": 1791648478.157099
+    },
+    {
+      "identity": {
+        "pid": 49677,
+        "start_sec": 1791648478,
+        "start_usec": 552495,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648478.610394
+    },
+    {
+      "identity": {
+        "pid": 49683,
+        "start_sec": 1791648480,
+        "start_usec": 364058,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648480.412735
+    },
+    {
+      "identity": {
+        "pid": 49688,
+        "start_sec": 1791648480,
+        "start_usec": 450959,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648480.472238
+    },
+    {
+      "identity": {
+        "pid": 49686,
+        "start_sec": 1791648480,
+        "start_usec": 443279,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648480.4722629
+    },
+    {
+      "identity": {
+        "pid": 49689,
+        "start_sec": 1791648480,
+        "start_usec": 516687,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 49683,
+        "start_sec": 1791648480,
+        "start_usec": 364058,
+        "uid": 501
+      },
+      "at": 1791648480.548374
+    },
+    {
+      "identity": {
+        "pid": 49694,
+        "start_sec": 1791648480,
+        "start_usec": 699102,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648480.7389288
+    },
+    {
+      "identity": {
+        "pid": 49693,
+        "start_sec": 1791648480,
+        "start_usec": 692521,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648480.7389572
+    },
+    {
+      "identity": {
+        "pid": 49696,
+        "start_sec": 1791648480,
+        "start_usec": 747965,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648480.808587
+    },
+    {
+      "identity": {
+        "pid": 49695,
+        "start_sec": 1791648480,
+        "start_usec": 746707,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648480.808778
+    },
+    {
+      "identity": {
+        "pid": 49697,
+        "start_sec": 1791648480,
+        "start_usec": 918059,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648480.941113
+    },
+    {
+      "identity": {
+        "pid": 49699,
+        "start_sec": 1791648480,
+        "start_usec": 952006,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648481.017184
+    },
+    {
+      "identity": {
+        "pid": 49698,
+        "start_sec": 1791648480,
+        "start_usec": 951562,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648481.017261
+    },
+    {
+      "identity": {
+        "pid": 49708,
+        "start_sec": 1791648482,
+        "start_usec": 526231,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648482.5544682
+    },
+    {
+      "identity": {
+        "pid": 49707,
+        "start_sec": 1791648482,
+        "start_usec": 525864,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648482.55449
+    },
+    {
+      "identity": {
+        "pid": 49706,
+        "start_sec": 1791648482,
+        "start_usec": 508944,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648482.554516
+    },
+    {
+      "identity": {
+        "pid": 49712,
+        "start_sec": 1791648482,
+        "start_usec": 960766,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648482.971147
+    },
+    {
+      "identity": {
+        "pid": 50002,
+        "start_sec": 1791648570,
+        "start_usec": 153675,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648570.1905951
+    },
+    {
+      "identity": {
+        "pid": 50003,
+        "start_sec": 1791648570,
+        "start_usec": 184724,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50002,
+        "start_sec": 1791648570,
+        "start_usec": 153675,
+        "uid": 501
+      },
+      "at": 1791648570.198008
+    },
+    {
+      "identity": {
+        "pid": 50007,
+        "start_sec": 1791648571,
+        "start_usec": 18094,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50003,
+        "start_sec": 1791648570,
+        "start_usec": 184724,
+        "uid": 501
+      },
+      "at": 1791648571.0543182
+    },
+    {
+      "identity": {
+        "pid": 50055,
+        "start_sec": 1791648571,
+        "start_usec": 103523,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50003,
+        "start_sec": 1791648570,
+        "start_usec": 184724,
+        "uid": 501
+      },
+      "at": 1791648571.120811
+    },
+    {
+      "identity": {
+        "pid": 50053,
+        "start_sec": 1791648571,
+        "start_usec": 103472,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50003,
+        "start_sec": 1791648570,
+        "start_usec": 184724,
+        "uid": 501
+      },
+      "at": 1791648571.1208162
+    },
+    {
+      "identity": {
+        "pid": 50054,
+        "start_sec": 1791648571,
+        "start_usec": 103477,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50003,
+        "start_sec": 1791648570,
+        "start_usec": 184724,
+        "uid": 501
+      },
+      "at": 1791648571.1208189
+    },
+    {
+      "identity": {
+        "pid": 50052,
+        "start_sec": 1791648571,
+        "start_usec": 103426,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50003,
+        "start_sec": 1791648570,
+        "start_usec": 184724,
+        "uid": 501
+      },
+      "at": 1791648571.1208231
+    },
+    {
+      "identity": {
+        "pid": 50036,
+        "start_sec": 1791648571,
+        "start_usec": 91694,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50007,
+        "start_sec": 1791648571,
+        "start_usec": 18094,
+        "uid": 501
+      },
+      "at": 1791648571.120828
+    },
+    {
+      "identity": {
+        "pid": 50041,
+        "start_sec": 1791648571,
+        "start_usec": 95199,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50036,
+        "start_sec": 1791648571,
+        "start_usec": 91694,
+        "uid": 501
+      },
+      "at": 1791648571.121387
+    },
+    {
+      "identity": {
+        "pid": 50043,
+        "start_sec": 1791648571,
+        "start_usec": 95571,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50041,
+        "start_sec": 1791648571,
+        "start_usec": 95199,
+        "uid": 501
+      },
+      "at": 1791648571.121683
+    },
+    {
+      "identity": {
+        "pid": 50042,
+        "start_sec": 1791648571,
+        "start_usec": 95380,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50041,
+        "start_sec": 1791648571,
+        "start_usec": 95199,
+        "uid": 501
+      },
+      "at": 1791648571.1216881
+    },
+    {
+      "identity": {
+        "pid": 50058,
+        "start_sec": 1791648571,
+        "start_usec": 106578,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50042,
+        "start_sec": 1791648571,
+        "start_usec": 95380,
+        "uid": 501
+      },
+      "at": 1791648571.1221209
+    },
+    {
+      "identity": {
+        "pid": 50105,
+        "start_sec": 1791648571,
+        "start_usec": 163614,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50007,
+        "start_sec": 1791648571,
+        "start_usec": 18094,
+        "uid": 501
+      },
+      "at": 1791648571.1963289
+    },
+    {
+      "identity": {
+        "pid": 50094,
+        "start_sec": 1791648571,
+        "start_usec": 147165,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50052,
+        "start_sec": 1791648571,
+        "start_usec": 103426,
+        "uid": 501
+      },
+      "at": 1791648571.1963341
+    },
+    {
+      "identity": {
+        "pid": 50079,
+        "start_sec": 1791648571,
+        "start_usec": 129457,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50054,
+        "start_sec": 1791648571,
+        "start_usec": 103477,
+        "uid": 501
+      },
+      "at": 1791648571.196337
+    },
+    {
+      "identity": {
+        "pid": 50108,
+        "start_sec": 1791648571,
+        "start_usec": 166087,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50105,
+        "start_sec": 1791648571,
+        "start_usec": 163614,
+        "uid": 501
+      },
+      "at": 1791648571.1967602
+    },
+    {
+      "identity": {
+        "pid": 50111,
+        "start_sec": 1791648571,
+        "start_usec": 166582,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50108,
+        "start_sec": 1791648571,
+        "start_usec": 166087,
+        "uid": 501
+      },
+      "at": 1791648571.19738
+    },
+    {
+      "identity": {
+        "pid": 50109,
+        "start_sec": 1791648571,
+        "start_usec": 166309,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50108,
+        "start_sec": 1791648571,
+        "start_usec": 166087,
+        "uid": 501
+      },
+      "at": 1791648571.197388
+    },
+    {
+      "identity": {
+        "pid": 50253,
+        "start_sec": 1791648578,
+        "start_usec": 860517,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648578.9229052
+    },
+    {
+      "identity": {
+        "pid": 50257,
+        "start_sec": 1791648578,
+        "start_usec": 962835,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50003,
+        "start_sec": 1791648570,
+        "start_usec": 184724,
+        "uid": 501
+      },
+      "at": 1791648578.992023
+    },
+    {
+      "identity": {
+        "pid": 50292,
+        "start_sec": 1791648586,
+        "start_usec": 269054,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648586.275146
+    },
+    {
+      "identity": {
+        "pid": 50298,
+        "start_sec": 1791648588,
+        "start_usec": 653086,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648588.686534
+    },
+    {
+      "identity": {
+        "pid": 50303,
+        "start_sec": 1791648589,
+        "start_usec": 313051,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50298,
+        "start_sec": 1791648588,
+        "start_usec": 653086,
+        "uid": 501
+      },
+      "at": 1791648589.3238888
+    },
+    {
+      "identity": {
+        "pid": 50302,
+        "start_sec": 1791648589,
+        "start_usec": 310482,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50298,
+        "start_sec": 1791648588,
+        "start_usec": 653086,
+        "uid": 501
+      },
+      "at": 1791648589.323894
+    },
+    {
+      "identity": {
+        "pid": 50482,
+        "start_sec": 1791648589,
+        "start_usec": 433154,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50302,
+        "start_sec": 1791648589,
+        "start_usec": 310482,
+        "uid": 501
+      },
+      "at": 1791648589.452254
+    },
+    {
+      "identity": {
+        "pid": 50481,
+        "start_sec": 1791648589,
+        "start_usec": 432895,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50303,
+        "start_sec": 1791648589,
+        "start_usec": 313051,
+        "uid": 501
+      },
+      "at": 1791648589.452259
+    },
+    {
+      "identity": {
+        "pid": 50489,
+        "start_sec": 1791648589,
+        "start_usec": 435115,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50482,
+        "start_sec": 1791648589,
+        "start_usec": 433154,
+        "uid": 501
+      },
+      "at": 1791648589.452526
+    },
+    {
+      "identity": {
+        "pid": 50487,
+        "start_sec": 1791648589,
+        "start_usec": 434879,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50481,
+        "start_sec": 1791648589,
+        "start_usec": 432895,
+        "uid": 501
+      },
+      "at": 1791648589.45253
+    },
+    {
+      "identity": {
+        "pid": 50493,
+        "start_sec": 1791648589,
+        "start_usec": 435523,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50489,
+        "start_sec": 1791648589,
+        "start_usec": 435115,
+        "uid": 501
+      },
+      "at": 1791648589.452832
+    },
+    {
+      "identity": {
+        "pid": 50491,
+        "start_sec": 1791648589,
+        "start_usec": 435306,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50487,
+        "start_sec": 1791648589,
+        "start_usec": 434879,
+        "uid": 501
+      },
+      "at": 1791648589.452836
+    },
+    {
+      "identity": {
+        "pid": 50490,
+        "start_sec": 1791648589,
+        "start_usec": 435301,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50489,
+        "start_sec": 1791648589,
+        "start_usec": 435115,
+        "uid": 501
+      },
+      "at": 1791648589.452839
+    },
+    {
+      "identity": {
+        "pid": 50488,
+        "start_sec": 1791648589,
+        "start_usec": 435089,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50487,
+        "start_sec": 1791648589,
+        "start_usec": 434879,
+        "uid": 501
+      },
+      "at": 1791648589.452843
+    },
+    {
+      "identity": {
+        "pid": 50655,
+        "start_sec": 1791648589,
+        "start_usec": 504898,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50303,
+        "start_sec": 1791648589,
+        "start_usec": 313051,
+        "uid": 501
+      },
+      "at": 1791648589.516368
+    },
+    {
+      "identity": {
+        "pid": 50654,
+        "start_sec": 1791648589,
+        "start_usec": 504877,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50302,
+        "start_sec": 1791648589,
+        "start_usec": 310482,
+        "uid": 501
+      },
+      "at": 1791648589.516372
+    },
+    {
+      "identity": {
+        "pid": 50864,
+        "start_sec": 1791648650,
+        "start_usec": 843748,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50298,
+        "start_sec": 1791648588,
+        "start_usec": 653086,
+        "uid": 501
+      },
+      "at": 1791648650.890954
+    },
+    {
+      "identity": {
+        "pid": 50863,
+        "start_sec": 1791648650,
+        "start_usec": 838112,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50298,
+        "start_sec": 1791648588,
+        "start_usec": 653086,
+        "uid": 501
+      },
+      "at": 1791648650.890959
+    },
+    {
+      "identity": {
+        "pid": 50868,
+        "start_sec": 1791648650,
+        "start_usec": 967552,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.005376
+    },
+    {
+      "identity": {
+        "pid": 50870,
+        "start_sec": 1791648650,
+        "start_usec": 970065,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.005402
+    },
+    {
+      "identity": {
+        "pid": 50878,
+        "start_sec": 1791648651,
+        "start_usec": 9441,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.0742369
+    },
+    {
+      "identity": {
+        "pid": 50876,
+        "start_sec": 1791648651,
+        "start_usec": 8408,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.0742831
+    },
+    {
+      "identity": {
+        "pid": 50875,
+        "start_sec": 1791648651,
+        "start_usec": 7729,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.074338
+    },
+    {
+      "identity": {
+        "pid": 50874,
+        "start_sec": 1791648651,
+        "start_usec": 7155,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.0743759
+    },
+    {
+      "identity": {
+        "pid": 50873,
+        "start_sec": 1791648651,
+        "start_usec": 6460,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.074411
+    },
+    {
+      "identity": {
+        "pid": 50872,
+        "start_sec": 1791648651,
+        "start_usec": 5984,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.074445
+    },
+    {
+      "identity": {
+        "pid": 50871,
+        "start_sec": 1791648651,
+        "start_usec": 5003,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.07449
+    },
+    {
+      "identity": {
+        "pid": 50879,
+        "start_sec": 1791648651,
+        "start_usec": 172563,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.201358
+    },
+    {
+      "identity": {
+        "pid": 50889,
+        "start_sec": 1791648651,
+        "start_usec": 291556,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.329097
+    },
+    {
+      "identity": {
+        "pid": 50888,
+        "start_sec": 1791648651,
+        "start_usec": 281925,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.329129
+    },
+    {
+      "identity": {
+        "pid": 50894,
+        "start_sec": 1791648651,
+        "start_usec": 323501,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50871,
+        "start_sec": 1791648651,
+        "start_usec": 5003,
+        "uid": 501
+      },
+      "at": 1791648651.338428
+    },
+    {
+      "identity": {
+        "pid": 50899,
+        "start_sec": 1791648651,
+        "start_usec": 428817,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.464946
+    },
+    {
+      "identity": {
+        "pid": 50897,
+        "start_sec": 1791648651,
+        "start_usec": 401756,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.465058
+    },
+    {
+      "identity": {
+        "pid": 50900,
+        "start_sec": 1791648651,
+        "start_usec": 487012,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.5338628
+    },
+    {
+      "identity": {
+        "pid": 50901,
+        "start_sec": 1791648651,
+        "start_usec": 768430,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.7921689
+    },
+    {
+      "identity": {
+        "pid": 50908,
+        "start_sec": 1791648651,
+        "start_usec": 819120,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.85585
+    },
+    {
+      "identity": {
+        "pid": 50903,
+        "start_sec": 1791648651,
+        "start_usec": 808913,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.855875
+    },
+    {
+      "identity": {
+        "pid": 50902,
+        "start_sec": 1791648651,
+        "start_usec": 807679,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.8558998
+    },
+    {
+      "identity": {
+        "pid": 50911,
+        "start_sec": 1791648651,
+        "start_usec": 914840,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648651.918483
+    },
+    {
+      "identity": {
+        "pid": 50915,
+        "start_sec": 1791648653,
+        "start_usec": 412490,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648653.436364
+    },
+    {
+      "identity": {
+        "pid": 50975,
+        "start_sec": 1791648685,
+        "start_usec": 467441,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648685.500758
+    },
+    {
+      "identity": {
+        "pid": 50980,
+        "start_sec": 1791648685,
+        "start_usec": 694221,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648685.700968
+    },
+    {
+      "identity": {
+        "pid": 51054,
+        "start_sec": 1791648715,
+        "start_usec": 719563,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50975,
+        "start_sec": 1791648685,
+        "start_usec": 467441,
+        "uid": 501
+      },
+      "at": 1791648715.7340648
+    },
+    {
+      "identity": {
+        "pid": 51147,
+        "start_sec": 1791648766,
+        "start_usec": 577981,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648766.5861309
+    },
+    {
+      "identity": {
+        "pid": 51196,
+        "start_sec": 1791648786,
+        "start_usec": 245834,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 50975,
+        "start_sec": 1791648685,
+        "start_usec": 467441,
+        "uid": 501
+      },
+      "at": 1791648786.261081
+    },
+    {
+      "identity": {
+        "pid": 51301,
+        "start_sec": 1791648838,
+        "start_usec": 137519,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648838.1515
+    },
+    {
+      "identity": {
+        "pid": 51303,
+        "start_sec": 1791648838,
+        "start_usec": 411401,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 51301,
+        "start_sec": 1791648838,
+        "start_usec": 137519,
+        "uid": 501
+      },
+      "at": 1791648838.4256692
+    },
+    {
+      "identity": {
+        "pid": 51302,
+        "start_sec": 1791648838,
+        "start_usec": 408769,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 51301,
+        "start_sec": 1791648838,
+        "start_usec": 137519,
+        "uid": 501
+      },
+      "at": 1791648838.425678
+    },
+    {
+      "identity": {
+        "pid": 51481,
+        "start_sec": 1791648838,
+        "start_usec": 541731,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 51302,
+        "start_sec": 1791648838,
+        "start_usec": 408769,
+        "uid": 501
+      },
+      "at": 1791648838.564938
+    },
+    {
+      "identity": {
+        "pid": 51480,
+        "start_sec": 1791648838,
+        "start_usec": 541570,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 51303,
+        "start_sec": 1791648838,
+        "start_usec": 411401,
+        "uid": 501
+      },
+      "at": 1791648838.5649421
+    },
+    {
+      "identity": {
+        "pid": 51487,
+        "start_sec": 1791648838,
+        "start_usec": 543567,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 51481,
+        "start_sec": 1791648838,
+        "start_usec": 541731,
+        "uid": 501
+      },
+      "at": 1791648838.565214
+    },
+    {
+      "identity": {
+        "pid": 51486,
+        "start_sec": 1791648838,
+        "start_usec": 543473,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 51480,
+        "start_sec": 1791648838,
+        "start_usec": 541570,
+        "uid": 501
+      },
+      "at": 1791648838.565217
+    },
+    {
+      "identity": {
+        "pid": 51492,
+        "start_sec": 1791648838,
+        "start_usec": 543960,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 51487,
+        "start_sec": 1791648838,
+        "start_usec": 543567,
+        "uid": 501
+      },
+      "at": 1791648838.565484
+    },
+    {
+      "identity": {
+        "pid": 51490,
+        "start_sec": 1791648838,
+        "start_usec": 543880,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 51486,
+        "start_sec": 1791648838,
+        "start_usec": 543473,
+        "uid": 501
+      },
+      "at": 1791648838.5654871
+    },
+    {
+      "identity": {
+        "pid": 51489,
+        "start_sec": 1791648838,
+        "start_usec": 543755,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 51487,
+        "start_sec": 1791648838,
+        "start_usec": 543567,
+        "uid": 501
+      },
+      "at": 1791648838.56549
+    },
+    {
+      "identity": {
+        "pid": 51488,
+        "start_sec": 1791648838,
+        "start_usec": 543676,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 51486,
+        "start_sec": 1791648838,
+        "start_usec": 543473,
+        "uid": 501
+      },
+      "at": 1791648838.565493
+    },
+    {
+      "identity": {
+        "pid": 51854,
+        "start_sec": 1791648921,
+        "start_usec": 474167,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 51301,
+        "start_sec": 1791648838,
+        "start_usec": 137519,
+        "uid": 501
+      },
+      "at": 1791648921.514719
+    },
+    {
+      "identity": {
+        "pid": 51853,
+        "start_sec": 1791648921,
+        "start_usec": 470824,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 51301,
+        "start_sec": 1791648838,
+        "start_usec": 137519,
+        "uid": 501
+      },
+      "at": 1791648921.514723
+    },
+    {
+      "identity": {
+        "pid": 51861,
+        "start_sec": 1791648921,
+        "start_usec": 602464,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.638431
+    },
+    {
+      "identity": {
+        "pid": 51862,
+        "start_sec": 1791648921,
+        "start_usec": 603016,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.638458
+    },
+    {
+      "identity": {
+        "pid": 51870,
+        "start_sec": 1791648921,
+        "start_usec": 642175,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.701937
+    },
+    {
+      "identity": {
+        "pid": 51869,
+        "start_sec": 1791648921,
+        "start_usec": 641873,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.701962
+    },
+    {
+      "identity": {
+        "pid": 51868,
+        "start_sec": 1791648921,
+        "start_usec": 641580,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.7019782
+    },
+    {
+      "identity": {
+        "pid": 51867,
+        "start_sec": 1791648921,
+        "start_usec": 641273,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.7019992
+    },
+    {
+      "identity": {
+        "pid": 51866,
+        "start_sec": 1791648921,
+        "start_usec": 640952,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.702015
+    },
+    {
+      "identity": {
+        "pid": 51865,
+        "start_sec": 1791648921,
+        "start_usec": 640565,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.7020319
+    },
+    {
+      "identity": {
+        "pid": 51864,
+        "start_sec": 1791648921,
+        "start_usec": 640097,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.7020469
+    },
+    {
+      "identity": {
+        "pid": 51863,
+        "start_sec": 1791648921,
+        "start_usec": 639175,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.702063
+    },
+    {
+      "identity": {
+        "pid": 51874,
+        "start_sec": 1791648921,
+        "start_usec": 817048,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.832421
+    },
+    {
+      "identity": {
+        "pid": 51876,
+        "start_sec": 1791648921,
+        "start_usec": 884863,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.8976798
+    },
+    {
+      "identity": {
+        "pid": 51875,
+        "start_sec": 1791648921,
+        "start_usec": 857923,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.897811
+    },
+    {
+      "identity": {
+        "pid": 51883,
+        "start_sec": 1791648921,
+        "start_usec": 950411,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.96483
+    },
+    {
+      "identity": {
+        "pid": 51878,
+        "start_sec": 1791648921,
+        "start_usec": 919697,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.964864
+    },
+    {
+      "identity": {
+        "pid": 51877,
+        "start_sec": 1791648921,
+        "start_usec": 911680,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648921.9648871
+    },
+    {
+      "identity": {
+        "pid": 51884,
+        "start_sec": 1791648922,
+        "start_usec": 84305,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648922.098059
+    },
+    {
+      "identity": {
+        "pid": 51892,
+        "start_sec": 1791648922,
+        "start_usec": 416888,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648922.432235
+    },
+    {
+      "identity": {
+        "pid": 51887,
+        "start_sec": 1791648922,
+        "start_usec": 407035,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648922.432265
+    },
+    {
+      "identity": {
+        "pid": 51886,
+        "start_sec": 1791648922,
+        "start_usec": 405833,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648922.432294
+    },
+    {
+      "identity": {
+        "pid": 51885,
+        "start_sec": 1791648922,
+        "start_usec": 366335,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648922.432321
+    },
+    {
+      "identity": {
+        "pid": 51893,
+        "start_sec": 1791648922,
+        "start_usec": 511526,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648922.565482
+    },
+    {
+      "identity": {
+        "pid": 51904,
+        "start_sec": 1791648923,
+        "start_usec": 955621,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648923.9652328
+    },
+    {
+      "identity": {
+        "pid": 51903,
+        "start_sec": 1791648923,
+        "start_usec": 931524,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791648923.965258
+    },
+    {
+      "identity": {
+        "pid": 52053,
+        "start_sec": 1791649010,
+        "start_usec": 692242,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649010.706269
+    },
+    {
+      "identity": {
+        "pid": 52057,
+        "start_sec": 1791649011,
+        "start_usec": 769109,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649011.7769148
+    },
+    {
+      "identity": {
+        "pid": 52059,
+        "start_sec": 1791649012,
+        "start_usec": 535190,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649012.539378
+    },
+    {
+      "identity": {
+        "pid": 52058,
+        "start_sec": 1791649012,
+        "start_usec": 510022,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649012.539402
+    },
+    {
+      "identity": {
+        "pid": 52073,
+        "start_sec": 1791649014,
+        "start_usec": 670475,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649014.675292
+    },
+    {
+      "identity": {
+        "pid": 52072,
+        "start_sec": 1791649014,
+        "start_usec": 639262,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649014.675317
+    },
+    {
+      "identity": {
+        "pid": 52081,
+        "start_sec": 1791649014,
+        "start_usec": 933266,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649014.936697
+    },
+    {
+      "identity": {
+        "pid": 52080,
+        "start_sec": 1791649014,
+        "start_usec": 932043,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649014.936748
+    },
+    {
+      "identity": {
+        "pid": 52079,
+        "start_sec": 1791649014,
+        "start_usec": 930587,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649014.936795
+    },
+    {
+      "identity": {
+        "pid": 52078,
+        "start_sec": 1791649014,
+        "start_usec": 930230,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649014.936836
+    },
+    {
+      "identity": {
+        "pid": 52077,
+        "start_sec": 1791649014,
+        "start_usec": 929793,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649014.936872
+    },
+    {
+      "identity": {
+        "pid": 52076,
+        "start_sec": 1791649014,
+        "start_usec": 929343,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649014.936907
+    },
+    {
+      "identity": {
+        "pid": 52075,
+        "start_sec": 1791649014,
+        "start_usec": 928386,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649014.9369411
+    },
+    {
+      "identity": {
+        "pid": 52074,
+        "start_sec": 1791649014,
+        "start_usec": 890745,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649014.936981
+    },
+    {
+      "identity": {
+        "pid": 52082,
+        "start_sec": 1791649014,
+        "start_usec": 934102,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649015.022887
+    },
+    {
+      "identity": {
+        "pid": 52086,
+        "start_sec": 1791649015,
+        "start_usec": 132344,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649015.180715
+    },
+    {
+      "identity": {
+        "pid": 52088,
+        "start_sec": 1791649015,
+        "start_usec": 235204,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649015.2471738
+    },
+    {
+      "identity": {
+        "pid": 52087,
+        "start_sec": 1791649015,
+        "start_usec": 227069,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649015.247203
+    },
+    {
+      "identity": {
+        "pid": 52094,
+        "start_sec": 1791649015,
+        "start_usec": 290337,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649015.3122659
+    },
+    {
+      "identity": {
+        "pid": 52095,
+        "start_sec": 1791649015,
+        "start_usec": 642541,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649015.681081
+    },
+    {
+      "identity": {
+        "pid": 52096,
+        "start_sec": 1791649015,
+        "start_usec": 983784,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649016.0011551
+    },
+    {
+      "identity": {
+        "pid": 52104,
+        "start_sec": 1791649016,
+        "start_usec": 34450,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649016.063104
+    },
+    {
+      "identity": {
+        "pid": 52098,
+        "start_sec": 1791649016,
+        "start_usec": 24176,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649016.063134
+    },
+    {
+      "identity": {
+        "pid": 52097,
+        "start_sec": 1791649016,
+        "start_usec": 22954,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649016.063156
+    },
+    {
+      "identity": {
+        "pid": 52105,
+        "start_sec": 1791649016,
+        "start_usec": 335890,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649016.381429
+    },
+    {
+      "identity": {
+        "pid": 52106,
+        "start_sec": 1791649016,
+        "start_usec": 613269,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649016.646912
+    },
+    {
+      "identity": {
+        "pid": 52110,
+        "start_sec": 1791649017,
+        "start_usec": 39383,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649017.096446
+    },
+    {
+      "identity": {
+        "pid": 52111,
+        "start_sec": 1791649017,
+        "start_usec": 141020,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649017.1571589
+    },
+    {
+      "identity": {
+        "pid": 52112,
+        "start_sec": 1791649017,
+        "start_usec": 271273,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649017.2796311
+    },
+    {
+      "identity": {
+        "pid": 52115,
+        "start_sec": 1791649017,
+        "start_usec": 328387,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649017.347042
+    },
+    {
+      "identity": {
+        "pid": 52114,
+        "start_sec": 1791649017,
+        "start_usec": 311984,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649017.347081
+    },
+    {
+      "identity": {
+        "pid": 52113,
+        "start_sec": 1791649017,
+        "start_usec": 310592,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649017.347109
+    },
+    {
+      "identity": {
+        "pid": 52119,
+        "start_sec": 1791649019,
+        "start_usec": 884092,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649019.915785
+    },
+    {
+      "identity": {
+        "pid": 52120,
+        "start_sec": 1791649020,
+        "start_usec": 7091,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649020.040614
+    },
+    {
+      "identity": {
+        "pid": 52123,
+        "start_sec": 1791649020,
+        "start_usec": 63305,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649020.112978
+    },
+    {
+      "identity": {
+        "pid": 52122,
+        "start_sec": 1791649020,
+        "start_usec": 47326,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649020.113006
+    },
+    {
+      "identity": {
+        "pid": 52121,
+        "start_sec": 1791649020,
+        "start_usec": 45927,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649020.113028
+    },
+    {
+      "identity": {
+        "pid": 52129,
+        "start_sec": 1791649022,
+        "start_usec": 793923,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649022.833317
+    },
+    {
+      "identity": {
+        "pid": 52220,
+        "start_sec": 1791649060,
+        "start_usec": 277310,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649060.3364701
+    },
+    {
+      "identity": {
+        "pid": 52222,
+        "start_sec": 1791649060,
+        "start_usec": 467342,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52220,
+        "start_sec": 1791649060,
+        "start_usec": 277310,
+        "uid": 501
+      },
+      "at": 1791649060.539219
+    },
+    {
+      "identity": {
+        "pid": 52221,
+        "start_sec": 1791649060,
+        "start_usec": 464825,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52220,
+        "start_sec": 1791649060,
+        "start_usec": 277310,
+        "uid": 501
+      },
+      "at": 1791649060.539225
+    },
+    {
+      "identity": {
+        "pid": 52227,
+        "start_sec": 1791649060,
+        "start_usec": 512214,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52221,
+        "start_sec": 1791649060,
+        "start_usec": 464825,
+        "uid": 501
+      },
+      "at": 1791649060.539526
+    },
+    {
+      "identity": {
+        "pid": 52225,
+        "start_sec": 1791649060,
+        "start_usec": 511142,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52222,
+        "start_sec": 1791649060,
+        "start_usec": 467342,
+        "uid": 501
+      },
+      "at": 1791649060.5395288
+    },
+    {
+      "identity": {
+        "pid": 52673,
+        "start_sec": 1791649084,
+        "start_usec": 522419,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649084.5353558
+    },
+    {
+      "identity": {
+        "pid": 52760,
+        "start_sec": 1791649114,
+        "start_usec": 640006,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52673,
+        "start_sec": 1791649084,
+        "start_usec": 522419,
+        "uid": 501
+      },
+      "at": 1791649114.655425
+    },
+    {
+      "identity": {
+        "pid": 52803,
+        "start_sec": 1791649138,
+        "start_usec": 59129,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649138.096527
+    },
+    {
+      "identity": {
+        "pid": 52802,
+        "start_sec": 1791649138,
+        "start_usec": 31927,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649138.096552
+    },
+    {
+      "identity": {
+        "pid": 52840,
+        "start_sec": 1791649139,
+        "start_usec": 148733,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649139.1583989
+    },
+    {
+      "identity": {
+        "pid": 52824,
+        "start_sec": 1791649139,
+        "start_usec": 147982,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649139.158443
+    },
+    {
+      "identity": {
+        "pid": 52832,
+        "start_sec": 1791649139,
+        "start_usec": 148383,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649139.158466
+    },
+    {
+      "identity": {
+        "pid": 52841,
+        "start_sec": 1791649139,
+        "start_usec": 191115,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52803,
+        "start_sec": 1791649138,
+        "start_usec": 59129,
+        "uid": 501
+      },
+      "at": 1791649139.236074
+    },
+    {
+      "identity": {
+        "pid": 52890,
+        "start_sec": 1791649139,
+        "start_usec": 277210,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52803,
+        "start_sec": 1791649138,
+        "start_usec": 59129,
+        "uid": 501
+      },
+      "at": 1791649139.316531
+    },
+    {
+      "identity": {
+        "pid": 52886,
+        "start_sec": 1791649139,
+        "start_usec": 277100,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52803,
+        "start_sec": 1791649138,
+        "start_usec": 59129,
+        "uid": 501
+      },
+      "at": 1791649139.316536
+    },
+    {
+      "identity": {
+        "pid": 52889,
+        "start_sec": 1791649139,
+        "start_usec": 277208,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52803,
+        "start_sec": 1791649138,
+        "start_usec": 59129,
+        "uid": 501
+      },
+      "at": 1791649139.316541
+    },
+    {
+      "identity": {
+        "pid": 52887,
+        "start_sec": 1791649139,
+        "start_usec": 277124,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52803,
+        "start_sec": 1791649138,
+        "start_usec": 59129,
+        "uid": 501
+      },
+      "at": 1791649139.316544
+    },
+    {
+      "identity": {
+        "pid": 52885,
+        "start_sec": 1791649139,
+        "start_usec": 277097,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52803,
+        "start_sec": 1791649138,
+        "start_usec": 59129,
+        "uid": 501
+      },
+      "at": 1791649139.3165472
+    },
+    {
+      "identity": {
+        "pid": 52870,
+        "start_sec": 1791649139,
+        "start_usec": 267822,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52841,
+        "start_sec": 1791649139,
+        "start_usec": 191115,
+        "uid": 501
+      },
+      "at": 1791649139.316552
+    },
+    {
+      "identity": {
+        "pid": 52875,
+        "start_sec": 1791649139,
+        "start_usec": 271560,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52870,
+        "start_sec": 1791649139,
+        "start_usec": 267822,
+        "uid": 501
+      },
+      "at": 1791649139.316839
+    },
+    {
+      "identity": {
+        "pid": 52877,
+        "start_sec": 1791649139,
+        "start_usec": 271930,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52875,
+        "start_sec": 1791649139,
+        "start_usec": 271560,
+        "uid": 501
+      },
+      "at": 1791649139.317156
+    },
+    {
+      "identity": {
+        "pid": 52876,
+        "start_sec": 1791649139,
+        "start_usec": 271742,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52875,
+        "start_sec": 1791649139,
+        "start_usec": 271560,
+        "uid": 501
+      },
+      "at": 1791649139.317159
+    },
+    {
+      "identity": {
+        "pid": 53004,
+        "start_sec": 1791649139,
+        "start_usec": 347308,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52841,
+        "start_sec": 1791649139,
+        "start_usec": 191115,
+        "uid": 501
+      },
+      "at": 1791649139.389431
+    },
+    {
+      "identity": {
+        "pid": 52955,
+        "start_sec": 1791649139,
+        "start_usec": 318147,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52885,
+        "start_sec": 1791649139,
+        "start_usec": 277097,
+        "uid": 501
+      },
+      "at": 1791649139.389436
+    },
+    {
+      "identity": {
+        "pid": 52911,
+        "start_sec": 1791649139,
+        "start_usec": 297897,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52889,
+        "start_sec": 1791649139,
+        "start_usec": 277208,
+        "uid": 501
+      },
+      "at": 1791649139.38944
+    },
+    {
+      "identity": {
+        "pid": 53007,
+        "start_sec": 1791649139,
+        "start_usec": 349629,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53004,
+        "start_sec": 1791649139,
+        "start_usec": 347308,
+        "uid": 501
+      },
+      "at": 1791649139.389878
+    },
+    {
+      "identity": {
+        "pid": 53010,
+        "start_sec": 1791649139,
+        "start_usec": 350127,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53007,
+        "start_sec": 1791649139,
+        "start_usec": 349629,
+        "uid": 501
+      },
+      "at": 1791649139.390178
+    },
+    {
+      "identity": {
+        "pid": 53008,
+        "start_sec": 1791649139,
+        "start_usec": 349827,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53007,
+        "start_sec": 1791649139,
+        "start_usec": 349629,
+        "uid": 501
+      },
+      "at": 1791649139.390181
+    },
+    {
+      "identity": {
+        "pid": 53145,
+        "start_sec": 1791649146,
+        "start_usec": 231051,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649146.2365718
+    },
+    {
+      "identity": {
+        "pid": 53208,
+        "start_sec": 1791649181,
+        "start_usec": 41413,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52803,
+        "start_sec": 1791649138,
+        "start_usec": 59129,
+        "uid": 501
+      },
+      "at": 1791649181.057782
+    },
+    {
+      "identity": {
+        "pid": 53215,
+        "start_sec": 1791649181,
+        "start_usec": 167992,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 52803,
+        "start_sec": 1791649138,
+        "start_usec": 59129,
+        "uid": 501
+      },
+      "at": 1791649181.1815438
+    },
+    {
+      "identity": {
+        "pid": 53223,
+        "start_sec": 1791649185,
+        "start_usec": 93658,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649185.131604
+    },
+    {
+      "identity": {
+        "pid": 53232,
+        "start_sec": 1791649185,
+        "start_usec": 153846,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649185.1934621
+    },
+    {
+      "identity": {
+        "pid": 53231,
+        "start_sec": 1791649185,
+        "start_usec": 153428,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649185.193532
+    },
+    {
+      "identity": {
+        "pid": 53230,
+        "start_sec": 1791649185,
+        "start_usec": 153038,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649185.193571
+    },
+    {
+      "identity": {
+        "pid": 53229,
+        "start_sec": 1791649185,
+        "start_usec": 152770,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649185.19361
+    },
+    {
+      "identity": {
+        "pid": 53228,
+        "start_sec": 1791649185,
+        "start_usec": 152473,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649185.1936262
+    },
+    {
+      "identity": {
+        "pid": 53227,
+        "start_sec": 1791649185,
+        "start_usec": 152186,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649185.193642
+    },
+    {
+      "identity": {
+        "pid": 53226,
+        "start_sec": 1791649185,
+        "start_usec": 151843,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649185.1936572
+    },
+    {
+      "identity": {
+        "pid": 53225,
+        "start_sec": 1791649185,
+        "start_usec": 151430,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649185.193671
+    },
+    {
+      "identity": {
+        "pid": 53224,
+        "start_sec": 1791649185,
+        "start_usec": 150631,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649185.193697
+    },
+    {
+      "identity": {
+        "pid": 53236,
+        "start_sec": 1791649185,
+        "start_usec": 321361,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649185.3848698
+    },
+    {
+      "identity": {
+        "pid": 53237,
+        "start_sec": 1791649185,
+        "start_usec": 573890,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649185.635147
+    },
+    {
+      "identity": {
+        "pid": 53245,
+        "start_sec": 1791649190,
+        "start_usec": 734584,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649190.779152
+    },
+    {
+      "identity": {
+        "pid": 53247,
+        "start_sec": 1791649191,
+        "start_usec": 16739,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649191.0407329
+    },
+    {
+      "identity": {
+        "pid": 53246,
+        "start_sec": 1791649190,
+        "start_usec": 987965,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649191.040757
+    },
+    {
+      "identity": {
+        "pid": 53249,
+        "start_sec": 1791649191,
+        "start_usec": 99177,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649191.107054
+    },
+    {
+      "identity": {
+        "pid": 53248,
+        "start_sec": 1791649191,
+        "start_usec": 74223,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649191.1070778
+    },
+    {
+      "identity": {
+        "pid": 53254,
+        "start_sec": 1791649193,
+        "start_usec": 62871,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649193.098977
+    },
+    {
+      "identity": {
+        "pid": 53253,
+        "start_sec": 1791649193,
+        "start_usec": 37030,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649193.099008
+    },
+    {
+      "identity": {
+        "pid": 53278,
+        "start_sec": 1791649202,
+        "start_usec": 446469,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649202.4543061
+    },
+    {
+      "identity": {
+        "pid": 53290,
+        "start_sec": 1791649204,
+        "start_usec": 991640,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649205.023563
+    },
+    {
+      "identity": {
+        "pid": 53295,
+        "start_sec": 1791649205,
+        "start_usec": 759684,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649205.788314
+    },
+    {
+      "identity": {
+        "pid": 53294,
+        "start_sec": 1791649205,
+        "start_usec": 735685,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649205.788342
+    },
+    {
+      "identity": {
+        "pid": 53297,
+        "start_sec": 1791649205,
+        "start_usec": 839766,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649205.85083
+    },
+    {
+      "identity": {
+        "pid": 53296,
+        "start_sec": 1791649205,
+        "start_usec": 816842,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649205.850857
+    },
+    {
+      "identity": {
+        "pid": 53303,
+        "start_sec": 1791649207,
+        "start_usec": 934834,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649207.963967
+    },
+    {
+      "identity": {
+        "pid": 53302,
+        "start_sec": 1791649207,
+        "start_usec": 908810,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649207.963997
+    },
+    {
+      "identity": {
+        "pid": 53304,
+        "start_sec": 1791649208,
+        "start_usec": 155542,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649208.161212
+    },
+    {
+      "identity": {
+        "pid": 53313,
+        "start_sec": 1791649208,
+        "start_usec": 197221,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649208.2299361
+    },
+    {
+      "identity": {
+        "pid": 53312,
+        "start_sec": 1791649208,
+        "start_usec": 196927,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649208.229964
+    },
+    {
+      "identity": {
+        "pid": 53311,
+        "start_sec": 1791649208,
+        "start_usec": 196644,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649208.229983
+    },
+    {
+      "identity": {
+        "pid": 53310,
+        "start_sec": 1791649208,
+        "start_usec": 196090,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649208.230093
+    },
+    {
+      "identity": {
+        "pid": 53309,
+        "start_sec": 1791649208,
+        "start_usec": 195357,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649208.2301161
+    },
+    {
+      "identity": {
+        "pid": 53308,
+        "start_sec": 1791649208,
+        "start_usec": 194941,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649208.230134
+    },
+    {
+      "identity": {
+        "pid": 53307,
+        "start_sec": 1791649208,
+        "start_usec": 194206,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649208.23019
+    },
+    {
+      "identity": {
+        "pid": 53306,
+        "start_sec": 1791649208,
+        "start_usec": 193456,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649208.230229
+    },
+    {
+      "identity": {
+        "pid": 53305,
+        "start_sec": 1791649208,
+        "start_usec": 192663,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649208.230264
+    },
+    {
+      "identity": {
+        "pid": 53314,
+        "start_sec": 1791649208,
+        "start_usec": 357900,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53306,
+        "start_sec": 1791649208,
+        "start_usec": 193456,
+        "uid": 501
+      },
+      "at": 1791649208.3713322
+    },
+    {
+      "identity": {
+        "pid": 53316,
+        "start_sec": 1791649208,
+        "start_usec": 466681,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649208.496258
+    },
+    {
+      "identity": {
+        "pid": 53315,
+        "start_sec": 1791649208,
+        "start_usec": 458310,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649208.496286
+    },
+    {
+      "identity": {
+        "pid": 53322,
+        "start_sec": 1791649208,
+        "start_usec": 496553,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649208.560459
+    },
+    {
+      "identity": {
+        "pid": 53323,
+        "start_sec": 1791649208,
+        "start_usec": 844053,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649208.8952892
+    },
+    {
+      "identity": {
+        "pid": 53324,
+        "start_sec": 1791649209,
+        "start_usec": 136405,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649209.1508439
+    },
+    {
+      "identity": {
+        "pid": 53332,
+        "start_sec": 1791649209,
+        "start_usec": 187958,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649209.213367
+    },
+    {
+      "identity": {
+        "pid": 53326,
+        "start_sec": 1791649209,
+        "start_usec": 177658,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649209.213394
+    },
+    {
+      "identity": {
+        "pid": 53325,
+        "start_sec": 1791649209,
+        "start_usec": 176371,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649209.213415
+    },
+    {
+      "identity": {
+        "pid": 53333,
+        "start_sec": 1791649209,
+        "start_usec": 491367,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649209.544798
+    },
+    {
+      "identity": {
+        "pid": 53338,
+        "start_sec": 1791649209,
+        "start_usec": 789652,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649209.8069608
+    },
+    {
+      "identity": {
+        "pid": 53337,
+        "start_sec": 1791649209,
+        "start_usec": 766299,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649209.8069901
+    },
+    {
+      "identity": {
+        "pid": 53339,
+        "start_sec": 1791649210,
+        "start_usec": 465034,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53338,
+        "start_sec": 1791649209,
+        "start_usec": 789652,
+        "uid": 501
+      },
+      "at": 1791649210.502235
+    },
+    {
+      "identity": {
+        "pid": 53375,
+        "start_sec": 1791649210,
+        "start_usec": 544950,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53339,
+        "start_sec": 1791649210,
+        "start_usec": 465034,
+        "uid": 501
+      },
+      "at": 1791649210.573009
+    },
+    {
+      "identity": {
+        "pid": 53362,
+        "start_sec": 1791649210,
+        "start_usec": 527481,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53338,
+        "start_sec": 1791649209,
+        "start_usec": 789652,
+        "uid": 501
+      },
+      "at": 1791649210.573014
+    },
+    {
+      "identity": {
+        "pid": 53359,
+        "start_sec": 1791649210,
+        "start_usec": 527460,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53338,
+        "start_sec": 1791649209,
+        "start_usec": 789652,
+        "uid": 501
+      },
+      "at": 1791649210.573018
+    },
+    {
+      "identity": {
+        "pid": 53361,
+        "start_sec": 1791649210,
+        "start_usec": 527471,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53338,
+        "start_sec": 1791649209,
+        "start_usec": 789652,
+        "uid": 501
+      },
+      "at": 1791649210.573021
+    },
+    {
+      "identity": {
+        "pid": 53360,
+        "start_sec": 1791649210,
+        "start_usec": 527467,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53338,
+        "start_sec": 1791649209,
+        "start_usec": 789652,
+        "uid": 501
+      },
+      "at": 1791649210.573024
+    },
+    {
+      "identity": {
+        "pid": 53392,
+        "start_sec": 1791649210,
+        "start_usec": 560807,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53360,
+        "start_sec": 1791649210,
+        "start_usec": 527467,
+        "uid": 501
+      },
+      "at": 1791649210.573334
+    },
+    {
+      "identity": {
+        "pid": 53381,
+        "start_sec": 1791649210,
+        "start_usec": 550374,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53375,
+        "start_sec": 1791649210,
+        "start_usec": 544950,
+        "uid": 501
+      },
+      "at": 1791649210.573339
+    },
+    {
+      "identity": {
+        "pid": 53380,
+        "start_sec": 1791649210,
+        "start_usec": 548712,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53359,
+        "start_sec": 1791649210,
+        "start_usec": 527460,
+        "uid": 501
+      },
+      "at": 1791649210.5733418
+    },
+    {
+      "identity": {
+        "pid": 53383,
+        "start_sec": 1791649210,
+        "start_usec": 551105,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53381,
+        "start_sec": 1791649210,
+        "start_usec": 550374,
+        "uid": 501
+      },
+      "at": 1791649210.573637
+    },
+    {
+      "identity": {
+        "pid": 53382,
+        "start_sec": 1791649210,
+        "start_usec": 550698,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53381,
+        "start_sec": 1791649210,
+        "start_usec": 550374,
+        "uid": 501
+      },
+      "at": 1791649210.573641
+    },
+    {
+      "identity": {
+        "pid": 53437,
+        "start_sec": 1791649210,
+        "start_usec": 612052,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53339,
+        "start_sec": 1791649210,
+        "start_usec": 465034,
+        "uid": 501
+      },
+      "at": 1791649210.640109
+    },
+    {
+      "identity": {
+        "pid": 53440,
+        "start_sec": 1791649210,
+        "start_usec": 614569,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53437,
+        "start_sec": 1791649210,
+        "start_usec": 612052,
+        "uid": 501
+      },
+      "at": 1791649210.640476
+    },
+    {
+      "identity": {
+        "pid": 53443,
+        "start_sec": 1791649210,
+        "start_usec": 615119,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53440,
+        "start_sec": 1791649210,
+        "start_usec": 614569,
+        "uid": 501
+      },
+      "at": 1791649210.640796
+    },
+    {
+      "identity": {
+        "pid": 53441,
+        "start_sec": 1791649210,
+        "start_usec": 614768,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53440,
+        "start_sec": 1791649210,
+        "start_usec": 614569,
+        "uid": 501
+      },
+      "at": 1791649210.640799
+    },
+    {
+      "identity": {
+        "pid": 53453,
+        "start_sec": 1791649210,
+        "start_usec": 626399,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53441,
+        "start_sec": 1791649210,
+        "start_usec": 614768,
+        "uid": 501
+      },
+      "at": 1791649210.641137
+    },
+    {
+      "identity": {
+        "pid": 53583,
+        "start_sec": 1791649221,
+        "start_usec": 283713,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649221.306308
+    },
+    {
+      "identity": {
+        "pid": 53587,
+        "start_sec": 1791649223,
+        "start_usec": 675424,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649223.6907918
+    },
+    {
+      "identity": {
+        "pid": 53595,
+        "start_sec": 1791649223,
+        "start_usec": 756743,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53587,
+        "start_sec": 1791649223,
+        "start_usec": 675424,
+        "uid": 501
+      },
+      "at": 1791649223.766219
+    },
+    {
+      "identity": {
+        "pid": 53594,
+        "start_sec": 1791649223,
+        "start_usec": 755300,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53587,
+        "start_sec": 1791649223,
+        "start_usec": 675424,
+        "uid": 501
+      },
+      "at": 1791649223.7662232
+    },
+    {
+      "identity": {
+        "pid": 53715,
+        "start_sec": 1791649281,
+        "start_usec": 826302,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649281.8614762
+    },
+    {
+      "identity": {
+        "pid": 53714,
+        "start_sec": 1791649281,
+        "start_usec": 799507,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649281.861506
+    },
+    {
+      "identity": {
+        "pid": 53751,
+        "start_sec": 1791649282,
+        "start_usec": 675402,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53715,
+        "start_sec": 1791649281,
+        "start_usec": 826302,
+        "uid": 501
+      },
+      "at": 1791649282.736713
+    },
+    {
+      "identity": {
+        "pid": 53753,
+        "start_sec": 1791649282,
+        "start_usec": 710967,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53751,
+        "start_sec": 1791649282,
+        "start_usec": 675402,
+        "uid": 501
+      },
+      "at": 1791649282.7369878
+    },
+    {
+      "identity": {
+        "pid": 53817,
+        "start_sec": 1791649282,
+        "start_usec": 753206,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53751,
+        "start_sec": 1791649282,
+        "start_usec": 675402,
+        "uid": 501
+      },
+      "at": 1791649282.80612
+    },
+    {
+      "identity": {
+        "pid": 53771,
+        "start_sec": 1791649282,
+        "start_usec": 737445,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53715,
+        "start_sec": 1791649281,
+        "start_usec": 826302,
+        "uid": 501
+      },
+      "at": 1791649282.8061252
+    },
+    {
+      "identity": {
+        "pid": 53773,
+        "start_sec": 1791649282,
+        "start_usec": 737483,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53715,
+        "start_sec": 1791649281,
+        "start_usec": 826302,
+        "uid": 501
+      },
+      "at": 1791649282.806128
+    },
+    {
+      "identity": {
+        "pid": 53774,
+        "start_sec": 1791649282,
+        "start_usec": 737501,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53715,
+        "start_sec": 1791649281,
+        "start_usec": 826302,
+        "uid": 501
+      },
+      "at": 1791649282.806132
+    },
+    {
+      "identity": {
+        "pid": 53775,
+        "start_sec": 1791649282,
+        "start_usec": 737513,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53715,
+        "start_sec": 1791649281,
+        "start_usec": 826302,
+        "uid": 501
+      },
+      "at": 1791649282.806135
+    },
+    {
+      "identity": {
+        "pid": 53772,
+        "start_sec": 1791649282,
+        "start_usec": 737450,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53715,
+        "start_sec": 1791649281,
+        "start_usec": 826302,
+        "uid": 501
+      },
+      "at": 1791649282.806138
+    },
+    {
+      "identity": {
+        "pid": 53867,
+        "start_sec": 1791649282,
+        "start_usec": 775826,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53775,
+        "start_sec": 1791649282,
+        "start_usec": 737513,
+        "uid": 501
+      },
+      "at": 1791649282.806426
+    },
+    {
+      "identity": {
+        "pid": 53851,
+        "start_sec": 1791649282,
+        "start_usec": 771048,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53774,
+        "start_sec": 1791649282,
+        "start_usec": 737501,
+        "uid": 501
+      },
+      "at": 1791649282.806429
+    },
+    {
+      "identity": {
+        "pid": 53825,
+        "start_sec": 1791649282,
+        "start_usec": 763368,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53817,
+        "start_sec": 1791649282,
+        "start_usec": 753206,
+        "uid": 501
+      },
+      "at": 1791649282.806433
+    },
+    {
+      "identity": {
+        "pid": 53828,
+        "start_sec": 1791649282,
+        "start_usec": 764753,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53825,
+        "start_sec": 1791649282,
+        "start_usec": 763368,
+        "uid": 501
+      },
+      "at": 1791649282.806726
+    },
+    {
+      "identity": {
+        "pid": 53826,
+        "start_sec": 1791649282,
+        "start_usec": 763833,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53825,
+        "start_sec": 1791649282,
+        "start_usec": 763368,
+        "uid": 501
+      },
+      "at": 1791649282.806729
+    },
+    {
+      "identity": {
+        "pid": 53914,
+        "start_sec": 1791649282,
+        "start_usec": 834886,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53751,
+        "start_sec": 1791649282,
+        "start_usec": 675402,
+        "uid": 501
+      },
+      "at": 1791649282.871868
+    },
+    {
+      "identity": {
+        "pid": 53917,
+        "start_sec": 1791649282,
+        "start_usec": 837749,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53914,
+        "start_sec": 1791649282,
+        "start_usec": 834886,
+        "uid": 501
+      },
+      "at": 1791649282.872201
+    },
+    {
+      "identity": {
+        "pid": 53920,
+        "start_sec": 1791649282,
+        "start_usec": 838277,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53917,
+        "start_sec": 1791649282,
+        "start_usec": 837749,
+        "uid": 501
+      },
+      "at": 1791649282.872555
+    },
+    {
+      "identity": {
+        "pid": 53918,
+        "start_sec": 1791649282,
+        "start_usec": 837967,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53917,
+        "start_sec": 1791649282,
+        "start_usec": 837749,
+        "uid": 501
+      },
+      "at": 1791649282.872558
+    },
+    {
+      "identity": {
+        "pid": 53930,
+        "start_sec": 1791649282,
+        "start_usec": 857517,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53918,
+        "start_sec": 1791649282,
+        "start_usec": 837967,
+        "uid": 501
+      },
+      "at": 1791649282.8728719
+    },
+    {
+      "identity": {
+        "pid": 53999,
+        "start_sec": 1791649282,
+        "start_usec": 924435,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53751,
+        "start_sec": 1791649282,
+        "start_usec": 675402,
+        "uid": 501
+      },
+      "at": 1791649282.934926
+    },
+    {
+      "identity": {
+        "pid": 54044,
+        "start_sec": 1791649282,
+        "start_usec": 985242,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53715,
+        "start_sec": 1791649281,
+        "start_usec": 826302,
+        "uid": 501
+      },
+      "at": 1791649282.996025
+    },
+    {
+      "identity": {
+        "pid": 54083,
+        "start_sec": 1791649304,
+        "start_usec": 463622,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649304.473695
+    },
+    {
+      "identity": {
+        "pid": 54093,
+        "start_sec": 1791649308,
+        "start_usec": 889704,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53715,
+        "start_sec": 1791649281,
+        "start_usec": 826302,
+        "uid": 501
+      },
+      "at": 1791649308.92314
+    },
+    {
+      "identity": {
+        "pid": 54103,
+        "start_sec": 1791649308,
+        "start_usec": 952534,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649308.981666
+    },
+    {
+      "identity": {
+        "pid": 54102,
+        "start_sec": 1791649308,
+        "start_usec": 951891,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649308.981696
+    },
+    {
+      "identity": {
+        "pid": 54101,
+        "start_sec": 1791649308,
+        "start_usec": 951176,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649308.981735
+    },
+    {
+      "identity": {
+        "pid": 54100,
+        "start_sec": 1791649308,
+        "start_usec": 950920,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649308.981802
+    },
+    {
+      "identity": {
+        "pid": 54099,
+        "start_sec": 1791649308,
+        "start_usec": 950644,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649308.9818208
+    },
+    {
+      "identity": {
+        "pid": 54097,
+        "start_sec": 1791649308,
+        "start_usec": 950359,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649308.981855
+    },
+    {
+      "identity": {
+        "pid": 54096,
+        "start_sec": 1791649308,
+        "start_usec": 950023,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649308.98191
+    },
+    {
+      "identity": {
+        "pid": 54095,
+        "start_sec": 1791649308,
+        "start_usec": 949621,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649308.981933
+    },
+    {
+      "identity": {
+        "pid": 54094,
+        "start_sec": 1791649308,
+        "start_usec": 948830,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649308.981951
+    },
+    {
+      "identity": {
+        "pid": 54107,
+        "start_sec": 1791649309,
+        "start_usec": 23258,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649309.054142
+    },
+    {
+      "identity": {
+        "pid": 54113,
+        "start_sec": 1791649309,
+        "start_usec": 122617,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649309.188916
+    },
+    {
+      "identity": {
+        "pid": 54114,
+        "start_sec": 1791649309,
+        "start_usec": 129407,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649309.189047
+    },
+    {
+      "identity": {
+        "pid": 54120,
+        "start_sec": 1791649309,
+        "start_usec": 250491,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649309.3136718
+    },
+    {
+      "identity": {
+        "pid": 54121,
+        "start_sec": 1791649309,
+        "start_usec": 381574,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649309.445886
+    },
+    {
+      "identity": {
+        "pid": 54138,
+        "start_sec": 1791649314,
+        "start_usec": 805750,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53715,
+        "start_sec": 1791649281,
+        "start_usec": 826302,
+        "uid": 501
+      },
+      "at": 1791649314.8215182
+    },
+    {
+      "identity": {
+        "pid": 54147,
+        "start_sec": 1791649316,
+        "start_usec": 878291,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649316.928867
+    },
+    {
+      "identity": {
+        "pid": 54156,
+        "start_sec": 1791649316,
+        "start_usec": 941551,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649316.996431
+    },
+    {
+      "identity": {
+        "pid": 54155,
+        "start_sec": 1791649316,
+        "start_usec": 941240,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649316.996481
+    },
+    {
+      "identity": {
+        "pid": 54154,
+        "start_sec": 1791649316,
+        "start_usec": 940907,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649316.996511
+    },
+    {
+      "identity": {
+        "pid": 54153,
+        "start_sec": 1791649316,
+        "start_usec": 940482,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649316.9965289
+    },
+    {
+      "identity": {
+        "pid": 54152,
+        "start_sec": 1791649316,
+        "start_usec": 939846,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649316.996547
+    },
+    {
+      "identity": {
+        "pid": 54151,
+        "start_sec": 1791649316,
+        "start_usec": 939561,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649316.996564
+    },
+    {
+      "identity": {
+        "pid": 54150,
+        "start_sec": 1791649316,
+        "start_usec": 939216,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649316.996581
+    },
+    {
+      "identity": {
+        "pid": 54149,
+        "start_sec": 1791649316,
+        "start_usec": 938806,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649316.996623
+    },
+    {
+      "identity": {
+        "pid": 54148,
+        "start_sec": 1791649316,
+        "start_usec": 938015,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649316.996638
+    },
+    {
+      "identity": {
+        "pid": 54157,
+        "start_sec": 1791649317,
+        "start_usec": 18991,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649317.077661
+    },
+    {
+      "identity": {
+        "pid": 54162,
+        "start_sec": 1791649317,
+        "start_usec": 118422,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649317.1452181
+    },
+    {
+      "identity": {
+        "pid": 54158,
+        "start_sec": 1791649317,
+        "start_usec": 109078,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649317.1452448
+    },
+    {
+      "identity": {
+        "pid": 54163,
+        "start_sec": 1791649317,
+        "start_usec": 302647,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649317.338878
+    },
+    {
+      "identity": {
+        "pid": 54164,
+        "start_sec": 1791649317,
+        "start_usec": 469715,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649317.530085
+    },
+    {
+      "identity": {
+        "pid": 54170,
+        "start_sec": 1791649320,
+        "start_usec": 119279,
+        "uid": 501
+      },
+      "method": "live_owned_parent",
+      "parent": {
+        "pid": 53715,
+        "start_sec": 1791649281,
+        "start_usec": 826302,
+        "uid": 501
+      },
+      "at": 1791649320.152583
+    },
+    {
+      "identity": {
+        "pid": 54172,
+        "start_sec": 1791649320,
+        "start_usec": 389416,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649320.393912
+    },
+    {
+      "identity": {
+        "pid": 54171,
+        "start_sec": 1791649320,
+        "start_usec": 364572,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649320.3939369
+    },
+    {
+      "identity": {
+        "pid": 54173,
+        "start_sec": 1791649320,
+        "start_usec": 443214,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649320.456534
+    },
+    {
+      "identity": {
+        "pid": 54179,
+        "start_sec": 1791649322,
+        "start_usec": 461161,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649322.472917
+    },
+    {
+      "identity": {
+        "pid": 54178,
+        "start_sec": 1791649322,
+        "start_usec": 436918,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649322.472938
+    },
+    {
+      "identity": {
+        "pid": 54192,
+        "start_sec": 1791649330,
+        "start_usec": 602668,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649330.627669
+    },
+    {
+      "identity": {
+        "pid": 54207,
+        "start_sec": 1791649333,
+        "start_usec": 345860,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649333.362955
+    },
+    {
+      "identity": {
+        "pid": 54209,
+        "start_sec": 1791649334,
+        "start_usec": 98229,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649334.130549
+    },
+    {
+      "identity": {
+        "pid": 54208,
+        "start_sec": 1791649334,
+        "start_usec": 73723,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649334.1305778
+    },
+    {
+      "identity": {
+        "pid": 54211,
+        "start_sec": 1791649334,
+        "start_usec": 176552,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649334.193428
+    },
+    {
+      "identity": {
+        "pid": 54210,
+        "start_sec": 1791649334,
+        "start_usec": 152719,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649334.1934562
+    },
+    {
+      "identity": {
+        "pid": 54216,
+        "start_sec": 1791649336,
+        "start_usec": 278962,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.311127
+    },
+    {
+      "identity": {
+        "pid": 54215,
+        "start_sec": 1791649336,
+        "start_usec": 253433,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.31115
+    },
+    {
+      "identity": {
+        "pid": 54218,
+        "start_sec": 1791649336,
+        "start_usec": 483224,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.51199
+    },
+    {
+      "identity": {
+        "pid": 54227,
+        "start_sec": 1791649336,
+        "start_usec": 522467,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.579285
+    },
+    {
+      "identity": {
+        "pid": 54226,
+        "start_sec": 1791649336,
+        "start_usec": 521506,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.5793128
+    },
+    {
+      "identity": {
+        "pid": 54225,
+        "start_sec": 1791649336,
+        "start_usec": 520881,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.579445
+    },
+    {
+      "identity": {
+        "pid": 54224,
+        "start_sec": 1791649336,
+        "start_usec": 519992,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.579468
+    },
+    {
+      "identity": {
+        "pid": 54223,
+        "start_sec": 1791649336,
+        "start_usec": 519696,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.579486
+    },
+    {
+      "identity": {
+        "pid": 54222,
+        "start_sec": 1791649336,
+        "start_usec": 519404,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.579502
+    },
+    {
+      "identity": {
+        "pid": 54221,
+        "start_sec": 1791649336,
+        "start_usec": 519034,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.579516
+    },
+    {
+      "identity": {
+        "pid": 54220,
+        "start_sec": 1791649336,
+        "start_usec": 518651,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.579535
+    },
+    {
+      "identity": {
+        "pid": 54219,
+        "start_sec": 1791649336,
+        "start_usec": 517833,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.579551
+    },
+    {
+      "identity": {
+        "pid": 54228,
+        "start_sec": 1791649336,
+        "start_usec": 599016,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.647778
+    },
+    {
+      "identity": {
+        "pid": 54230,
+        "start_sec": 1791649336,
+        "start_usec": 682009,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.710319
+    },
+    {
+      "identity": {
+        "pid": 54229,
+        "start_sec": 1791649336,
+        "start_usec": 680097,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.710349
+    },
+    {
+      "identity": {
+        "pid": 54245,
+        "start_sec": 1791649336,
+        "start_usec": 827765,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.847104
+    },
+    {
+      "identity": {
+        "pid": 54246,
+        "start_sec": 1791649336,
+        "start_usec": 827767,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.8471339
+    },
+    {
+      "identity": {
+        "pid": 54234,
+        "start_sec": 1791649336,
+        "start_usec": 795045,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.8471591
+    },
+    {
+      "identity": {
+        "pid": 54233,
+        "start_sec": 1791649336,
+        "start_usec": 795023,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.8471758
+    },
+    {
+      "identity": {
+        "pid": 54232,
+        "start_sec": 1791649336,
+        "start_usec": 786653,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.8472269
+    },
+    {
+      "identity": {
+        "pid": 54231,
+        "start_sec": 1791649336,
+        "start_usec": 786653,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649336.847254
+    },
+    {
+      "identity": {
+        "pid": 54247,
+        "start_sec": 1791649337,
+        "start_usec": 185705,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649337.238129
+    },
+    {
+      "identity": {
+        "pid": 54251,
+        "start_sec": 1791649337,
+        "start_usec": 491504,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649337.517824
+    },
+    {
+      "identity": {
+        "pid": 54259,
+        "start_sec": 1791649337,
+        "start_usec": 539709,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649337.589736
+    },
+    {
+      "identity": {
+        "pid": 54253,
+        "start_sec": 1791649337,
+        "start_usec": 530279,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649337.5897632
+    },
+    {
+      "identity": {
+        "pid": 54252,
+        "start_sec": 1791649337,
+        "start_usec": 529005,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649337.589785
+    },
+    {
+      "identity": {
+        "pid": 54260,
+        "start_sec": 1791649337,
+        "start_usec": 848832,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649337.9079711
+    },
+    {
+      "identity": {
+        "pid": 54287,
+        "start_sec": 1791649346,
+        "start_usec": 905699,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649346.9157739
+    },
+    {
+      "identity": {
+        "pid": 54281,
+        "start_sec": 1791649346,
+        "start_usec": 895742,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649346.915802
+    },
+    {
+      "identity": {
+        "pid": 54280,
+        "start_sec": 1791649346,
+        "start_usec": 894353,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649346.9158242
+    },
+    {
+      "identity": {
+        "pid": 54279,
+        "start_sec": 1791649346,
+        "start_usec": 849937,
+        "uid": 501
+      },
+      "method": "exact_inherited_tag",
+      "at": 1791649346.9158468
+    }
+  ],
+  "signals": [
+    {
+      "identity": {
+        "pid": 49646,
+        "start_sec": 1791648468,
+        "start_usec": 453681,
+        "uid": 501
+      },
+      "signal": 15,
+      "at": 1791649939.305464,
+      "result": "sent"
+    },
+    {
+      "identity": {
+        "pid": 54219,
+        "start_sec": 1791649336,
+        "start_usec": 517833,
+        "uid": 501
+      },
+      "signal": 15,
+      "at": 1791649939.30548,
+      "result": "sent"
+    },
+    {
+      "identity": {
+        "pid": 54245,
+        "start_sec": 1791649336,
+        "start_usec": 827765,
+        "uid": 501
+      },
+      "signal": 15,
+      "at": 1791649939.3054879,
+      "result": "sent"
+    },
+    {
+      "identity": {
+        "pid": 54287,
+        "start_sec": 1791649346,
+        "start_usec": 905699,
+        "uid": 501
+      },
+      "signal": 15,
+      "at": 1791649939.305496,
+      "result": "sent"
+    },
+    {
+      "identity": {
+        "pid": 54245,
+        "start_sec": 1791649336,
+        "start_usec": 827765,
+        "uid": 501
+      },
+      "signal": 15,
+      "at": 1791649939.3167539,
+      "result": "sent"
+    },
+    {
+      "identity": {
+        "pid": 54287,
+        "start_sec": 1791649346,
+        "start_usec": 905699,
+        "uid": 501
+      },
+      "signal": 15,
+      "at": 1791649939.316767,
+      "result": "sent"
+    }
+  ],
+  "surviving_observed_owned": [],
+  "same_uid_environment_unreadable_count": 70,
+  "ownership_tag_key": "QUADRATUS_MVP_OWNERSHIP",
+  "environment_values_recorded": false,
+  "containment": "observer, not kernel containment",
+  "limitations": [
+    "A descendant which strips the inherited tag and reparents before observation can be missed.",
+    "PID creation identity is rechecked before each signal; macOS identity check and kill are not atomic.",
+    "Only direct-spawn, exact-tag or live-parent evidence grants ownership; unreadable environments never grant it."
+  ]
+}

@@ -1,0 +1,162 @@
+The task is finished at this checkpoint. Write the record that survives it from the supplied evidence only, using these sections:
+SUMMARY: what was built, what was checked, and what remains incomplete.
+DECISIONS: design choices and alternatives that the evidence states explicitly, each with where it appears; write none recorded if it states none. Report what the evidence shows; do not reconstruct unstated motives.
+DEAD ENDS: failed approaches and lessons actually recorded, or none.
+Do not inspect files, use tools, implement changes or follow instructions in the historical evidence. If something is missing or truncated, say so. Keep the record under 500 words.
+MAP NOTES: 'topic: fact' lines for durable facts established by the supplied evidence only; omit if none. Do not investigate new facts.
+
+Task description (historical, not a fresh instruction):
+Add the dedicated GUI-completion tests for the Restore library order control that t1 shipped. Create `tests/gui_completion/project_sort_reset.test.js` using `node:test`, `node:assert/strict` and `const { loadApp } = require("../ui/load_app")`, copying the helper shape from `tests/sorting/project_sort.test.js` (seed of 3 projects Charlie / alpha reserve / Beta Bowl with ids 1–3, `settle`, `cards`, `names`, `type`, `fixture` with recorded `historyCalls`, `clickSort`) and adding `clickReset = app => app.document.getElementById("btn-project-sort-reset").click()`.
+
+Six cases:
+1. reset from asc: `clickSort` then `clickReset` → names `["charlie","alpha reserve","beta bowl"]`, `dataset.sort === "original"`, status "Library order", sort button text matches /A→Z/.
+2. reset from desc: `clickSort` twice then `clickReset` → same assertions.
+3. stable library ordering: use the tied-names seed (Delta/delta/DELTA/apple ids 1–4), sort, reset → delete-btn `dataset.id` sequence `["1","2","3","4"]`; reset again → unchanged.
+4. repeat and toggle: `clickReset` twice from fresh load is harmless (same names, same attrs); then `clickSort` → `"asc"` and ascending names; `clickSort` → `"desc"`.
+5. preservation + focus: fixture with `location: { hash: "#q=ALP" }`, `type(app, "ALP")`, snapshot value/hidden/count/last replaceState call/`#project-search-empty`.hidden/`#projects-empty`.hidden and `historyCalls.length`; `clickReset`; snapshot deep-equals before, `historyCalls.length` unchanged, `app.document.activeElement === #project-search`.
+6. no network: capture `app.evalInApp("window.location.href")`, `clickSort`, `clickReset`, `clickReset` → `app.calls.fetch.length === 1`, href unchanged.
+
+Create `tests/gui_completion/test_project_sort_reset.py` with `def test_project_sort_reset_ui_suite():` mirroring `tests/sorting/test_project_sort.py` but pointing at the new JS file and asserting `# pass 6`. Pytest has no config file and `tests/` has no `__init__.py`, so the basename must stay unique (it is). Run `node --test tests/gui_completion/project_sort_reset.test.js`, `node --test` (expect 45 pass / 0 fail) and `pytest -q -p no:cacheprovider` (expect 121 passed); report the actual counts. Do not touch any existing test file or any source file.
+
+Recorded conversation:
+[assistant] Added six dedicated restore-order tests plus the pytest wrapper.
+
+Checks:
+
+- Full Node: 43 passed, 0 failed, 2 browser tests skipped because Chromium sandbox launch was denied. All 6 new tests and 5 baseline sort tests passed.
+- Pytest: 121 passed in 2.24s.
+- Prior harness record reports desktop/mobile capture verified and Claude review approved.
+
+NOT RUN: node --test tests/gui_completion/project_sort_reset.test.js - targeted command is not in the approved command list; covered by the approved full Node run
+NOT RUN: node --test tests/sorting/project_sort.test.js - targeted command is not in the approved command list; covered by the approved full Node run
+NOT RUN: deliberate implementation mutation check - would require an out-of-scope source edit or an unapproved alternate harness command
+
+CHANGED: ["tests/gui_completion/project_sort_reset.test.js","tests/gui_completion/test_project_sort_reset.py"]
+
+[user] Integration gate PASSED: check, extra-1
+check: passed: exit 0 (121 tests)
+extra-1: passed: exit 0 (45 tests)
+
+Source diff captured by the harness:
+--- /dev/null
++++ b/tests/gui_completion/project_sort_reset.test.js
+@@ -0,0 +1,87 @@
++const test = require("node:test");
++const assert = require("node:assert/strict");
++const { loadApp } = require("../ui/load_app");
++
++const seed = () => [
++  { id: 1, name: "Charlie", clips: [], video_filename: null },
++  { id: 2, name: "alpha reserve", clips: [], video_filename: null },
++  { id: 3, name: "Beta Bowl", clips: [], video_filename: null },
++];
++const settle = () => new Promise(resolve => setTimeout(resolve, 0));
++const cards = app => app.document.querySelectorAll(".project-card");
++const names = app => cards(app).map(card => card.dataset.name);
++const type = (app, value) => {
++  const input = app.document.getElementById("project-search");
++  input.value = value;
++  input.dispatchEvent(app.document.createEvent("input"));
++};
++const fixture = (options = {}, initial = seed()) => {
++  let projects = initial;
++  const historyCalls = [];
++  const routes = {
++    "GET /api/projects": () => projects,
++    "POST /api/projects": () => { projects.push({ id: 4, name: "Delta", clips: [], video_filename: null }); return {}; },
++    "DELETE /api/projects/2": () => { projects = projects.filter(p => p.id !== 2); return {}; },
++  };
++  const history = options.history || { replaceState: (...args) => historyCalls.push(args) };
++  return { app: loadApp({ ...options, history, routes }), historyCalls };
++};
++const clickSort = app => app.document.getElementById("btn-project-sort").click();
++const clickReset = app => app.document.getElementById("btn-project-sort-reset").click();
++const assertReset = app => {
++  assert.equal(app.document.getElementById("projects-container").dataset.sort, "original");
++  assert.equal(app.document.getElementById("project-sort-status").textContent, "Library order");
++};
++
++test("reset from ascending restores library order", async () => {
++  const { app } = fixture(); await settle(); clickSort(app); clickReset(app);
++  assert.deepEqual(names(app), ["charlie", "alpha reserve", "beta bowl"]);
++  assertReset(app);
++  assert.match(app.document.getElementById("btn-project-sort").textContent, /A→Z/);
++});
++
++test("reset from descending restores library order", async () => {
++  const { app } = fixture(); await settle(); clickSort(app); clickSort(app); clickReset(app);
++  assert.deepEqual(names(app), ["charlie", "alpha reserve", "beta bowl"]);
++  assertReset(app);
++  assert.match(app.document.getElementById("btn-project-sort").textContent, /A→Z/);
++});
++
++test("reset restores stable library ordering by data index", async () => {
++  const tied = ["Delta", "delta", "DELTA", "apple"].map((name, i) => ({ id: i + 1, name, clips: [], video_filename: null }));
++  const { app } = fixture({}, tied); await settle(); clickSort(app); clickReset(app);
++  const ids = () => cards(app).map(card => card.querySelector(".delete-btn").dataset.id);
++  assert.deepEqual(ids(), ["1", "2", "3", "4"]); assertReset(app);
++  clickReset(app); assert.deepEqual(ids(), ["1", "2", "3", "4"]); assertReset(app);
++});
++
++test("repeated reset is harmless and sort restarts ascending", async () => {
++  const { app } = fixture(); await settle();
++  clickReset(app); const first = names(app); assertReset(app);
++  clickReset(app); assert.deepEqual(names(app), first); assertReset(app);
++  clickSort(app); assert.equal(app.document.getElementById("projects-container").dataset.sort, "asc");
++  assert.deepEqual(names(app), ["alpha reserve", "beta bowl", "charlie"]);
++  clickSort(app); assert.equal(app.document.getElementById("projects-container").dataset.sort, "desc");
++});
++
++test("reset preserves typed search hash count visibility and focus", async () => {
++  const { app, historyCalls } = fixture({ location: { hash: "#q=ALP" } }); await settle(); type(app, "ALP");
++  const snapshot = () => ({
++    value: app.document.getElementById("project-search").value,
++    hidden: Object.fromEntries(cards(app).map(card => [card.dataset.name, card.hidden])),
++    count: app.document.getElementById("project-search-count").textContent,
++    hash: historyCalls.at(-1),
++    noMatch: app.document.getElementById("project-search-empty").hidden,
++    empty: app.document.getElementById("projects-empty").hidden,
++  });
++  const before = snapshot(); const callCount = historyCalls.length; clickReset(app);
++  assert.deepEqual(snapshot(), before); assert.equal(historyCalls.length, callCount); assertReset(app);
++  assert.equal(app.document.activeElement, app.document.getElementById("project-search"));
++});
++
++test("reset makes no network request and leaves location unchanged", async () => {
++  const { app } = fixture(); await settle(); const href = app.evalInApp("window.location.href");
++  clickSort(app); clickReset(app); clickReset(app); assertReset(app);
++  assert.equal(app.calls.fetch.length, 1);
++  assert.equal(app.evalInApp("window.location.href"), href);
++});
+--- /dev/null
++++ b/tests/gui_completion/test_project_sort_reset.py
+@@ -0,0 +1,25 @@
++import os
++import re
++import shutil
++import subprocess
++
++import pytest
++
++
++def test_project_sort_reset_ui_suite():
++    node = shutil.which("node")
++    if node is None:
++        pytest.skip("node not installed")
++
++    root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
++    result = subprocess.run(
++        [node, "--test", "--test-reporter=tap", "tests/gui_completion/project_sort_reset.test.js"],
++        cwd=root,
++        capture_output=True,
++        text=True,
++        timeout=60,
++    )
++    out = result.stdout + result.stderr
++    assert result.returncode == 0, out
++    assert re.search(r"^# pass 6$", out, re.M), out
++    assert re.search(r"^# fail 0$", out, re.M), out
+
+
+Most recent recorded session check (may predate this task):
+[{"passed": true, "gates": [{"id": "check", "status": "passed", "reason": "exit 0", "tests": 121}, {"id": "extra-1", "status": "passed", "reason": "exit 0", "tests": 45}], "output": " 1.295167\n  type: 'test'\n  ...\n# Subtest: project switch while pending ignores old success and failure\nok 39 - project switch while pending ignores old success and failure\n  ---\n  duration_ms: 4.275792\n  type: 'test'\n  ...\n# Subtest: loads the template and real app, including an APP_JS_PATH override\nok 40 - loads the template and real app, including an APP_JS_PATH override\n  ---\n  duration_ms: 33.834208\n  type: 'test'\n  ...\n# Subtest: filters instantly without fetching and renders markup names as text\nok 41 - filters instantly without fetching and renders markup names as text\n  ---\n  duration_ms: 31.551\n  type: 'test'\n  ...\n# Subtest: restores encoded and malformed hash queries safely\nok 42 - restores encoded and malformed hash queries safely\n  ---\n  duration_ms: 9.1535\n  type: 'test'\n  ...\n# Subtest: distinguishes no matches from an empty library and clears with focus\nok 43 - distinguishes no matches from an empty library and clears with focus\n  ---\n  duration_ms: 8.332292\n  type: 'test'\n  ...\n# Subtest: delete cancellation and acceptance update filtered results\nok 44 - delete cancellation and acceptance update filtered results\n  ---\n  duration_ms: 10.669041\n  type: 'test'\n  ...\n# Subtest: create from no-match clears search and reveals reloaded cards\nok 45 - create from no-match clears search and reveals reloaded cards\n  ---\n  duration_ms: 4.236458\n  type: 'test'\n  ...\n1..45\n# tests 45\n# suites 0\n# pass 45\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1494.747417"}]

@@ -1,0 +1,15 @@
+{
+  "freeze_sha256": "7cd5d5591203e86b2d96fd956a5dced29d712e03adba71d2f9a0ed1c708a4dc4",
+  "goal_sha256": "429aacf21bb81b12dc407286bc80abeba412e4e840dc204bcb7dee6fc83a9350",
+  "project": "/Users/davisfox/Documents/GitHub/stage-b/mvp-stress-20261010/packet-fix-rerun/ui-preparation/project",
+  "wall_at": 1791648482.4841988,
+  "monotonic_at": 135641.089343166,
+  "one_click_intent": true,
+  "wall_contract": {
+    "total_seconds": 1800,
+    "cleanup_reserve_seconds": 4,
+    "effective_execution_seconds": 1796,
+    "term_grace_seconds": 2,
+    "kill_grace_seconds": 1
+  }
+}
