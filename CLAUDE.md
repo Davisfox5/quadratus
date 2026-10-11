@@ -1149,6 +1149,32 @@ Key design decisions already settled:
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
   reviewers produce judgement.
+- **A test repair is named, not inferred** (run 20261010T225947Z-fec6da52:
+  the goal authorized repairing a broken generated browser test, the
+  repaired suite passed, and the original-test check restored the broken
+  run-start version and timed out). `--repair-test PATH` / the GUI's "test
+  files this run may repair" names exact existing test files; a glob, folder,
+  helper or forbidden path is refused before any call. Only those files stand
+  as repaired in the original-test copy; every other original is still
+  restored. The repair must keep every case its run-start version declared,
+  each executed and unskipped in a passed check, with names no other test file
+  shares; otherwise the check fails. The broken original is kept as an
+  artifact. Kept names and executed cases do not prove the assertions were
+  not weakened (a same-name `assert True` satisfies both), so
+  `test_repairs[].assertions_verified` is never set by the engine, the report
+  says so, and `tools/truth_check.py` reports the run unverified until an
+  independent review of the repaired file against the kept original.
+- **A check command owns its process group** (`integration._run_owned`). It
+  runs in a new session; on a timeout, or when it exits leaving its own
+  processes behind, only that group's members are stopped, pid by pid,
+  SIGTERM then SIGKILL to a pid whose group and start time still match.
+  Never a whole-group signal; a process that detached into its own session is
+  not touched. Output printed before a timeout is kept on the receipt. A
+  timeout is still an error, never an attributable product failure.
+- **The Monitor follows the project you opened.** A folder typed into the
+  Monitor wins, then the project opened on the Project tab, and only then the
+  project the GUI was started watching (`QUADRATUS_MONITOR_PROJECT`), which no
+  longer pre-fills the field.
 - **A role packet is sized before the calls that carry it** (run
   20261010T135407Z-f3d33e9d). The operator's forbidden paths alone put every
   packet over the 12,000-byte cap, and the run found out only when building

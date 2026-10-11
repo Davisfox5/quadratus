@@ -58,7 +58,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 default_scope=None, run_limits=None, forbid=(), declared_paths=(),
                 security_verdict_json=False, gates=None, extra_checks=(), capture_profile=None,
                 readiness=None, survey=None, direct_tier=False, tasks=None, decider=None,
-                decider_labels="unstated"):
+                decider_labels="unstated", repair_tests=()):
     """Keep both successful and interrupted runs next to their source tree.
 
     ``tasks`` is an operator-written task list (explicit-task entry): each
@@ -112,6 +112,7 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
         raise ValueError('Run state must not contain the project source folder.')
     project.exclude.add(state)
 
+    repair_tests = _repair_tests(project.root, repair_tests, forbid)
     policy = load_policy(project.root, forbid=forbid)
     if declared_paths:
         from .scope import TaskScope
@@ -138,7 +139,33 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     fleet_type=Fleet, session_factory=new_session, extras=extras,
                     capture_profile=profile, readiness=probes, survey=survey, direct_tier=direct_tier,
                     tasks=list(tasks) if tasks is not None else None, decider=decider,
-                    decider_labels=decider_labels)
+                    decider_labels=decider_labels, repair_tests=repair_tests)
+
+
+def _repair_tests(root, paths, forbid=()):
+    """The operator's authorized test repairs as exact project-relative
+    paths, or ValueError before any model call. Each must be an existing
+    test file (not a helper, fixture or configuration) that no operator
+    exclusion protects; a glob, a folder or a path outside the project is
+    refused, so the authorization cannot widen past the files it names."""
+    from .integration import _test_family
+    from .scope import _matches
+    names = []
+    for raw in paths or ():
+        name = str(raw).strip().removeprefix('./')
+        if not name:
+            continue
+        if any(c in name for c in '*?[') or name.endswith('/') or name.startswith('/') or '..' in name.split('/'):
+            raise ValueError(f'Test repair must name one exact file inside the project: {raw!r}')
+        target = Path(root) / name
+        if target.is_symlink() or not target.is_file():
+            raise ValueError(f'Test repair names no existing file: {name}')
+        if _test_family(name) is None:
+            raise ValueError(f'Test repair names a file that is not a test: {name}')
+        if any(_matches(name, pattern) for pattern in forbid or ()):
+            raise ValueError(f'Test repair names a path the operator forbade: {name}')
+        names.append(name)
+    return tuple(dict.fromkeys(names))
 
 
 def _packet_floor(policy, scope):
@@ -287,7 +314,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
          extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False, tasks=None,
-         decider=None, decider_labels="unstated"):
+         decider=None, decider_labels="unstated", repair_tests=()):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
@@ -356,6 +383,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         direct_tier=direct_tier,
         decider=decider,
         decider_labels=decider_labels,
+        repair_tests=tuple(repair_tests),
     )
     preview = policy.resolve(default_scope.permitted_paths if default_scope else (),
                              writing=allow_writes) if policy else None
@@ -460,6 +488,14 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                       *[f'- {name}' for name in changed], '']
     if not completed and not error:
         lines += ['The plan was declined, the task limit was reached, or findings/checks remain open.', '']
+    for repair in (getattr(session, 'test_repairs', None) or []) if session else []:
+        seen = repair.get('checks') or []
+        lines += [f"Authorized test repair: {repair['path']} (run-start bytes kept as artifact "
+                  f"{repair['original_artifact']}). Original cases "
+                  + ('kept and executed in the last check' if seen and seen[-1].get('passed') else
+                     'NOT shown kept and executed') + '. Its assertions are not independently checked; '
+                  'retained case names do not prove they were not weakened. Review the repaired file '
+                  'against the kept original before relying on it.', '']
     lines += ['Source changes are saved in the project folder.' if diff else
               'No source changes were produced. Any passing checks describe the existing tree.', '']
     if checks:
@@ -510,6 +546,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'selected_limits': selected,
         'unnamed_test_files': list(getattr(session, 'unnamed_test_files', []) or []) if session else [],
         'original_test_runs': list(getattr(session, 'original_test_runs', []) or []) if session else [],
+        'test_repairs': list(getattr(session, 'test_repairs', []) or []) if session else [],
         'skip_baselines': list(getattr(session, 'skip_baselines', []) or []) if session else [],
         'unexecuted_acceptance': list(getattr(session, 'unexecuted_acceptance', []) or []) if session else [],
         'stale_capture_fixtures': stale_fixtures,

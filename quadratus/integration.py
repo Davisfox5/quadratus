@@ -305,6 +305,132 @@ def attribute(result) -> dict:
     return dict(product=not reasons, reasons=reasons)
 
 
+#: Seconds a gate command's own processes get to exit after SIGTERM, then
+#: after SIGKILL, and the readers to drain their pipes once they are gone.
+_TERM_GRACE, _KILL_GRACE, _DRAIN_GRACE = 2.0, 1.0, 2.0
+
+
+class _GateTimeout(Exception):
+    def __init__(self, output, cleanup):
+        super().__init__('gate command timed out')
+        self.output, self.cleanup = output, cleanup
+
+
+def _group_members(pgid: int) -> dict:
+    """pid -> start-time text of every live process in process group
+    ``pgid``, read from ``ps``; {} when it cannot be read."""
+    try:
+        out = subprocess.run(['ps', '-A', '-o', 'pid=,pgid=,lstart='], capture_output=True,
+                             text=True, timeout=10, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    members = {}
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[1] == str(pgid) and parts[0].isdigit():
+            members[int(parts[0])] = parts[2].strip()
+    return members
+
+
+def _stop_owned(pgid: int) -> dict:
+    """Stop the processes a gate command left in the process group made for
+    it alone (``start_new_session``), one verified pid at a time: SIGTERM,
+    a bounded wait, then SIGKILL only to a pid whose group and start time
+    are still the ones seen, never a whole-group signal. A process that left
+    the group (its own setsid) is outside what this owns and is not
+    touched. Identity check and signal are not atomic; the record says what
+    was done and what remained (Codex, run 20261010T225947Z-fec6da52: a
+    timed-out original-test check left Node and two Python previews alive)."""
+    import signal
+    import time
+    seen = _group_members(pgid)
+    record = dict(found=sorted(seen), terminated=[], killed=[], remaining=[])
+    for pid in seen:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            record['terminated'].append(pid)
+        except OSError:
+            pass
+    for grace, sig, key in ((_TERM_GRACE, signal.SIGKILL, 'killed'), (_KILL_GRACE, None, None)):
+        end = time.monotonic() + grace
+        while time.monotonic() < end:
+            alive = {p: t for p, t in _group_members(pgid).items() if seen.get(p) == t}
+            if not alive:
+                break
+            time.sleep(0.05)
+        alive = {p: t for p, t in _group_members(pgid).items() if seen.get(p) == t}
+        if sig is None:
+            record['remaining'] = sorted(alive)
+            break
+        for pid in alive:
+            try:
+                os.kill(pid, sig)
+                record[key].append(pid)
+            except OSError:
+                pass
+    return record
+
+
+def _run_owned(argv, *, cwd, timeout, env):
+    """Run one gate command and return ``(returncode, output, cleanup)``;
+    ``returncode`` is None when it timed out.
+
+    The command runs in a new session, so the group holds it and every
+    descendant that did not leave on its own. Output is read as it arrives,
+    so a timeout keeps what was printed before it. When the command times
+    out, or exits leaving its own processes behind (a preview server holding
+    its pipes open), those processes are stopped by :func:`_stop_owned` and
+    ``cleanup`` says which. Nothing outside the group is signalled."""
+    import threading
+    import time
+    proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, start_new_session=True)
+    chunks = {'out': [], 'err': []}
+
+    def drain(stream, key):
+        for block in iter(lambda: stream.read1(65536) if hasattr(stream, 'read1') else stream.read(65536), b''):
+            chunks[key].append(block)
+    readers = [threading.Thread(target=drain, args=(proc.stdout, 'out'), daemon=True),
+               threading.Thread(target=drain, args=(proc.stderr, 'err'), daemon=True)]
+    for reader in readers:
+        reader.start()
+    deadline = time.monotonic() + timeout
+    returncode, cleanup = None, None
+    try:
+        try:
+            returncode = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            returncode = None
+        for reader in readers:
+            reader.join(max(0.0, deadline - time.monotonic()) if returncode is not None else 0)
+        if returncode is None or any(r.is_alive() for r in readers) or _group_members(proc.pid):
+            if returncode is not None and any(r.is_alive() for r in readers):
+                returncode = None  # the pipes outlived the deadline: a timeout
+            cleanup = _stop_owned(proc.pid)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        for reader in readers:
+            reader.join(_DRAIN_GRACE)
+    text = lambda key: b''.join(chunks[key]).decode('utf-8', errors='replace')  # noqa: E731
+    output = (text('out') + '\n' + text('err')).strip()
+    if cleanup is not None and any(r.is_alive() for r in readers):
+        cleanup['pipes_still_held'] = True
+    return returncode, output, cleanup
+
+
+def _cleanup_note(cleanup) -> str:
+    if not cleanup:
+        return ''
+    note = (f"(owned processes left by the command: found {len(cleanup['found'])}, "
+            f"terminated {len(cleanup['terminated'])}, killed {len(cleanup['killed'])}, "
+            f"still running {len(cleanup['remaining'])}"
+            + ('; output pipes still held by a process outside the command\'s group' if
+               cleanup.get('pipes_still_held') else '') + ')')
+    return note
+
+
 @contextmanager
 def _fresh_bytecode_env():
     """An environment in which standard CPython source-module imports read
@@ -452,28 +578,23 @@ class IntegrationGate:
         shown = shlex.join(self.command)
         try:
             with _fresh_bytecode_env() as fresh, _report_slot(self.command, fresh) as (argv, env, path, expected):
-                proc = subprocess.run(
-                    argv,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout,
-                    cwd=self.cwd,
-                    check=False,
-                    env=env,
-                )
-                report = read_report(path, expected)
-        except subprocess.TimeoutExpired:
-            return GateResult(
-                passed=False, command=shown, returncode=None,
-                output=f"(timed out after {self.timeout}s)",
-            )
+                returncode, combined, cleanup = _run_owned(argv, cwd=self.cwd, timeout=self.timeout, env=env)
+                report = read_report(path, expected) if returncode is not None else None
         except FileNotFoundError as exc:
             return GateResult(
                 passed=False, command=shown, returncode=None,
                 output=f"(command not found: {exc})",
             )
-        combined = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
-        passed = proc.returncode == 0
+        if returncode is None:
+            # The partial output is kept: a hang must name what it was doing.
+            return GateResult(
+                passed=False, command=shown, returncode=None,
+                output=(f"(timed out after {self.timeout}s) {_cleanup_note(cleanup)}\n"
+                        + combined[-_TAIL_CHARS:]).strip(),
+            )
+        if cleanup:
+            combined = (combined + "\n" + _cleanup_note(cleanup)).strip()
+        passed = returncode == 0
         if passed and self.minimum_tests is not None:
             count = _test_count(combined)
             if count is None:
@@ -483,7 +604,7 @@ class IntegrationGate:
         return GateResult(
             passed=passed,
             command=shown,
-            returncode=proc.returncode,
+            returncode=returncode,
             output=combined[-_TAIL_CHARS:],
             report=report,
             cases=case_record(combined, runner_of(self.command)),
@@ -714,24 +835,29 @@ class GateSuite:
                     receipts.append(replace(self._cache[key], cached=True))
                     continue
                 with _fresh_bytecode_env() as fresh, _report_slot(command.argv, fresh) as (argv, env, path, expected):
-                    proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
-                                          timeout=command.timeout, check=False, env=env)
-                    report = read_report(path, expected)
-                output = ((proc.stdout or '') + '\n' + (proc.stderr or '')).strip()
+                    returncode, output, cleanup = _run_owned(argv, cwd=cwd, timeout=command.timeout, env=env)
+                    report = read_report(path, expected) if returncode is not None else None
+                if returncode is None:
+                    raise _GateTimeout(output, cleanup)
+                if cleanup:
+                    output = (output + '\n' + _cleanup_note(cleanup)).strip()
                 count = _test_count(output)
-                status, reason = ('passed', 'exit 0') if proc.returncode == 0 else ('failed', 'nonzero exit')
+                status, reason = ('passed', 'exit 0') if returncode == 0 else ('failed', 'nonzero exit')
                 if count == 0:
                     status, reason = 'failed', 'zero tests executed'
-                elif proc.returncode == 0 and command.minimum_tests is not None:
+                elif returncode == 0 and command.minimum_tests is not None:
                     if count is None:
                         status, reason = 'blocked', 'test count unavailable'
                     elif count < command.minimum_tests:
                         status, reason = 'failed', 'fewer tests than required'
                 receipt = GateReceipt(**base, status=status, reason=reason,
-                                      returncode=proc.returncode, output=output[-_TAIL_CHARS:], tests=count,
+                                      returncode=returncode, output=output[-_TAIL_CHARS:], tests=count,
                                       report=report, cases=case_record(output, runner_of(command.argv)))
-            except subprocess.TimeoutExpired:
-                receipt = GateReceipt(**base, status='error', reason=f'timed out after {command.timeout}s')
+            except _GateTimeout as exc:
+                # Still an error, never a product failure: what was printed
+                # before the deadline is kept so the hang can be diagnosed.
+                receipt = GateReceipt(**base, status='error', reason=f'timed out after {command.timeout}s',
+                                      output=((_cleanup_note(exc.cleanup) + '\n' + exc.output).strip())[-_TAIL_CHARS:])
             except OSError as exc:
                 receipt = GateReceipt(**base, status='blocked', reason=f'runner unavailable: {exc}')
             if self.project.fingerprint() != source:
@@ -1200,7 +1326,80 @@ def _gate_commands(gate, root: Path):
     return [replace(c, cwd=(prefix / c.cwd).as_posix()) for c in commands]
 
 
-def run_original_tests(gate, root, originals: dict, current: dict):
+#: A node:test / mocha-style case declared with a literal name.
+_JS_CASE = re.compile(r"""(?:^|[^\w.$])(?:test|it)\s*\(\s*(["'])((?:\\.|(?!\1).)*?)\1""", re.MULTILINE)
+_JS_DYNAMIC = re.compile(r"(?:^|[^\w.$])(?:test|it)\s*\(\s*(?:`|[A-Za-z_$])", re.MULTILINE)
+_PY_CASE = re.compile(r"^\s*(?:async\s+)?def\s+(test_\w+)\s*\(", re.MULTILINE)
+
+
+def declared_cases(name: str, data: bytes) -> Optional[List[str]]:
+    """The case names a test file declares literally, or None when they
+    cannot all be read (a computed or template-literal name, or none)."""
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        return None
+    family = _test_family(name)
+    if family is None:
+        return None
+    if family[1] == 'py':
+        names = _PY_CASE.findall(text)
+    else:
+        if _JS_DYNAMIC.search(text):
+            return None
+        names = [m.group(2) for m in _JS_CASE.finditer(text)]
+    return names or None
+
+
+def repair_problems(name: str, original: bytes, current: dict, receipts) -> List[str]:
+    """Why an operator-authorized test repair is not shown to keep the test
+    it replaced, or [] when it is.
+
+    The repaired file must still declare every case the run-start version
+    declared, each by a name no other test file in the project uses (TAP
+    case names carry no file), and each must have executed, not skipped, in
+    a passed required receipt of this check. A case that cannot be named,
+    attributed or seen executing is not shown to run: the check fails rather
+    than trusting the rewritten file (Codex/Davis, run 20261010T225947Z-
+    fec6da52: the authorized repair was replaced by the broken original in
+    the original-test copy)."""
+    wanted = declared_cases(name, original)
+    if wanted is None:
+        return [f'{name}: the run-start version declares no case names that can be read, so its '
+                'cases cannot be shown to survive the repair']
+    data = current.get(name)
+    if data is None:
+        return [f'{name}: the repaired file is gone']
+    now = declared_cases(name, data) or []
+    problems = [f'{name}: case "{c}" was removed by the repair' for c in sorted(set(wanted) - set(now))]
+    py = _test_family(name)[1] == 'py'
+    if not py:
+        for other, body in current.items():
+            if other == name or _test_family(other) is None or _test_family(other)[1] == 'py':
+                continue
+            clash = set(wanted) & set(declared_cases(other, body) or [])
+            if clash:
+                problems.append(f'{name}: case name(s) {", ".join(sorted(clash))} also declared in {other}, '
+                                'so their execution cannot be attributed to the repaired file')
+    executed, skipped = set(), set()
+    for r in receipts:
+        get = (lambda k, r=r: r.get(k)) if isinstance(r, dict) else (lambda k, r=r: getattr(r, k, None))
+        cases = get('cases') or {}
+        skipped |= set(cases.get('skipped') or {})
+        if get('status') == 'passed' and get('required') is not False:
+            executed |= set(cases.get('executed') or {})
+
+    def seen(case, pool):
+        return any(k == case or (py and k.endswith('::' + case) and k.split('::')[0] == name) for k in pool)
+    for case in wanted:
+        if seen(case, skipped):
+            problems.append(f'{name}: case "{case}" was skipped')
+        elif not seen(case, executed):
+            problems.append(f'{name}: case "{case}" is not shown executing in a passed required check')
+    return problems
+
+
+def run_original_tests(gate, root, originals: dict, current: dict, keep=()):
     """Run the gate's own commands against the current source with every
     run-start test and support file restored to its run-start bytes.
 
@@ -1211,9 +1410,14 @@ def run_original_tests(gate, root, originals: dict, current: dict):
     file added during the run cannot run there and is skipped with that
     reason; tests the run added are checked by the ordinary gate, not here.
 
+    ``keep`` names run-start test files the operator authorized this run to
+    repair: their current bytes stand in the copy instead of the run-start
+    ones, which stay recorded as evidence. Every other original is restored.
+
     Returns ``(result, problem)``: a :class:`GateResult` whose receipts are
     named ``original-tests:<id>``, or ``None`` and why nothing was checked.
     """
+    keep = {k for k in keep if k in originals and k in current}
     root = Path(root).resolve()
     commands = _gate_commands(gate, root)
     if commands is None:
@@ -1231,6 +1435,8 @@ def run_original_tests(gate, root, originals: dict, current: dict):
             except OSError:
                 pass
         for name, data in originals.items():
+            if name in keep:
+                continue
             target = copy / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)

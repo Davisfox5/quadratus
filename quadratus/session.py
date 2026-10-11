@@ -524,6 +524,12 @@ class SessionConfig:
     #: leaves such a task unbounded, which is at least recorded as unbounded.
     default_scope: Optional["TaskScope"] = None
     repository_policy: Optional[object] = None
+    #: Run-start test files the operator authorized this run to repair (exact
+    #: project-relative paths). Only these stand as repaired in the
+    #: original-test copy, and only while every case they declared at run
+    #: start still executes, unskipped (integration.repair_problems). Every
+    #: other original is restored as before.
+    repair_tests: tuple = ()
 
 
 _SCOPE_REQUEST = (
@@ -2000,6 +2006,9 @@ class Session:
         self._original_tests: Optional[dict] = None
         #: Each run of the gate's commands against those bytes.
         self.original_test_runs: List[dict] = []
+        #: One record per authorized repair: the run-start bytes kept as
+        #: evidence, and each check of the repaired file.
+        self.test_repairs: List[dict] = []
         #: What the gate's commands skipped on the run-start source, measured
         #: once when a check first skips cases (Session._skip_baseline).
         self.skip_baselines: List[dict] = []
@@ -7933,6 +7942,7 @@ class Session:
         try:
             contents = Project(self.project, exclude=self.config.project_excludes).contents()
             self._original_tests = original_tests(contents)
+            self._record_repair_originals(contents)
             # The whole run-start source, for the one skip baseline run
             # (_skip_baseline, Codex review of 81adcc7, R3 and R4).
             self._run_start_contents = contents
@@ -7944,6 +7954,43 @@ class Session:
             self._original_tests = None
             self._unverified_once("The run-start test files could not be read, so changes to "
                                              f"them cannot be checked: {type(exc).__name__}: {str(exc)[:160]}")
+
+    def _record_repair_originals(self, contents: dict) -> None:
+        """Keep each authorized repair's run-start bytes as evidence before any
+        edit: the broken original is a raw failure record, never discarded."""
+        from .integration import declared_cases
+        for name in self.config.repair_tests:
+            data = contents.get(name)
+            if data is None:
+                continue
+            self.test_repairs.append(dict(
+                path=name, original_sha256=hashlib.sha256(data).hexdigest(),
+                original_artifact=self.store.put(data.decode("utf-8", errors="replace"),
+                                                 kind="repair-original", author="harness").id,
+                original_cases=declared_cases(name, data), checks=[],
+                # Kept names and executed cases do not show the assertions
+                # were not weakened: a same-name trivial pass satisfies both.
+                # Never set by the engine; an independent source review is
+                # what can establish it.
+                assertions_verified=False))
+
+    def _repaired(self, changed, current: dict) -> List[str]:
+        """The changed run-start files that are authorized repairs still present."""
+        return [n for n in changed if n in self.config.repair_tests and n in current]
+
+    def _repair_check(self, names, current: dict, receipts, where: str) -> List[str]:
+        """Each authorized repair's cases against this check's receipts."""
+        from .integration import repair_problems
+        problems = []
+        for name in names:
+            found = repair_problems(name, self._original_tests[name], current, receipts)
+            for record in self.test_repairs:
+                if record["path"] == name:
+                    record["checks"].append(dict(
+                        at=where, current_sha256=hashlib.sha256(current[name]).hexdigest(),
+                        passed=not found, problems=found))
+            problems += found
+        return problems
 
     def _with_original_tests(self, gate, result, current: dict):
         """The gate's result joined by the original tests, then the run-start
@@ -8006,7 +8053,28 @@ class Session:
         changed = changed_originals(originals, current) + added
         if not changed:
             return result
-        baseline, problem = run_original_tests(gate, self.project, originals, current)
+        repaired = self._repaired(changed, current)
+        # A failing check stays an ordinary failure with its own attribution;
+        # the repaired cases are judged on a check that passed.
+        if repaired and result.passed:
+            problems = self._repair_check(repaired, current, result.receipts or (dict(
+                status="passed" if result.passed else "failed", required=True, cases=result.cases),), task)
+            if problems:
+                text = ("Authorized test repair not shown to keep the original cases:\n"
+                        + "\n".join(f"- {p}" for p in problems))
+                self._note(f"task {task}: {text}")
+                return replace(result, passed=False, returncode=result.returncode or 1,
+                               output=f"{result.output}\n\n{text}"[-8_000:], receipts=tuple(result.receipts) + (
+                                   GateReceipt(id="repair-check", status="failed", reason="; ".join(problems)[:300],
+                                               required=True),))
+        if repaired:
+            changed = [n for n in changed if n not in repaired]
+            if not changed:
+                if result.passed:
+                    self._note(f"task {task}: authorized repair(s) {', '.join(repaired)} keep their original "
+                               "cases, executed; no other run-start test file changed")
+                return result
+        baseline, problem = run_original_tests(gate, self.project, originals, current, keep=repaired)
         self._verify_dependencies(f"during original tests ({task})")
         drift = self._source_drift(current)
         if drift:
@@ -8083,23 +8151,40 @@ class Session:
                    + added_selectors(self._original_tests, current))
         if not changed:
             return ""
+        repaired = self._repaired(changed, current)
+        if repaired:
+            # The delivered bytes of each repaired file must be bytes a check
+            # already showed keeping every original case, executed.
+            problems = []
+            for name in repaired:
+                digest = hashlib.sha256(current[name]).hexdigest()
+                if not any(c["passed"] and c["current_sha256"] == digest
+                           for r in self.test_repairs if r["path"] == name for c in r["checks"]):
+                    problems.append(f"{name}: no check of these delivered bytes showed every original case "
+                                    "executing")
+            if problems:
+                return ("\n\n--- DONE SENT BACK ---\nAn authorized test repair is not shown to keep the "
+                        "original cases:\n" + "\n".join(f"- {p}" for p in problems))
+            changed = [n for n in changed if n not in repaired]
+            if not changed:
+                return ""
         key = hashlib.sha256(b"".join(n.encode() + b"\0" + hashlib.sha256(d).digest()
                                       for n, d in sorted(current.items()))).hexdigest()
         cached = getattr(self, "_done_original_tests", None)
         if cached and cached[0] == key:
             return cached[1]
-        refusal = self._run_original_tests_at_done(current, changed)
+        refusal = self._run_original_tests_at_done(current, changed, keep=tuple(repaired))
         self._done_original_tests = (key, refusal)
         return refusal
 
-    def _run_original_tests_at_done(self, current: dict, changed: List[str]) -> str:
+    def _run_original_tests_at_done(self, current: dict, changed: List[str], keep=()) -> str:
         from .integration import run_original_tests
         gate = self.config.integration_gate
         if gate is None:
             self._unverified_once("Run-start test files changed and no check is configured to "
                                              "run the original tests against the delivered source.")
             return ""
-        baseline, problem = run_original_tests(gate, self.project, self._original_tests, current)
+        baseline, problem = run_original_tests(gate, self.project, self._original_tests, current, keep=keep)
         self._verify_dependencies("during original tests (DONE)")
         drift = self._source_drift(current)
         if drift:
