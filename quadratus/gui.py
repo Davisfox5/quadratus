@@ -629,7 +629,7 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                 with gr.Row():
                     monitor_refresh = gr.Button('Refresh now')
                     monitor_auto = gr.Checkbox(label=f'Refresh every {MONITOR_REFRESH_SECONDS} s', value=True)
-                monitor_status = gr.Markdown('Enter a project folder or series directory.')
+                monitor_status = gr.HTML('<p>Enter a project folder or series directory.</p>')
                 with gr.Accordion('Previous runs', open=False):
                     monitor_history = gr.Dataframe(headers=HISTORY_COLUMNS, value=[], interactive=False,
                                                    wrap=True, label=f'Last {MONITOR_HISTORY} runs')
