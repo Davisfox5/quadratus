@@ -5187,8 +5187,10 @@ class Session:
         facts = self._harness_facts()
         if not facts:
             return ""
-        return ("\n\n## The harness's latest check and renders (its own runs, not a model's account)\n"
-                + facts + "\nA task that only verifies (SCOPE edits none) is not dispatched while these "
+        head = "\n\n## The harness's latest check and renders (its own runs, not a model's account)\n" + facts
+        if not self.config.requirements_ledger or self._explicit_tasks is not None:
+            return head
+        return (head + "\nA task that only verifies (SCOPE edits none) is not dispatched while these "
                 "show the current source passing on every command with nothing skipped, its renders "
                 "approved and nothing open: cover such requirements in the task that does the work, or "
                 "reply DONE and the independent requirement audit judges them.")
@@ -5267,6 +5269,12 @@ class Session:
                 or getattr(spec, "kind", None) == TaskKind.SECURITY):
             # An operator's own list is run as written: there is nobody to
             # send a task back to.
+            return None
+        if not self.config.requirements_ledger:
+            # No final requirements audit runs, so nothing would judge what a
+            # handoff covers (root review of 95b81c2): dispatch as named.
+            self.verification_dispatched.append(dict(task=spec.task_id, covers=list(covers),
+                                                     why="the requirements audit is disabled"))
             return None
         status = self.memory.ledger.requirement_status
         if any(str(status.get(rid, "")).startswith("NOT MET") for rid in covers):

@@ -243,6 +243,19 @@ def test_renders_changed_after_approval_are_not_verification(tmp_path, monkeypat
 
 
 @browser
+def test_with_the_requirements_audit_off_the_review_task_runs(tmp_path, monkeypatch):
+    # Root review of 95b81c2: no final audit would judge what a handoff covers.
+    monkeypatch.setenv("QUADRATUS_REQUIREMENTS_LEDGER", "0")
+    profile, _ = _profile(tmp_path)
+    replay = _run(tmp_path, monkeypatch, [BUILD, VERIFY], {"t1": _build, "t2": _no_edit}, profile=profile)
+    _not_handed_off(replay, "the requirements audit is disabled")
+    assert len(_leads(replay, "t2")) == 1 and replay.of("auditor") == []
+    second = replay.of("orchestrator")[1].prompt
+    assert "## The harness's latest check and renders" in second
+    assert "is not dispatched while" not in second and "requirement audit judges" not in second
+
+
+@browser
 def test_unapproved_renders_are_not_verification(tmp_path, monkeypatch):
     profile, _ = _profile(tmp_path)
     replay = _run(tmp_path, monkeypatch, [REQS + BUILD, VERIFY], {"t1": _build, "t2": _no_edit}, profile=profile,
