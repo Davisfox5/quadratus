@@ -1169,7 +1169,11 @@ Key design decisions already settled:
   The seats get those receipts in place of the command list; the
   orchestrator sees them labelled as evidence only. They are never a task
   check, never a handoff and never a MET. A fix round that changes no source
-  is not re-checked: its findings stay open.
+  is not re-checked: its findings stay open. Every receipt is bound to the
+  gate in force as well as the source (`_gate_identity`: commands, cwd,
+  timeouts, minimum tests): a check of another gate on the same bytes is
+  history, never a seat's receipt, and a verification handoff needs a check
+  of the gate the task itself would run.
 - **A capture path keeps its #fragment, and a redeclaration sees the goal**
   (r05, 20261011T183849Z-869a1896: the goal prescribed /#q=Alpha; the
   orchestrator declared "/" expecting the harness to apply the hash "if

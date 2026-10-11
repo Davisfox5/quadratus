@@ -813,13 +813,18 @@ def _audit_check_facts(checks, current) -> str:
 
 
 def _gate_identity(gate) -> str:
-    """A stable digest of what a gate runs: its commands and their settings."""
+    """A stable digest of what a gate runs and where: each command with its
+    settings (argv, cwd, timeout, required, minimum tests, skip reason), the
+    gate's own working directory and its test-count minimum. None for none."""
+    if gate is None:
+        return ""
     commands = getattr(gate, "commands", None)
-    if commands is not None:
-        body = repr([dataclasses.asdict(c) if dataclasses.is_dataclass(c) else repr(c) for c in commands])
-    else:
-        body = repr((type(gate).__name__, getattr(gate, "command", None), getattr(gate, "timeout", None)))
-    return hashlib.sha256(body.encode()).hexdigest()[:16]
+    body = dict(kind=type(gate).__name__, cwd=str(getattr(gate, "cwd", "") or ""),
+                command=list(getattr(gate, "command", []) or []), timeout=getattr(gate, "timeout", None),
+                minimum_tests=getattr(gate, "minimum_tests", None),
+                commands=[dataclasses.asdict(c) if dataclasses.is_dataclass(c) else repr(c)
+                          for c in (commands or ())])
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
 def _executed_clean(report, tests) -> str:
@@ -5187,6 +5192,25 @@ class Session:
             self._apply_completion(self._completion_decision(CAP, max_tasks))
         return list(self.history)
 
+    def _current_gate(self):
+        """The gate the current task runs: its bound gate, else the configured one."""
+        return self._bound_gate() or self.config.integration_gate
+
+    def _gate_for(self, spec):
+        """The gate ``spec`` would run if dispatched now, read without side
+        effects (the same policy resolution _prepare_dispatch makes); None
+        when the policy refuses it."""
+        policy = self.config.repository_policy
+        if policy is None:
+            return self.config.integration_gate
+        from .policy import PolicyError, task_gate
+        try:
+            paths = spec.scope.permitted_paths if spec.scope else ()
+            return task_gate(policy, policy.resolve(paths, writing=self.config.allow_writes),
+                             self._original_gate, exclude=self.config.project_excludes)
+        except (PolicyError, ValueError):
+            return None
+
     def _observe_checks(self, spec, stage: str) -> None:
         """Run the task's own gate on the current source, once per source, as
         evidence for the seats that judge it: no fix call, never a task check,
@@ -5200,7 +5224,7 @@ class Session:
         live = self.config.integration_gate
         if not self.project or live is None or not self._required("checks", live is not None):
             return
-        gate = self._bound_gate() or live
+        gate = self._current_gate()
         current = self._source_fingerprint()
         identity = _gate_identity(gate)
         # Reused only for the same source AND the same gate: a cheap subset,
@@ -5238,8 +5262,13 @@ class Session:
         if not self.project or not (self.checks or observed):
             return ""
         current = self._source_fingerprint()
-        canonical = bool(self.checks) and bool(current) and self.checks[-1].get("source") == current
-        seen = next((c for c in reversed(observed) if current and c.get("source") == current), None)
+        # Bound to the gate in force now as well as the source: a run of
+        # another gate on these bytes is history, never this task's receipt.
+        identity = _gate_identity(self._current_gate())
+        canonical = (bool(self.checks) and bool(current) and self.checks[-1].get("source") == current
+                     and self.checks[-1].get("gate") == identity)
+        seen = next((c for c in reversed(observed)
+                     if current and c.get("source") == current and c.get("gate") == identity), None)
         if current_only and not canonical and seen is None:
             return ""
         lines = []
@@ -5272,7 +5301,8 @@ class Session:
             return ""
         head = "\n\n## The harness's latest check and renders (its own runs, not a model's account)\n" + facts
         current = self._source_fingerprint()
-        canonical = bool(self.checks) and bool(current) and self.checks[-1].get("source") == current
+        canonical = (bool(self.checks) and bool(current) and self.checks[-1].get("source") == current
+                     and self.checks[-1].get("gate") == _gate_identity(self.config.integration_gate))
         if not self.config.requirements_ledger or self._explicit_tasks is not None or not canonical:
             return head
         return (head + "\nA task that only verifies (SCOPE edits none) is not dispatched while these "
@@ -5294,6 +5324,8 @@ class Session:
         why = _verified_by_check(self.checks[-1] if self.checks else None, current)
         if why:
             return why
+        if spec is not None and self.checks[-1].get("gate") != _gate_identity(self._gate_for(spec)):
+            return "the latest project check ran a different gate than this task's"
         if self._checks_standing_failed():
             return "a check failure still stands"
         open_work = self._open_work()
@@ -8137,7 +8169,7 @@ class Session:
             task.record("user", result.for_models())
             attempt_facts.append(self._record_check_attempt(result, gate_kind=kind))
             self._handoff_unattributable(gate, result, task)
-        self.checks.append({"passed": result.passed, "command": result.command,
+        self.checks.append({"passed": result.passed, "command": result.command, "gate": _gate_identity(gate),
                             "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
                             "selection": self._gate_selection(gate), "command_cwd": self._gate_cwd(gate),
                             "cases": result.cases,

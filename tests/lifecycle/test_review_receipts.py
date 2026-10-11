@@ -121,3 +121,91 @@ def test_an_observation_is_bound_to_its_gate_as_well_as_its_source(tmp_path):
     one = IntegrationGate([sys.executable, "-m", "pytest"], cwd=tmp_path)
     two = IntegrationGate([sys.executable, "-m", "pytest", "-x"], cwd=tmp_path)
     assert _gate_identity(one) != _gate_identity(two)
+    # Root's three probes of 82615bd: each setting changes the identity.
+    (tmp_path / "sub").mkdir()
+    counted = IntegrationGate([sys.executable, "-m", "pytest"], cwd=tmp_path, minimum_tests=5)
+    elsewhere = IntegrationGate([sys.executable, "-m", "pytest"], cwd=tmp_path / "sub")
+    moved = GateSuite(list(full.commands), cwd=tmp_path / "sub")
+    assert _gate_identity(counted) != _gate_identity(one)
+    assert _gate_identity(elsewhere) != _gate_identity(one)
+    assert _gate_identity(moved) != _gate_identity(full)
+
+
+# -- the gate in force, not only the source ---------------------------------------------
+
+def _two_command_gate(project):
+    import sys
+
+    from quadratus.integration import GateCommand, GateSuite
+    return GateSuite([GateCommand(id="tests", argv=(sys.executable, "-m", "pytest", "-q")),
+                      GateCommand(id="extra", argv=(sys.executable, "-c", "print('1 passed')"))], cwd=project)
+
+
+def test_a_check_of_another_gate_on_the_same_source_is_not_a_seat_receipt(tmp_path, monkeypatch):
+    # Root and SAME review of 82615bd: a later task's policy gate adds a
+    # command; t1's passing check of the old gate on the same bytes is
+    # history, so t2's reviewers get a run of t2's own gate.
+    from quadratus.session import Session, _gate_identity
+    original = Session._prepare_dispatch
+
+    def dispatch(self, spec):
+        original(self, spec)
+        if spec.task_id == "t2":
+            self.config.integration_gate = _two_command_gate(self.project)
+
+    monkeypatch.setattr(Session, "_prepare_dispatch", dispatch)
+
+    def lead(call, replay):
+        if call.task == "t1":
+            H.write(call, {"app.py": FIXED})
+            return 'Wrote add.\nCHANGED: ["app.py"]'
+        return "Nothing to change.\nCHANGED: []"
+    import json
+
+    from tests.lifecycle.test_lifecycle_matrix import DECL_T1, T2
+    reread = "KIND: architect complex\nSCOPE: " + json.dumps(T2) + "\nRe-read the README against app.py."
+    plan = [DECL_T1, reread]
+    replay = _run(tmp_path, monkeypatch, Script(lead=lead, orchestrator=lambda c, r: plan.pop(0) if plan else "DONE"),
+                  files=FILES, max_tasks=2)
+    second = [c for c in replay.of("collaborator") if c.task == "t2"]
+    assert second, "t2 drew reviewers"
+    for call in second:
+        text = _text(call)
+        assert HANDED in text and "extra (required): passed" in text, "the run of t2's own gate"
+    seen = [s for s in _observed(replay) if s["task"] == "t2"]
+    assert seen and seen[0]["gate"] == _gate_identity(_two_command_gate(replay.project))
+
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("gate_changes", [False, True], ids=["same-gate", "other-gate"])
+def test_a_verification_handoff_needs_a_check_of_the_gate_the_task_would_run(tmp_path, monkeypatch, gate_changes):
+    import json
+
+    from quadratus.session import Session
+    from tests.lifecycle.test_lifecycle_matrix import T2
+    reqs = "REQUIREMENTS:\nR1: add returns the sum\nR2: the README documents add\n"
+    build = ('KIND: architect complex\nSCOPE: {"permitted_paths": ["app.py"], "intended_result": "add works", '
+             '"acceptance": ["add(1, 2) == 3"], "max_lines": 40}\nImplement add in app.py.\nCOVERS: R1')
+    verify = ("KIND: docs simple\nSCOPE: " + json.dumps(dict(T2, max_lines=1, edits="none"))
+              + "\nCheck the README against app.py.\nCOVERS: R2")
+    plan = [reqs + build, verify]
+    original = Session.next_task
+
+    def next_task(self):
+        if gate_changes and len(self.history) == 1:
+            # The gate the next task would run changes: the policy derives
+            # each task's gate from the operator's, as dispatch does.
+            self._original_gate = self.config.integration_gate = _two_command_gate(self.project)
+        return original(self)
+
+    monkeypatch.setattr(Session, "next_task", next_task)
+    script = Script(lead=_writes(FIXED), orchestrator=lambda c, r: plan.pop(0) if plan else "DONE",
+                    auditor=lambda c, r: "R1: MET - app.py\nR2: MET - README.md")
+    replay = _run(tmp_path, monkeypatch, script, files=FILES, max_tasks=4)
+    requirements = H.result_json(replay)["requirements"]
+    if gate_changes:
+        assert requirements["verification_handoffs"] == []
+        assert requirements["verification_dispatched"][0]["why"] == \
+            "the latest project check ran a different gate than this task's"
+    else:
+        assert [h["task"] for h in requirements["verification_handoffs"]] == ["t2"], "the positive control"
