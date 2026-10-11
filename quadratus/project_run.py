@@ -496,6 +496,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                      'NOT shown kept and executed') + '. Its assertions are not independently checked; '
                   'retained case names do not prove they were not weakened. Review the repaired file '
                   'against the kept original before relying on it.', '']
+    for handoff in (getattr(session, 'verification_handoffs', None) or []) if session else []:
+        lines += [f"Verification task {handoff['task']} was not dispatched: the harness had already verified "
+                  f"source {handoff['source'][:12]} with its own runs. {', '.join(handoff['covers']) or 'Nothing'} "
+                  "covered by that evidence, judged only by the final requirement audit.", '']
     lines += ['Source changes are saved in the project folder.' if diff else
               'No source changes were produced. Any passing checks describe the existing tree.', '']
     if checks:
@@ -818,7 +822,11 @@ def _requirements_record(session):
             "decided_by_orchestrator": dict(ledger.decisions),
             "operator_rulings": list(ledger.rulings),
             "reviews": list(getattr(session, "requirement_reviews", []) or []),
-            "audits": list(getattr(session, "requirement_audits", []) or [])}
+            "audits": list(getattr(session, "requirement_audits", []) or []),
+            # Review-only tasks the harness's own verification made redundant:
+            # their requirements were covered, never met, by that evidence.
+            "verification_handoffs": list(getattr(session, "verification_handoffs", []) or []),
+            "verification_dispatched": list(getattr(session, "verification_dispatched", []) or [])}
 
 
 def _preferences_record(settings=None):

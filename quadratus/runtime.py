@@ -553,7 +553,19 @@ class Fleet:
                      "path of this copy: this copy is deleted when your call ends, and an "
                      "absolute path into it is a dead reference in the report.")
             checks = tuple(getattr(self, "check_commands", ()) or ())
-            if checks and context.get("role") in REVIEW_CAPPED_ROLES:
+            if checks and context.get("role") in REVIEW_CAPPED_ROLES and context.get("harness_checks"):
+                # r03 (20261011T152432Z-4ceef6b5): seats re-ran the project's
+                # checks in copies with no browser while the harness's own
+                # runs of this exact source were on record.
+                role += (
+                    "\nTHE HARNESS HAS ALREADY RUN THE PROJECT'S CHECK COMMANDS ON EXACTLY THIS SOURCE:\n"
+                    + context["harness_checks"]
+                    + "\nJudge from those records and the files; do not run the check commands again here. "
+                    "This copy may lack browsers or other dependencies the harness has, so a command that "
+                    "cannot run here is not evidence about the source. This copy is not a git repository: "
+                    "git commands fail here, so read files and the task's own account of its changes instead."
+                )
+            elif checks and context.get("role") in REVIEW_CAPPED_ROLES:
                 # The same exact-command guidance the editing call gets (#51),
                 # which review seats never had: series rule-2ffa7f6 f1's
                 # collaborator and rechecks ran `node --test tests/ui/`, a

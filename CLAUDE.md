@@ -1159,6 +1159,21 @@ Key design decisions already settled:
   missing runner's exception names its path). It still judges for itself: a
   failure on the delivered source is evidence against it, a skip, earlier
   source or unknown count establishes no pass, and nothing turns into a MET.
+- **A verification-only task over a source the harness already verified is
+  not dispatched** (overnight r02 and r03: after a same-source harness pass
+  and approved renders, a review-only t2 re-ran the tests where it had no
+  browser, reported failures and NOT RUN, and in r03 spent 574,721 of
+  1,843,534 reported tokens with no edits, so the run hit its reserve before
+  the audit). `Session._verification_handoff` sends such a task back before
+  any lead call only when the latest check passed on this exact source with
+  every command executing cases and none failing or skipping, nothing open
+  (check failure, finding, capped task, NOT RUN, unrun test file), and the
+  latest renders are verified, approved and captured from this source. Its
+  requirements become "covered by harness verification", never met: the
+  final audit still judges each. Anything short of that dispatches the task
+  as before, with the reason in `verification_dispatched`. The orchestrator
+  sees the same facts each round, and review seats judging a source the
+  harness checked get the receipts in place of the command list.
 - **A reviewer's blocking design judgement gets one fix** (overnight r01,
   20261011T052348Z-1a2969ca: the reviewer rightly blocked a hint that
   squeezed the search field to 46 px, and the run ended FindingsOpen after 7
