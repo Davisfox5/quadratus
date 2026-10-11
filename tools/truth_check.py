@@ -9,7 +9,8 @@ Three verdicts, and missing evidence is never success:
 
 - ``verified``: completed, every listed requirement met by an audit, the final
   passing check ran test cases against the final source, nothing required was
-  skipped, nothing reported NOT RUN still stands, no finding is open, and every
+  skipped, nothing reported NOT RUN still stands, no finding is open, no
+  authorized test repair is left unreviewed, and every
   UI change carries approved capture evidence bound by digest to the bytes
   the reviewer was handed.
 - ``unverified``: the run says it succeeded but some of that is not shown.
@@ -219,6 +220,12 @@ def judge(run_dir, project=None) -> dict:
         if not _not_run_cleared(entry, checks):
             unshown.append(f"task {entry.get('task')} reported NOT RUN and no later check shows it ran: "
                            f"{str(entry.get('item'))[:120]}")
+    for repair in record.get("test_repairs") or []:
+        # Kept case names and executed cases do not show a repaired test's
+        # assertions were not weakened; only an independent review can.
+        if repair.get("assertions_verified") is not True:
+            unshown.append(f"authorized test repair {repair.get('path')}: its assertions are not independently "
+                           "checked against the kept original")
     for finding in record.get("findings") or []:
         if finding.get("status") == "open":
             unshown.append(f"open finding {finding.get('id')}: {str(finding.get('message'))[:120]}")

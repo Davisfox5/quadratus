@@ -227,7 +227,7 @@ def preset_values(name):
 def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
                    *, forbid=(), declared_paths=(), channel: Optional[OperatorChannel] = None,
                    neutral: bool = False, capture_profile=None, extra_checks=(), readiness=None,
-                   run_limits=None, survey=None):
+                   run_limits=None, survey=None, repair_tests=()):
     """Stream progress while the shared project runner performs model calls.
 
     ``run_limits`` (a RunLimits) and ``survey`` (a SurveyConfig) go to the
@@ -256,6 +256,7 @@ def run_project_ui(goal, folder, allow_writes, check, mode, max_tasks, settings,
                              capture_profile=capture_profile or None,
                              extra_checks=tuple(extra_checks), readiness=readiness or None,
                              run_limits=run_limits, survey=survey,
+                             **({'repair_tests': tuple(repair_tests)} if repair_tests else {}),
                              progress=events.put,
                              ask_operator=channel.ask if channel is not None else None)
         while not future.done():
@@ -406,17 +407,21 @@ MONITOR_REFRESH_SECONDS = 5
 MONITOR_HISTORY = 10
 
 
-def monitor_view(folder, series='', selected='', limit=MONITOR_HISTORY):
+def monitor_view(folder, series='', selected='', default='', limit=MONITOR_HISTORY):
     """The Monitor tab's one read: status markdown and the run history rows.
 
     Read-only by construction: it calls ``quadratus.monitor`` and nothing
-    else, so a refresh can never start, stop or alter a run. ``folder``
-    falls back to the project opened on the Project tab; a blank series
-    directory means the Stage B packet is not read.
+    else, so a refresh can never start, stop or alter a run. A folder typed
+    here wins; otherwise the project opened on the Project tab; only then
+    ``default``, the project the GUI was started watching. The startup
+    default used to fill the folder field and so outranked the project
+    actually opened: the operator watched the old project's records while a
+    new run was active. A blank series directory means the Stage B packet is
+    not read.
     """
     from .monitor import history_rows, read_status, run_history
     from .monitor_story import render_story
-    folder = (folder or '').strip() or (selected or '').strip()
+    folder = (folder or '').strip() or (selected or '').strip() or (default or '').strip()
     series = (series or '').strip() or None
     if not folder and not series:
         return ('Enter a project folder (or open one on the Project tab), or a Stage B '
@@ -511,6 +516,9 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                     field.change(summarize, inputs=[max_tasks, *limit_inputs], outputs=[limits_info])
                 declared_paths = gr.Textbox(label='Paths this task may change (one per line)', lines=2)
                 forbid_paths = gr.Textbox(label='Paths that must stay unchanged (one per line)', lines=2)
+                repair_paths = gr.Textbox(label='Existing test files this run may repair (exact paths, one per line)',
+                                          lines=1, info='Only these stand as repaired when the original tests are '
+                                          're-run, and only while every original case still runs unskipped.')
                 preview_button = gr.Button('Preview policy')
                 policy_info = gr.Markdown()
                 preview_button.click(policy_preview_ui,
@@ -547,7 +555,7 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                 open_button.click(open_project, inputs=[project_path, clone_url, branch],
                                   outputs=[selected, project_info, source_files, clone_url, branch, run_button])
 
-                def run_selected(goal, folder, writes, command, mode, limit, paths, forbid, no_personal,
+                def run_selected(goal, folder, writes, command, mode, limit, paths, forbid, repairs, no_personal,
                                  profile_path, further, probes, *limit_values):
                     if not folder:
                         raise gr.Error('Open a project first.')
@@ -563,10 +571,13 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                                               extra_checks=[c.strip() for c in (further or '').splitlines()
                                                             if c.strip()],
                                               readiness=(probes or '').strip() or None,
-                                              run_limits=run_limits, survey=survey)
+                                              run_limits=run_limits, survey=survey,
+                                              repair_tests=[p.strip() for p in (repairs or '').splitlines()
+                                                            if p.strip()])
 
                 run_button.click(run_selected, inputs=[goal, selected, edits, check, mode, max_tasks, declared_paths,
-                                                       forbid_paths, neutral, capture_profile, extra_checks, readiness,
+                                                       forbid_paths, repair_paths, neutral, capture_profile,
+                                                       extra_checks, readiness,
                                                        *limit_inputs],
                                  outputs=[report, diff, downloads], concurrency_limit=1)
             with gr.Tab('Code discussion'):
@@ -611,7 +622,8 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                             'Watching uses no model calls and cannot start or change a run.')
                 with gr.Accordion('Choose the project to watch', open=False):
                     monitor_folder = gr.Textbox(label='Project folder (blank: the opened project)',
-                                                placeholder='/path/to/project', value=watch_project)
+                                                placeholder=watch_project or '/path/to/project')
+                    monitor_default = gr.State(watch_project)
                     monitor_series = gr.Textbox(label='Stage B series directory (optional)',
                                                 placeholder='/abs/runs')
                 with gr.Row():
@@ -622,7 +634,7 @@ def build_interface(settings: Optional[Settings] = None, *, watch_project=''):
                     monitor_history = gr.Dataframe(headers=HISTORY_COLUMNS, value=[], interactive=False,
                                                    wrap=True, label=f'Last {MONITOR_HISTORY} runs')
                 monitor_timer = gr.Timer(MONITOR_REFRESH_SECONDS, active=True)
-                monitor_inputs = [monitor_folder, monitor_series, selected]
+                monitor_inputs = [monitor_folder, monitor_series, selected, monitor_default]
                 monitor_outputs = [monitor_status, monitor_history]
                 monitor_timer.tick(monitor_view, inputs=monitor_inputs, outputs=monitor_outputs,
                                    show_progress='hidden')

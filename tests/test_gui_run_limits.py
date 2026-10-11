@@ -108,7 +108,8 @@ def test_the_real_run_button_validates_and_forwards_the_form(tmp_path, monkeypat
     labels = {getattr(block, "label", None) for block in demo.blocks.values()}
     assert {"Use run limits", "Fill from preset", "Maximum model calls", "Parallel workers"} <= labels
     run_selected = _callback(demo, "run_selected")
-    common = ("goal", str(tmp_path), True, "", "adversarial", 10, "", "", False, "", "", "")
+    # goal, folder, writes, check, mode, tasks, paths, forbid, repairs, neutral, profile, extra, probes
+    common = ("goal", str(tmp_path), True, "", "adversarial", 10, "", "", "", False, "", "", "")
     list(run_selected(*common, *gui.preset_values(DIAGNOSTIC)))
     assert seen["run_limits"] == RunLimits(max_calls=90, max_reported_tokens=5_000_000, wall_seconds=3600,
                                            max_concurrent_workers=2, reserve_tokens_per_call=250_000,
@@ -120,6 +121,11 @@ def test_the_real_run_button_validates_and_forwards_the_form(tmp_path, monkeypat
     assert seen == {}, "a refused form never reaches the runner"
     list(run_selected(*common, False, 24, 500_000, 900, 2, 0, 0, 0))
     assert seen["run_limits"] is None and seen["survey"] is None
+    assert "repair_tests" not in seen, "no repair is authorized unless one is named"
+    seen.clear()
+    named = common[:8] + (" tests/ui/a.test.js \n\n",) + common[9:]
+    list(run_selected(*named, False, 24, 500_000, 900, 2, 0, 0, 0))
+    assert seen["repair_tests"] == ("tests/ui/a.test.js",)
 
 
 def test_the_runner_saves_the_selected_allowance_before_any_model_call(tmp_path, monkeypatch):

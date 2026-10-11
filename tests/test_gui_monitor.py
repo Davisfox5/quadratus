@@ -74,3 +74,24 @@ def test_the_interface_builds_with_the_monitor_tab():
     labels = {getattr(block, "label", None) for block in demo.blocks.values()}
     assert "Stage B series directory (optional)" in labels
     assert any(isinstance(block, gradio.Timer) for block in demo.blocks.values())
+
+
+def test_the_opened_project_outranks_the_project_the_gui_started_watching(tmp_path):
+    # The startup default (QUADRATUS_MONITOR_PROJECT) filled the folder field
+    # and outranked the project opened later, so a new run went unwatched.
+    old, new = tmp_path / "old", tmp_path / "new"
+    for root, stamp in ((old, "20261010T160802Z-8c1d2343"), (new, "20261011T090000Z-00000001")):
+        (root / ".quadratus" / "runs" / stamp).mkdir(parents=True)
+    markdown, rows = gui.monitor_view("", "", str(new), str(old))
+    assert str(new) in markdown and str(old) not in markdown
+    assert [r[0] for r in rows] == ["20261011T090000Z-00000001"]
+    markdown, _ = gui.monitor_view("", "", "", str(old))
+    assert str(old) in markdown, "with nothing opened, the startup project is watched"
+    markdown, _ = gui.monitor_view(str(old), "", str(new), str(old))
+    assert str(old) in markdown, "a folder typed into the field still wins"
+
+
+def test_the_startup_project_does_not_fill_the_folder_field():
+    import inspect
+    source = inspect.getsource(gui.build_interface)
+    assert "value=watch_project" not in source and "gr.State(watch_project)" in source
