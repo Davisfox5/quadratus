@@ -5206,8 +5206,13 @@ class Session:
         from .policy import PolicyError, task_gate
         try:
             paths = spec.scope.permitted_paths if spec.scope else ()
-            return task_gate(policy, policy.resolve(paths, writing=self.config.allow_writes),
-                             self._original_gate, exclude=self.config.project_excludes)
+            plan = policy.resolve(paths, writing=self.config.allow_writes)
+            # Every refusal _prepare_dispatch makes is no gate here (SAME
+            # review of f5c04b5: a blocked plan resolves without raising).
+            if plan["blocked"] or (self.config.allow_writes and self.config.default_scope
+                                   and any(not self.config.default_scope.permits(x) for x in paths)):
+                return None
+            return task_gate(policy, plan, self._original_gate, exclude=self.config.project_excludes)
         except (PolicyError, ValueError):
             return None
 
@@ -5324,8 +5329,13 @@ class Session:
         why = _verified_by_check(self.checks[-1] if self.checks else None, current)
         if why:
             return why
-        if spec is not None and self.checks[-1].get("gate") != _gate_identity(self._gate_for(spec)):
-            return "the latest project check ran a different gate than this task's"
+        if spec is not None:
+            gate = self._gate_for(spec)
+            if gate is None and self.config.repository_policy is not None:
+                # Dispatched, so the policy refuses it exactly as it would any task.
+                return "the repository policy refuses this task"
+            if self.checks[-1].get("gate") != _gate_identity(gate):
+                return "the latest project check ran a different gate than this task's"
         if self._checks_standing_failed():
             return "a check failure still stands"
         open_work = self._open_work()

@@ -177,7 +177,7 @@ def test_a_check_of_another_gate_on_the_same_source_is_not_a_seat_receipt(tmp_pa
 
 
 @pytest.mark.requirements_ledger
-@pytest.mark.parametrize("gate_changes", [False, True], ids=["same-gate", "other-gate"])
+@pytest.mark.parametrize("gate_changes", [False, True, "forbidden"], ids=["same-gate", "other-gate", "forbidden"])
 def test_a_verification_handoff_needs_a_check_of_the_gate_the_task_would_run(tmp_path, monkeypatch, gate_changes):
     import json
 
@@ -188,11 +188,12 @@ def test_a_verification_handoff_needs_a_check_of_the_gate_the_task_would_run(tmp
              '"acceptance": ["add(1, 2) == 3"], "max_lines": 40}\nImplement add in app.py.\nCOVERS: R1')
     verify = ("KIND: docs simple\nSCOPE: " + json.dumps(dict(T2, max_lines=1, edits="none"))
               + "\nCheck the README against app.py.\nCOVERS: R2")
+    forbid = ("README.md",) if gate_changes == "forbidden" else ()
     plan = [reqs + build, verify]
     original = Session.next_task
 
     def next_task(self):
-        if gate_changes and len(self.history) == 1:
+        if gate_changes is True and len(self.history) == 1:
             # The gate the next task would run changes: the policy derives
             # each task's gate from the operator's, as dispatch does.
             self._original_gate = self.config.integration_gate = _two_command_gate(self.project)
@@ -201,11 +202,54 @@ def test_a_verification_handoff_needs_a_check_of_the_gate_the_task_would_run(tmp
     monkeypatch.setattr(Session, "next_task", next_task)
     script = Script(lead=_writes(FIXED), orchestrator=lambda c, r: plan.pop(0) if plan else "DONE",
                     auditor=lambda c, r: "R1: MET - app.py\nR2: MET - README.md")
-    replay = _run(tmp_path, monkeypatch, script, files=FILES, max_tasks=4)
+    replay = _run(tmp_path, monkeypatch, script, files=FILES, max_tasks=4, forbid=forbid)
     requirements = H.result_json(replay)["requirements"]
-    if gate_changes:
+    if gate_changes == "forbidden":
+        # SAME review of f5c04b5: the policy blocks the task's path, so it is
+        # dispatched to meet the same refusal any task would, never covered.
+        assert requirements["verification_handoffs"] == []
+        assert requirements["verification_dispatched"][0]["why"] == "the repository policy refuses this task"
+        assert "PolicyError" in replay.result.error and not replay.result.completed
+        assert requirements["status"].get("R2", "open") == "open"
+    elif gate_changes:
         assert requirements["verification_handoffs"] == []
         assert requirements["verification_dispatched"][0]["why"] == \
             "the latest project check ran a different gate than this task's"
     else:
         assert [h["task"] for h in requirements["verification_handoffs"]] == ["t2"], "the positive control"
+
+
+@pytest.mark.parametrize("refusal", ["blocked", "runner", "limits"])
+def test_a_plan_dispatch_would_refuse_predicts_no_gate(tmp_path, refusal):
+    # SAME review of f5c04b5: every refusal _prepare_dispatch makes (a
+    # blocked plan, a required runner that is not configured, paths beyond
+    # the operator's limits) is no predicted gate, so no handoff.
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.policy import PolicyError
+    from quadratus.scope import TaskScope
+    from quadratus.session import Session, SessionConfig, TaskSpec
+
+    class Policy:
+        explicit = True
+
+        def resolve(self, paths, writing=False):
+            return dict(blocked=["needs an operator ruling: secrets/"] if refusal == "blocked" else [],
+                        gates=[], primary_family="x", hash="h")
+
+    (tmp_path / "project").mkdir()
+    limit = TaskScope(permitted_paths=["app.py"]) if refusal == "limits" else None
+    session = Session("goal", ArtifactStore(tmp_path / "a"), lambda *a, **k: "",
+                      config=SessionConfig(project=tmp_path / "project", allow_writes=True, default_scope=limit))
+    session.config.repository_policy = Policy()
+    if refusal == "runner":
+        import quadratus.policy as policy_module
+
+        def refuse(*a, **k):
+            raise PolicyError("Required runner is not configured: endpoint (http)")
+        original, policy_module.task_gate = policy_module.task_gate, refuse
+    try:
+        spec = TaskSpec("t2", "Check README.", scope=TaskScope(permitted_paths=["README.md"]))
+        assert session._gate_for(spec) is None
+    finally:
+        if refusal == "runner":
+            policy_module.task_gate = original
