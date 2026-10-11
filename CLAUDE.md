@@ -1155,8 +1155,10 @@ Key design decisions already settled:
   NOT MET against a same-source pass of 121 Python and 64 Node tests). Each
   recorded command id now reaches the audit with its status, parsed
   passed/failed/skipped counts, and whether it ran on the delivered source;
-  never a command line. It still judges for itself: a skip, failure, earlier
-  source or unknown count is stated as such, and nothing turns into a MET.
+  never a command line, and a reason is path-redacted like check output (a
+  missing runner's exception names its path). It still judges for itself: a
+  failure on the delivered source is evidence against it, a skip, earlier
+  source or unknown count establishes no pass, and nothing turns into a MET.
 - **A reviewer's blocking design judgement gets one fix** (overnight r01,
   20261011T052348Z-1a2969ca: the reviewer rightly blocked a hint that
   squeezed the search field to 46 px, and the run ended FindingsOpen after 7

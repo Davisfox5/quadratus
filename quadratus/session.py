@@ -787,9 +787,15 @@ def _audit_check_facts(checks, current) -> str:
     Overnight r02 (20261011T134747Z-b14aa88b): the audit saw only "gate
     suite: passed", ran the browser tests in its own copy without
     Playwright, and marked R6 NOT MET against a same-source harness pass
-    of 121 Python and 64 Node with none skipped."""
+    of 121 Python and 64 Node with none skipped.
+
+    A reason is exception text and can carry a command's path (a missing
+    runner: ``runner unavailable: [Errno 2] ... '/private/grader/run.py'``),
+    so it is redacted like check output before it is shortened."""
+    from .integration import redact_command_paths
     lines = []
     for check in checks:
+        paths = _check_command_paths(check)
         receipts = check.get("receipts") or []
         if not receipts:
             lines.append(f"- check: {'passed' if check.get('passed') else 'FAILED'}; "
@@ -797,7 +803,7 @@ def _audit_check_facts(checks, current) -> str:
             continue
         for r in receipts:
             lines.append(f"- {r.get('id')} ({'required' if r.get('required', True) else 'optional'}): "
-                         f"{r.get('status')}: {str(r.get('reason', ''))[:80]}; "
+                         f"{r.get('status')}: {redact_command_paths(str(r.get('reason') or ''), paths)[:80]}; "
                          f"{_check_tally(r.get('report'), r.get('tests'))}; {_check_source(r.get('source_hash'), current)}")
     return "\n".join(lines)
 
@@ -1733,9 +1739,21 @@ def _invocation_role(role):
 
 def _check_for_models(check: dict) -> dict:
     """A recorded check as a seat may see it: outcomes, never commands or their paths."""
-    import shlex
-
     from .integration import redact_command_paths
+    ordered = _check_command_paths(check)
+    return {
+        "passed": check.get("passed"),
+        "gates": [{"id": r.get("id"), "status": r.get("status"),
+                   "reason": redact_command_paths(str(r.get("reason") or ""), ordered),
+                   "tests": r.get("tests")} for r in check.get("receipts") or []],
+        "output": redact_command_paths(check.get("output") or "", ordered)[-1500:],
+    }
+
+
+def _check_command_paths(check: dict) -> list:
+    """Absolute paths named by a recorded check's commands, and the folders
+    holding them, longest first: what redact_command_paths hides."""
+    import shlex
     paths = set()
     for text in [check.get("command", "")] + [r.get("command", "") for r in check.get("receipts") or []]:
         try:
@@ -1748,13 +1766,7 @@ def _check_for_models(check: dict) -> dict:
                 parent = token.rstrip("/").rsplit("/", 1)[0]
                 if parent.count("/") >= 2:
                     paths.add(parent)
-    ordered = sorted(paths, key=len, reverse=True)
-    return {
-        "passed": check.get("passed"),
-        "gates": [{"id": r.get("id"), "status": r.get("status"), "reason": r.get("reason"),
-                   "tests": r.get("tests")} for r in check.get("receipts") or []],
-        "output": redact_command_paths(check.get("output") or "", ordered)[-1500:],
-    }
+    return sorted(paths, key=len, reverse=True)
 
 
 #: The marker as a verifier writes it: the uppercase word, not the English one.
@@ -6110,8 +6122,10 @@ class Session:
             + (f"\n\n## Latest project checks (run by the harness, oldest first)\n{checks}\n"
                "These are the harness's own executions. Your working copy may lack browsers or other "
                "dependencies the harness has, so a test you cannot run there is not evidence that it "
-               "fails. A check that skipped, failed, or ran on an earlier source shows nothing about "
-               "the delivered source. Judge each requirement yourself." if checks else "")
+               "fails. A check that failed on the delivered source is evidence against it. Skipped tests and "
+               "checks that did not run are incomplete evidence, and a check on an earlier source cannot "
+               "establish the delivered source's result; none of these establishes a pass. Judge each "
+               "requirement yourself." if checks else "")
             + (("\n\n## How ambiguous requirements were settled (judge against these)\n"
                 + "\n".join([f"- {r}: decided by the orchestrator: {t}" for r, t in ledger.decisions.items()]
                              + [f"- operator ruling: {r}" for r in ledger.rulings]))
