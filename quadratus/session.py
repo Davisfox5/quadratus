@@ -5225,6 +5225,24 @@ class Session:
                 return f"the latest renders ({record.get('task')}) are not verified"
             if not review.get("approved"):
                 return f"the latest renders ({record.get('task')}) are not approved by the design reviewer"
+            # The files themselves, not the saved flags (root review of
+            # 95b81c2): the set must still be complete and deliverable, and
+            # every file the reviewer was handed must hold the approved bytes.
+            task = record.get("task")
+            outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == task), None)
+            delivered = ((outcome.delivery or {}).get("files") or {}) if outcome is not None else {}
+            if outcome is None or outcome.edges.get("reviewer") is not True or not delivered:
+                return f"the latest renders ({task}) have no approved delivery on record"
+            problem = self._evidence_set_problem(task)
+            if problem:
+                return f"the latest renders ({task}): {problem}"
+            for rel, digest in sorted(delivered.items()):
+                try:
+                    now = hashlib.sha256((Path(self.project) / rel).read_bytes()).hexdigest()
+                except OSError:
+                    now = ""
+                if not digest or now != digest:
+                    return f"the latest renders ({task}) changed after their review: {rel}"
             from .design_evidence import evidence_dir
             try:
                 summary = json.loads((evidence_dir(self.project, record.get("task")) / "summary.json").read_text())

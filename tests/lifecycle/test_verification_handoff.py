@@ -199,6 +199,49 @@ def test_renders_from_an_earlier_source_are_not_verification(tmp_path, monkeypat
     assert len(_leads(replay, "t3")) == 1
 
 
+def _delete_desktop(folder):
+    (folder / "desktop" / "page.png").unlink()
+
+
+def _replace_desktop(folder):
+    shot = folder / "desktop" / "page.png"
+    shot.write_bytes(shot.read_bytes() + b"\0")
+
+
+def _rewrite_summary(folder):
+    # Same source fingerprint, so only the approved bytes can tell.
+    summary = folder / "summary.json"
+    data = json.loads(summary.read_text())
+    data["target"] = str(data.get("target", "")) + "?changed"
+    summary.write_text(json.dumps(data))
+
+
+@browser
+@pytest.mark.parametrize("mutate, why", [
+    (_delete_desktop, "the latest renders (t1): the evidence set is incomplete"),
+    (_replace_desktop, "the latest renders (t1) changed after their review: "),
+    (_rewrite_summary, "the latest renders (t1) changed after their review: "),
+])
+def test_renders_changed_after_approval_are_not_verification(tmp_path, monkeypatch, mutate, why):
+    # Root review of 95b81c2: the files, not the saved flags. Mutated after
+    # the approval and before the orchestrator names the verification task.
+    from quadratus.design_evidence import evidence_dir
+    profile, _ = _profile(tmp_path)
+
+    def verify_after_mutation(call, replay):
+        mutate(evidence_dir(replay.project, "t1"))
+        return VERIFY
+    plan = [REQS + BUILD, None]
+    replay = _run(tmp_path, monkeypatch, [], {"t1": _build, "t2": _no_edit}, profile=profile,
+                  roles={"orchestrator": lambda c, r: (plan.pop(0) or verify_after_mutation(c, r)) if plan
+                         else "DONE"})
+    assert _handoffs(replay) == []
+    [dispatched] = H.result_json(replay)["requirements"]["verification_dispatched"]
+    assert dispatched["why"].startswith(why), dispatched
+    assert len(_leads(replay, "t2")) == 1
+    assert not replay.result.completed, "the completion guard still holds"
+
+
 @browser
 def test_unapproved_renders_are_not_verification(tmp_path, monkeypatch):
     profile, _ = _profile(tmp_path)
