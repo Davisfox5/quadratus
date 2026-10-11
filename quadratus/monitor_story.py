@@ -104,7 +104,8 @@ def _activity_line(event):
     actor = _model(event.get('model'))
     action = ROLE_LABELS.get(str(event.get('role', '')), 'Working on the task')
     task = str(event.get('task', ''))
-    suffix = f' · {_safe(task)}' if task and task != 'run' else ''
+    # Plain text: every caller escapes exactly once where it writes markup.
+    suffix = f' · {task}' if task and task != 'run' else ''
     if kind == 'call-started':
         return f'{actor}: {action.lower()}{suffix}'
     if kind == 'call-ended':
@@ -143,7 +144,8 @@ _STYLE = """<style>
 .qm-card h3,.qm h3{margin:0 0 4px;font-size:.8em;letter-spacing:.04em;text-transform:uppercase;opacity:.8}
 .qm-card .qm-big{font-size:1.1em;font-weight:600}
 .qm-note{font-size:.88em;opacity:.85;margin:0}
-.qm ol{margin:0;padding:0;list-style:none}.qm li{margin:3px 0}
+.qm ol.qm-timeline{margin:0 !important;padding:0 !important;list-style:none !important}
+.qm ol.qm-timeline>li{margin:3px 0 !important;padding:0 !important;list-style:none !important}
 .qm-now{margin-top:4px}.qm-now span{display:block;font-size:.85em;opacity:.8}
 .qm time{font-variant-numeric:tabular-nums;opacity:.8;margin-right:6px}
 .qm-replies{display:grid;gap:10px}
@@ -168,8 +170,16 @@ def _excerpt(text, limit=200):
 
 
 def _active_calls(events):
+    """Calls and test commands recorded as started and not yet recorded as
+    ended, in order. A record, not proof that a process is alive."""
     active = {}
     for event in events:
+        if event.get('kind') == 'check-started':
+            active['check:' + str(event.get('task', ''))] = event
+            continue
+        if event.get('kind') == 'check-ended':
+            active.pop('check:' + str(event.get('task', '')), None)
+            continue
         call_id = event.get('call_id')
         if not isinstance(call_id, str):
             continue
@@ -230,13 +240,15 @@ def render_story(status):
     if active:
         now = ''.join(f'<div class="qm-now">{_safe(_activity_line(e))}<span>since {_safe(_time(e.get("at")))}</span></div>'
                       for e in active[-3:])
-        progress = f'<div class="qm-big">In progress</div>{now}'
+        checking = any(e.get('kind') == 'check-started' for e in active[-3:])
+        progress = (f'<div class="qm-big">{"Checking the project tests" if checking else "In progress"}</div>{now}'
+                    '<p class="qm-note">As recorded; not proof the process is still running.</p>')
     elif finished and isinstance((result or {}).get('tasks'), int):
         progress = (f'<div class="qm-big">{result["tasks"]} tasks closed</div>'
                     '<p class="qm-note">Closed tasks do not prove the whole goal is met.</p>')
     elif run_dir and events:
         latest = next((e for e in reversed(events) if _activity_line(e)), None)
-        progress = ('<div class="qm-big">No call in progress</div>' + (
+        progress = ('<div class="qm-big">Nothing recorded as in progress</div>' + (
             f'<p class="qm-note">Last recorded: {_safe(_activity_line(latest))} · {_safe(_time(latest.get("at")))}</p>'
             if latest else ''))
     elif run_dir:
@@ -266,10 +278,10 @@ def render_story(status):
     out.append('<section aria-label="Activity"><h3>Activity</h3>')
     visible = [(e, _activity_line(e)) for e in events if _activity_line(e)]
     if visible:
-        out.append('<ol>' + ''.join(f'<li><time>{_safe(_time(e.get("at")))}</time>{_safe(text)}</li>'
+        out.append('<ol class="qm-timeline">' + ''.join(f'<li><time>{_safe(_time(e.get("at")))}</time>{_safe(text)}</li>'
                                     for e, text in visible[-6:]) + '</ol>')
         if len(visible) > 6:
-            out.append('<details><summary>Earlier activity</summary><ol>' + ''.join(
+            out.append('<details><summary>Earlier activity</summary><ol class="qm-timeline">' + ''.join(
                 f'<li><time>{_safe(_time(e.get("at")))}</time>{_safe(text)}</li>' for e, text in visible[:-6])
                 + '</ol></details>')
     else:
@@ -293,7 +305,8 @@ def render_story(status):
                    + f'<span>{_safe(label)}</span>' + (f'<span>{_safe(task)}</span>' if task else '')
                    + f'<span>{_safe(_time(reply["at"]))}</span></header>'
                    + f'<p class="qm-excerpt">{_safe(_excerpt(reply["text"]))}</p>'
-                   + '<details><summary>Read the full reply</summary><pre>' + _safe(reply['text']) + '</pre>'
+                   + '<details><summary>' + ('Read saved reply' if reply['truncated'] else 'Read the full reply')
+                   + '</summary><pre>' + _safe(reply['text']) + '</pre>'
                    + ('<p class="qm-note">Shown up to 6,000 characters; the whole reply is in the saved run '
                       'files.</p>' if reply['truncated'] else '') + '</details></article>')
     out.append('</div></section>')

@@ -164,3 +164,44 @@ def test_every_saved_reply_opens_in_full_behind_a_short_excerpt(tmp_path):
     assert '<details><summary>Read the full reply</summary><pre>' in view
     assert 'THE LAST WORDS' in view, 'the full saved text is one click away'
     assert view.count('They are the team’s own claims') == 1, 'the caveat is stated once, not per card'
+
+
+def _live(tmp_path):
+    run = tmp_path / '.quadratus/runs/20261011T040426Z-1b6cfff5'
+    run.mkdir(parents=True)
+    return run, RunActivity(run)
+
+
+def test_a_test_command_recorded_as_started_shows_as_checking(tmp_path):
+    run, journal = _live(tmp_path)
+    journal.record('call-started', call_id='a', model='openai:gpt-5.6-sol', role='lead', task='t1')
+    journal.record('call-ended', call_id='a', model='openai:gpt-5.6-sol', role='lead', task='t1')
+    journal.record('check-started', task='t1')
+    view = render_story(read_status(tmp_path))
+    assert '<div class="qm-big">Checking the project tests</div>' in view
+    assert 'not proof the process is still running' in view
+    journal.record('check-ended', task='t1')
+    view = render_story(read_status(tmp_path))
+    assert 'Checking the project tests</div>' not in view
+    assert 'Nothing recorded as in progress' in view
+
+
+def test_an_activity_task_id_is_escaped_exactly_once(tmp_path):
+    run, journal = _live(tmp_path)
+    journal.record('call-started', call_id='a', model='claude:opus', role='collaborator', task='t1 & <b>x</b>')
+    view = render_story(read_status(tmp_path))
+    assert 't1 &amp; &lt;b&gt;x&lt;/b&gt;' in view
+    assert '&amp;amp;' not in view and '&amp;lt;' not in view and '<b>x' not in view
+
+
+def test_a_reply_cut_at_the_read_bound_is_labelled_saved_not_full(tmp_path):
+    run, _ = _live(tmp_path)
+    ArtifactStore(run / 'artifacts').put('start ' + 'y' * 7000, kind='draft', author='claude:opus')
+    view = render_story(read_status(tmp_path))
+    assert '<summary>Read saved reply</summary>' in view and 'Read the full reply' not in view
+    assert 'Shown up to 6,000 characters' in view
+
+
+def test_the_timeline_overrides_host_list_styles():
+    from quadratus.monitor_story import _STYLE
+    assert 'ol.qm-timeline{margin:0 !important;padding:0 !important;list-style:none !important}' in _STYLE

@@ -95,3 +95,10 @@ def test_the_startup_project_does_not_fill_the_folder_field():
     import inspect
     source = inspect.getsource(gui.build_interface)
     assert "value=watch_project" not in source and "gr.State(watch_project)" in source
+
+
+def test_the_refresh_control_says_how_to_read_a_reply_without_it_closing():
+    import inspect
+    source = inspect.getsource(gui.build_interface)
+    assert "label='Live updates (pause to read replies)'" in source
+    assert 'closes an open reply' in source
