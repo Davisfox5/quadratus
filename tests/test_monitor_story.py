@@ -39,6 +39,8 @@ def test_a_blocked_call_is_visible_before_it_returns_and_reply_appears_after(tmp
         before = {p: p.stat().st_mtime_ns for p in run.rglob('*')}
         view, _ = monitor_view(str(tmp_path))
         assert 'Claude: reviewing the change' in view
+        assert '<div class="qm-big">In progress</div>' in view
+        assert 'Replies appear when each call finishes' in view
         assert 'No team reply has been saved yet' in view
         assert 'Run has not finished' in view
         assert {p: p.stat().st_mtime_ns for p in run.rglob('*')} == before
@@ -48,7 +50,7 @@ def test_a_blocked_call_is_visible_before_it_returns_and_reply_appears_after(tmp
     view = render_story(read_status(tmp_path))
     assert 'The reset button now keeps your search' in view
     assert 'reply saved' in view
-    assert '**Last recorded:** Claude: reviewing' not in view
+    assert '<div class="qm-big">In progress</div>' not in view, 'a returned call is no longer shown as in flight'
 
 
 def test_call_errors_end_activity_and_broken_journal_does_not_change_the_error(tmp_path):
@@ -103,7 +105,8 @@ def test_terminal_result_overrides_an_unfinished_call_and_unjudged_goal_stays_un
     (run / 'result.json').write_text(json.dumps(dict(completed=True, explicit_tasks=dict(goal_judged=False))))
     view = render_story(read_status(tmp_path))
     assert 'Listed tasks finished — overall goal not checked' in view
-    assert '**Last recorded:**' not in view
+    assert '<div class="qm-big">In progress</div>' not in view
+    assert 'qm-banner qm-confirmed' not in view
 
 
 def test_nonregular_reply_and_malformed_metadata_are_not_read(tmp_path):
@@ -118,3 +121,87 @@ def test_nonregular_reply_and_malformed_metadata_are_not_read(tmp_path):
     assert 'No team reply has been saved yet' in render_story(read_status(tmp_path))
     (run / 'artifacts' / (ref.id + '.json')).write_text(json.dumps(dict(kind=[], author='claude:opus')))
     assert 'No team reply has been saved yet' in render_story(read_status(tmp_path))
+
+
+# Card layout (2026-10-11): what the presentation must never lose.
+
+def _terminal(tmp_path, **result):
+    run = tmp_path / '.quadratus/runs/20261011T040426Z-1b6cfff5'
+    run.mkdir(parents=True)
+    (run / 'result.json').write_text(json.dumps(result))
+    return run
+
+
+def test_every_saved_string_is_escaped_in_banner_cards_and_replies(tmp_path):
+    run = _terminal(tmp_path, completed=False, goal='<img src=x onerror=alert(1)>. more',
+                    error='<b>boom</b> & stop', checks=[dict(passed=False)])
+    store = ArtifactStore(run / 'artifacts')
+    store.put('<script>steal()</script>\n\nmore <a href="javascript:x">link</a>', kind='draft',
+              author='claude:opus')
+    view = render_story(read_status(tmp_path))
+    for raw in ('<img', '<script>', '<a href', '<b>boom'):
+        assert raw not in view
+    assert '&lt;img src=x onerror=alert(1)&gt;' in view
+    assert '&lt;b&gt;boom&lt;/b&gt; &amp; stop' in view, 'the exact error stays readable in Technical details'
+
+
+def test_the_banner_never_reads_as_success_unless_the_engine_recorded_it(tmp_path):
+    _terminal(tmp_path, completed=False, tasks=3, checks=[dict(passed=True)])
+    view = render_story(read_status(tmp_path))
+    assert 'Run ended — goal not confirmed' in view and 'qm-banner qm-stopped' in view
+    assert 'qm-banner qm-confirmed' not in view and 'goal complete' not in view
+    assert 'Closed tasks do not prove the whole goal is met' in view
+
+
+def test_every_saved_reply_opens_in_full_behind_a_short_excerpt(tmp_path):
+    run = _terminal(tmp_path, completed=False)
+    store = ArtifactStore(run / 'artifacts')
+    long = 'First line of the review. ' + 'detail ' * 300 + 'THE LAST WORDS'
+    store.put(long, kind='review:claude:opus', author='claude:opus')
+    view = render_story(read_status(tmp_path))
+    excerpt = view.split('class="qm-excerpt">', 1)[1].split('</p>', 1)[0]
+    assert len(excerpt) <= 200 and excerpt.startswith('First line of the review.')
+    assert '<details><summary>Read the full reply</summary><pre>' in view
+    assert 'THE LAST WORDS' in view, 'the full saved text is one click away'
+    assert view.count('They are the team’s own claims') == 1, 'the caveat is stated once, not per card'
+
+
+def _live(tmp_path):
+    run = tmp_path / '.quadratus/runs/20261011T040426Z-1b6cfff5'
+    run.mkdir(parents=True)
+    return run, RunActivity(run)
+
+
+def test_a_test_command_recorded_as_started_shows_as_checking(tmp_path):
+    run, journal = _live(tmp_path)
+    journal.record('call-started', call_id='a', model='openai:gpt-5.6-sol', role='lead', task='t1')
+    journal.record('call-ended', call_id='a', model='openai:gpt-5.6-sol', role='lead', task='t1')
+    journal.record('check-started', task='t1')
+    view = render_story(read_status(tmp_path))
+    assert '<div class="qm-big">Checking the project tests</div>' in view
+    assert 'not proof the process is still running' in view
+    journal.record('check-ended', task='t1')
+    view = render_story(read_status(tmp_path))
+    assert 'Checking the project tests</div>' not in view
+    assert 'Nothing recorded as in progress' in view
+
+
+def test_an_activity_task_id_is_escaped_exactly_once(tmp_path):
+    run, journal = _live(tmp_path)
+    journal.record('call-started', call_id='a', model='claude:opus', role='collaborator', task='t1 & <b>x</b>')
+    view = render_story(read_status(tmp_path))
+    assert 't1 &amp; &lt;b&gt;x&lt;/b&gt;' in view
+    assert '&amp;amp;' not in view and '&amp;lt;' not in view and '<b>x' not in view
+
+
+def test_a_reply_cut_at_the_read_bound_is_labelled_saved_not_full(tmp_path):
+    run, _ = _live(tmp_path)
+    ArtifactStore(run / 'artifacts').put('start ' + 'y' * 7000, kind='draft', author='claude:opus')
+    view = render_story(read_status(tmp_path))
+    assert '<summary>Read saved reply</summary>' in view and 'Read the full reply' not in view
+    assert 'Shown up to 6,000 characters' in view
+
+
+def test_the_timeline_overrides_host_list_styles():
+    from quadratus.monitor_story import _STYLE
+    assert 'ol.qm-timeline{margin:0 !important;padding:0 !important;list-style:none !important}' in _STYLE
