@@ -40,7 +40,7 @@ def test_a_blocked_call_is_visible_before_it_returns_and_reply_appears_after(tmp
         view, _ = monitor_view(str(tmp_path))
         assert 'Claude: reviewing the change' in view
         assert '<div class="qm-big">In progress</div>' in view
-        assert 'Replies appear when each call finishes' in view
+        assert 'not proof' not in view.split('Run records and full report', 1)[0]
         assert 'No team reply has been saved yet' in view
         assert 'Run has not finished' in view
         assert {p: p.stat().st_mtime_ns for p in run.rglob('*')} == before
@@ -49,7 +49,7 @@ def test_a_blocked_call_is_visible_before_it_returns_and_reply_appears_after(tmp
         thread.join(5)
     view = render_story(read_status(tmp_path))
     assert 'The reset button now keeps your search' in view
-    assert 'reply saved' in view
+    assert 'Claude reported: The reset button now keeps your search' in view
     assert '<div class="qm-big">In progress</div>' not in view, 'a returned call is no longer shown as in flight'
 
 
@@ -150,7 +150,7 @@ def test_the_banner_never_reads_as_success_unless_the_engine_recorded_it(tmp_pat
     view = render_story(read_status(tmp_path))
     assert 'Run ended — goal not confirmed' in view and 'qm-banner qm-stopped' in view
     assert 'qm-banner qm-confirmed' not in view and 'goal complete' not in view
-    assert 'Closed tasks do not prove the whole goal is met' in view
+    assert '3 steps closed' in view
 
 
 def test_every_saved_reply_opens_in_full_behind_a_short_excerpt(tmp_path):
@@ -163,7 +163,7 @@ def test_every_saved_reply_opens_in_full_behind_a_short_excerpt(tmp_path):
     assert len(excerpt) <= 200 and excerpt.startswith('First line of the review.')
     assert '<details><summary>Read the full reply</summary><pre>' in view
     assert 'THE LAST WORDS' in view, 'the full saved text is one click away'
-    assert view.count('They are the team’s own claims') == 1, 'the caveat is stated once, not per card'
+    assert 'Team replies describe what agents reported' in view
 
 
 def _live(tmp_path):
@@ -178,12 +178,12 @@ def test_a_test_command_recorded_as_started_shows_as_checking(tmp_path):
     journal.record('call-ended', call_id='a', model='openai:gpt-5.6-sol', role='lead', task='t1')
     journal.record('check-started', task='t1')
     view = render_story(read_status(tmp_path))
-    assert '<div class="qm-big">Checking the project tests</div>' in view
-    assert 'not proof the process is still running' in view
+    assert '<div class="qm-big">Testing the changes</div>' in view
+    assert 'not proof the process is still running' not in view
     journal.record('check-ended', task='t1')
     view = render_story(read_status(tmp_path))
-    assert 'Checking the project tests</div>' not in view
-    assert 'Nothing recorded as in progress' in view
+    assert 'Testing the changes</div>' not in view
+    assert 'Waiting for the next update' in view
 
 
 def test_an_activity_task_id_is_escaped_exactly_once(tmp_path):
@@ -205,3 +205,74 @@ def test_a_reply_cut_at_the_read_bound_is_labelled_saved_not_full(tmp_path):
 def test_the_timeline_overrides_host_list_styles():
     from quadratus.monitor_story import _STYLE
     assert 'ol.qm-timeline{margin:0 !important;padding:0 !important;list-style:none !important}' in _STYLE
+
+
+def test_live_cards_describe_the_task_tests_and_budget_without_filler(tmp_path):
+    run, journal = _live(tmp_path)
+    journal('task 2: COVERS: R1\nRESOLVES: F1\nFix the deterministic assertion mismatch in `tests/gui_completion/browser_sort_reset.test.js`.')
+    journal.record('call-started', call_id='a', model='grok:default', role='lead', task='t2')
+    (run / 'budget.json').write_text(json.dumps(dict(reported_tokens=12500, reserved_attempts=2,
+        elapsed_seconds=65, limits=dict(max_reported_tokens=100000, max_calls=10))))
+    view = render_story(read_status(tmp_path))
+    assert 'Grok: building the change — Fix the wrong expected result in the browser test.' in view
+    assert '2 of 10 requests · 1 min 05 sec' in view
+    assert '12% of 100,000 token limit' in view
+    cards = view.split('<div class="qm-cards">')[1].split('<section aria-label="Activity">')[0]
+    for filler in ('not proof', 'Earlier passes', 'Updates after', 'Closed tasks'):
+        assert filler not in cards
+    assert 'COVERS' not in view.split('Run records and full report')[0]
+
+
+def test_live_harness_counts_are_visible_but_model_claims_do_not_override_them(tmp_path):
+    run, journal = _live(tmp_path)
+    journal.record('check-started', task='t1')
+    journal.record('check-ended', task='t1')
+    store = ArtifactStore(run / 'artifacts')
+    store.put('check: passed: exit 0\n121 passed in 2.3s\nextra-1: failed: nonzero exit\n# pass 54\n# fail 2\n# skipped 0',
+              kind='check-output', author='harness')
+    ref = store.put('All browser tests passed.', kind='monitor-reply', author='grok:default')
+    journal.record('reply', artifact=ref.id, model='grok:default', role='lead', task='t2')
+    view = render_story(read_status(tmp_path))
+    assert 'Last checked: 175 passed · 2 failed' in view
+    assert 'Tests finished: 175 passed · 2 failed' in view
+    assert 'Grok reported: All browser tests passed.' in view
+    assert 'qm-banner qm-confirmed' not in view
+
+
+def test_terminal_cards_use_actual_failed_receipts_and_explain_the_stop(tmp_path):
+    run = _terminal(tmp_path, completed=False, tasks=1, error='RunBudgetExceeded',
+        in_flight=dict(task='t2', description='Correct the expected message in the browser test.'),
+        checks=[dict(passed=False, receipts=[dict(report=dict(counts=dict(passed=175, failed=2, skipped=0),
+          failures=[dict(nodeid='test.js::restore-order browser review at 390x844')]))])])
+    journal = RunActivity(run)
+    journal.record('call-started', call_id='a', model='grok:default', role='lead', task='t2')
+    (run / 'budget.json').write_text(json.dumps(dict(stop_reason='reported_token_threshold',
+        reported_tokens=2019296, reserved_attempts=11, elapsed_seconds=876,
+        limits=dict(max_reported_tokens=2000000, max_calls=20))))
+    view = render_story(read_status(tmp_path))
+    assert 'reached its token limit before completion was confirmed' in view
+    assert 'Last work: Correct the expected message in the browser test.' in view
+    assert '175 passed · 2 failed · 0 skipped' in view
+    assert 'Restore library order (phone)' in view
+    assert '11 of 20 requests · 14 min 36 sec' in view
+    assert '<div class="qm-big">In progress</div>' not in view
+
+
+def test_check_output_fifo_and_non_harness_claims_are_not_test_results(tmp_path):
+    import os
+    run, _ = _live(tmp_path)
+    store = ArtifactStore(run / 'artifacts')
+    ref = store.put('# pass 99\n# fail 0', kind='check-output', author='harness')
+    body = run / 'artifacts' / (ref.id + '.txt')
+    body.unlink()
+    os.mkfifo(body)
+    store.put('# pass 999\n# fail 0', kind='check-output', author='claude:opus')
+    view = render_story(read_status(tmp_path))
+    assert 'Not tested yet' in view
+    assert '999 passed' not in view
+
+
+def test_protocol_and_tool_details_stay_out_of_reply_previews():
+    from quadratus.monitor_story import _excerpt
+    assert _excerpt('KIND: debug\nSCOPE: {"permitted_paths": ["test.js"]}\n\nFix the deterministic assertion mismatch in `tests/browser.test.js`.') == 'Fix the wrong expected result in the browser test.'
+    assert _excerpt('## Checks\n\n**NOT RUN:** pytest — this review session has no shell tool at all (no Bash).') == 'Could not run the tests because this reviewer could not run commands.'
