@@ -812,6 +812,16 @@ def _audit_check_facts(checks, current) -> str:
     return "\n".join(lines)
 
 
+def _gate_identity(gate) -> str:
+    """A stable digest of what a gate runs: its commands and their settings."""
+    commands = getattr(gate, "commands", None)
+    if commands is not None:
+        body = repr([dataclasses.asdict(c) if dataclasses.is_dataclass(c) else repr(c) for c in commands])
+    else:
+        body = repr((type(gate).__name__, getattr(gate, "command", None), getattr(gate, "timeout", None)))
+    return hashlib.sha256(body.encode()).hexdigest()[:16]
+
+
 def _executed_clean(report, tests) -> str:
     """"" when a command's record shows cases executed with none failed or
     skipped; otherwise why it does not."""
@@ -5192,7 +5202,11 @@ class Session:
             return
         gate = self._bound_gate() or live
         current = self._source_fingerprint()
-        if not current or any(c.get("source") == current for c in self.checks[-1:] + self.review_checks[-1:]):
+        identity = _gate_identity(gate)
+        # Reused only for the same source AND the same gate: a cheap subset,
+        # another task's gate or a check of an earlier source is not this run.
+        if not current or any(c.get("source") == current and c.get("gate") == identity
+                              for c in self.review_checks):
             return
         from .project import Project
         project = Project(self.project, exclude=self.config.project_excludes)
@@ -5206,7 +5220,7 @@ class Session:
         self._verify_dependencies(f"during observed check ({spec.task_id})")
         moved = project.contents() != before
         self.review_checks.append({
-            "task": spec.task_id, "stage": stage, "passed": bool(result.passed) and not moved,
+            "task": spec.task_id, "stage": stage, "gate": identity, "passed": bool(result.passed) and not moved,
             "command": result.command, "report": result.report,
             # A run the tree moved under shows nothing about any one source.
             "source": None if moved else current,

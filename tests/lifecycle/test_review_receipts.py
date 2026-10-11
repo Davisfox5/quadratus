@@ -100,3 +100,24 @@ def test_an_observation_is_never_a_task_check(tmp_path, monkeypatch, stage):
     record = H.result_json(replay)
     assert len(record["checks"]) == len(H.gate_results(replay)) == 1, "only the task gate is a check"
     assert record["review_checks"][0]["stage"] == stage
+
+
+def test_an_observation_is_bound_to_its_gate_as_well_as_its_source(tmp_path):
+    # A cheap subset or another task's gate on the same source is not this
+    # run: the identity changes with any command or its settings.
+    import sys
+
+    from quadratus.integration import GateCommand, GateSuite, IntegrationGate
+    from quadratus.session import _gate_identity
+    full = GateSuite([GateCommand(id="py", argv=(sys.executable, "-m", "pytest")),
+                      GateCommand(id="node", argv=("node", "--test"))], cwd=tmp_path)
+    cheap = GateSuite([GateCommand(id="py", argv=(sys.executable, "-m", "pytest"))], cwd=tmp_path)
+    slower = GateSuite([GateCommand(id="py", argv=(sys.executable, "-m", "pytest"), timeout=60),
+                        GateCommand(id="node", argv=("node", "--test"))], cwd=tmp_path)
+    again = GateSuite([GateCommand(id="py", argv=(sys.executable, "-m", "pytest")),
+                       GateCommand(id="node", argv=("node", "--test"))], cwd=tmp_path)
+    assert len({_gate_identity(g) for g in (full, cheap, slower)}) == 3
+    assert _gate_identity(full) == _gate_identity(again)
+    one = IntegrationGate([sys.executable, "-m", "pytest"], cwd=tmp_path)
+    two = IntegrationGate([sys.executable, "-m", "pytest", "-x"], cwd=tmp_path)
+    assert _gate_identity(one) != _gate_identity(two)

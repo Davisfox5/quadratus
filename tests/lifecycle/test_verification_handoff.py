@@ -119,8 +119,14 @@ def test_seats_judging_the_checked_source_get_the_records_not_the_commands(tmp_p
         text = call.prompt + " ".join(call.argv)
         assert "THE HARNESS HAS ALREADY RUN THE PROJECT'S CHECK COMMANDS ON EXACTLY THIS SOURCE" in text
         assert "0 skipped; on the delivered source" in text and "APPROVED CHECK COMMANDS" not in text
-    # The draft review comes before any check of the draft: the commands stay.
-    assert "APPROVED CHECK COMMANDS" in review.prompt + " ".join(review.argv)
+    # The draft review gets the harness's run of the draft (review receipts,
+    # r08): the exact-source counts, labelled as evidence before review, and
+    # neither the command list nor any command line.
+    drafted = review.prompt + " ".join(review.argv)
+    assert "THE HARNESS HAS ALREADY RUN THE PROJECT'S CHECK COMMANDS ON EXACTLY THIS SOURCE" in drafted
+    assert "harness run of the task's checks on this exact source before review" in drafted
+    assert "0 skipped; on the delivered source" in drafted
+    assert "APPROVED CHECK COMMANDS" not in drafted and "quadratus-report" not in drafted
     second = replay.of("orchestrator")[1].prompt
     assert "## The harness's latest check and renders" in second
     assert "renders from t1: verified; design review by" in second and "APPROVED; on the delivered source" in second
