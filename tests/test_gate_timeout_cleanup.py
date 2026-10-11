@@ -103,3 +103,40 @@ def test_a_process_that_left_the_group_is_not_signalled(tmp_path):
         assert _alive(pid), "a detached process is outside what the check owns"
     finally:
         os.kill(pid, signal.SIGKILL)
+
+
+def test_a_member_spawned_during_cleanup_is_found_and_stopped(tmp_path):
+    # Codex review of 574edfb: the child answers SIGTERM by starting another
+    # child in the same group and exiting; a cleanup that only signals the
+    # pids it saw first leaves the new one running.
+    respawn = ("import signal, subprocess, sys, time\n"
+               "def renew(*_):\n"
+               "    child = subprocess.Popen([sys.executable, '-c', 'import time\\nwhile True: time.sleep(1)'],"
+               " stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+               "    open(sys.argv[1], 'w').write(str(child.pid))\n"
+               "    sys.exit(0)\n"
+               "signal.signal(signal.SIGTERM, renew)\n"
+               "while True: time.sleep(1)\n")
+    project = _script(tmp_path, "child = subprocess.Popen([sys.executable, '-c', " + repr(respawn) + ", "
+                      + repr(str(tmp_path / "second.pid")) + "], stdout=subprocess.DEVNULL, "
+                      "stderr=subprocess.DEVNULL)\nopen('child.pid', 'w').write(str(child.pid))\n"
+                      "time.sleep(0.5)\nprint('1 passed')\n")
+    suite = GateSuite([GateCommand(id="check", argv=(sys.executable, "check.py"), timeout=20)], cwd=project)
+    [receipt] = suite.run().receipts
+    assert receipt.status == "passed"
+    second = int((tmp_path / "second.pid").read_text())
+    try:
+        assert _wait_gone(int((tmp_path / "child.pid").read_text()))
+        assert _wait_gone(second), "the member started during cleanup is stopped too"
+        assert "still running 0)" in receipt.output and "INCOMPLETE" not in receipt.output
+    finally:
+        if _alive(second):
+            os.kill(second, signal.SIGKILL)
+
+
+def test_cleanup_is_not_reported_complete_when_the_process_list_cannot_be_read(monkeypatch):
+    from quadratus import integration
+    monkeypatch.setattr(integration, "_group_members", lambda pgid: None)
+    record = integration._stop_owned(999_999)
+    assert record["unreadable"] and not record["complete"]
+    assert "NOT confirmed" in integration._cleanup_note(record)

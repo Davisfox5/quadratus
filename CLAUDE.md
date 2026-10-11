@@ -1167,7 +1167,10 @@ Key design decisions already settled:
 - **A check command owns its process group** (`integration._run_owned`). It
   runs in a new session; on a timeout, or when it exits leaving its own
   processes behind, only that group's members are stopped, pid by pid,
-  SIGTERM then SIGKILL to a pid whose group and start time still match.
+  SIGTERM then SIGKILL to a pid whose group and start time are re-read
+  just before the signal. The group is scanned again until it is empty or
+  the bounded grace ends, so a member started during cleanup is stopped too;
+  cleanup is reported complete only when a final read shows the group empty.
   Never a whole-group signal; a process that detached into its own session is
   not touched. Output printed before a timeout is kept on the receipt. A
   timeout is still an error, never an attributable product failure.

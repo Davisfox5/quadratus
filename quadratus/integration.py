@@ -316,58 +316,81 @@ class _GateTimeout(Exception):
         self.output, self.cleanup = output, cleanup
 
 
-def _group_members(pgid: int) -> dict:
+def _group_members(pgid: int) -> Optional[dict]:
     """pid -> start-time text of every live process in process group
-    ``pgid``, read from ``ps``; {} when it cannot be read."""
+    ``pgid``, read from ``ps``; None when the process list cannot be read."""
     try:
-        out = subprocess.run(['ps', '-A', '-o', 'pid=,pgid=,lstart='], capture_output=True,
-                             text=True, timeout=10, check=False).stdout
+        proc = subprocess.run(['ps', '-A', '-o', 'pid=,pgid=,lstart='], capture_output=True,
+                              text=True, timeout=10, check=False)
     except (OSError, subprocess.SubprocessError):
-        return {}
+        return None
+    if proc.returncode != 0:
+        return None
     members = {}
-    for line in out.splitlines():
+    for line in proc.stdout.splitlines():
         parts = line.split(None, 2)
         if len(parts) == 3 and parts[1] == str(pgid) and parts[0].isdigit():
             members[int(parts[0])] = parts[2].strip()
     return members
 
 
+def _signal_member(pgid: int, pid: int, started: str, sig) -> bool:
+    """Signal ``pid`` only if, read again just now, it is still in ``pgid``
+    with the start time it was seen with. Not atomic with the signal."""
+    now = _group_members(pgid)
+    if not now or now.get(pid) != started:
+        return False
+    try:
+        os.kill(pid, sig)
+        return True
+    except OSError:
+        return False
+
+
 def _stop_owned(pgid: int) -> dict:
     """Stop the processes a gate command left in the process group made for
-    it alone (``start_new_session``), one verified pid at a time: SIGTERM,
-    a bounded wait, then SIGKILL only to a pid whose group and start time
-    are still the ones seen, never a whole-group signal. A process that left
-    the group (its own setsid) is outside what this owns and is not
-    touched. Identity check and signal are not atomic; the record says what
-    was done and what remained (Codex, run 20261010T225947Z-fec6da52: a
-    timed-out original-test check left Node and two Python previews alive)."""
+    it alone (``start_new_session``), one verified pid at a time, never a
+    whole-group signal. The group is scanned again until it is empty or the
+    bounded grace ends, so a member started during cleanup (a child that
+    answers SIGTERM by spawning another, Codex review of 574edfb) is found
+    and signalled too: SIGTERM within the first grace, SIGKILL to anything
+    still there in the second. A process that left the group (its own
+    setsid) is not touched. ``complete`` is true only when a final read of
+    the process list shows the group empty (Codex, run
+    20261010T225947Z-fec6da52: a timed-out original-test check left Node
+    and two Python previews alive)."""
     import signal
     import time
-    seen = _group_members(pgid)
-    record = dict(found=sorted(seen), terminated=[], killed=[], remaining=[])
-    for pid in seen:
-        try:
-            os.kill(pid, signal.SIGTERM)
-            record['terminated'].append(pid)
-        except OSError:
-            pass
-    for grace, sig, key in ((_TERM_GRACE, signal.SIGKILL, 'killed'), (_KILL_GRACE, None, None)):
+    record = dict(found=[], terminated=[], killed=[], remaining=[], unreadable=False, complete=False)
+    for grace, sig, key in ((_TERM_GRACE, signal.SIGTERM, 'terminated'), (_KILL_GRACE, signal.SIGKILL, 'killed')):
         end = time.monotonic() + grace
-        while time.monotonic() < end:
-            alive = {p: t for p, t in _group_members(pgid).items() if seen.get(p) == t}
-            if not alive:
+        signalled = set()
+        while True:
+            members = _group_members(pgid)
+            if members is None:
+                record['unreadable'] = True
+                break
+            if not members:
+                break
+            for pid, started in members.items():
+                if pid not in record['found']:
+                    record['found'].append(pid)
+                if (pid, started) in signalled:
+                    continue
+                if _signal_member(pgid, pid, started, sig):
+                    record[key].append(pid)
+                signalled.add((pid, started))
+            if time.monotonic() >= end:
                 break
             time.sleep(0.05)
-        alive = {p: t for p, t in _group_members(pgid).items() if seen.get(p) == t}
-        if sig is None:
-            record['remaining'] = sorted(alive)
+        if record['unreadable']:
             break
-        for pid in alive:
-            try:
-                os.kill(pid, sig)
-                record[key].append(pid)
-            except OSError:
-                pass
+    final = _group_members(pgid)
+    if final is None:
+        record['unreadable'] = True
+    else:
+        record['remaining'] = sorted(final)
+    record['complete'] = not record['unreadable'] and not record['remaining']
     return record
 
 
@@ -403,7 +426,7 @@ def _run_owned(argv, *, cwd, timeout, env):
             returncode = None
         for reader in readers:
             reader.join(max(0.0, deadline - time.monotonic()) if returncode is not None else 0)
-        if returncode is None or any(r.is_alive() for r in readers) or _group_members(proc.pid):
+        if returncode is None or any(r.is_alive() for r in readers) or _group_members(proc.pid) != {}:
             if returncode is not None and any(r.is_alive() for r in readers):
                 returncode = None  # the pipes outlived the deadline: a timeout
             cleanup = _stop_owned(proc.pid)
@@ -425,7 +448,9 @@ def _cleanup_note(cleanup) -> str:
         return ''
     note = (f"(owned processes left by the command: found {len(cleanup['found'])}, "
             f"terminated {len(cleanup['terminated'])}, killed {len(cleanup['killed'])}, "
-            f"still running {len(cleanup['remaining'])}"
+            + ("process list unreadable, cleanup NOT confirmed" if cleanup.get('unreadable') else
+               f"still running {len(cleanup['remaining'])}"
+               + ("" if cleanup.get('complete') else ", cleanup INCOMPLETE"))
             + ('; output pipes still held by a process outside the command\'s group' if
                cleanup.get('pipes_still_held') else '') + ')')
     return note
