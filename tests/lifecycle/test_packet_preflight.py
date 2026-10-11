@@ -4,7 +4,8 @@ Run 20261010T135407Z-f3d33e9d: the operator's 260 forbidden paths alone put
 every role packet over the 12,000-byte cap, and the run learned it only when
 building t1's lead packet, after the planning and requirements-review calls
 had been spent. The saved list is replayed here with scripted replies: the
-run must refuse with zero model calls, a normal configuration must still run,
+exclusions must now be admitted without changing their enforcement, while a
+normal configuration must still run,
 and a task whose own scope overflows the packet must be refused at dispatch,
 before its lead is called.
 """
@@ -26,15 +27,17 @@ def _result(replay):
     return json.loads((Path(replay.result.run_dir) / "result.json").read_text())
 
 
-def test_the_saved_oversized_forbidden_list_refuses_with_zero_model_calls(tmp_path, monkeypatch):
+def test_saved_large_exclusions_admit_planning_but_still_refuse_forbidden_edits(tmp_path, monkeypatch):
     assert len(SAVED_FORBID) == 260 and len(json.dumps(SAVED_FORBID).encode()) > 12_000
-    replay = _run(tmp_path, monkeypatch, _decl(), forbid=SAVED_FORBID, expect_session=False)
-    assert replay.calls == []
+    replay = _run(tmp_path, monkeypatch, _decl(), forbid=SAVED_FORBID)
+    assert replay.of("orchestrator"), "the exclusion list must not prevent admission"
+    # The script asks to edit app.py, which this real saved list protects.
+    # Admission must not weaken that exclusion or spend a lead call on it.
     assert not replay.result.completed
-    assert "Required role packet exceeds 12000 bytes" in replay.result.error
+    assert "Write denied: app.py" in replay.result.error
+    assert not replay.of("lead")
     data = _result(replay)
-    assert data["tasks"] == 0 and data["source_changed"] is False
-    assert (Path(replay.result.run_dir) / "report.md").read_text().startswith("# Run incomplete")
+    assert set(SAVED_FORBID).issubset(data["policy_preview"]["deny_write"])
 
 
 def test_a_normal_forbidden_list_still_runs(tmp_path, monkeypatch):
