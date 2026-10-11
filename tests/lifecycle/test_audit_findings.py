@@ -164,7 +164,9 @@ def test_resolving_renders_replaced_after_review_reopen_at_done(tmp_path, monkey
         H.evidence(Path(call.cwd), call.task, age=0)
         H.evidence(Path(call.cwd), "t2", age=0, **replacement)
         return "Captured the page.\nCHANGED: []"
-    later = RECAPTURE.replace("Re-check the import page.", "Look over the page once more.")
+    # An editing-scope task that changes no source: a review-only one over
+    # this verified source is no longer dispatched (verification handoff).
+    later = REPAIR.replace("Fix the mobile overflow.", "Look over the page once more.")
     replay = _run(tmp_path, monkeypatch, [REQS + AUDIT, REPAIR + "\nRESOLVES: F1", later],
                   {"t1": _capture(measured=WIDE, steps=STATE), "t2": _repair(steps=STATE), "t3": swap},
                   max_tasks=8)

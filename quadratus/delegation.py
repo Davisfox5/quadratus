@@ -116,7 +116,7 @@ def record_invocation(ledger, event):
 
 @contextmanager
 def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None, evidence_files=None,
-               evidence_sha256=None):
+               evidence_sha256=None, harness_checks=None):
     context = dict(task=task, role=role, origin=origin)
     if prompt_artifact:
         context["prompt_artifact"] = prompt_artifact
@@ -132,6 +132,10 @@ def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None
         # The sha256 of each of those files, snapshotted before the call; a
         # file whose bytes changed since is not copied (runtime._furnish_evidence).
         context["evidence_sha256"] = dict(evidence_sha256)
+    if harness_checks:
+        # The harness's own check records for exactly the source a read-only
+        # review copy holds; Fleet states them in place of the command list.
+        context["harness_checks"] = str(harness_checks)
     token = invocation_context.set(context)
     try:
         yield

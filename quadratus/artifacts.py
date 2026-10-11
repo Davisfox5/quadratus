@@ -53,7 +53,12 @@ class ArtifactRef:
     preview: str
 
     def render(self) -> str:
-        """One-line-plus-preview form for inclusion in a prompt."""
+        """One-line-plus-preview form for inclusion in a prompt. A text no
+        longer than the preview is shown in full and says so, with no fetch
+        pointer: re-sent every round, the pointer was pure repetition."""
+        if self.lines <= PREVIEW_LINES:
+            return (f"[artifact {self.id} | {self.kind} | by {self.author} | "
+                    f"{self.lines} lines, {self.chars} chars, shown in full]\n{self.preview}")
         return (
             f"[artifact {self.id} | {self.kind} | by {self.author} | "
             f"{self.lines} lines, {self.chars} chars]\n"

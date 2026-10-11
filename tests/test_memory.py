@@ -32,6 +32,13 @@ def test_reference_carries_a_preview_but_not_the_whole_thing(store):
     assert "fetch artifact" in ref.render()
 
 
+def test_a_short_text_is_shown_in_full_without_a_fetch_pointer(store):
+    ref = store.put("Let the toolbar shrink.\nCHANGED: []", kind="draft", author="opus")
+    rendered = ref.render()
+    assert rendered.endswith("shown in full]\nLet the toolbar shrink.\nCHANGED: []")
+    assert "fetch artifact" not in rendered and ref.id in rendered
+
+
 def test_identical_content_stores_once(store):
     a = store.put("same", kind="draft", author="opus")
     b = store.put("same", kind="draft", author="sol")

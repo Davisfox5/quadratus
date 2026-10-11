@@ -808,6 +808,44 @@ def _audit_check_facts(checks, current) -> str:
     return "\n".join(lines)
 
 
+def _executed_clean(report, tests) -> str:
+    """"" when a command's record shows cases executed with none failed or
+    skipped; otherwise why it does not."""
+    counts = report.get("counts") if isinstance(report, dict) and report.get("state") == "parsed" else None
+    if isinstance(counts, dict):
+        if counts.get("failed", 0) or counts.get("errors", 0):
+            return "it has failures"
+        if counts.get("skipped", 0):
+            return "it skipped cases"
+        return "" if counts.get("passed", 0) > 0 else "it executed no cases"
+    if isinstance(tests, int) and tests > 0:
+        return "its skips and failures were not parsed"
+    return "its counts are unknown"
+
+
+def _verified_by_check(check, current) -> str:
+    """"" when the harness's recorded check passed on ``current`` with every
+    command executing cases and none failing or skipping; otherwise why not.
+    Only harness records count: a model's account of a run never does."""
+    if not check:
+        return "no project check has run"
+    if not check.get("passed"):
+        return "the latest project check failed"
+    if not current or check.get("source") != current:
+        return "the latest project check ran on an earlier source"
+    receipts = check.get("receipts") or []
+    if not receipts:
+        why = _executed_clean(check.get("report"), None)
+        return f"the latest project check: {why}" if why else ""
+    for r in receipts:
+        if r.get("status") != "passed":
+            return f"command {r.get('id')} did not pass ({r.get('status')})"
+        why = _executed_clean(r.get("report"), r.get("tests"))
+        if why:
+            return f"command {r.get('id')}: {why}"
+    return ""
+
+
 def _renders_blind(verdict: str) -> bool:
     """Whether the verdict is the blind-render reply and nothing else.
 
@@ -2083,6 +2121,12 @@ class Session:
         #: Acceptance an editing call said it did not run ('NOT RUN:' lines):
         #: evidence that can only lower an audit verdict, never raise one.
         self.unexecuted_acceptance: List[dict] = []
+        #: Review-only tasks not dispatched because the harness had already
+        #: verified the current source (Session._verification_handoff).
+        self.verification_handoffs: List[dict] = []
+        #: Review-only tasks dispatched because the source was not fully
+        #: verified, each with the first reason.
+        self.verification_dispatched: List[dict] = []
 
     def _open_finding(self, kind: str, text: str, *, legacy_route: bool = False) -> None:
         """Append a legacy open finding and record it as a typed fact.
@@ -2194,6 +2238,11 @@ class Session:
             context = dict(context, evidence_files=tuple(self._review_evidence))
             if context.get("role") == "design-review" and self._review_evidence_hashes:
                 context = dict(context, evidence_sha256=dict(self._review_evidence_hashes))
+        from .runtime import REVIEW_CAPPED_ROLES
+        if not allow_writes and context.get("role") in REVIEW_CAPPED_ROLES:
+            facts = self._harness_facts(current_only=True)
+            if facts:
+                context = dict(context, harness_checks=facts)
         # Every prompt is kept, not only an interrupted one: without it there was
         # no proof of which packet or instructions a seat actually received.
         try:
@@ -4530,6 +4579,7 @@ class Session:
                        if self.config.requirements_ledger else "")
                     + ("\n\n" + _parallel_request(self.config.max_parallel_tasks)
                        if self._parallel_enabled() else "")
+                    + self._verification_note()
                     + (self._done_refusal or "")
                     + self._findings_prompt()
                     + ("\n\n" + _SCOPE_REQUEST if self.project and self.config.allow_writes else "")
@@ -4965,6 +5015,19 @@ class Session:
                 self._done_refusal = (f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again.")
                 previous_description = None
                 continue
+            handoff = self._verification_handoff(spec, covers, resolves, continues)
+            if handoff is not None:
+                # Before any lead call: the harness has already verified this
+                # source, so the requirements wait for the final audit, which
+                # judges them independently (r02, r03: a verification task
+                # re-ran the tests where it could not run them).
+                self._covers_corrections += 1
+                if self._covers_corrections > self.config.max_requirement_reopens:
+                    raise RunStalled("the orchestrator kept naming verification-only tasks over a source "
+                                     "the harness had already verified")
+                self._done_refusal = handoff
+                previous_description = None
+                continue
             problem = self._capture_problem(spec, resolves)
             if problem:
                 self._refuse_listed(spec, problem)
@@ -5091,6 +5154,157 @@ class Session:
             self._recheck_resolved_findings()
             self._apply_completion(self._completion_decision(CAP, max_tasks))
         return list(self.history)
+
+    def _harness_facts(self, *, current_only=False) -> str:
+        """The latest project check and renders as harness records: per
+        command its status, counts and source; the renders' review and
+        source. Never a command line or an unredacted reason. With
+        ``current_only``, "" unless that check ran on the current source."""
+        if not self.project or not self.checks:
+            return ""
+        current = self._source_fingerprint()
+        if current_only and (not current or self.checks[-1].get("source") != current):
+            return ""
+        lines = [_audit_check_facts(self.checks[-1:], current)]
+        if self.design_checks:
+            record = self.design_checks[-1]
+            from .design_evidence import evidence_dir
+            try:
+                summary = json.loads((evidence_dir(self.project, record.get("task")) / "summary.json").read_text())
+            except (OSError, ValueError, TypeError):
+                summary = {}
+            source = summary.get("source_fingerprint") if isinstance(summary, dict) else None
+            review = record.get("final_review")
+            lines.append(f"- renders from {record.get('task')}: "
+                         + ("verified" if record.get("verified") else "NOT verified")
+                         + (f"; design review by {review.get('reviewer')}: {_review_reading(review)}" if review
+                            else "; no design review verdict")
+                         + f"; {_check_source(source, current)}")
+        return "\n".join(lines)
+
+    def _verification_note(self) -> str:
+        """The orchestrator's view of the harness's own verification."""
+        facts = self._harness_facts()
+        if not facts:
+            return ""
+        head = "\n\n## The harness's latest check and renders (its own runs, not a model's account)\n" + facts
+        if not self.config.requirements_ledger or self._explicit_tasks is not None:
+            return head
+        return (head + "\nA task that only verifies (SCOPE edits none) is not dispatched while these "
+                "show the current source passing on every command with nothing skipped, its renders "
+                "approved and nothing open: cover such requirements in the task that does the work, or "
+                "reply DONE and the independent requirement audit judges them.")
+
+    def _verification_problem(self, spec=None) -> str:
+        """Why the current source is not fully verified by the harness's own
+        records; "" when it is. Fully verified: the latest project check
+        passed on this exact source with every command executing cases and
+        none failing or skipping; no check failure, open finding, capped
+        task, NOT RUN report or unrun test file stands; and, where this run
+        has design work, its latest renders are clean, approved by the
+        cross-vendor reviewer, and captured from this exact source."""
+        if not self.project or not self.history:
+            return "no task has delivered work on this project yet"
+        current = self._source_fingerprint()
+        why = _verified_by_check(self.checks[-1] if self.checks else None, current)
+        if why:
+            return why
+        if self._checks_standing_failed():
+            return "a check failure still stands"
+        open_work = self._open_work()
+        if open_work:
+            return open_work[0]
+        if self._standing_not_run():
+            return "a task reported acceptance it did not run"
+        if self._unnamed_standing():
+            return "test files no required check names have not been shown to run"
+        if self.design_checks or (spec is not None and is_design_task(spec)):
+            if not self.design_checks:
+                return "no renders of this source were captured and reviewed"
+            record = self.design_checks[-1]
+            review = record.get("final_review") or {}
+            if not record.get("verified"):
+                return f"the latest renders ({record.get('task')}) are not verified"
+            if not review.get("approved"):
+                return f"the latest renders ({record.get('task')}) are not approved by the design reviewer"
+            # The files themselves, not the saved flags (root review of
+            # 95b81c2): the set must still be complete and deliverable, and
+            # every file the reviewer was handed must hold the approved bytes.
+            task = record.get("task")
+            outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == task), None)
+            delivered = ((outcome.delivery or {}).get("files") or {}) if outcome is not None else {}
+            if outcome is None or outcome.edges.get("reviewer") is not True or not delivered:
+                return f"the latest renders ({task}) have no approved delivery on record"
+            problem = self._evidence_set_problem(task)
+            if problem:
+                return f"the latest renders ({task}): {problem}"
+            for rel, digest in sorted(delivered.items()):
+                try:
+                    now = hashlib.sha256((Path(self.project) / rel).read_bytes()).hexdigest()
+                except OSError:
+                    now = ""
+                if not digest or now != digest:
+                    return f"the latest renders ({task}) changed after their review: {rel}"
+            from .design_evidence import evidence_dir
+            try:
+                summary = json.loads((evidence_dir(self.project, record.get("task")) / "summary.json").read_text())
+            except (OSError, ValueError, TypeError):
+                return "the latest renders' summary cannot be read"
+            if not isinstance(summary, dict) or summary.get("source_fingerprint") != current:
+                return "the latest renders were captured from an earlier source"
+        return ""
+
+    def _verification_handoff(self, spec, covers, resolves, continues) -> Optional[str]:
+        """The send-back for a verification-only task the harness has already
+        done, or None to dispatch the task as named.
+
+        Only an orchestrator's review-only task (SCOPE edits none) that resolves no finding,
+        continues no capped task and covers no requirement an audit found
+        not met, over a fully verified source (_verification_problem). Its
+        requirements are marked covered by the harness evidence, never met:
+        the final audit still judges each one, with the same receipts and
+        renders in hand. Anything short of full verification dispatches the
+        task exactly as before."""
+        if (self._explicit_tasks is not None or not is_review_only(spec) or resolves or continues
+                or getattr(spec, "kind", None) == TaskKind.SECURITY):
+            # An operator's own list is run as written: there is nobody to
+            # send a task back to.
+            return None
+        if not self.config.requirements_ledger:
+            # No final requirements audit runs, so nothing would judge what a
+            # handoff covers (root review of 95b81c2): dispatch as named.
+            self.verification_dispatched.append(dict(task=spec.task_id, covers=list(covers),
+                                                     why="the requirements audit is disabled"))
+            return None
+        status = self.memory.ledger.requirement_status
+        if any(str(status.get(rid, "")).startswith("NOT MET") for rid in covers):
+            return None
+        problem = self._verification_problem(spec)
+        if problem:
+            self.verification_dispatched.append(dict(task=spec.task_id, covers=list(covers), why=problem[:300]))
+            self._note(f"{spec.task_id} dispatched as named: {problem}")
+            return None
+        current = self._source_fingerprint() or ""
+        facts = _audit_check_facts(self.checks[-1:], current)
+        design = self.design_checks[-1] if self.design_checks else None
+        for rid in covers:
+            if rid in self.memory.ledger.requirements:
+                status[rid] = f"covered by harness verification of {current[:12]}"
+        record = dict(task=spec.task_id, description=spec.description[:300], covers=list(covers),
+                      source=current, check=facts,
+                      renders=(dict(task=design.get("task"), reviewer=(design.get("final_review") or {}).get("reviewer"))
+                               if design else None))
+        self.verification_handoffs.append(record)
+        self._note(f"{spec.task_id} not dispatched: the harness already verified source {current[:12]}; "
+                   f"{', '.join(covers) or 'nothing'} wait for the final audit")
+        self._activity("verification_handoff", task=spec.task_id, covers=list(covers), source=current[:12])
+        return ("\n\n--- TASK NOT DISPATCHED ---\nThat task only verifies, and the harness has already "
+                "verified the delivered source with its own runs:\n" + facts
+                + (f"\n- renders from {design.get('task')}, captured from this source, approved by "
+                   f"{(design.get('final_review') or {}).get('reviewer')}" if design else "")
+                + f"\n{', '.join(covers)} are covered by that evidence. They are not met until the final "
+                "requirement audit judges them, independently. Reply DONE to have it judge them, or name "
+                "work that changes the source.")
 
     def _findings_stop_due(self) -> bool:
         """Whether open findings stop the run after a task or batch (map P3.4):
