@@ -79,7 +79,7 @@ def test_old_terminal_run_shows_public_replies_not_prompts_and_preserves_error(t
     error = 'CheckUnattributable: extra-1 timed out after 600s'
     (run / 'result.json').write_text(json.dumps(dict(completed=False, error=error, tasks=2, goal='Add reset')))
     view = render_story(read_status(tmp_path))
-    assert 'Run ended — goal not confirmed' in view
+    assert 'Stopped — a test took too long' in view
     assert 'A test did not finish after 10 minutes' in view
     assert error in view
     assert 'We kept the search' in view
@@ -104,7 +104,7 @@ def test_terminal_result_overrides_an_unfinished_call_and_unjudged_goal_stays_un
     journal.record('call-started', call_id='one', model='claude:opus', role='lead')
     (run / 'result.json').write_text(json.dumps(dict(completed=True, explicit_tasks=dict(goal_judged=False))))
     view = render_story(read_status(tmp_path))
-    assert 'Listed tasks finished — overall goal not checked' in view
+    assert 'Planned tasks finished — overall review not run' in view
     assert '<div class="qm-big">In progress</div>' not in view
     assert 'qm-banner qm-confirmed' not in view
 
@@ -148,7 +148,7 @@ def test_every_saved_string_is_escaped_in_banner_cards_and_replies(tmp_path):
 def test_the_banner_never_reads_as_success_unless_the_engine_recorded_it(tmp_path):
     _terminal(tmp_path, completed=False, tasks=3, checks=[dict(passed=True)])
     view = render_story(read_status(tmp_path))
-    assert 'Run ended — goal not confirmed' in view and 'qm-banner qm-stopped' in view
+    assert 'Tests passed — final review unfinished' in view and 'qm-banner qm-idle' in view
     assert 'qm-banner qm-confirmed' not in view and 'goal complete' not in view
     assert '3 steps closed' in view
 
@@ -250,7 +250,7 @@ def test_terminal_cards_use_actual_failed_receipts_and_explain_the_stop(tmp_path
         reported_tokens=2019296, reserved_attempts=11, elapsed_seconds=876,
         limits=dict(max_reported_tokens=2000000, max_calls=20))))
     view = render_story(read_status(tmp_path))
-    assert 'reached its token limit before completion was confirmed' in view
+    assert 'The run used its allowed tokens and stopped before final review finished.' in view
     assert 'Last work: Correct the expected message in the browser test.' in view
     assert '175 passed · 2 failed · 0 skipped' in view
     assert 'Restore library order (phone)' in view
@@ -297,7 +297,7 @@ def test_recorded_wall_deadline_has_a_plain_time_limit_explanation(tmp_path):
     (run / 'budget.json').write_text(json.dumps(dict(stop_reason='wall_deadline')))
     view = render_story(read_status(tmp_path))
     assert 'The run reached its time limit.' in view
-    assert 'goal not confirmed' in view
+    assert 'Stopped at time limit' in view
 
 
 def test_runner_failure_does_not_claim_the_application_needs_a_fix(tmp_path):
@@ -306,3 +306,95 @@ def test_runner_failure_does_not_claim_the_application_needs_a_fix(tmp_path):
     view = render_story(read_status(tmp_path))
     assert '<div class="qm-big">Did not pass</div>' in view
     assert 'Needs a fix' not in view
+
+
+def test_limit_reply_is_shown_without_overwriting_independent_failed_tests(tmp_path):
+    run = _terminal(tmp_path, completed=False, source_changed=True, error='RunBudgetExceeded',
+                    checks=[dict(passed=False, receipts=[dict(report=dict(counts=dict(passed=175, failed=2)))])])
+    (run / 'budget-responses').mkdir()
+    (run / 'budget-responses/attempt-11.txt').write_text(
+        'The browser expectation now matches the app.\n\nChecks that ran:\n'
+        '- Focused browser tests: 2 passed, 0 failed, 0 skipped.\n'
+        '- Full node --test: 56 passed, 0 failed, 0 skipped.\n'
+        '- pytest: 121 passed in 2.34s.\n\nCHANGED: ["tests/browser.test.js"]')
+    (run / 'budget.json').write_text(json.dumps(dict(stop_reason='reported_token_threshold',
+        preserved_responses=['budget-responses/attempt-11.txt'])))
+    before = {p: p.stat().st_mtime_ns for p in run.rglob('*')}
+    view = render_story(read_status(tmp_path))
+    summary = view.split('aria-label="Run summary"', 1)[1].split('</section>', 1)[0]
+    assert 'Stopped at token limit' in view
+    assert 'goal not confirmed' not in view
+    assert 'Team reported changes:</strong> The browser expectation now matches the app.' in summary
+    assert 'Final team test report:' in summary
+    assert 'Browser checks: 2 passed · 0 failed · 0 skipped' in summary
+    assert 'Python tests: 121 passed' in summary
+    assert 'Earlier independent check:</strong> 175 passed · 2 failed' in summary
+    assert 'did not finish independently checking and accepting that reply' in summary
+    assert 'qm-banner qm-confirmed' not in view
+    assert 'Final team update — saved at the limit' in view
+    assert 'The browser expectation now matches the app.' in view
+    assert {p: p.stat().st_mtime_ns for p in run.rglob('*')} == before
+
+
+@pytest.mark.parametrize('kind', ['outside', 'symlink', 'fifo', 'oversized'])
+def test_limit_reply_cannot_read_other_paths_or_special_files(tmp_path, kind):
+    import os
+    run = _terminal(tmp_path, completed=False, error='RunBudgetExceeded')
+    (run / 'budget-responses').mkdir()
+    path = run / 'budget-responses/attempt-1.txt'
+    outside = tmp_path / 'private.txt'
+    outside.write_text('SECRET MUST NOT APPEAR')
+    name = 'budget-responses/attempt-1.txt'
+    if kind == 'outside':
+        name = '../private.txt'
+    elif kind == 'symlink':
+        path.symlink_to(outside)
+    elif kind == 'fifo':
+        os.mkfifo(path)
+    else:
+        path.write_text('x' * 6000 + 'SECRET MUST NOT APPEAR')
+    (run / 'budget.json').write_text(json.dumps(dict(stop_reason='reported_token_threshold',
+                                                   preserved_responses=[name])))
+    view = render_story(read_status(tmp_path))
+    assert 'SECRET MUST NOT APPEAR' not in view
+    assert 'qm-banner qm-confirmed' not in view
+    if kind == 'oversized':
+        assert 'Shown up to 6,000 characters' in view
+
+
+def test_complete_and_failed_outcomes_have_specific_plain_summaries(tmp_path):
+    run = _terminal(tmp_path, completed=True, source_changed=True, checks=[dict(passed=True)])
+    view = render_story(read_status(tmp_path))
+    assert 'Completed — goal recorded as met' in view
+    assert 'Result:</strong> Quadratus recorded the overall goal as complete.' in view
+    (run / 'result.json').write_text(json.dumps(dict(completed=False, source_changed=False,
+                                                    checks=[dict(passed=False)])))
+    view = render_story(read_status(tmp_path))
+    assert 'Stopped — tests did not pass' in view
+    assert 'No project changes were recorded.' in view
+    assert 'Last independent check:</strong> Did not pass' in view
+
+
+def test_saved_team_success_claim_is_never_overall_completion(tmp_path):
+    run = _terminal(tmp_path, completed=False)
+    ArtifactStore(run / 'artifacts').put('All tests passed. Everything complete.', kind='draft', author='claude:opus')
+    view = render_story(read_status(tmp_path))
+    assert 'Stopped before final review finished' in view
+    assert 'No independent test result was saved.' in view
+    assert 'qm-banner qm-confirmed' not in view
+
+
+def test_malformed_stop_reason_does_not_hide_the_run_summary(tmp_path):
+    run = _terminal(tmp_path, completed=False)
+    (run / 'budget.json').write_text(json.dumps(dict(stop_reason=['broken'])))
+    view = render_story(read_status(tmp_path))
+    assert 'Run summary' in view
+    assert 'No independent test result was saved.' in view
+
+
+def test_final_saved_change_statement_is_used_instead_of_opening_intention():
+    from quadratus.monitor_story import _reported_work
+    reply = dict(text='The expectation is wrong. I will change it. '
+        'The ascending-state check now expects the status text the app actually shows, `Sorted by name A→Z`. '
+        'Nothing else was changed.\n\nChecks that ran:\n- pytest: 121 passed')
+    assert _reported_work(reply) == 'Updated the browser test to expect the message the app displays.'

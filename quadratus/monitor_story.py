@@ -5,6 +5,7 @@ Activity is a last-recorded observation, not proof that a process is alive.
 """
 
 import html
+import json
 import os
 import re
 from datetime import datetime, timezone
@@ -117,6 +118,8 @@ def _plain_work(text, limit=180):
         text = 'Updated the browser test to wait until all three project cards are ready.'
     elif text.startswith('Fixed the browser timeout by replacing') and 'exactly three project cards' in text:
         text = 'Updated the browser test to wait until all three project cards are ready.'
+    elif text.startswith('The ascending-state check now expects the status text the app actually shows'):
+        text = 'Updated the browser test to expect the message the app displays.'
     text = ' '.join(text.split())
     text = re.split(r'(?<=[.!?])\s', text, maxsplit=1)[0]
     return text[:limit - 1] + '…' if len(text) > limit else text
@@ -270,6 +273,119 @@ def _elapsed(budget):
     return None
 
 
+def _preserved_reply(run_dir, budget):
+    """A returned public reply saved when a usage limit interrupted acceptance.
+
+    Only the budget's named reply files, never a prompt or native transcript.
+    A reply remains a team report; it cannot replace independent test receipts.
+    """
+    names = budget.get('preserved_responses')
+    folder = run_dir / 'budget-responses'
+    if not isinstance(names, list) or folder.is_symlink():
+        return None
+    for name in reversed(names[-20:]):
+        if not isinstance(name, str) or not re.fullmatch(r'budget-responses/attempt-[1-9]\d{0,8}\.txt', name):
+            continue
+        path = run_dir / name
+        if path.is_symlink():
+            continue
+        try:
+            raw, _ = _read_regular(path, 6001)
+            return dict(text=raw[:6000].decode('utf-8', errors='replace'),
+                        truncated=len(raw) > 6000, kind='preserved-response',
+                        author=None, artifact=name,
+                        at=datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat())
+        except OSError:
+            continue
+    return None
+
+
+def _reported_results(reply):
+    """Short, attributed test statements, never promoted to verified results."""
+    rows = []
+    for line in (reply or {}).get('text', '').splitlines():
+        if not re.match(r'^\s*[-*]\s', line) or not re.search(r'\b\d+ passed\b', line):
+            continue
+        label = line.lstrip(' -*').split(':', 1)[0]
+        if 'browser' in label.lower():
+            label = 'Browser checks'
+        elif 'node' in label.lower():
+            label = 'Full JavaScript tests' if 'full' in label.lower() else 'JavaScript tests'
+        elif 'pytest' in label.lower():
+            label = 'Python tests'
+        elif 'cleanup' in label.lower():
+            label = 'Startup and cleanup tests'
+        else:
+            label = _plain_work(label, 80)
+        counts = re.findall(r'\b\d+ (?:passed|failed|skipped)\b', line)
+        rows.append(label + ': ' + ' · '.join(counts))
+        if len(rows) == 4:
+            break
+    return rows
+
+
+def _reported_changes(reply):
+    match = re.search(r'^CHANGED:\s*(.+)$', reply['text'], re.MULTILINE)
+    if not match:
+        return None
+    try:
+        paths = json.loads(match[1])
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+        return None
+    labels = []
+    for path in paths[:3]:
+        if 'test' in path.lower() and 'browser' in path.lower():
+            label = 'Browser tests'
+        elif 'test' in path.lower():
+            label = 'Tests'
+        else:
+            label = Path(path).name[:80]
+        if label not in labels:
+            labels.append(label)
+    return ', '.join(labels) or None
+
+
+def _reported_work(reply):
+    # Some providers concatenate progress narration and the final answer.
+    # Prefer a saved statement of a completed change to their opening intention.
+    before_checks = re.split(r'^Checks that ran:', reply['text'], maxsplit=1, flags=re.MULTILINE)[0]
+    statements = re.findall(r'(?:^|(?<=[.!?]))\s*([^.!?\n]+\bnow\b[^.!?\n]*[.!?])', before_checks)
+    return _plain_work(statements[-1], 250) if statements else _reported_changes(reply)
+
+
+def _run_outcome(status, budget, last):
+    """Name what actually stopped the workflow, separately from test results."""
+    terminal = status.get('terminal_status')
+    if status.get('finished') is not True:
+        return 'Run in progress', 'running', None
+    if terminal == 'complete':
+        return 'Completed — goal recorded as met', 'confirmed', 'Quadratus recorded the overall goal as complete.'
+    if terminal == 'listed tasks complete':
+        return 'Planned tasks finished — overall review not run', 'idle', 'The listed tasks finished. This run did not review the overall goal.'
+    reason = str(status.get('stop_reason', ''))
+    match = re.search(r'timed out after (\d+)s', reason)
+    if match:
+        return 'Stopped — a test took too long', 'stopped', f'A test did not finish after {int(match[1]) // 60} minutes.'
+    stop = budget.get('stop_reason')
+    reasons = {
+        'reported_token_threshold': ('Stopped at token limit', 'The run used its allowed tokens and stopped before final review finished.'),
+        'reported_token_reserve': ('Stopped at token limit', 'There were not enough allowed tokens left to start the next request.'),
+        'wall_deadline': ('Stopped at time limit', 'The run reached its time limit.'),
+        'call_limit': ('Stopped at request limit', 'The run reached its allowed number of requests.'),
+        'api_cost_threshold': ('Stopped at spending limit', 'The run reached its spending limit.'),
+    }
+    if isinstance(stop, str) and stop in reasons:
+        title, why = reasons[stop]
+        return title, 'stopped', why
+    if last is not None and last.get('passed') is False:
+        return 'Stopped — tests did not pass', 'stopped', 'The last independent test check did not pass. The work was saved.'
+    if last is not None and last.get('passed') is True:
+        return 'Tests passed — final review unfinished', 'idle', 'The tests passed, but Quadratus did not record a completed overall review.'
+    return 'Stopped before final review finished', 'idle', 'No completed overall review was saved. The detailed stopping reason is in Run records and full report.'
+
+
 def _number(value):
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
@@ -302,6 +418,8 @@ _STYLE = """<style>
 .qm-reply header span{font-weight:400;opacity:.8}
 .qm pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0 0;font-size:.9em}
 .qm-excerpt{margin:6px 0 0;overflow-wrap:anywhere}
+.qm-summary{border:1px solid var(--border-color-primary,#d0d5dd);border-radius:8px;padding:12px 16px}
+.qm-summary p{margin:6px 0;overflow-wrap:anywhere}
 .qm details>summary{cursor:pointer;margin-top:6px}
 .qm details>summary:focus-visible{outline:2px solid currentColor;outline-offset:2px}
 @media (max-width:600px){.qm{font-size:14px}.qm-cards{grid-template-columns:1fr}}
@@ -355,9 +473,8 @@ def render_story(status):
     checks, usage), the latest activity, the saved team replies as short
     cards each opening to the full text, then every technical fact
     collapsed. Read-only: no model call, no generated summary; every saved
-    string is escaped. The banner never says more than the saved result
-    does: complete only when the engine recorded it, otherwise not
-    confirmed."""
+    string is escaped. Test results and overall completion stay separate;
+    returned team claims never replace independent test receipts."""
     root = status.get('run_dir')
     run_dir = Path(root) if root and root != UNKNOWN else None
     result, events, replies = None, [], []
@@ -368,6 +485,12 @@ def render_story(status):
     work = _task_work(events, result)
     budget, _ = _read_json(run_dir / 'budget.json') if run_dir else (None, None)
     budget = budget or {}
+    preserved = _preserved_reply(run_dir, budget) if run_dir and status.get('finished') is True else None
+    if preserved:
+        replies = [preserved] + replies[:7]
+    checks = (result or {}).get('checks')
+    last = checks[-1] if isinstance(checks, list) and checks and isinstance(checks[-1], dict) else None
+    summary = _check_summary(last)
     saved_checks = _saved_checks(run_dir) if run_dir else []
     reply_text = {r['artifact']: r['text'] for r in replies}
     def activity(event):
@@ -382,35 +505,15 @@ def render_story(status):
         return _activity_line(event, work, reply_text.get(event.get('artifact')), summary)
     finished = status.get('finished') is True
     terminal = status.get('terminal_status')
-    tone = 'idle'
-    if finished:
-        title, tone = 'Run ended — goal not confirmed', 'stopped'
-        if terminal == 'complete':
-            title, tone = 'Run ended — engine reports the goal complete', 'confirmed'
-        elif terminal == 'listed tasks complete':
-            title = 'Listed tasks finished — overall goal not checked'
-    elif not run_dir:
-        title = 'Ready to watch — no saved run yet'
-    else:
-        title, tone = 'Run has not finished — showing recorded activity', 'running'
+    title, tone, why = _run_outcome(status, budget, last)
+    if not run_dir:
+        title, tone = 'Ready to watch — no saved run yet', 'idle'
+    elif not finished:
+        title = 'Run has not finished — showing recorded activity'
     goal = (result or {}).get('goal') or next((e.get('goal') for e in events if e.get('kind') == 'run-started'), None)
     banner = [f'<h2>{_safe(title)}</h2>']
     if goal:
         banner.append(f'<p><strong>Task:</strong> {_safe(str(goal).splitlines()[0].partition(". ")[0][:200])}</p>')
-    if finished:
-        reason = str(status.get('stop_reason', ''))
-        match = re.search(r'timed out after (\d+)s', reason)
-        if match:
-            banner.append(f'<p><strong>What stopped it:</strong> A test did not finish after '
-                          f'{int(match[1]) // 60} minutes. The run stopped without confirming the goal. '
-                          'Changes and evidence were saved.</p>')
-        elif budget.get('stop_reason') == 'reported_token_threshold':
-            banner.append('<p><strong>What stopped it:</strong> The run reached its token limit before completion was confirmed.</p>')
-        elif budget.get('stop_reason') == 'wall_deadline':
-            banner.append('<p><strong>What stopped it:</strong> The run reached its time limit.</p>')
-        elif terminal not in ('complete', 'listed tasks complete'):
-            banner.append('<p><strong>What stopped it:</strong> The run could not confirm completion. '
-                          'The recorded reason is in Technical details.</p>')
     out = [_STYLE, '<div class="qm">',
            f'<section class="qm-banner qm-{tone}" role="status" aria-live="polite">{"".join(banner)}</section>']
 
@@ -435,14 +538,13 @@ def render_story(status):
     else:
         progress = '<div class="qm-big">No activity yet</div>'
 
-    checks = (result or {}).get('checks')
-    last = checks[-1] if isinstance(checks, list) and checks and isinstance(checks[-1], dict) else None
-    summary = _check_summary(last)
     testing = any(e.get('kind') == 'check-started' for e in active)
     if testing:
         check = '<div class="qm-big">Tests are running</div>'
     elif last is not None:
         check = '<div class="qm-big">' + ('Passed' if last.get('passed') is True else 'Did not pass') + '</div>'
+        if preserved:
+            check = '<div class="qm-big">Earlier independent check</div>'
     elif saved_checks:
         check = '<div class="qm-big">Latest test results</div>'
     else:
@@ -486,6 +588,37 @@ def render_story(status):
             f'<section class="qm-card" aria-label="Checks"><h3>Tests</h3>{check}</section>',
             f'<section class="qm-card" aria-label="Usage"><h3>Usage</h3>{usage}</section>', '</div>']
 
+    if finished:
+        out.append('<section class="qm-summary" aria-label="Run summary"><h3>Run summary</h3>')
+        changed = (result or {}).get('source_changed')
+        if changed is True:
+            out.append('<p><strong>Work saved:</strong> Changes were saved in the project.</p>')
+        elif changed is False:
+            out.append('<p><strong>Work saved:</strong> No project changes were recorded.</p>')
+        if preserved:
+            # CHANGED is a team statement too; do not assume the file exists or a fix works.
+            changes = _reported_work(preserved)
+            if changes:
+                out.append(f'<p><strong>Team reported changes:</strong> {_safe(changes)}</p>')
+            reported = _reported_results(preserved)
+            if reported:
+                out.append('<p><strong>Final team test report:</strong> ' + '<br>'.join(map(_safe, reported)) + '</p>')
+            else:
+                out.append(f'<p><strong>Final team update:</strong> {_safe(_excerpt(preserved["text"]))}</p>')
+        if last is not None:
+            test_result = summary or ('Passed' if last.get('passed') is True else 'Did not pass')
+            out.append(f'<p><strong>{"Earlier" if preserved else "Last"} independent check:</strong> {_safe(test_result)}</p>')
+        elif saved_checks:
+            out.append(f'<p><strong>Last saved test output:</strong> {_safe(saved_checks[-1]["summary"])}</p>')
+        else:
+            out.append('<p><strong>Tests:</strong> No independent test result was saved.</p>')
+        out.append(f'<p><strong>{"Result" if terminal in ("complete", "listed tasks complete") else "Why it stopped"}:</strong> {_safe(why)}</p>')
+        if preserved and terminal not in ('complete', 'listed tasks complete'):
+            out.append('<p><strong>Still unfinished:</strong> The final team reply was saved when the run stopped. '
+                       'Quadratus did not finish independently checking and accepting that reply. '
+                       'Earlier checks do not verify changes described in that reply.</p>')
+        out.append('</section>')
+
     out.append('<section aria-label="Activity"><h3>Activity</h3>')
     answered = {e.get('call_id') for e in events if e.get('kind') == 'reply'}
     visible = []
@@ -513,14 +646,16 @@ def render_story(status):
     if not replies:
         out.append('<p>No team reply has been saved yet. Replies appear when each call returns.</p>')
     for reply in replies:
-        label = {'draft': 'Reported change', 'revision': 'Reported corrections'}.get(reply['kind'], 'Team update')
+        label = {'draft': 'Reported change', 'revision': 'Reported corrections',
+                 'preserved-response': 'Final team update — saved at the limit'}.get(reply['kind'], 'Team update')
         if reply['kind'].startswith('review:'):
             label = 'Review update'
         task = reply.get('task')
-        out.append('<article class="qm-reply"><header>' + _safe(_model(reply['author']))
+        excerpt = (_reported_work(reply) or _excerpt(reply['text'])) if reply['kind'] == 'preserved-response' else _excerpt(reply['text'])
+        out.append('<article class="qm-reply"><header>' + _safe('Team' if reply['kind'] == 'preserved-response' else _model(reply['author']))
                    + f'<span>{_safe(label)}</span>' + (f'<span>{_safe(_step(task))}</span>' if task else '')
                    + f'<span>{_safe(_time(reply["at"]))}</span></header>'
-                   + f'<p class="qm-excerpt">{_safe(_excerpt(reply["text"]))}</p>'
+                   + f'<p class="qm-excerpt">{_safe(excerpt)}</p>'
                    + '<details><summary>' + ('Read saved reply' if reply['truncated'] else 'Read the full reply')
                    + '</summary><pre>' + _safe(reply['text']) + '</pre>'
                    + ('<p class="qm-note">Shown up to 6,000 characters; the whole reply is in the saved run '
