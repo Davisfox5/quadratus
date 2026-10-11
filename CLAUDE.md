@@ -1149,6 +1149,14 @@ Key design decisions already settled:
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
   reviewers produce judgement.
+- **The requirements auditor sees the harness's own check facts** (overnight
+  r02, 20261011T134747Z-b14aa88b: the audit saw only "gate suite: passed",
+  ran the browser tests in its own copy without Playwright, and marked R6
+  NOT MET against a same-source pass of 121 Python and 64 Node tests). Each
+  recorded command id now reaches the audit with its status, parsed
+  passed/failed/skipped counts, and whether it ran on the delivered source;
+  never a command line. It still judges for itself: a skip, failure, earlier
+  source or unknown count is stated as such, and nothing turns into a MET.
 - **A reviewer's blocking design judgement gets one fix** (overnight r01,
   20261011T052348Z-1a2969ca: the reviewer rightly blocked a hint that
   squeezed the search field to 46 px, and the run ended FindingsOpen after 7
