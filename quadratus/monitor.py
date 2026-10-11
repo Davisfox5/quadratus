@@ -319,7 +319,7 @@ def _newest_artifact(run_dir: Path):
 def _last_write(run_dir: Path) -> Optional[float]:
     """The newest mtime among the files a running engine appends to."""
     candidates = [run_dir / name for name in
-                  ("invocations.jsonl", "usage.jsonl", "budget.json", "native-children.jsonl")]
+                  ("invocations.jsonl", "usage.jsonl", "budget.json", "native-children.jsonl", "activity.jsonl")]
     times = [t for t in (_mtime(p) for p in candidates) if t is not None]
     _, artifact_mtime = _newest_artifact(run_dir)
     if artifact_mtime is not None:
