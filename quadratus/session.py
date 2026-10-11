@@ -760,6 +760,54 @@ def _design_judgement(blocking) -> bool:
     return bool(blocking) and not any(line.strip().startswith(_HARNESS_BLOCKERS) for line in blocking)
 
 
+def _check_tally(report, tests) -> str:
+    counts = report.get("counts") if isinstance(report, dict) and report.get("state") == "parsed" else None
+    if isinstance(counts, dict):
+        return (f"{counts.get('passed', 0)} passed, {counts.get('failed', 0) + counts.get('errors', 0)} "
+                f"failed, {counts.get('skipped', 0)} skipped")
+    if isinstance(tests, int):
+        return f"{tests} tests run, skips and failures not parsed"
+    return "counts unknown"
+
+
+def _check_source(source, current) -> str:
+    if source and current and source == current:
+        return "on the delivered source"
+    if source and current:
+        return "on an EARLIER source, not the delivered one"
+    return "source not established"
+
+
+def _audit_check_facts(checks, current) -> str:
+    """The harness's recorded checks as facts an auditor can weigh: per
+    command id, its status, executed/skipped/failed counts when known, and
+    whether it ran on the delivered source. Never a command line (a gate
+    can name a file seats must not open; GateResult.for_models).
+
+    Overnight r02 (20261011T134747Z-b14aa88b): the audit saw only "gate
+    suite: passed", ran the browser tests in its own copy without
+    Playwright, and marked R6 NOT MET against a same-source harness pass
+    of 121 Python and 64 Node with none skipped.
+
+    A reason is exception text and can carry a command's path (a missing
+    runner: ``runner unavailable: [Errno 2] ... '/private/grader/run.py'``),
+    so it is redacted like check output before it is shortened."""
+    from .integration import redact_command_paths
+    lines = []
+    for check in checks:
+        paths = _check_command_paths(check)
+        receipts = check.get("receipts") or []
+        if not receipts:
+            lines.append(f"- check: {'passed' if check.get('passed') else 'FAILED'}; "
+                         f"{_check_tally(check.get('report'), None)}; {_check_source(check.get('source'), current)}")
+            continue
+        for r in receipts:
+            lines.append(f"- {r.get('id')} ({'required' if r.get('required', True) else 'optional'}): "
+                         f"{r.get('status')}: {redact_command_paths(str(r.get('reason') or ''), paths)[:80]}; "
+                         f"{_check_tally(r.get('report'), r.get('tests'))}; {_check_source(r.get('source_hash'), current)}")
+    return "\n".join(lines)
+
+
 def _renders_blind(verdict: str) -> bool:
     """Whether the verdict is the blind-render reply and nothing else.
 
@@ -1691,9 +1739,21 @@ def _invocation_role(role):
 
 def _check_for_models(check: dict) -> dict:
     """A recorded check as a seat may see it: outcomes, never commands or their paths."""
-    import shlex
-
     from .integration import redact_command_paths
+    ordered = _check_command_paths(check)
+    return {
+        "passed": check.get("passed"),
+        "gates": [{"id": r.get("id"), "status": r.get("status"),
+                   "reason": redact_command_paths(str(r.get("reason") or ""), ordered),
+                   "tests": r.get("tests")} for r in check.get("receipts") or []],
+        "output": redact_command_paths(check.get("output") or "", ordered)[-1500:],
+    }
+
+
+def _check_command_paths(check: dict) -> list:
+    """Absolute paths named by a recorded check's commands, and the folders
+    holding them, longest first: what redact_command_paths hides."""
+    import shlex
     paths = set()
     for text in [check.get("command", "")] + [r.get("command", "") for r in check.get("receipts") or []]:
         try:
@@ -1706,13 +1766,7 @@ def _check_for_models(check: dict) -> dict:
                 parent = token.rstrip("/").rsplit("/", 1)[0]
                 if parent.count("/") >= 2:
                     paths.add(parent)
-    ordered = sorted(paths, key=len, reverse=True)
-    return {
-        "passed": check.get("passed"),
-        "gates": [{"id": r.get("id"), "status": r.get("status"), "reason": r.get("reason"),
-                   "tests": r.get("tests")} for r in check.get("receipts") or []],
-        "output": redact_command_paths(check.get("output") or "", ordered)[-1500:],
-    }
+    return sorted(paths, key=len, reverse=True)
 
 
 #: The marker as a verifier writes it: the uppercase word, not the English one.
@@ -6059,13 +6113,19 @@ class Session:
             self.requirement_audits.append(dict(auditor=None, result="no auditor from another vendor available"))
             return {r: (False, "no auditor from another vendor available") for r in audited}
         before = self._capture_source() if self.project else None
-        checks = "\n".join(f"- {c['command']}: {'passed' if c['passed'] else 'FAILED'}" for c in self.checks[-3:])
+        checks = _audit_check_facts(self.checks[-3:], self._source_fingerprint())
         prompt = (
             f"## Goal (verbatim)\n\n{self.memory.goal.strip()}\n\n## Requirements\n\n"
             + "\n".join(f"{rid}: {text}" for rid, text in audited.items())
             + ("\n\nOnly the requirements listed above are audited; the others the goal names were "
                "not claimed by any task in this run and are not judged." if ids is not None else "")
-            + (f"\n\n## Latest project checks\n{checks}" if checks else "")
+            + (f"\n\n## Latest project checks (run by the harness, oldest first)\n{checks}\n"
+               "These are the harness's own executions. Your working copy may lack browsers or other "
+               "dependencies the harness has, so a test you cannot run there is not evidence that it "
+               "fails. A check that failed on the delivered source is evidence against it. Skipped tests and "
+               "checks that did not run are incomplete evidence, and a check on an earlier source cannot "
+               "establish the delivered source's result; none of these establishes a pass. Judge each "
+               "requirement yourself." if checks else "")
             + (("\n\n## How ambiguous requirements were settled (judge against these)\n"
                 + "\n".join([f"- {r}: decided by the orchestrator: {t}" for r, t in ledger.decisions.items()]
                              + [f"- operator ruling: {r}" for r in ledger.rulings]))
@@ -7769,6 +7829,10 @@ class Session:
                             "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
                             "selection": self._gate_selection(gate), "command_cwd": self._gate_cwd(gate),
                             "cases": result.cases,
+                            # A single-command gate's parsed report and the
+                            # source it ran on (a suite's receipts carry
+                            # their own), for the requirements audit.
+                            "report": result.report, "source": self._source_fingerprint(),
                             "receipts": [dataclasses.asdict(r) for r in result.receipts]})
         self._discharge_named()
         # A passing check makes every earlier check failure in the same task
