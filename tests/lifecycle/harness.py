@@ -204,7 +204,7 @@ def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
         limits=None, settings=None, extra_checks=(), lead_runs_commands=True,
         capture_profile=None, readiness=None, record_complete=True, survey=None,
         direct_tier=False, tasks=None, decider=None, decider_labels=None, forbid=(), repair_tests=(),
-        expect_session=True) -> Replay:
+        expect_session=True, goal="Build the feature.") -> Replay:
     """``lead_runs_commands``: the replayed leads write their renders
     directly, which models a lead whose transport can run the capture. Set
     False for the real claude fact ("granted": only exact allow rules run),
@@ -228,7 +228,7 @@ def run(tmp_path, monkeypatch, responder, *, files, check=GATE, max_tasks=1,
     settings = settings or Settings(backend="cli")
     settings.backend_overrides = {}
     settings.openai_api_key = settings.anthropic_api_key = settings.xai_api_key = None
-    replay.result = run_project("Build the feature.", project, settings, allow_writes=True,
+    replay.result = run_project(goal, project, settings, allow_writes=True,
                                 check=check, max_tasks=max_tasks, extra_checks=extra_checks,
                                 **({"capture_profile": capture_profile} if capture_profile else {}),
                                 **({"readiness": readiness} if readiness else {}),

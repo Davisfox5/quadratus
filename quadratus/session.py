@@ -577,7 +577,11 @@ _CAPTURE_SCOPE_REQUEST = (
     '.html, .css, .scss, .sass, .less, .jsx, .tsx, .vue or .svelte; such a task without a '
     'capture is sent back. The capture object has exactly the keys path and steps. path '
     'is a route on the preview origin starting with /, with no query string, spaces, '
-    'shell characters or parent segments. steps holds at most ' + str(MAX_CAPTURE_STEPS) + ' '
+    'shell characters or parent segments. It may end in a #fragment (for example /#q=Alpha), '
+    'which the harness loads exactly as written. The harness adds nothing to the path, so a '
+    'state the page reaches only through a hash or route must be in the path itself, and a '
+    'page or fragment the goal prescribes for the capture is declared as written there. '
+    'steps holds at most ' + str(MAX_CAPTURE_STEPS) + ' '
     'steps. Each step is exactly {"action": "click", '
     '"selector": "<css selector>"}, {"action": "wait", "selector": "<css selector>"}, '
     '{"action": "confirm", "selector": "<css selector>", "message": "<text the dialog shows>"} or '
@@ -5670,8 +5674,19 @@ class Session:
         current = spec.scope.capture or {}
         self._count("recapture")
         self._note(f"task {spec.task_id}: renders do not show the change; one recapture declaration")
+        ledger = self.memory.ledger
         prompt = (
-            f"Task: {spec.description}\n\nThe harness captured {current.get('path')} after "
+            # The operator's own words travel with the declaration (r05,
+            # 20261011T183849Z-869a1896: the goal prescribed /#q=Alpha, the
+            # dispatched capture loaded / and its first wait could not be
+            # met, and the redeclaring call never saw the goal).
+            f"## Goal (verbatim)\n\n{self.memory.goal.strip()}\n\n"
+            + (("## Requirements\n\n" + "\n".join(f"{rid}: {text}" for rid, text in ledger.requirements.items())
+                + "\n\n") if ledger.requirements else "")
+            + "Any page, fragment, steps or state the goal or requirements prescribe for the capture "
+            "still apply: declare them as written there.\n\n"
+            f"Task: {spec.description}\n\nThe harness captured {current.get('path')}, exactly as "
+            f"declared with nothing added to it, after "
             f"{len(current.get('steps') or [])} declared interaction step(s) and {source} "
             f"replied: {verdict.strip()[:300]}\n\nThe interface this task changed "
             "does not appear in those renders, so the declared page or steps do not reach the state "

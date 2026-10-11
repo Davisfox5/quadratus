@@ -1159,6 +1159,15 @@ Key design decisions already settled:
   missing runner's exception names its path). It still judges for itself: a
   failure on the delivered source is evidence against it, a skip, earlier
   source or unknown count establishes no pass, and nothing turns into a MET.
+- **A capture path keeps its #fragment, and a redeclaration sees the goal**
+  (r05, 20261011T183849Z-869a1896: the goal prescribed /#q=Alpha; the
+  orchestrator declared "/" expecting the harness to apply the hash "if
+  supported", step 1 timed out, and the one redeclaration, asked without the
+  goal, spent 228,533 reported tokens and hit its round cap). The capture
+  rules now say a path may end in a fragment loaded exactly as written and
+  that nothing is added to it; the capture-redeclare prompt carries the goal
+  verbatim and the numbered requirements. Validation, the step allowlist and
+  the one-redeclaration bound are unchanged.
 - **A verification-only task over a source the harness already verified is
   not dispatched** (overnight r02 and r03: after a same-source harness pass
   and approved renders, a review-only t2 re-ran the tests where it had no
