@@ -746,6 +746,20 @@ _HARNESS_CAPTURE = (
 _RENDERS_BLIND = "the renders do not show the changed interface"
 
 
+#: Blocking lines the harness writes itself: delivery, capture and verdict
+#: failures. None is a design judgement a source fix could answer.
+_HARNESS_BLOCKERS = (
+    "BLOCKING: the renders could not be handed", "BLOCKING: the renders changed while",
+    "BLOCKING: the final design review gave no verdict", "BLOCKING: the renders do not show",
+    "BLOCKING: the reviewer altered",
+)
+
+
+def _design_judgement(blocking) -> bool:
+    """Whether every blocking line is the reviewer's own design judgement."""
+    return bool(blocking) and not any(line.strip().startswith(_HARNESS_BLOCKERS) for line in blocking)
+
+
 def _renders_blind(verdict: str) -> bool:
     """Whether the verdict is the blind-render reply and nothing else.
 
@@ -5340,6 +5354,9 @@ class Session:
                 blocking = [line for line in (verdict or "").splitlines() if line.strip().startswith("BLOCKING:")]
                 if (verdict or "").strip() != "APPROVED" and not blocking:
                     blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
+                if blocking and harness and not is_review_only(spec) and _design_judgement(blocking):
+                    verdict, blocking = self._fix_reviewed_design(spec, lead, task, record, reviewer,
+                                                                  verdict, blocking)
                 # The decision travels with the text: a reader of the first
                 # line or of the stored 600 characters must not take an
                 # APPROVED that a later BLOCKING line overrode (Codex review
@@ -5456,6 +5473,61 @@ class Session:
                                                     receipt=self._capture_receipt(spec.task_id, True))
         self._refuse_mismatched(spec, record, task, records, True)
         return ok, problem, shots, records
+
+    def _fix_reviewed_design(self, spec, lead, task, record, reviewer, verdict, blocking):
+        """One bounded fix of the reviewer's blocking design problems, then
+        the same checks again: the gate, a harness recapture, and the same
+        reviewer judging the new renders. Returns ``(verdict, blocking)``
+        for the record; the original blockers stand when the fix breaks the
+        check or the recapture.
+
+        Overnight r01 (20261011T052348Z-1a2969ca): the reviewer rightly
+        blocked a hint that squeezed the search field to 46 px, and the run
+        ended FindingsOpen after 7 of 20 calls with no repair. A failed check
+        gets a gate-fix and a broken render a design-fix; a reviewer's
+        BLOCKING design judgement got nothing, unlike the fix-then-verify
+        cycle every other blocking critique gets. One call, no loop: a second
+        BLOCKING verdict stays an open finding."""
+        lines = [line.strip()[:300] for line in blocking]
+        fix = record["review_fix"] = dict(reviewer=reviewer, blocking=lines)
+        self._note(f"task {spec.task_id}: the design review blocked; one fix call ({lines[0][:100]})")
+        self._count("design_fix")
+        self._edit(lead, (
+            f"Task: {spec.description}\n\nAn independent reviewer judged the rendered page and found "
+            "these blocking design problems:\n" + "\n".join(lines) + "\nFix them in source and keep "
+            "every other behaviour and test as it is. Do not start servers or run capture commands: the "
+            "harness runs the checks, captures the page again and the same reviewer judges it. "
+            + self._revision_delivery() + _design_fix_delivery(self._interim_edits_note())),
+            role="design-fix", capped=(spec, task))
+        self._run_integration_gate(lead, spec, task)
+        self._stage("design")
+        if self.checks and not self.checks[-1]["passed"]:
+            fix["after"] = "the check failed after the fix; the design was not judged again"
+            return verdict, blocking
+        from .design_evidence import check_records
+        failure = self._harness_capture(spec)
+        if failure:
+            self._hand_off_preview(spec, task, record, failure)
+            ok, problem, shots = False, failure, []
+        else:
+            ok, problem, shots, records = check_records(
+                self.project, spec.task_id, self._last_edit_started or 0,
+                expected_source=self._trusted_source(), receipt=self._capture_receipt(spec.task_id, True))
+            self._refuse_mismatched(spec, record, task, records, True)
+        if not ok:
+            record.update(verified=False, problem=problem)
+            self._design_unverified.append((spec.task_id, problem))
+            self._open_finding("invalid_proof",
+                               f"Task {spec.task_id} is design work without clean rendered evidence: {problem}.")
+            fix["after"] = f"the recapture after the fix is not clean evidence: {problem[:200]}"
+            return verdict, blocking
+        record.update(verified=True, problem="", screenshots=shots)
+        verdict = self._final_design_review(spec, reviewer, shots)
+        blocking = [line for line in (verdict or "").splitlines() if line.strip().startswith("BLOCKING:")]
+        if (verdict or "").strip() != "APPROVED" and not blocking:
+            blocking = [f"BLOCKING: the final design review gave no verdict ({(verdict or '')[:120]})"]
+        fix["after"] = "approved" if not blocking else "still blocking"
+        return verdict, blocking
 
     def _refuse_mismatched(self, spec, record, task, records, harness) -> None:
         """Stop on evidence positively observed not to hold (map J9b): a

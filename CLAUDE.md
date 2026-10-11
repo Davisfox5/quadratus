@@ -1149,6 +1149,15 @@ Key design decisions already settled:
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,
   reviewers produce judgement.
+- **A reviewer's blocking design judgement gets one fix** (overnight r01,
+  20261011T052348Z-1a2969ca: the reviewer rightly blocked a hint that
+  squeezed the search field to 46 px, and the run ended FindingsOpen after 7
+  of 20 calls with no repair). With harness capture, BLOCKING lines from the
+  cross-vendor design reviewer get one design-fix call, then the gate, a
+  harness recapture and the same reviewer again. One call, no loop; a second
+  BLOCKING verdict stays open. Delivery, capture and no-verdict blockers
+  written by the harness get no fix, and lead-captured ("self") evidence is
+  unchanged.
 - **A test repair is named, not inferred** (run 20261010T225947Z-fec6da52:
   the goal authorized repairing a broken generated browser test, the
   repaired suite passed, and the original-test check restored the broken
