@@ -232,12 +232,30 @@ def _saved_checks(run_dir):
             text = raw.decode('utf-8', errors='replace')
         except OSError:
             continue
-        # This is the harness's saved output, never a model's claimed test result.
-        passed = re.findall(r'(?:# pass |ℹ pass )(\d+)', text)
-        failed = re.findall(r'(?:# fail |ℹ fail )(\d+)', text)
-        python = re.findall(r'(\d+) passed in [\d.]+s', text)
-        if passed and failed:
-            summary = f'{sum(map(int, passed + python))} passed · {sum(map(int, failed))} failed'
+        # Count each runner independently: Node succeeding cannot hide pytest failing.
+        clean = re.sub(r'\x1b\[[0-9;]*m', '', text)
+        node_pass = re.findall(r'(?:# pass |ℹ pass )(\d+)', clean)
+        node_fail = re.findall(r'(?:# fail |ℹ fail )(\d+)', clean)
+        totals = dict(passed=0, failed=0, skipped=0)
+        counted = False
+        if node_pass and node_fail:
+            totals['passed'] += sum(map(int, node_pass))
+            totals['failed'] += sum(map(int, node_fail))
+            counted = True
+        outcome = r'\d+ (?:passed|failed|errors?|skipped|xfailed|xpassed|deselected|rerun|warnings?)'
+        for line in clean.splitlines():
+            if not re.fullmatch(r'\s*(?:=+\s*)?' + outcome + r'(?:, ' + outcome +
+                                r')*(?: in [\d.]+s(?: \([^)]*\))?)?\s*=*\s*', line):
+                continue
+            for count, name in re.findall(r'(\d+) (passed|failed|errors?|skipped)\b', line):
+                totals['failed' if name in ('error', 'errors') else name] += int(count)
+                counted = True
+        if counted:
+            summary = f'{totals["passed"]} passed · {totals["failed"]} failed'
+            if totals['skipped']:
+                summary += f' · {totals["skipped"]} skipped'
+            if ': failed:' in text and totals['failed'] == 0:
+                summary += ' · test command did not pass'
         else:
             summary = 'did not pass' if ': failed:' in text else 'result details unavailable'
         checks.append(dict(at=at, summary=summary))
@@ -388,7 +406,7 @@ def render_story(status):
                           'Changes and evidence were saved.</p>')
         elif budget.get('stop_reason') == 'reported_token_threshold':
             banner.append('<p><strong>What stopped it:</strong> The run reached its token limit before completion was confirmed.</p>')
-        elif budget.get('stop_reason') == 'wall_time_limit':
+        elif budget.get('stop_reason') == 'wall_deadline':
             banner.append('<p><strong>What stopped it:</strong> The run reached its time limit.</p>')
         elif terminal not in ('complete', 'listed tasks complete'):
             banner.append('<p><strong>What stopped it:</strong> The run could not confirm completion. '
@@ -424,7 +442,7 @@ def render_story(status):
     if testing:
         check = '<div class="qm-big">Tests are running</div>'
     elif last is not None:
-        check = '<div class="qm-big">' + ('Passed' if last.get('passed') is True else 'Needs a fix') + '</div>'
+        check = '<div class="qm-big">' + ('Passed' if last.get('passed') is True else 'Did not pass') + '</div>'
     elif saved_checks:
         check = '<div class="qm-big">Latest test results</div>'
     else:

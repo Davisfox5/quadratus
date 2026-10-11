@@ -276,3 +276,33 @@ def test_protocol_and_tool_details_stay_out_of_reply_previews():
     from quadratus.monitor_story import _excerpt
     assert _excerpt('KIND: debug\nSCOPE: {"permitted_paths": ["test.js"]}\n\nFix the deterministic assertion mismatch in `tests/browser.test.js`.') == 'Fix the wrong expected result in the browser test.'
     assert _excerpt('## Checks\n\n**NOT RUN:** pytest — this review session has no shell tool at all (no Bash).') == 'Could not run the tests because this reviewer could not run commands.'
+
+
+@pytest.mark.parametrize('output, expected', [
+    ('check: passed: exit 0\n121 passed in 2.3s', '121 passed · 0 failed'),
+    ('check: failed: nonzero exit\n1 failed, 2 passed in 2.3s\n# pass 4\n# fail 0', '6 passed · 1 failed'),
+    ('check: failed: nonzero exit\n1 error, 2 passed, 3 skipped in 2.3s', '2 passed · 1 failed · 3 skipped'),
+    ('check: failed: nonzero exit\n1 failed, 2 passed\nℹ pass 4\nℹ fail 0', '6 passed · 1 failed'),
+])
+def test_live_python_results_are_independent_of_node_results(tmp_path, output, expected):
+    run, _ = _live(tmp_path)
+    ArtifactStore(run / 'artifacts').put(output, kind='check-output', author='harness')
+    view = render_story(read_status(tmp_path))
+    assert f'Last checked: {expected}' in view
+    assert 'qm-banner qm-confirmed' not in view
+
+
+def test_recorded_wall_deadline_has_a_plain_time_limit_explanation(tmp_path):
+    run = _terminal(tmp_path, completed=False, error='RunBudgetExceeded')
+    (run / 'budget.json').write_text(json.dumps(dict(stop_reason='wall_deadline')))
+    view = render_story(read_status(tmp_path))
+    assert 'The run reached its time limit.' in view
+    assert 'goal not confirmed' in view
+
+
+def test_runner_failure_does_not_claim_the_application_needs_a_fix(tmp_path):
+    _terminal(tmp_path, completed=False, error='CheckUnattributable',
+              checks=[dict(passed=False, attribution=dict(product=False, reasons=['runner unavailable']))])
+    view = render_story(read_status(tmp_path))
+    assert '<div class="qm-big">Did not pass</div>' in view
+    assert 'Needs a fix' not in view
