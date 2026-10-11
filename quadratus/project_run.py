@@ -550,6 +550,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'selected_limits': selected,
         'unnamed_test_files': list(getattr(session, 'unnamed_test_files', []) or []) if session else [],
         'original_test_runs': list(getattr(session, 'original_test_runs', []) or []) if session else [],
+        # Harness runs of the task gate seats were shown; never task checks.
+        'review_checks': list(getattr(session, 'review_checks', []) or []) if session else [],
         'test_repairs': list(getattr(session, 'test_repairs', []) or []) if session else [],
         'skip_baselines': list(getattr(session, 'skip_baselines', []) or []) if session else [],
         'unexecuted_acceptance': list(getattr(session, 'unexecuted_acceptance', []) or []) if session else [],

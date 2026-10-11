@@ -1159,6 +1159,17 @@ Key design decisions already settled:
   missing runner's exception names its path). It still judges for itself: a
   failure on the delivered source is evidence against it, a skip, earlier
   source or unknown count establishes no pass, and nothing turns into a MET.
+- **Seats judging a source get the harness's run of it** (r08,
+  20261011T203457Z-eaf86c90: reviewers' source copies carry no dependency
+  tree, so their runs of the browser tests failed with MODULE_NOT_FOUND while
+  the same tests passed in the project; revisions and re-checks looped on it
+  until the token reserve). `Session._observe_checks` runs the task's own
+  gate on the exact source before the draft review, before each re-check,
+  and on what a turn-capped lead left, once per source and with no fix call.
+  The seats get those receipts in place of the command list; the
+  orchestrator sees them labelled as evidence only. They are never a task
+  check, never a handoff and never a MET. A fix round that changes no source
+  is not re-checked: its findings stay open.
 - **A capture path keeps its #fragment, and a redeclaration sees the goal**
   (r05, 20261011T183849Z-869a1896: the goal prescribed /#q=Alpha; the
   orchestrator declared "/" expecting the harness to apply the hash "if
