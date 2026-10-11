@@ -3928,7 +3928,6 @@ class Session:
             )
             while unresolved and cycles < self.config.max_fix_cycles:
                 self._count("revision")
-                unchanged_from = self._source_fingerprint()
                 try:
                     revision = self._edit(
                         lead,
@@ -3942,12 +3941,6 @@ class Session:
                 task.record("assistant", revision)
                 task.keep(revision, kind="revision")
                 cycles += 1
-                if unchanged_from is not None and self._source_fingerprint() == unchanged_from:
-                    # r08 (20261011T203457Z-eaf86c90): the same reviewer re-judging
-                    # the same bytes repeats its verdict. The findings stay open.
-                    self._note(f"task {spec.task_id}: the fix changed no source; its findings stay "
-                               "unresolved without another re-check")
-                    break
                 unresolved = self._recheck_blocking(
                     spec, [(p, n) for p, n in blocking
                            if any(p == up for up, _ in unresolved)],

@@ -289,7 +289,9 @@ def _writing_check(relative):
 def test_a_check_that_writes_into_a_tree_is_stopped_and_its_receipt_is_not_accepted(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, Script(), files={**FILES, "node_modules/pkg/index.js": SHIM},
                   check=_writing_check("node_modules/x.js"))
-    _stopped(replay, "during check (t1)", "node_modules/x.js")
+    # The first harness run of the gate is now the observation before review
+    # (Session._observe_checks); the guard stops it there, as at any check.
+    _stopped(replay, "during observed check (t1)", "node_modules/x.js")
     assert H.result_json(replay)["checks"] == []
 
 
@@ -304,13 +306,13 @@ def test_a_check_writing_an_operator_declared_cache_proceeds_and_is_recorded(tmp
     record = H.result_json(replay)["dependency_identity"]
     assert record["status"] == "unchanged" and record["exemptions"] == ["node_modules/.cache"]
     assert record["events"][0]["exempt_changed"] == ["node_modules/.cache", "node_modules/.cache/babel.json"]
-    assert record["events"][0]["window"] == "during check (t1)"
+    assert record["events"][0]["window"] == "during observed check (t1)"
 
 
 def test_the_same_cache_write_without_a_declared_exemption_is_a_change(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, Script(), files={**FILES, "node_modules/pkg/index.js": SHIM},
                   check=_writing_check("node_modules/.cache/babel.json"))
-    _stopped(replay, "during check (t1)", "node_modules/.cache/babel.json")
+    _stopped(replay, "during observed check (t1)", "node_modules/.cache/babel.json")
 
 
 @pytest.mark.requirements_ledger

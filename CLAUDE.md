@@ -1168,8 +1168,7 @@ Key design decisions already settled:
   and on what a turn-capped lead left, once per source and with no fix call.
   The seats get those receipts in place of the command list; the
   orchestrator sees them labelled as evidence only. They are never a task
-  check, never a handoff and never a MET. A fix round that changes no source
-  is not re-checked: its findings stay open. Every receipt is bound to the
+  check, never a handoff and never a MET. Every receipt is bound to the
   gate in force as well as the source (`_gate_identity`: commands, cwd,
   timeouts, minimum tests): a check of another gate on the same bytes is
   history, never a seat's receipt, and a verification handoff needs a check

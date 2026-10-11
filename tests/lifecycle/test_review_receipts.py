@@ -63,17 +63,17 @@ def test_a_failing_draft_is_shown_failing_and_the_task_gate_still_decides(tmp_pa
     assert all(c["passed"] for c in H.result_json(replay)["checks"])
 
 
-def test_a_recheck_sees_the_revised_source_and_an_unchanged_fix_is_not_rechecked(tmp_path, monkeypatch):
+def test_a_recheck_sees_the_run_of_the_revised_source(tmp_path, monkeypatch):
     script = Script(lead=_writes(BROKEN), revision=_writes(FIXED),
                     collaborator=lambda c, r: "BLOCKING: add subtracts\nREVIEW: COMPLETE",
                     recheck=lambda c, r: "UNRESOLVED: still not convinced")
     edits = iter([_writes(FIXED), lambda c, r: "Nothing more to change.\nCHANGED: []"])
     script.overrides["revision"] = lambda c, r: next(edits)(c, r)
     replay = _run(tmp_path, monkeypatch, script, files=FILES)
-    peers = len(replay.of("collaborator"))
     rechecks = replay.of("recheck")
-    assert len(rechecks) == peers, "one re-check per reviewer; the unchanged fix bought none"
-    assert all(HANDED in _text(c) and "before recheck" in _text(c) for c in rechecks)
+    assert rechecks and all(HANDED in _text(c) and "before recheck" in _text(c) for c in rechecks)
+    # One observation per source: the unchanged fix round reuses the run of
+    # the revised source rather than running the gate again.
     assert [s["stage"] for s in _observed(replay)] == ["review", "recheck"]
     assert _observed(replay)[1]["passed"] is True, "the recheck saw the run of the revised source"
     assert not replay.result.completed, "the findings stay open"
