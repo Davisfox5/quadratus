@@ -149,9 +149,15 @@ def test_cheap_gates_precede_review_and_share_final_repair_allowance(tmp_path, m
 
     s = session_for(tmp_path, suite, invoke)
     s.run_task(TaskSpec('t1', 'Review fixture', complexity='standard'))
-    assert phases == ['fix', 'review', 'final gate']
+    # The full suite also runs once before the review, on the exact source the
+    # reviewer judges (Session._observe_checks, r08): evidence for the seat,
+    # never one of the task's checks.
+    assert phases == ['fix', 'final gate', 'review', 'final gate']
     assert len(s.checks) == 2 and s.checks[0]['passed'] and not s.checks[1]['passed']
     assert s.checks[0]['receipts'][0]['id'] == 'early'
+    [seen] = s.review_checks
+    assert seen['stage'] == 'review' and seen['passed'] is False
+    assert [r['id'] for r in seen['receipts']] == ['late']
 
 
 def test_failed_cheap_gate_stops_before_collaborators(tmp_path):

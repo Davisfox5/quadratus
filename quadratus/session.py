@@ -812,6 +812,21 @@ def _audit_check_facts(checks, current) -> str:
     return "\n".join(lines)
 
 
+def _gate_identity(gate) -> str:
+    """A stable digest of what a gate runs and where: each command with its
+    settings (argv, cwd, timeout, required, minimum tests, skip reason), the
+    gate's own working directory and its test-count minimum. None for none."""
+    if gate is None:
+        return ""
+    commands = getattr(gate, "commands", None)
+    body = dict(kind=type(gate).__name__, cwd=str(getattr(gate, "cwd", "") or ""),
+                command=list(getattr(gate, "command", []) or []), timeout=getattr(gate, "timeout", None),
+                minimum_tests=getattr(gate, "minimum_tests", None),
+                commands=[dataclasses.asdict(c) if dataclasses.is_dataclass(c) else repr(c)
+                          for c in (commands or ())])
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
 def _executed_clean(report, tests) -> str:
     """"" when a command's record shows cases executed with none failed or
     skipped; otherwise why it does not."""
@@ -2131,6 +2146,10 @@ class Session:
         #: Review-only tasks dispatched because the source was not fully
         #: verified, each with the first reason.
         self.verification_dispatched: List[dict] = []
+        #: Harness runs of the task's own gate on the exact source a review
+        #: or recheck judges, or a capped task left: evidence for the seats,
+        #: never a task check (Session._observe_checks).
+        self.review_checks: List[dict] = []
 
     def _open_finding(self, kind: str, text: str, *, legacy_route: bool = False) -> None:
         """Append a legacy open finding and record it as a typed fact.
@@ -3821,6 +3840,8 @@ class Session:
         # reputation. Full attribution survives for the operator -- in the
         # artifact kinds and the ledger -- which is where feedback quality
         # per reviewer belongs: the scoreboard's question, not the author's.
+        if collaborators:
+            self._observe_checks(spec, "review")
         labels = {peer: f"Reviewer {chr(65 + i)}"
                   for i, peer in enumerate(collaborators)}
         notes: List[tuple] = []
@@ -3994,6 +4015,11 @@ class Session:
                 if report and (report.blocking or report.oversized):
                     raise TaskFailed("scope", "Turn-limited edits exceed the declared scope; work "
                                      "preserved. " + report.render(), partial=state) from exc
+        if state["changed"]:
+            # What the capped lead left meets the gate once, as evidence only:
+            # r08's t1 stopped at its cap and its source never met a check
+            # before a verification-only task was named for it.
+            self._observe_checks(spec, "turn-limited")
         said = (exc.partial_text or "").strip()
         record = dict(task=spec.task_id, lead=lead, turns=exc.turns,
                       changed=state["changed"], changed_lines=state["changed_lines"],
@@ -5159,17 +5185,97 @@ class Session:
             self._apply_completion(self._completion_decision(CAP, max_tasks))
         return list(self.history)
 
+    def _current_gate(self):
+        """The gate the current task runs: its bound gate, else the configured one."""
+        return self._bound_gate() or self.config.integration_gate
+
+    def _gate_for(self, spec):
+        """The gate ``spec`` would run if dispatched now, read without side
+        effects (the same policy resolution _prepare_dispatch makes); None
+        when the policy refuses it."""
+        policy = self.config.repository_policy
+        if policy is None:
+            return self.config.integration_gate
+        from .policy import PolicyError, task_gate
+        try:
+            paths = spec.scope.permitted_paths if spec.scope else ()
+            plan = policy.resolve(paths, writing=self.config.allow_writes)
+            # Every refusal _prepare_dispatch makes is no gate here (SAME
+            # review of f5c04b5: a blocked plan resolves without raising).
+            if plan["blocked"] or (self.config.allow_writes and self.config.default_scope
+                                   and any(not self.config.default_scope.permits(x) for x in paths)):
+                return None
+            return task_gate(policy, plan, self._original_gate, exclude=self.config.project_excludes)
+        except (PolicyError, ValueError):
+            return None
+
+    def _observe_checks(self, spec, stage: str) -> None:
+        """Run the task's own gate on the current source, once per source, as
+        evidence for the seats that judge it: no fix call, never a task check,
+        so it decides nothing about the task (r08, 20261011T203457Z-eaf86c90:
+        reviewers' source copies have no dependency tree, so their runs of the
+        project's browser tests failed with MODULE_NOT_FOUND while the same
+        tests passed in the project, and the revisions looped on it).
+
+        Skipped when the task requires no checks, when there is no gate, or
+        when a check or an earlier observation already ran on this source."""
+        live = self.config.integration_gate
+        if not self.project or live is None or not self._required("checks", live is not None):
+            return
+        gate = self._current_gate()
+        current = self._source_fingerprint()
+        identity = _gate_identity(gate)
+        # Reused only for the same source AND the same gate: a cheap subset,
+        # another task's gate or a check of an earlier source is not this run.
+        if not current or any(c.get("source") == current and c.get("gate") == identity
+                              for c in self.review_checks):
+            return
+        from .project import Project
+        project = Project(self.project, exclude=self.config.project_excludes)
+        self._verify_dependencies(f"before observed check ({spec.task_id})")
+        before = project.contents()
+        self._activity("check-started", task=spec.task_id)
+        try:
+            result = gate.run()
+        finally:
+            self._activity("check-ended", task=spec.task_id)
+        self._verify_dependencies(f"during observed check ({spec.task_id})")
+        moved = project.contents() != before
+        self.review_checks.append({
+            "task": spec.task_id, "stage": stage, "gate": identity, "passed": bool(result.passed) and not moved,
+            "command": result.command, "report": result.report,
+            # A run the tree moved under shows nothing about any one source.
+            "source": None if moved else current,
+            "receipts": [dict(dataclasses.asdict(r), output=(r.output or "")[-4000:]) for r in result.receipts],
+        })
+        self._note(f"task {spec.task_id}: harness ran the checks on the source before {stage}: "
+                   + ("passed" if result.passed and not moved else "did not pass"))
+
     def _harness_facts(self, *, current_only=False) -> str:
         """The latest project check and renders as harness records: per
         command its status, counts and source; the renders' review and
         source. Never a command line or an unredacted reason. With
         ``current_only``, "" unless that check ran on the current source."""
-        if not self.project or not self.checks:
+        observed = getattr(self, "review_checks", [])
+        if not self.project or not (self.checks or observed):
             return ""
         current = self._source_fingerprint()
-        if current_only and (not current or self.checks[-1].get("source") != current):
+        # Bound to the gate in force now as well as the source: a run of
+        # another gate on these bytes is history, never this task's receipt.
+        identity = _gate_identity(self._current_gate())
+        canonical = (bool(self.checks) and bool(current) and self.checks[-1].get("source") == current
+                     and self.checks[-1].get("gate") == identity)
+        seen = next((c for c in reversed(observed)
+                     if current and c.get("source") == current and c.get("gate") == identity), None)
+        if current_only and not canonical and seen is None:
             return ""
-        lines = [_audit_check_facts(self.checks[-1:], current)]
+        lines = []
+        if self.checks and (canonical or not current_only):
+            lines.append(_audit_check_facts(self.checks[-1:], current))
+        if seen is not None and not canonical:
+            lines.append(f"- harness run of the task's checks on this exact source before {seen['stage']} "
+                         f"({seen['task']}; evidence only, not the task's check):")
+            lines.append(_audit_check_facts([seen], current))
         if self.design_checks:
             record = self.design_checks[-1]
             from .design_evidence import evidence_dir
@@ -5192,7 +5298,10 @@ class Session:
         if not facts:
             return ""
         head = "\n\n## The harness's latest check and renders (its own runs, not a model's account)\n" + facts
-        if not self.config.requirements_ledger or self._explicit_tasks is not None:
+        current = self._source_fingerprint()
+        canonical = (bool(self.checks) and bool(current) and self.checks[-1].get("source") == current
+                     and self.checks[-1].get("gate") == _gate_identity(self.config.integration_gate))
+        if not self.config.requirements_ledger or self._explicit_tasks is not None or not canonical:
             return head
         return (head + "\nA task that only verifies (SCOPE edits none) is not dispatched while these "
                 "show the current source passing on every command with nothing skipped, its renders "
@@ -5213,6 +5322,13 @@ class Session:
         why = _verified_by_check(self.checks[-1] if self.checks else None, current)
         if why:
             return why
+        if spec is not None:
+            gate = self._gate_for(spec)
+            if gate is None and self.config.repository_policy is not None:
+                # Dispatched, so the policy refuses it exactly as it would any task.
+                return "the repository policy refuses this task"
+            if self.checks[-1].get("gate") != _gate_identity(gate):
+                return "the latest project check ran a different gate than this task's"
         if self._checks_standing_failed():
             return "a check failure still stands"
         open_work = self._open_work()
@@ -7919,6 +8035,8 @@ class Session:
         debate protocols measurably tip into conformity.
         """
         unresolved: List[tuple] = []
+        if blocking:
+            self._observe_checks(spec, "recheck")
         for peer, note in blocking:
             shown = (labels or {}).get(peer, peer)
             try:
@@ -8054,7 +8172,7 @@ class Session:
             task.record("user", result.for_models())
             attempt_facts.append(self._record_check_attempt(result, gate_kind=kind))
             self._handoff_unattributable(gate, result, task)
-        self.checks.append({"passed": result.passed, "command": result.command,
+        self.checks.append({"passed": result.passed, "command": result.command, "gate": _gate_identity(gate),
                             "output": result.output, "cwd": str(self.project or getattr(gate, 'cwd', '')),
                             "selection": self._gate_selection(gate), "command_cwd": self._gate_cwd(gate),
                             "cases": result.cases,
