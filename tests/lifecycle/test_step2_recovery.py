@@ -238,6 +238,35 @@ def test_a_failed_task_hands_the_planner_held_facts_and_an_unchanged_retry_is_re
     assert len(set(leads)) == 2, "the changed continuation was dispatched"
 
 
+@pytest.mark.parametrize("field,value,match", [
+    ("in_flight", None, "in_flight is missing"), ("in_flight", "0", "in_flight is missing"),
+    ("in_flight", True, "in_flight is missing"),
+    ("unknown_usage_attempts", None, "unknown_usage_attempts is missing"),
+    ("unknown_usage_attempts", -1, "unknown_usage_attempts is missing"),
+    ("stop_reason", None, "stop_reason is missing"), ("stop_reason", 0, "stop_reason is missing")])
+def test_an_absent_or_malformed_uncertainty_field_is_unknown_not_zero(tmp_path, monkeypatch, field, value, match):
+    """Root review of dc70adb: a missing in_flight, unknown_usage_attempts or
+    stop_reason resumed as if it read zero or empty."""
+    replay, first = _interrupted(tmp_path, monkeypatch)
+    budget = _budget(first)
+    if value is None:
+        del budget[field]
+    else:
+        budget[field] = value
+    (first / "budget.json").write_text(json.dumps(budget))
+    with pytest.raises(CheckpointRefused, match=match):
+        _episode(replay, resume_from=first.name)
+    assert not (first / "resumed-by.json").exists()
+
+
+def test_a_record_with_known_zero_uncertainty_still_resumes(tmp_path, monkeypatch):
+    replay, first = _interrupted(tmp_path, monkeypatch)
+    budget = _budget(first)
+    assert (budget["in_flight"], budget["unknown_usage_attempts"], budget["stop_reason"]) == (0, 0, "")
+    second = Path(_episode(replay, resume_from=first.name).run_dir)
+    assert json.loads((second / "lineage.json").read_text())["episode"] == 2
+
+
 # -- budget persistence and identity precision (root review of aaa06a6) -------------
 
 def test_time_between_calls_reaches_the_record_the_checkpoint_is_written_against(tmp_path):

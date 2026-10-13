@@ -332,12 +332,22 @@ def validate(run_dir, body: dict, now: Dict[str, str]) -> dict:
         budget = json.loads((run_dir / "budget.json").read_text())
     except (OSError, ValueError) as exc:
         raise CheckpointRefused(f"the parent's budget record is unreadable: {type(exc).__name__}") from exc
-    if budget.get("in_flight"):
+    if not isinstance(budget, dict):
+        raise CheckpointRefused("the parent's budget record is not a record")
+    # The uncertainty fields must be present and well typed: an absent one
+    # is unknown, never a known zero (root review of dc70adb).
+    for field in ("in_flight", "unknown_usage_attempts"):
+        value = budget.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise CheckpointRefused(f"the budget record's {field} is missing or not a non-negative count")
+    if not isinstance(budget.get("stop_reason"), str):
+        raise CheckpointRefused("the budget record's stop_reason is missing or not text")
+    if budget["in_flight"]:
         raise CheckpointRefused(f"{budget['in_flight']} call(s) were in flight when the run ended; their "
                                 "usage and effect are unknown")
-    if budget.get("unknown_usage_attempts") or budget.get("stop_reason"):
+    if budget["unknown_usage_attempts"] or budget["stop_reason"]:
         raise CheckpointRefused("the parent's budget stopped or holds unknown usage: "
-                                f"{budget.get('stop_reason') or 'unknown_usage'}")
+                                f"{budget['stop_reason'] or 'unknown_usage'}")
     spent = consumed(budget)
     held_spend = consumed(body.get("consumed"), recorded=True)
     lower = sorted(name for name in spent if spent[name] < held_spend[name])
