@@ -117,6 +117,12 @@ def protected_codex_argv(argv: Sequence[str], *, protected: Sequence[str],
         if arg == "--":
             body.extend(argv[i:])
             break
+        if arg in {"--model", "-m"}:
+            if i + 1 == len(argv) or not argv[i + 1] or argv[i + 1].startswith("-"):
+                raise ValueError("Missing held model value")
+            body.extend(argv[i:i + 2])
+            i += 2
+            continue
         if arg in {"-C", "--cd"}:
             if i + 1 == len(argv) or Path(argv[i + 1]).resolve() != root:
                 raise ValueError("CLI working directory differs from the held workspace")
@@ -183,6 +189,10 @@ def protected_codex_argv(argv: Sequence[str], *, protected: Sequence[str],
                            "--add-dir=", "--config=", "--cd=", "--disable=", "-c=")) or (
                 arg.startswith(("-c", "-s", "-P", "-p", "-C")) and not arg.startswith("--")):
             raise ValueError("Unqualified attached boundary/config option")
+        if arg not in {"exec", "sandbox", "--json", "--skip-git-repo-check", "-"}:
+            raise ValueError("Only the held worker option surface is supported")
+        if arg in {"exec", "sandbox"} and i != 1:
+            raise ValueError("Unexpected subcommand")
         body.append(arg)
         i += 1
     if mode not in {"read-only", "workspace-write"}:

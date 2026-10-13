@@ -156,3 +156,16 @@ def test_parent_instruction_paths_project_trust_and_auth_commands_do_not_survive
     assert not {'model_instructions_file','experimental_instructions_file','projects'} & result.keys()
     with pytest.raises(ValueError):
         _module.isolated_solver_config('[model_providers.custom]\nauth_command=["/private/script"]\n')
+
+
+@pytest.mark.parametrize('flags', [
+    ['-i','/private/hidden'], ['--image','/private/hidden'], ['--image=/private/hidden'],
+    ['--output-schema','/private/hidden'], ['-o','/private/hidden'],
+    ['--output-last-message','/private/hidden'], ['--output-last-message=/private/hidden'],
+    ['--future-native-parent-reader','/private/hidden'],
+])
+def test_native_parent_file_flags_are_not_allowed(roots, flags):
+    work, private = roots
+    with pytest.raises(ValueError):
+        protect(['codex','exec','--sandbox','workspace-write',*flags],
+                protected=[str(private)],cwd=str(work))
