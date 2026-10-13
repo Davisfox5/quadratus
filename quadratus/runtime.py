@@ -463,7 +463,7 @@ class Fleet:
                                   'A standalone FETCH, CONSULT or WORKER request may omit the line; '
                                   'any files you changed before it are kept.' + check_instructions)
             except TurnLimitReached as exc:
-                _raise_if_infrastructure(model_key, getattr(view, "last_tool_failures", None), exc)
+                _raise_if_infrastructure(model_key, view, exc)
                 # A capped call may have spent its rounds on exactly the
                 # denied command; that is the capability stop, not an
                 # ordinary continuation (Codex review of 3a55d82). A refusal
@@ -478,7 +478,7 @@ class Fleet:
                         + ". Declare the command as a check or a capture profile; a denied write is the "
                         "transport's permission mode. Work preserved.") from exc
                 raise
-            _raise_if_infrastructure(model_key, getattr(view, "last_tool_failures", None))
+            _raise_if_infrastructure(model_key, view)
             context = invocation_context.get()
             if context is not None:
                 # For the session's same-failure check across editing calls.
@@ -599,7 +599,7 @@ class Fleet:
                 if worker_loop_control.get() is not None:
                     role += '\nDuring this bounded errand only, CONTINUE: may request another read step.'
             reply = self._generate(model_key, view, prompt, role)
-            _raise_if_infrastructure(model_key, getattr(view, "last_tool_failures", None))
+            _raise_if_infrastructure(model_key, view)
             altered = _copy_altered(directory, handed)
             if altered:
                 raise ReviewCopyAltered(
@@ -1018,12 +1018,16 @@ def _infrastructure_failures(failures) -> List[str]:
     return out
 
 
-def _raise_if_infrastructure(model_key, failures, cause=None) -> None:
+def _raise_if_infrastructure(model_key, view, cause=None) -> None:
     """Stop at once when the call's tools could not run in this environment:
     the cause is the environment, so no review, revision or retry can change
-    it. Nothing is retried, rerouted or rolled back."""
-    found = _infrastructure_failures(failures)
-    if found:
+    it. Nothing is retried, rerouted or rolled back.
+
+    A call whose later tool run succeeded after the refusal recovered from
+    it (root review of d51ae79): the refusal stays in the call's recorded
+    tool failures and the work goes on to its ordinary review and checks."""
+    found = _infrastructure_failures(getattr(view, "last_tool_failures", None))
+    if found and getattr(view, "last_tool_recovered", False) is not True:
         from .session import InfrastructureUnavailable
         raise InfrastructureUnavailable(
             f"{model_key}'s tools could not run in this execution environment: "

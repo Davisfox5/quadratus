@@ -21,6 +21,16 @@ from .scope import TaskScope, _matches
 _IO_CHECKS = frozenset({'no-io'})
 _IO_SCOPE = re.compile(r"\b(?:sqlite3?|database|databases|sql|db|http|https|network|socket|filesystem)\b"
                        r"|\.(?:db|sqlite3?|sql)\b", re.IGNORECASE)
+#: A scope sentence that rules I/O out ("without database access", "no
+#: network calls", "must not touch the filesystem").
+_IO_DENIED = re.compile(r"\b(?:without|no|not|never|avoid\w*|forbid\w*|prohibit\w*|pure)\b[^.;\n]{0,60}?"
+                        r"(?:" + _IO_SCOPE.pattern.replace("|\\.(?:db|sqlite3?|sql)\\b", "") + r"|\bi/?o\b)",
+                        re.IGNORECASE)
+
+
+def _io_authorized(text: str) -> bool:
+    """The scope names storage or network work and nowhere rules I/O out."""
+    return bool(_IO_SCOPE.search(text)) and not _IO_DENIED.search(text)
 
 
 class PolicyError(ValueError):
@@ -226,13 +236,15 @@ class RepositoryPolicy:
         parts = ['## Role packet', f'Role: {role}', scope_text,
                  'Families: ' + ', '.join(plan['families']),
                  'Overlays: ' + (', '.join(plan['overlays']) or 'none')]
-        # A defaulted family was chosen by nothing that read the task. When
-        # the task's own scope names storage or network work, its no-I/O item
-        # contradicts the task (step 1, 2026-10-13: SQLite reservations work
-        # was told the module performs no database access). The item is left
-        # out and the packet says why; a family a path rule chose keeps it.
-        io_named = (not str(plan.get('family_source', '')).startswith('path rules')
-                    and scope is not None and _IO_SCOPE.search(scope.render(include_forbidden=False)))
+        # The built-in default family was chosen by nothing that read the
+        # task. When the task's own scope asks for storage or network work,
+        # its no-I/O item contradicts the task (step 1, 2026-10-13: SQLite
+        # reservations work was told the module performs no database
+        # access). The item is left out and the packet says why. A family a
+        # path rule or the project's own policy chose keeps it, and so does a
+        # scope that itself rules I/O out.
+        io_named = (str(plan.get('family_source', '')).startswith('built-in default')
+                    and scope is not None and _io_authorized(scope.render(include_forbidden=False)))
         for family in plan['families']:
             card = self.cards[family]
             parts.append(f'Family checklist ({family}):')

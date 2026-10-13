@@ -842,27 +842,36 @@ def _audit_check_facts(checks, current) -> str:
     return "\n".join(lines)
 
 
+#: Runner labels a model may see: public program and module names only,
+#: never an operand, a path or a project script's name (root review of
+#: d51ae79: a script path can be a file seats must not open).
+_PUBLIC_RUNNERS = frozenset({
+    "pytest", "unittest", "python", "python3", "node", "nodejs", "npm", "npx", "pnpm", "yarn", "bun",
+    "deno", "jest", "vitest", "mocha", "playwright", "tox", "nox", "make", "go", "cargo", "ruby", "rspec",
+    "rake", "bundle", "mvn", "gradle", "dotnet", "bash", "sh", "uv", "poetry", "hatch"})
+
+
 def _check_runner(argv) -> str:
-    """A command's runner by name only: the program's basename, or the
-    module after ``-m``. Never a path or an operand (a command can name a
-    file seats must not open)."""
+    """A command's runner as a public label: the module after ``-m``, else
+    the program's basename, when it is a known public runner; otherwise "a
+    project command"."""
     argv = [str(a) for a in argv or ()]
     if not argv:
-        return "unknown runner"
-    if "-m" in argv[:-1]:
-        return argv[argv.index("-m") + 1]
-    return os.path.basename(argv[0])
+        return "a project command"
+    label = argv[argv.index("-m") + 1] if "-m" in argv[:-1] else os.path.basename(argv[0])
+    return label if label in _PUBLIC_RUNNERS else "a project command"
 
 
 def _configured_checks(gate) -> str:
     """The checks the harness executes, one line per command: id, whether it
-    is required, its runner. "" with no gate."""
+    is required, its runner label, and whether it is skipped. Never a skip
+    reason, operand or path. "" with no gate."""
     if gate is None:
         return ""
     commands = getattr(gate, "commands", None)
     if commands:
         return "\n".join(f"- {c.id} ({'required' if c.required else 'optional'}): runs {_check_runner(c.argv)}"
-                         + (f"; skipped: {c.skip_reason[:80]}" if c.skip_reason else "") for c in commands)
+                         + ("; skipped by configuration" if c.skip_reason else "") for c in commands)
     command = getattr(gate, "command", None)
     return f"- check (required): runs {_check_runner(command)}" if command else ""
 
@@ -5384,9 +5393,11 @@ class Session:
         if not listed:
             return ""
         return ("\n\n## Configured project checks (the only commands the harness executes)\n" + listed
-                + "\nPlan verification these checks can show: tests their runner collects. Do not prescribe "
-                "another test command, even one the goal names; no seat can be held to a command the "
-                "harness does not run.")
+                + "\nPlan verification these checks can show: tests their runner collects. Do not invent "
+                "a test command the goal does not name; a seat cannot be held to a command the harness "
+                "does not run. If the goal itself requires a command these checks do not run, do not "
+                "drop it and do not prescribe it: ASK, naming the command and the configured checks as "
+                "a configuration conflict.")
 
     def _verification_note(self) -> str:
         """The orchestrator's view of the harness's own verification."""
@@ -6571,10 +6582,12 @@ class Session:
                "establish the delivered source's result; none of these establishes a pass. Judge each "
                "requirement yourself." if checks else "")
             + (f"\n\n## Configured project checks (the only commands the harness executes)\n{configured}\n"
-               "Where the goal names a different command for running tests, nobody here executes that "
-               "command, so its absence alone is not a NOT MET: judge whether the configured checks, as "
-               "executed on the delivered source, exercise the requirement. A configured check that is "
-               "missing, failed, skipped, stale or not run is still not evidence of a pass." if configured else "")
+               "A test command that only a plan, task or model prescribed is not a requirement: judge "
+               "the requirement by whether these checks, as executed on the delivered source, exercise "
+               "it. A command the goal itself requires is a requirement: if these checks do not run it, "
+               "that requirement is NOT MET as a configuration conflict naming the command. A configured "
+               "check that is missing, failed, skipped, stale or not run is still not evidence of a "
+               "pass." if configured else "")
             + (("\n\n## How ambiguous requirements were settled (judge against these)\n"
                 + "\n".join([f"- {r}: decided by the orchestrator: {t}" for r, t in ledger.decisions.items()]
                              + [f"- operator ruling: {r}" for r in ledger.rulings]))

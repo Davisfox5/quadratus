@@ -618,25 +618,29 @@ Key design decisions already settled:
   legitimately changes behaviour an original test pins will fail this check;
   there is no exemption and no new grant.
 - **Step 1: execution failures surface at once; planner, audit and family
-  card agree with the task** (#35, 2026-10-13). A call whose tool output
-  carries a sandbox launcher's own refusal line (`sandbox-exec: `, `bwrap: `,
-  `sandbox_apply: ` at a line start) raises `InfrastructureUnavailable` from
-  Fleet on the editing and review paths: the reservations pilot spent six
-  more calls after a lead's every command failed status 71. On a Mac that
-  line exists only in Codex's session journal, as the second part of a
-  `custom_tool_call_output` whose first part says "Script completed", so the
-  codex provider reads tool-output items there (never reasoning or
-  messages). A test's own output that mentions a sandbox mid-line is not a
-  refusal. Two editing calls in
-  one task with the same environmental tool failure (exit 126/127, command
-  not found, permission denied) on unchanged source fail the task
-  (`TaskFailed("environment")`, work kept); a failing test or a rebuttal with
-  no tool failures is not that. The orchestrator and the requirements audit
-  see the configured checks by id and runner (never a command line), and the
-  audit is told a goal-named command nobody runs is not by itself NOT MET,
-  while missing, failed, skipped, stale and NOT RUN stay against. A defaulted
-  family's `no-io` item is left out, with a line saying so, when the task's
-  own scope names storage or network work; permissions are unchanged.
+  card agree with the task** (#35, 2026-10-13, corrected after root's review
+  of d51ae79). A sandbox launcher's own refusal (`sandbox-exec: sandbox_apply:`
+  or one of bwrap's namespace-setup errors, as the whole line) raises
+  `InfrastructureUnavailable` from Fleet on the editing and review paths,
+  unless a later tool run in the same call succeeded: that call recovered,
+  and the refusal stays in its recorded tool failures. Any other line that
+  starts with a launcher's name is ordinary output. On a Mac the refusal
+  exists only in Codex's session journal, as the second part of a
+  `custom_tool_call_output` whose first part says "Script completed"; the
+  provider reads tool-output items there (never reasoning or messages) and
+  only from a journal it can prove is this call's: one file, its
+  `session_meta` id and cwd matching, begun inside the call. Two editing
+  calls in one task with the same environmental tool failure (exit 126/127,
+  a shell's own command-not-found or permission-denied line) on unchanged
+  source fail the task as `environment`, work kept. The orchestrator and
+  audit see configured checks by id and a public runner label (never a
+  command line, operand, script name or skip reason). A test command only a
+  plan or model prescribed is not a requirement; one the goal itself
+  requires is, and when the checks do not run it the planner ASKs and the
+  audit reports a named configuration conflict, never a waiver. The
+  built-in default family's `no-io` item is left out only when the scope
+  asks for storage or network work and nowhere rules I/O out; a family
+  chosen by a path rule or the project's policy keeps it.
 - **The measured diff is the truth; the CHANGED line is the lead's account of
   it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
   project around every editing call, so it already knows what changed. The
