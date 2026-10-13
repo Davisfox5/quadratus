@@ -675,6 +675,16 @@ Key design decisions already settled:
   parent's budget record spent, so the allowance is the job's. State the
   checkpoint does not carry (design evidence, test repairs, explicit lists)
   makes the point not resumable rather than partly resumed.
+- **The planner plans against the job's allowance, and recovery is serial**
+  (Step 2 medium job on 3e59970). Every next-task prompt states the task
+  slots left, counting the one being named, and the requirements no task
+  has covered yet: the planner had never been told the cap of 3 and spent it
+  on storage and HTTP while the CLI and docs went unplanned. A parallel
+  batch carrying CONTINUES is sent back before any lead call, as RESOLVES
+  is: a continuation inside a batch skipped the recovery allowance, the
+  hypothesis record, the unchanged-retry check and its contract's
+  predecessor. The cap, the size ceiling and the completion gates are
+  unchanged.
 - **The measured diff is the truth; the CHANGED line is the lead's account of
   it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
   project around every editing call, so it already knows what changed. The

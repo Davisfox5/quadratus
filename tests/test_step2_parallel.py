@@ -106,3 +106,34 @@ def test_merged_work_that_fails_the_check_becomes_repairable_debt(tmp_path):
     assert not any(f.active and f.kind == "product" for f in session.run_outcome.facts
                    if "merge gate" in f.detail), "the finding holds the debt"
     assert not session.completed, "open check debt still blocks completion"
+
+
+# -- recovery goes through the serial intake (medium job on 3e59970) ---------------
+
+def test_a_continuation_inside_a_batch_is_sent_back_and_then_charged_as_a_recovery(tmp_path):
+    """t2 continued t1 inside a batch: the recovery allowance, the
+    hypothesis record, the unchanged-retry check and the contract's
+    predecessor were all skipped. A batch carrying CONTINUES is sent back
+    before any lead call; the continuation named alone is a recorded recovery."""
+    from quadratus.session import SurveyConfig
+    first = _block("a.py") + "\nwrites too much"
+    batch = ("PARALLEL\n" + _continuation(["a.py"], text="work in a.py") .replace("CONTINUES: t2", "CONTINUES: t1")
+             + "\n---\n" + _block("b.py"))
+    alone = _continuation(["a.py"], text="finish a.py, smaller", extra="\nHYPOTHESIS: split the helper out")
+    alone = alone.replace("CONTINUES: t2", "CONTINUES: t1")
+    script = Orchestrated([first, batch, alone, "DONE"], lead_delay=0, rogue="a.py")
+    session, project = parallel_session(tmp_path, script, survey=SurveyConfig(recovery_tasks=1))
+    prompts, invoke = [], session.invoke
+
+    def recording(model, prompt, system=None, allow_writes=False):
+        prompts.append(prompt)
+        return invoke(model, prompt, system, allow_writes)
+    session.invoke = recording
+    session.run(max_tasks=5)
+    assert session.failed[:1] == ["t1"], "t1 left its scope and failed"
+    assert any("CONTINUES is not supported in a parallel batch" in p for p in prompts)
+    assert not session.parallel_batches, "the batch never ran"
+    assert session.survey["recovery_used"] == 1, "the continuation named alone was charged"
+    assert [h["text"] for h in session.survey["hypotheses"] if h["text"]] == ["split the helper out"]
+    contracts = [o.contract or {} for o in session.task_outcomes]
+    assert any(c.get("continues") == "t1" for c in contracts), "the continuation's contract names t1"

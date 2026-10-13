@@ -1333,8 +1333,9 @@ def _parallel_request(limit: int) -> str:
         "then each task as a complete block (KIND, SCOPE, COVERS and description), "
         "blocks separated by a line '---'. Each SCOPE must list exact file paths, no "
         "wildcards, and no file may appear in two blocks. Work that shares a file stays "
-        "one task at a time. A task that RESOLVES a finding, and a task the harness "
-        "captures, are named alone, never in a batch. A batch that breaks any of these "
+        "one task at a time. A task that RESOLVES a finding, a task that CONTINUES an "
+        "unfinished one, and a task the harness captures, are named alone, never in a "
+        "batch. A batch that breaks any of these "
         "rules is not run in parallel: its first block runs alone and the rest are "
         "dropped, so name them again next round."
     )
@@ -4744,6 +4745,7 @@ class Session:
                        + f" This task's id will be t{len(self.history) + 1}."
                        if self._capture_guidance() else "")
                     + self._operator_limits_note()
+                    + self._slots_note()
                     + self._survey_request()
                     + ("\n\n" + _tier_request(self.config.direct_max_lines) if self.config.direct_tier else "")
                     + ("\n\nA task identical to the one you named last round is refused and "
@@ -4989,6 +4991,30 @@ class Session:
             raise
         return history
 
+    def _slots_note(self) -> str:
+        """The job's task allowance as the planner must plan against it: the
+        slots left, counting the task about to be named, and the requirements
+        no task has covered yet (Step 2 medium job on 3e59970: the planner was
+        never told the cap of 3, spent it on storage and HTTP, and the CLI and
+        docs requirements were never planned). Facts only: the cap, the size
+        ceiling and the completion gates are unchanged."""
+        total = getattr(self, "_max_tasks", None)
+        if not total or self._explicit_tasks is not None:
+            return ""
+        left = max(0, total - int(getattr(self, "_slots_used", 0) or 0))
+        text = (f"\n\nTask slots: {left} of {total} remain for this job, counting the task you name now. "
+                "A parallel batch spends one slot per task, and a task that is sent back spends one too.")
+        ledger = self.memory.ledger
+        if self.config.requirements_ledger and ledger.requirements:
+            status = ledger.requirement_status
+            open_ids = [rid for rid in ledger.requirements
+                        if not str(status.get(rid, "")).startswith(("covered", "met"))]
+            if open_ids:
+                text += (f" Requirements no task has covered yet: {', '.join(open_ids)}. Plan so the "
+                         "remaining slots can reach every one of them within the size ceiling; if they "
+                         "cannot, say which will be left open rather than spend the slots unaware.")
+        return text
+
     def _quiescent(self) -> None:
         """Offer the quiescent point to the checkpoint writer; a failure to
         write is logged and never fails the run (the writer removes a stale
@@ -5079,6 +5105,7 @@ class Session:
         # #25: a 3-task batch used to cost one slot).
         # A resumed episode starts from the slots its job already spent.
         used = int(getattr(self, "_slots_used", 0) or 0)
+        self._max_tasks = max_tasks
         # An explicit list that fills the cap exactly still ends through its
         # own completion path, never the cap's goal question, which is an
         # orchestrator call (Codex on #42, 357d40a P2).
@@ -6285,7 +6312,15 @@ class Session:
             continues, spec = _read_continues(spec)
             covers, spec = _read_covers(spec)
             problem = self._covers_problem(covers)
-            if _read_resolves(spec)[0] is not None:
+            if continues is not None:
+                # Recovery goes through the serial intake (Step 2 medium job on
+                # 3e59970: t2 continued t1 inside a batch, so the recovery was
+                # never charged to the allowance, its hypothesis was never
+                # recorded, the unchanged-retry check never ran and the
+                # child's contract named no predecessor).
+                problem = ("CONTINUES is not supported in a parallel batch; name the continuation alone "
+                           "so it is checked and counted as a recovery.")
+            elif _read_resolves(spec)[0] is not None:
                 # Findings are resolved by one serial task with its own
                 # verified renders; a forked child has no ledger to close them.
                 problem = "RESOLVES is not supported in a parallel batch; name that task alone."

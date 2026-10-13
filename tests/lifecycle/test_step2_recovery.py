@@ -308,3 +308,28 @@ def test_settings_identity_binds_controls_and_leaves_out_only_credentials():
     assert digest(SimpleNamespace(max_tokens=1000, openai_api_key="first")) == \
         digest(SimpleNamespace(max_tokens=1000, openai_api_key="second"))
     assert digest(Settings(backend="cli")) != digest(Settings(backend="cli", lead_max_turns=7))
+
+
+# -- the planner plans against the job's task allowance (medium job on 3e59970) ----
+
+def test_the_planner_is_told_the_slots_left_counting_the_task_it_names(tmp_path, monkeypatch):
+    """Step 2 medium job on 3e59970: a cap of 3 was never stated to the
+    planner; it spent the cap on storage and HTTP and never planned the CLI."""
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(DECL_T1, DECL_T2)), files=FILES, max_tasks=3,
+                   record_complete=False)
+    planners = replay.of("orchestrator")
+    assert "Task slots: 3 of 3 remain for this job, counting the task you name now." in planners[0].prompt
+    assert "Task slots: 2 of 3 remain" in planners[1].prompt
+    assert "Task slots: 1 of 3 remain" in planners[2].prompt
+
+
+@pytest.mark.requirements_ledger
+def test_the_planner_is_told_which_requirements_no_task_has_covered(tmp_path, monkeypatch):
+    reqs = "REQUIREMENTS:\nR1: add works\nR2: README documents add\n"
+    first = reqs + DECL_T1 + "\nCOVERS: R1"
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(first, DECL_T2 + "\nCOVERS: R2"),
+                                                  auditor=lambda c, r: "R1: MET - app.py\nR2: MET - README.md"),
+                   files=FILES, max_tasks=3, record_complete=False)
+    second = replay.of("orchestrator")[1].prompt
+    assert "Requirements no task has covered yet: R2." in second
+    assert "say which will be left open" in second

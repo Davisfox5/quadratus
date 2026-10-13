@@ -88,7 +88,8 @@ def test_the_ask_limit_and_decide_scope_are_stated():
 def test_the_parallel_request_carries_the_configured_limit_and_the_exclusions(tmp_path):
     text = S._parallel_request(4)
     assert "two to 4 tasks" in text
-    assert "RESOLVES a finding, and a task the harness captures, are named alone" in text
+    assert ("RESOLVES a finding, a task that CONTINUES an unfinished one, and a task the harness "
+            "captures, are named alone") in text
     assert "its first block runs alone" in text
     import inspect
     assert "_parallel_request(self.config.max_parallel_tasks)" in inspect.getsource(S.Session.next_task)
