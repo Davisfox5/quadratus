@@ -176,3 +176,34 @@ def test_non_codex_and_candidate_checks_keep_outer_answer_denial(boundary, monke
         integration._run_owned(['python', 'held-check'], cwd='held-cwd', timeout=3, env={})
     assert seen == [['/usr/bin/sandbox-exec', '-f', str(adapter.outer_profile), 'claude', 'held-argument'],
                     ['/usr/bin/sandbox-exec', '-f', str(adapter.outer_profile), 'python', 'held-check']]
+
+
+def test_nested_installation_refused_and_original_hooks_restored(boundary):
+    adapter, _ = boundary
+    original = cli._launch
+    with adapter.installed():
+        with pytest.raises(ValueError, match='already installed'):
+            with adapter.installed():
+                pytest.fail('nested adapter must not install')
+    assert cli._launch is original
+
+
+def test_parallel_calls_do_not_share_home_or_journal_context(boundary, monkeypatch):
+    adapter, provider = boundary
+    import copy
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    barrier = threading.Barrier(2)
+    seen = []
+    def launch(argv, **kwargs):
+        home = Path(kwargs['env']['CODEX_HOME'])
+        barrier.wait(timeout=5)
+        assert adapter.current.get()['home'] == home
+        seen.append(home)
+        return kwargs['input']
+    monkeypatch.setattr(cli.CLIProvider, '_call', fake_call)
+    monkeypatch.setattr(cli, '_launch', launch)
+    with adapter.installed(), ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(copy.copy(provider)._call, str(i), '', []) for i in range(2)]
+        assert [f.result(timeout=6) for f in futures] == ['0', '1']
+    assert len(set(seen)) == 2 and all(not (home / 'auth.json').exists() for home in seen)

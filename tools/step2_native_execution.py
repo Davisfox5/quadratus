@@ -13,6 +13,7 @@ import os
 import shutil
 import stat
 import tempfile
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -21,6 +22,8 @@ from tools.step1_native_boundary import (
     protected_codex_argv,
     require_no_worker_project_config,
 )
+
+_installation = threading.Lock()
 
 
 def sha(path):
@@ -86,6 +89,16 @@ class NativeExecution:
 
     @contextmanager
     def installed(self):
+        if not _installation.acquire(blocking=False):
+            raise ValueError('Execution adapter already installed in this controller')
+        try:
+            with self._installed():
+                yield self
+        finally:
+            _installation.release()
+
+    @contextmanager
+    def _installed(self):
         import quadratus.cli_providers as cli
         import quadratus.integration as integration
         import quadratus.native_sessions as native
