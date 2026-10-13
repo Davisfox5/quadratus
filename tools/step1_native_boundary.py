@@ -76,7 +76,8 @@ def isolated_solver_config(config: str) -> str:
 
 
 def protected_codex_argv(argv: Sequence[str], *, protected: Sequence[str],
-                         cwd: str, tempdir: str | None = None) -> list[str]:
+                         cwd: str, tempdir: str | None = None,
+                         readonly_runtime: Sequence[str] = ()) -> list[str]:
     """Narrow existing read-only/workspace-write commands without adding grants.
 
     The caller must separately review the trusted native parent and qualify
@@ -153,6 +154,13 @@ def protected_codex_argv(argv: Sequence[str], *, protected: Sequence[str],
         if candidate == root or candidate.is_relative_to(root):
             raise ValueError("Protected roots cannot be inside the workspace")
         filesystem[str(candidate)] = "deny"
+    for path in readonly_runtime:
+        candidate = Path(path)
+        if not candidate.is_absolute() or candidate.resolve(strict=True) != candidate:
+            raise ValueError("Runtime roots must exist and be canonical")
+        if any(candidate == Path(p) or Path(p).is_relative_to(candidate) for p in protected):
+            raise ValueError("Runtime exception would reopen protected evidence")
+        filesystem[str(candidate)] = "read"
     # exec on 0.154 has no -P option. default_permissions is the documented
     # selection route. A caller must refuse legacy sandbox_mode in loaded
     # configs, which otherwise takes precedence over this selection.

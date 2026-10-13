@@ -97,3 +97,10 @@ def test_ambient_readers_removed_without_changing_model_effort_or_approvals():
     assert not {'sandbox_mode', 'mcp_servers', 'plugins', 'notify'} & result.keys()
     assert result['features']['memories'] is False and result['features']['apps'] is False
     assert result['features']['code_mode_host'] is True
+
+
+def test_runtime_exception_cannot_reopen_operator_root(roots):
+    work, private = roots
+    with pytest.raises(ValueError):
+        protect(['codex', 'exec', '--sandbox', 'workspace-write'], protected=[str(private)],
+                cwd=str(work), readonly_runtime=[str(private)])
