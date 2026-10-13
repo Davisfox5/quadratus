@@ -2,9 +2,9 @@
   "version": 1,
   "note": "One shared development record (plan on #35, comment 5922888762). Edited through tools/dev_record.py; the acceptance manifest and workflow scorecard keep their own evidence, referenced here, never copied.",
   "candidate": {
-    "pr": 42,
-    "sha": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
-    "gate": "merge #42 to main, then the five-run series (docs/DIRECTION.md finish line)",
+    "pr": 73,
+    "sha": "4465156a6d9f30735f4d712001390b9009e212a4",
+    "gate": "Step 2 (adaptive orchestration, accurate recovery, coordination, persistent progress): root's independent scoped review of #73 and #72, one correction batch, one final combined changed-engine local suite, exact CI and install, then one qualified fresh medium multi-component job. Benchmark stays paused; no automatic PASS or MET.",
     "required_receipts": [
       "ci",
       "acceptance",
@@ -24,6 +24,15 @@
         "reason": "Davis, 2026-10-06: Jev off, keep rule routing, continue the runs to catch further engine errors. b1ff751 (#51, atop #50 atop #42) is the engine every Stage B cell ran on; CI green on all four jobs, Codex focused clearance and Claude independent review recorded on T-stage-b-timeout-fix. Gate: rule-arm continuation series on this SHA; acceptance receipt still owed on this head.",
         "by": "claude",
         "at": "2026-10-06T02:02:43Z"
+      },
+      {
+        "previous": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
+        "sha": "4465156a6d9f30735f4d712001390b9009e212a4",
+        "reason": "Step 1 complete (#71 and #70 merged); Davis approved Step 2 on #35. The baseline is main 4465156; the Step 2 engine batch is #73 and root's native execution adapter is #72.",
+        "by": "claude",
+        "at": "2026-10-13T19:18:56Z",
+        "previous_pr": 42,
+        "previous_gate": "merge #42 to main, then the five-run series (docs/DIRECTION.md finish line)"
       }
     ]
   },
@@ -1941,6 +1950,66 @@
         "claude: History rewrite, content unchanged: at 03:35:39-40Z (committer GitHub, the second #50 merged into claude/direct-tier) claude/engine-repairs-2 and claude/engine-repairs-3 were rewritten; every tree is byte-identical. Map: 4a273a3=d9a6338, 00725ce=ca26d31, 1e5c97f=91d2583, d6e145d=104f9d8, 553e24f=8159a34, 3e95645=cf545dc, f6e1ce1=0a99ee2. Delivery re-recorded at cf545dc (engine range d9a6338..cf545dc; installation delta cf545dc..0a99ee2). Suite-35 on the 3e95645 snapshot tests the tree of cf545dc. #53 comment 6073753038.",
         "claude: Merges observed (not made by this session): at 03:35:35-40Z #42 (claude/direct-tier) merged to main, with #50 and #51 into its stack and #39, #40, #41 to main; the record's candidate gate 'merge #42 to main' is met. #52 (base main, head 727a970) and #53 (base #52, head 0a99ee2) remain open; their SHAs were rewritten in the same second with identical trees (map in the previous note). #55 (claude/run-monitor) is open from the separate monitor session."
       ]
+    },
+    {
+      "id": "T-step2-adaptive-recovery",
+      "purpose": "Step 2 engine: recovery planning from held facts with changed approach, recoverable worker/integration conflicts, durable quiescent checkpoint resume with lineage and carried budget (#73).",
+      "base": "4465156a6d9f30735f4d712001390b9009e212a4",
+      "owns": [
+        "quadratus/checkpoint.py",
+        "quadratus/session.py",
+        "quadratus/project_run.py",
+        "quadratus/run_budget.py",
+        "quadratus/cli.py",
+        "tools/dev_record.py",
+        "tests/lifecycle/test_step2_recovery.py",
+        "tests/test_step2_parallel.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "delivered",
+      "claimed_at": "2026-10-13T19:19:06Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "aaa06a6c4f2d9bd797ead6c85604575bb601890d",
+        "at": "2026-10-13T19:19:23Z"
+      },
+      "reviews": [],
+      "blockers": [],
+      "decisions": []
+    },
+    {
+      "id": "T-step2-native-execution",
+      "purpose": "Step 2 development execution boundary: explicit isolated native execution adapter with fresh per-call config/auth, bounded worker bridge, outer profile for other providers and checks (#72). Not benchmark admission; MCP qualification prepared, not admitted.",
+      "base": "4465156a6d9f30735f4d712001390b9009e212a4",
+      "owns": [
+        "tools/step2_native_execution.py",
+        "tests/test_step2_native_execution.py"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "reviewed",
+      "claimed_at": "2026-10-13T19:19:23Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "3bca57e804d2a836f88ac2828e8329a2bac4f74a",
+        "at": "2026-10-13T19:19:24Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "3bca57e804d2a836f88ac2828e8329a2bac4f74a",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/72#issuecomment-6153298309 (19 focused PASS; TMPDIR outside measured source, identity-bound scratch cleanup, auth rotation latched, no credential write-back)",
+          "scope": [
+            "tools/step2_native_execution.py",
+            "tests/test_step2_native_execution.py"
+          ],
+          "at": "2026-10-13T19:19:24Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
