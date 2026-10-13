@@ -111,6 +111,7 @@ def test_runtime_exception_cannot_reopen_operator_root(roots):
     'profile="x"', 'profiles.x.sandbox_mode="danger-full-access"',
     'mcp_servers . amb.command="node"', 'projects.x.trust_level="trusted"',
     'model_instructions_file="/private/hidden"', 'experimental_instructions_file="/private/hidden"',
+    'unknown_parent_path="/private/hidden"',
 ])
 def test_config_override_cannot_restore_removed_reader(roots, setting):
     work, private = roots

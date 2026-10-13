@@ -174,6 +174,8 @@ def protected_codex_argv(argv: Sequence[str], *, protected: Sequence[str],
                 raise ValueError("Unreviewed native-parent reader or environment override")
             if (key == "agents" or key.startswith("agents.")) and (key != "agents.enabled" or setting != "false"):
                 raise ValueError("Native fanout override")
+            if key not in {"model_reasoning_effort", "agents.enabled"}:
+                raise ValueError("Only original role effort, fanout denial or exact held bridge config is accepted")
             body.extend((arg, value))
             i += 2
             continue
