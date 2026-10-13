@@ -1,0 +1,178 @@
+"""No providers: exercise call isolation and the real stdio/socket bridge."""
+import json
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+import pytest
+
+from quadratus import cli_providers as cli
+from quadratus.worker_bridge import WorkerBridge
+from tools.step2_native_execution import NativeExecution, sha
+
+
+@pytest.fixture
+def boundary(tmp_path, monkeypatch):
+    work = tmp_path / 'work'
+    private = tmp_path / 'private'
+    work.mkdir()
+    private.mkdir()
+    config = tmp_path / 'config.toml'
+    config.write_text('model="gpt-5.6-sol"\nmodel_reasoning_effort="low"\n'
+                      'sandbox_mode="read-only"\n[mcp_servers.ambient]\ncommand="untrusted"\n')
+    auth = tmp_path / 'auth.json'
+    auth.write_text('disposable-test-auth')
+    profile = tmp_path / 'answer.sb'
+    profile.write_text('fake-held-profile')
+    client = tmp_path / 'codex'
+    client.write_text('fake-client')
+    worker_mcp = Path(cli.__file__).with_name('worker_mcp.py')
+    adapter = NativeExecution(client=client, config=config, config_sha256=sha(config),
+                             auth=auth, homes=private / 'homes', protected=[private],
+                             readonly_runtime=[], outer_profile=profile, runtime_python=sys.executable,
+                             worker_mcp=worker_mcp, worker_mcp_sha256=sha(worker_mcp))
+    monkeypatch.setenv('QUADRATUS_NATIVE_DELEGATION', 'off')
+    provider = cli.CodexCLIProvider('gpt-5.6-sol', workdir=str(work), allow_writes=True)
+    provider._client = str(client)
+    return adapter, provider
+
+
+def fake_call(provider, prompt, system, history):
+    argv = provider._build_argv(prompt, system)
+    return cli._launch(argv, input=prompt, cwd=provider.workdir, timeout=12,
+                       env={'HOME': str(Path.home()), 'PATH': '', 'OPENAI_API_KEY': 'must-not-inherit',
+                            'NODE_OPTIONS': 'untrusted-hook', 'QUADRATUS_MVP_OWNERSHIP': 'owned'})
+
+
+def test_each_call_fresh_config_auth_removed_and_original_command_preserved(boundary, monkeypatch):
+    adapter, provider = boundary
+    seen = []
+    def launch(argv, **kwargs):
+        home = Path(kwargs['env']['CODEX_HOME'])
+        parsed = tomllib.loads((home / 'config.toml').read_text())
+        assert parsed['model'] == 'gpt-5.6-sol'
+        assert parsed['model_reasoning_effort'] == 'low'
+        assert 'mcp_servers' not in parsed and 'projects' not in parsed
+        assert (home / 'auth.json').stat().st_mode & 0o777 == 0o600
+        assert 'OPENAI_API_KEY' not in kwargs['env'] and 'NODE_OPTIONS' not in kwargs['env']
+        assert kwargs['env']['QUADRATUS_MVP_OWNERSHIP'] == 'owned'
+        assert argv[:2] == [str(adapter.client), 'exec']
+        assert '--sandbox' not in argv and 'default_permissions="quadratus-step1-workspace-write"' in argv
+        assert kwargs['input'] == 'same-natural-request' and kwargs['timeout'] == 12
+        (home / 'config.toml').write_text((home / 'config.toml').read_text() + '\n[projects."test"]\ntrust_level="trusted"\n')
+        seen.append(home)
+        return 'actual-return-value'
+    monkeypatch.setattr(cli.CLIProvider, '_call', fake_call)
+    monkeypatch.setattr(cli, '_launch', launch)
+    before = adapter.config.read_bytes()
+    with adapter.installed():
+        assert provider._call('same-natural-request', '', []) == 'actual-return-value'
+        assert provider._call('same-natural-request', '', []) == 'actual-return-value'
+    assert len(set(seen)) == 2 and adapter.config.read_bytes() == before
+    assert all(not (home / 'auth.json').exists() for home in seen)
+
+
+def test_exception_and_project_config_appearance_preserved_without_auth(boundary, monkeypatch):
+    adapter, provider = boundary
+    def launch(argv, **kwargs):
+        Path(provider.workdir, '.codex').mkdir()
+        raise TimeoutError('actual timeout')
+    monkeypatch.setattr(cli.CLIProvider, '_call', fake_call)
+    monkeypatch.setattr(cli, '_launch', launch)
+    with adapter.installed(), pytest.raises(ValueError, match='appeared'):
+        provider._call('request', '', [])
+    assert Path(provider.workdir, '.codex').is_dir()
+    assert adapter.receipts[0]['auth_removed'] and adapter.receipts[0]['project_config_appeared']
+
+
+def test_journal_accounting_uses_exact_fresh_home_not_global_home(boundary, monkeypatch):
+    adapter, provider = boundary
+    monkeypatch.setattr(cli, '_codex_journal_tool_failures', lambda root, *a, **k: root)
+    monkeypatch.setattr(cli, '_codex_rollout_usage', lambda root, *a, **k: root)
+    import quadratus.native_sessions as native
+    monkeypatch.setattr(native, 'codex_children', lambda root, *a, **k: root)
+    def call(provider, *args, **kwargs):
+        state = adapter.current.get()
+        expected = state['home'] / 'sessions'
+        assert cli._codex_journal_tool_failures('wrong-global') == expected
+        assert cli._codex_rollout_usage('wrong-global') == expected
+        assert native.codex_children('wrong-global') == expected
+        return 'journal-read'
+    monkeypatch.setattr(cli.CLIProvider, '_call', call)
+    original = cli._codex_journal_tool_failures
+    with adapter.installed():
+        assert provider._call('', '', []) == 'journal-read'
+    assert cli._codex_journal_tool_failures is original
+
+
+@pytest.mark.parametrize('mutation', ['command', 'args', 'name', 'extra-env', 'schema', 'token'])
+def test_unreviewed_bridge_refused_before_native_launch(boundary, monkeypatch, mutation):
+    adapter, provider = boundary
+    monkeypatch.setattr(cli.CLIProvider, '_call', fake_call)
+    monkeypatch.setattr(cli, '_launch', lambda *a, **k: pytest.fail('native launch must not occur'))
+    with WorkerBridge(lambda a: ('bounded-answer', False)) as bridge:
+        provider.worker_tool = bridge.spec()
+        if mutation in {'command', 'name'}:
+            provider.worker_tool[mutation] = 'untrusted'
+        elif mutation == 'args':
+            provider.worker_tool['args'] = ['untrusted.py']
+        elif mutation == 'extra-env':
+            provider.worker_tool['env']['UNTRUSTED'] = 'reader'
+        elif mutation == 'schema':
+            provider.worker_tool['env']['QUADRATUS_WORKER_SCHEMA'] = '{}'
+        else:
+            provider.worker_tool['env']['QUADRATUS_WORKER_TOKEN'] = 'invalid'
+        with adapter.installed(), pytest.raises((ValueError, FileNotFoundError)):
+            provider._call('request', '', [])
+        assert all(r['auth_removed'] for r in adapter.receipts)
+
+
+def test_actual_stdio_bridge_returns_only_held_handler_answer(boundary):
+    adapter, provider = boundary
+    called = []
+    def handler(args):
+        called.append(args)
+        return 'controller-held bounded answer', False
+    with WorkerBridge(handler) as bridge:
+        provider.worker_tool = bridge.spec()
+        config = adapter._bridge(provider, cli.CLIProvider._worker_tool_argv)
+        assert set(config) == {'mcp_servers.quadratus.' + key for key in
+                               ('command', 'args', 'env', 'default_tools_approval_mode',
+                                'tool_timeout_sec', 'startup_timeout_sec')}
+        arguments = {'errand': 'read', 'instruction': 'describe public source'}
+        requests = [{'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {}},
+                    {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'},
+                    {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call',
+                     'params': {'name': 'commission_worker', 'arguments': arguments}}]
+        reply = subprocess.run([sys.executable, adapter.worker_mcp],
+                               input=''.join(json.dumps(r) + '\n' for r in requests),
+                               capture_output=True, text=True, timeout=5,
+                               env=provider.worker_tool['env'], check=True)
+        rows = [json.loads(line) for line in reply.stdout.splitlines()]
+        assert called == [arguments]
+        assert len(rows[1]['result']['tools']) == 1
+        assert rows[2]['result'] == {'content': [{'type': 'text', 'text': 'controller-held bounded answer'}],
+                                    'isError': False}
+
+
+def test_config_drift_refused_before_credentials_or_launch(boundary, monkeypatch):
+    adapter, provider = boundary
+    adapter.config.write_text('model="different"')
+    monkeypatch.setattr(cli.CLIProvider, '_call', lambda *a, **k: pytest.fail('launch forbidden'))
+    with adapter.installed(), pytest.raises(ValueError, match='Held operator config'):
+        provider._call('request', '', [])
+    assert list(adapter.homes.iterdir()) == []
+
+
+def test_non_codex_and_candidate_checks_keep_outer_answer_denial(boundary, monkeypatch):
+    adapter, _ = boundary
+    import quadratus.integration as integration
+    seen = []
+    monkeypatch.setattr(cli, '_launch', lambda argv, **k: seen.append(argv))
+    monkeypatch.setattr(integration, '_run_owned', lambda argv, **k: seen.append(argv))
+    with adapter.installed():
+        cli._launch(['claude', 'held-argument'], cwd='held-cwd')
+        integration._run_owned(['python', 'held-check'], cwd='held-cwd', timeout=3, env={})
+    assert seen == [['/usr/bin/sandbox-exec', '-f', str(adapter.outer_profile), 'claude', 'held-argument'],
+                    ['/usr/bin/sandbox-exec', '-f', str(adapter.outer_profile), 'python', 'held-check']]
