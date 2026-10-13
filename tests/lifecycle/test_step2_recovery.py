@@ -333,3 +333,19 @@ def test_the_planner_is_told_which_requirements_no_task_has_covered(tmp_path, mo
     second = replay.of("orchestrator")[1].prompt
     assert "Requirements no task has covered yet: R2." in second
     assert "say which will be left open" in second
+
+
+# -- acceptance the configured checks can show (r02 on 3b629cf) --------------------
+
+def test_the_planner_is_told_acceptance_must_be_a_committed_test_the_checks_run(tmp_path, monkeypatch):
+    """r02: t1's acceptance named a scratch two-Store Python session; the
+    lead reported it NOT RUN and R1-R7 stayed open after committed tests
+    covered the same behaviour. The NOT RUN rule is unchanged; the planner is
+    told before it plans."""
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(DECL_T1)), files=FILES, max_tasks=1)
+    first = replay.of("orchestrator")[0].prompt
+    assert "Each acceptance item must be a condition a committed test shows when the project's " \
+           "configured checks run it" in first
+    assert "Never name a scratch or interactive session, a manual or one-off command" in first
+    assert "keeps its requirements open as NOT RUN" in first
+    assert "--quadratus-report" not in first, "still no command line reaches the planner"

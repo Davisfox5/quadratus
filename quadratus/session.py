@@ -578,6 +578,14 @@ _SCOPE_REQUEST = (
     'project-wide wildcard. '
     'max_lines must be a positive integer no greater than ' + str(MAX_TASK_LINES) + '. '
     'Decompose larger work. '
+    # Step 2 r02 on 3b629cf: t1's acceptance named a scratch two-Store
+    # Python session; no seat may run it, the lead reported it NOT RUN, and
+    # R1-R7 stayed open after committed tests covered the same behaviour.
+    'Each acceptance item must be a condition a committed test shows when the project\'s '
+    'configured checks run it: put that test in a file within permitted_paths that those '
+    'checks collect. Never name a scratch or interactive session, a manual or one-off '
+    'command, or a script outside the project\'s tests: no seat may run one, it is reported '
+    'NOT RUN, and the requirements it serves stay open even when other tests pass. '
     'For a task that only reviews or audits and must not change source, add '
     '"edits": "none" to SCOPE; its findings then go to separately scoped tasks. '
     'These bounds are measured after every editing call; an overrun stops the task '
@@ -5487,7 +5495,10 @@ class Session:
         if not listed:
             return ""
         return ("\n\n## Configured project checks (the only commands the harness executes)\n" + listed
-                + "\nPlan verification these checks can show: tests their runner collects. Do not invent "
+                + "\nPlan verification these checks can show: tests their runner collects, committed in "
+                "the task's own files. Acceptance that names a scratch session, a manual or one-off "
+                "command or a script outside the tests is never run and keeps its requirements open as "
+                "NOT RUN. Do not invent "
                 "a test command the goal does not name; a seat cannot be held to a command the harness "
                 "does not run. If the goal itself requires a command these checks do not run, do not "
                 "drop it and do not prescribe it: ASK, naming the command and the configured checks as "
