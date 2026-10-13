@@ -12,8 +12,10 @@ import hashlib
 import os
 import shutil
 import stat
+import subprocess
 import tempfile
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -136,6 +138,7 @@ class NativeExecution:
                 self.current.reset(token)
                 violation = os.path.lexists(Path(provider.workdir) / '.codex')
                 self.receipts.append({'home': str(home), 'launched': state['launched'],
+                                      'native_seconds': state.get('native_seconds'),
                                       'auth_removed': not (home / 'auth.json').exists(),
                                       'project_config_appeared': violation})
                 if violation:
@@ -168,7 +171,26 @@ class NativeExecution:
             child_env['CODEX_HOME'] = str(state['home'])
             child_env['TMPDIR'] = str(Path(cwd) / '.quadratus-tmp')
             Path(child_env['TMPDIR']).mkdir(exist_ok=True)
-            return launch(argv, input=input, timeout=timeout, cwd=cwd, env=child_env)
+            home = state['home']
+            (home / 'native-input.txt').write_text(input or '')
+            started = time.monotonic()
+            def save(name, value):
+                if isinstance(value, bytes):
+                    value = value.decode(errors='replace')
+                with (home / name).open('x') as stream:
+                    stream.write(value or '')
+            try:
+                result = launch(argv, input=input, timeout=timeout, cwd=cwd, env=child_env)
+            except subprocess.TimeoutExpired as exc:
+                save('native-output.jsonl', exc.output)
+                save('native-stderr.log', exc.stderr)
+                raise
+            else:
+                save('native-output.jsonl', getattr(result, 'stdout', ''))
+                save('native-stderr.log', getattr(result, 'stderr', ''))
+                return result
+            finally:
+                state['native_seconds'] = time.monotonic() - started
 
         def bounded_gate(argv, *, cwd, timeout, env):
             return gate(['/usr/bin/sandbox-exec', '-f', str(self.outer_profile), *argv],

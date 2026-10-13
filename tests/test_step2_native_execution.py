@@ -207,3 +207,18 @@ def test_parallel_calls_do_not_share_home_or_journal_context(boundary, monkeypat
         futures = [pool.submit(copy.copy(provider)._call, str(i), '', []) for i in range(2)]
         assert [f.result(timeout=6) for f in futures] == ['0', '1']
     assert len(set(seen)) == 2 and all(not (home / 'auth.json').exists() for home in seen)
+
+
+def test_actual_timeout_output_preserved_and_seed_removed(boundary, monkeypatch):
+    adapter, provider = boundary
+    def launch(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, 12, output=b'actual-partial-native-output', stderr=b'actual-timeout')
+    monkeypatch.setattr(cli.CLIProvider, '_call', fake_call)
+    monkeypatch.setattr(cli, '_launch', launch)
+    with adapter.installed(), pytest.raises(subprocess.TimeoutExpired):
+        provider._call('original request', '', [])
+    home = Path(adapter.receipts[0]['home'])
+    assert (home / 'native-output.jsonl').read_text() == 'actual-partial-native-output'
+    assert (home / 'native-stderr.log').read_text() == 'actual-timeout'
+    assert (home / 'native-input.txt').read_text() == 'original request'
+    assert not (home / 'auth.json').exists()
