@@ -647,6 +647,28 @@ Key design decisions already settled:
   SQLite work with "No network access" keeps its database and its network
   ban. A family chosen by a path rule or the project's policy keeps the
   item whole, and so does a scope that rules all I/O out.
+- **Step 2: recovery changes approach, conflicts can be continued, and an
+  interrupted job resumes from a durable quiescent checkpoint** (#35,
+  2026-10-13). An unfinished task's ledger entry carries held facts (cause,
+  first error line, the environment's own tool failures, the harness's run
+  of the checks on the source it left), never the lead's account; a failed
+  task's source now meets the gate once as evidence, as a capped one did. A
+  CONTINUES that re-sends its predecessor's text and declared scope unchanged
+  is sent back before any lead call. A parallel child that wrote outside its
+  scope is a failed, unmerged task (nothing it wrote reaches the project; its
+  files are an artifact) that a scoped CONTINUES may finish; a child stopped
+  by integrity, refusal, budget or an unknown error is unchanged. Merged work
+  that fails the check after the merge fix round is a `check.failed` finding
+  (with the ledger and COVERS) that a RESOLVES task repairs. The run writes
+  `checkpoint.json` (digest-bound) at every point between tasks; `--resume RUN`
+  starts a new episode only from an interrupted run, never a sealed one, never
+  twice, never with a call in flight or unknown usage, and only when source,
+  goal, policy, limits, settings, gate and dependency identities all match.
+  The record, unfinished work, findings, check debt, typed outcomes and the
+  job's run-start test bytes carry over; the budget starts from what the
+  parent's budget record spent, so the allowance is the job's. State the
+  checkpoint does not carry (design evidence, test repairs, explicit lists)
+  makes the point not resumable rather than partly resumed.
 - **The measured diff is the truth; the CHANGED line is the lead's account of
   it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
   project around every editing call, so it already knows what changed. The

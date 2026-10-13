@@ -184,22 +184,36 @@ def describe_limits(limits, survey=None, max_tasks=None, lead_turns=None, lead_s
 
 
 class RunBudget:
-    def __init__(self, limits: RunLimits, *, path=None, clock=time.monotonic):
+    def __init__(self, limits: RunLimits, *, path=None, clock=time.monotonic, carried=None):
+        """``carried`` is what earlier episodes of the same job spent
+        (quadratus.checkpoint.consumed): the allowance is the job's, so a
+        resumed episode starts from it and never from zero (step 2)."""
         self.limits = limits
         self.path = Path(path) if path else None
         self._clock = clock
-        self._started = clock()
+        carried = dict(carried or {})
+        self._carried = carried
+        self._started = clock() - float(carried.get('elapsed_seconds') or 0.0)
         self._lock = threading.Lock()
-        self._calls = 0
+        self._calls = int(carried.get('calls') or 0)
         self._active = {}
         self._rates = {r.model: r for r in limits.api_cost_rates}
-        self._api_cost = Decimal(0)
+        self._api_cost = Decimal(str(carried.get('api_cost_usd') or 0))
         self._unknown_cost = 0
-        self._input = self._output = self._unknown = 0
+        self._input = int(carried.get('input_tokens') or 0)
+        self._output = int(carried.get('output_tokens') or 0)
+        self._unknown = 0
         self._reason = ''
         self._responses = []
         self._oversized = []
         self._shaped = 0
+        if self.path:
+            # Written before any call, so an episode that ends before its
+            # first call still leaves the job's record (and what it carried).
+            try:
+                self._persist()
+            except RunBudgetExceeded:
+                pass   # _reason is latched: the first reserve stops the run
 
     def _snapshot(self):
         return {
@@ -220,6 +234,8 @@ class RunBudget:
                                  'max_tokens_per_call stops the run after it returns'),
             'oversized_calls': list(self._oversized),
             'shaped_reservations': self._shaped,
+            # Included in every total above: spent by earlier episodes.
+            'carried_from_earlier_episodes': dict(self._carried),
             'shape_boundary': ('a summary-only call whose CLI argv enforces one model turn reserves '
                                'min(reserve_tokens_per_call, SUMMARY_CALL_RESERVE_TOKENS), a measured '
                                'allowance (largest saved close-out 24,006 reported tokens), not a hard '

@@ -4,8 +4,8 @@ inventory 5863608874).
 After a parallel batch the run stopped on the legacy ``open_findings`` list
 alone. It now uses the same ``_findings_stop_due`` as the serial stop: the
 projected active findings or the legacy list, failing closed, with a
-disagreement recorded. The unmerged child is real (it wrote outside its
-scope); the legacy loss is injected after the batch, a controller invariant.
+disagreement recorded. The unmerged child is real (its lead stopped on an
+uninspectable tree; since step 2 an out-of-scope child is a failed task instead); the legacy loss is injected after the batch, a controller invariant.
 """
 
 from quadratus.session import Session
@@ -25,7 +25,7 @@ def test_an_unmerged_child_lost_from_the_legacy_list_still_stops_the_batch(tmp_p
         self.open_findings.clear()
         return ran
     monkeypatch.setattr(Session, "_run_batch", losing)
-    script = Orchestrated([BATCH, "DONE"], rogue="b.py", lead_delay=0)
+    script = Orchestrated([BATCH, "DONE"], crash="b.py", lead_delay=0)
     session, project = parallel_session(tmp_path, script)
     session.run(max_tasks=4)
     assert script.plan == ["DONE"], "the run stopped after the batch; DONE was never read"
@@ -37,7 +37,7 @@ def test_an_unmerged_child_lost_from_the_legacy_list_still_stops_the_batch(tmp_p
 # -- controls -----------------------------------------------------------------------
 
 def test_an_unmerged_child_stops_the_batch_the_same_way_with_the_legacy_list(tmp_path):
-    script = Orchestrated([BATCH, "DONE"], rogue="b.py", lead_delay=0)
+    script = Orchestrated([BATCH, "DONE"], crash="b.py", lead_delay=0)
     session, _ = parallel_session(tmp_path, script)
     session.run(max_tasks=4)
     assert script.plan == ["DONE"]

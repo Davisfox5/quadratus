@@ -472,6 +472,10 @@ class SessionConfig:
     #: only, never load-bearing: a progress callback that raises is a bug in
     #: the caller, not a reason to lose the run, so it is called defensively.
     progress: Optional[Callable[[str], None]] = None
+    #: Called at every quiescent point (between tasks, nothing in flight)
+    #: with the session; project_run writes the durable checkpoint here
+    #: (quadratus.checkpoint, step 2). It never fails the run.
+    on_quiescent: Optional[Callable[["Session"], None]] = None
     #: Optional operator journal. Reporting only; never used for run decisions.
     activity: Optional[Callable[..., None]] = None
     #: How many lead revisions a task may spend answering blocking findings.
@@ -3705,6 +3709,31 @@ class Session:
         if self._outcome is not None:
             self._outcome.count(attempt)
 
+    def _unchanged_continuation(self, spec, continues) -> str:
+        """Why a CONTINUES task is its predecessor re-sent unchanged, or "".
+
+        The same text and the same scope after an unfinished attempt is the
+        same attempt (step 2): whatever stopped it stops it again, and the
+        breaker would only learn that after another lead call. A stated
+        HYPOTHESIS is the planner's declared change and is not refused here;
+        the survey's same-cause repeat check and the breaker still judge
+        what the attempt then did."""
+        record = self.failed_records.get(continues or "") or self.turn_limited_records.get(continues or "")
+        if not record or "description" not in record:
+            return ""
+        def bounds(scope):
+            # What the planner declared. The operator's exclusions and the
+            # exact-file binding are added by the harness at dispatch.
+            return ({k: v for k, v in scope.items() if k not in ("exact", "forbidden_paths")}
+                    if scope is not None else None)
+        scope = spec.scope.to_dict() if spec.scope is not None else None
+        if (" ".join(str(spec.description or "").split()) != record["description"]
+                or bounds(scope) != bounds(record.get("scope"))):
+            return ""
+        return (f"{spec.task_id} continues {continues} with the same task text and scope that did not "
+                f"finish. Name what changes this time (a narrower scope, a different split, a different "
+                f"method), or name a different task.")
+
     def _recover_continued(self, continues) -> None:
         """A task that CONTINUES a capped one takes over its debt: the
         predecessor's cap stops blocking, and its record stays (mirrors the
@@ -4115,7 +4144,8 @@ class Session:
         record = dict(task=spec.task_id, lead=lead, turns=exc.turns,
                       changed=state["changed"], changed_lines=state["changed_lines"],
                       note=state["note"], partial_text=said[:4000] or None,
-                      content=self._content_fingerprint(state["changed"]))
+                      content=self._content_fingerprint(state["changed"]),
+                      **self._attempt_identity(spec))
         task.keep(json.dumps(record), kind="turn-limited", author=lead)
         self.turn_limited_records[spec.task_id] = record
         from .project_files import MAX_INSPECT_BYTES
@@ -4191,10 +4221,15 @@ class Session:
             self._outcome.note("failed", f"{exc.cause}: {exc}")
             self._outcome.partial = dict(changed=changed, changed_lines=state.get("changed_lines", 0),
                                          inspected=state.get("inspected"), note=state.get("note"))
+        if changed and state.get("inspected"):
+            # What the failed attempt left meets the gate once, as evidence
+            # for the re-plan only (step 2): the capped path already did this,
+            # the failed path handed the planner the lead's error text alone.
+            self._observe_checks(spec, "failed")
         record = dict(task=spec.task_id, lead=lead, cause=exc.cause, error=str(exc)[:2000],
                       changed=changed, changed_lines=state.get("changed_lines", 0), note=state.get("note"),
                       role=str(self._active_call.get("role") or ""),
-                      content=self._content_fingerprint(changed))
+                      content=self._content_fingerprint(changed), **self._attempt_identity(spec))
         task.keep(json.dumps(record), kind="task-failed", author=lead)
         self.failed_records[spec.task_id] = record
         from .project_files import MAX_INSPECT_BYTES
@@ -4954,6 +4989,17 @@ class Session:
             raise
         return history
 
+    def _quiescent(self) -> None:
+        """Offer the quiescent point to the checkpoint writer; a failure to
+        write is logged and never fails the run (the writer removes a stale
+        checkpoint rather than leave one behind)."""
+        if self.config.on_quiescent is None:
+            return
+        try:
+            self.config.on_quiescent(self)
+        except Exception:  # noqa: BLE001 -- a checkpoint never fails the run
+            log.warning("could not record the quiescent checkpoint", exc_info=True)
+
     def _finalise_findings(self, exc: BaseException) -> None:
         """A resolution a later task's changes undid must not persist as
         resolved because the run ended on an exception; if the re-check
@@ -5010,6 +5056,12 @@ class Session:
                 self.project, exempt=self.config.dependency_cache_exemptions))
             self.dependency_watch.start()
             self._snapshot_original_tests()
+            carried = getattr(self, "_carried_baselines", None)
+            if carried is not None:
+                # A resumed episode keeps the job's run-start test bytes, not
+                # the bytes its own start found (quadratus.checkpoint).
+                for name, value in carried.items():
+                    setattr(self, name, value)
         if self.config.readiness_probes:
             self._run_readiness()
         if self.config.plan_gate is not None and self._explicit_tasks is not None:
@@ -5025,11 +5077,14 @@ class Session:
         # Slots, not iterations: a parallel batch spends one slot per task, so
         # the cap bounds tasks run however they are grouped (Codex review of
         # #25: a 3-task batch used to cost one slot).
-        used = 0
+        # A resumed episode starts from the slots its job already spent.
+        used = int(getattr(self, "_slots_used", 0) or 0)
         # An explicit list that fills the cap exactly still ends through its
         # own completion path, never the cap's goal question, which is an
         # orchestrator call (Codex on #42, 357d40a P2).
         while used < max_tasks or self._explicit_list_spent():
+            self._slots_used = used
+            self._quiescent()
             used += 1
             if self._explicit_tasks is not None:
                 spec = self._next_explicit_task()
@@ -5056,7 +5111,8 @@ class Session:
                                          + (self._done_refusal or "").replace("--- BATCH SENT BACK ---", "")
                                          .strip()[:300])
                     continue
-                if self._findings_stop_due() or (self.checks and not self.checks[-1]['passed']):
+                merge_debt = (self.parallel_batches[-1].get("merge_debt") if self.parallel_batches else None)
+                if self._findings_stop_due() or (self.checks and not self.checks[-1]['passed'] and not merge_debt):
                     self._name_findings_stop({s.task_id for s in batch} | {f"{batch[-1].task_id}-merge"})
                     break
                 continue
@@ -5135,6 +5191,17 @@ class Session:
                 if self._covers_corrections > self.config.max_requirement_reopens:
                     raise RunStalled(f"the orchestrator kept naming tasks with an invalid RESOLVES: {problem}")
                 self._done_refusal = (f"\n\n--- TASK SENT BACK ---\n{problem} Name the task again.")
+                previous_description = None
+                continue
+            problem = "" if hypothesis else self._unchanged_continuation(spec, continues)
+            if problem:
+                # Before any lead call (step 2): an unfinished attempt re-sent
+                # with the same text and scope meets the same failure.
+                self._refuse_listed(spec, problem)
+                self._covers_corrections += 1
+                if self._covers_corrections > self.config.max_requirement_reopens:
+                    raise RunStalled(f"the orchestrator kept re-sending an unfinished task unchanged: {problem}")
+                self._done_refusal = f"\n\n--- TASK SENT BACK ---\n{problem}"
                 previous_description = None
                 continue
             handoff = self._verification_handoff(spec, covers, resolves, continues)
@@ -6287,7 +6354,20 @@ class Session:
                 # stop names it rather than a generic open finding (map G8).
                 self._design_unverified.extend(child._design_unverified)
                 self.task_outcomes.extend(child.task_outcomes)
+                # A child's unfinished record comes back with it, so a later
+                # CONTINUES gets the same handoff a serial task's would (step 2).
+                self.failed_records.update(child.failed_records)
+                self.turn_limited_records.update(child.turn_limited_records)
+                self._cap_baselines.update(child._cap_baselines)
                 mine = next((o for o in child.task_outcomes if o.task_id == spec.task_id), None)
+                if outside and exc is None:
+                    # A worker conflict, not a tampered tree: the child's edits
+                    # crossed into a sibling's or an undeclared path, nothing
+                    # was merged, and the project still holds the batch's base
+                    # bytes. It fails as a serial scope breach does and a
+                    # scoped CONTINUES may recover it (step 2).
+                    self._unmerged_conflict(spec, summary, mine, changed, outside, after, base)
+                    continue
                 if outside or exc is not None:
                     kept = self.store.put(json.dumps({p: (after.get(p) or b"").decode("utf-8", "replace")
                                                       for p in changed}), kind="parallel-unmerged",
@@ -6351,9 +6431,46 @@ class Session:
                 self._active_spec, self._task_before, self._task_memory = saved
                 record["merge_gate"] = dict(task=merge.task_id, gate_fixes=self._gate_fixes_used,
                                             passed=bool(self.checks) and bool(self.checks[-1]["passed"]))
+            if not record["merge_gate"]["passed"]:
+                record["merge_debt"] = self._record_merge_debt(merge, parsed)
         if fatal is not None:
             raise fatal
         return True
+
+    def _unmerged_conflict(self, spec, summary, outcome, changed, outside, after, base) -> None:
+        """Record a parallel child whose edits left its scope as a failed,
+        unmerged task the orchestrator may continue: its files are kept as an
+        artifact, the project is untouched, and the continuation's lead is
+        handed the base contents as its baseline."""
+        kept = self.store.put(json.dumps({p: (after.get(p) or b"").decode("utf-8", "replace") for p in changed}),
+                              kind="parallel-unmerged", author=spec.lead)
+        reason = f"changed files outside its scope: {', '.join(outside)}"
+        if outcome is not None:
+            outcome.note("failed", f"scope: not merged: {reason}", stage="merge")
+            outcome.closed_as = "failed"
+        from .project_files import MAX_INSPECT_BYTES
+        record = dict(task=spec.task_id, lead=getattr(summary, "author", spec.lead), cause="scope",
+                      error=f"not merged: {reason}; its files are kept in artifact {kept.id}",
+                      changed=list(changed), changed_lines=0, note="parallel batch: nothing was merged",
+                      role="lead", content=self._content_fingerprint([]), unmerged_artifact=kept.id,
+                      **self._attempt_identity(spec))
+        self.failed_records[spec.task_id] = record
+        self._cap_baselines[spec.task_id] = {p: base.get(p, b"") for p in changed
+                                             if len(base.get(p, b"")) <= MAX_INSPECT_BYTES}
+        from dataclasses import replace
+        text = (f"FAILED before finishing: its edits left its declared scope ({', '.join(outside)}) and "
+                f"nothing it changed was merged; its files are kept in artifact {kept.id}. This task is "
+                f"not done: name the remaining work as a new task whose description includes the line "
+                f"'CONTINUES: {spec.task_id}', with a scope that holds every file it needs, or split it.")
+        failed = replace(summary, summary=text, reasoning="Recorded by the harness from the merge.",
+                         outcome="failed") if summary is not None else TaskSummary(
+            task_id=spec.task_id, author=spec.lead or "", summary=text,
+            reasoning="Recorded by the harness from the merge.", outcome="failed")
+        self.history.append(failed)
+        self.memory.absorb(failed)
+        self.failed.append(spec.task_id)
+        self._partial_tasks.add(spec.task_id)
+        self._note(f"{spec.task_id} not merged: {reason[:160]}; recorded as a failed task to continue")
 
     def _covers_problem(self, covers) -> str:
         ledger = self.memory.ledger
@@ -7701,6 +7818,39 @@ class Session:
         self._note(f"task {spec.task_id}: failed check recorded as finding {fid}; the orchestrator re-plans")
         return fid
 
+    def _record_merge_debt(self, merge, parsed) -> Optional[str]:
+        """Merged parallel work that fails the project check after the merge
+        fix round is an integration conflict between the tasks, recorded as
+        the same check finding a serial task leaves (step 2): a scoped task
+        naming RESOLVES repairs it, instead of the run ending. Needs the
+        requirements ledger and the tasks' COVERS to hold the debt; otherwise
+        the CheckFailing stop stands. Returns the finding id or None."""
+        covers = sorted({rid for _spec, task_covers, _continues in parsed for rid in task_covers})
+        if not (self.config.requirements_ledger and covers and self.checks) or self.checks[-1].get("passed"):
+            return None
+        last = self.checks[-1]
+        fid = f"F{len(self.findings) + 1}"
+        failed_checks = _check_ids(last.get("receipts") or [], passed=False)
+        tasks = ", ".join(spec.task_id for spec, _c, _n in parsed)
+        message = (f"the merged parallel work of {tasks} failed the project check after the merge fix "
+                   f"round (failed: {', '.join(failed_checks)}); repair it within {merge.task_id}'s files")
+        self.findings.append(dict(
+            id=fid, task=merge.task_id, requirements=covers, kind="check.failed",
+            target=None, steps=[], view=None, width=None, viewport=None, message=message[:300],
+            check=dict(attempt=last.get("attempt"), gate=last.get("gate"), failed_checks=failed_checks,
+                       output_artifact=last.get("output_artifact"), attribution=last.get("attribution")),
+            evidence=None, status="open"))
+        for rid in covers:
+            self.memory.ledger.requirement_status[rid] = f"NOT MET: open finding {', '.join(self._open_findings_for(rid))}"
+        # The finding now holds the merge gate's failure, as the scope
+        # finding holds a serial breach: it blocks completion until a task
+        # resolves it, and the run-level fact is history from here.
+        for fact in self.run_outcome.facts:
+            if fact.kind == "product" and fact.active and "merge gate" in fact.detail:
+                fact.recovered = True
+        self._note(f"{merge.task_id}: the merged work failed its check; recorded as finding {fid}")
+        return fid
+
     def _check_findings_settled(self, task_id: str) -> bool:
         """Whether every finding ``task_id`` recorded is resolved (and it
         recorded at least one): its failed check was repaired by a later
@@ -8348,6 +8498,47 @@ class Session:
         outcome = self._outcome if getattr(self._outcome, "task_id", None) == task_id else None
         if outcome is not None and "checks" in (outcome.edges or {}):
             facts.append("required checks: " + ("passed" if outcome.edges["checks"] else "failed"))
+        facts.extend(self._unfinished_facts(task_id))
+        return facts
+
+    def _attempt_identity(self, spec) -> dict:
+        """What an unfinished attempt was, for the unchanged-retry check and
+        the re-plan: its text, its scope, and the tool failures the
+        environment owned (command and exit only)."""
+        return dict(description=" ".join(str(spec.description or "").split()),
+                    scope=spec.scope.to_dict() if spec.scope is not None else None,
+                    environment=[list(item) for item in _environment_signature(self._last_tool_failures)])
+
+    def _unfinished_facts(self, task_id: str) -> List[str]:
+        """The held facts of an unfinished task, measured rather than
+        narrated (step 2, 2026-10-13): the cause, the first line of the
+        error, the environment's own tool failures, and the harness's run
+        of the checks on the source the attempt left. The lead's account is
+        never one of them."""
+        record = self.failed_records.get(task_id) or self.turn_limited_records.get(task_id)
+        if not record:
+            return []
+        facts = []
+        if record.get("cause"):
+            head = str(record.get("error") or "").strip().splitlines()
+            facts.append(f"unfinished: failed ({record['cause']})"
+                         + (f"; first error line: {head[0][:200]}" if head else ""))
+        else:
+            facts.append("unfinished: stopped at the lead turn limit"
+                         + (f" after {record['turns']} rounds" if record.get("turns") else ""))
+        if record.get("environment"):
+            facts.append("environment tool failures (not the task's code): "
+                         + "; ".join(f"{cmd} (exit {code})" for cmd, code in record["environment"][:3]))
+        current = self._source_fingerprint()
+        seen = next((c for c in reversed(getattr(self, "review_checks", []))
+                     if c.get("task") == task_id and current and c.get("source") == current), None)
+        if seen is not None:
+            facts.append("harness checks on the source this attempt left: "
+                         + _audit_check_facts([seen], current).replace("\n", " | ")[:600])
+        elif record.get("changed"):
+            facts.append("the source this attempt left has not met the checks")
+        facts.append("a continuation must change the approach (scope, split or method); the same "
+                     "task text and scope again is refused")
         return facts
 
     def _note_unrun_tests(self, spec, task, gate) -> None:
