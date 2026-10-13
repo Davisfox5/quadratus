@@ -33,7 +33,9 @@ import dataclasses
 import hashlib
 import json
 import logging
+import math
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -194,35 +196,75 @@ def restore_state(session, state: dict) -> None:
 
 # -- identities and budget ------------------------------------------------------------
 
+#: Settings fields that hold a credential, by exact shape: an API key, a
+#: secret, a password or an auth token. Only these are left out of the
+#: settings digest (a credential value is never written to disk); every
+#: control field, ``max_tokens`` included, is bound (root review of aaa06a6).
+_CREDENTIAL_FIELD = re.compile(r"(?:^|_)(?:api_key|secret|password|auth_token|access_token|refresh_token)$",
+                               re.IGNORECASE)
+
+
 def settings_identity(settings) -> str:
-    """A digest of the settings that choose models, roles and transport.
-    Fields that name a key, token, secret or password are left out: the
-    digest is written to disk and a credential never is."""
+    """A digest of the settings that choose models, roles, transport and
+    their limits, credential fields excluded."""
     if settings is None:
         return "none"
     try:
         fields = dataclasses.asdict(settings) if dataclasses.is_dataclass(settings) else dict(vars(settings))
     except TypeError:
         fields = {}
-    kept = {k: v for k, v in fields.items()
-            if not any(word in k.lower() for word in ("key", "token", "secret", "password"))}
+    kept = {k: v for k, v in fields.items() if not _CREDENTIAL_FIELD.search(k)}
     return hashlib.sha256(json.dumps(kept, sort_keys=True, default=repr).encode()).hexdigest()
 
 
-def identities(*, goal, source, policy, limits, settings, gate, dependency) -> Dict[str, str]:
+def workflow_identity(**config) -> str:
+    """A digest of the run configuration that decides dispatch: mode, tier,
+    decider, write grant, default scope, capture profile, readiness probes
+    and the like. A resumed episode is the same job only under the same
+    configuration (root review of aaa06a6)."""
+    def stable(value):
+        if dataclasses.is_dataclass(value) and not isinstance(value, type):
+            return dataclasses.asdict(value)
+        if isinstance(value, (set, frozenset)):
+            return sorted(map(str, value))
+        if isinstance(value, Path):
+            return str(value)
+        if hasattr(value, "to_dict"):
+            return value.to_dict()
+        return f"{type(value).__module__}.{type(value).__qualname__}"
+    return hashlib.sha256(json.dumps(config, sort_keys=True, default=stable).encode()).hexdigest()
+
+
+def identities(*, goal, source, policy, limits, settings, gate, dependency, workflow) -> Dict[str, str]:
     return dict(goal=hashlib.sha256(str(goal).encode()).hexdigest(), source=str(source or "unavailable"),
                 policy=str(policy or "none"), limits=str(limits), settings=str(settings),
-                gate=str(gate or "none"), dependency=str(dependency or "unavailable"))
+                gate=str(gate or "none"), dependency=str(dependency or "unavailable"), workflow=str(workflow))
 
 
-def consumed(budget_record: Optional[dict]) -> dict:
-    """What the job has spent, from a budget record (budget.json)."""
-    record = budget_record or {}
-    return dict(calls=int(record.get("reserved_attempts") or 0),
-                input_tokens=int(record.get("input_tokens") or 0),
-                output_tokens=int(record.get("output_tokens") or 0),
-                api_cost_usd=float(record.get("api_cost_usd") or 0.0),
-                elapsed_seconds=float(record.get("elapsed_seconds") or 0.0))
+#: Budget record fields that measure spend, and their types. Every one must
+#: be present, finite and non-negative; nothing unknown becomes free
+#: allowance (root review of aaa06a6).
+_SPENT = (("calls", "reserved_attempts", int), ("input_tokens", "input_tokens", int),
+          ("output_tokens", "output_tokens", int), ("api_cost_usd", "api_cost_usd", float),
+          ("elapsed_seconds", "elapsed_seconds", float))
+
+
+def consumed(budget_record: Optional[dict], *, recorded: bool = False) -> dict:
+    """What the job has spent, from a budget record (budget.json or a
+    RunBudget snapshot), or with ``recorded`` from a checkpoint's own
+    ``consumed`` block. Raises CheckpointRefused for a missing, malformed,
+    non-finite or negative counter."""
+    record = budget_record if isinstance(budget_record, dict) else {}
+    spent = {}
+    for name, field, kind in _SPENT:
+        field = name if recorded else field
+        value = record.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or (kind is int and not isinstance(value, int)):
+            raise CheckpointRefused(f"the budget record's {field} is missing or not a number")
+        if not math.isfinite(value) or value < 0:
+            raise CheckpointRefused(f"the budget record's {field} is not a finite non-negative number")
+        spent[name] = kind(value)
+    return spent
 
 
 # -- the file --------------------------------------------------------------------------
@@ -297,9 +339,12 @@ def validate(run_dir, body: dict, now: Dict[str, str]) -> dict:
         raise CheckpointRefused("the parent's budget stopped or holds unknown usage: "
                                 f"{budget.get('stop_reason') or 'unknown_usage'}")
     spent = consumed(budget)
-    if spent["calls"] < int(body.get("consumed", {}).get("calls", 0)):
-        raise CheckpointRefused("the budget record holds fewer calls than the checkpoint; it is not the "
-                                "record this checkpoint was written against")
+    held_spend = consumed(body.get("consumed"), recorded=True)
+    lower = sorted(name for name in spent if spent[name] < held_spend[name])
+    if lower:
+        raise CheckpointRefused("the budget record holds less than the checkpoint recorded ("
+                                + ", ".join(lower) + "); it is not the record this checkpoint was "
+                                "written against")
     held = body.get("identities") or {}
     differing = sorted(k for k in set(held) | set(now) if held.get(k) != now.get(k))
     if differing:

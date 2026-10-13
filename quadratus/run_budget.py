@@ -250,6 +250,23 @@ class RunBudget:
         with self._lock:
             return self._snapshot()
 
+    def persist(self):
+        """Write the budget record now and return the snapshot written: the
+        quiescent checkpoint and an interrupted run's record then carry the
+        same spend, time included (root review of aaa06a6: a record written
+        only at reserve and finish under-counted the time between calls)."""
+        with self._lock:
+            snapshot = self._snapshot()
+            if self.path:
+                try:
+                    self.path.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = self.path.with_suffix('.tmp')
+                    temporary.write_text(json.dumps(snapshot, indent=2) + '\n')
+                    temporary.replace(self.path)
+                except OSError as exc:
+                    raise RunBudgetExceeded('Run stopped: budget_state_unavailable') from exc
+            return snapshot
+
     def _persist(self):
         if self.path:
             try:

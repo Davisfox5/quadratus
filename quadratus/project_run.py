@@ -377,7 +377,17 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     from .session import _gate_identity
     held = dict(goal=goal, policy=(_preview or {}).get('hash'),
                 limits=hashlib.sha256(json.dumps(_selected, sort_keys=True).encode()).hexdigest(),
-                settings=checkpoint.settings_identity(_settings), gate=_gate_identity(gate))
+                settings=checkpoint.settings_identity(_settings), gate=_gate_identity(gate),
+                # The run configuration that decides dispatch: the same job
+                # only under the same one (root review of aaa06a6).
+                workflow=checkpoint.workflow_identity(
+                    allow_writes=allow_writes, mode=mode, direct_tier=direct_tier,
+                    decider=decider,
+                    decider_labels=decider_labels, default_scope=default_scope,
+                    capture_profile=capture_profile, readiness=list(readiness or ()),
+                    security_verdict_json=security_verdict_json, repair_tests=list(repair_tests or ()),
+                    explicit_tasks=list(tasks) if tasks is not None else None,
+                    plan_gate=plan_gate is not None, ask_operator=ask_operator is not None))
     lineage = dict(root=run_dir.name, parent=None, episode=1)
     carried = None
     if parent is not None:
@@ -451,7 +461,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     )
 
     def on_quiescent(session):
-        snapshot = budget.snapshot() if budget else {}
+        # One snapshot, written to budget.json and into the checkpoint, so
+        # the two agree to the second (root review of aaa06a6).
+        snapshot = budget.persist() if budget else {}
         watch = getattr(session, 'dependency_watch', None)
         baseline = getattr(watch, 'baseline', None)
         state_now = checkpoint.capture_state(session)
@@ -460,7 +472,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             uncarried.append('a call in flight')
         checkpoint.write(run_dir, dict(
             version=checkpoint.VERSION, lineage=lineage, sealed=False, resumable=not uncarried,
-            uncarried=uncarried, consumed=checkpoint.consumed(snapshot),
+            uncarried=uncarried, consumed=checkpoint.consumed(snapshot) if snapshot else None,
             identities=checkpoint.identities(source=session._source_fingerprint(),
                                              dependency=getattr(baseline, 'digest', None), **held),
             state={} if uncarried else state_now,
@@ -509,6 +521,12 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         session.run(max_tasks=max_tasks, **({'tasks': tasks} if tasks is not None else {}))
     except (Exception, KeyboardInterrupt) as exc:  # persist partial work and its cause
         interrupted = isinstance(exc, KeyboardInterrupt)
+        if interrupted and budget is not None:
+            try:
+                # The time up to the interruption is the job's spend too.
+                budget.persist()
+            except Exception:  # noqa: BLE001 -- the record keeps its last write
+                pass
         error = f'{type(exc).__name__}: {exc}'
         # A stopped editing call already inspected the tree and kept whatever
         # was there. Carrying that forward is what makes the handoff resumable

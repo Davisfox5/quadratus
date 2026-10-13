@@ -15,7 +15,7 @@ from quadratus import checkpoint
 from quadratus.checkpoint import CheckpointRefused
 from quadratus.config import Settings
 from quadratus.project_run import run_project
-from quadratus.run_budget import RunLimits
+from quadratus.run_budget import RunBudget, RunLimits
 from quadratus.session import Session
 from tests.lifecycle import harness as H
 from tests.lifecycle.test_lifecycle_matrix import DECL_T1, DECL_T2, FILES, FIXED, T1, Script
@@ -47,12 +47,12 @@ def _interrupt_after(monkeypatch, tasks: int):
     monkeypatch.setattr(Session, "_interrupted_once", False, raising=False)
 
 
-def _episode(replay, *, resume_from, goal="Build the feature.", max_tasks=2, limits=LIMITS):
+def _episode(replay, *, resume_from, goal="Build the feature.", max_tasks=2, limits=LIMITS, **workflow):
     settings = Settings(backend="cli")
     settings.backend_overrides = {}
     settings.openai_api_key = settings.anthropic_api_key = settings.xai_api_key = None
     return run_project(goal, replay.project, settings, allow_writes=True, check=H.GATE, max_tasks=max_tasks,
-                       run_limits=limits, resume_from=resume_from)
+                       run_limits=limits, resume_from=resume_from, **workflow)
 
 
 def _interrupted(tmp_path, monkeypatch, script=None, max_tasks=2):
@@ -170,9 +170,35 @@ def test_a_resume_from_outside_the_state_folder_is_refused(tmp_path, monkeypatch
         _episode(replay, resume_from=str(tmp_path))
 
 
+@pytest.mark.parametrize("change", [dict(mode="constructive"), dict(direct_tier=True),
+                                    dict(decider_labels="all")])
+def test_a_different_run_configuration_refuses_the_resume(tmp_path, monkeypatch, change):
+    """Root review of aaa06a6: mode, tier and decider labels decide dispatch."""
+    replay, first = _interrupted(tmp_path, monkeypatch)
+    with pytest.raises(CheckpointRefused, match="workflow"):
+        _episode(replay, resume_from=first.name, **change)
+    assert not (first / "resumed-by.json").exists()
+
+
+def test_the_interrupted_record_carries_the_time_up_to_the_interruption(tmp_path, monkeypatch):
+    replay, first = _interrupted(tmp_path, monkeypatch)
+    body = checkpoint.load(first)
+    budget = _budget(first)
+    for field, name in (("elapsed_seconds", "elapsed_seconds"), ("input_tokens", "input_tokens"),
+                        ("output_tokens", "output_tokens"), ("reserved_attempts", "calls")):
+        assert budget[field] >= body["consumed"][name], field
+
+
 @pytest.mark.parametrize("field,value,match", [("in_flight", 1, "in flight"),   # a killed process
                                                 ("unknown_usage_attempts", 1, "unknown_usage"),
-                                                ("reserved_attempts", 0, "fewer calls")])
+                                                ("reserved_attempts", 0, "less than the checkpoint"),
+                                                ("input_tokens", 0, "less than the checkpoint"),
+                                                ("output_tokens", 0, "less than the checkpoint"),
+                                                ("elapsed_seconds", 0.0, "less than the checkpoint"),
+                                                ("input_tokens", -1, "non-negative"),
+                                                ("elapsed_seconds", float("nan"), "finite"),
+                                                ("output_tokens", "10", "not a number"),
+                                                ("reserved_attempts", None, "not a number")])
 def test_a_budget_record_with_unknown_or_missing_usage_refuses_the_resume(tmp_path, monkeypatch, field, value,
                                                                           match):
     replay, first = _interrupted(tmp_path, monkeypatch)
@@ -210,3 +236,46 @@ def test_a_failed_task_hands_the_planner_held_facts_and_an_unchanged_retry_is_re
     leads = [c.task for c in replay.of("lead")]
     assert leads.count("t1") == 1, "the unchanged retry never reached a lead"
     assert len(set(leads)) == 2, "the changed continuation was dispatched"
+
+
+# -- budget persistence and identity precision (root review of aaa06a6) -------------
+
+def test_time_between_calls_reaches_the_record_the_checkpoint_is_written_against(tmp_path):
+    """The quiescent checkpoint and budget.json come from one persisted
+    snapshot, so time spent on checks between calls is carried."""
+    clock = [0.0]
+    budget = RunBudget(LIMITS, path=tmp_path / "budget.json", clock=lambda: clock[0])
+    ticket, _ = budget.reserve(transport="cli", price_key="openai:gpt-5.6-sol")
+    clock[0] = 10.0
+    budget.finish(ticket, {"input_tokens": 100, "output_tokens": 10})
+    clock[0] = 30.0                          # checks and merge work between calls
+    snapshot = budget.persist()
+    identity = dict(goal="g")
+    checkpoint.write(tmp_path, dict(version=checkpoint.VERSION, sealed=False, resumable=True,
+                                    identities=identity, consumed=checkpoint.consumed(snapshot)))
+    spent = checkpoint.validate(tmp_path, checkpoint.load(tmp_path), identity)
+    assert spent["elapsed_seconds"] == 30.0 and spent["calls"] == 1 and spent["input_tokens"] == 100
+
+
+def test_a_stale_budget_record_is_refused_rather_than_read_as_free_time(tmp_path):
+    clock = [0.0]
+    budget = RunBudget(LIMITS, path=tmp_path / "budget.json", clock=lambda: clock[0])
+    ticket, _ = budget.reserve(transport="cli", price_key="openai:gpt-5.6-sol")
+    clock[0] = 10.0
+    budget.finish(ticket, {"input_tokens": 100, "output_tokens": 10})   # persisted at 10
+    clock[0] = 30.0
+    identity = dict(goal="g")
+    checkpoint.write(tmp_path, dict(version=checkpoint.VERSION, sealed=False, resumable=True,
+                                    identities=identity, consumed=checkpoint.consumed(budget.snapshot())))
+    with pytest.raises(CheckpointRefused, match="elapsed_seconds"):
+        checkpoint.validate(tmp_path, checkpoint.load(tmp_path), identity)
+
+
+def test_settings_identity_binds_controls_and_leaves_out_only_credentials():
+    from types import SimpleNamespace
+    digest = checkpoint.settings_identity
+    assert digest(SimpleNamespace(max_tokens=1000, openai_api_key="first")) != \
+        digest(SimpleNamespace(max_tokens=500000, openai_api_key="first"))
+    assert digest(SimpleNamespace(max_tokens=1000, openai_api_key="first")) == \
+        digest(SimpleNamespace(max_tokens=1000, openai_api_key="second"))
+    assert digest(Settings(backend="cli")) != digest(Settings(backend="cli", lead_max_turns=7))

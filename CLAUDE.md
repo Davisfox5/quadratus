@@ -663,7 +663,13 @@ Key design decisions already settled:
   `checkpoint.json` (digest-bound) at every point between tasks; `--resume RUN`
   starts a new episode only from an interrupted run, never a sealed one, never
   twice, never with a call in flight or unknown usage, and only when source,
-  goal, policy, limits, settings, gate and dependency identities all match.
+  goal, policy, limits, settings (credential fields excluded by exact
+  name, `max_tokens` bound), gate, dependency and run-configuration
+  (mode, tier, decider, write grant, scope, capture, readiness) identities
+  all match. The checkpoint and `budget.json` come from one persisted
+  snapshot, an interruption persists the time up to it, and every spend
+  counter must be present, finite, non-negative and no lower than the
+  checkpoint's.
   The record, unfinished work, findings, check debt, typed outcomes and the
   job's run-start test bytes carry over; the budget starts from what the
   parent's budget record spent, so the allowance is the job's. State the
