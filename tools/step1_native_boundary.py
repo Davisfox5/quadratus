@@ -62,7 +62,9 @@ def isolated_solver_config(config: str) -> str:
     supplied separately by its own trusted argv. No operator file is edited.
     """
     document = tomllib.loads(without_legacy_mode(config))
-    for field in ("mcp_servers", "plugins", "hooks", "notify"):
+    if document.get("profile"):
+        raise ValueError("A selected user profile requires an explicitly reviewed flattened config")
+    for field in ("profile", "profiles", "sandbox_workspace_write", "mcp_servers", "plugins", "hooks", "notify"):
         document.pop(field, None)
     features = dict(document.get("features", {}))
     for feature in ("apps", "browser_use", "browser_use_external", "browser_use_full_cdp_access",
@@ -77,7 +79,8 @@ def isolated_solver_config(config: str) -> str:
 
 def protected_codex_argv(argv: Sequence[str], *, protected: Sequence[str],
                          cwd: str, tempdir: str | None = None,
-                         readonly_runtime: Sequence[str] = ()) -> list[str]:
+                         readonly_runtime: Sequence[str] = (),
+                         trusted_worker_config: dict[str, str] | None = None) -> list[str]:
     """Narrow existing read-only/workspace-write commands without adding grants.
 
     The caller must separately review the trusted native parent and qualify
@@ -92,12 +95,29 @@ def protected_codex_argv(argv: Sequence[str], *, protected: Sequence[str],
     body: list[str] = []
     mode = None
     excludes: dict[str, bool] = {}
+    trusted_worker_config = dict(trusted_worker_config or {})
+    if any(not k.startswith("mcp_servers.quadratus.") for k in trusted_worker_config):
+        raise ValueError("Only the separately held bounded Quadratus bridge may be declared trusted")
     i = 1
     while i < len(argv):
         arg = argv[i]
         if arg == "--":
             body.extend(argv[i:])
             break
+        if arg in {"-C", "--cd"}:
+            if i + 1 == len(argv) or Path(argv[i + 1]).resolve() != root:
+                raise ValueError("CLI working directory differs from the held workspace")
+            body.extend(argv[i:i + 2])
+            i += 2
+            continue
+        if arg == "--enable" or arg.startswith("--enable=") or arg.startswith("--dangerously-"):
+            raise ValueError("Feature enablement would reopen a removed surface")
+        if arg == "--disable":
+            if i + 1 == len(argv) or argv[i + 1] not in {"multi_agent", "multi_agent_v2"}:
+                raise ValueError("Only unchanged mandatory native fanout denials are accepted")
+            body.extend(argv[i:i + 2])
+            i += 2
+            continue
         if arg in {"--sandbox", "-s"}:
             if mode is not None or i + 1 == len(argv):
                 raise ValueError("Exactly one known sandbox mode required")
@@ -113,6 +133,7 @@ def protected_codex_argv(argv: Sequence[str], *, protected: Sequence[str],
                 raise ValueError("Missing config value")
             value = argv[i + 1]
             key, _, setting = value.partition("=")
+            key = key.strip().replace('"', '').replace("'", "")
             if key.startswith("sandbox_workspace_write."):
                 if key.endswith(".writable_roots") and setting == "[]":
                     i += 2
@@ -127,12 +148,21 @@ def protected_codex_argv(argv: Sequence[str], *, protected: Sequence[str],
                 continue
             if key in {"sandbox_mode", "sandbox", "permissions", "default_permissions"} or key.startswith("permissions."):
                 raise ValueError("Conflicting boundary config")
+            if key in trusted_worker_config and setting == trusted_worker_config[key]:
+                body.extend((arg, value))
+                i += 2
+                continue
+            if any(key == prefix or key.startswith(prefix + ".") for prefix in
+                   ("mcp_servers", "plugins", "hooks", "notify", "features", "profile", "profiles")):
+                raise ValueError("Config override would restore an ambient reader or selected profile")
+            if (key == "agents" or key.startswith("agents.")) and (key != "agents.enabled" or setting != "false"):
+                raise ValueError("Native fanout override")
             body.extend((arg, value))
             i += 2
             continue
         if arg.startswith(("--sandbox=", "--permission-profile=", "--profile=",
-                           "--add-dir=", "--config=", "-c=")) or (
-                arg.startswith(("-c", "-s", "-P", "-p")) and not arg.startswith("--")):
+                           "--add-dir=", "--config=", "--cd=", "--disable=", "-c=")) or (
+                arg.startswith(("-c", "-s", "-P", "-p", "-C")) and not arg.startswith("--")):
             raise ValueError("Unqualified attached boundary/config option")
         body.append(arg)
         i += 1

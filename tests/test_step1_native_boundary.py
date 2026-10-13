@@ -104,3 +104,42 @@ def test_runtime_exception_cannot_reopen_operator_root(roots):
     with pytest.raises(ValueError):
         protect(['codex', 'exec', '--sandbox', 'workspace-write'], protected=[str(private)],
                 cwd=str(work), readonly_runtime=[str(private)])
+
+
+@pytest.mark.parametrize('setting', [
+    'mcp_servers.amb.command="node"', 'features.computer_use=true', 'notify=["/x"]',
+    'profile="x"', 'profiles.x.sandbox_mode="danger-full-access"',
+])
+def test_config_override_cannot_restore_removed_reader(roots, setting):
+    work, private = roots
+    with pytest.raises(ValueError):
+        protect(['codex', 'exec', '--sandbox', 'workspace-write', '-c', setting],
+                protected=[str(private)], cwd=str(work))
+
+
+@pytest.mark.parametrize('option', ['-C', '--cd'])
+def test_cli_cwd_must_match_validated_workspace(roots, option):
+    work, private = roots
+    with pytest.raises(ValueError):
+        protect(['codex', 'exec', '--sandbox', 'workspace-write', option, '/'],
+                protected=[str(private)], cwd=str(work))
+
+
+def test_selected_profile_refused_and_inactive_profiles_do_not_survive():
+    with pytest.raises(ValueError):
+        _module.isolated_solver_config('profile="x"\n[profiles.x]\nsandbox_mode="danger-full-access"\n')
+    result = tomllib.loads(_module.isolated_solver_config(
+        '[profiles.x]\nsandbox_mode="danger-full-access"\n[sandbox_workspace_write]\nwritable_roots=["/private/grader"]\n'))
+    assert 'profiles' not in result and 'sandbox_workspace_write' not in result
+
+
+def test_only_exact_held_bounded_bridge_override_is_allowed(roots):
+    work, private = roots
+    value = '"held-bridge-command"'
+    key = 'mcp_servers.quadratus.command'
+    original = ['codex', 'exec', '--sandbox', 'workspace-write', '-c', key+'='+value,
+                '--disable', 'multi_agent', '--disable', 'multi_agent_v2', '-c', 'agents.enabled=false']
+    result = protect(original, protected=[str(private)], cwd=str(work), trusted_worker_config={key:value})
+    assert key+'='+value in result and 'agents.enabled=false' in result
+    with pytest.raises(ValueError):
+        protect(original, protected=[str(private)], cwd=str(work), trusted_worker_config={key:'"other"'})
