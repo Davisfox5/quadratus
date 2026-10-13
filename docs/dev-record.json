@@ -3,7 +3,7 @@
   "note": "One shared development record (plan on #35, comment 5922888762). Edited through tools/dev_record.py; the acceptance manifest and workflow scorecard keep their own evidence, referenced here, never copied.",
   "candidate": {
     "pr": 73,
-    "sha": "4465156a6d9f30735f4d712001390b9009e212a4",
+    "sha": "b809429aff558630041c121dde3c52b502e69ad1",
     "gate": "Step 2 (adaptive orchestration, accurate recovery, coordination, persistent progress): root's independent scoped review of #73 and #72, one correction batch, one final combined changed-engine local suite, exact CI and install, then one qualified fresh medium multi-component job. Benchmark stays paused; no automatic PASS or MET.",
     "required_receipts": [
       "ci",
@@ -1967,14 +1967,32 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "delivered",
+      "state": "reviewed",
       "claimed_at": "2026-10-13T19:19:06Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "aaa06a6c4f2d9bd797ead6c85604575bb601890d",
-        "at": "2026-10-13T19:19:23Z"
+        "sha": "0cf52221865e31b1c4199656bb93d1293f263060",
+        "at": "2026-10-13T21:16:06Z"
       },
-      "reviews": [],
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "0cf52221865e31b1c4199656bb93d1293f263060",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/73#issuecomment-6155345663 (root exact 0cf5222 scoped CLEAR; 13 independent controls PASS 0 skip; Ruff and diff clean)",
+          "scope": [
+            "quadratus/checkpoint.py",
+            "quadratus/session.py",
+            "quadratus/project_run.py",
+            "quadratus/run_budget.py",
+            "quadratus/cli.py",
+            "tools/dev_record.py",
+            "tests/lifecycle/test_step2_recovery.py",
+            "tests/test_step2_parallel.py"
+          ],
+          "at": "2026-10-13T21:16:06Z"
+        }
+      ],
       "blockers": [],
       "decisions": []
     },
@@ -1988,7 +2006,7 @@
       ],
       "author": "codex",
       "reviewer": "claude",
-      "state": "reviewed",
+      "state": "integrated",
       "claimed_at": "2026-10-13T19:19:23Z",
       "acknowledged": false,
       "delivery": {
@@ -2009,7 +2027,12 @@
         }
       ],
       "blockers": [],
-      "decisions": []
+      "decisions": [],
+      "integrated": {
+        "sha": "3bca57e804d2a836f88ac2828e8329a2bac4f74a",
+        "candidate": "b809429aff558630041c121dde3c52b502e69ad1",
+        "at": "2026-10-13T21:16:07Z"
+      }
     }
   ],
   "receipts": [
