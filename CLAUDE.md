@@ -685,14 +685,17 @@ Key design decisions already settled:
   hypothesis record, the unchanged-retry check and its contract's
   predecessor. The cap, the size ceiling and the completion gates are
   unchanged.
-- **Acceptance is what the configured checks can show** (Step 2 r02 on
-  3b629cf). The planner's SCOPE instructions and the configured-checks note
-  say each acceptance item must be a condition a committed test (in the
-  task's files, collected by the configured checks) shows; never a scratch or
-  interactive session, a manual or one-off command, or a script outside the
-  tests. r02's t1 named a scratch two-Store Python session, the lead reported
-  it NOT RUN, and R1-R7 stayed open after committed tests covered the same
-  behaviour. The NOT RUN rule and its discharge are unchanged.
+- **Automated acceptance is what the configured checks can show** (Step 2
+  r02 on 3b629cf, narrowed after root's review of 86e2841). r02's t1 named a
+  scratch two-Store Python session as acceptance, the lead reported it NOT
+  RUN, and R1-R7 stayed open after committed tests covered the same
+  behaviour. Only the configured-checks note, which renders only when a check
+  is configured, now says automated code-behaviour acceptance belongs in
+  collected tests committed in the task's files, never a scratch session,
+  one-off command or script outside the tests. The shared SCOPE text carries
+  no such rule: read-only (`edits: none`) reviews, design or audit judgment,
+  harness captures and operator acceptance keep their own channels. The NOT
+  RUN rule and its discharge are unchanged.
 - **The measured diff is the truth; the CHANGED line is the lead's account of
   it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
   project around every editing call, so it already knows what changed. The

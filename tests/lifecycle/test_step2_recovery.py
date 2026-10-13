@@ -337,15 +337,29 @@ def test_the_planner_is_told_which_requirements_no_task_has_covered(tmp_path, mo
 
 # -- acceptance the configured checks can show (r02 on 3b629cf) --------------------
 
-def test_the_planner_is_told_acceptance_must_be_a_committed_test_the_checks_run(tmp_path, monkeypatch):
+@pytest.mark.parametrize("check", [H.GATE, None], ids=["configured-check", "no-check"])
+def test_committed_test_acceptance_is_scoped_to_automated_behaviour_under_configured_checks(
+        tmp_path, monkeypatch, check):
     """r02: t1's acceptance named a scratch two-Store Python session; the
-    lead reported it NOT RUN and R1-R7 stayed open after committed tests
-    covered the same behaviour. The NOT RUN rule is unchanged; the planner is
-    told before it plans."""
-    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(DECL_T1)), files=FILES, max_tasks=1)
+    lead reported it NOT RUN and R1-R7 stayed open. Root's review of 86e2841:
+    the shared SCOPE text then required every acceptance item to be a
+    committed test, which a read-only review, design judgment or harness
+    capture cannot satisfy, with or without checks. The rule now lives only
+    in the configured-checks note and covers automated code behaviour; the
+    other channels are named as unchanged. NOT RUN is unchanged."""
+    # No check given and no tests to detect: the project has no configured check.
+    files = FILES if check else {k: v for k, v in FILES.items() if not k.startswith("tests/")}
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(DECL_T1)), files=files, max_tasks=1,
+                   check=check)
     first = replay.of("orchestrator")[0].prompt
-    assert "Each acceptance item must be a condition a committed test shows when the project's " \
-           "configured checks run it" in first
-    assert "Never name a scratch or interactive session, a manual or one-off command" in first
-    assert "keeps its requirements open as NOT RUN" in first
+    assert "Each acceptance item must be a condition a committed test shows" not in first
+    assert '"edits": "none" to SCOPE' in first, "read-only reviews are still offered"
+    scoped = "Where acceptance is automated code behaviour these checks can establish"
+    if check is None:
+        assert "## Configured project checks" not in first, "the project has no configured check"
+        assert scoped not in first and "keeps its requirements open as NOT RUN" not in first
+    else:
+        assert scoped in first and "keeps its requirements open as NOT RUN" in first
+        assert ("independent design or audit judgment, or a read-only (\"edits\": \"none\") review, "
+                "which adds no files") in first
     assert "--quadratus-report" not in first, "still no command line reaches the planner"
