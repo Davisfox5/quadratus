@@ -84,3 +84,16 @@ def test_disposable_config_preserves_models_effort_and_other_profiles():
 def test_unfamiliar_legacy_format_refused():
     with pytest.raises(ValueError):
         _module.without_legacy_mode('"sandbox_mode" = "danger-full-access"\n')
+
+
+def test_ambient_readers_removed_without_changing_model_effort_or_approvals():
+    source = ('model="gpt-5.6-sol"\nmodel_reasoning_effort="low"\napproval_policy="never"\n'
+              'sandbox_mode="danger-full-access"\nnotify=["/some/ambient-hook"]\n'
+              '[mcp_servers.ambient]\ncommand="node"\n[plugins.some]\nenabled=true\n'
+              '[features]\nmemories=true\ncode_mode_host=true\n')
+    result = tomllib.loads(_module.isolated_solver_config(source))
+    assert result['model'] == 'gpt-5.6-sol'
+    assert result['model_reasoning_effort'] == 'low' and result['approval_policy'] == 'never'
+    assert not {'sandbox_mode', 'mcp_servers', 'plugins', 'notify'} & result.keys()
+    assert result['features']['memories'] is False and result['features']['apps'] is False
+    assert result['features']['code_mode_host'] is True

@@ -7,6 +7,7 @@ vendors and scored benchmark adapters are deliberately outside this helper.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tomllib
@@ -35,6 +36,42 @@ def without_legacy_mode(config: str) -> str:
     del expected["sandbox_mode"]
     if tomllib.loads(result) != expected:
         raise ValueError("Non-permission settings changed")
+    return result
+
+
+def _toml_value(value):
+    if isinstance(value, str):
+        return json.dumps(value)
+    if type(value) is bool:
+        return "true" if value else "false"
+    if type(value) is int or (type(value) is float and math.isfinite(value)):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ",".join(_toml_value(v) for v in value) + "]"
+    if isinstance(value, dict) and all(isinstance(k, str) for k in value):
+        return "{" + ",".join(json.dumps(k) + "=" + _toml_value(v) for k, v in value.items()) + "}"
+    raise ValueError("Unsupported config value; no guessing or coercion")
+
+
+def isolated_solver_config(config: str) -> str:
+    """Narrow a disposable worker's ambient tools, preserving model settings.
+
+    Native profiles govern shell execution, not arbitrary MCP/plugin children
+    or parent-side memories. A private-evidence worker must not inherit those
+    uncontained readers. The harness's explicit bounded worker bridge is
+    supplied separately by its own trusted argv. No operator file is edited.
+    """
+    document = tomllib.loads(without_legacy_mode(config))
+    for field in ("mcp_servers", "plugins", "hooks", "notify"):
+        document.pop(field, None)
+    features = dict(document.get("features", {}))
+    for feature in ("apps", "browser_use", "browser_use_external", "browser_use_full_cdp_access",
+                    "computer_use", "memories", "chronicle"):
+        features[feature] = False
+    document["features"] = features
+    result = "\n".join(json.dumps(k) + "=" + _toml_value(v) for k, v in document.items()) + "\n"
+    if tomllib.loads(result) != document:
+        raise ValueError("Configuration round trip failed")
     return result
 
 
@@ -87,7 +124,7 @@ def protected_codex_argv(argv: Sequence[str], *, protected: Sequence[str],
                     raise ValueError("Unqualified workspace boundary override")
                 i += 2
                 continue
-            if key == "sandbox_mode" or key.startswith("permissions.") or key == "default_permissions":
+            if key in {"sandbox_mode", "sandbox", "permissions", "default_permissions"} or key.startswith("permissions."):
                 raise ValueError("Conflicting boundary config")
             body.extend((arg, value))
             i += 2
