@@ -58,6 +58,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from .cli_providers import SANDBOX_REFUSAL
 from .config import Settings
 from .delegation import (
     DelegationLedger,
@@ -462,6 +463,7 @@ class Fleet:
                                   'A standalone FETCH, CONSULT or WORKER request may omit the line; '
                                   'any files you changed before it are kept.' + check_instructions)
             except TurnLimitReached as exc:
+                _raise_if_infrastructure(model_key, view, exc)
                 # A capped call may have spent its rounds on exactly the
                 # denied command; that is the capability stop, not an
                 # ordinary continuation (Codex review of 3a55d82). A refusal
@@ -476,6 +478,11 @@ class Fleet:
                         + ". Declare the command as a check or a capture profile; a denied write is the "
                         "transport's permission mode. Work preserved.") from exc
                 raise
+            _raise_if_infrastructure(model_key, view)
+            context = invocation_context.get()
+            if context is not None:
+                # For the session's same-failure check across editing calls.
+                context["tool_failures"] = bounded_tool_failures(getattr(view, "last_tool_failures", None))
             denied = _relevant_denials(getattr(view, "last_tool_failures", None),
                                        getattr(self, "check_commands", ()) or (), writes_granted=True)
             if denied:
@@ -592,6 +599,7 @@ class Fleet:
                 if worker_loop_control.get() is not None:
                     role += '\nDuring this bounded errand only, CONTINUE: may request another read step.'
             reply = self._generate(model_key, view, prompt, role)
+            _raise_if_infrastructure(model_key, view)
             altered = _copy_altered(directory, handed)
             if altered:
                 raise ReviewCopyAltered(
@@ -981,6 +989,50 @@ def _relevant_denials(failures, checks, *, writes_granted: bool = False) -> List
         elif writes_granted and entry.get("tool") and not command:
             out.append(f"{entry['tool']} {entry.get('path') or ''}".strip())
     return out
+
+
+#: The execution environment itself refusing to start a tool: a vendor
+#: sandbox that cannot apply inside the operator's sandbox. Step 1
+#: (2026-10-13): a reservations pilot lead's every command failed
+#: "sandbox_apply" with status 71 before any file was read, and six more
+#: review and revision calls followed as if the code were wrong. The match is
+#: the launcher's own refusal line, never a substring of test output.
+_INFRASTRUCTURE = SANDBOX_REFUSAL
+
+
+def _infrastructure_failures(failures) -> List[str]:
+    """Failed tool calls whose own output says the environment could not run
+    them, each as one bounded line of evidence (command, exit status, the
+    output that says so). Ordinary failures (a failing test, a missing
+    module, a denied command) are not this; they stay the model's to read."""
+    out = []
+    for entry in failures if isinstance(failures, list) else ():
+        if not isinstance(entry, dict):
+            continue
+        text = " ".join(str(entry.get(k) or "") for k in ("output_tail", "message"))
+        refusal = _INFRASTRUCTURE.search(text)
+        if refusal:
+            where = entry.get("command") or entry.get("kind") or "tool"
+            status = f" (exit {entry['exit_code']})" if entry.get("exit_code") is not None else ""
+            out.append(f"{str(where)[:120]}{status}: {refusal.group(0).strip()[:200]}")
+    return out
+
+
+def _raise_if_infrastructure(model_key, view, cause=None) -> None:
+    """Stop at once when the call's tools could not run in this environment:
+    the cause is the environment, so no review, revision or retry can change
+    it. Nothing is retried, rerouted or rolled back.
+
+    A call whose later tool run succeeded after the refusal recovered from
+    it (root review of d51ae79): the refusal stays in the call's recorded
+    tool failures and the work goes on to its ordinary review and checks."""
+    found = _infrastructure_failures(getattr(view, "last_tool_failures", None))
+    if found and getattr(view, "last_tool_recovered", False) is not True:
+        from .session import InfrastructureUnavailable
+        raise InfrastructureUnavailable(
+            f"{model_key}'s tools could not run in this execution environment: "
+            + "; ".join(found[:3]) + ". This is the environment, not the task's code: fix the "
+            "sandbox or transport setup and run again. Work preserved.") from cause
 
 
 def _is_capture_invocation(command: str) -> bool:

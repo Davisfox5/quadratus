@@ -185,7 +185,7 @@ class PartialWorkStopped(RuntimeError):
 
 
 #: What a task can fail on by itself (``TaskFailed.cause``).
-TASK_FAILURE_CAUSES = ("scope", "reply", "channel", "transport")
+TASK_FAILURE_CAUSES = ("scope", "reply", "channel", "transport", "environment")
 
 
 class TaskFailed(PartialWorkStopped):
@@ -230,6 +230,36 @@ class CapabilityUnavailable(RuntimeError):
     declared. Nothing is granted, replayed or rerouted: the operator declares
     a capture profile or a check. Distinct from a model's refusal.
     """
+
+
+#: A shell or tool's own refusal line ("zsh:1: command not found: pytest",
+#: "cat: app.py: Permission denied"), never a test's report of an error.
+_ENVIRONMENT_TEXT = re.compile(r"^(?:[\w./-]+:\s*)+(?:command not found|permission denied|operation not permitted)",
+                               re.IGNORECASE | re.MULTILINE)
+
+
+def _environment_signature(failures) -> tuple:
+    """The environmental part of a call's tool failures, order-free:
+    (command, exit) for each command the environment could not run."""
+    found = set()
+    for failure in failures or []:
+        if not isinstance(failure, dict):
+            continue
+        code = failure.get("exit_code")
+        text = str(failure.get("output_tail") or failure.get("message") or "")
+        if (code in (126, 127) or failure.get("status") == "permission_denied"
+                or _ENVIRONMENT_TEXT.search(text)):
+            found.add((str(failure.get("command") or failure.get("type") or "tool"), code))
+    return tuple(sorted(found, key=repr))
+
+
+class InfrastructureUnavailable(CapabilityUnavailable):
+    """A call's tools could not run in this execution environment (a vendor
+    sandbox that cannot start inside the operator's, for one). The cause is
+    the environment, so the run stops at once with it quoted; no review,
+    revision or retry is spent on code that was never the problem (step 1,
+    2026-10-13: six calls followed a lead whose every command failed
+    "sandbox_apply", status 71, before any file was read)."""
 
 
 class RunStalled(RuntimeError):
@@ -810,6 +840,40 @@ def _audit_check_facts(checks, current) -> str:
                          f"{r.get('status')}: {redact_command_paths(str(r.get('reason') or ''), paths)[:80]}; "
                          f"{_check_tally(r.get('report'), r.get('tests'))}; {_check_source(r.get('source_hash'), current)}")
     return "\n".join(lines)
+
+
+#: Runner labels a model may see: public program and module names only,
+#: never an operand, a path or a project script's name (root review of
+#: d51ae79: a script path can be a file seats must not open).
+_PUBLIC_RUNNERS = frozenset({
+    "pytest", "unittest", "python", "python3", "node", "nodejs", "npm", "npx", "pnpm", "yarn", "bun",
+    "deno", "jest", "vitest", "mocha", "playwright", "tox", "nox", "make", "go", "cargo", "ruby", "rspec",
+    "rake", "bundle", "mvn", "gradle", "dotnet", "bash", "sh", "uv", "poetry", "hatch"})
+
+
+def _check_runner(argv) -> str:
+    """A command's runner as a public label: the module after ``-m``, else
+    the program's basename, when it is a known public runner; otherwise "a
+    project command"."""
+    argv = [str(a) for a in argv or ()]
+    if not argv:
+        return "a project command"
+    label = argv[argv.index("-m") + 1] if "-m" in argv[:-1] else os.path.basename(argv[0])
+    return label if label in _PUBLIC_RUNNERS else "a project command"
+
+
+def _configured_checks(gate) -> str:
+    """The checks the harness executes, one line per command: id, whether it
+    is required, its runner label, and whether it is skipped. Never a skip
+    reason, operand or path. "" with no gate."""
+    if gate is None:
+        return ""
+    commands = getattr(gate, "commands", None)
+    if commands:
+        return "\n".join(f"- {c.id} ({'required' if c.required else 'optional'}): runs {_check_runner(c.argv)}"
+                         + ("; skipped by configuration" if c.skip_reason else "") for c in commands)
+    command = getattr(gate, "command", None)
+    return f"- check (required): runs {_check_runner(command)}" if command else ""
 
 
 def _gate_identity(gate) -> str:
@@ -2124,6 +2188,8 @@ class Session:
         self._outcome: Optional[TaskOutcome] = None
         #: Fleet's CHANGED classification for the editing call in flight.
         self._last_changed_report: Optional[dict] = None
+        self._last_tool_failures: list = []
+        self._last_environment_failure: Optional[tuple] = None
         self.requirement_audits: List[dict] = []
         self.requirement_reviews: List[dict] = []
         #: Run-start bytes of every test and test-support file
@@ -2289,6 +2355,7 @@ class Session:
                 # Fleet leaves its CHANGED classification on this inner
                 # context, which resets on exit; carry it out for _edit.
                 self._last_changed_report = (invocation_context.get() or {}).get("changed_report")
+                self._last_tool_failures = (invocation_context.get() or {}).get("tool_failures") or []
                 if allow_writes and spec is not None and self._task_memory is not None:
                     report = self._assess_scope(spec, self._task_memory, self._task_before)
                     if spec.scope is not None and report is None:
@@ -2354,9 +2421,11 @@ class Session:
         allow_writes = self._writes()
         before = self._capture_source() if allow_writes else None
         self._last_changed_report = None
+        self._last_tool_failures = []
         try:
             with invocation(getattr(self._active_spec, "task_id", "run"), role):
                 reply = self._invoke_model(key, prompt, allow_writes=allow_writes)
+            self._stop_repeated_environment_failure(key, role, before)
             report = self._last_changed_report
             if report and report.get("status") != "match":
                 self._record_changed_report(key, role, reply, report)
@@ -2380,6 +2449,28 @@ class Session:
             if not state.get("inspected"):
                 raise PartialWorkStopped(str(exc), partial=state) from exc
             raise TaskFailed("transport", str(exc), partial=state) from exc
+
+    def _stop_repeated_environment_failure(self, key, role, before) -> None:
+        """An editing call that hit the same environmental tool failure as the
+        last one, against the same source, fails the task (step 1, 2026-10-13).
+
+        Only failures the environment owns count: a missing command, one that
+        could not execute, or a denied permission. A failing test is the
+        task's own business and a rebuttal with no tool failures is a changed
+        approach, so neither is caught here. Partial work is kept."""
+        signature = _environment_signature(self._last_tool_failures)
+        task = getattr(self._active_spec, "task_id", "run")
+        source = self._source_fingerprint()
+        current = (task, signature, source) if signature and source else None
+        previous, self._last_environment_failure = self._last_environment_failure, current
+        if current is None or current != previous:
+            return
+        shown = "; ".join(f"{command} (exit {code})" for command, code in signature[:3])
+        raise TaskFailed("environment",
+                         f"{key} ({role}) hit the same environmental tool failure as the previous call "
+                         f"with the source unchanged: {shown}. Repeating the call cannot change that; "
+                         "fix the environment or change the approach. Work preserved.",
+                         partial=self._inspect_partial_edits(before))
 
     def _record_changed_report(self, key: str, role: str, reply: str, report: dict) -> None:
         """A CHANGED line that disagreed with the measured diff, kept as history.
@@ -4117,6 +4208,7 @@ class Session:
             "reply": "its lead's reply was neither a request nor a delivery",
             "channel": "its lead's requests did not converge on a draft",
             "transport": "its lead's call stopped after changing source",
+            "environment": "its calls repeated the same environmental tool failure on unchanged source",
         }[exc.cause]
         summary_text = (
             f"FAILED before finishing: {what}. {str(exc)[:600]}"
@@ -5292,12 +5384,29 @@ class Session:
                          + f"; {_check_source(source, current)}")
         return "\n".join(lines)
 
+    def _configured_checks_note(self) -> str:
+        """The configured checks as the one source of executable verification
+        (step 1, 2026-10-13: a pilot plan prescribed ``python3 -m unittest
+        discover -v`` while the configured runner was pytest, and audits kept
+        requiring the command nobody here runs). Runner names only."""
+        listed = _configured_checks(self.config.integration_gate) if self.project else ""
+        if not listed:
+            return ""
+        return ("\n\n## Configured project checks (the only commands the harness executes)\n" + listed
+                + "\nPlan verification these checks can show: tests their runner collects. Do not invent "
+                "a test command the goal does not name; a seat cannot be held to a command the harness "
+                "does not run. If the goal itself requires a command these checks do not run, do not "
+                "drop it and do not prescribe it: ASK, naming the command and the configured checks as "
+                "a configuration conflict.")
+
     def _verification_note(self) -> str:
         """The orchestrator's view of the harness's own verification."""
+        configured = self._configured_checks_note()
         facts = self._harness_facts()
         if not facts:
-            return ""
-        head = "\n\n## The harness's latest check and renders (its own runs, not a model's account)\n" + facts
+            return configured
+        head = (configured + "\n\n## The harness's latest check and renders (its own runs, not a model's account)\n"
+                + facts)
         current = self._source_fingerprint()
         canonical = (bool(self.checks) and bool(current) and self.checks[-1].get("source") == current
                      and self.checks[-1].get("gate") == _gate_identity(self.config.integration_gate))
@@ -6459,6 +6568,7 @@ class Session:
             return {r: (False, "no auditor from another vendor available") for r in audited}
         before = self._capture_source() if self.project else None
         checks = _audit_check_facts(self.checks[-3:], self._source_fingerprint())
+        configured = _configured_checks(self.config.integration_gate) if self.project else ""
         prompt = (
             f"## Goal (verbatim)\n\n{self.memory.goal.strip()}\n\n## Requirements\n\n"
             + "\n".join(f"{rid}: {text}" for rid, text in audited.items())
@@ -6471,6 +6581,13 @@ class Session:
                "checks that did not run are incomplete evidence, and a check on an earlier source cannot "
                "establish the delivered source's result; none of these establishes a pass. Judge each "
                "requirement yourself." if checks else "")
+            + (f"\n\n## Configured project checks (the only commands the harness executes)\n{configured}\n"
+               "A test command that only a plan, task or model prescribed is not a requirement: judge "
+               "the requirement by whether these checks, as executed on the delivered source, exercise "
+               "it. A command the goal itself requires is a requirement: if these checks do not run it, "
+               "that requirement is NOT MET as a configuration conflict naming the command. A configured "
+               "check that is missing, failed, skipped, stale or not run is still not evidence of a "
+               "pass." if configured else "")
             + (("\n\n## How ambiguous requirements were settled (judge against these)\n"
                 + "\n".join([f"- {r}: decided by the orchestrator: {t}" for r, t in ledger.decisions.items()]
                              + [f"- operator ruling: {r}" for r in ledger.rulings]))

@@ -61,7 +61,7 @@ import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -442,6 +442,157 @@ def _extract_grok_usage(stdout: str) -> Optional[Dict[str, int]]:
     if input_tokens == 0 and output_tokens == 0:
         return None
     return {"input_tokens": input_tokens, "output_tokens": output_tokens}
+
+
+#: A sandbox launcher's own refusal to start a command: macOS
+#: ``sandbox-exec``'s ``sandbox_apply`` failure (status 71) or one of
+#: ``bwrap``'s namespace-setup errors, as the whole line. Any other line that
+#: merely starts with a launcher's name (a test fixture's diagnostic, a
+#: model's prose) is ordinary output (#35, root review of d51ae79).
+SANDBOX_REFUSAL = re.compile(
+    r"^[ \t]*(?:sandbox-exec: sandbox_apply: [^\n]*"
+    r"|bwrap: (?:No permissions to create (?:a )?new namespace|Creating new namespace failed"
+    r"|setting up uid map: Permission denied|Can't mount proc on /newroot/proc"
+    r"|loopback: Failed RTM_NEWADDR)[^\n]*)", re.MULTILINE)
+
+#: Journal tools that execute a local command. Only these can show that a
+#: local command ran after a refusal; a search or documentation result that
+#: quotes an exit status shows nothing (root review of feacb60).
+_JOURNAL_SHELL_TOOLS = frozenset({"shell", "local_shell", "exec_command", "shell_command", "container.exec"})
+#: The status line a shell tool writes first, when its output is text.
+_JOURNAL_EXIT_LINE = re.compile(r"(?:Exit code: |Process exited with code )(-?\d+)")
+
+
+def _journal_exit_status(output) -> Optional[int]:
+    """A shell tool output's own exit status: ``metadata.exit_code`` (or a
+    top-level ``exit_code``) of the output's JSON envelope, else an exit
+    line as the first line of its first text part. None when it states
+    none; text further in is the command's output, never its status."""
+    texts = _tool_output_texts(output)
+    if not texts:
+        return None
+    try:
+        envelope = json.loads(texts[0])
+    except ValueError:
+        envelope = None
+    if isinstance(envelope, dict):
+        meta = envelope.get("metadata")
+        code = meta.get("exit_code") if isinstance(meta, dict) else envelope.get("exit_code")
+        return code if type(code) is int else None
+    first = texts[0].lstrip().split("\n", 1)[0].strip()
+    match = _JOURNAL_EXIT_LINE.fullmatch(first)
+    return int(match.group(1)) if match else None
+
+#: How much of a Codex session journal is read for tool outputs.
+_JOURNAL_BYTES = 8 * 1024 * 1024
+
+
+def _tool_output_texts(output) -> List[str]:
+    """The text items of a journal tool output: a string, or a list of
+    ``{"type": "input_text"|"output_text", "text": ...}`` parts."""
+    if isinstance(output, str):
+        return [output]
+    if isinstance(output, list):
+        return [part["text"] for part in output
+                if isinstance(part, dict) and isinstance(part.get("text"), str)]
+    return []
+
+
+def _codex_stdout_recovered(stdout: str) -> Optional[bool]:
+    """Whether a command completed with status 0 after the last sandbox
+    refusal in ``codex exec --json`` output; None when there was no refusal."""
+    refused, recovered = False, False
+    for line in (stdout or "").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        item = event.get("item") if isinstance(event, dict) else None
+        if not isinstance(item, dict) or item.get("type") != "command_execution":
+            continue
+        output = item.get("aggregated_output")
+        if isinstance(output, str) and SANDBOX_REFUSAL.search(output):
+            refused, recovered = True, False
+        elif refused and item.get("exit_code") == 0 and item.get("status") == "completed":
+            recovered = True
+    return recovered if refused else None
+
+
+def _codex_journal(root: Path, session_id: str, cwd, started: Optional[datetime]) -> Optional[Path]:
+    """This call's own journal, or None: exactly one file named for the
+    session, whose first record is its ``session_meta`` with the same id and
+    working directory, begun inside this call's window. A filename alone
+    authorizes nothing (root review of d51ae79)."""
+    if not session_id or not re.fullmatch(r"[A-Za-z0-9-]{8,80}", session_id) or not cwd or started is None:
+        return None
+    try:
+        files = list(Path(root).glob(f"*/*/*/rollout-*-{session_id}.jsonl"))
+        if len(files) != 1:
+            return None
+        with files[0].open(encoding="utf-8", errors="replace") as handle:
+            first = json.loads(handle.readline())
+        meta = first.get("payload") if isinstance(first, dict) and first.get("type") == "session_meta" else None
+        if not isinstance(meta, dict) or meta.get("id") != session_id:
+            return None
+        if Path(str(meta.get("cwd") or "")).resolve() != Path(cwd).resolve() or not meta.get("cwd"):
+            return None
+        begun = datetime.fromisoformat(str(meta.get("timestamp") or "").replace("Z", "+00:00"))
+        if begun.tzinfo is None:
+            return None
+        now = datetime.now(timezone.utc)
+        if not started - timedelta(seconds=5) <= begun <= now + timedelta(seconds=5):
+            return None
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+    return files[0]
+
+
+def _codex_journal_tool_failures(root: Path, session_id: str, cwd=None,
+                                 started: Optional[datetime] = None) -> Tuple[List[Dict[str, object]], Optional[bool]]:
+    """Sandbox refusals in this call's own Codex session journal, as tool
+    failures, and whether a local shell command of the same call reported
+    its own exit status 0 after the last of them (None when there was none). Never raises; ([], None) when the
+    journal is absent or not provably this call's.
+
+    #35 (2026-10-13): on a Mac the native shell's failure is not a
+    ``command_execution`` in stdout. It is a ``custom_tool_call_output``
+    whose first part reads "Script completed" and whose second part reads
+    "sandbox-exec: sandbox_apply: Operation not permitted". Only tool-output
+    items are read; reasoning and messages are never inspected.
+    """
+    path = _codex_journal(root, session_id, cwd, started)
+    if path is None:
+        return [], None
+    names, found, recovered = {}, [], False
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            lines = handle.read(_JOURNAL_BYTES).splitlines()
+    except OSError:
+        return [], None
+    for line in lines[1:]:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        payload = row.get("payload") if isinstance(row, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        kind = payload.get("type")
+        if kind in ("custom_tool_call", "function_call"):
+            names[payload.get("call_id")] = str(payload.get("name") or "tool")
+        elif kind in ("custom_tool_call_output", "function_call_output"):
+            texts = _tool_output_texts(payload.get("output"))
+            refusal = next((m for m in map(SANDBOX_REFUSAL.search, texts) if m), None)
+            if refusal:
+                recovered = False
+                if len(found) < TOOL_FAILURE_LIMIT:
+                    found.append({"kind": "native-tool",
+                                  "command": names.get(payload.get("call_id"), "tool")[:TOOL_FAILURE_TEXT],
+                                  "status": "failed", "output_tail": refusal.group(0).strip()[-TOOL_FAILURE_TEXT:]})
+            elif (found and names.get(payload.get("call_id")) in _JOURNAL_SHELL_TOOLS
+                  and _journal_exit_status(payload.get("output")) == 0):
+                recovered = True
+    return found, (recovered if found else None)
 
 
 def _codex_rollout_usage(root: Path, session_id: str) -> Optional[dict]:
@@ -2551,6 +2702,9 @@ class CLIProvider(LLMProvider):
         self.last_session_id = None  # likewise: a trace must never join the wrong transcript
         self.last_stderr = ""
         self.last_tool_failures = []
+        #: A sandbox refusal was followed by a successful tool run in this call.
+        self.last_tool_recovered = False
+        self._call_started = datetime.now(timezone.utc)
         composed = self._compose_prompt(prompt, system, history)
         argv = self._build_argv(composed, system)
         if self.spec.session_id_flag:
@@ -2705,6 +2859,15 @@ class CLIProvider(LLMProvider):
             if self.spec.vendor == "openai" and getattr(self, "last_session_id", None):
                 from .native_sessions import codex_children
                 root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "sessions"
+                # The native shell records a sandbox refusal only in the
+                # session journal (#35); Fleet stops the run on one that no
+                # later tool run recovered from.
+                journal, journal_recovered = _codex_journal_tool_failures(
+                    root, self.last_session_id, self.workdir, self._call_started)
+                self.last_tool_failures = list(self.last_tool_failures or []) + journal
+                stdout_recovered = _codex_stdout_recovered(stdout)
+                verdicts = [v for v in (stdout_recovered, journal_recovered) if v is not None]
+                self.last_tool_recovered = bool(verdicts) and all(verdicts)
                 if self.last_usage is None:
                     # Diagnostic only (Codex review of #25): a stream that ended
                     # before response.completed may have unreported usage, so

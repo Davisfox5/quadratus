@@ -617,6 +617,36 @@ Key design decisions already settled:
   Reviewers are told which run-start test files changed. A goal that
   legitimately changes behaviour an original test pins will fail this check;
   there is no exemption and no new grant.
+- **Step 1: execution failures surface at once; planner, audit and family
+  card agree with the task** (#35, 2026-10-13, corrected after root's review
+  of d51ae79). A sandbox launcher's own refusal (`sandbox-exec: sandbox_apply:`
+  or one of bwrap's namespace-setup errors, as the whole line) raises
+  `InfrastructureUnavailable` from Fleet on the editing and review paths,
+  unless a later local command in the same call stated its own exit status
+  0 (a `command_execution` in stdout, or a shell tool's output envelope or
+  first-line exit status in the journal; a search result or command output
+  that quotes `"exit_code": 0` proves nothing): that call recovered, and the
+  refusal stays in its recorded tool failures. Any other line that
+  starts with a launcher's name is ordinary output. On a Mac the refusal
+  exists only in Codex's session journal, as the second part of a
+  `custom_tool_call_output` whose first part says "Script completed"; the
+  provider reads tool-output items there (never reasoning or messages) and
+  only from a journal it can prove is this call's: one file, its
+  `session_meta` id and cwd matching, begun inside the call. Two editing
+  calls in one task with the same environmental tool failure (exit 126/127,
+  a shell's own command-not-found or permission-denied line) on unchanged
+  source fail the task as `environment`, work kept. The orchestrator and
+  audit see configured checks by id and a public runner label (never a
+  command line, operand, script name or skip reason). A test command only a
+  plan or model prescribed is not a requirement; one the goal itself
+  requires is, and when the checks do not run it the planner ASKs and the
+  audit reports a named configuration conflict, never a waiver. The
+  built-in default family's `no-io` item is narrowed, kind by kind
+  (database, network, filesystem), to the kinds the scope names outside any
+  clause that rules something out; every other kind stays forbidden, so
+  SQLite work with "No network access" keeps its database and its network
+  ban. A family chosen by a path rule or the project's policy keeps the
+  item whole, and so does a scope that rules all I/O out.
 - **The measured diff is the truth; the CHANGED line is the lead's account of
   it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
   project around every editing call, so it already knows what changed. The
