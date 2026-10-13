@@ -444,6 +444,75 @@ def _extract_grok_usage(stdout: str) -> Optional[Dict[str, int]]:
     return {"input_tokens": input_tokens, "output_tokens": output_tokens}
 
 
+#: A sandbox launcher's own refusal line: macOS ``sandbox-exec`` (whose
+#: ``sandbox_apply`` failure is status 71) or Linux ``bwrap``. Anchored at a
+#: line start so an application's test output or a model's prose that merely
+#: mentions a sandbox is not read as one (#35, 2026-10-13).
+SANDBOX_REFUSAL = re.compile(r"^[ \t]*(?:sandbox-exec: |bwrap: |sandbox_apply: )[^\n]*", re.MULTILINE)
+
+#: How much of a Codex session journal is read for tool outputs.
+_JOURNAL_BYTES = 8 * 1024 * 1024
+
+
+def _tool_output_texts(output) -> List[str]:
+    """The text items of a journal tool output: a string, or a list of
+    ``{"type": "input_text"|"output_text", "text": ...}`` parts."""
+    if isinstance(output, str):
+        return [output]
+    if isinstance(output, list):
+        return [part["text"] for part in output
+                if isinstance(part, dict) and isinstance(part.get("text"), str)]
+    return []
+
+
+def _codex_journal_tool_failures(root: Path, session_id: str) -> List[Dict[str, object]]:
+    """Sandbox refusals recorded in Codex's own session journal, as tool
+    failures. Never raises; [] when nothing matches.
+
+    #35 (2026-10-13): on a Mac the native shell's failure is not a
+    ``command_execution`` in stdout. It is a ``custom_tool_call_output``
+    whose first part reads "Script completed" and whose second part reads
+    "sandbox-exec: sandbox_apply: Operation not permitted". Only tool-output
+    items are read; reasoning and messages are never inspected.
+    """
+    if not session_id or not re.fullmatch(r"[A-Za-z0-9-]{8,80}", session_id):
+        return []
+    try:
+        # The dated layout native_sessions reads, not a walk of every journal.
+        files = sorted(Path(root).glob(f"*/*/*/rollout-*-{session_id}.jsonl"))
+    except OSError:
+        return []
+    if not files:
+        return []
+    names, found = {}, []
+    try:
+        with open(files[-1], encoding="utf-8", errors="replace") as handle:
+            for line in handle.read(_JOURNAL_BYTES).splitlines():
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                payload = row.get("payload") if isinstance(row, dict) else None
+                if not isinstance(payload, dict):
+                    continue
+                kind = payload.get("type")
+                if kind in ("custom_tool_call", "function_call"):
+                    names[payload.get("call_id")] = str(payload.get("name") or "tool")
+                elif kind in ("custom_tool_call_output", "function_call_output"):
+                    for text in _tool_output_texts(payload.get("output")):
+                        refusal = SANDBOX_REFUSAL.search(text)
+                        if refusal:
+                            found.append({"kind": "native-tool",
+                                          "command": names.get(payload.get("call_id"), "tool")[:500],
+                                          "status": "failed", "output_tail": refusal.group(0).strip()[-500:]})
+                            break
+                if len(found) >= 8:
+                    break
+    except OSError:
+        return []
+    return found
+
+
 def _codex_rollout_usage(root: Path, session_id: str) -> Optional[dict]:
     """A lower bound on a failed call's usage, from codex's own session
     record, for diagnostics. Never raises; None when nothing was recorded.
@@ -2705,6 +2774,10 @@ class CLIProvider(LLMProvider):
             if self.spec.vendor == "openai" and getattr(self, "last_session_id", None):
                 from .native_sessions import codex_children
                 root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "sessions"
+                # The native shell records a sandbox refusal only in the
+                # session journal (#35); Fleet stops the run on it.
+                self.last_tool_failures = list(self.last_tool_failures or []) + \
+                    _codex_journal_tool_failures(root, self.last_session_id)
                 if self.last_usage is None:
                     # Diagnostic only (Codex review of #25): a stream that ended
                     # before response.completed may have unreported usage, so

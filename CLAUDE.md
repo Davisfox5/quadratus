@@ -618,11 +618,16 @@ Key design decisions already settled:
   legitimately changes behaviour an original test pins will fail this check;
   there is no exemption and no new grant.
 - **Step 1: execution failures surface at once; planner, audit and family
-  card agree with the task** (#35, 2026-10-13). A call whose tool output says
-  the environment could not start it (`sandbox_apply`, `sandbox-exec`,
-  `bwrap`, landlock, seccomp) raises `InfrastructureUnavailable` from Fleet
-  on the editing and review paths: the reservations pilot spent six more
-  calls after a lead's every command failed status 71. Two editing calls in
+  card agree with the task** (#35, 2026-10-13). A call whose tool output
+  carries a sandbox launcher's own refusal line (`sandbox-exec: `, `bwrap: `,
+  `sandbox_apply: ` at a line start) raises `InfrastructureUnavailable` from
+  Fleet on the editing and review paths: the reservations pilot spent six
+  more calls after a lead's every command failed status 71. On a Mac that
+  line exists only in Codex's session journal, as the second part of a
+  `custom_tool_call_output` whose first part says "Script completed", so the
+  codex provider reads tool-output items there (never reasoning or
+  messages). A test's own output that mentions a sandbox mid-line is not a
+  refusal. Two editing calls in
   one task with the same environmental tool failure (exit 126/127, command
   not found, permission denied) on unchanged source fail the task
   (`TaskFailed("environment")`, work kept); a failing test or a rebuttal with

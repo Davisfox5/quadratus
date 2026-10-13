@@ -19,6 +19,7 @@ import uuid
 
 import pytest
 
+from quadratus.cli_providers import _codex_journal_tool_failures
 from quadratus.policy import load_policy
 from quadratus.scope import TaskScope
 from quadratus.session import _environment_signature
@@ -33,9 +34,9 @@ DECL_REVIEWED = "KIND: architect complex\nSCOPE: " + json.dumps(T1) + "\nImpleme
 SANDBOX = "sandbox_apply: Operation not permitted (status 71)"
 
 
-def _codex(text, *failures):
+def _codex(text, *failures, thread=None):
     """A codex stream whose failed commands precede the final message."""
-    events = [{"type": "thread.started", "thread_id": str(uuid.uuid4())}, {"type": "turn.started"}]
+    events = [{"type": "thread.started", "thread_id": thread or str(uuid.uuid4())}, {"type": "turn.started"}]
     for n, (command, output, code) in enumerate(failures):
         events.append({"type": "item.completed", "item": {
             "id": f"item_{n}", "type": "command_execution", "command": command,
@@ -133,3 +134,67 @@ def test_only_environmental_failures_form_the_repeat_signature():
     assert _environment_signature([{"command": "cat a", "exit_code": 1,
                                     "output_tail": "cat: a: Permission denied"}]) == (("cat a", 1),)
     assert _environment_signature(None) == ()
+
+
+# -- the native journal shape (#35, root's Mac capture, 2026-10-13) ---------------
+
+NATIVE_REFUSAL = [{"type": "input_text", "text": "Script completed\nWall time 0.0 seconds\nOutput:\n"},
+                  {"type": "input_text", "text": "sandbox-exec: sandbox_apply: Operation not permitted\n"}]
+
+
+def _journal(home, thread, rows):
+    folder = home / "sessions" / "2026" / "10" / "13"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"rollout-2026-10-13T10-00-00-{thread}.jsonl").write_text(
+        "\n".join(json.dumps({"type": "response_item", "payload": p}) for p in rows) + "\n")
+
+
+def test_the_native_journal_refusal_is_read_from_tool_output_only(tmp_path):
+    thread = str(uuid.uuid4())
+    _journal(tmp_path, thread, [
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "sandbox-exec: sandbox_apply: x"}]},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text",
+                                                               "text": "sandbox-exec: sandbox_apply: y"}]},
+        {"type": "custom_tool_call", "call_id": "c1", "name": "shell", "input": "pytest"},
+        {"type": "custom_tool_call_output", "call_id": "c1", "output": [
+            {"type": "input_text", "text": "Script failed\nOutput:\nE  assert 'sandbox-exec: ' in msg\n"
+                                           "tests/test_app.py: sandbox_apply mentioned mid-line\n"}]},
+        {"type": "custom_tool_call", "call_id": "c2", "name": "shell", "input": "cat app.py"},
+        {"type": "custom_tool_call_output", "call_id": "c2", "output": NATIVE_REFUSAL},
+    ])
+    found = _codex_journal_tool_failures(tmp_path / "sessions", thread)
+    assert found == [{"kind": "native-tool", "command": "shell", "status": "failed",
+                      "output_tail": "sandbox-exec: sandbox_apply: Operation not permitted"}]
+    assert _codex_journal_tool_failures(tmp_path / "sessions", "../../etc") == []
+
+
+def test_a_native_journal_refusal_stops_the_run_before_any_review(tmp_path, monkeypatch):
+    home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    thread = str(uuid.uuid4())
+
+    def lead(call, replay):
+        assert call.vendor == "codex"
+        _journal(home, thread, [{"type": "custom_tool_call", "call_id": "c1", "name": "shell", "input": "ls"},
+                                {"type": "custom_tool_call_output", "call_id": "c1", "output": NATIVE_REFUSAL}])
+        return _codex("I could not read the project.\nCHANGED: []", thread=thread)
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_orchestrator, lead=lead), files=FILES,
+                   record_complete=False)
+    assert "could not run in this execution environment" in replay.result.error
+    assert "sandbox-exec: sandbox_apply: Operation not permitted" in replay.result.error
+    roles = [c.role.split(":")[0] for c in replay.calls]
+    assert roles.count("lead") == 1 and not {"collaborator", "revision"} & set(roles), roles
+
+
+def test_application_output_that_mentions_a_sandbox_is_not_an_infrastructure_failure(tmp_path, monkeypatch):
+    def lead(call, replay):
+        if call.task != "t1":
+            return Script()._lead(call, replay)
+        H.write(call, {"app.py": FIXED})
+        return _codex('Implemented add.\nCHANGED: ["app.py"]',
+                      ("pytest -q", "E   AssertionError: expected 'bwrap: denied' and seccomp profile", 1))
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_orchestrator, lead=lead), files=FILES)
+    assert "execution environment" not in (replay.result.error or "")
+    assert replay.of("closeout"), "the task ran its ordinary course"

@@ -58,6 +58,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from .cli_providers import SANDBOX_REFUSAL
 from .config import Settings
 from .delegation import (
     DelegationLedger,
@@ -991,12 +992,12 @@ def _relevant_denials(failures, checks, *, writes_granted: bool = False) -> List
 
 
 #: The execution environment itself refusing to start a tool: a vendor
-#: sandbox that cannot apply inside the operator's sandbox (macOS
-#: sandbox-exec, Linux bwrap, landlock/seccomp). Step 1 (2026-10-13): a
-#: reservations pilot lead's every command failed "sandbox_apply" with status
-#: 71 before any file was read, and six more review and revision calls
-#: followed as if the code were wrong.
-_INFRASTRUCTURE = re.compile(r"sandbox_apply|sandbox-exec:|\bbwrap:|\blandlock\b|\bseccomp\b", re.IGNORECASE)
+#: sandbox that cannot apply inside the operator's sandbox. Step 1
+#: (2026-10-13): a reservations pilot lead's every command failed
+#: "sandbox_apply" with status 71 before any file was read, and six more
+#: review and revision calls followed as if the code were wrong. The match is
+#: the launcher's own refusal line, never a substring of test output.
+_INFRASTRUCTURE = SANDBOX_REFUSAL
 
 
 def _infrastructure_failures(failures) -> List[str]:
@@ -1009,10 +1010,11 @@ def _infrastructure_failures(failures) -> List[str]:
         if not isinstance(entry, dict):
             continue
         text = " ".join(str(entry.get(k) or "") for k in ("output_tail", "message"))
-        if _INFRASTRUCTURE.search(text):
+        refusal = _INFRASTRUCTURE.search(text)
+        if refusal:
             where = entry.get("command") or entry.get("kind") or "tool"
             status = f" (exit {entry['exit_code']})" if entry.get("exit_code") is not None else ""
-            out.append(f"{str(where)[:120]}{status}: {' '.join(text.split())[:200]}")
+            out.append(f"{str(where)[:120]}{status}: {refusal.group(0).strip()[:200]}")
     return out
 
 
