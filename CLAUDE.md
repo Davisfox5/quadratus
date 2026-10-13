@@ -617,6 +617,21 @@ Key design decisions already settled:
   Reviewers are told which run-start test files changed. A goal that
   legitimately changes behaviour an original test pins will fail this check;
   there is no exemption and no new grant.
+- **Step 1: execution failures surface at once; planner, audit and family
+  card agree with the task** (#35, 2026-10-13). A call whose tool output says
+  the environment could not start it (`sandbox_apply`, `sandbox-exec`,
+  `bwrap`, landlock, seccomp) raises `InfrastructureUnavailable` from Fleet
+  on the editing and review paths: the reservations pilot spent six more
+  calls after a lead's every command failed status 71. Two editing calls in
+  one task with the same environmental tool failure (exit 126/127, command
+  not found, permission denied) on unchanged source fail the task
+  (`TaskFailed("environment")`, work kept); a failing test or a rebuttal with
+  no tool failures is not that. The orchestrator and the requirements audit
+  see the configured checks by id and runner (never a command line), and the
+  audit is told a goal-named command nobody runs is not by itself NOT MET,
+  while missing, failed, skipped, stale and NOT RUN stay against. A defaulted
+  family's `no-io` item is left out, with a line saying so, when the task's
+  own scope names storage or network work; permissions are unchanged.
 - **The measured diff is the truth; the CHANGED line is the lead's account of
   it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
   project around every editing call, so it already knows what changed. The

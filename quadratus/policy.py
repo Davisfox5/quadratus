@@ -17,6 +17,11 @@ from jsonschema import Draft202012Validator
 from .repo_scan import detect_adapters, scan_repo
 from .scope import TaskScope, _matches
 
+#: Checklist items that forbid I/O, and the scope words that contradict them.
+_IO_CHECKS = frozenset({'no-io'})
+_IO_SCOPE = re.compile(r"\b(?:sqlite3?|database|databases|sql|db|http|https|network|socket|filesystem)\b"
+                       r"|\.(?:db|sqlite3?|sql)\b", re.IGNORECASE)
+
 
 class PolicyError(ValueError):
     pass
@@ -221,10 +226,22 @@ class RepositoryPolicy:
         parts = ['## Role packet', f'Role: {role}', scope_text,
                  'Families: ' + ', '.join(plan['families']),
                  'Overlays: ' + (', '.join(plan['overlays']) or 'none')]
+        # A defaulted family was chosen by nothing that read the task. When
+        # the task's own scope names storage or network work, its no-I/O item
+        # contradicts the task (step 1, 2026-10-13: SQLite reservations work
+        # was told the module performs no database access). The item is left
+        # out and the packet says why; a family a path rule chose keeps it.
+        io_named = (not str(plan.get('family_source', '')).startswith('path rules')
+                    and scope is not None and _IO_SCOPE.search(scope.render(include_forbidden=False)))
         for family in plan['families']:
             card = self.cards[family]
             parts.append(f'Family checklist ({family}):')
             for check in card['checklist']:
+                if io_named and check.get('id') in _IO_CHECKS:
+                    parts.append(f"- (Not applied: \"{check['rule']}\". The {family} family is a default "
+                                 "and this task's scope names storage or network work; the scope decides "
+                                 "which I/O is allowed. Permissions are unchanged.)")
+                    continue
                 if role in check.get('applies_to', ['lead', 'reviewer', 'verifier']):
                     parts.append(f"- {check['rule']} Because: {check['because']}")
             parts.append('Required inputs: ' + json.dumps(card['required_inputs']))
