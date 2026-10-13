@@ -109,6 +109,8 @@ def test_runtime_exception_cannot_reopen_operator_root(roots):
 @pytest.mark.parametrize('setting', [
     'mcp_servers.amb.command="node"', 'features.computer_use=true', 'notify=["/x"]',
     'profile="x"', 'profiles.x.sandbox_mode="danger-full-access"',
+    'mcp_servers . amb.command="node"', 'projects.x.trust_level="trusted"',
+    'model_instructions_file="/private/hidden"', 'experimental_instructions_file="/private/hidden"',
 ])
 def test_config_override_cannot_restore_removed_reader(roots, setting):
     work, private = roots
@@ -143,3 +145,13 @@ def test_only_exact_held_bounded_bridge_override_is_allowed(roots):
     assert key+'='+value in result and 'agents.enabled=false' in result
     with pytest.raises(ValueError):
         protect(original, protected=[str(private)], cwd=str(work), trusted_worker_config={key:'"other"'})
+
+
+def test_parent_instruction_paths_project_trust_and_auth_commands_do_not_survive():
+    source = ('model="gpt-5.6-sol"\nmodel_instructions_file="/private/hidden"\n'
+              'experimental_instructions_file="/private/other"\n[projects."/work"]\ntrust_level="trusted"\n')
+    result = tomllib.loads(_module.isolated_solver_config(source))
+    assert result['model'] == 'gpt-5.6-sol'
+    assert not {'model_instructions_file','experimental_instructions_file','projects'} & result.keys()
+    with pytest.raises(ValueError):
+        _module.isolated_solver_config('[model_providers.custom]\nauth_command=["/private/script"]\n')

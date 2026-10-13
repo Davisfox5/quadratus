@@ -64,13 +64,26 @@ def isolated_solver_config(config: str) -> str:
     document = tomllib.loads(without_legacy_mode(config))
     if document.get("profile"):
         raise ValueError("A selected user profile requires an explicitly reviewed flattened config")
-    for field in ("profile", "profiles", "sandbox_workspace_write", "mcp_servers", "plugins", "hooks", "notify"):
-        document.pop(field, None)
+    if document.get("model_providers") or document.get("model_provider") not in (None, "openai"):
+        raise ValueError("Custom provider definitions require separate subscription/parent-reader review")
+    # The native parent can open instruction/config paths before its shell
+    # sandbox exists. Preserve the actual model/effort/approval scalars, not
+    # arbitrary path-valued user settings or project trust layers.
+    safe = {"model", "model_provider", "model_reasoning_effort", "model_reasoning_summary",
+            "model_verbosity", "model_context_window", "model_auto_compact_token_limit",
+            "approval_policy", "approvals_reviewer", "service_tier", "cli_auth_credentials_store"}
+    narrowed = {k: v for k, v in document.items() if k in safe}
+    if any(not isinstance(v, (str, int, float, bool)) for v in narrowed.values()):
+        raise ValueError("Model/approval settings must be scalar")
     features = dict(document.get("features", {}))
     for feature in ("apps", "browser_use", "browser_use_external", "browser_use_full_cdp_access",
                     "computer_use", "memories", "chronicle"):
         features[feature] = False
-    document["features"] = features
+    narrowed["features"] = features
+    # The controller pins the child's environment; shells do not inherit
+    # arbitrary API keys or startup script paths from the operator.
+    narrowed["shell_environment_policy"] = {"inherit": "core"}
+    document = narrowed
     result = "\n".join(json.dumps(k) + "=" + _toml_value(v) for k, v in document.items()) + "\n"
     if tomllib.loads(result) != document:
         raise ValueError("Configuration round trip failed")
@@ -133,7 +146,7 @@ def protected_codex_argv(argv: Sequence[str], *, protected: Sequence[str],
                 raise ValueError("Missing config value")
             value = argv[i + 1]
             key, _, setting = value.partition("=")
-            key = key.strip().replace('"', '').replace("'", "")
+            key = ".".join(part.strip().strip('"\'').strip() for part in key.split("."))
             if key.startswith("sandbox_workspace_write."):
                 if key.endswith(".writable_roots") and setting == "[]":
                     i += 2
@@ -155,6 +168,10 @@ def protected_codex_argv(argv: Sequence[str], *, protected: Sequence[str],
             if any(key == prefix or key.startswith(prefix + ".") for prefix in
                    ("mcp_servers", "plugins", "hooks", "notify", "features", "profile", "profiles")):
                 raise ValueError("Config override would restore an ambient reader or selected profile")
+            if key in {"model_instructions_file", "experimental_instructions_file"} or any(
+                    key == prefix or key.startswith(prefix + ".") for prefix in
+                    ("projects", "model_providers", "shell_environment_policy", "skills", "desktop", "marketplaces")):
+                raise ValueError("Unreviewed native-parent reader or environment override")
             if (key == "agents" or key.startswith("agents.")) and (key != "agents.enabled" or setting != "false"):
                 raise ValueError("Native fanout override")
             body.extend((arg, value))
