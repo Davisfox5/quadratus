@@ -170,3 +170,21 @@ def test_native_parent_file_flags_are_not_allowed(roots, flags):
     with pytest.raises(ValueError):
         protect(['codex','exec','--sandbox','workspace-write',*flags],
                 protected=[str(private)],cwd=str(work))
+
+
+@pytest.mark.parametrize('kind', ['directory', 'file', 'broken_symlink'])
+def test_worker_project_config_refused_before_launch_and_after_call(roots, kind):
+    work, private = roots
+    _module.require_no_worker_project_config(str(work))
+    path = work / '.codex'
+    if kind == 'directory':
+        path.mkdir()
+    elif kind == 'file':
+        path.write_text('worker-owned config')
+    else:
+        path.symlink_to(work / 'missing-config')
+    with pytest.raises(ValueError, match='must be absent'):
+        _module.require_no_worker_project_config(str(work))
+    with pytest.raises(ValueError, match='must be absent'):
+        protect(['codex','exec','--sandbox','workspace-write'],
+                protected=[str(private)],cwd=str(work))

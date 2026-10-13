@@ -90,6 +90,19 @@ def isolated_solver_config(config: str) -> str:
     return result
 
 
+def require_no_worker_project_config(cwd: str) -> Path:
+    """Call before launch and after shutdown; preserve a violating result.
+
+    Exec can mark the disposable config's workspace trusted. Never reuse that
+    config, and refuse a worker-owned .codex tree rather than letting a later
+    invocation load additional parent tools or settings from it.
+    """
+    root = Path(cwd).resolve(strict=True)
+    if not root.is_dir() or os.path.lexists(root / ".codex"):
+        raise ValueError("Worker project .codex configuration must be absent")
+    return root
+
+
 def protected_codex_argv(argv: Sequence[str], *, protected: Sequence[str],
                          cwd: str, tempdir: str | None = None,
                          readonly_runtime: Sequence[str] = (),
@@ -101,9 +114,7 @@ def protected_codex_argv(argv: Sequence[str], *, protected: Sequence[str],
     """
     if not argv or not protected:
         raise ValueError("Exact client argv and protected roots required")
-    root = Path(cwd).resolve(strict=True)
-    if not root.is_dir():
-        raise ValueError("Workspace must be a directory")
+    root = require_no_worker_project_config(cwd)
     result = [argv[0]]
     body: list[str] = []
     mode = None
