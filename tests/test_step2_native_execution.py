@@ -84,6 +84,7 @@ def test_exception_and_project_config_appearance_preserved_without_auth(boundary
         provider._call('request', '', [])
     assert Path(provider.workdir, '.codex').is_dir()
     assert adapter.receipts[0]['auth_removed'] and adapter.receipts[0]['project_config_appeared']
+    assert adapter.receipts[0]['original_exception'] == 'TimeoutError'
 
 
 def test_journal_accounting_uses_exact_fresh_home_not_global_home(boundary, monkeypatch):
@@ -222,3 +223,72 @@ def test_actual_timeout_output_preserved_and_seed_removed(boundary, monkeypatch)
     assert (home / 'native-stderr.log').read_text() == 'actual-timeout'
     assert (home / 'native-input.txt').read_text() == 'original request'
     assert not (home / 'auth.json').exists()
+
+
+@pytest.mark.parametrize('disposable', [False, True])
+def test_temp_files_do_not_enter_measured_source_and_scratch_is_removed(boundary, monkeypatch, disposable):
+    adapter, provider = boundary
+    from quadratus.project import Project
+    provider._disposable = disposable
+    before = Project(provider.workdir).fingerprint()
+    scratch = []
+    def launch(argv, **kwargs):
+        path = Path(kwargs['env']['TMPDIR'])
+        assert path.is_relative_to(Path(provider.workdir)) is disposable
+        (path / 'test-temp.txt').write_text('temporary test output')
+        scratch.append(path)
+        return 'answer'
+    monkeypatch.setattr(cli.CLIProvider, '_call', fake_call)
+    monkeypatch.setattr(cli, '_launch', launch)
+    with adapter.installed():
+        provider._call('request', '', [])
+    assert not scratch[0].exists()
+    assert Project(provider.workdir).fingerprint() == before
+    assert adapter.receipts[0]['scratch_removed']
+
+
+def test_rotated_auth_is_removed_recorded_and_next_call_refused(boundary, monkeypatch):
+    adapter, provider = boundary
+    original = adapter.auth.read_bytes()
+    launches = []
+    def launch(argv, **kwargs):
+        launches.append(argv)
+        Path(kwargs['env']['CODEX_HOME'], 'auth.json').write_text('rotated-test-auth')
+        return 'successful-answer'
+    monkeypatch.setattr(cli.CLIProvider, '_call', fake_call)
+    monkeypatch.setattr(cli, '_launch', launch)
+    with adapter.installed():
+        assert provider._call('request', '', []) == 'successful-answer'
+        with pytest.raises(ValueError, match='auth changed'):
+            provider._call('request', '', [])
+    assert len(launches) == 1 and adapter.auth.read_bytes() == original
+    assert adapter.receipts[0]['auth_changed'] and adapter.receipts[0]['auth_removed']
+    assert 'rotated-test-auth' not in json.dumps(adapter.receipts)
+
+
+def test_replaced_scratch_is_not_deleted_and_further_calls_refused(boundary, monkeypatch):
+    adapter, provider = boundary
+    import shutil
+    paths = []
+    def launch(argv, **kwargs):
+        path = Path(kwargs['env']['TMPDIR'])
+        moved = path.with_name(path.name + '-moved')
+        path.rename(moved)
+        path.mkdir()
+        (path / 'replacement.txt').write_text('retain replacement')
+        paths.extend([path, moved])
+        return 'answer'
+    monkeypatch.setattr(cli.CLIProvider, '_call', fake_call)
+    monkeypatch.setattr(cli, '_launch', launch)
+    try:
+        with adapter.installed():
+            with pytest.raises(ValueError, match='cleanup failed'):
+                provider._call('request', '', [])
+            with pytest.raises(ValueError, match='further native calls refused'):
+                provider._call('request', '', [])
+        assert (paths[0] / 'replacement.txt').read_text() == 'retain replacement'
+        assert adapter.receipts[0]['cleanup_errors'] == ['ValueError']
+        assert adapter.receipts[0]['auth_removed']
+    finally:
+        for path in paths:
+            shutil.rmtree(path)

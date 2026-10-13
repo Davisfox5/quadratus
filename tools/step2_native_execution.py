@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextvars
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -30,6 +31,27 @@ _installation = threading.Lock()
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def cleanup_owned_scratch(home):
+    """After owned shutdown, remove only the directory this controller created.
+
+    Its identity receipt lives in the protected, controller-owned call home.
+    Never follow a replacement symlink or delete a substituted directory.
+    """
+    record = Path(home) / 'native-scratch.json'
+    if not record.exists():
+        return
+    held = json.loads(record.read_text())
+    path = Path(held['path'])
+    if not os.path.lexists(path):
+        return
+    info = path.lstat()
+    if ([info.st_dev, info.st_ino, info.st_uid] != held['identity']
+            or not stat.S_ISDIR(info.st_mode) or path.is_symlink()
+            or not path.is_absolute() or not path.name.startswith('qw-native-')):
+        raise ValueError('Scratch creation identity changed; refuse deletion')
+    shutil.rmtree(path)
 
 
 class NativeExecution:
@@ -55,6 +77,8 @@ class NativeExecution:
         self.worker_mcp_sha256 = worker_mcp_sha256
         self.current = contextvars.ContextVar('quadratus_native_execution', default=None)
         self.receipts = []
+        self.auth_changed = False
+        self.cleanup_failed = False
 
     def _bridge(self, provider, original_tool):
         from quadratus.worker_bridge import TOOL_TIMEOUT, input_schema
@@ -70,7 +94,6 @@ class NativeExecution:
         env = tool['env']
         if set(env) != {'QUADRATUS_WORKER_SOCKET', 'QUADRATUS_WORKER_TOKEN', 'QUADRATUS_WORKER_SCHEMA'}:
             raise ValueError('Unreviewed bridge environment')
-        import json
         if json.loads(env['QUADRATUS_WORKER_SCHEMA']) != input_schema():
             raise ValueError('Worker bridge schema drift')
         token = env['QUADRATUS_WORKER_TOKEN']
@@ -116,6 +139,8 @@ class NativeExecution:
         def bounded_call(provider, *args, **kwargs):
             if provider.spec.vendor != 'openai':
                 return call(provider, *args, **kwargs)
+            if self.auth_changed or self.cleanup_failed:
+                raise ValueError('Disposable subscription auth changed or cleanup failed; further native calls refused')
             require_no_worker_project_config(provider.workdir)
             if sha(self.config) != self.config_sha256:
                 raise ValueError('Held operator config changed')
@@ -128,19 +153,61 @@ class NativeExecution:
             os.chmod(home / 'config.toml', 0o600)
             state = {'home': home, 'provider': provider, 'launched': False}
             token = self.current.set(state)
+            seed_digest = None
+            original_exception = None
             try:
+                seed = self.auth.read_bytes()
+                seed_digest = hashlib.sha256(seed).digest()
                 fd = os.open(home / 'auth.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(fd, 'wb') as stream:
-                    stream.write(self.auth.read_bytes())
+                    stream.write(seed)
+                del seed
+                # Writable calls already have the native workspace profile's
+                # ordinary TMPDIR grant. Keep their temporary files outside the
+                # measured project. Read-only disposable copies retain their
+                # existing inside-copy scratch authority; no grant is widened.
+                state['scratch'] = Path(tempfile.mkdtemp(prefix='qw-native-',
+                    dir=provider.workdir if getattr(provider, '_disposable', False) else None)).resolve()
+                info = state['scratch'].lstat()
+                (home / 'native-scratch.json').write_text(json.dumps({
+                    'path': str(state['scratch']), 'identity': [info.st_dev, info.st_ino, info.st_uid]}))
                 return call(provider, *args, **kwargs)
+            except BaseException as exc:
+                original_exception = type(exc).__name__
+                raise
             finally:
-                (home / 'auth.json').unlink(missing_ok=True)
+                seed_path = home / 'auth.json'
+                cleanup_errors = []
+                rotated = False
+                if seed_digest is not None:
+                    try:
+                        rotated = (seed_path.is_symlink() or not seed_path.is_file()
+                                   or hashlib.sha256(seed_path.read_bytes()).digest() != seed_digest)
+                    except OSError:
+                        rotated = True
+                self.auth_changed = self.auth_changed or rotated
+                try:
+                    seed_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    cleanup_errors.append(type(exc).__name__)
+                if state.get('scratch'):
+                    try:
+                        cleanup_owned_scratch(home)
+                    except (OSError, ValueError) as exc:
+                        cleanup_errors.append(type(exc).__name__)
+                self.cleanup_failed = self.cleanup_failed or bool(cleanup_errors)
                 self.current.reset(token)
                 violation = os.path.lexists(Path(provider.workdir) / '.codex')
                 self.receipts.append({'home': str(home), 'launched': state['launched'],
                                       'native_seconds': state.get('native_seconds'),
-                                      'auth_removed': not (home / 'auth.json').exists(),
+                                      'scratch': str(state.get('scratch')),
+                                      'scratch_removed': not state.get('scratch') or not state['scratch'].exists(),
+                                      'auth_changed': rotated, 'original_exception': original_exception,
+                                      'cleanup_errors': cleanup_errors,
+                                      'auth_removed': not os.path.lexists(seed_path),
                                       'project_config_appeared': violation})
+                if cleanup_errors:
+                    raise ValueError('Native credential/scratch cleanup failed; work preserved')
                 if violation:
                     raise ValueError('Worker project .codex appeared; work preserved, future calls refused')
 
@@ -154,7 +221,7 @@ class NativeExecution:
             trusted = self._bridge(provider, tool)
             return protected_codex_argv(argv, protected=self.protected, cwd=provider.workdir,
                                         readonly_runtime=self.readonly_runtime,
-                                        tempdir=str(Path(provider.workdir) / '.quadratus-tmp'),
+                                        tempdir=str(state['scratch']),
                                         trusted_worker_config=trusted)
 
         def bounded_launch(argv, *, input=None, timeout=None, cwd=None, env=None):
@@ -169,8 +236,7 @@ class NativeExecution:
                          'QUADRATUS_MVP_OWNERSHIP')
             child_env = {k: v for k, v in (env or {}).items() if k in permitted}
             child_env['CODEX_HOME'] = str(state['home'])
-            child_env['TMPDIR'] = str(Path(cwd) / '.quadratus-tmp')
-            Path(child_env['TMPDIR']).mkdir(exist_ok=True)
+            child_env['TMPDIR'] = str(state['scratch'])
             home = state['home']
             (home / 'native-input.txt').write_text(input or '')
             started = time.monotonic()
