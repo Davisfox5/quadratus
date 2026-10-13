@@ -17,20 +17,28 @@ from jsonschema import Draft202012Validator
 from .repo_scan import detect_adapters, scan_repo
 from .scope import TaskScope, _matches
 
-#: Checklist items that forbid I/O, and the scope words that contradict them.
+#: Checklist items that forbid I/O, and the I/O kinds a task scope can ask
+#: for by name.
 _IO_CHECKS = frozenset({'no-io'})
-_IO_SCOPE = re.compile(r"\b(?:sqlite3?|database|databases|sql|db|http|https|network|socket|filesystem)\b"
-                       r"|\.(?:db|sqlite3?|sql)\b", re.IGNORECASE)
-#: A scope sentence that rules I/O out ("without database access", "no
-#: network calls", "must not touch the filesystem").
-_IO_DENIED = re.compile(r"\b(?:without|no|not|never|avoid\w*|forbid\w*|prohibit\w*|pure)\b[^.;\n]{0,60}?"
-                        r"(?:" + _IO_SCOPE.pattern.replace("|\\.(?:db|sqlite3?|sql)\\b", "") + r"|\bi/?o\b)",
-                        re.IGNORECASE)
+_IO_KINDS = {
+    'database': re.compile(r"\b(?:sqlite3?|databases?|sql|db)\b|\.(?:db|sqlite3?|sql)\b", re.IGNORECASE),
+    'network': re.compile(r"\b(?:https?|network|socket|api calls?)\b", re.IGNORECASE),
+    'filesystem': re.compile(r"\b(?:filesystem|file system|disk)\b", re.IGNORECASE),
+}
+#: A clause that rules something out ("without database access", "No
+#: network access", "must not touch the filesystem"), to the clause's end.
+_IO_NEGATION = re.compile(r"\b(?:without|no|not|never|avoid\w*|forbid\w*|prohibit\w*|pure)\b[^.;\n]*",
+                          re.IGNORECASE)
 
 
-def _io_authorized(text: str) -> bool:
-    """The scope names storage or network work and nowhere rules I/O out."""
-    return bool(_IO_SCOPE.search(text)) and not _IO_DENIED.search(text)
+def _io_requested(text: str) -> list:
+    """The I/O kinds the scope asks for: named outside every clause that
+    rules something out. A kind named only inside such a clause stays
+    forbidden, kind by kind (root review of feacb60: SQLite work with "No
+    network access" still needs its database)."""
+    negated = [m.span() for m in _IO_NEGATION.finditer(text)]
+    return [kind for kind, pattern in _IO_KINDS.items()
+            if any(not any(a <= m.start() < b for a, b in negated) for m in pattern.finditer(text))]
 
 
 class PolicyError(ValueError):
@@ -237,22 +245,26 @@ class RepositoryPolicy:
                  'Families: ' + ', '.join(plan['families']),
                  'Overlays: ' + (', '.join(plan['overlays']) or 'none')]
         # The built-in default family was chosen by nothing that read the
-        # task. When the task's own scope asks for storage or network work,
-        # its no-I/O item contradicts the task (step 1, 2026-10-13: SQLite
-        # reservations work was told the module performs no database
-        # access). The item is left out and the packet says why. A family a
-        # path rule or the project's own policy chose keeps it, and so does a
-        # scope that itself rules I/O out.
-        io_named = (str(plan.get('family_source', '')).startswith('built-in default')
-                    and scope is not None and _io_authorized(scope.render(include_forbidden=False)))
+        # task. When the task's own scope asks for a kind of I/O, its no-I/O
+        # item contradicts the task (step 1, 2026-10-13: SQLite reservations
+        # work was told the module performs no database access). The item is
+        # narrowed to the kinds the scope asks for and says so; every other
+        # kind stays forbidden. A family a path rule or the project's own
+        # policy chose keeps it whole, and so does a scope that rules I/O out.
+        requested = (_io_requested(scope.render(include_forbidden=False))
+                     if scope is not None and str(plan.get('family_source', '')).startswith('built-in default')
+                     else [])
         for family in plan['families']:
             card = self.cards[family]
             parts.append(f'Family checklist ({family}):')
             for check in card['checklist']:
-                if io_named and check.get('id') in _IO_CHECKS:
-                    parts.append(f"- (Not applied: \"{check['rule']}\". The {family} family is a default "
-                                 "and this task's scope names storage or network work; the scope decides "
-                                 "which I/O is allowed. Permissions are unchanged.)")
+                if requested and check.get('id') in _IO_CHECKS:
+                    rest = [k for k in _IO_KINDS if k not in requested]
+                    parts.append(f"- The module performs no I/O beyond the {' and '.join(requested)} access this "
+                                 "task's scope asks for" + (f", and no {' or '.join(rest)} access" if rest else "")
+                                 + f". Because: the {family} family is the built-in default, and its no-I/O "
+                                 f"rule (\"{check['rule']}\") is narrowed to what the scope names. "
+                                 "Permissions are unchanged.")
                     continue
                 if role in check.get('applies_to', ['lead', 'reviewer', 'verifier']):
                     parts.append(f"- {check['rule']} Because: {check['because']}")

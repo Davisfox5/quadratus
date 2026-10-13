@@ -622,8 +622,11 @@ Key design decisions already settled:
   of d51ae79). A sandbox launcher's own refusal (`sandbox-exec: sandbox_apply:`
   or one of bwrap's namespace-setup errors, as the whole line) raises
   `InfrastructureUnavailable` from Fleet on the editing and review paths,
-  unless a later tool run in the same call succeeded: that call recovered,
-  and the refusal stays in its recorded tool failures. Any other line that
+  unless a later local command in the same call stated its own exit status
+  0 (a `command_execution` in stdout, or a shell tool's output envelope or
+  first-line exit status in the journal; a search result or command output
+  that quotes `"exit_code": 0` proves nothing): that call recovered, and the
+  refusal stays in its recorded tool failures. Any other line that
   starts with a launcher's name is ordinary output. On a Mac the refusal
   exists only in Codex's session journal, as the second part of a
   `custom_tool_call_output` whose first part says "Script completed"; the
@@ -638,9 +641,12 @@ Key design decisions already settled:
   plan or model prescribed is not a requirement; one the goal itself
   requires is, and when the checks do not run it the planner ASKs and the
   audit reports a named configuration conflict, never a waiver. The
-  built-in default family's `no-io` item is left out only when the scope
-  asks for storage or network work and nowhere rules I/O out; a family
-  chosen by a path rule or the project's policy keeps it.
+  built-in default family's `no-io` item is narrowed, kind by kind
+  (database, network, filesystem), to the kinds the scope names outside any
+  clause that rules something out; every other kind stays forbidden, so
+  SQLite work with "No network access" keeps its database and its network
+  ban. A family chosen by a path rule or the project's policy keeps the
+  item whole, and so does a scope that rules all I/O out.
 - **The measured diff is the truth; the CHANGED line is the lead's account of
   it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
   project around every editing call, so it already knows what changed. The

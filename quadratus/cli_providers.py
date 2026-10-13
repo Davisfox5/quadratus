@@ -455,8 +455,33 @@ SANDBOX_REFUSAL = re.compile(
     r"|setting up uid map: Permission denied|Can't mount proc on /newroot/proc"
     r"|loopback: Failed RTM_NEWADDR)[^\n]*)", re.MULTILINE)
 
-#: A journal tool output that reports a zero exit status.
-_JOURNAL_SUCCESS = re.compile(r'exit_code\\?"?\s*:\s*0\b|^Exit code: 0\b', re.MULTILINE)
+#: Journal tools that execute a local command. Only these can show that a
+#: local command ran after a refusal; a search or documentation result that
+#: quotes an exit status shows nothing (root review of feacb60).
+_JOURNAL_SHELL_TOOLS = frozenset({"shell", "local_shell", "exec_command", "shell_command", "container.exec"})
+#: The status line a shell tool writes first, when its output is text.
+_JOURNAL_EXIT_LINE = re.compile(r"(?:Exit code: |Process exited with code )(-?\d+)")
+
+
+def _journal_exit_status(output) -> Optional[int]:
+    """A shell tool output's own exit status: ``metadata.exit_code`` (or a
+    top-level ``exit_code``) of the output's JSON envelope, else an exit
+    line as the first line of its first text part. None when it states
+    none; text further in is the command's output, never its status."""
+    texts = _tool_output_texts(output)
+    if not texts:
+        return None
+    try:
+        envelope = json.loads(texts[0])
+    except ValueError:
+        envelope = None
+    if isinstance(envelope, dict):
+        meta = envelope.get("metadata")
+        code = meta.get("exit_code") if isinstance(meta, dict) else envelope.get("exit_code")
+        return code if type(code) is int else None
+    first = texts[0].lstrip().split("\n", 1)[0].strip()
+    match = _JOURNAL_EXIT_LINE.fullmatch(first)
+    return int(match.group(1)) if match else None
 
 #: How much of a Codex session journal is read for tool outputs.
 _JOURNAL_BYTES = 8 * 1024 * 1024
@@ -525,8 +550,8 @@ def _codex_journal(root: Path, session_id: str, cwd, started: Optional[datetime]
 def _codex_journal_tool_failures(root: Path, session_id: str, cwd=None,
                                  started: Optional[datetime] = None) -> Tuple[List[Dict[str, object]], Optional[bool]]:
     """Sandbox refusals in this call's own Codex session journal, as tool
-    failures, and whether a tool output reported exit 0 after the last of
-    them (None when there was none). Never raises; ([], None) when the
+    failures, and whether a local shell command of the same call reported
+    its own exit status 0 after the last of them (None when there was none). Never raises; ([], None) when the
     journal is absent or not provably this call's.
 
     #35 (2026-10-13): on a Mac the native shell's failure is not a
@@ -564,7 +589,8 @@ def _codex_journal_tool_failures(root: Path, session_id: str, cwd=None,
                     found.append({"kind": "native-tool",
                                   "command": names.get(payload.get("call_id"), "tool")[:TOOL_FAILURE_TEXT],
                                   "status": "failed", "output_tail": refusal.group(0).strip()[-TOOL_FAILURE_TEXT:]})
-            elif found and any(_JOURNAL_SUCCESS.search(t) for t in texts):
+            elif (found and names.get(payload.get("call_id")) in _JOURNAL_SHELL_TOOLS
+                  and _journal_exit_status(payload.get("output")) == 0):
                 recovered = True
     return found, (recovered if found else None)
 

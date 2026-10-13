@@ -115,7 +115,8 @@ def test_a_defaulted_pure_logic_card_does_not_forbid_the_database_the_task_names
                        intended_result="Reservations are stored in SQLite", acceptance=["a booking survives restart"])
     packet = policy.role_packet(sqlite, "lead")
     assert "performs no network, database or filesystem access Because" not in packet
-    assert "Not applied" in packet and "Permissions are unchanged" in packet
+    assert "no I/O beyond the database access this task's scope asks for, and no network or filesystem" in packet
+    assert "Permissions are unchanged" in packet
     pure = TaskScope(permitted_paths=["total.py"], intended_result="Calculate totals", acceptance=["2+2=4"])
     assert "performs no network, database or filesystem access Because" in policy.role_packet(pure, "lead")
 
@@ -287,7 +288,7 @@ def test_explicit_no_io_task_keeps_its_no_io_family_check(tmp_path):
                       intended_result='Pure calculation without database, network or filesystem access',
                       acceptance=['No database or network calls'])
     packet = policy.role_packet(scope, 'lead')
-    assert 'Not applied' not in packet, packet
+    assert 'performs no network, database or filesystem access Because' in packet, packet
 
 
 def test_a_project_policy_default_family_keeps_its_no_io_item(tmp_path):
@@ -297,4 +298,55 @@ def test_a_project_policy_default_family_keeps_its_no_io_item(tmp_path):
     assert "pure-logic" in cards
     sqlite = TaskScope(permitted_paths=["reservations.py"], intended_result="Reservations are stored in SQLite")
     builtin = load_policy(tmp_path).role_packet(sqlite, "lead")
-    assert "Not applied" in builtin
+    assert "no I/O beyond the database access" in builtin
+
+
+# -- root review of feacb60: two remaining edges ------------------------------------
+
+def test_sqlite_task_forbidding_network_still_can_use_authorized_database(tmp_path):
+    policy = load_policy(tmp_path)
+    scope = TaskScope(permitted_paths=['inventory.py'], intended_result='Store reservations in SQLite',
+                      acceptance=['No network access', 'Batch persists atomically'])
+    packet = policy.role_packet(scope, 'lead')
+    assert 'performs no network, database or filesystem access Because' not in packet, packet
+    assert 'No network access' in packet
+    assert "beyond the database access this task's scope asks for, and no network or filesystem access" in packet
+
+
+def _journal_rows(tmp_path, rows):
+    sid, started = str(uuid.uuid4()), datetime.now(timezone.utc)
+    _journal(tmp_path, sid, rows, cwd=tmp_path)
+    return _codex_journal_tool_failures(tmp_path / "sessions", sid, tmp_path, started)
+
+
+REFUSED = [{"type": "custom_tool_call", "call_id": "fail", "name": "shell", "input": "cat app.py"},
+           {"type": "custom_tool_call_output", "call_id": "fail", "output": NATIVE_REFUSAL}]
+
+
+def test_non_shell_documentation_output_cannot_prove_sandbox_recovery(tmp_path):
+    failures, recovered = _journal_rows(tmp_path, REFUSED + [
+        {"type": "function_call", "call_id": "docs", "name": "web_search", "arguments": "documentation"},
+        {"type": "function_call_output", "call_id": "docs",
+         "output": 'Documentation example: {"exit_code": 0}; no local process was executed.'}])
+    assert failures and recovered is False, (failures, recovered)
+
+
+@pytest.mark.parametrize("output", [
+    'Script completed\nOutput:\nREADME: run it and expect {"exit_code": 0}\n',   # quoted in command output
+    '{"output": "x", "metadata": {"exit_code": 1}}',                              # a real failure
+    'Script completed\nWall time 0.1 seconds\nOutput:\nok\n',                    # no stated status
+])
+def test_a_shell_output_without_its_own_zero_status_is_not_a_recovery(tmp_path, output):
+    failures, recovered = _journal_rows(tmp_path, REFUSED + [
+        {"type": "function_call", "call_id": "s2", "name": "shell", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "s2", "output": output}])
+    assert failures and recovered is False
+
+
+@pytest.mark.parametrize("output", ['{"output": "3 passed", "metadata": {"exit_code": 0}}',
+                                    'Exit code: 0\nWall time: 0.2 seconds\nOutput:\n3 passed\n'])
+def test_a_later_shell_command_with_its_own_zero_status_is_a_recovery(tmp_path, output):
+    failures, recovered = _journal_rows(tmp_path, REFUSED + [
+        {"type": "function_call", "call_id": "s2", "name": "shell", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "s2", "output": output}])
+    assert failures and recovered is True
