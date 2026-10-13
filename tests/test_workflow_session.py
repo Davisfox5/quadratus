@@ -108,15 +108,18 @@ def test_a_merged_parallel_batch_records_each_child_with_its_owner(tmp_path):
     assert result["agree"] and result["complete"], result
 
 
-def test_an_unmerged_parallel_child_is_integrity_and_its_debt_stays_open(tmp_path):
+def test_an_unmerged_parallel_child_is_a_failed_task_and_its_debt_stays_open(tmp_path):
     session, project = parallel_session(tmp_path, Orchestrated([BATCH, "DONE"], rogue="b.py"))
     session.run(max_tasks=4)
     children = {o.task_id: o for o in session.task_outcomes}
     # The child's own scope check fails the task inside its copy; the parent
-    # then refuses the merge, which is the integrity fact that ranks first.
-    assert children["t2"].closed_as == "stopped:unmerged" and children["t2"].primary == "integrity"
-    assert [f.kind for f in children["t2"].facts if f.kind == "failed"] == ["failed"]
-    assert [f.stage for f in children["t2"].facts if f.kind == "integrity"][-1] == "merge"
+    # refuses the merge. Since step 2 that is a failed, continuable task (the
+    # same as a serial scope breach), not an integrity stop: nothing it wrote
+    # was merged.
+    assert children["t2"].closed_as == "failed" and children["t2"].primary == "failed"
+    assert not [f for f in children["t2"].facts if f.kind == "integrity" and f.active]
+    assert [f.stage for f in children["t2"].facts if f.kind == "failed"][-1] == "merge"
+    assert not (project / "b.py").exists() and not (project / "shared.py").exists()
     assert children["t1"].primary == "clean"
     assert not session.completed
     result = _parity(session, session.stop_reason)
