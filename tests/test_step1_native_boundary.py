@@ -27,8 +27,9 @@ def test_preserves_model_effort_and_controls_but_denies_private(roots, mode):
     args = ["codex", "exec", "--model", "gpt-5.6-sol", "-c", "model_reasoning_effort=low",
             "--sandbox", mode, "--json", "-"]
     result = protect(args, protected=[str(private)], cwd=str(work))
-    assert result[-7:] == ["exec", "--model", "gpt-5.6-sol", "-c",
-                           "model_reasoning_effort=low", "--json", "-"]
+    assert result[:2] == ["codex", "exec"]
+    assert result[-6:] == ["--model", "gpt-5.6-sol", "-c",
+                          "model_reasoning_effort=low", "--json", "-"]
     assert "--sandbox" not in result
     value = next(item.split("=", 1)[1] for item in result if item.startswith("permissions."))
     profile = tomllib.loads("profile=" + value)["profile"]

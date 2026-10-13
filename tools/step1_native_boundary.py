@@ -223,12 +223,17 @@ def protected_codex_argv(argv: Sequence[str], *, protected: Sequence[str],
     # exec on 0.154 has no -P option. default_permissions is the documented
     # selection route. A caller must refuse legacy sandbox_mode in loaded
     # configs, which otherwise takes precedence over this selection.
-    result.extend(("-c", "default_permissions=" + json.dumps(name)))
+    profile_args = ["-c", "default_permissions=" + json.dumps(name)]
     # Quoted dotted CLI keys are not TOML-parsed on 0.154; use an inline
     # table value so absolute paths, dots and spaces stay literal map keys.
     fields = ",".join(json.dumps(k) + "=" + json.dumps(v) for k, v in filesystem.items())
     table = "{extends=" + json.dumps(inherit) + ",filesystem={" + fields + "}}"
-    result.extend(("-c", prefix + "=" + table))
+    profile_args.extend(("-c", prefix + "=" + table))
+    if body and body[0] == "exec":
+        # The installed 0.154 exec parser drops root -c flags when exec also
+        # carries -c. Keep the selection and definition in the exec scope.
+        # Actual empty-stdin configuration probes pin this without generation.
+        return [*result, "exec", *profile_args, *body[1:]]
     if body and body[0] == "sandbox":
         body[1:1] = ["--permission-profile", name]
-    return [*result, *body]
+    return [*result, *profile_args, *body]
