@@ -650,6 +650,25 @@ def _test_family(path: str):
     return folder, (match.group(1) or 'py')
 
 
+def discovers_added_tests(argv) -> bool:
+    """Whether a command would also run a test file added beside the existing
+    ones: pytest with no filter and no test-file operand (only directories or
+    none), or ``unittest discover`` with no pattern or filter. An explicit
+    file list, a node id or a selection flag names only what it names, so a
+    new file there is never run (root review of b24b6db)."""
+    argv = [str(a) for a in argv]
+    if not argv or is_filtered(argv):
+        return False
+    if _is_pytest(argv):
+        tail = argv[argv.index('pytest') + 1:] if 'pytest' in argv else argv[1:]
+        return not any(not a.startswith('-') and _test_family(a) for a in tail)
+    if argv[0].split('/')[-1].startswith('python') and argv[1:3] == ['-m', 'unittest']:
+        rest = argv[3:]
+        return bool(rest) and rest[0] == 'discover' and not any(a in ('-p', '--pattern', '-k') or
+                                                                   a.startswith(('-p', '-k')) for a in rest[1:])
+    return False
+
+
 def uncovered_tests(changed, argvs) -> List[str]:
     """Changed test files no required command runs, where that can be told.
 

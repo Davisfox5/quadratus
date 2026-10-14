@@ -756,12 +756,17 @@ Key design decisions already settled:
   requirement and the error-path rule, cited a success-path test and
   called the CLI refusal condition MET; malformed input still left before
   the handler in another form. Prompt prose did not move either seat.
-  `_PROBE_RULE` asks the one kind of seat that can already show it, a seat
-  whose copy takes scratch (`CLISpec.copy_args`, today codex), to add a
-  scratch test feeding the interface each kind of invalid input the
-  condition covers, including input the interface's own parsing rejects,
-  run the approved check and report the run. No new command, grant or
-  role; seats without that copy are not asked. Whether it changes the
+  `_PROBE_RULE` asks a review seat whose copy takes scratch
+  (`CLISpec.copy_args`, today codex) to add a scratch test feeding the
+  interface each kind of invalid input the condition covers, including input
+  the interface's own parsing rejects, and report the test's own name as
+  executed and passed; otherwise NOT RUN and no MET line, so the review is
+  held unverified. It applies only when an approved command would discover a
+  new test file (`integration.discovers_added_tests`: no filter, no explicit
+  test file; root review of b24b6db). The copy-bound role keeps the harness
+  records and "do not run the checks again" and adds one named exception for
+  that scratch file (`runtime._probe_exception`). The auditor gets no probe
+  and no command line. No new command, grant or role. Whether it changes the
   verdict is unmeasured until a run shows it.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged

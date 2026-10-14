@@ -116,7 +116,7 @@ def record_invocation(ledger, event):
 
 @contextmanager
 def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None, evidence_files=None,
-               evidence_sha256=None, harness_checks=None):
+               evidence_sha256=None, harness_checks=None, probe=False):
     context = dict(task=task, role=role, origin=origin)
     if prompt_artifact:
         context["prompt_artifact"] = prompt_artifact
@@ -136,6 +136,10 @@ def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None
         # The harness's own check records for exactly the source a read-only
         # review copy holds; Fleet states them in place of the command list.
         context["harness_checks"] = str(harness_checks)
+    if probe:
+        # A review asked for a scratch demonstration; Fleet names the approved
+        # command that may run it (runtime._probe_exception).
+        context["probe"] = True
     token = invocation_context.set(context)
     try:
         yield

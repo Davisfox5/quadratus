@@ -762,36 +762,111 @@ def test_an_approval_keeps_its_notes_and_never_waives_a_hold(reply, approves):
     assert _approving_review(reply, ["R1", "R2"]) is approves
 
 
+def _gate(tmp_path, *argvs):
+    from quadratus.integration import GateCommand, GateSuite
+    return GateSuite([GateCommand(id=f"c{i}", argv=tuple(a)) for i, a in enumerate(argvs)], cwd=tmp_path)
+
+
+@pytest.mark.parametrize("argvs,seat,applies", [
+    ((), "openai:gpt-5.6-sol", False),
+    ((("python", "-m", "pytest", "-q", "tests/test_existing.py"),), "openai:gpt-5.6-sol", False),
+    ((("python", "-m", "pytest", "-q", "tests", "-k", "add"),), "openai:gpt-5.6-sol", False),
+    ((("python", "-m", "pytest", "-q", "tests", "--quadratus-report={report}"),), "openai:gpt-5.6-sol", True),
+    ((("python3", "-m", "unittest", "discover", "-s", "tests"),), "openai:gpt-5.6-sol", True),
+    ((("python", "-m", "pytest", "-q", "tests"),), "claude:opus", False),
+], ids=["empty-suite", "explicit-file", "filtered", "discovering-pytest", "unittest-discover", "no-scratch-seat"])
+def test_a_scratch_demonstration_is_asked_only_where_an_approved_command_would_run_it(
+        tmp_path, argvs, seat, applies):
+    """Root review of b24b6db: the probe was asked for with an empty suite or
+    an explicit file list, where no approved command runs a new file. It now
+    applies only to a seat whose copy takes scratch and an approved command
+    that would discover a new test file: no filter, no explicit test file."""
+    from tests.lifecycle.test_direct_tier import _unit_session
+    session = _unit_session(tmp_path)
+    session.config.integration_gate = _gate(Path(session.project), *argvs)
+    assert session._probe_applies(seat) is applies
+
+
+def _role_for(tmp_path, monkeypatch, *, role, checks, facts, probe):
+    """The role text a real Fleet copy-bound call delivers, with a fake
+    generation boundary (no provider)."""
+    from quadratus.config import Settings
+    from quadratus.delegation import invocation
+    from quadratus.runtime import Fleet
+    seen = {}
+    monkeypatch.setattr(Fleet, "_generate", lambda self, key, provider, prompt, system, **kw:
+                        seen.update(role=system, prompt=prompt) or "NO FINDINGS")
+    monkeypatch.setattr("shutil.which", lambda name: f"/fake/bin/{name}")
+    (tmp_path / "app.py").write_text("x = 1\n")
+    fleet = Fleet(Settings(backend="cli"), project=tmp_path)
+    fleet.check_commands = tuple(checks)
+    with invocation("t1", role, harness_checks=facts, probe=probe):
+        fleet.invoke("openai:gpt-5.6-sol", "review this")
+    return seen["role"]
+
+
+@pytest.mark.parametrize("facts", ["- check passed on this source", None], ids=["recorded-checks", "no-records"])
+@pytest.mark.parametrize("checks,probe,named", [
+    (("python -m pytest -q tests", "python3 -m unittest discover -s tests"), True, True),
+    (("python -m pytest -q tests/test_existing.py",), True, False),
+    (("python -m pytest -q tests",), False, False),
+], ids=["discovering", "explicit-file-only", "not-asked"])
+def test_the_runtime_names_the_one_approved_command_a_scratch_test_may_run(
+        tmp_path, monkeypatch, facts, checks, probe, named):
+    """Root review of b24b6db: with current harness records the copy-bound
+    role replaced the command list with facts and said not to run the checks
+    again, while the review prompt asked for a scratch run. The role now keeps
+    the records and that rule, and adds one exception naming the approved
+    commands that would discover a new scratch file, for that file only.
+    Nothing is named when no approved command would run it, or when the call
+    was not asked for a demonstration."""
+    role = _role_for(tmp_path, monkeypatch, role="collaborator", checks=checks, facts=facts, probe=probe)
+    exception = "ONE EXCEPTION, FOR A NEW SCRATCH TEST ONLY"
+    assert (exception in role) is named
+    if facts:
+        assert "do not run the check commands again here" in role, "the recorded checks still stand"
+    if named:
+        tail = role.split(exception, 1)[1]
+        assert "python -m pytest -q tests\n" in tail and "python3 -m unittest discover -s tests" in tail
+        assert "not to confirm the delivered source again" in tail
+        assert "quadratus-report" not in role
+
+
 @pytest.mark.requirements_ledger
-@pytest.mark.parametrize("lead_rung", ["standard", "complex"])
-def test_a_seat_whose_copy_takes_scratch_is_asked_to_demonstrate_error_conditions(tmp_path, monkeypatch, lead_rung):
-    """r08 on f247f0a: the reviewer and the final auditor had the goal, the
-    requirement and the error-path rule, cited a success-path test and called
-    the refusal condition met. A seat whose source copy takes scratch files
-    (CLISpec.copy_args) may already add a new file there and run the approved
-    check; it is now asked to show such a condition with a scratch test and
-    report the run. Seats without that copy are not asked for what they
-    cannot do. No runner, library or case is named."""
-    from quadratus.cli_providers import CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC
+def test_the_review_seat_is_asked_for_a_scratch_run_and_the_auditor_never_sees_a_command(tmp_path, monkeypatch):
+    """Whole controller: the codex review of goal-bearing work gets the scratch
+    rule and the runtime exception naming the approved command; a claude or
+    grok review gets neither; the auditor gets no probe and no command line
+    (the standing rule: no command lines, paths or operands to the planner or
+    auditor)."""
     from quadratus.session import _PROBE_RULE
     from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
-    scratch = {s.vendor for s in (CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC) if s.copy_args}
-    assert scratch == {"openai"}, "today only the codex seat reviews in a writable copy"
+    seen = []
+    from quadratus import runtime
+    real = runtime.Fleet._generate
+
+    def capture(self, key, provider, prompt, system, **kw):
+        seen.append((key, system, prompt))
+        return real(self, key, provider, prompt, system, **kw)
+    monkeypatch.setattr(runtime.Fleet, "_generate", capture)
     declared = ("REQUIREMENTS:\nR1: " + _R1 + "\n"
-                + DECL_SIMPLE.replace("backend simple", f"backend {lead_rung}") + "\nCOVERS: R1")
+                + DECL_SIMPLE.replace("backend simple", "backend complex") + "\nCOVERS: R1")
 
     def lead(call, replay):
         H.write(call, {"app.py": fixed})
         return 'Implemented add.\nCHANGED: ["app.py"]'
 
-    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead,
-                                                 collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:2",
-                                                 auditor=lambda c, r: "R1: MET - app.py",
-                                                 **{"requirements-review": lambda c, r: "COMPLETE"}),
-                   files=FILES, max_tasks=1, record_complete=False)
-    seats = replay.of("collaborator") + replay.of("auditor")
-    assert seats, "a review and an audit ran"
-    for call in seats:
-        assert (_PROBE_RULE in call.prompt) is (call.vendor == "codex"), (call.role, call.vendor)
-        assert "argparse" not in call.prompt
-    assert any(c.vendor == "codex" for c in seats), "at least one scratch-capable seat was asked"
+    H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead,
+                                        collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:2",
+                                        auditor=lambda c, r: "R1: MET - app.py",
+                                        **{"requirements-review": lambda c, r: "COMPLETE"}),
+          files=FILES, max_tasks=1, record_complete=False)
+    reviews = [(k, r, p) for k, r, p in seen if "contributing an independent" in p]
+    audits = [(k, r, p) for k, r, p in seen if "You are an independent auditor" in p]
+    assert reviews and audits
+    for key, role, prompt in reviews:
+        codex = key.startswith("openai:")
+        assert (_PROBE_RULE in prompt) is codex and ("ONE EXCEPTION, FOR A NEW SCRATCH TEST ONLY" in role) is codex
+    assert any(k.startswith("openai:") for k, _, _ in reviews) and any(not k.startswith("openai:") for k, _, _ in reviews)
+    for _, role, prompt in audits:
+        assert _PROBE_RULE not in prompt and "ONE EXCEPTION" not in role and "-m pytest" not in prompt

@@ -50,6 +50,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import tempfile
 import threading
 import time
@@ -570,6 +571,7 @@ class Fleet:
                      "path of this copy: this copy is deleted when your call ends, and an "
                      "absolute path into it is a dead reference in the report.")
             checks = tuple(getattr(self, "check_commands", ()) or ())
+            probe = _probe_commands(checks) if context.get("probe") else ()
             if checks and context.get("role") in REVIEW_CAPPED_ROLES and context.get("harness_checks"):
                 # r03 (20261011T152432Z-4ceef6b5): seats re-ran the project's
                 # checks in copies with no browser while the harness's own
@@ -581,6 +583,7 @@ class Fleet:
                     "This copy may lack browsers or other dependencies the harness has, so a command that "
                     "cannot run here is not evidence about the source. This copy is not a git repository: "
                     "git commands fail here, so read files and the task's own account of its changes instead."
+                    + _probe_exception(probe)
                 )
             elif checks and context.get("role") in REVIEW_CAPPED_ROLES:
                 # The same exact-command guidance the editing call gets (#51),
@@ -597,6 +600,7 @@ class Fleet:
                     "the task's own account of its changes instead. If a command is denied, do not "
                     "retry variants, delegate it or use another tool to execute it; report the "
                     "unrun check and judge from what you could read."
+                    + _probe_exception(probe)
                 )
             if allow_writes:
                 role += ("\nYou are a bounded editor. Return exactly PATCH: followed by a fenced "
@@ -1184,6 +1188,35 @@ class ReviewCopyAltered(ProviderError):
     the call means the answer was formed on bytes other than the ones the
     session hashed and will record, so the answer is refused (Codex review
     of 2ffa7f6 on #52)."""
+
+
+def _probe_commands(checks) -> tuple:
+    """The approved model-facing commands that would run a new scratch test
+    file a review added to its copy (integration.discovers_added_tests)."""
+    from .integration import discovers_added_tests
+    out = []
+    for command in checks:
+        try:
+            argv = shlex.split(command)
+        except ValueError:
+            continue
+        if discovers_added_tests(argv):
+            out.append(command)
+    return tuple(out)
+
+
+def _probe_exception(commands) -> str:
+    """The one run a scratch demonstration may make (root review of b24b6db:
+    the review prompt asked for it while this role forbade running checks)."""
+    if not commands:
+        return ""
+    return ("\nONE EXCEPTION, FOR A NEW SCRATCH TEST ONLY: to run a new test file you added to this copy "
+            "for the review's demonstration, run exactly one of these approved commands, verbatim:\n"
+            + "\n".join(commands)
+            + "\nPut the file where that command discovers tests and name it the way its runner collects "
+            "them. Run it for that file only, not to confirm the delivered source again: the records "
+            "above stand. If its output does not show your scratch test executed and passed, the "
+            "condition is not demonstrated.")
 
 
 def _copy_digests(directory) -> Dict[str, str]:

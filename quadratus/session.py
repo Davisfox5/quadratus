@@ -2053,14 +2053,17 @@ _ERROR_PATH_RULE = (
 #: and run the approved check; this asks it to use that authority to show
 #: the condition instead of reading it. No new command, grant or role.
 _PROBE_RULE = (
-    "Your source copy accepts new files as scratch that is discarded with it, and the approved "
-    "check command runs here. For a condition about invalid input, errors or refusals, show it "
-    "rather than read it: add a new test file in the copy that feeds the public interface each "
-    "kind of invalid input the condition covers, including input that the interface's own argument "
-    "or request parsing rejects before the project's code runs, and asserts exactly the result the "
-    "condition states; run the approved check command; give the command, its exit status and the "
-    "outcome on the verdict line. A demonstration that fails is NOT MET. Never change an existing "
-    "file: an answer formed after a handed file changed is refused.")
+    "Your source copy accepts new files as scratch that is discarded with it. For a condition about "
+    "invalid input, errors or refusals, show it rather than read it: add one new test file in the "
+    "copy that feeds the public interface each kind of invalid input the condition covers, including "
+    "input that the interface's own argument or request parsing rejects before the project's code "
+    "runs, and asserts exactly the result the condition states. Run it only with the approved command "
+    "your role instructions name for a new scratch test, and give the scratch test's own name and "
+    "whether it executed and passed on the verdict line. A demonstration that fails is NOT MET. If you "
+    "could not run it, or the run does not show your scratch test executed, give no MET line for that "
+    "requirement and write 'NOT RUN: <why>' instead: it stays unverified. Passing existing tests are "
+    "not this demonstration. Never change an existing file: an answer formed after a handed file "
+    "changed is refused.")
 
 
 def _seat_takes_scratch(key: str) -> bool:
@@ -2433,6 +2436,11 @@ class Session:
             facts = self._harness_facts(current_only=True)
             if facts:
                 context = dict(context, harness_checks=facts)
+        if (not allow_writes and context.get("role") == "collaborator" and self._covered_texts()
+                and self._probe_applies(key)):
+            # The review prompt asked for a scratch demonstration; the runtime
+            # names the one approved command that may run it.
+            context = dict(context, probe=True)
         # Every prompt is kept, not only an interrupted one: without it there was
         # no proof of which packet or instructions a seat actually received.
         try:
@@ -7073,7 +7081,6 @@ class Session:
             "states a condition the goal, a decision and a ruling do not, judge the goal's own "
             "condition and say so on the line ('wording stricter than the goal: <condition>'); a "
             "condition the goal does state is never relaxed this way. " + _ERROR_PATH_RULE + " "
-            + (_PROBE_RULE + " " if self._probe_applies(auditor) else "")
             + "For each requirement, check the delivered files themselves: code, "
             "interface, tests and documentation. Documentation must agree with the goal, not only "
             "with the code. A requirement about existing product behaviour is met only if it works "
@@ -8610,8 +8617,15 @@ class Session:
 
     def _probe_applies(self, key: str) -> bool:
         """A demonstration is asked for only where the seat can make one: a
-        project with a configured check, and a copy that takes scratch."""
-        return bool(self.project and self.config.integration_gate is not None and _seat_takes_scratch(key))
+        copy that takes scratch, and an approved command that would run a new
+        test file (root review of b24b6db: an empty suite or an explicit file
+        list never runs one)."""
+        if not (self.project and self.config.integration_gate is not None and _seat_takes_scratch(key)):
+            return False
+        from . import integration
+        commands = integration._gate_commands(self.config.integration_gate, Path(self.project).resolve()) or []
+        return any(integration.discovers_added_tests(integration.model_facing(c.argv))
+                   for c in commands if not c.skip_reason)
 
     def _covered_texts(self) -> List[tuple]:
         """(rid, original text) for each requirement the current task covers.
