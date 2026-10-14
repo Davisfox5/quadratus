@@ -1994,7 +1994,9 @@
         }
       ],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: Step 2 corrections after the 0cf5222 clearance: 86e2841, f4eafea, d0f3263, 5366412, 4ed4d30, 238b2e9; root's 2cfff79 merged at 5112c44. Each awaits root's scoped review; final combined gates held."
+      ]
     },
     {
       "id": "T-step2-native-execution",
@@ -2033,6 +2035,39 @@
         "candidate": "b809429aff558630041c121dde3c52b502e69ad1",
         "at": "2026-10-13T21:16:07Z"
       }
+    },
+    {
+      "id": "T-step2-judge-delivery",
+      "purpose": "Step 2 Grok transport: native-delegation-off seats take headless -p with --no-subagents; oversized off-mode prompt refused, never downgraded to the file route (#73, root-owned; enforcement NOT RUN until root's canary). Base 4ed4d30 is the #73 head it was built on.",
+      "base": "4ed4d30e8a992870892f0aec5ac655ba5e0dbc63",
+      "owns": [
+        "quadratus/cli_providers.py",
+        "tests/test_native_mode.py"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "reviewed",
+      "claimed_at": "2026-10-14T03:29:43Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "2cfff79ecd15ee4e8950677834d40c1d80450de9",
+        "at": "2026-10-14T03:29:47Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "2cfff79ecd15ee4e8950677834d40c1d80450de9",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/73#issuecomment-6160231826 (scoped clear; merged into #73 at 5112c44; 930 focused PASS; real Grok enforcement NOT RUN)",
+          "scope": [
+            "quadratus/cli_providers.py",
+            "tests/test_native_mode.py"
+          ],
+          "at": "2026-10-14T03:29:47Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
