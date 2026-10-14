@@ -2072,6 +2072,39 @@
       "decisions": [
         "claude: Grok qualification worker/profile scoped review on engine 1655cf1: CLEAR on condition that the source.txt and private-link state after the one call is recorded (post-run check or worker-terminal digests); real Grok enforcement NOT RUN until root's canary. https://github.com/Davisfox5/quadratus/pull/73#issuecomment-6161041990"
       ]
+    },
+    {
+      "id": "T-step2-test-selection",
+      "purpose": "Step 2 opt-in whole-file pytest selection: operator marker expands to every current test file in the tests directory as whole operands in harness receipts (same population, no filter, NOT RUN rule unchanged); workers see and are granted ordinary directory discovery. Root-owned helper (#73).",
+      "base": "5f36a83a3c2003e010e413b3284547ffd49b0ba5",
+      "owns": [
+        "tools/step2_test_selection.py",
+        "tests/test_step2_test_selection.py"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "reviewed",
+      "claimed_at": "2026-10-14T08:56:35Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "25e962e85cbcf6bd8db576b4f4ae8ed77f2ca486",
+        "at": "2026-10-14T08:56:47Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "25e962e85cbcf6bd8db576b4f4ae8ed77f2ca486",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/73#issuecomment-6164652796 (scoped clear after HOLD 6164561100; 16 selector tests PASS; merged into #73; real runner and native behaviour not exercised)",
+          "scope": [
+            "tools/step2_test_selection.py",
+            "tests/test_step2_test_selection.py"
+          ],
+          "at": "2026-10-14T08:56:47Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": []
     }
   ],
   "receipts": [
