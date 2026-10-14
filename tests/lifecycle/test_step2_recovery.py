@@ -516,3 +516,60 @@ def test_goal_bearing_simple_parallel_work_meets_one_cross_vendor_review(tmp_pat
         assert not replay.result.completed
     else:
         assert not replay.of("revision") and not blocked, "a source that meets the goal is not held"
+
+
+# -- goal-bearing work never closes unreviewed (root review of 1a58853) ----------------
+
+_HELD = "no reviewer from another vendor was available"
+
+
+@pytest.mark.parametrize("route,goal", [("unavailable", True), ("unavailable", False),
+                                        ("direct", True), ("direct", False)])
+def test_goal_bearing_work_is_reviewed_or_held_never_closed_unreviewed(tmp_path, monkeypatch, route, goal):
+    """Root review of 1a58853: collaborators_for still returned [] for
+    goal-bearing work when no other vendor was available, and the direct tier
+    returned [] before the goal rule, so both took r04's close-out-only route.
+    Now an unavailable cross-vendor reviewer holds the task unverified, and a
+    direct label on goal-bearing work is refused so the task runs at the
+    normal tier with its review. Work that covers no requirement keeps its
+    behaviour on both routes."""
+    from quadratus import runtime
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    monkeypatch.setenv("QUADRATUS_REQUIREMENTS_LEDGER", "1" if goal else "0")
+    if route == "unavailable":
+        gone = {"claude:opus", "openai:gpt-5.6-sol"}
+        real = runtime.Fleet.available
+        monkeypatch.setattr(runtime.Fleet, "available", lambda self, key: key not in gone and real(self, key))
+    declared = (("REQUIREMENTS:\nR1: add(a, b) returns the sum\n" if goal else "") + DECL_SIMPLE
+                + ("\nCOVERS: R1" if goal else "") + ("\nTIER: direct" if route == "direct" else ""))
+
+    def lead(call, replay):
+        H.write(call, {"app.py": fixed})
+        return 'Implemented add.\nCHANGED: ["app.py"]'
+
+    reviews = []
+
+    def collaborator(call, replay):
+        reviews.append(call)
+        return "NO FINDINGS"
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead, collaborator=collaborator,
+                                                 auditor=lambda c, r: "R1: MET - app.py"),
+                   files=FILES, max_tasks=1, direct_tier=route == "direct", record_complete=False)
+    t1 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t1")
+    lead_vendor = replay.of("lead")[0].vendor
+    held = _HELD in (replay.result.report or "") or any(_HELD in (f.get("detail") or "") for f in t1["facts"])
+    assert H.gate_results(replay) and H.gate_results(replay)[-1] == "PASSED", "the checks pass in every case"
+    if route == "unavailable":
+        assert lead_vendor == "grok" and not reviews, "no reviewer from another vendor was reachable"
+        assert held is goal, "goal-bearing work is held unverified; other work is not"
+        if goal:
+            assert not replay.result.completed
+    else:
+        required = t1["contract"]["required"]
+        assert not held
+        if goal:
+            assert required["tier"] == "normal" and "covers goal requirements" in required["tier_refused"]
+            assert reviews and all(r.vendor != lead_vendor for r in reviews), "it met a cross-vendor review"
+        else:
+            assert required["tier"] == "direct" and required["tier_refused"] == "" and not reviews

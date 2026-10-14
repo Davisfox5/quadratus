@@ -1695,7 +1695,8 @@ def _tier_request(max_lines: int) -> str:
         "file paths (no wildcards, no directories: a path spelled with a trailing slash or "
         "that is an existing directory is refused) and none is a dependency tree, a "
         f"policy-denied or sensitive path; max_lines is at most {max_lines}; it is not an audit (edits none), not a "
-        "security task, not a review task, names no RESOLVES and no CONTINUES; and the run has "
+        "security task, not a review task, names no RESOLVES, no CONTINUES and no COVERS (work that covers "
+        "goal requirements meets a cross-vendor review, which direct work does not run); and the run has "
         "a check to run. An admitted task runs with no collaborator review, no revision round "
         "and no model close-out: one lead call, the scope measurement, the check and its one "
         "fix round, the harness capture and the design review where the task changes what "
@@ -2653,6 +2654,22 @@ class Session:
                    + ", ".join(f"{v} {n}" for v, n in sorted(load.items())) + ")")
         return choice
 
+    def _hold_unreviewed_goal_work(self, spec, lead, collaborators) -> None:
+        """Goal-bearing work with no reviewer from another vendor is held, never
+        waived (root review of 1a58853): ``collaborators_for`` adds one only
+        when such a peer is available, and an empty or same-vendor list used to
+        take the close-out-only route r04's t3 took. The task still runs its
+        checks and close-out; an open unverified finding keeps the job from
+        completing until a reviewed task covers the same requirements."""
+        covers = list(getattr(self, "_current_covers", None) or [])
+        vendor = lead.partition(":")[0]
+        if not covers or any(p.partition(":")[0] != vendor for p in collaborators):
+            return
+        self._open_finding("unverified", f"Task {spec.task_id} covers {', '.join(covers)} but no reviewer from "
+                                         "another vendor was available, so the goal's conditions were not "
+                                         "independently reviewed; held unverified, not waived.")
+        self._note(f"task {spec.task_id}: no cross-vendor reviewer available for goal-bearing work; held unverified")
+
     def collaborators_for(self, spec: TaskSpec, lead: str) -> List[str]:
         """Which other peers help with this task.
 
@@ -3457,6 +3474,11 @@ class Session:
         continues = getattr(outcome, "continues", None) or getattr(self, "_continues", None)
         if continues:
             return "a CONTINUES task is not direct work"
+        if list(getattr(outcome, "covers", None) or getattr(self, "_current_covers", []) or []):
+            # Root review of 1a58853: the direct tier draws no reviewer, and
+            # work that covers goal requirements must meet one from another
+            # vendor; it runs at the normal tier, which does.
+            return "a task that covers goal requirements needs a cross-vendor review, which direct work does not run"
         if self.config.integration_gate is None:
             return "the run has no check to run"
         return ""
@@ -3977,6 +3999,7 @@ class Session:
         # reputation. Full attribution survives for the operator -- in the
         # artifact kinds and the ledger -- which is where feedback quality
         # per reviewer belongs: the scoreboard's question, not the author's.
+        self._hold_unreviewed_goal_work(spec, lead, collaborators)
         if collaborators:
             self._observe_checks(spec, "review")
         labels = {peer: f"Reviewer {chr(65 + i)}"

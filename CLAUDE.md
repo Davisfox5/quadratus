@@ -721,7 +721,13 @@ Key design decisions already settled:
   that failed. A task that covers ledger requirements now draws one
   existing peer from another vendor whatever its difficulty
   (`collaborators_for`), and a parallel child is handed its covered
-  requirement text by the parent.
+  requirement text by the parent. Missing review is held, never waived
+  (root review of 1a58853): goal-bearing work with no reviewer from another
+  vendor available opens an unverified finding
+  (`_hold_unreviewed_goal_work`), and a direct label on work that covers
+  requirements is refused (`_direct_refusal`), so it runs at the normal
+  tier with its review. With the ledger on, every task carries COVERS, so
+  the direct tier now admits only ledger-off work.
 - **Native delegation is denied to every seat without the worker bridge**
   (r04 on 5366412). The goal question at the cap used Claude's own Agent
   tool, reported four children still running and 1,206,662 unattributed

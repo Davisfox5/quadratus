@@ -28,9 +28,17 @@ FAVICON = dict(
     capture={"path": "/", "steps": []})
 
 
-def _decl(scope=FAVICON, tier="direct", extra=""):
-    return ("KIND: frontend simple\nSCOPE: " + json.dumps(scope) + "\nAdd a favicon route and link.\nCOVERS: R1"
-            + (f"\nTIER: {tier}" if tier else "") + extra)
+def _decl(scope=FAVICON, tier="direct", extra="", covers="R1"):
+    return ("KIND: frontend simple\nSCOPE: " + json.dumps(scope) + "\nAdd a favicon route and link."
+            + (f"\nCOVERS: {covers}" if covers else "") + (f"\nTIER: {tier}" if tier else "") + extra)
+
+
+def _non_goal(monkeypatch):
+    """Direct work that covers no goal requirement: the ledger is off, so the
+    task names no COVERS. Work that covers requirements is refused the direct
+    tier (root review of 1a58853) and is pinned in test_step2_recovery."""
+    monkeypatch.setenv("QUADRATUS_REQUIREMENTS_LEDGER", "0")
+    return _decl(covers="")
 
 
 def _files():
@@ -46,7 +54,7 @@ def _lead(call, replay):
 
 
 def _run(tmp_path, monkeypatch, decl, *, direct=True, lead=_lead, roles=None, **kw):
-    plan = [REQS + decl]
+    plan = [(REQS if "COVERS:" in decl else "") + decl]
 
     def orchestrator(call, replay):
         return plan.pop(0) if plan else "DONE"
@@ -70,7 +78,7 @@ def _roles(replay, tid="t1"):
 
 
 def test_the_favicon_task_on_the_direct_tier_drops_review_and_closeout_only(tmp_path, monkeypatch):
-    replay = _run(tmp_path, monkeypatch, _decl())
+    replay = _run(tmp_path, monkeypatch, _non_goal(monkeypatch))
     t1 = _task(replay)
     assert t1["contract"]["required"]["tier"] == "direct" and t1["contract"]["required"]["tier_refused"] == ""
     assert t1["contract"]["required"]["design_collaboration_applicable"] is False
@@ -170,7 +178,7 @@ def test_a_direct_task_that_overruns_its_scope_still_fails_the_task(tmp_path, mo
     def lead(call, replay):
         H.write(call, {"static/favicon.svg": "<svg/>\n", "README.md": "# rewritten\n"})
         return 'Did both.\nCHANGED: ["README.md", "static/favicon.svg"]'
-    replay = _run(tmp_path, monkeypatch, _decl(), lead=lead, record_complete=False)
+    replay = _run(tmp_path, monkeypatch, _non_goal(monkeypatch), lead=lead, record_complete=False)
     t1 = _task(replay)
     assert t1["contract"]["required"]["tier"] == "direct" and t1["closed_as"] == "failed"
     assert _roles(replay).get("closeout", 0) == 0
@@ -186,7 +194,7 @@ def test_a_direct_task_whose_check_fails_still_gets_its_fix_round(tmp_path, monk
     def gate_fix(call, replay):
         H.write(call, {"app.py": FIXED})
         return 'Fixed add.\nCHANGED: ["app.py"]'
-    replay = _run(tmp_path, monkeypatch, _decl(), lead=lead, roles={"gate-fix": gate_fix})
+    replay = _run(tmp_path, monkeypatch, _non_goal(monkeypatch), lead=lead, roles={"gate-fix": gate_fix})
     roles = _roles(replay)
     assert roles["gate-fix"] == 1 and roles.get("collaborator", 0) == 0
     assert H.gate_results(replay)[-1] == "PASSED"
