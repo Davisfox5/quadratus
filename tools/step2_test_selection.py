@@ -98,7 +98,8 @@ class WholeFileGateSuite(BaseGateSuite):
     """
     def cheap(self):
         view = WholeFileGateSuite([c for c in self.commands if c.cheap], cwd=self.cwd,
-                                  exclude=self.project.exclude)
+                                  exclude=self.project.exclude, report_env=self.report_env,
+                                  isolation=self.isolation)
         view._cache = self._cache
         return view
 
@@ -109,7 +110,8 @@ class WholeFileGateSuite(BaseGateSuite):
         commands = tuple(render(c, self.cwd) if not c.skip_reason else c for c in self.commands)
         if self.project.fingerprint() != before:
             raise ValueError("source changed during test selection")
-        view = BaseGateSuite(commands, cwd=self.cwd, exclude=self.project.exclude)
+        view = BaseGateSuite(commands, cwd=self.cwd, exclude=self.project.exclude, report_env=self.report_env,
+                             isolation=self.isolation)
         view._cache = self._cache
         return view.run()
 

@@ -178,3 +178,46 @@ def test_real_default_discovery_and_explicit_inventory_have_the_same_population(
     assert ordinary.receipts[0].tests == selected.receipts[0].tests == 2
     assert set(selected.receipts[0].cases['executed']) == {
         'tests/test_first.py::test_one', 'tests/nested/second_test.py::test_second'}
+
+
+@pytest.mark.parametrize("cheap", [False, True])
+def test_marker_execution_preserves_reporting_environment(tmp_path, cheap):
+    """The scratch runner uses report_env; marker expansion must retain it."""
+    import sys
+
+    from quadratus.integration import GateCommand
+    from tools.step2_test_selection import WholeFileGateSuite
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_report_env.py").write_text(
+        'import os\ndef test_environment():\n    assert os.environ.get("PYTEST_ADDOPTS") == "-q"\n')
+    command = GateCommand("public", argv=(sys.executable, "-m", "pytest", "-q",
+                                           "@all-pytest-files:tests", "--quadratus-report={report}"),
+                          timeout=20, minimum_tests=1, cheap=True)
+    gate = WholeFileGateSuite([command], cwd=tmp_path, report_env={"PYTEST_ADDOPTS": "-q"})
+    result = (gate.cheap() if cheap else gate).run()
+    assert result.passed, result.output
+    assert result.receipts[0].tests == 1
+
+
+@pytest.mark.parametrize("cheap", [False, True])
+def test_marker_execution_preserves_the_scratch_isolation_prefix(tmp_path, cheap):
+    """The scratch runner's sandbox launcher is a GateSuite option too; a
+    marker or cheap view that dropped it would run a reviewer's scratch test
+    with the gate's authority (root review of 1c14ea9). An inert launcher
+    that only sets a variable shows whether the prefix reached the run."""
+    import sys
+
+    from quadratus.integration import GateCommand
+    from tools.step2_test_selection import WholeFileGateSuite
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_isolation.py").write_text(
+        'import os\ndef test_environment():\n    assert os.environ.get("SCRATCH_ISOLATED") == "1"\n')
+    command = GateCommand("public", argv=(sys.executable, "-m", "pytest", "-q",
+                                           "@all-pytest-files:tests", "--quadratus-report={report}"),
+                          timeout=20, minimum_tests=1, cheap=True)
+    gate = WholeFileGateSuite([command], cwd=tmp_path, isolation=("/usr/bin/env", "SCRATCH_ISOLATED=1"))
+    result = (gate.cheap() if cheap else gate).run()
+    assert result.passed, result.output
+    assert result.receipts[0].tests == 1
