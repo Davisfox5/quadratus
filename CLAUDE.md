@@ -708,11 +708,24 @@ Key design decisions already settled:
   the review must give a verdict, the cap's goal question and audits still
   decide, and the cap stays on the task as a non-blocking fact. A capped
   task with a slot left still closes unfinished and is continued by name.
-  The handoff draft carries the original goal verbatim and the original text
-  of the requirements the task covers, ranked above the task's paraphrase
-  (root review of d0f3263: r03's t3 paraphrase had dropped the goal's JSON
-  refusal contract, and the reviewer saw only the paraphrase). It grants
-  nothing; a finding that needs a change outside the task's paths stays open.
+- **Every task review judges the original goal** (root review of d0f3263,
+  then r04 on 5366412). A reviewer saw the role packet, the task's
+  paraphrase and the draft, never the goal; r03's and r04's CLI tasks
+  dropped the goal's JSON refusal contract, closed, and left malformed IDs
+  on argparse's plain-text exit. `Session._goal_authority` now appends the
+  goal verbatim and the covered requirements' original text to every
+  collaborator prompt, ranked above the paraphrase. It grants nothing; a
+  finding that needs a change outside the task's paths stays open.
+- **Native delegation is denied to every seat without the worker bridge**
+  (r04 on 5366412). The goal question at the cap used Claude's own Agent
+  tool, reported four children still running and 1,206,662 unattributed
+  auxiliary tokens, and stopped the job on the per-call ceiling.
+  `runtime.NO_NATIVE_DELEGATION_ROLES` (orchestrator, auditor,
+  requirements-review, consultant and every review seat) gets the
+  verifier's denial with read tools kept. Leads keep the vendor default and
+  the bounded WorkerBridge. Grok's unrestricted seats still take their
+  prompt by file, where `--disallowed-tools` is ignored; there the record
+  stays the check.
 - **The measured diff is the truth; the CHANGED line is the lead's account of
   it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
   project around every editing call, so it already knows what changed. The

@@ -148,6 +148,16 @@ REVIEW_CAPPED_ROLES = frozenset({"collaborator", "recheck", "design-review", "ve
 #: above the operator's lead cap where that is smaller.
 DECLARATION_ROLES = frozenset({"capture-redeclare", "fixture-supply"})
 DECLARATION_MAX_TURNS = 6
+#: Seats that plan, judge or review and hold no bounded worker bridge: native
+#: delegation is denied on every call they make, with every read tool kept.
+#: Step 2 r04 on 5366412: the orchestrator's goal question at the cap ran in
+#: a source copy, used the CLI's own Agent tool and reported four parallel
+#: children still running; the call reported 1,272,024 tokens, 1,206,662 of
+#: them unattributed auxiliary usage, and stopped the job on the per-call
+#: ceiling. The only sanctioned delegation is the WorkerBridge a lead call
+#: carries; leads keep the vendor default (and lose it under granted checks).
+NO_NATIVE_DELEGATION_ROLES = frozenset({"orchestrator", "auditor", "requirements-review", "consultant"}
+                                       | REVIEW_CAPPED_ROLES)
 
 
 class Fleet:
@@ -384,7 +394,7 @@ class Fleet:
         # evidence/q9v2-rerun2-1m). Delegation is a plausible cause, not an
         # established one. The verifier keeps every read tool and loses only
         # native delegation, on a copy so no other seat inherits it.
-        verifying = (invocation_context.get() or {}).get("role") == "verifier"
+        verifying = (invocation_context.get() or {}).get("role") in NO_NATIVE_DELEGATION_ROLES
         # A lead's agentic turn limit, when the operator set one. Applied per
         # call on a view, never on the shared provider. A capped lead raises
         # TurnLimitReached with its edits still in place; the session keeps

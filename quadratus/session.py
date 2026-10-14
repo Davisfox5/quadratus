@@ -4177,30 +4177,8 @@ class Session:
                    "Nothing here says the work is finished: read the source against the whole task."
                  + (f" The lead's last words, which are narration and not a result: {said[:300]}"
                     if said else " The lead returned no answer text.")
-                 + self._capped_goal_authority(spec, current, identity))
+                 + f" Bound to source {current[:16]} and checks {identity[:16]}.")
         return draft, list(collaborators) + [p for p in reviewers if p not in collaborators]
-
-    def _capped_goal_authority(self, spec, source, gate) -> str:
-        """The original goal, verbatim, and the original text of the
-        requirements this task covers, for the capped-draft review and the
-        revision that answers it. Root review of d0f3263: the reviewer saw only
-        the task's paraphrase, and r03's t3 paraphrase had dropped the goal's
-        JSON refusal contract for the CLI, so a reviewer could approve the very
-        defect the goal rules out. Context only: scope, edits, runners and paths
-        bind as before, and nothing here grants anything."""
-        ledger = self.memory.ledger
-        covered = [(rid, ledger.requirements[rid]) for rid in getattr(self, "_current_covers", []) or []
-                   if rid in ledger.requirements]
-        return ("\n\n## Original goal (verbatim; it outranks the task text where they differ)\n\n"
-                + self.memory.goal.strip()
-                + ("\n\n## Original requirements this task covers (verbatim)\n\n"
-                   + "\n".join(f"{rid}: {text}" for rid, text in covered) if covered else "")
-                + f"\n\nThis is the goal as the operator gave it, bound to source {(source or '')[:16]} and "
-                  f"checks {(gate or '')[:16]}. Judge the source against it and against the task: a "
-                  "condition of the goal or a covered requirement that this source does not meet is a "
-                  "BLOCKING finding even when the task text omits it. It grants nothing: the task's "
-                  "permitted paths, edits and commands bind as before, and a finding that needs a change "
-                  "outside them stays open as a finding, never a reason to edit there.")
 
     def _close_turn_limited(self, lead, spec, task, exc, before) -> TaskSummary:
         """A lead stopped at its turn limit: keep the work, record it, re-plan.
@@ -8362,8 +8340,34 @@ class Session:
             + (_DESIGN_REVIEW_LENS + (self._design_note or "")
                if self._collaboration_applicable(spec) else "")
             + self._changed_originals_note()
+            + self._goal_authority()
             + self._review_turn_budget_note(peer)
         )
+
+    def _goal_authority(self) -> str:
+        """The original goal, verbatim, and the original text of the
+        requirements the current task covers, for every task review.
+
+        A reviewer saw the role packet, the task's paraphrase and the draft,
+        never the goal (root review of d0f3263, then r04 on 5366412): r03's
+        and r04's CLI tasks paraphrased the goal without its JSON refusal
+        contract, both closed, and the source still let malformed IDs reach
+        argparse's plain-text exit. The lead already gets the goal through
+        the memory render; the reviewer now judges against the same text.
+        Context only: scope, edits, runners and paths bind as before, and
+        nothing here grants anything."""
+        ledger = self.memory.ledger
+        covered = [(rid, ledger.requirements[rid]) for rid in getattr(self, "_current_covers", []) or []
+                   if rid in ledger.requirements]
+        return ("\n\n## Original goal (verbatim; it outranks the task text where they differ)\n\n"
+                + self.memory.goal.strip()
+                + ("\n\n## Original requirements this task covers (verbatim)\n\n"
+                   + "\n".join(f"{rid}: {text}" for rid, text in covered) if covered else "")
+                + "\n\nJudge the work against the goal and the task: a condition of the goal or a "
+                  "covered requirement that falls within this task's work and is not met is a BLOCKING "
+                  "finding even when the task text omits it. It grants nothing: the task's permitted "
+                  "paths, edits and commands bind as before, and a finding that needs a change outside "
+                  "them stays open as a finding, never a reason to edit there.")
 
     def _changed_originals_note(self) -> str:
         """For a reviewer: run-start test or support files that now differ.

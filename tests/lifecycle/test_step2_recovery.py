@@ -407,20 +407,25 @@ def test_a_capped_draft_in_the_last_slot_meets_an_independent_review_only_when_c
     assert replay.result.completed, "completed only on the orchestrator's own answer at the cap"
 
 
-def test_the_capped_draft_reviewer_judges_the_original_goal_not_only_the_task_paraphrase(tmp_path, monkeypatch):
-    """Root review of d0f3263: the reviewer saw only the task's paraphrase,
-    and r03's t3 paraphrase had dropped the goal's error contract, so a
-    reviewer could approve the defect the goal rules out. Here the task text
-    omits the goal's error condition; the peer receives the goal verbatim,
+@pytest.mark.parametrize("closing", ["capped", "finished"])
+def test_every_task_review_judges_the_original_goal_not_only_the_task_paraphrase(tmp_path, monkeypatch, closing):
+    """Root review of d0f3263, then r04 on 5366412: a reviewer saw only the
+    task's paraphrase, and r03's and r04's CLI tasks dropped the goal's
+    error contract; both closed and the defect stayed. Here the task text
+    omits the goal's error condition. The peer receives the goal verbatim,
     holds the source to it, and the unmet condition stays open after the
-    capped lead's revision instead of the job completing."""
+    lead's one revision instead of the job completing, whether the draft
+    was capped (the last-slot handoff) or finished (an ordinary review)."""
     from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
     contract = "A non-number argument must raise TypeError naming the argument."
     goal = "Implement add(a, b) in app.py. " + contract
+    declared = DECL_SIMPLE if closing == "capped" else DECL_SIMPLE.replace("backend simple", "backend standard")
 
     def lead(call, replay):
         H.write(call, {"app.py": fixed})
-        return H.grok_ok("I'll run the tests next", stop="cancelled", num_turns=8)
+        if closing == "capped":
+            return H.grok_ok("I'll run the tests next", stop="cancelled", num_turns=8)
+        return 'Implemented add.\nCHANGED: ["app.py"]'
 
     seen = []
 
@@ -433,12 +438,12 @@ def test_the_capped_draft_reviewer_judges_the_original_goal_not_only_the_task_pa
     def recheck(call, replay):
         return "UNRESOLVED: add still accepts a non-number without the TypeError the goal requires."
 
-    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(DECL_SIMPLE), lead=lead,
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead,
                                                  collaborator=collaborator, recheck=recheck),
                    files=FILES, max_tasks=1, goal=goal, settings=Settings(backend="cli", lead_max_turns=8))
-    assert contract not in DECL_SIMPLE, "the task text omits the goal's error condition"
-    assert len(seen) == 1 and contract in seen[0].prompt, "the peer received the original goal"
+    assert contract not in declared, "the task text omits the goal's error condition"
+    assert seen and all(contract in c.prompt for c in seen), "every peer received the original goal"
     assert "it outranks the task text where they differ" in seen[0].prompt
     assert "It grants nothing" in seen[0].prompt
-    assert [c.task for c in replay.of("lead")] == ["t1"] and replay.of("revision"), "the capped lead answered once"
+    assert [c.task for c in replay.of("lead")] == ["t1"] and replay.of("revision"), "the lead answered once"
     assert not replay.result.completed, "the goal's unmet condition stays open"

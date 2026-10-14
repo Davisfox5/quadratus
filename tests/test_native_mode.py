@@ -385,6 +385,28 @@ def test_the_fleet_turns_delegation_off_for_the_verifier_only(monkeypatch, tmp_p
         "the shared provider is never marked"
 
 
+@pytest.mark.parametrize("project", [True, False])
+@pytest.mark.parametrize("role", ["orchestrator", "auditor", "requirements-review", "collaborator",
+                                  "recheck", "design-review", "consultant"])
+def test_seats_without_the_worker_bridge_lose_native_delegation(monkeypatch, tmp_path, project, role):
+    """Step 2 r04 on 5366412: the orchestrator's goal question at the cap used
+    the CLI's own Agent tool, reported four children still running and
+    1,206,662 unattributed auxiliary tokens, and stopped the job on the
+    per-call ceiling. Every seat that holds no WorkerBridge now gets the
+    verifier's denial; a lead keeps the vendor default."""
+    fleet, views = _captured_views(monkeypatch, tmp_path, project=project)
+    with invocation("t1", role):
+        fleet.invoke("claude:opus", "judge this")
+    with invocation("t1", "lead"):
+        fleet.invoke("claude:opus", "lead this")
+    seat, lead = views
+    assert getattr(seat, "native_fanout_off", False) is True
+    denied = _pair(seat._build_argv("p", ""), "--disallowed-tools").split()
+    assert denied[-len(CLAUDE_OFF_DENIALS):] == CLAUDE_OFF_DENIALS and "Agent" in denied
+    assert "Read" not in denied and "Glob" not in denied, "the seat keeps its read tools"
+    assert getattr(lead, "native_fanout_off", False) is False
+
+
 # -- verifier controls, vendor by vendor (Codex review of d282bad) ---------------
 
 
