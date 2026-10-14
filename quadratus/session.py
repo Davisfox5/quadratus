@@ -2678,6 +2678,20 @@ class Session:
                 other = next((p for p in others if p.partition(":")[0] != vendor), None)
                 if other is not None:
                     chosen.append(other)
+        if getattr(self, "_current_covers", None):
+            # Goal-bearing work draws one independent read from another
+            # vendor whatever its difficulty (root review of 4ed4d30, r04 on
+            # 5366412): t3, the CLI, was a SIMPLE parallel child with no
+            # collaborator, so lead and close-out were one model and the goal
+            # text added to the review prompt never reached it. It closed
+            # with green checks and the goal's JSON refusal contract unmet.
+            # The peer is an existing brain-trust seat; its findings go
+            # through the ordinary bounded revision and recheck.
+            vendor = lead.partition(":")[0]
+            if not any(p.partition(":")[0] != vendor for p in chosen):
+                other = next((p for p in others if p.partition(":")[0] != vendor), None)
+                if other is not None:
+                    chosen.append(other)
         if spec.kind == TaskKind.REVIEW:
             for peer in policy_for(TaskKind.REVIEW).prefer:
                 if peer != lead and peer in others and peer not in chosen:
@@ -6445,6 +6459,7 @@ class Session:
                 # contract and snapshot without any audit-debt decision.
                 for child, (_, covers, _) in zip(children, parsed, strict=True):
                     child._current_covers = list(covers)
+                    child._requirement_texts = dict(self.memory.ledger.requirements)
                 futures = [pool.submit(child.run_task, spec) for child, (spec, _, _) in zip(children, parsed, strict=True)]
                 outcomes = []
                 for future in futures:
@@ -8356,9 +8371,10 @@ class Session:
         the memory render; the reviewer now judges against the same text.
         Context only: scope, edits, runners and paths bind as before, and
         nothing here grants anything."""
-        ledger = self.memory.ledger
-        covered = [(rid, ledger.requirements[rid]) for rid in getattr(self, "_current_covers", []) or []
-                   if rid in ledger.requirements]
+        # A parallel child has no ledger of its own; its parent hands it the
+        # requirement text with the ids it covers.
+        texts = self.memory.ledger.requirements or getattr(self, "_requirement_texts", {}) or {}
+        covered = [(rid, texts[rid]) for rid in getattr(self, "_current_covers", []) or [] if rid in texts]
         return ("\n\n## Original goal (verbatim; it outranks the task text where they differ)\n\n"
                 + self.memory.goal.strip()
                 + ("\n\n## Original requirements this task covers (verbatim)\n\n"

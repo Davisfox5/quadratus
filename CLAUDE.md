@@ -715,7 +715,13 @@ Key design decisions already settled:
   on argparse's plain-text exit. `Session._goal_authority` now appends the
   goal verbatim and the covered requirements' original text to every
   collaborator prompt, ranked above the paraphrase. It grants nothing; a
-  finding that needs a change outside the task's paths stays open.
+  finding that needs a change outside the task's paths stays open. Root's
+  review of 4ed4d30: r04's CLI task was a SIMPLE parallel child, and SIMPLE
+  draws no collaborator, so the goal never reached a review on the route
+  that failed. A task that covers ledger requirements now draws one
+  existing peer from another vendor whatever its difficulty
+  (`collaborators_for`), and a parallel child is handed its covered
+  requirement text by the parent.
 - **Native delegation is denied to every seat without the worker bridge**
   (r04 on 5366412). The goal question at the cap used Claude's own Agent
   tool, reported four children still running and 1,206,662 unattributed

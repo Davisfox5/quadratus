@@ -447,3 +447,72 @@ def test_every_task_review_judges_the_original_goal_not_only_the_task_paraphrase
     assert "It grants nothing" in seen[0].prompt
     assert [c.task for c in replay.of("lead")] == ["t1"] and replay.of("revision"), "the lead answered once"
     assert not replay.result.completed, "the goal's unmet condition stays open"
+
+
+# -- goal-bearing SIMPLE work in a parallel batch (root review of 4ed4d30) -------------
+
+_TYPED = ("def add(a, b):\n"
+          "    for name, value in (('a', a), ('b', b)):\n"
+          "        if not isinstance(value, (int, float)):\n"
+          "            raise TypeError(name)\n"
+          "    return a + b\n")
+
+
+def _simple(path, text, covers):
+    scope = json.dumps({"permitted_paths": [path], "intended_result": f"{path} written",
+                        "acceptance": [f"{path} meets the task"], "max_lines": 20})
+    return f"KIND: backend simple\nSCOPE: {scope}\n{text}\nCOVERS: {covers}"
+
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("source", ["unmet", "met"])
+def test_goal_bearing_simple_parallel_work_meets_one_cross_vendor_review(tmp_path, monkeypatch, source):
+    """r04 on 5366412: t3, the CLI, was a SIMPLE parallel child. SIMPLE draws
+    no collaborator, so its lead and close-out were one model, the goal text
+    added to the review prompt never reached it, and it closed on green
+    checks with the goal's error contract unmet. A task that covers goal
+    requirements now draws one existing peer from another vendor. The checks
+    pass in both cases; only the original goal separates them."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    contract = "A non-number argument must raise TypeError naming the argument."
+    goal = "Implement add(a, b) in app.py and document it in README.md. " + contract
+    batch = ("REQUIREMENTS:\nR1: add(a, b) returns the sum\nR2: " + contract + "\nR3: README documents add\n"
+             "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1, R2")
+             + "\n---\n" + _simple("README.md", "Document add in README.md.", "R3"))
+
+    def lead(call, replay):
+        if call.task == "t1":
+            H.write(call, {"app.py": _TYPED if source == "met" else fixed})
+            return 'Implemented add.\nCHANGED: ["app.py"]'
+        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
+        return 'Documented add.\nCHANGED: ["README.md"]'
+
+    reviews = []
+
+    def collaborator(call, replay):
+        reviews.append(call)
+        if call.task == "t1" and contract in call.prompt \
+                and "TypeError" not in Path(call.cwd, "app.py").read_text():
+            return "BLOCKING: add('x', 1) returns without the TypeError the goal requires.\nREVIEW: COMPLETE"
+        return "NO FINDINGS"
+
+    def recheck(call, replay):
+        return "UNRESOLVED: add still accepts a non-number."
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(batch), lead=lead,
+                                                 collaborator=collaborator, recheck=recheck),
+                   files=FILES, max_tasks=2, goal=goal, record_complete=False)
+    batches = H.result_json(replay).get("parallel_batches") or []
+    assert batches and sorted(batches[0].get("tasks") or []) == ["t1", "t2"], batches
+    lead_vendor = {c.task: c.vendor for c in replay.of("lead")}
+    assert sorted(r.task for r in reviews) == ["t1", "t2"], "each goal-bearing SIMPLE child drew one review"
+    assert all(r.vendor != lead_vendor[r.task] for r in reviews), "from another vendor"
+    assert all(contract in r.prompt for r in reviews), "the original goal reached every review"
+    t1_review = next(r for r in reviews if r.task == "t1")
+    assert "R2: " + contract in t1_review.prompt, "the child's covered requirement text came from the parent"
+    blocked = [f for f in replay.result.report.splitlines() if "TypeError the goal requires" in f]
+    if source == "unmet":
+        assert replay.of("revision") and blocked, "the unmet goal condition is held open after one revision"
+        assert not replay.result.completed
+    else:
+        assert not replay.of("revision") and not blocked, "a source that meets the goal is not held"
