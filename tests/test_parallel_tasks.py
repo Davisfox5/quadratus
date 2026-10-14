@@ -7,6 +7,7 @@ from pathlib import Path
 
 from quadratus.artifacts import ArtifactStore
 from quadratus.session import Session, SessionConfig, _parallel_blocks
+from tests.lifecycle.test_lifecycle_matrix import covered_met
 
 
 def _block(path, text="work"):
@@ -56,7 +57,7 @@ class Orchestrated:
                 with self.lock:
                     self.active -= 1
                 return f'Wrote it\nCHANGED: ["{target}"]'
-            return "NO FINDINGS"
+            return "NO FINDINGS\n" + covered_met(prompt)
         return invoke
 
 

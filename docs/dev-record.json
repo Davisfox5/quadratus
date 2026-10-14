@@ -1995,7 +1995,8 @@
       ],
       "blockers": [],
       "decisions": [
-        "claude: Step 2 corrections after the 0cf5222 clearance: 86e2841, f4eafea, d0f3263, 5366412, 4ed4d30, 238b2e9; root's 2cfff79 merged at 5112c44. Each awaits root's scoped review; final combined gates held."
+        "claude: Step 2 corrections after the 0cf5222 clearance: 86e2841, f4eafea, d0f3263, 5366412, 4ed4d30, 238b2e9; root's 2cfff79 merged at 5112c44. Each awaits root's scoped review; final combined gates held.",
+        "claude: r05 on 1655cf1 corrections: per-requirement review verdicts (_judge_goal_review) and one cross-vendor review of capped work in the final parallel batch (_review_capped_final_child). Awaiting root's scoped review; final gates held."
       ]
     },
     {

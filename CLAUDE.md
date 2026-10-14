@@ -728,6 +728,24 @@ Key design decisions already settled:
   requirements is refused (`_direct_refusal`), so it runs at the normal
   tier with its review. With the ledger on, every task carries COVERS, so
   the direct tier now admits only ledger-off work.
+- **A goal-bearing review owes a verdict per covered requirement** (r05 on
+  1655cf1). The CLI reviewer carried the goal and R10 verbatim and still
+  replied NO FINDINGS while malformed IDs left through argparse's plain
+  exit. A review of work that covers requirements now gives one
+  `R<n>: MET - <file>:<line>` or `R<n>: NOT MET - <condition>` line per
+  covered requirement (`_judge_goal_review`). An approval missing a line
+  is an unfinished review, held unverified; a NOT MET line is a BLOCKING
+  finding even when the reviewer wrote none; a clean review is NO FINDINGS
+  followed only by MET lines and buys no revision. This makes a miss
+  harder, not impossible: the verdict is still the reviewer's judgement.
+- **Capped work in the final parallel batch meets one review** (r05). A
+  child has no gate and no slot context, so t2's capped Grok draft merged
+  and the job stopped GoalUnconfirmedAtCap with calls left.
+  `_review_capped_final_child` sends the merged source to one reviewer
+  from another vendor when the batch spent the last slot and the merge
+  gate passed. A clean verdict lifts the cap and records coverage;
+  anything else is held. No lead call follows, so a capped lead stays
+  capped.
 - **Native delegation is denied to every seat without the worker bridge**
   (r04 on 5366412). The goal question at the cap used Claude's own Agent
   tool, reported four children still running and 1,206,662 unattributed

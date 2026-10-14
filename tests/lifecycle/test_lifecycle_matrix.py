@@ -11,6 +11,7 @@ Controller determinism, not live reliability.
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -56,6 +57,17 @@ def _fetch_request(style, artifact):
     }[style]
 
 
+_COVERED = re.compile(r"## Original requirements this task covers \(verbatim\)\n\n((?:R\d+: .*\n?)+)")
+
+
+def covered_met(prompt: str) -> str:
+    """A scripted reviewer's verdict lines (r05 on 1655cf1): a review of
+    goal-bearing work gives one MET line per covered requirement."""
+    found = _COVERED.search(prompt or "")
+    rids = re.findall(r"^(R\d+): ", found.group(1), re.MULTILINE) if found else []
+    return "".join(f"{rid}: MET - scripted reviewer\n" for rid in rids)
+
+
 class Script:
     """Default replies by role; a case overrides the parts it is about."""
 
@@ -66,7 +78,7 @@ class Script:
         handler = self.overrides.get(call.role) or getattr(self, "_" + call.role.split(":")[0].replace("-", "_"),
                                                            None)
         if handler is None:
-            return "No blocking findings.\nREVIEW: COMPLETE"
+            return "No blocking findings.\n" + covered_met(call.prompt) + "REVIEW: COMPLETE"
         return handler(call, replay)
 
     def _orchestrator(self, call, replay):

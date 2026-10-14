@@ -2035,6 +2035,29 @@ def _review_complete(text: str) -> bool:
     return False
 
 
+_REQUIREMENT_VERDICT = re.compile(r"^\s*(?:[-*+]\s+)?\**(R\d+)\**\s*:\s*(NOT\s+MET|MET)\b", re.IGNORECASE | re.MULTILINE)
+
+
+def _requirement_verdicts(text: str) -> Dict[str, bool]:
+    """A reviewer's per-requirement lines: rid -> met. The last line wins."""
+    return {rid.upper(): not verdict.upper().startswith("NOT")
+            for rid, verdict in _REQUIREMENT_VERDICT.findall(text or "")}
+
+
+def _clean_goal_review(text: str, rids) -> bool:
+    """A goal-bearing review with nothing to change: NO FINDINGS on the first
+    line, every covered requirement MET on its own line, no BLOCKING finding
+    and no other text beyond a REVIEW: COMPLETE line."""
+    lines = [line.strip() for line in (text or "").strip().splitlines() if line.strip()]
+    if not lines or lines[0].upper().rstrip(".") != "NO FINDINGS" or _has_blocking_finding(text):
+        return False
+    verdicts = _requirement_verdicts(text)
+    if not rids or any(verdicts.get(rid) is not True for rid in rids):
+        return False
+    return all(_REQUIREMENT_VERDICT.match(line) or line.replace("**", "").rstrip(" .!").upper() == _REVIEW_COMPLETE
+               for line in lines[1:])
+
+
 def _has_blocking_finding(text: str) -> bool:
     """Only a finding's explicit prefix controls the recheck loop."""
     return any(re.match(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?BLOCKING\s*:",
@@ -4019,7 +4042,8 @@ class Session:
                 capped.add(peer)
                 note = self._capped_review(spec, peer, "review", exc)
             else:
-                if not _review_complete(note):
+                note = self._judge_goal_review(spec, peer, note)
+                if not _review_complete(note) and not _clean_goal_review(note, [r for r, _ in self._covered_texts()]):
                     # A reply arrived; a review did not finish. Recorded as
                     # unverified; the text still reaches the lead as a note.
                     self._open_finding("unverified", f"Task {spec.task_id}: review by {peer} ended "
@@ -4058,6 +4082,7 @@ class Session:
         notes = [
             (p, n) for p, n in notes
             if n.strip().upper().rstrip(".") != "NO FINDINGS" and p not in capped
+            and not _clean_goal_review(n, [r for r, _ in self._covered_texts()])
         ]
         # Satisfied only when a peer actually reviewed. Complexity can draw no
         # collaborator (Complexity.collaborator_count), and batch 2 recovery-v2
@@ -6477,6 +6502,7 @@ class Session:
                 children.append(child)
                 roots.append(root)
             started = time.monotonic()
+            capped_merged = []
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(children)) as pool:
                 # Record-only: a child's ledger is off, so its COVERS feed its
                 # contract and snapshot without any audit-debt decision.
@@ -6559,6 +6585,8 @@ class Session:
                     self._partial_tasks.discard(continues)
                     self._recover_continued(continues)
                     self._partial_tasks.add(spec.task_id)
+                    if summary.outcome == "turn_limited" and mine is not None:
+                        capped_merged.append((spec, covers, mine))
                 else:
                     self._partial_tasks.discard(continues)
                     self._recover_continued(continues)
@@ -6591,9 +6619,95 @@ class Session:
                                             passed=bool(self.checks) and bool(self.checks[-1]["passed"]))
             if not record["merge_gate"]["passed"]:
                 record["merge_debt"] = self._record_merge_debt(merge, parsed)
+        if capped_merged and not fatal:
+            record["capped_final_reviews"] = [self._review_capped_final_child(spec, covers, mine, record, len(parsed))
+                                              for spec, covers, mine in capped_merged]
         if fatal is not None:
             raise fatal
         return True
+
+    def _review_capped_final_child(self, spec, covers, outcome, record, size) -> dict:
+        """A turn-capped child of the job's final parallel batch meets one
+        independent review of the merged source instead of ending the job
+        unfinished (r05 on 1655cf1: t2's Grok lead hit its 8-turn cap in the
+        last two slots; its two scoped files merged, but a child has no gate
+        and no slot context, so the checked-final-draft handoff never ran, the
+        selected reviewer was never called and the job stopped
+        GoalUnconfirmedAtCap with calls and tokens left).
+
+        Only when nothing can continue the child (the batch spent the job's
+        last slot), the merged source passed the merge gate, and a reviewer
+        from another vendor is available. The reviewer judges the merged
+        source against the original goal and the covered requirements, with
+        the same verdict rules as any review. A clean verdict lifts the cap
+        and records the covered requirements as covered; anything else stays
+        open, unverified, with the reviewer's words. No lead call is made, so
+        a capped lead stays capped, and no slot, recovery, turn or grant is
+        added; the cap's goal question and audits still decide."""
+        total = getattr(self, "_max_tasks", None)
+        merge_gate = record.get("merge_gate") or {}
+        result = dict(task=spec.task_id, reviewed=False, reviewer=None, verdict=None)
+        if (not total or self._explicit_tasks is not None
+                or int(getattr(self, "_slots_used", 0) or 0) + size < total or not merge_gate.get("passed")):
+            result["verdict"] = "not eligible"
+            return result
+        capped = self.turn_limited_records.get(spec.task_id) or {}
+        lead = capped.get("lead") or spec.lead or ""
+        vendor = lead.partition(":")[0]
+        peer = next((p for p in self.brain_trust
+                     if p.partition(":")[0] != vendor and self._available(p)), None)
+        saved = self._current_covers if hasattr(self, "_current_covers") else None
+        self._current_covers = list(covers)
+        try:
+            if peer is None:
+                self._open_finding("unverified", f"Task {spec.task_id} stopped at its lead's turn limit in the "
+                                                 "final parallel batch and no reviewer from another vendor was "
+                                                 "available; held unverified, not waived.")
+                result["verdict"] = "held: no reviewer"
+                return result
+            changed = ", ".join(capped.get("changed") or []) or "no files"
+            draft = ("HARNESS RECORD: the lead stopped at its turn limit"
+                     + (f" ({capped.get('turns')} turns)" if capped.get("turns") else "")
+                     + " before giving a final answer, in the job's final parallel batch, so no task can "
+                       "continue it. Its edits, all inside the declared scope, were merged, and the project's "
+                       f"checks passed on the merged source. Changed: {changed}. The work is the project "
+                       "source as it is now. Nothing here says the work is finished: read the source against "
+                       "the whole task, the original goal and the covered requirements.")
+            self._record_selection(spec, peer, "collaborator")
+            try:
+                with invocation(spec.task_id, "collaborator"):
+                    note = self._invoke_model(peer, self._collaborator_prompt(spec, draft, peer))
+            except TurnLimitReached as exc:
+                note = self._capped_review(spec, peer, "review", exc)
+                self._open_finding("unverified", f"Task {spec.task_id}: the review of its capped final work "
+                                                 f"by {peer} stopped at its turn limit; held unverified.")
+                result.update(reviewer=peer, verdict="held: review capped")
+                return result
+            self.store.put(note, kind=f"review:{peer}", author=peer)
+            note = self._judge_goal_review(spec, peer, note)
+            rids = [rid for rid, _ in self._covered_texts()]
+            clean = (_clean_goal_review(note, rids) if rids
+                     else note.strip().upper().rstrip(".") == "NO FINDINGS")
+            result.update(reviewer=peer, reviewed=True)
+            if clean:
+                outcome.recover("cap")
+                outcome.note("cap", f"capped in the final parallel batch; merged source passed the checks "
+                                    f"and {peer}'s review found nothing to change", terminal=False)
+                outcome.edge("review", True)
+                self._partial_tasks.discard(spec.task_id)
+                for rid in covers:
+                    self._mark_covered(rid, spec.task_id)
+                result["verdict"] = "clean"
+                self._note(f"{spec.task_id}: capped final work reviewed clean by {peer}; its cap is lifted")
+            else:
+                self._open_finding("unverified", f"Task {spec.task_id}: the review of its capped final work by "
+                                                 f"{peer} did not clear it, and no task can continue it: "
+                                                 + note.strip()[:600])
+                result["verdict"] = "held: findings"
+                self._note(f"{spec.task_id}: capped final work not cleared by {peer}; held unverified")
+            return result
+        finally:
+            self._current_covers = saved
 
     def _unmerged_conflict(self, spec, summary, outcome, changed, outside, after, base) -> None:
         """Record a parallel child whose edits left its scope as a failed,
@@ -8394,10 +8508,7 @@ class Session:
         the memory render; the reviewer now judges against the same text.
         Context only: scope, edits, runners and paths bind as before, and
         nothing here grants anything."""
-        # A parallel child has no ledger of its own; its parent hands it the
-        # requirement text with the ids it covers.
-        texts = self.memory.ledger.requirements or getattr(self, "_requirement_texts", {}) or {}
-        covered = [(rid, texts[rid]) for rid in getattr(self, "_current_covers", []) or [] if rid in texts]
+        covered = self._covered_texts()
         return ("\n\n## Original goal (verbatim; it outranks the task text where they differ)\n\n"
                 + self.memory.goal.strip()
                 + ("\n\n## Original requirements this task covers (verbatim)\n\n"
@@ -8406,7 +8517,44 @@ class Session:
                   "covered requirement that falls within this task's work and is not met is a BLOCKING "
                   "finding even when the task text omits it. It grants nothing: the task's permitted "
                   "paths, edits and commands bind as before, and a finding that needs a change outside "
-                  "them stays open as a finding, never a reason to edit there.")
+                  "them stays open as a finding, never a reason to edit there."
+                + ("\n\nFor each covered requirement give one line 'R<n>: MET - <file>:<line>' naming "
+                   "where the source meets every condition of it, including what it says must happen "
+                   "on an error or a refusal, or 'R<n>: NOT MET - <the condition>', which is a BLOCKING "
+                   "finding. A review that leaves a covered requirement without such a line is recorded "
+                   "as unfinished. With nothing to change, reply NO FINDINGS on the first line followed "
+                   "only by those lines." if covered else ""))
+
+    def _covered_texts(self) -> List[tuple]:
+        """(rid, original text) for each requirement the current task covers.
+        A parallel child has no ledger of its own; its parent hands it the
+        requirement text with the ids it covers."""
+        texts = self.memory.ledger.requirements or getattr(self, "_requirement_texts", {}) or {}
+        return [(rid, texts[rid]) for rid in getattr(self, "_current_covers", []) or [] if rid in texts]
+
+    def _judge_goal_review(self, spec, peer: str, note: str) -> str:
+        """Hold a goal-bearing review to its per-requirement verdicts (r05 on
+        1655cf1: the CLI reviewer carried the goal and R10 verbatim and still
+        replied NO FINDINGS while malformed IDs left through argparse's plain
+        exit). A covered requirement with no MET or NOT MET line makes the
+        review unfinished; a NOT MET line is a BLOCKING finding even when the
+        reviewer did not write one. Returns the note the lead answers."""
+        rids = [rid for rid, _ in self._covered_texts()]
+        if not rids:
+            return note
+        verdicts = _requirement_verdicts(note)
+        missing = [rid for rid in rids if rid not in verdicts]
+        # Only an approval needs every verdict: a review that already raises a
+        # BLOCKING finding sends the work back whatever it left unsaid.
+        if missing and not _has_blocking_finding(note) and not any(v is False for v in verdicts.values()):
+            self._open_finding("unverified", f"Task {spec.task_id}: review by {peer} gave no MET or NOT MET "
+                                             f"line for {', '.join(missing)}; recorded as an unfinished review.")
+            self._note(f"task {spec.task_id}: review by {peer} left {', '.join(missing)} without a verdict")
+        unmet = [rid for rid in rids if verdicts.get(rid) is False]
+        if unmet and not _has_blocking_finding(note):
+            note += "\n" + "\n".join(f"BLOCKING: {rid} is NOT MET (the reviewer's own verdict line)."
+                                      for rid in unmet)
+        return note
 
     def _changed_originals_note(self) -> str:
         """For a reviewer: run-start test or support files that now differ.

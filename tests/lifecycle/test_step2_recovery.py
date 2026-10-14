@@ -573,3 +573,100 @@ def test_goal_bearing_work_is_reviewed_or_held_never_closed_unreviewed(tmp_path,
             assert reviews and all(r.vendor != lead_vendor for r in reviews), "it met a cross-vendor review"
         else:
             assert required["tier"] == "direct" and required["tier_refused"] == "" and not reviews
+
+
+# -- r05 on 1655cf1: per-requirement review verdicts; capped final parallel work ------
+
+_R1 = "add(a, b) returns the sum of two numbers"
+
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("reply,held,revised", [
+    ("NO FINDINGS", True, False),
+    ("NO FINDINGS\nR1: MET - app.py:2 returns a + b", False, False),
+    ("R1: NOT MET - add('x', 1) returns without the error the requirement names\nREVIEW: COMPLETE", False, True),
+], ids=["bare", "cited", "not-met"])
+def test_a_goal_bearing_review_gives_a_verdict_per_covered_requirement(tmp_path, monkeypatch, reply, held, revised):
+    """r05: the CLI reviewer carried the goal and R10 verbatim and replied
+    NO FINDINGS while the source missed R10's refusal condition. A review of
+    goal-bearing work now owes one MET or NOT MET line per covered
+    requirement: a bare NO FINDINGS is an unfinished review, held; a cited
+    MET line is a clean review with no revision; a NOT MET line is a BLOCKING
+    finding the lead answers even though the reviewer wrote no BLOCKING."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    declared = ("REQUIREMENTS:\nR1: " + _R1 + "\n"
+                + DECL_SIMPLE.replace("backend simple", "backend standard") + "\nCOVERS: R1")
+
+    def lead(call, replay):
+        H.write(call, {"app.py": fixed})
+        return 'Implemented add.\nCHANGED: ["app.py"]'
+
+    reviews = []
+
+    def collaborator(call, replay):
+        reviews.append(call)
+        return reply
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead, collaborator=collaborator,
+                                                 recheck=lambda c, r: "RESOLVED"),
+                   files=FILES, max_tasks=1, record_complete=False)
+    assert reviews and "R<n>: MET - <file>:<line>" in reviews[0].prompt and "R1: " + _R1 in reviews[0].prompt
+    gap = "gave no MET or NOT MET line for R1"
+    assert (gap in (replay.result.report or "")) is held
+    assert bool(replay.of("revision")) is revised
+    if held:
+        assert not replay.result.completed
+
+
+def _capped_lead(call, replay, files):
+    H.write(call, files)
+    if call.vendor == "grok":
+        return H.grok_ok("I'll run the tests next", stop="cancelled", num_turns=8)
+    return H.claude_cap("Wrote it; tests not run yet.", num_turns=8)
+
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("verdict", ["clean", "blocking"])
+def test_capped_work_in_the_final_parallel_batch_meets_one_independent_review(tmp_path, monkeypatch, verdict):
+    """r05: t2's lead hit its turn cap inside the job's final parallel batch;
+    its scoped files merged and the checks passed, but a child has no gate
+    and no slot context, so no reviewer was called and the job stopped
+    GoalUnconfirmedAtCap with calls left. The parent now sends that merged
+    source to one reviewer from another vendor: a clean per-requirement
+    verdict lifts the cap; a finding is held open. No lead call follows."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    batch = ("REQUIREMENTS:\nR1: " + _R1 + "\nR2: README documents add\n"
+             "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1")
+             + "\n---\n" + _simple("README.md", "Document add in README.md.", "R2"))
+
+    def lead(call, replay):
+        if call.task == "t1":
+            return _capped_lead(call, replay, {"app.py": fixed})
+        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
+        return 'Documented add.\nCHANGED: ["README.md"]'
+
+    reviews = []
+
+    def collaborator(call, replay):
+        reviews.append(call)
+        if call.task == "t1" and verdict == "blocking":
+            return "R1: NOT MET - add(1.5, 2) is not covered by any test\nREVIEW: COMPLETE"
+        return "NO FINDINGS\nR1: MET - app.py:2\nR2: MET - README.md:3"
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(batch), lead=lead, collaborator=collaborator),
+                   files=FILES, max_tasks=2, settings=Settings(backend="cli", lead_max_turns=8),
+                   record_complete=False)
+    batches = H.result_json(replay).get("parallel_batches") or []
+    assert batches and sorted(batches[0]["tasks"]) == ["t1", "t2"]
+    assert H.gate_results(replay) and H.gate_results(replay)[-1] == "PASSED", "the merged source passes"
+    t1_reviews = [r for r in reviews if r.task == "t1"]
+    lead_vendor = next(c.vendor for c in replay.of("lead") if c.task == "t1")
+    assert len(t1_reviews) == 1 and t1_reviews[0].vendor != lead_vendor, "one cross-vendor review of t1"
+    assert "final parallel batch" in t1_reviews[0].prompt and "R1: " + _R1 in t1_reviews[0].prompt
+    assert [c.task for c in replay.of("lead")].count("t1") == 1, "no further lead call for the capped task"
+    review = batches[0]["capped_final_reviews"][0]
+    capped_stop = "capped or failed task(s) t1 not continued" in (replay.result.error or "")
+    if verdict == "clean":
+        assert review["verdict"] == "clean" and not capped_stop, "the cap is lifted by the review"
+    else:
+        assert review["verdict"] == "held: findings" and not replay.result.completed
