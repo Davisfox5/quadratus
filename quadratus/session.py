@@ -2045,6 +2045,32 @@ _ERROR_PATH_RULE = (
     "condition is met only if every such path meets it; one path that leaves in another form is "
     "NOT MET.")
 
+#: r08 on f247f0a: the reviewer and the final auditor both had the goal, the
+#: requirement and _ERROR_PATH_RULE, read the code, cited a success-path
+#: test and called the refusal condition met, while malformed input left
+#: before the project's handler in another form. A seat whose source copy
+#: takes scratch files (CLISpec.copy_args) may already add a new file there
+#: and run the approved check; this asks it to use that authority to show
+#: the condition instead of reading it. No new command, grant or role.
+_PROBE_RULE = (
+    "Your source copy accepts new files as scratch that is discarded with it, and the approved "
+    "check command runs here. For a condition about invalid input, errors or refusals, show it "
+    "rather than read it: add a new test file in the copy that feeds the public interface each "
+    "kind of invalid input the condition covers, including input that the interface's own argument "
+    "or request parsing rejects before the project's code runs, and asserts exactly the result the "
+    "condition states; run the approved check command; give the command, its exit status and the "
+    "outcome on the verdict line. A demonstration that fails is NOT MET. Never change an existing "
+    "file: an answer formed after a handed file changed is refused.")
+
+
+def _seat_takes_scratch(key: str) -> bool:
+    """Whether ``key``'s CLI runs a review in a writable disposable copy."""
+    from .cli_providers import CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC
+    vendor = (key or "").partition(":")[0]
+    spec = next((s for s in (CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC) if s.vendor == vendor), None)
+    return bool(spec is not None and spec.copy_args)
+
+
 _REQUIREMENT_VERDICT = re.compile(r"^\s*(?:[-*+]\s+)?\**(R\d+)\**\s*:\s*(NOT\s+MET|MET)\b", re.IGNORECASE | re.MULTILINE)
 
 
@@ -7047,7 +7073,8 @@ class Session:
             "states a condition the goal, a decision and a ruling do not, judge the goal's own "
             "condition and say so on the line ('wording stricter than the goal: <condition>'); a "
             "condition the goal does state is never relaxed this way. " + _ERROR_PATH_RULE + " "
-            "For each requirement, check the delivered files themselves: code, "
+            + (_PROBE_RULE + " " if self._probe_applies(auditor) else "")
+            + "For each requirement, check the delivered files themselves: code, "
             "interface, tests and documentation. Documentation must agree with the goal, not only "
             "with the code. A requirement about existing product behaviour is met only if it works "
             "with what the product actually does today. A user-interface requirement is met only "
@@ -8547,11 +8574,11 @@ class Session:
             + (_DESIGN_REVIEW_LENS + (self._design_note or "")
                if self._collaboration_applicable(spec) else "")
             + self._changed_originals_note()
-            + self._goal_authority()
+            + self._goal_authority(peer)
             + self._review_turn_budget_note(peer)
         )
 
-    def _goal_authority(self) -> str:
+    def _goal_authority(self, peer: str = "") -> str:
         """The original goal, verbatim, and the original text of the
         requirements the current task covers, for every task review.
 
@@ -8578,7 +8605,13 @@ class Session:
                    "on an error or a refusal, or 'R<n>: NOT MET - <the condition>', which is a BLOCKING "
                    "finding. A review that leaves a covered requirement without such a line is recorded "
                    "as unfinished. With nothing to change, reply NO FINDINGS on the first line followed "
-                   "only by those lines. " + _ERROR_PATH_RULE if covered else ""))
+                   "only by those lines. " + _ERROR_PATH_RULE if covered else "")
+                + (" " + _PROBE_RULE if covered and self._probe_applies(peer) else ""))
+
+    def _probe_applies(self, key: str) -> bool:
+        """A demonstration is asked for only where the seat can make one: a
+        project with a configured check, and a copy that takes scratch."""
+        return bool(self.project and self.config.integration_gate is not None and _seat_takes_scratch(key))
 
     def _covered_texts(self) -> List[tuple]:
         """(rid, original text) for each requirement the current task covers.

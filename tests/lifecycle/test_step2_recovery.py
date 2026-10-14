@@ -760,3 +760,38 @@ def test_an_approval_keeps_its_notes_and_never_waives_a_hold(reply, approves):
     for a requirement the task does not cover."""
     from quadratus.session import _approving_review
     assert _approving_review(reply, ["R1", "R2"]) is approves
+
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("lead_rung", ["standard", "complex"])
+def test_a_seat_whose_copy_takes_scratch_is_asked_to_demonstrate_error_conditions(tmp_path, monkeypatch, lead_rung):
+    """r08 on f247f0a: the reviewer and the final auditor had the goal, the
+    requirement and the error-path rule, cited a success-path test and called
+    the refusal condition met. A seat whose source copy takes scratch files
+    (CLISpec.copy_args) may already add a new file there and run the approved
+    check; it is now asked to show such a condition with a scratch test and
+    report the run. Seats without that copy are not asked for what they
+    cannot do. No runner, library or case is named."""
+    from quadratus.cli_providers import CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC
+    from quadratus.session import _PROBE_RULE
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    scratch = {s.vendor for s in (CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC) if s.copy_args}
+    assert scratch == {"openai"}, "today only the codex seat reviews in a writable copy"
+    declared = ("REQUIREMENTS:\nR1: " + _R1 + "\n"
+                + DECL_SIMPLE.replace("backend simple", f"backend {lead_rung}") + "\nCOVERS: R1")
+
+    def lead(call, replay):
+        H.write(call, {"app.py": fixed})
+        return 'Implemented add.\nCHANGED: ["app.py"]'
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead,
+                                                 collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:2",
+                                                 auditor=lambda c, r: "R1: MET - app.py",
+                                                 **{"requirements-review": lambda c, r: "COMPLETE"}),
+                   files=FILES, max_tasks=1, record_complete=False)
+    seats = replay.of("collaborator") + replay.of("auditor")
+    assert seats, "a review and an audit ran"
+    for call in seats:
+        assert (_PROBE_RULE in call.prompt) is (call.vendor == "codex"), (call.role, call.vendor)
+        assert "argparse" not in call.prompt
+    assert any(c.vendor == "codex" for c in seats), "at least one scratch-capable seat was asked"

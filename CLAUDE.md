@@ -751,6 +751,18 @@ Key design decisions already settled:
   decisions and rulings binding, and never relaxes a condition the goal
   states. NOT RUN discharge is unchanged; full-file evidence for discovery
   commands is a design proposed to root, not implemented.
+- **The final audit is not a proven backstop for refusal conditions** (r08
+  on f247f0a). The reviewer and the final auditor both had the goal, the
+  requirement and the error-path rule, cited a success-path test and
+  called the CLI refusal condition MET; malformed input still left before
+  the handler in another form. Prompt prose did not move either seat.
+  `_PROBE_RULE` asks the one kind of seat that can already show it, a seat
+  whose copy takes scratch (`CLISpec.copy_args`, today codex), to add a
+  scratch test feeding the interface each kind of invalid input the
+  condition covers, including input the interface's own parsing rejects,
+  run the approved check and report the run. No new command, grant or
+  role; seats without that copy are not asked. Whether it changes the
+  verdict is unmeasured until a run shows it.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.
