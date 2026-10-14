@@ -1738,3 +1738,101 @@ def test_a_parallel_childs_finished_draft_past_the_stop_is_trimmed_inside_the_ch
         assert (replay.project / "app.py").read_text() == _TYPED
     else:
         assert "t1" in result["failed_tasks"] and "t1" not in reviewed
+
+
+# -- R14 on 164859f: the cap goal question is the goal decision, not a second audit -------
+
+_CAP = "task cap for this run has been reached"
+
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("case", ["done-met", "fetch-then-done", "not-done", "audit-not-met", "hedged-done"])
+def test_the_cap_goal_question_lists_full_work_by_id_and_the_audit_still_decides(tmp_path, monkeypatch, case):
+    """R14: the cap question rendered every task's full work inline (43k
+    characters) to an uncapped seat that also read the delivered files; its
+    183k tokens left the final audit below the call reserve. The question
+    now lists each task's full work by artifact id, FETCH serves any of them
+    whole, and it says the independent audit follows a DONE. The goal,
+    requirements and harness records are rendered as before. NOT DONE, a
+    hedged DONE or an audit NOT MET still hold the run."""
+    import re
+
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    declared = "REQUIREMENTS:\nR1: " + _R1 + "\n" + DECL_T1 + "\nCOVERS: R1"
+    caps = []
+
+    def orchestrator(call, replay):
+        if _CAP not in call.prompt:
+            return declared if not replay.of("orchestrator")[:-1] else "DONE"
+        caps.append(call.prompt)
+        if case == "fetch-then-done" and len(caps) == 1:
+            ids = re.findall(r"artifact ([0-9a-f]{12}) \(draft\)", call.prompt)
+            return "FETCH: " + ids[0]
+        return {"not-done": "NOT DONE: R1 is unchecked",
+                "hedged-done": "DONE, though R1 is unchecked"}.get(case, "DONE")
+
+    def lead(call, replay):
+        H.write(call, {"app.py": fixed})
+        return 'Implemented add with the sum.\nCHANGED: ["app.py"]'
+
+    replay = H.run(tmp_path, monkeypatch, Script(
+        orchestrator=orchestrator, lead=lead,
+        collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:2",
+        auditor=lambda c, r: "R1: NOT MET - no test of a negative sum" if case == "audit-not-met"
+        else "R1: MET - app.py:2",
+        **{"requirements-review": lambda c, r: "COMPLETE"}),
+        files=FILES, max_tasks=1, record_complete=False)
+    assert caps, "the cap question was asked"
+    first = caps[0]
+    assert "## Goal (verbatim, unchanged)" in first and "R1" in first and _R1 in first
+    assert "**Harness record" in first, "measured facts still rendered"
+    assert "**Full work:** artifact" in first and "shown in full" not in first, "full work by id"
+    assert "Implemented add with the sum." not in first, "no inline artifact text"
+    assert "your DONE does not stand in for that check" in first
+    audited = bool(replay.of("auditor"))
+    if case == "fetch-then-done":
+        assert len(caps) == 2 and "Implemented add with the sum." in caps[1], "FETCH serves the original whole"
+    if case in ("done-met", "fetch-then-done"):
+        assert audited and replay.result.completed
+    elif case == "audit-not-met":
+        assert audited and not replay.result.completed, "the audit, not the goal answer, decides"
+    else:
+        assert not audited and not replay.result.completed, "no DONE, no audit, no completion"
+
+
+@pytest.mark.requirements_ledger
+def test_the_final_audit_is_admitted_exactly_at_the_unchanged_call_reserve(tmp_path, monkeypatch):
+    """R14's stop: the audit was refused because the remaining reported
+    budget sat below the ordinary-call reserve. The reserve is unchanged:
+    with exactly the reserve left the auditor is invoked, one token less
+    and it is refused with the run held incomplete."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    declared = "REQUIREMENTS:\nR1: " + _R1 + "\n" + DECL_T1 + "\nCOVERS: R1"
+    reserve = 1000
+
+    def run(where, total):
+        def orchestrator(call, replay):
+            if _CAP in call.prompt:
+                return "DONE"
+            return declared if not replay.of("orchestrator")[:-1] else "DONE"
+
+        def lead(call, replay):
+            H.write(call, {"app.py": fixed})
+            return 'Implemented add.\nCHANGED: ["app.py"]'
+        where.mkdir()
+        return H.run(where, monkeypatch, Script(
+            orchestrator=orchestrator, lead=lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:2",
+            auditor=lambda c, r: "R1: MET - app.py:2", **{"requirements-review": lambda c, r: "COMPLETE"}),
+            files=FILES, max_tasks=1, record_complete=False,
+            limits=RunLimits(max_calls=120, max_reported_tokens=total, wall_seconds=600,
+                             max_concurrent_workers=2, reserve_tokens_per_call=reserve))
+
+    calibration = run(tmp_path / "calibrate", 6_000_000)
+    before = next(i for i, c in enumerate(calibration.calls) if c.role == "auditor")
+    used = before * (H.USAGE["input_tokens"] + H.USAGE["output_tokens"])
+    admitted = run(tmp_path / "at", used + reserve)
+    refused = run(tmp_path / "below", used + reserve - 1)
+    assert admitted.of("auditor") and admitted.result.completed
+    assert not refused.of("auditor") and not refused.result.completed
+    assert "reported_token_reserve" in (refused.result.error or "") or "RunBudgetExceeded" in (
+        refused.result.error or "")

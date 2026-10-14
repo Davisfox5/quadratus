@@ -876,6 +876,17 @@ Key design decisions already settled:
   still meets the checks, the peer and the final audit. Its fact is
   recorded only after the trim lands, so a failed trim leaves the failure
   record unchanged.
+- **The cap goal question is the goal decision, not a second audit** (R14
+  on 164859f). It rendered every task's full work inline (43k characters)
+  to an uncapped native seat that also read the delivered files; its 183k
+  reported tokens left 163,762, below the unchanged 200,000 call reserve,
+  and the final audit was never invoked. `_confirm_goal_met` now renders
+  with `with_previews=False`: goal, standing rules, requirements, rulings,
+  harness records and summaries as before, each task's full work as
+  artifact ids that FETCH serves whole. With the requirements ledger on, it
+  says DONE is the goal decision and the independent audit follows. No
+  reserve, order, cap or seat change: reordering would only move the
+  starvation, since native usage cannot be known before a call.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.

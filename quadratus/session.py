@@ -7728,9 +7728,22 @@ class Session:
         """
         seat = self.seat()
         self._note(f"task cap reached; asking {seat.key} whether the goal is met")
+        # R14 on 164859f: this question rendered every task's full work
+        # inline (43k characters) to an uncapped native seat that also read
+        # the delivered files, and its 183k reported tokens left the final
+        # audit below the call reserve, never invoked. The goal, standing
+        # rules, requirements, rulings, harness records and summaries are
+        # rendered as before; each task's full work is listed by artifact id,
+        # every one served whole by FETCH. And the question says what it is:
+        # the goal decision, which the independent audit follows.
+        audit = ("\n\nYour answer is the goal decision, not the requirement audit: if you reply DONE, "
+                 "an independent auditor then checks every numbered requirement against the current "
+                 "source, and your DONE does not stand in for that check."
+                 if self.memory.ledger.requirements and self.config.requirements_ledger else "")
         prompt = self.memory.render(
-            current=_TERMINAL_REQUEST,
+            current=_TERMINAL_REQUEST + audit,
             recent=self.config.recent_entries,
+            with_previews=False,
             extra=self._map_block(),
         )
 
