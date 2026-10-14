@@ -1997,7 +1997,8 @@
       "decisions": [
         "claude: Step 2 corrections after the 0cf5222 clearance: 86e2841, f4eafea, d0f3263, 5366412, 4ed4d30, 238b2e9; root's 2cfff79 merged at 5112c44. Each awaits root's scoped review; final combined gates held.",
         "claude: r05 on 1655cf1 corrections: per-requirement review verdicts (_judge_goal_review) and one cross-vendor review of capped work in the final parallel batch (_review_capped_final_child). Awaiting root's scoped review; final gates held.",
-        "claude: r06 on 5b31818: error-path rule for reviews and audits, goal authority over requirement wording in the audit; NOT RUN discharge unchanged, full-file evidence design proposed to root (helper/config is root's). Awaiting root's scoped review."
+        "claude: r06 on 5b31818: error-path rule for reviews and audits, goal authority over requirement wording in the audit; NOT RUN discharge unchanged, full-file evidence design proposed to root (helper/config is root's). Awaiting root's scoped review.",
+        "claude: r07 on 820bed6: capped-final-child review accepts a finished approval with every covered requirement MET and non-blocking notes kept on record (_approving_review); holds unchanged otherwise. CLI review miss assessed as reviewer judgement; no engine change."
       ]
     },
     {

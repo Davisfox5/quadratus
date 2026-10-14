@@ -759,6 +759,12 @@ Key design decisions already settled:
   gate passed. A clean verdict lifts the cap and records coverage;
   anything else is held. No lead call follows, so a capped lead stays
   capped.
+  An approval there is a finished review (NO FINDINGS or a REVIEW: COMPLETE
+  line) with no BLOCKING and every covered requirement MET; non-blocking
+  notes beside it are kept on record, not answered (r07 on 820bed6: R8-R10
+  MET, REVIEW: COMPLETE and six low-severity notes were held because only a
+  bare NO FINDINGS counted). Missing lines, NOT MET in either order and
+  BLOCKING still hold.
 - **Native delegation is denied to every seat without the worker bridge**
   (r04 on 5366412). The goal question at the cap used Claude's own Agent
   tool, reported four children still running and 1,206,662 unattributed

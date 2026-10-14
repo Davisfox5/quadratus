@@ -625,8 +625,13 @@ def _capped_lead(call, replay, files):
     return H.claude_cap("Wrote it; tests not run yet.", num_turns=8)
 
 
+_APPROVED_WITH_NOTES = ("I found nothing that has to be fixed before this work is accepted.\n"
+                        "Non-blocking findings:\n1. Low severity: add(True, 1) is accepted.\n"
+                        "R1: MET - app.py:2\nR2: MET - README.md:3\nREVIEW: COMPLETE")
+
+
 @pytest.mark.requirements_ledger
-@pytest.mark.parametrize("verdict", ["clean", "blocking"])
+@pytest.mark.parametrize("verdict", ["clean", "blocking", "approved-with-notes"])
 def test_capped_work_in_the_final_parallel_batch_meets_one_independent_review(tmp_path, monkeypatch, verdict):
     """r05: t2's lead hit its turn cap inside the job's final parallel batch;
     its scoped files merged and the checks passed, but a child has no gate
@@ -651,6 +656,8 @@ def test_capped_work_in_the_final_parallel_batch_meets_one_independent_review(tm
         reviews.append(call)
         if call.task == "t1" and verdict == "blocking":
             return "R1: NOT MET - add(1.5, 2) is not covered by any test\nREVIEW: COMPLETE"
+        if call.task == "t1" and verdict == "approved-with-notes":
+            return _APPROVED_WITH_NOTES
         return "NO FINDINGS\nR1: MET - app.py:2\nR2: MET - README.md:3"
 
     replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(batch), lead=lead, collaborator=collaborator),
@@ -666,8 +673,9 @@ def test_capped_work_in_the_final_parallel_batch_meets_one_independent_review(tm
     assert [c.task for c in replay.of("lead")].count("t1") == 1, "no further lead call for the capped task"
     review = batches[0]["capped_final_reviews"][0]
     capped_stop = "capped or failed task(s) t1 not continued" in (replay.result.error or "")
-    if verdict == "clean":
+    if verdict in ("clean", "approved-with-notes"):
         assert review["verdict"] == "clean" and not capped_stop, "the cap is lifted by the review"
+        assert review["nonblocking_notes"] is (verdict == "approved-with-notes"), "notes are kept on record"
     else:
         assert review["verdict"] == "held: findings" and not replay.result.completed
 
@@ -726,3 +734,21 @@ def test_review_and_audit_trace_every_error_path_and_judge_the_goal_over_require
     assert "a condition the goal does state is never relaxed this way" in audit
     for text in (review, audit):
         assert "argparse" not in text and "--quadratus-report" not in text, "nothing case-specific or private"
+
+
+@pytest.mark.parametrize("reply,approves", [
+    (_APPROVED_WITH_NOTES, True),
+    ("NO FINDINGS\nR1: MET - app.py:2\nR2: MET - README.md:3", True),
+    ("Looks fine.\nR1: MET - app.py:2\nR2: MET - README.md:3", False),
+    ("Notes only.\nR1: MET - app.py:2\nREVIEW: COMPLETE", False),
+    ("R1: NOT MET - x\nR1: MET - app.py:2\nR2: MET - README.md:3\nREVIEW: COMPLETE", False),
+    ("BLOCKING: x\nR1: MET - app.py:2\nR2: MET - README.md:3\nREVIEW: COMPLETE", False),
+], ids=["notes-complete", "no-findings", "no-verdict-form", "missing-requirement", "contradiction", "blocking"])
+def test_an_approval_keeps_its_notes_and_never_waives_a_hold(reply, approves):
+    """r07 on 820bed6: a complete approval with every covered requirement MET
+    and only non-blocking notes was held because only a bare NO FINDINGS
+    counted. It now approves where no revision can follow; a reply with no
+    verdict form, a missing requirement line, a NOT MET line in either order
+    or a BLOCKING finding never does."""
+    from quadratus.session import _approving_review
+    assert _approving_review(reply, ["R1", "R2"]) is approves

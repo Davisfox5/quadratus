@@ -2073,6 +2073,25 @@ def _clean_goal_review(text: str, rids) -> bool:
                for line in lines[1:])
 
 
+def _approving_review(text: str, rids) -> bool:
+    """A finished review that approves the work: no BLOCKING finding, a
+    verdict form (NO FINDINGS, or a REVIEW: COMPLETE line), and, when it
+    covers requirements, every one MET on its own line with no NOT MET line
+    for it in either order. Non-blocking notes may sit beside the verdict
+    (r07 on 820bed6: the parent review of a capped final child gave R8-R10
+    MET, REVIEW: COMPLETE and six low-severity notes, and was held because
+    only a bare NO FINDINGS counted). Used where no revision can follow, so
+    the notes are kept on record rather than answered."""
+    body = (text or "").strip()
+    if not body or _has_blocking_finding(body):
+        return False
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if not (_review_complete(body) or lines[0].upper().rstrip(".") == "NO FINDINGS"):
+        return False
+    verdicts = _requirement_verdicts(body)
+    return all(verdicts.get(rid) is True for rid in rids or ())
+
+
 def _has_blocking_finding(text: str) -> bool:
     """Only a finding's explicit prefix controls the recheck loop."""
     return any(re.match(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?BLOCKING\s*:",
@@ -6701,13 +6720,17 @@ class Session:
             self.store.put(note, kind=f"review:{peer}", author=peer)
             note = self._judge_goal_review(spec, peer, note)
             rids = [rid for rid, _ in self._covered_texts()]
-            clean = (_clean_goal_review(note, rids) if rids
-                     else note.strip().upper().rstrip(".") == "NO FINDINGS")
+            clean = _approving_review(note, rids)
             result.update(reviewer=peer, reviewed=True)
             if clean:
+                notes = not (_clean_goal_review(note, rids) if rids
+                             else note.strip().upper().rstrip(".") == "NO FINDINGS")
                 outcome.recover("cap")
                 outcome.note("cap", f"capped in the final parallel batch; merged source passed the checks "
-                                    f"and {peer}'s review found nothing to change", terminal=False)
+                                    f"and {peer}'s review approved it"
+                                    + (" with non-blocking notes kept on record" if notes else ""),
+                             terminal=False)
+                result["nonblocking_notes"] = notes
                 outcome.edge("review", True)
                 self._partial_tasks.discard(spec.task_id)
                 for rid in covers:
