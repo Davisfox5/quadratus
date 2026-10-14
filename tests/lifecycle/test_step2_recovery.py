@@ -1209,3 +1209,111 @@ def test_every_parametrized_instance_of_a_scratch_case_must_execute_and_pass(
     assert proof["status"] == status, proof
     cases = proof["cases"]
     assert any("test_every_case[True]" in c for c in cases) and any("test_every_case[False]" in c for c in cases)
+
+
+# -- r10 on f6c028c: a capped revision in the last slot meets its own reviewer -------------
+
+_FINDING = "BLOCKING: add('x', 1) returns a string instead of raising TypeError naming the argument."
+
+
+@pytest.mark.parametrize("case", ["resolved", "unresolved", "failing", "out-of-scope", "non-blocking"])
+def test_a_capped_revision_in_the_last_slot_meets_the_reviewer_whose_findings_it_answered(
+        tmp_path, monkeypatch, case):
+    """r10: t3's capped Grok draft took the last-slot handoff to a review,
+    which found a real CLI defect. The revision fixed it inside scope and
+    the checks passed, but it also stopped at its cap and the task closed
+    turn-limited with no recheck. Now that reviewer checks its own finding
+    once on the revised source. RESOLVED lets the task close normally; any
+    other verdict stays open. The writer is never called again. Failing
+    checks, an out-of-scope edit or a note with no blocking finding keep the
+    capped close exactly as before."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+
+    def lead(call, replay):
+        H.write(call, {"app.py": fixed})
+        return H.grok_ok("I'll run the tests next", stop="cancelled", num_turns=8)
+
+    revised = {"resolved": _TYPED, "unresolved": _TYPED, "non-blocking": _TYPED,
+               "failing": "def add(a, b):\n    return a - b\n", "out-of-scope": _TYPED}
+
+    def revision(call, replay):
+        H.write(call, {"app.py": revised[case]})
+        if case == "out-of-scope":
+            H.write(call, {"README.md": "# app\n\nadd raises TypeError.\n"})
+        return H.grok_ok("Now checking the TypeError path", stop="cancelled", num_turns=8)
+
+    reviews, rechecks = [], []
+
+    def collaborator(call, replay):
+        reviews.append(call)
+        if case == "non-blocking":
+            return "Consider naming the argument in the TypeError message.\nREVIEW: COMPLETE"
+        return _FINDING + "\nREVIEW: COMPLETE"
+
+    def recheck(call, replay):
+        rechecks.append(call)
+        return "RESOLVED" if case == "resolved" else "UNRESOLVED: add('x', 1) still returns a string."
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(DECL_SIMPLE), lead=lead, revision=revision,
+                                                 collaborator=collaborator, recheck=recheck),
+                   files=FILES, max_tasks=1, settings=Settings(backend="cli", lead_max_turns=8),
+                   record_complete=False)
+    result = H.result_json(replay)
+    writers = [c for c in replay.calls if c.role in ("lead", "revision", "gate-fix", "design-fix")]
+    assert [c.role for c in writers] == ["lead", "revision"], "the capped writer is never called again"
+    assert len(reviews) == 1
+    if case in ("resolved", "unresolved"):
+        assert len(rechecks) == 1 and rechecks[0].vendor == reviews[0].vendor, "the same reviewer, once"
+        assert rechecks[0].model == reviews[0].model
+        assert _FINDING in rechecks[0].prompt and "stopped at its turn limit" in rechecks[0].prompt
+        assert "while revising" in rechecks[0].prompt
+        assert result["turn_limited_tasks"] == [], "the rechecked task is not unfinished debt"
+        assert [c.role for c in replay.calls][:6] == ["orchestrator", "lead", "collaborator", "revision",
+                                                      "recheck", "closeout"]
+        if case == "resolved":
+            assert replay.result.completed, "completed only on the orchestrator's answer at the cap"
+        else:
+            assert not replay.result.completed and "FindingsOpen" in (replay.result.error or ""), \
+                "an unresolved finding stays open"
+        return
+    assert not rechecks, "no recheck for work that is not the last slot's checked, in-scope source"
+    assert not replay.result.completed
+    if case == "out-of-scope":
+        assert result["failed_tasks"] == ["t1"], "the scope breach still fails the task"
+    else:
+        assert result["turn_limited_tasks"] == ["t1"], "the capped close applies as before"
+
+
+def test_a_capped_fix_in_the_last_slot_meets_the_reviewer_whose_finding_stayed_open(tmp_path, monkeypatch):
+    """r10, the fix-cycle form: the revision finished, its recheck came back
+    UNRESOLVED, and the one fix stopped at its cap. The reviewer whose finding
+    stayed open checks it once on the fixed source; no further fix follows."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+
+    def lead(call, replay):
+        H.write(call, {"app.py": fixed})
+        return H.grok_ok("I'll run the tests next", stop="cancelled", num_turns=8)
+
+    def revision(call, replay):
+        if len(replay.of("revision")) == 1:
+            H.write(call, {"app.py": "def add(a, b):\n    return a + b  # still unchecked\n"})
+            return 'Revised add.\nCHANGED: ["app.py"]'
+        H.write(call, {"app.py": _TYPED})
+        return H.grok_ok("Now checking the TypeError path", stop="cancelled", num_turns=8)
+
+    rechecks = []
+
+    def recheck(call, replay):
+        rechecks.append(call)
+        return "RESOLVED" if "while revising" in call.prompt else "UNRESOLVED: add('x', 1) still returns a string."
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(DECL_SIMPLE), lead=lead, revision=revision,
+                                                 collaborator=lambda c, r: _FINDING + "\nREVIEW: COMPLETE",
+                                                 recheck=recheck),
+                   files=FILES, max_tasks=1, settings=Settings(backend="cli", lead_max_turns=8),
+                   record_complete=False)
+    roles = [c.role for c in replay.calls]
+    assert roles.count("revision") == 2 and roles.count("recheck") == 2, roles
+    assert "while revising" in rechecks[1].prompt and _FINDING in rechecks[1].prompt
+    assert len({(c.vendor, c.model) for c in rechecks}) == 1, "the same reviewer both times"
+    assert H.result_json(replay)["turn_limited_tasks"] == [] and replay.result.completed

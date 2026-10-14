@@ -4181,9 +4181,11 @@ class Session:
         # on 5d9f5ff recorded "review: true" on three tasks no peer read; with
         # no peer the edge is not applicable (None), never satisfied.
         self._edge("review", True if collaborators else None)
+        capped_writer = False
         if notes:
             self._stage("revision")
             self._count("revision")
+            blocking = [(p, n) for p, n in notes if _has_blocking_finding(n)]
             try:
                 revision = self._edit(
                     lead,
@@ -4193,18 +4195,23 @@ class Session:
                 )
             except TurnLimitReached as exc:
                 # A capped revision takes the capped-task path: kept,
-                # measured, unreviewed and ungated, re-planned by name.
-                return self._close_turn_limited(lead, spec, task, exc, before)
-            task.record("assistant", revision)
-            task.keep(revision, kind="revision")
-
-            blocking = [(p, n) for p, n in notes if _has_blocking_finding(n)]
+                # measured, unreviewed and ungated, re-planned by name --
+                # unless it is the last slot's checked, in-scope source, which
+                # meets the reviewers whose findings it answered (r10).
+                handoff = self._capped_revision_recheck(lead, spec, task, exc, before, blocking, labels)
+                if handoff is None:
+                    return self._close_turn_limited(lead, spec, task, exc, before)
+                revision, unresolved, capped_writer = handoff[0], handoff[1], True
+            else:
+                task.record("assistant", revision)
+                task.keep(revision, kind="revision")
+                unresolved = self._recheck_blocking(
+                    spec, blocking, revision, task, labels=labels
+                )
             cycles = 1
-            unresolved = self._recheck_blocking(
-                spec, blocking, revision, task, labels=labels
-            )
-            while unresolved and cycles < self.config.max_fix_cycles:
+            while unresolved and cycles < self.config.max_fix_cycles and not capped_writer:
                 self._count("revision")
+                pending = [(p, n) for p, n in blocking if any(p == up for up, _ in unresolved)]
                 try:
                     revision = self._edit(
                         lead,
@@ -4214,14 +4221,16 @@ class Session:
                         ),
                     )
                 except TurnLimitReached as exc:
-                    return self._close_turn_limited(lead, spec, task, exc, before)
+                    handoff = self._capped_revision_recheck(lead, spec, task, exc, before, pending, labels)
+                    if handoff is None:
+                        return self._close_turn_limited(lead, spec, task, exc, before)
+                    revision, unresolved, capped_writer = handoff[0], handoff[1], True
+                    break
                 task.record("assistant", revision)
                 task.keep(revision, kind="revision")
                 cycles += 1
                 unresolved = self._recheck_blocking(
-                    spec, [(p, n) for p, n in blocking
-                           if any(p == up for up, _ in unresolved)],
-                    revision, task, labels=labels,
+                    spec, pending, revision, task, labels=labels,
                 )
             if unresolved:
                 for peer, verdict in unresolved:
@@ -4238,7 +4247,8 @@ class Session:
                     + "\n".join(f"[{labels[p]}] {v}" for p, v in unresolved),
                 )
 
-        self._run_integration_gate(lead, spec, task)
+        # A capped writer gets no further call: the gate decides, unfixed.
+        self._run_integration_gate(lead, spec, task, **({"max_fixes": 0} if capped_writer else {}))
         if self._tier(spec) == "direct" and not collaborators:
             # The direct tier draws no draft collaborator, but the design
             # review of the evidence is still required where it applies:
@@ -4336,6 +4346,92 @@ class Session:
                     if said else " The lead returned no answer text.")
                  + f" Bound to source {current[:16]} and checks {identity[:16]}.")
         return draft, list(collaborators) + [p for p in reviewers if p not in collaborators]
+
+    def _capped_revision_recheck(self, lead, spec, task, exc, before, pending, labels):
+        """A capped revision or fix in the job's last task slot meets the
+        reviewers whose blocking findings it answered, once, on the current
+        source; or None and the capped close applies as before.
+
+        Step 2 r10 on f6c028c: t3's capped Grok draft took the last-slot
+        handoff to an Opus review, which found malformed CLI ids leaving as
+        plain stderr. The revision fixed that within scope and the checks
+        passed on its source, but it also stopped at its cap and the task
+        closed turn-limited with no recheck, so the job ended
+        GoalUnconfirmedAtCap.
+
+        The same conditions as the capped draft (_capped_final_draft): a
+        serial task in the last slot, measured in-scope edits under the write
+        grant, the task's own checks passing on exactly this source. Also: at
+        least one blocking finding to check, every one of its reviewers
+        available, and no design evidence (a design fix would be a writer
+        round). The writer stays capped: no fix cycle, no gate fix, no slot,
+        recovery or grant is added. A finding the reviewer does not call
+        RESOLVED, or cannot check, stays open; the source must be unchanged
+        by the rechecks. Returns (record text, unresolved)."""
+        if not pending or any(not self._available(peer) for peer, _ in pending):
+            return None
+        if is_design_task(spec) and self.project and self.config.allow_writes:
+            return None
+        bound = self._checked_final_source(spec, before)
+        if bound is None:
+            return None
+        state, current, identity = bound
+        peers = [peer for peer, _ in pending]
+        said = (exc.partial_text or "").strip()
+        task.keep(json.dumps(dict(task=spec.task_id, lead=lead, turns=exc.turns, changed=state["changed"],
+                                  changed_lines=state["changed_lines"], reviewers=peers,
+                                  **self._attempt_identity(spec))),
+                  kind="capped-final-revision", author=lead)
+        if self._outcome is not None:
+            self._outcome.note("cap", f"lead stopped at its turn limit ({exc.turns or '?'} turns) while "
+                                      "revising in the last task slot; its in-scope source passed the checks "
+                                      f"and goes back to {', '.join(peers)} for their own findings",
+                               terminal=False)
+        self._note(f"task {spec.task_id}: revision stopped at its turn limit in the last task slot; its "
+                   "checked, in-scope source goes back to the reviewers whose findings it answered")
+        record = ("HARNESS RECORD: the lead stopped at its turn limit"
+                  + (f" ({exc.turns} turns)" if exc.turns else "")
+                  + " while revising, before giving a final answer, in the job's last task slot. The "
+                    "revised work is the project source as it is now. Changed since the task began: "
+                    f"{', '.join(state['changed'])} ({state['changed_lines']} lines), inside the declared "
+                    "scope. The project's checks passed on exactly this source. Nothing here says your "
+                    "findings are addressed: read the source."
+                  + (f" The lead's last words, which are narration and not a result: {said[:300]}"
+                     if said else " The lead returned no answer text.")
+                  + f" Bound to source {current[:16]} and checks {identity[:16]}.")
+        task.record("assistant", record)
+        task.keep(record, kind="revision")
+        unresolved = self._recheck_blocking(spec, pending, record, task, labels=labels)
+        if self._source_fingerprint() != current:
+            # What was checked is no longer the source: nothing is resolved.
+            unresolved = [(peer, f"UNRESOLVED: the source changed during the recheck; {note.strip()}")
+                          for peer, note in pending]
+        return record, unresolved
+
+    def _checked_final_source(self, spec, before):
+        """``(state, source, gate)`` when a capped call's work is the last
+        slot's measured, in-scope source and the task's checks passed on
+        exactly it; None otherwise. The capped draft's conditions without its
+        reviewer choice (_capped_final_draft)."""
+        total = getattr(self, "_max_tasks", None)
+        if (not total or self._explicit_tasks is not None
+                or int(getattr(self, "_slots_used", 0) or 0) + 1 < total
+                or not self._write_ceiling() or spec.scope is None):
+            return None
+        state = self._inspect_partial_edits(before)
+        if not state["inspected"] or not state["changed"]:
+            return None
+        report = self._measure_scope(spec, before)
+        if report is None or report.blocking or report.oversized:
+            return None
+        self._observe_checks(spec, "turn-limited")
+        current = self._source_fingerprint()
+        identity = _gate_identity(self._current_gate()) if self._current_gate() is not None else None
+        if not current or identity is None or not any(
+                c.get("source") == current and c.get("gate") == identity and c.get("passed")
+                for c in self.review_checks if c.get("task") == spec.task_id):
+            return None
+        return state, current, identity
 
     def _close_turn_limited(self, lead, spec, task, exc, before) -> TaskSummary:
         """A lead stopped at its turn limit: keep the work, record it, re-plan.

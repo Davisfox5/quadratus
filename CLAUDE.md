@@ -819,6 +819,20 @@ Key design decisions already settled:
   outer profile), is `not run`. The run uses the reviewer's model-facing
   argv. And each pytest instance keeps its id: a parametrized case passes
   only when every printed instance executed and passed.
+- **A capped revision in the last slot meets its own reviewer, once**
+  (r10 on f6c028c). t3's capped draft took the last-slot handoff to a
+  review that found a real CLI defect; the revision fixed it inside scope
+  with the checks passing, but stopped at its cap and closed turn-limited
+  with no recheck. `_capped_revision_recheck` now sends a capped revision
+  or capped fix back to exactly the reviewers whose blocking findings it
+  answered, once, on the current source. That uses the capped draft's
+  eligibility (`_checked_final_source`): last slot, no operator list, write
+  grant, measured in-scope edits, checks passed on exactly this source.
+  It also needs every one of those reviewers available and no design
+  evidence. RESOLVED lets the task close normally; anything else stays
+  open. The writer is never called again (no fix cycle, gate fix zero). A
+  note with no blocking finding, failing checks or a scope breach keep the
+  capped close. Whole-goal confirmation and the final audit still decide.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.
