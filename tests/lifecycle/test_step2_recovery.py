@@ -1625,3 +1625,5 @@ def test_the_writer_budget_note_follows_the_cap_the_fleet_applies(tmp_path, role
     if told:
         assert "the edits already on disk are kept" in seen[-1] and "unreviewed" not in seen[-1]
         assert "unfinished" not in seen[-1] and "unchecked" not in seen[-1], "no status promise"
+        assert "start with the files they name" in seen[-1] and "read only" not in seen[-1], \
+            "a priority, not a narrower read authority"

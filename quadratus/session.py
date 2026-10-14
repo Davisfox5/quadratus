@@ -8718,7 +8718,8 @@ class Session:
                 f"This call has at most {limit} tool rounds. At round {limit} this call stops; the "
                 "edits already on disk are kept, and the task's checks, its reviewers and the final "
                 "audit still decide what happens to them. The findings, the goal and "
-                "your remaining room are in this prompt and are current: read only the files they name, "
+                "your remaining room are in this prompt and are current: start with the files they name "
+                "and read further (callers, imports, tests) only where the edit needs it, "
                 f"have the edit written by about round {write_by}, and keep the last rounds for running "
                 "the project's check.")
 
