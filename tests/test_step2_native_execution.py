@@ -334,3 +334,14 @@ def test_unexpected_scratch_gate_policy_is_rejected(tmp_path, bad):
     cwd = tmp_path if bad == "outside" else copy
     with pytest.raises(ValueError):
         protected_gate_argv(['/usr/bin/sandbox-exec', '-p', profile, 'python3'], tmp_path / "outer.sb", cwd=cwd)
+
+
+@pytest.mark.parametrize("operation", ["file-write*", "network*"])
+def test_parent_allow_exception_cannot_expand_scratch_authority(tmp_path, operation):
+    from tools.step2_native_execution import protected_gate_argv
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    parent = tmp_path / "outer.sb"
+    parent.write_text(f'(version 1)\n(allow default)\n(allow {operation})\n')
+    with pytest.raises(ValueError, match="expand scratch authority"):
+        protected_gate_argv(['/usr/bin/sandbox-exec', '-p', _scratch_policy(copy), 'python3'], parent, cwd=copy)

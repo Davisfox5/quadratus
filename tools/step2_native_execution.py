@@ -83,6 +83,12 @@ def protected_gate_argv(argv, outer_profile, *, cwd):
         raise ValueError("Unexpected scratch read policy")
     parent = [line for line in Path(outer_profile).read_text().splitlines()
               if line.strip() not in ("(version 1)", "(allow default)")]
+    for line in parent:
+        if not line.strip() or line.lstrip().startswith(";"):
+            continue
+        operation = re.match(r"\((allow|deny)\s+([^\s()]+)", line.strip())
+        if operation is None or (operation[1] == "allow" and not operation[2].startswith("file-read")):
+            raise ValueError("Parent policy could expand scratch authority")
     profile = "\n".join([*expected, lines[4], *parent, *hidden]) + "\n"
     return ["/usr/bin/sandbox-exec", "-p", profile, *argv[3:]]
 
