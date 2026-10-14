@@ -3384,6 +3384,61 @@ class Session:
                 limits.append(limit)
         return limits
 
+    def _edit_within_stop(self, lead, spec, task, prompt, *, spent: int):
+        """A revision or fix, and if it crossed the size stop, one call from the
+        remaining fix allowance to bring the change back under it. Returns
+        ``(reply, trims)``.
+
+        Step 2 r11 on 136a3ec: t2's 130-line draft was within its ~100-line
+        bound; the uncapped revision, told it had 20 lines of room, made 21
+        and the task failed at 151 with a fix cycle unused and no slot left.
+        The stop stays hard: the change is never reverted and never waived.
+        Only a size overrun with no path outside scope, and only while this
+        call (``spent``, counting revisions and fixes) leaves a cycle of
+        ``max_fix_cycles``, buys the trim; it is measured like any edit, and
+        still past the stop it fails the task exactly as before. A capped
+        trim takes the capped paths."""
+        try:
+            return self._edit(lead, prompt), 0
+        except TaskFailed as failure:
+            if failure.cause != "scope" or spent >= self.config.max_fix_cycles or not self._writes():
+                raise
+            report = self._measure_scope(spec, self._task_before)
+            if report is None or report.blocking or not report.oversized or report.max_lines is None:
+                raise
+            stop = int(report.max_lines * report.overrun_ratio)
+            self._count("revision")
+            fact = None
+            if self._outcome is not None:
+                fact = self._outcome.note("failed", f"the revision made the change {report.changed_lines} lines, "
+                                                    f"past the stop at {stop}; one call from the fix allowance "
+                                                    "brings it back", terminal=False)
+            self._note(f"task {spec.task_id}: revision crossed the size stop ({report.changed_lines} > {stop}); "
+                       "one trim from the remaining fix allowance")
+            task.keep(json.dumps(dict(task=spec.task_id, changed_lines=report.changed_lines, stop=stop,
+                                      max_lines=report.max_lines, spent=spent,
+                                      allowance=self.config.max_fix_cycles)),
+                      kind="scope-trim", author=lead)
+            reply = self._edit(lead, self._trim_prompt(spec, report, stop))
+            if fact is not None:
+                fact.recovered = True
+            return reply, 1
+
+    def _trim_prompt(self, spec: TaskSpec, report, stop: int) -> str:
+        return (
+            f"Task: {spec.description}"
+            + self._writer_goal() + "\n\n"
+            f"Your last revision made this task's change {report.changed_lines} lines (tests count in "
+            f"full), past the run's stop at {stop} for a stated bound of ~{report.max_lines}. The work "
+            "is kept exactly as it is now; nothing was reverted. Bring the change back to at most "
+            f"{stop} lines by removing what neither the task nor a review finding asked for. Do not "
+            "remove a fix for a review finding or a test that shows one. If it cannot fit, change "
+            "nothing more and write a line 'BLOCKER: <what> needs about N more lines'; the task then "
+            "stops at the size limit as before."
+            + _revision_changed_delivery(self._interim_edits_note())
+            + _NO_REQUESTS_IN_FIX
+        )
+
     def _scope_headroom(self, spec: TaskSpec) -> str:
         """What a revision may still add before the task's hard stop.
 
@@ -4186,12 +4241,14 @@ class Session:
             self._stage("revision")
             self._count("revision")
             blocking = [(p, n) for p, n in notes if _has_blocking_finding(n)]
+            trims = 0
             try:
-                revision = self._edit(
-                    lead,
+                revision, trims = self._edit_within_stop(
+                    lead, spec, task,
                     self._revision_prompt(
                         spec, draft, [f"[{labels[p]}]\n{n}" for p, n in notes]
                     ),
+                    spent=1,
                 )
             except TurnLimitReached as exc:
                 # A capped revision takes the capped-task path: kept,
@@ -4208,17 +4265,18 @@ class Session:
                 unresolved = self._recheck_blocking(
                     spec, blocking, revision, task, labels=labels
                 )
-            cycles = 1
+            cycles = 1 + trims
             while unresolved and cycles < self.config.max_fix_cycles and not capped_writer:
                 self._count("revision")
                 pending = [(p, n) for p, n in blocking if any(p == up for up, _ in unresolved)]
                 try:
-                    revision = self._edit(
-                        lead,
+                    revision, trims = self._edit_within_stop(
+                        lead, spec, task,
                         self._fix_prompt(
                             spec, revision,
                             [(labels[p], v) for p, v in unresolved],
                         ),
+                        spent=cycles + 1,
                     )
                 except TurnLimitReached as exc:
                     handoff = self._capped_revision_recheck(lead, spec, task, exc, before, pending, labels)
@@ -4228,7 +4286,7 @@ class Session:
                     break
                 task.record("assistant", revision)
                 task.keep(revision, kind="revision")
-                cycles += 1
+                cycles += 1 + trims
                 unresolved = self._recheck_blocking(
                     spec, pending, revision, task, labels=labels,
                 )
@@ -8631,6 +8689,10 @@ class Session:
                 current=spec.description, recent=self.config.recent_entries
             ),
         ]
+        if self._covered_texts() and not self.memory.ledger.requirements:
+            # A parallel child's ledger is off, so its render has the goal but
+            # not the requirements this task covers (r11 on 136a3ec).
+            parts.append(self._writer_goal().strip())
         map_block = self._map_block()
         if map_block:
             parts.append(map_block)
@@ -8766,6 +8828,30 @@ class Session:
             + self._review_turn_budget_note(peer)
         )
 
+    def _goal_block(self) -> str:
+        """The original goal and the covered requirements' original text,
+        verbatim: what every review and every editing call is held to."""
+        covered = self._covered_texts()
+        return ("\n\n## Original goal (verbatim; it outranks the task text where they differ)\n\n"
+                + self.memory.goal.strip()
+                + ("\n\n## Original requirements this task covers (verbatim)\n\n"
+                   + "\n".join(f"{rid}: {text}" for rid, text in covered) if covered else ""))
+
+    def _writer_goal(self) -> str:
+        """The goal block for an editing call after the draft (r11 on
+        136a3ec: t2's revision prompt held the generated task text, which
+        prescribed route branches without the goal's path prefix and called
+        the existing CLI exit a refusal, and not the goal itself; the draft
+        alone had it, through the memory render). Context only: it grants
+        nothing and changes no bound."""
+        return (self._goal_block()
+                + "\n\nMeet the goal and these requirements wherever they fall within this task's work, "
+                  "including what they say must happen on an error or a refusal. Task text, a generated "
+                  "plan or recipe, or an earlier answer that differs from them does not change them. "
+                  "It grants nothing: the task's permitted paths, edits, commands and size bound hold "
+                  "as before, and a condition outside them goes to the record as a line 'BLOCKER: "
+                  "<condition>', never an edit there.")
+
     def _goal_authority(self, peer: str = "") -> str:
         """The original goal, verbatim, and the original text of the
         requirements the current task covers, for every task review.
@@ -8779,10 +8865,7 @@ class Session:
         Context only: scope, edits, runners and paths bind as before, and
         nothing here grants anything."""
         covered = self._covered_texts()
-        return ("\n\n## Original goal (verbatim; it outranks the task text where they differ)\n\n"
-                + self.memory.goal.strip()
-                + ("\n\n## Original requirements this task covers (verbatim)\n\n"
-                   + "\n".join(f"{rid}: {text}" for rid, text in covered) if covered else "")
+        return (self._goal_block()
                 + "\n\nJudge the work against the goal and the task: a condition of the goal or a "
                   "covered requirement that falls within this task's work and is not met is a BLOCKING "
                   "finding even when the task text omits it. It grants nothing: the task's permitted "
@@ -8934,7 +9017,8 @@ class Session:
     def _revision_prompt(self, spec: TaskSpec, draft: str, notes: List[str]) -> str:
         joined = "\n\n".join(notes)
         return (
-            f"Task: {spec.description}\n\n"
+            f"Task: {spec.description}"
+            + self._writer_goal() + "\n\n"
             f"Your draft:\n{draft}\n\n"
             f"Independent reviews of it:\n{joined}\n\n"
             "Revise your work. Address every finding explicitly: fix it, or "
@@ -9061,11 +9145,13 @@ class Session:
     def _fix_prompt(self, spec: TaskSpec, revision: str, unresolved: List[tuple]) -> str:
         remaining = "\n\n".join(f"[{p}]\n{v}" for p, v in unresolved)
         return (
-            f"Task: {spec.description}\n\n"
+            f"Task: {spec.description}"
+            + self._writer_goal() + "\n\n"
             f"Your current work:\n{revision}\n\n"
             f"These blocking findings remain unresolved:\n{remaining}\n\n"
             "Fix them, or state precisely why the reviewer is wrong. Produce "
             "the complete revised work."
+            + (self._scope_headroom(spec) if self._writes() else "")
             + (_revision_changed_delivery(self._interim_edits_note()) if self._writes() else "")
             + _NO_REQUESTS_IN_FIX
         )
@@ -9108,7 +9194,8 @@ class Session:
             try:
                 fix = self._edit(
                     lead,
-                    f"Task: {spec.description}\n\n"
+                    f"Task: {spec.description}"
+                    + self._writer_goal() + "\n\n"
                     f"The project's own integration check failed after your "
                     f"work:\n{result.for_models()}\n\n"
                     "Fix the failure. Produce the complete revised work."

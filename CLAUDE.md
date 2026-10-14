@@ -833,6 +833,21 @@ Key design decisions already settled:
   open. The writer is never called again (no fix cycle, gate fix zero). A
   note with no blocking finding, failing checks or a scope breach keep the
   capped close. Whole-goal confirmation and the final audit still decide.
+- **A revision past the size stop spends the remaining fix allowance
+  coming back under it** (r11 on 136a3ec). t2's in-bound draft was revised
+  past the hard stop by one line, though its prompt stated the exact room,
+  and the task failed with a fix cycle unused and no slot left.
+  `_edit_within_stop` gives a size-only overrun (no path outside scope),
+  while the call leaves a cycle of `max_fix_cycles`, one trim call. The
+  work is never reverted, the stop is measured again, and still over it
+  fails the task as before. The fix prompt now states the same room.
+- **Every editing call carries the original goal** (r11). Only the draft
+  had it, through the memory render; revision, fix and gate-fix prompts
+  held the generated task text, which in r11 prescribed the defective
+  route branches and called the plain CLI exit a refusal. `_writer_goal`
+  gives each of them, and a parallel child's draft, the goal and covered
+  requirements verbatim, saying a task text or generated recipe does not
+  change them. It grants nothing and changes no bound.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.

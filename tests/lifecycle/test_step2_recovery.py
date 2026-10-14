@@ -1317,3 +1317,145 @@ def test_a_capped_fix_in_the_last_slot_meets_the_reviewer_whose_finding_stayed_o
     assert "while revising" in rechecks[1].prompt and _FINDING in rechecks[1].prompt
     assert len({(c.vendor, c.model) for c in rechecks}) == 1, "the same reviewer both times"
     assert H.result_json(replay)["turn_limited_tasks"] == [] and replay.result.completed
+
+
+# -- r11 on 136a3ec: a revision that crosses the size stop -------------------------------
+
+_BLOATED = _TYPED + "".join(f"\n\ndef _unused_{i}():\n    return {i}\n" for i in range(20))
+
+
+@pytest.mark.parametrize("case", ["trimmed", "still-over", "out-of-scope", "fix-overrun"])
+def test_a_revision_past_the_size_stop_spends_the_remaining_fix_allowance_bringing_it_back(
+        tmp_path, monkeypatch, case):
+    """r11: t2's in-bound draft was revised past the hard stop by one line
+    and the task failed with a fix cycle unused and no slot left. A size-only
+    overrun with a cycle left now spends that cycle on one call to bring the
+    change back under the stop; nothing is reverted and the stop is measured
+    again. Still over, a path outside scope, or no cycle left fails the task
+    as before. The fix prompt now carries the same room as the revision."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    declared = DECL_SIMPLE.replace("backend simple", "backend standard")
+
+    def lead(call, replay):
+        H.write(call, {"app.py": fixed})
+        return 'Implemented add.\nCHANGED: ["app.py"]'
+
+    def revision(call, replay):
+        n = len(replay.of("revision"))
+        if case == "fix-overrun":
+            H.write(call, {"app.py": _TYPED if n == 1 else _BLOATED})
+        elif n == 1:
+            H.write(call, {"app.py": _BLOATED})
+            if case == "out-of-scope":
+                H.write(call, {"README.md": "# app\n\nadd raises TypeError.\n"})
+        else:
+            H.write(call, {"app.py": _TYPED if case == "trimmed" else _BLOATED + "\n# still here\n"})
+        return 'Revised add.\nCHANGED: ["app.py"]'
+
+    def recheck(call, replay):
+        if case == "fix-overrun" and len(replay.of("recheck")) == 1:
+            return "UNRESOLVED: the TypeError message does not name the argument."
+        return "RESOLVED"
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead, revision=revision,
+                                                 collaborator=lambda c, r: _FINDING + "\nREVIEW: COMPLETE",
+                                                 recheck=recheck),
+                   files=FILES, max_tasks=1, record_complete=False)
+    result = H.result_json(replay)
+    writers = [c for c in replay.calls if c.role in ("lead", "revision", "gate-fix", "design-fix")]
+    if case == "trimmed":
+        assert [c.role for c in writers] == ["lead", "revision", "revision"], "one call from the allowance"
+        assert "past the run's stop at 60" in writers[2].prompt and "nothing was reverted" in writers[2].prompt
+        assert result["failed_tasks"] == [] and replay.of("recheck"), "the trimmed source meets the recheck"
+        assert replay.result.completed
+        return
+    assert result["failed_tasks"] == ["t1"], "the stop still fails the task"
+    assert not replay.result.completed
+    if case == "still-over":
+        assert [c.role for c in writers] == ["lead", "revision", "revision"]
+    elif case == "out-of-scope":
+        assert [c.role for c in writers] == ["lead", "revision"], "a path breach buys no trim"
+    else:
+        assert [c.role for c in writers] == ["lead", "revision", "revision"], "no cycle left, no trim"
+        assert "lines of room for this revision" in writers[2].prompt, "the fix is told its room"
+
+
+# -- r11: every editing call carries the original goal, not only the generated task --------
+
+_CONTRACT = "A non-number argument must raise TypeError naming the argument."
+_RECIPE = ("Implement add in app.py. Keep the existing behaviour for bad input: it already "
+           "satisfies the refusal, so add no type check.")
+
+
+@pytest.mark.parametrize("path", ["revision-and-fix", "gate-fix"])
+def test_every_editing_call_after_the_draft_carries_the_original_goal_over_a_generated_recipe(
+        tmp_path, monkeypatch, path):
+    """r11: t2's revision prompt held the generated task text, which
+    prescribed the defective behaviour, and not the original goal; only the
+    draft had the goal, through the memory render. Revision, fix and gate-fix
+    prompts now carry the goal and the covered requirements verbatim, and
+    say that task text or a generated recipe does not change them. It grants
+    nothing: the scope line is unchanged."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    goal = "Implement add(a, b) in app.py. " + _CONTRACT
+    declared = ("KIND: backend standard\nSCOPE: " + json.dumps(T1) + "\n" + _RECIPE)
+
+    def lead(call, replay):
+        H.write(call, {"app.py": fixed if path == "revision-and-fix" else "def add(a, b):\n    return a - b\n"})
+        return 'Implemented add.\nCHANGED: ["app.py"]'
+
+    def revision(call, replay):
+        H.write(call, {"app.py": _TYPED})
+        return 'Revised add.\nCHANGED: ["app.py"]'
+
+    def gate_fix(call, replay):
+        H.write(call, {"app.py": fixed})
+        return 'Fixed add.\nCHANGED: ["app.py"]'
+
+    def collaborator(call, replay):
+        if path == "gate-fix":
+            return "NO FINDINGS"
+        return "BLOCKING: add('x', 1) does not raise TypeError naming the argument.\nREVIEW: COMPLETE"
+
+    def recheck(call, replay):
+        return "UNRESOLVED: still no TypeError." if len(replay.of("recheck")) == 1 else "RESOLVED"
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead, revision=revision,
+                                                 collaborator=collaborator, recheck=recheck,
+                                                 **{"gate-fix": gate_fix}),
+                   files=FILES, max_tasks=1, goal=goal, record_complete=False)
+    assert _CONTRACT not in declared, "the task text omits, and contradicts, the goal's condition"
+    later = [c for c in replay.calls if c.role in ("revision", "gate-fix")]
+    expected = ["revision", "revision"] if path == "revision-and-fix" else ["gate-fix"]
+    assert [c.role for c in later] == expected
+    for call in later:
+        assert _CONTRACT in call.prompt and "## Original goal (verbatim" in call.prompt, call.role
+        assert "a generated plan or recipe" in call.prompt and "does not change them" in call.prompt
+        assert "It grants nothing" in call.prompt
+
+
+@pytest.mark.requirements_ledger
+def test_a_parallel_childs_draft_carries_the_requirements_it_covers_verbatim(tmp_path, monkeypatch):
+    """r11: a parallel child's ledger is off, so its draft had the goal but not
+    the original text of the requirements its task covers. It now does."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    batch = ("REQUIREMENTS:\nR1: " + _R1 + "\nR2: README documents add\n"
+             "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1")
+             + "\n---\n" + _simple("README.md", "Document add in README.md.", "R2"))
+
+    def lead(call, replay):
+        if call.task == "t1":
+            H.write(call, {"app.py": fixed})
+            return 'Implemented add.\nCHANGED: ["app.py"]'
+        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
+        return 'Documented add.\nCHANGED: ["README.md"]'
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(batch), lead=lead,
+                                                 collaborator=lambda c, r: "NO FINDINGS\n" + (
+                                                     "R1: MET - app.py:2" if c.task == "t1" else
+                                                     "R2: MET - README.md:3")),
+                   files=FILES, max_tasks=2, record_complete=False)
+    drafts = {c.task: c.prompt for c in replay.of("lead")}
+    assert "## Original requirements this task covers (verbatim)\n\nR1: " + _R1 in drafts["t1"]
+    assert "R2: README documents add" in drafts["t2"] and "R1: " + _R1 not in drafts["t2"].split(
+        "## Original requirements this task covers (verbatim)", 1)[1].split("\n\n", 2)[1]
