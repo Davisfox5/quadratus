@@ -2039,9 +2039,14 @@ _REQUIREMENT_VERDICT = re.compile(r"^\s*(?:[-*+]\s+)?\**(R\d+)\**\s*:\s*(NOT\s+M
 
 
 def _requirement_verdicts(text: str) -> Dict[str, bool]:
-    """A reviewer's per-requirement lines: rid -> met. The last line wins."""
-    return {rid.upper(): not verdict.upper().startswith("NOT")
-            for rid, verdict in _REQUIREMENT_VERDICT.findall(text or "")}
+    """A reviewer's per-requirement lines: rid -> met. A NOT MET line wins in
+    either order (root review of 5cfc841: with the last line winning, NOT MET
+    then MET read as an approval), so a contradiction is never an approval."""
+    verdicts: Dict[str, bool] = {}
+    for rid, verdict in _REQUIREMENT_VERDICT.findall(text or ""):
+        met = not verdict.upper().startswith("NOT")
+        verdicts[rid.upper()] = verdicts.get(rid.upper(), True) and met
+    return verdicts
 
 
 def _clean_goal_review(text: str, rids) -> bool:

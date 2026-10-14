@@ -670,3 +670,24 @@ def test_capped_work_in_the_final_parallel_batch_meets_one_independent_review(tm
         assert review["verdict"] == "clean" and not capped_stop, "the cap is lifted by the review"
     else:
         assert review["verdict"] == "held: findings" and not replay.result.completed
+
+
+@pytest.mark.parametrize("lines,blocked", [
+    (["R1: NOT MET - the error path violates the goal", "R1: MET - app.py:2"], True),
+    (["R1: MET - app.py:2", "R1: NOT MET - the error path violates the goal"], True),
+    (["R1: MET - app.py:2"], False),
+], ids=["not-met-then-met", "met-then-not-met", "clean"])
+def test_a_not_met_verdict_is_never_erased_by_a_later_met_line(tmp_path, lines, blocked):
+    """Root review of 5cfc841: the verdict parser let the last line win, so
+    NO FINDINGS, R1 NOT MET, R1 MET read as a clean approval and could lift a
+    capped child. A NOT MET line now wins in either order: the note gains a
+    BLOCKING finding and is not clean. One MET line stays a clean approval."""
+    from quadratus.session import _clean_goal_review
+    from tests.lifecycle.test_direct_tier import _spec, _unit_session
+    session = _unit_session(tmp_path)
+    session.memory.ledger.requirements = {"R1": "add(a, b) returns the sum"}
+    session._current_covers = ["R1"]
+    note = session._judge_goal_review(_spec(), "openai:gpt-5.6-sol", "\n".join(["NO FINDINGS", *lines]))
+    assert ("BLOCKING: R1 is NOT MET" in note) is blocked
+    assert _clean_goal_review(note, ["R1"]) is (not blocked)
+    assert not session.open_findings, "every R1 has a verdict line, so the review is not unfinished"
