@@ -363,3 +363,45 @@ def test_committed_test_acceptance_is_scoped_to_automated_behaviour_under_config
         assert ("independent design or audit judgment, or a read-only (\"edits\": \"none\") review, "
                 "which adds no files") in first
     assert "--quadratus-report" not in first, "still no command line reaches the planner"
+
+
+# -- a capped draft in the last slot (r03 on f4eafea) --------------------------------
+
+DECL_SIMPLE = "KIND: backend simple\nSCOPE: " + json.dumps(T1) + "\nImplement add in app.py."
+
+
+@pytest.mark.parametrize("source", ["checked", "failing"])
+def test_a_capped_draft_in_the_last_slot_meets_an_independent_review_only_when_checked(
+        tmp_path, monkeypatch, source):
+    """r03: t3's Grok lead hit its turn cap in the last slot with the recovery
+    spent; the checks passed on its in-scope source and nothing could continue
+    it, so the job ended with no independent read of the work. That source now
+    goes to one cross-vendor review and the existing gate and close-out; the
+    lead stays capped. Source the checks do not pass closes capped as before."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+
+    def lead(call, replay):
+        H.write(call, {"app.py": fixed if source == "checked" else "def add(a, b):\n    return a - b\n"})
+        return H.grok_ok("I'll run the tests next", stop="cancelled", num_turns=8)
+
+    seen = []
+
+    def collaborator(call, replay):
+        seen.append(call)
+        return "NO FINDINGS"
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(DECL_SIMPLE), lead=lead,
+                                                 collaborator=collaborator),
+                   files=FILES, max_tasks=1, settings=Settings(backend="cli", lead_max_turns=8))
+    assert replay.of("lead")[0].vendor == "grok"
+    capped = "capped or failed task(s) t1 not continued" in (replay.result.error or "")
+    if source == "failing":
+        assert not seen and capped, "unchecked source still closes capped, unreviewed"
+        return
+    assert len(seen) == 1 and seen[0].vendor != "grok", "one review from another vendor"
+    assert "HARNESS RECORD: the lead stopped at its turn limit" in seen[0].prompt
+    assert "Nothing here says the work is finished" in seen[0].prompt
+    assert [c.task for c in replay.of("lead")] == ["t1"], "no further lead turn or task was added"
+    assert not capped, "the reviewed task is not left as unfinished debt"
+    assert [c.role for c in replay.calls] == ["orchestrator", "lead", "collaborator", "closeout", "orchestrator"]
+    assert replay.result.completed, "completed only on the orchestrator's own answer at the cap"

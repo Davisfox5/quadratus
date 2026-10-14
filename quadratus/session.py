@@ -3870,7 +3870,9 @@ class Session:
         try:
             draft = self._draft_with_channels(lead, spec, task)
         except TurnLimitReached as exc:
-            return self._close_turn_limited(lead, spec, task, exc, before)
+            draft, collaborators = self._capped_final_draft(lead, spec, task, exc, before, collaborators)
+            if draft is None:
+                return self._close_turn_limited(lead, spec, task, exc, before)
         except ProviderError as exc:
             # Only a failed lead, not a consultant/worker or policy refusal,
             # may be replaced. Never replay partial or uninspectable edits.
@@ -4106,6 +4108,76 @@ class Session:
         self.memory.absorb(summary)
         self.history.append(summary)
         return summary
+
+    def _capped_final_draft(self, lead, spec, task, exc, before, collaborators):
+        """A capped first draft in the job's last task slot goes to the existing
+        review, fix, gate and close-out path instead of closing unfinished,
+        or ``(None, collaborators)`` and the capped close applies as before.
+
+        Step 2 r03 on f4eafea: t3's Grok lead hit its 8-turn cap in slot 3
+        of 3 with the recovery spent; the checks passed on its source and
+        nothing could continue it, so the job ended GoalUnconfirmedAtCap with
+        no independent read of the work. A capped task with a slot left still
+        closes unfinished and is continued by name.
+
+        Only when every one holds: a serial task in the last slot (not an
+        operator list or a parallel child), edits made under the write grant
+        that are measured and inside the declared scope, the task's own
+        checks passing on that exact source, and one available reviewer from
+        another vendor. The lead stays capped (a capped revision or fix is the
+        capped close), the reviewer must give a verdict or the review is
+        recorded unverified, and the cap and DONE audits still decide the
+        goal and requirements. The cap is recorded on the task as a
+        non-blocking fact; no slot, recovery, call or turn is added."""
+        total = getattr(self, "_max_tasks", None)
+        if (not total or self._explicit_tasks is not None
+                or int(getattr(self, "_slots_used", 0) or 0) + 1 < total
+                or not self._write_ceiling() or spec.scope is None):
+            return None, collaborators
+        vendor = lead.partition(":")[0]
+        reviewers = [p for p in collaborators if p.partition(":")[0] != vendor]
+        if not reviewers:
+            reviewers = [p for p in self.brain_trust
+                         if p != lead and self._available(p) and p.partition(":")[0] != vendor][:1]
+        if not reviewers:
+            return None, collaborators
+        state = self._inspect_partial_edits(before)
+        if not state["inspected"] or not state["changed"]:
+            return None, collaborators
+        report = self._measure_scope(spec, before)
+        if report is None or report.blocking or report.oversized:
+            return None, collaborators
+        self._observe_checks(spec, "turn-limited")
+        current = self._source_fingerprint()
+        identity = _gate_identity(self._current_gate()) if self._current_gate() is not None else None
+        if not current or identity is None or not any(
+                c.get("source") == current and c.get("gate") == identity and c.get("passed")
+                for c in self.review_checks if c.get("task") == spec.task_id):
+            return None, collaborators
+        said = (exc.partial_text or "").strip()
+        task.keep(json.dumps(dict(task=spec.task_id, lead=lead, turns=exc.turns, changed=state["changed"],
+                                  changed_lines=state["changed_lines"], reviewers=reviewers,
+                                  **self._attempt_identity(spec))),
+                  kind="capped-final-draft", author=lead)
+        if self._outcome is not None:
+            self._outcome.note("cap", f"lead stopped at its turn limit ({exc.turns or '?'} turns) in the last "
+                                      "task slot; its in-scope source passed the checks and went to "
+                                      f"independent review by {', '.join(reviewers)}", terminal=False)
+        for peer in reviewers:
+            if peer not in collaborators:
+                self._record_selection(spec, peer, "collaborator")
+        self._note(f"task {spec.task_id}: lead stopped at its turn limit in the last task slot; its "
+                   "checked, in-scope source goes to independent review")
+        changed = ", ".join(state["changed"])
+        draft = ("HARNESS RECORD: the lead stopped at its turn limit"
+                 + (f" ({exc.turns} turns)" if exc.turns else "")
+                 + " before giving a final answer, in the job's last task slot. The work is the "
+                   f"project source as it is now. Changed: {changed} ({state['changed_lines']} lines), "
+                   "inside the declared scope. The project's checks passed on exactly this source. "
+                   "Nothing here says the work is finished: read the source against the whole task."
+                 + (f" The lead's last words, which are narration and not a result: {said[:300]}"
+                    if said else " The lead returned no answer text."))
+        return draft, list(collaborators) + [p for p in reviewers if p not in collaborators]
 
     def _close_turn_limited(self, lead, spec, task, exc, before) -> TaskSummary:
         """A lead stopped at its turn limit: keep the work, record it, re-plan.

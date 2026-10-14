@@ -84,8 +84,15 @@ def test_the_cap_without_a_confirmed_goal_is_named(tmp_path, monkeypatch):
     assert len(replay.of("orchestrator")) == 2, "one task, then the one terminal question"
 
 
+def _half_done_capped_lead(call, replay):
+    # A half-done source the checks fail: a checked capped draft in the last
+    # slot meets an independent review instead (Step 2 r03).
+    H.write(call, {"app.py": "def add(a, b):\n    return a\n"})
+    return H.claude_cap("Wrote add; tests not run yet.", num_turns=14)
+
+
 def test_the_cap_with_a_capped_task_never_continued_is_named(tmp_path, monkeypatch):
-    replay = H.run(tmp_path, monkeypatch, Script(lead=_capped_lead), files=FILES, max_tasks=1,
+    replay = H.run(tmp_path, monkeypatch, Script(lead=_half_done_capped_lead), files=FILES, max_tasks=1,
                    settings=_settings())
     assert not replay.result.completed
     assert replay.result.error == ("GoalUnconfirmedAtCap: the task cap (1) was reached, but capped or failed task(s) t1 not "

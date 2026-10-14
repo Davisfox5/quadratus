@@ -195,7 +195,9 @@ def test_j18_a_denial_at_the_cap_is_a_denial_above_the_cap(tmp_path, monkeypatch
 
 def test_j20_a_capped_lead_is_a_cap_that_blocks_completion(tmp_path, monkeypatch):
     def lead(call, replay):
-        H.write(call, {"app.py": FIXED})
+        # A half-done source the checks fail: a checked capped draft in the last
+        # slot meets an independent review instead (Step 2 r03).
+        H.write(call, {"app.py": "def add(a, b):\n    return a\n"})
         return H.claude_cap("Wrote add; tests not run yet.", num_turns=14)
     replay = _run(tmp_path, monkeypatch, Script(lead=lead), settings=CAPPED)
     t1 = _task(replay, "t1")

@@ -696,6 +696,18 @@ Key design decisions already settled:
   no such rule: read-only (`edits: none`) reviews, design or audit judgment,
   harness captures and operator acceptance keep their own channels. The NOT
   RUN rule and its discharge are unchanged.
+- **A capped draft in the last task slot meets an independent review**
+  (Step 2 r03 on f4eafea). t3's Grok lead hit its 8-turn cap in slot 3 of 3
+  with the recovery spent; the checks passed on its in-scope source, nothing
+  could continue it, and the job ended GoalUnconfirmedAtCap with nobody
+  having read the work. `Session._capped_final_draft` now sends that source
+  through the existing review, fix, gate and close-out path, with one
+  reviewer from another vendor, only when the task is serial, in the last
+  slot, scoped, inside its scope and passing its own checks on that exact
+  source. The lead stays capped (a capped revision or fix closes capped),
+  the review must give a verdict, the cap's goal question and audits still
+  decide, and the cap stays on the task as a non-blocking fact. A capped
+  task with a slot left still closes unfinished and is continued by name.
 - **The measured diff is the truth; the CHANGED line is the lead's account of
   it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
   project around every editing call, so it already knows what changed. The

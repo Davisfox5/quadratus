@@ -563,7 +563,10 @@ def test_shadow_done_with_a_capped_task_never_continued(tmp_path, monkeypatch, s
 def test_shadow_cap_with_a_capped_task_never_continued(tmp_path, monkeypatch, shadow):
     from quadratus.config import Settings
     H, _, FILES, FIXED, Script = _lifecycle()
-    replay = H.run(tmp_path, monkeypatch, Script(lead=_capped_lead(FIXED, H)), files=FILES, max_tasks=1,
+    # A half-done source the checks fail: a checked capped draft in the last
+    # slot meets an independent review instead (Step 2 r03).
+    replay = H.run(tmp_path, monkeypatch, Script(lead=_capped_lead("def add(a, b):\n    return a\n", H)),
+                   files=FILES, max_tasks=1,
                    settings=Settings(backend="cli", lead_max_turns=14))
     decision, session = _shadow_decision(shadow, CAP, 1)
     assert shadow["goal"] is None and decision.stop.name == "GoalUnconfirmedAtCap"
