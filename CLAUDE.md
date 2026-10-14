@@ -708,6 +708,11 @@ Key design decisions already settled:
   the review must give a verdict, the cap's goal question and audits still
   decide, and the cap stays on the task as a non-blocking fact. A capped
   task with a slot left still closes unfinished and is continued by name.
+  The handoff draft carries the original goal verbatim and the original text
+  of the requirements the task covers, ranked above the task's paraphrase
+  (root review of d0f3263: r03's t3 paraphrase had dropped the goal's JSON
+  refusal contract, and the reviewer saw only the paraphrase). It grants
+  nothing; a finding that needs a change outside the task's paths stays open.
 - **The measured diff is the truth; the CHANGED line is the lead's account of
   it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
   project around every editing call, so it already knows what changed. The

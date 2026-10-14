@@ -405,3 +405,40 @@ def test_a_capped_draft_in_the_last_slot_meets_an_independent_review_only_when_c
     assert not capped, "the reviewed task is not left as unfinished debt"
     assert [c.role for c in replay.calls] == ["orchestrator", "lead", "collaborator", "closeout", "orchestrator"]
     assert replay.result.completed, "completed only on the orchestrator's own answer at the cap"
+
+
+def test_the_capped_draft_reviewer_judges_the_original_goal_not_only_the_task_paraphrase(tmp_path, monkeypatch):
+    """Root review of d0f3263: the reviewer saw only the task's paraphrase,
+    and r03's t3 paraphrase had dropped the goal's error contract, so a
+    reviewer could approve the defect the goal rules out. Here the task text
+    omits the goal's error condition; the peer receives the goal verbatim,
+    holds the source to it, and the unmet condition stays open after the
+    capped lead's revision instead of the job completing."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    contract = "A non-number argument must raise TypeError naming the argument."
+    goal = "Implement add(a, b) in app.py. " + contract
+
+    def lead(call, replay):
+        H.write(call, {"app.py": fixed})
+        return H.grok_ok("I'll run the tests next", stop="cancelled", num_turns=8)
+
+    seen = []
+
+    def collaborator(call, replay):
+        seen.append(call)
+        if contract in call.prompt:
+            return "BLOCKING: add('x', 1) does not raise TypeError naming the argument.\nREVIEW: COMPLETE"
+        return "NO FINDINGS"
+
+    def recheck(call, replay):
+        return "UNRESOLVED: add still accepts a non-number without the TypeError the goal requires."
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(DECL_SIMPLE), lead=lead,
+                                                 collaborator=collaborator, recheck=recheck),
+                   files=FILES, max_tasks=1, goal=goal, settings=Settings(backend="cli", lead_max_turns=8))
+    assert contract not in DECL_SIMPLE, "the task text omits the goal's error condition"
+    assert len(seen) == 1 and contract in seen[0].prompt, "the peer received the original goal"
+    assert "it outranks the task text where they differ" in seen[0].prompt
+    assert "It grants nothing" in seen[0].prompt
+    assert [c.task for c in replay.of("lead")] == ["t1"] and replay.of("revision"), "the capped lead answered once"
+    assert not replay.result.completed, "the goal's unmet condition stays open"
