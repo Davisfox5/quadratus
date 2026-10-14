@@ -762,8 +762,10 @@ Key design decisions already settled:
   the interface's own parsing rejects, and report the test's own name as
   executed and passed; otherwise NOT RUN and no MET line, so the review is
   held unverified. It applies only when an approved command would discover a
-  new test file (`integration.discovers_added_tests`: no filter, no explicit
-  test file; root review of b24b6db). The copy-bound role keeps the harness
+  new test file (`integration.discovers_added_tests`: verbosity flags only,
+  operands only project-relative directories that exist in the project or
+  copy; no filter, explicit file, absolute or outside path, or other flag;
+  root reviews of b24b6db and 2d9be52, so a private path is never named). The copy-bound role keeps the harness
   records and "do not run the checks again" and adds one named exception for
   that scratch file (`runtime._probe_exception`). The auditor gets no probe
   and no command line. No new command, grant or role. Whether it changes the

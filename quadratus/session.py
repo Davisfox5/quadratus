@@ -8624,7 +8624,8 @@ class Session:
             return False
         from . import integration
         commands = integration._gate_commands(self.config.integration_gate, Path(self.project).resolve()) or []
-        return any(integration.discovers_added_tests(integration.model_facing(c.argv))
+        root = Path(self.project).resolve()
+        return any(integration.discovers_added_tests(integration.model_facing(c.argv), root / c.cwd)
                    for c in commands if not c.skip_reason)
 
     def _covered_texts(self) -> List[tuple]:

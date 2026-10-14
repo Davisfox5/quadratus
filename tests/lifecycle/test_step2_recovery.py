@@ -774,7 +774,13 @@ def _gate(tmp_path, *argvs):
     ((("python", "-m", "pytest", "-q", "tests", "--quadratus-report={report}"),), "openai:gpt-5.6-sol", True),
     ((("python3", "-m", "unittest", "discover", "-s", "tests"),), "openai:gpt-5.6-sol", True),
     ((("python", "-m", "pytest", "-q", "tests"),), "claude:opus", False),
-], ids=["empty-suite", "explicit-file", "filtered", "discovering-pytest", "unittest-discover", "no-scratch-seat"])
+    ((("python3", "-m", "pytest", "-q", "/private/operator/PRIVATE-GRADING-SENTINEL"),), "openai:gpt-5.6-sol", False),
+    ((("python", "-m", "pytest", "-q", "../outside"),), "openai:gpt-5.6-sol", False),
+    ((("python", "-m", "pytest", "-q", "-c", "other.ini", "tests"),), "openai:gpt-5.6-sol", False),
+    ((("python", "-m", "pytest", "-q", "missing"),), "openai:gpt-5.6-sol", False),
+    ((("python3", "-m", "unittest", "discover", "-s", "/private/operator"),), "openai:gpt-5.6-sol", False),
+], ids=["empty-suite", "explicit-file", "filtered", "discovering-pytest", "unittest-discover", "no-scratch-seat",
+        "absolute-private", "traversal", "config-flag", "missing-dir", "unittest-absolute"])
 def test_a_scratch_demonstration_is_asked_only_where_an_approved_command_would_run_it(
         tmp_path, argvs, seat, applies):
     """Root review of b24b6db: the probe was asked for with an empty suite or
@@ -783,6 +789,7 @@ def test_a_scratch_demonstration_is_asked_only_where_an_approved_command_would_r
     that would discover a new test file: no filter, no explicit test file."""
     from tests.lifecycle.test_direct_tier import _unit_session
     session = _unit_session(tmp_path)
+    (Path(session.project) / "tests").mkdir()
     session.config.integration_gate = _gate(Path(session.project), *argvs)
     assert session._probe_applies(seat) is applies
 
@@ -798,6 +805,8 @@ def _role_for(tmp_path, monkeypatch, *, role, checks, facts, probe):
                         seen.update(role=system, prompt=prompt) or "NO FINDINGS")
     monkeypatch.setattr("shutil.which", lambda name: f"/fake/bin/{name}")
     (tmp_path / "app.py").write_text("x = 1\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_app.py").write_text("def test_x():\n    assert True\n")
     fleet = Fleet(Settings(backend="cli"), project=tmp_path)
     fleet.check_commands = tuple(checks)
     with invocation("t1", role, harness_checks=facts, probe=probe):
@@ -810,7 +819,9 @@ def _role_for(tmp_path, monkeypatch, *, role, checks, facts, probe):
     (("python -m pytest -q tests", "python3 -m unittest discover -s tests"), True, True),
     (("python -m pytest -q tests/test_existing.py",), True, False),
     (("python -m pytest -q tests",), False, False),
-], ids=["discovering", "explicit-file-only", "not-asked"])
+    (("python3 -m pytest -q /private/operator/PRIVATE-GRADING-SENTINEL",), True, False),
+    (("python -m pytest -q tests", "python3 -m pytest -q /private/operator/PRIVATE-GRADING-SENTINEL"), True, True),
+], ids=["discovering", "explicit-file-only", "not-asked", "private-only", "private-beside-public"])
 def test_the_runtime_names_the_one_approved_command_a_scratch_test_may_run(
         tmp_path, monkeypatch, facts, checks, probe, named):
     """Root review of b24b6db: with current harness records the copy-bound
@@ -827,9 +838,13 @@ def test_the_runtime_names_the_one_approved_command_a_scratch_test_may_run(
         assert "do not run the check commands again here" in role, "the recorded checks still stand"
     if named:
         tail = role.split(exception, 1)[1]
-        assert "python -m pytest -q tests\n" in tail and "python3 -m unittest discover -s tests" in tail
+        assert "python -m pytest -q tests\n" in tail
+        assert ("python3 -m unittest discover -s tests" in tail) is ("python3 -m unittest discover -s tests" in checks)
         assert "not to confirm the delivered source again" in tail
         assert "quadratus-report" not in role
+    if probe:
+        exception_text = role.split(exception, 1)[1] if exception in role else ""
+        assert "PRIVATE-GRADING-SENTINEL" not in exception_text, "a private path is never named by the exception"
 
 
 @pytest.mark.requirements_ledger

@@ -571,7 +571,7 @@ class Fleet:
                      "path of this copy: this copy is deleted when your call ends, and an "
                      "absolute path into it is a dead reference in the report.")
             checks = tuple(getattr(self, "check_commands", ()) or ())
-            probe = _probe_commands(checks) if context.get("probe") else ()
+            probe = _probe_commands(checks, directory) if context.get("probe") else ()
             if checks and context.get("role") in REVIEW_CAPPED_ROLES and context.get("harness_checks"):
                 # r03 (20261011T152432Z-4ceef6b5): seats re-ran the project's
                 # checks in copies with no browser while the harness's own
@@ -1190,9 +1190,11 @@ class ReviewCopyAltered(ProviderError):
     of 2ffa7f6 on #52)."""
 
 
-def _probe_commands(checks) -> tuple:
+def _probe_commands(checks, directory) -> tuple:
     """The approved model-facing commands that would run a new scratch test
-    file a review added to its copy (integration.discovers_added_tests)."""
+    file a review added to its copy: discovery confined to directories inside
+    that copy (integration.discovers_added_tests). Any other command, and any
+    command naming a path outside the copy, is never repeated here."""
     from .integration import discovers_added_tests
     out = []
     for command in checks:
@@ -1200,7 +1202,7 @@ def _probe_commands(checks) -> tuple:
             argv = shlex.split(command)
         except ValueError:
             continue
-        if discovers_added_tests(argv):
+        if discovers_added_tests(argv, directory):
             out.append(command)
     return tuple(out)
 

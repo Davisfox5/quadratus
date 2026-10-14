@@ -25,7 +25,7 @@ import subprocess
 import tempfile
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import List, Literal, Optional, Sequence
 
 __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateSuite", "REPORT_TOKEN",
@@ -650,23 +650,67 @@ def _test_family(path: str):
     return folder, (match.group(1) or 'py')
 
 
-def discovers_added_tests(argv) -> bool:
-    """Whether a command would also run a test file added beside the existing
-    ones: pytest with no filter and no test-file operand (only directories or
-    none), or ``unittest discover`` with no pattern or filter. An explicit
-    file list, a node id or a selection flag names only what it names, so a
-    new file there is never run (root review of b24b6db)."""
+#: Flags a discovering command may carry and still be shown to a review
+#: seat for a scratch run: output verbosity only. Anything else, a
+#: selection, a plugin, a config or a path-bearing option, is refused.
+_DISCOVERY_PYTEST_FLAGS = frozenset({"-q", "-qq", "-v", "-vv", "-rA", "-ra"})
+_DISCOVERY_UNITTEST_FLAGS = frozenset({"-v", "-q", "--verbose", "--quiet"})
+
+
+def _local_dir(operand: str, root) -> bool:
+    """A project-relative directory: no absolute path, no traversal, no home
+    or variable expansion, and, when ``root`` is given, an existing directory
+    inside it."""
+    path = PurePosixPath(operand)
+    if (not operand or path.is_absolute() or ".." in path.parts or operand.startswith("~")
+            or any(c in operand for c in "$`*?[]{}:")):
+        return False
+    if root is None:
+        return True
+    target = (Path(root) / operand)
+    try:
+        return target.is_dir() and target.resolve().is_relative_to(Path(root).resolve())
+    except OSError:
+        return False
+
+
+def discovers_added_tests(argv, root=None) -> bool:
+    """Whether a command would also run a test file added inside ``root``:
+    pytest, or ``python -m unittest discover``, whose only options are
+    output verbosity and whose only operands are project-relative
+    directories (for unittest, ``-s``/``-t`` values). An explicit file, a
+    node id, a filter, any other flag, an absolute or outside path, or an
+    unknown form is refused, so nothing private or outside the copy is ever
+    named (root reviews of b24b6db and 2d9be52). The interpreter is the
+    approved one, left as it is."""
     argv = [str(a) for a in argv]
     if not argv or is_filtered(argv):
         return False
-    if _is_pytest(argv):
-        tail = argv[argv.index('pytest') + 1:] if 'pytest' in argv else argv[1:]
-        return not any(not a.startswith('-') and _test_family(a) for a in tail)
-    if argv[0].split('/')[-1].startswith('python') and argv[1:3] == ['-m', 'unittest']:
+    head = Path(argv[0]).name
+    if head in _PYTEST_NAMES:
+        rest = argv[1:]
+    elif head.startswith("python") and argv[1:3] == ["-m", "pytest"]:
         rest = argv[3:]
-        return bool(rest) and rest[0] == 'discover' and not any(a in ('-p', '--pattern', '-k') or
-                                                                   a.startswith(('-p', '-k')) for a in rest[1:])
-    return False
+    elif head.startswith("python") and argv[1:4] == ["-m", "unittest", "discover"]:
+        rest, i = argv[4:], 0
+        while i < len(rest):
+            arg = rest[i]
+            if arg in _DISCOVERY_UNITTEST_FLAGS:
+                i += 1
+            elif arg in ("-s", "-t") and i + 1 < len(rest) and _local_dir(rest[i + 1], root):
+                i += 2
+            else:
+                return False
+        return True
+    else:
+        return False
+    for arg in rest:
+        if arg.startswith("-"):
+            if arg not in _DISCOVERY_PYTEST_FLAGS:
+                return False
+        elif _test_family(arg) or not _local_dir(arg, root):
+            return False
+    return True
 
 
 def uncovered_tests(changed, argvs) -> List[str]:
