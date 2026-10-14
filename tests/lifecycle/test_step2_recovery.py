@@ -1627,3 +1627,114 @@ def test_the_writer_budget_note_follows_the_cap_the_fleet_applies(tmp_path, role
         assert "unfinished" not in seen[-1] and "unchecked" not in seen[-1], "no status promise"
         assert "start with the files they name" in seen[-1] and "read only" not in seen[-1], \
             "a priority, not a narrower read authority"
+
+
+# -- r13 on 5e8926b: a finished draft past the size stop ----------------------------------
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("case", ["trimmed", "still-over", "path-breach", "capped-draft", "exhausted", "unresolved"])
+def test_a_finished_draft_past_the_size_stop_spends_one_fix_cycle_coming_back_under_it(
+        tmp_path, monkeypatch, case):
+    """r13: two finished parallel drafts crossed the hard stop inside their
+    paths and failed before any check or peer read them. A size-only overrun
+    of a finished draft now spends one cycle of the task's own fix allowance
+    on one call to come back under the stop; that cycle is charged against
+    the later revision and fixes. The trimmed source still meets the checks,
+    the peer and the final audit. Still over, a path breach, a capped draft,
+    an exhausted allowance or an unresolved finding all hold as before."""
+    tier = "standard" if case != "capped-draft" else "simple"
+    declared = ("REQUIREMENTS:\nR1: " + _R1 + "\n"
+                + DECL_SIMPLE.replace("backend simple", "backend " + tier) + "\nCOVERS: R1")
+
+    def lead(call, replay):
+        H.write(call, {"app.py": _BLOATED})
+        if case == "path-breach":
+            H.write(call, {"README.md": "# app\n\nadd.\n"})
+        if case == "capped-draft":
+            return H.grok_ok("I'll trim it next", stop="cancelled", num_turns=8)
+        return 'Implemented add.\nCHANGED: ["app.py"]'
+
+    def revision(call, replay):
+        n = len(replay.of("revision"))
+        if n == 1:
+            H.write(call, {"app.py": _BLOATED + "\n# kept\n" if case == "still-over" else _TYPED})
+        else:
+            H.write(call, {"app.py": _BLOATED if case == "exhausted" else _TYPED + "\n# revised\n"})
+        return 'Revised add.\nCHANGED: ["app.py"]'
+
+    def collaborator(call, replay):
+        if case in ("exhausted", "unresolved"):
+            return _FINDING + "\nR1: NOT MET - TypeError\nREVIEW: COMPLETE"
+        return "NO FINDINGS\nR1: MET - app.py:5"
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead, revision=revision,
+                                                 collaborator=collaborator,
+                                                 recheck=lambda c, r: "UNRESOLVED: add('x', 1) still returns.",
+                                                 auditor=lambda c, r: "R1: MET - app.py:5",
+                                                 **{"requirements-review": lambda c, r: "COMPLETE"}),
+                   files=FILES, max_tasks=1, settings=Settings(backend="cli", lead_max_turns=8),
+                   record_complete=False)
+    result = H.result_json(replay)
+    writers = [c for c in replay.calls if c.role in ("lead", "revision", "gate-fix", "design-fix")]
+    roles = [c.role for c in writers]
+    if case == "trimmed":
+        assert roles == ["lead", "revision"] and "Your draft made this task's change" in writers[1].prompt
+        assert "Do not remove behaviour the task or the goal requires" in writers[1].prompt
+        assert result["failed_tasks"] == [] and replay.of("collaborator"), "the trimmed draft meets its peer"
+        assert replay.of("auditor"), "and the final audit"
+        assert (replay.project / "app.py").read_text() == _TYPED
+        return
+    if case == "exhausted":
+        assert roles == ["lead", "revision", "revision"], "trim, then a revision that overruns: no second trim"
+        assert result["failed_tasks"] == ["t1"] and not replay.result.completed
+        return
+    if case == "unresolved":
+        assert roles == ["lead", "revision", "revision"], "trim, then the one revision the allowance leaves"
+        assert len(replay.of("recheck")) == 1 and "FindingsOpen" in (replay.result.error or "")
+        return
+    assert not replay.result.completed and result["failed_tasks"] == ["t1"]
+    assert not replay.of("collaborator"), "no peer reads source past the stop"
+    if case == "still-over":
+        assert roles == ["lead", "revision"]
+    elif case in ("path-breach", "capped-draft"):
+        assert roles == ["lead"], "no trim"
+    else:
+        raise AssertionError(case)
+
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("fits", [True, False], ids=["trimmed", "still-over"])
+def test_a_parallel_childs_finished_draft_past_the_stop_is_trimmed_inside_the_child(tmp_path, monkeypatch, fits):
+    """r13's actual shape: the overrun drafts were parallel children. The
+    child spends its own task's cycle; trimmed, it merges and its review
+    still runs; still over, it fails exactly as before."""
+    batch = ("REQUIREMENTS:\nR1: " + _R1 + "\nR2: README documents add\n"
+             "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1")
+             + "\n---\n" + _simple("README.md", "Document add in README.md.", "R2"))
+    bloated = _TYPED + "".join(f"\n\ndef _unused_{i}():\n    return {i}\n" for i in range(8))
+
+    def lead(call, replay):
+        if call.task == "t1":
+            H.write(call, {"app.py": bloated})
+            return 'Implemented add.\nCHANGED: ["app.py"]'
+        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
+        return 'Documented add.\nCHANGED: ["README.md"]'
+
+    def revision(call, replay):
+        H.write(call, {"app.py": _TYPED if fits else bloated + "\n# kept\n"})
+        return 'Trimmed add.\nCHANGED: ["app.py"]'
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(batch), lead=lead, revision=revision,
+                                                 collaborator=lambda c, r: "NO FINDINGS\n" + (
+                                                     "R1: MET - app.py:5" if c.task == "t1" else
+                                                     "R2: MET - README.md:3")),
+                   files=FILES, max_tasks=2, record_complete=False)
+    result = H.result_json(replay)
+    trims = [c for c in replay.calls if c.role == "revision" and c.task == "t1"]
+    assert len(trims) == 1 and "Your draft made this task's change" in trims[0].prompt
+    reviewed = {c.task for c in replay.of("collaborator")}
+    if fits:
+        assert "t1" not in result["failed_tasks"] and "t1" in reviewed, "merged and reviewed"
+        assert (replay.project / "app.py").read_text() == _TYPED
+    else:
+        assert "t1" in result["failed_tasks"] and "t1" not in reviewed

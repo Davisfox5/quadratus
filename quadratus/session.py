@@ -3422,38 +3422,54 @@ class Session:
         try:
             return self._edit(lead, prompt), 0
         except TaskFailed as failure:
-            if failure.cause != "scope" or spent >= self.config.max_fix_cycles or not self._writes():
-                raise
-            report = self._measure_scope(spec, self._task_before)
-            if report is None or report.blocking or not report.oversized or report.max_lines is None:
-                raise
-            stop = int(report.max_lines * report.overrun_ratio)
-            self._count("revision")
-            fact = None
-            if self._outcome is not None:
-                fact = self._outcome.note("failed", f"the revision made the change {report.changed_lines} lines, "
-                                                    f"past the stop at {stop}; one call from the fix allowance "
-                                                    "brings it back", terminal=False)
-            self._note(f"task {spec.task_id}: revision crossed the size stop ({report.changed_lines} > {stop}); "
-                       "one trim from the remaining fix allowance")
-            task.keep(json.dumps(dict(task=spec.task_id, changed_lines=report.changed_lines, stop=stop,
-                                      max_lines=report.max_lines, spent=spent,
-                                      allowance=self.config.max_fix_cycles)),
-                      kind="scope-trim", author=lead)
-            reply = self._edit(lead, self._trim_prompt(spec, report, stop))
-            if fact is not None:
-                fact.recovered = True
-            return reply, 1
+            return self._trim_overrun(lead, spec, task, failure, spent=spent, what="revision"), 1
 
-    def _trim_prompt(self, spec: TaskSpec, report, stop: int) -> str:
+    def _trim_overrun(self, lead, spec, task, failure, *, spent: int, what: str) -> str:
+        """One call, charged as a fix cycle, to bring a size-only overrun back
+        under the stop; re-raises ``failure`` when it does not qualify: another
+        cause, a path outside scope, no write grant, or ``spent`` (the cycles
+        already charged in this task, the overrunning call included) leaving
+        no cycle of ``max_fix_cycles``. The trim is measured like any edit;
+        still past the stop it fails the task as before."""
+        if failure.cause != "scope" or spent >= self.config.max_fix_cycles or not self._writes():
+            raise failure
+        report = self._measure_scope(spec, self._task_before)
+        if report is None or report.blocking or not report.oversized or report.max_lines is None:
+            raise failure
+        stop = int(report.max_lines * report.overrun_ratio)
+        self._count("revision")
+        self._note(f"task {spec.task_id}: {what} crossed the size stop ({report.changed_lines} > {stop}); "
+                   "one trim from the remaining fix allowance")
+        task.keep(json.dumps(dict(task=spec.task_id, changed_lines=report.changed_lines, stop=stop,
+                                  max_lines=report.max_lines, spent=spent, after=what,
+                                  allowance=self.config.max_fix_cycles)),
+                  kind="scope-trim", author=lead)
+        reply = self._edit(lead, self._trim_prompt(spec, report, stop, what=what))
+        # Recorded only once the trim landed under the stop: a trim that does
+        # not fit leaves the task's failure record exactly as it was.
+        if self._outcome is not None:
+            self._outcome.note("failed", f"the {what} made the change {report.changed_lines} lines, past "
+                                         f"the stop at {stop}; one call from the fix allowance brought it "
+                                         "back", terminal=False).recovered = True
+        return reply
+
+    def _trim_prompt(self, spec: TaskSpec, report, stop: int, *, what: str = "revision") -> str:
+        if what == "draft":
+            ask = ("Your draft made this task's change {n} lines (tests count in full), past the run's "
+                   "stop at {stop} for a stated bound of ~{bound}. The work is kept exactly as it is now; "
+                   "nothing was reverted. Bring the change back to at most {stop} lines by removing what "
+                   "neither the task nor the goal asked for. Do not remove behaviour the task or the goal "
+                   "requires, or a test that shows it. If it cannot fit, change ")
+        else:
+            ask = ("Your last revision made this task's change {n} lines (tests count in full), past the "
+                   "run's stop at {stop} for a stated bound of ~{bound}. The work is kept exactly as it is "
+                   "now; nothing was reverted. Bring the change back to at most {stop} lines by removing "
+                   "what neither the task nor a review finding asked for. Do not remove a fix for a review "
+                   "finding or a test that shows one. If it cannot fit, change ")
         return (
             f"Task: {spec.description}\n\n"
-            f"Your last revision made this task's change {report.changed_lines} lines (tests count in "
-            f"full), past the run's stop at {stop} for a stated bound of ~{report.max_lines}. The work "
-            "is kept exactly as it is now; nothing was reverted. Bring the change back to at most "
-            f"{stop} lines by removing what neither the task nor a review finding asked for. Do not "
-            "remove a fix for a review finding or a test that shows one. If it cannot fit, change "
-            "nothing more and write a line 'BLOCKER: <what> needs about N more lines'; the task then "
+            + ask.format(n=report.changed_lines, stop=stop, bound=report.max_lines)
+            + "nothing more and write a line 'BLOCKER: <what> needs about N more lines'; the task then "
             "stops at the size limit as before."
             + _revision_changed_delivery(self._interim_edits_note())
             + _NO_REQUESTS_IN_FIX
@@ -4091,12 +4107,25 @@ class Session:
         # The lead drafts with full working memory, and with the fetch and
         # consult channels live: a reply that is a request gets served.
         self._stage("draft")
+        # Fix cycles this task has spent before its review revision (r13).
+        charged = 0
         try:
             draft = self._draft_with_channels(lead, spec, task)
         except TurnLimitReached as exc:
             draft, collaborators = self._capped_final_draft(lead, spec, task, exc, before, collaborators)
             if draft is None:
                 return self._close_turn_limited(lead, spec, task, exc, before)
+        except TaskFailed as failure:
+            # r13 on 5e8926b: two finished parallel drafts crossed the size
+            # stop inside their paths and failed before any check or peer.
+            # One cycle of the task's own fix allowance, charged against its
+            # later revision and fixes, brings a size-only overrun back; the
+            # stop, the checks, the review and the final audit stand.
+            try:
+                draft = self._trim_overrun(lead, spec, task, failure, spent=1, what="draft")
+            except TurnLimitReached as exc:
+                return self._close_turn_limited(lead, spec, task, exc, before)
+            charged = 1
         except ProviderError as exc:
             # Only a failed lead, not a consultant/worker or policy refusal,
             # may be replaced. Never replay partial or uninspectable edits.
@@ -4268,7 +4297,7 @@ class Session:
                     self._revision_prompt(
                         spec, draft, [f"[{labels[p]}]\n{n}" for p, n in notes]
                     ),
-                    spent=1,
+                    spent=1 + charged,
                 )
             except TurnLimitReached as exc:
                 # A capped revision takes the capped-task path: kept,
@@ -4285,7 +4314,7 @@ class Session:
                 unresolved = self._recheck_blocking(
                     spec, blocking, revision, task, labels=labels
                 )
-            cycles = 1 + trims
+            cycles = 1 + trims + charged
             while unresolved and cycles < self.config.max_fix_cycles and not capped_writer:
                 self._count("revision")
                 pending = [(p, n) for p, n in blocking if any(p == up for up, _ in unresolved)]

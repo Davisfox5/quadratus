@@ -865,6 +865,17 @@ Key design decisions already settled:
   reviewers and the final audit still decide; no status promise. Codex,
   security-fix and uncapped runs are told no cap. The cap itself is
   unchanged.
+- **A finished draft past the size stop gets the same one trim** (r13 on
+  5e8926b). Two finished parallel drafts crossed the hard stop inside their
+  paths and failed before any check or peer. `_trim_overrun` (shared with
+  the r11 revision trim) now also serves a normally finished draft: one
+  call, charged as a fix cycle against the task's later revision and
+  fixes, and only while a cycle is left for that revision. Never reverted,
+  measured again; still over, a path breach, a capped or transport-failed
+  draft, or no cycle left fails or holds as before. The trimmed source
+  still meets the checks, the peer and the final audit. Its fact is
+  recorded only after the trim lands, so a failed trim leaves the failure
+  record unchanged.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.
