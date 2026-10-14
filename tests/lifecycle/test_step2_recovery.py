@@ -1459,3 +1459,43 @@ def test_a_parallel_childs_draft_carries_the_requirements_it_covers_verbatim(tmp
     assert "## Original requirements this task covers (verbatim)\n\nR1: " + _R1 in drafts["t1"]
     assert "R2: README documents add" in drafts["t2"] and "R1: " + _R1 not in drafts["t2"].split(
         "## Original requirements this task covers (verbatim)", 1)[1].split("\n\n", 2)[1]
+
+
+@pytest.mark.parametrize("role", ["revision", "gate-fix", "security-fix", "design-fix", "fixture-supply",
+                                  "capture-redeclare", "lead"])
+def test_every_editing_role_after_the_draft_is_held_to_the_goal_at_the_shared_boundary(tmp_path, role):
+    """Root review of af5814d: design-fix, security-fix and fixture-supply
+    prompts still carried no original goal; only the builders patched in
+    af5814d did. The goal and covered requirements now enter once, at the
+    boundary where every editing role already gets the lead's packet, so
+    no route can miss them and none carries them twice. The draft ('lead')
+    already has the goal through the memory render and gets no second copy
+    here; grants and the call itself are unchanged."""
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.delegation import invocation
+    from quadratus.session import Session, SessionConfig, TaskSpec
+    seen = []
+
+    def invoke(key, prompt, *, allow_writes=False):
+        seen.append((prompt, allow_writes))
+        return 'Done.\nCHANGED: []'
+
+    goal = "Implement add(a, b) in app.py. " + _CONTRACT
+    (tmp_path / "app.py").write_text("def add(a, b):\n    return a + b\n")
+    session = Session(goal, ArtifactStore(tmp_path / ".quadratus"), invoke, available=lambda key: True,
+                      config=SessionConfig(project=tmp_path, allow_writes=True))
+    session._active_spec = TaskSpec("t1", _RECIPE)
+    session._current_covers = ["R1"]
+    session._requirement_texts = {"R1": _CONTRACT}
+    if role in ("revision", "gate-fix", "security-fix", "design-fix"):
+        session._edit("anthropic:claude-opus-5", "Task: " + _RECIPE + "\n\nFix it.", role=role)
+    else:
+        with invocation("t1", role):
+            session._invoke_model("anthropic:claude-opus-5", "Task: " + _RECIPE + "\n\nSupply it.")
+    prompt, writes = seen[-1]
+    if role == "lead":
+        assert "## Original goal (verbatim" not in prompt, "the draft's goal comes from the memory render"
+        return
+    assert prompt.count("## Original goal (verbatim") == 1 and prompt.count(_CONTRACT) >= 2, role
+    assert "R1: " + _CONTRACT in prompt and "does not change them" in prompt and "It grants nothing" in prompt
+    assert writes is (role in ("revision", "gate-fix", "security-fix", "design-fix")), "grants are unchanged"

@@ -845,9 +845,13 @@ Key design decisions already settled:
   had it, through the memory render; revision, fix and gate-fix prompts
   held the generated task text, which in r11 prescribed the defective
   route branches and called the plain CLI exit a refusal. `_writer_goal`
-  gives each of them, and a parallel child's draft, the goal and covered
-  requirements verbatim, saying a task text or generated recipe does not
-  change them. It grants nothing and changes no bound.
+  enters once, at the boundary in `_invoke_model_call` where every
+  editing role (`_EDITING_ROLES`) already gets the lead's packet, so
+  design-fix, security-fix, fixture-supply and capture-redeclare are held
+  to it too (root review of af5814d); the draft keeps the memory render's
+  goal, and a parallel child's draft adds its covered requirements. It
+  says a task text or generated recipe does not change them, grants
+  nothing and changes no bound.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.

@@ -2066,6 +2066,12 @@ _PROBE_RULE = (
     "changed is refused.")
 
 
+#: The task's own lead working on its source: each carries the lead's packet
+#: and, after the draft, the original goal (Session._invoke_model_call).
+_EDITING_ROLES = ('lead', 'revision', 'gate-fix', 'security-fix', 'design-fix', 'capture-redeclare',
+                  'fixture-supply')
+
+
 def _seat_takes_scratch(key: str) -> bool:
     """Whether ``key``'s CLI runs a review in a writable disposable copy."""
     from .cli_providers import CLAUDE_SPEC, CODEX_SPEC, GROK_SPEC
@@ -2420,11 +2426,18 @@ class Session:
                 and spec is not None and '## Role packet' not in prompt):
             # design-fix is the task's own lead editing its work (map G11): it
             # carries the lead's packet, like every other editing role.
-            role = ('lead' if context.get('role') in ('lead', 'revision', 'gate-fix', 'security-fix', 'design-fix',
-                                                       'capture-redeclare', 'fixture-supply')
+            role = ('lead' if context.get('role') in _EDITING_ROLES
                     else 'verifier'
                     if context.get('role') == 'verifier' else 'reviewer')
             prompt += '\n\n' + self._role_packet(spec, role)
+        if (context.get('origin') != 'worker' and spec is not None and context.get('role') in _EDITING_ROLES
+                and context.get('role') != 'lead' and '## Original goal (verbatim' not in prompt):
+            # Every editing call after the draft is held to the original goal
+            # and covered requirements, once, here (r11 on 136a3ec and root's
+            # review of af5814d: revision, fix, gate-fix, design-fix,
+            # security-fix and fixture-supply prompts carried only generated
+            # task text). The draft has the goal through the memory render.
+            prompt = self._writer_goal().strip() + "\n\n" + prompt
         if context.get("role") != "closeout" and spec is not None and spec.scope is not None:
             if spec.scope.render() not in prompt:
                 prompt += "\n\n" + spec.scope.render()
@@ -3426,8 +3439,7 @@ class Session:
 
     def _trim_prompt(self, spec: TaskSpec, report, stop: int) -> str:
         return (
-            f"Task: {spec.description}"
-            + self._writer_goal() + "\n\n"
+            f"Task: {spec.description}\n\n"
             f"Your last revision made this task's change {report.changed_lines} lines (tests count in "
             f"full), past the run's stop at {stop} for a stated bound of ~{report.max_lines}. The work "
             "is kept exactly as it is now; nothing was reverted. Bring the change back to at most "
@@ -9017,8 +9029,7 @@ class Session:
     def _revision_prompt(self, spec: TaskSpec, draft: str, notes: List[str]) -> str:
         joined = "\n\n".join(notes)
         return (
-            f"Task: {spec.description}"
-            + self._writer_goal() + "\n\n"
+            f"Task: {spec.description}\n\n"
             f"Your draft:\n{draft}\n\n"
             f"Independent reviews of it:\n{joined}\n\n"
             "Revise your work. Address every finding explicitly: fix it, or "
@@ -9145,8 +9156,7 @@ class Session:
     def _fix_prompt(self, spec: TaskSpec, revision: str, unresolved: List[tuple]) -> str:
         remaining = "\n\n".join(f"[{p}]\n{v}" for p, v in unresolved)
         return (
-            f"Task: {spec.description}"
-            + self._writer_goal() + "\n\n"
+            f"Task: {spec.description}\n\n"
             f"Your current work:\n{revision}\n\n"
             f"These blocking findings remain unresolved:\n{remaining}\n\n"
             "Fix them, or state precisely why the reviewer is wrong. Produce "
@@ -9194,8 +9204,7 @@ class Session:
             try:
                 fix = self._edit(
                     lead,
-                    f"Task: {spec.description}"
-                    + self._writer_goal() + "\n\n"
+                    f"Task: {spec.description}\n\n"
                     f"The project's own integration check failed after your "
                     f"work:\n{result.for_models()}\n\n"
                     "Fix the failure. Produce the complete revised work."
