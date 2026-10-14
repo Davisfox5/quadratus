@@ -108,6 +108,44 @@ def test_off_requests_cannot_be_overridden_by_extra_args(monkeypatch, vendor, pr
         provider(model='')._build_argv('task', 'role')
 
 
+@pytest.mark.parametrize('scope', ['run', 'seat'])
+def test_grok_off_uses_headless_prompt_and_startup_spawner_control(monkeypatch, scope):
+    """The default file route ignores controls; an off seat must not use it."""
+    provider = GrokCLIProvider(model='').for_seat('', effort='high', restricted=False)
+    if scope == 'run':
+        monkeypatch.setenv('QUADRATUS_NATIVE_DELEGATION', 'off')
+    else:
+        provider.native_fanout_off = True
+    argv = provider._build_argv('judge the held source', 'existing reviewer role')
+    assert _pair(argv, '-p') == 'judge the held source'
+    assert '--prompt-file' not in argv
+    assert '--no-subagents' in argv
+    assert _pair(argv, '--disallowed-tools').split(',') == GROK_OFF_DENIALS
+    assert '--always-approve' in argv, 'ordinary file/tool permissions were not widened or replaced'
+    assert _pair(argv, '--effort') == 'high'
+    assert not provider._prompt_files, 'no private prompt file remains'
+
+
+def test_grok_off_oversized_prompt_refuses_before_creating_file(monkeypatch):
+    from quadratus.cli_providers import MAX_ARGV_PROMPT
+    provider = GrokCLIProvider(model='')
+    provider.native_fanout_off = True
+    with pytest.raises(ProviderError, match='without removing its native-delegation controls'):
+        provider._build_argv('x' * (MAX_ARGV_PROMPT + 1), 'existing role')
+    assert not provider._prompt_files
+
+
+def test_grok_vendor_default_prompt_delivery_remains_a_file():
+    provider = GrokCLIProvider(model='')
+    try:
+        argv = provider._build_argv('existing lead prompt', 'existing lead role')
+        assert '--prompt-file' in argv and '-p' not in argv
+        assert '--no-subagents' not in argv
+        assert '--always-approve' in argv
+    finally:
+        provider.cleanup()
+
+
 # --- Evidence that a folded denial held, or did not -------------------------
 #
 # Codex reports its own children in its event stream. Claude and grok do not,
@@ -322,13 +360,13 @@ def test_grok_off_mode_argv_is_pinned_byte_for_byte(monkeypatch):
     assert normal[1:] == ["--output-format", "json", "--always-approve",
                           "--disallowed-tools",
                           "Agent,spawn_subagent,workflow,scheduler_create,use_tool,search_tool",
-                          "--prompt-file", normal[-1]]
+                          "--no-subagents", "-p", "p"]
     worker = GrokCLIProvider(model="").for_seat("", restricted=True)._build_argv("p", "")
     assert worker[1:] == ["--output-format", "json",
                           "--tools", "read_file,grep,list_dir,web_search,web_fetch",
                           "--disallowed-tools",
                           "Agent,spawn_subagent,workflow,scheduler_create,use_tool,search_tool",
-                          "-p", "p"]
+                          "--no-subagents", "-p", "p"]
     for argv in (normal, worker):
         assert " " not in argv[argv.index("--disallowed-tools") + 1]
 
