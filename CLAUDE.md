@@ -738,6 +738,19 @@ Key design decisions already settled:
   finding even when the reviewer wrote none; a clean review is NO FINDINGS
   followed only by MET lines and buys no revision. This makes a miss
   harder, not impossible: the verdict is still the reviewer's judgement.
+- **Reviews and audits trace every error path; the goal outranks requirement
+  wording** (r06 on 5b31818). The reviewer cited per-requirement lines and
+  the auditor judged the CLI requirement, yet both read only the handler that
+  formats errors while input parsing exited before it. `_ERROR_PATH_RULE`
+  now tells both seats to trace parsing and validation ahead of the main
+  operation, outside any error handler, and the helpers, in general words
+  with no runner or known case named. The auditor also held R14 to
+  "exactly", which the requirements review added and the goal never states:
+  the audit prompt now names the goal as the authority, judges the goal's
+  own condition over stricter wording and says so on the line, keeps
+  decisions and rulings binding, and never relaxes a condition the goal
+  states. NOT RUN discharge is unchanged; full-file evidence for discovery
+  commands is a design proposed to root, not implemented.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.

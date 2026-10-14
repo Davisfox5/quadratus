@@ -691,3 +691,38 @@ def test_a_not_met_verdict_is_never_erased_by_a_later_met_line(tmp_path, lines, 
     assert ("BLOCKING: R1 is NOT MET" in note) is blocked
     assert _clean_goal_review(note, ["R1"]) is (not blocked)
     assert not session.open_findings, "every R1 has a verdict line, so the review is not unfinished"
+
+
+@pytest.mark.requirements_ledger
+def test_review_and_audit_trace_every_error_path_and_judge_the_goal_over_requirement_wording(
+        tmp_path, monkeypatch):
+    """r06 on 5b31818: the CLI reviewer cited per-requirement lines and the
+    auditor judged R10, yet both read only the handler that formats errors,
+    while input parsing exited before it in another form; and the auditor
+    held R14 to wording ('exactly') the original goal never states. Both
+    seats are now told to trace every rejection path, including parsing and
+    validation ahead of the handler and its helpers, and the auditor judges
+    the goal's own condition over stricter requirement wording, saying so on
+    the line, with decisions and rulings still binding. General wording only:
+    no runner, library or known case is named."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    declared = ("REQUIREMENTS:\nR1: " + _R1 + "\n"
+                + DECL_SIMPLE.replace("backend simple", "backend standard") + "\nCOVERS: R1")
+
+    def lead(call, replay):
+        H.write(call, {"app.py": fixed})
+        return 'Implemented add.\nCHANGED: ["app.py"]'
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead,
+                                                 collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:2",
+                                                 auditor=lambda c, r: "R1: MET - app.py",
+                                                 **{"requirements-review": lambda c, r: "COMPLETE"}),
+                   files=FILES, max_tasks=1, record_complete=False)
+    review, audit = replay.of("collaborator")[0].prompt, replay.of("auditor")[0].prompt
+    rule = "input parsing and validation that run before the main operation or outside any error handler"
+    assert rule in review and rule in audit
+    assert "one path that leaves in another form is NOT MET" in review and "NOT MET" in audit
+    assert "The goal above is the authority" in audit and "wording stricter than the goal" in audit
+    assert "a condition the goal does state is never relaxed this way" in audit
+    for text in (review, audit):
+        assert "argparse" not in text and "--quadratus-report" not in text, "nothing case-specific or private"

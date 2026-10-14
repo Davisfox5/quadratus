@@ -2035,6 +2035,16 @@ def _review_complete(text: str) -> bool:
     return False
 
 
+#: r06 on 5b31818: a reviewer and the auditor both cited the handler that
+#: formats errors and missed the input parsing that exits before it. Stated
+#: generally, never as a known case.
+_ERROR_PATH_RULE = (
+    "For a condition about errors, refusals or invalid input, trace every way the code can reject "
+    "or fail for it: input parsing and validation that run before the main operation or outside "
+    "any error handler, and the helpers it calls, not only the handler that catches errors. A "
+    "condition is met only if every such path meets it; one path that leaves in another form is "
+    "NOT MET.")
+
 _REQUIREMENT_VERDICT = re.compile(r"^\s*(?:[-*+]\s+)?\**(R\d+)\**\s*:\s*(NOT\s+MET|MET)\b", re.IGNORECASE | re.MULTILINE)
 
 
@@ -6997,7 +7007,12 @@ class Session:
                if self.design_checks else "")
             + self._not_run_block()
             + "\n\nYou are an independent auditor. The project in your working directory is the "
-            "delivered work. For each requirement, check the delivered files themselves: code, "
+            "delivered work. The goal above is the authority; the requirements are this run's reading "
+            "of it, and the decisions and rulings listed above bind. Where a requirement's wording "
+            "states a condition the goal, a decision and a ruling do not, judge the goal's own "
+            "condition and say so on the line ('wording stricter than the goal: <condition>'); a "
+            "condition the goal does state is never relaxed this way. " + _ERROR_PATH_RULE + " "
+            "For each requirement, check the delivered files themselves: code, "
             "interface, tests and documentation. Documentation must agree with the goal, not only "
             "with the code. A requirement about existing product behaviour is met only if it works "
             "with what the product actually does today. A user-interface requirement is met only "
@@ -8528,7 +8543,7 @@ class Session:
                    "on an error or a refusal, or 'R<n>: NOT MET - <the condition>', which is a BLOCKING "
                    "finding. A review that leaves a covered requirement without such a line is recorded "
                    "as unfinished. With nothing to change, reply NO FINDINGS on the first line followed "
-                   "only by those lines." if covered else ""))
+                   "only by those lines. " + _ERROR_PATH_RULE if covered else ""))
 
     def _covered_texts(self) -> List[tuple]:
         """(rid, original text) for each requirement the current task covers.
