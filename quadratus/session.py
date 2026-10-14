@@ -2088,7 +2088,19 @@ def _approving_review(text: str, rids) -> bool:
     lines = [line.strip() for line in body.splitlines() if line.strip()]
     if not (_review_complete(body) or lines[0].upper().rstrip(".") == "NO FINDINGS"):
         return False
+    # Root review of 6a1ff8a: a contrary marker anywhere is never outvoted by
+    # a later COMPLETE. Any UNFINISHED line, any REVIEW: line other than
+    # COMPLETE, and any NOT MET line, covered or not, holds the work.
+    for line in lines:
+        bare = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", line.replace("**", "").replace("`", "")).strip()
+        if re.match(r"UNFINISHED\s*:", bare, re.IGNORECASE):
+            return False
+        verdict = re.match(r"REVIEW\s*:\s*(.*)$", bare, re.IGNORECASE)
+        if verdict and verdict.group(1).rstrip(" .!").upper() != "COMPLETE":
+            return False
     verdicts = _requirement_verdicts(body)
+    if any(met is False for met in verdicts.values()):
+        return False
     return all(verdicts.get(rid) is True for rid in rids or ())
 
 

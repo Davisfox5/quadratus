@@ -743,12 +743,20 @@ def test_review_and_audit_trace_every_error_path_and_judge_the_goal_over_require
     ("Notes only.\nR1: MET - app.py:2\nREVIEW: COMPLETE", False),
     ("R1: NOT MET - x\nR1: MET - app.py:2\nR2: MET - README.md:3\nREVIEW: COMPLETE", False),
     ("BLOCKING: x\nR1: MET - app.py:2\nR2: MET - README.md:3\nREVIEW: COMPLETE", False),
-], ids=["notes-complete", "no-findings", "no-verdict-form", "missing-requirement", "contradiction", "blocking"])
+    ("UNFINISHED: did not review all work.\nR1: MET - app.py:2\nR2: MET - README.md:3\nREVIEW: COMPLETE", False),
+    ("REVIEW: INCOMPLETE\nR1: MET - app.py:2\nR2: MET - README.md:3\nREVIEW: COMPLETE", False),
+    ("REVIEW: REJECT\nR1: MET - app.py:2\nR2: MET - README.md:3\nREVIEW: COMPLETE", False),
+    ("R3: NOT MET - another goal condition fails\nR1: MET - app.py:2\nR2: MET - README.md:3\n"
+     "REVIEW: COMPLETE", False),
+], ids=["notes-complete", "no-findings", "no-verdict-form", "missing-requirement", "contradiction", "blocking",
+        "unfinished", "review-incomplete", "review-reject", "uncovered-not-met"])
 def test_an_approval_keeps_its_notes_and_never_waives_a_hold(reply, approves):
     """r07 on 820bed6: a complete approval with every covered requirement MET
     and only non-blocking notes was held because only a bare NO FINDINGS
     counted. It now approves where no revision can follow; a reply with no
     verdict form, a missing requirement line, a NOT MET line in either order
-    or a BLOCKING finding never does."""
+    or a BLOCKING finding never does; nor (root review of 6a1ff8a) does an
+    UNFINISHED line, a REVIEW: line other than COMPLETE, or a NOT MET line
+    for a requirement the task does not cover."""
     from quadratus.session import _approving_review
     assert _approving_review(reply, ["R1", "R2"]) is approves
