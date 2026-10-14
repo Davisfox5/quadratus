@@ -2067,7 +2067,9 @@
         }
       ],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "claude: Grok qualification worker/profile scoped review on engine 1655cf1: CLEAR on condition that the source.txt and private-link state after the one call is recorded (post-run check or worker-terminal digests); real Grok enforcement NOT RUN until root's canary. https://github.com/Davisfox5/quadratus/pull/73#issuecomment-6161041990"
+      ]
     }
   ],
   "receipts": [
