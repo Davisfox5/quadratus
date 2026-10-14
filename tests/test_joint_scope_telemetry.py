@@ -35,6 +35,12 @@ def test_scope_stop_records_provider_success_and_failed_acceptance(tmp_path, mon
             name = 'outside.py' if breach == 'path' else 'a.py'
             (tmp_path / name).write_text('a = 1\nb = 2\nc = 3\n')
             return 'Implemented'
+        if breach == 'size' and "Your draft made this task's change" in prompt:
+            # Step 2 r13: a size-only overrun buys one trim from the fix
+            # allowance. This one returns normally and still leaves the
+            # change past the same stop, so the task fails as before.
+            (tmp_path / 'a.py').write_text('a = 1\nb = 2\nc = 3\nd = 4\n')
+            return 'Could not fit.\nCHANGED: ["a.py"]'
         pytest.fail('Scope-stopped task must not reach review or closeout')
 
     monkeypatch.setattr(CLIProvider, '_call', call)
@@ -49,9 +55,17 @@ def test_scope_stop_records_provider_success_and_failed_acceptance(tmp_path, mon
     assert lead['provider_outcome'] == 'ok'
     assert lead['post_return_failure'] is True
     assert lead['input_tokens'] == 11 and lead['output_tokens'] == 3
-    assert len(invoked) == len(calls) == 2
-    assert len({row['invocation_id'] for row in invoked}) == 2
-    assert sum(row['input_tokens'] + row['output_tokens'] for row in invoked) == 28
+    trims = [row for row in invoked if row['role'] == 'revision']
+    expected = 3 if breach == 'size' else 2
+    assert len(trims) == expected - 2, "only a size-only overrun buys one trim, and only one"
+    for trim in trims:
+        # The trim's own provider call succeeded; its scope check failed after.
+        assert trim['outcome'] == 'TaskFailed' and trim['provider_outcome'] == 'ok'
+        assert trim['post_return_failure'] is True
+        assert trim['input_tokens'] == 11 and trim['output_tokens'] == 3
+    assert len(invoked) == len(calls) == expected
+    assert len({row['invocation_id'] for row in invoked}) == expected
+    assert sum(row['input_tokens'] + row['output_tokens'] for row in invoked) == 14 * expected
     assert invoked[0]['outcome'] == 'ok'
     assert (tmp_path / 'mine.txt').read_text() == 'operator work\n'
     assert (tmp_path / ('outside.py' if breach == 'path' else 'a.py')).exists()
