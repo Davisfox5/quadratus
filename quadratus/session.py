@@ -2186,6 +2186,10 @@ class Session:
         self.completed = False
         self.checks = []
         self.open_findings = []
+        #: Review findings a parallel child left open (unresolved after its fix
+        #: rounds, or deferred to a sibling): the parent rechecks them once
+        #: against the merged source (_recheck_after_merge).
+        self.unresolved_reviews: List[dict] = []
         #: One per task that declared a scope. Evidence for the operator; the
         #: work itself is never reverted on the strength of these.
         self.scope_reports: List[ScopeReport] = []
@@ -2465,6 +2469,7 @@ class Session:
                 # context, which resets on exit; carry it out for _edit.
                 self._last_changed_report = (invocation_context.get() or {}).get("changed_report")
                 self._last_tool_failures = (invocation_context.get() or {}).get("tool_failures") or []
+                self._last_scratch_tests = (invocation_context.get() or {}).get("scratch_tests")
                 if allow_writes and spec is not None and self._task_memory is not None:
                     report = self._assess_scope(spec, self._task_memory, self._task_before)
                     if spec.scope is not None and report is None:
@@ -4123,6 +4128,8 @@ class Session:
                 note = self._capped_review(spec, peer, "review", exc)
             else:
                 note = self._judge_goal_review(spec, peer, note)
+                self._record_deferred(spec, peer, note)
+                self._record_scratch_evidence(spec, peer)
                 if not _review_complete(note) and not _clean_goal_review(note, [r for r, _ in self._covered_texts()]):
                     # A reply arrived; a review did not finish. Recorded as
                     # unverified; the text still reaches the lead as a note.
@@ -4212,8 +4219,11 @@ class Session:
                     revision, task, labels=labels,
                 )
             if unresolved:
-                for _, verdict in unresolved:
+                for peer, verdict in unresolved:
                     self._open_finding("unverified", verdict)
+                    original = next((n for p, n in blocking if p == peer), verdict)
+                    self.unresolved_reviews.append(dict(task=spec.task_id, peer=peer, finding=original.strip(),
+                                                        text=verdict))
                 # The cap ran out with findings still open. They go to the
                 # record loudly rather than being lost in the transcript.
                 task.record(
@@ -6583,12 +6593,17 @@ class Session:
                 roots.append(root)
             started = time.monotonic()
             capped_merged = []
+            pending_rechecks = []
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(children)) as pool:
                 # Record-only: a child's ledger is off, so its COVERS feed its
                 # contract and snapshot without any audit-debt decision.
-                for child, (_, covers, _) in zip(children, parsed, strict=True):
+                for child, (mine, covers, _) in zip(children, parsed, strict=True):
                     child._current_covers = list(covers)
                     child._requirement_texts = dict(self.memory.ledger.requirements)
+                    child._batch_siblings = [
+                        (other.task_id, sorted(_literal_paths(other.scope) or ()),
+                         (other.scope.intended_result if other.scope else "") or "")
+                        for other, _, _ in parsed if other.task_id != mine.task_id]
                 futures = [pool.submit(child.run_task, spec) for child, (spec, _, _) in zip(children, parsed, strict=True)]
                 outcomes = []
                 for future in futures:
@@ -6660,6 +6675,8 @@ class Session:
                         target.unlink()
                 self.history.append(summary)
                 self.memory.absorb(summary)
+                if child.unresolved_reviews and mine is not None:
+                    pending_rechecks.append((spec, child.unresolved_reviews, mine))
                 if getattr(summary, "outcome", "closed") in ("turn_limited", "failed"):
                     (self.turn_limited if summary.outcome == "turn_limited" else self.failed).append(spec.task_id)
                     self._partial_tasks.discard(continues)
@@ -6699,12 +6716,66 @@ class Session:
                                             passed=bool(self.checks) and bool(self.checks[-1]["passed"]))
             if not record["merge_gate"]["passed"]:
                 record["merge_debt"] = self._record_merge_debt(merge, parsed)
+        if pending_rechecks and not fatal and (record.get("merge_gate") or {}).get("passed"):
+            record["post_merge_rechecks"] = [self._recheck_after_merge(spec, entries, mine)
+                                             for spec, entries, mine in pending_rechecks]
         if capped_merged and not fatal:
             record["capped_final_reviews"] = [self._review_capped_final_child(spec, covers, mine, record, len(parsed))
                                               for spec, covers, mine in capped_merged]
         if fatal is not None:
             raise fatal
         return True
+
+    def _recheck_after_merge(self, spec, entries, outcome) -> dict:
+        """Recheck a merged child's open review findings once against the
+        merged source, by the reviewer who raised them (r09 on ded0095).
+
+        Only after the merge gate passed. One recheck call per reviewer, the
+        existing recheck role: its own findings only, no new ones. RESOLVED
+        closes exactly those findings (the open text and its fact); anything
+        else, a capped recheck or an unavailable reviewer keeps them open. No
+        lead call, no fix round, no slot, recovery or grant."""
+        result = dict(task=spec.task_id, rechecked=[])
+        by_peer: Dict[str, List[dict]] = {}
+        for entry in entries:
+            by_peer.setdefault(entry["peer"], []).append(entry)
+        for peer, group in by_peer.items():
+            row = dict(peer=peer, findings=len(group), verdict=None)
+            result["rechecked"].append(row)
+            if not self._available(peer):
+                row["verdict"] = "kept: reviewer unavailable"
+                continue
+            listed = "\n".join(f"- {e['finding']}" for e in group)
+            try:
+                with invocation(spec.task_id, "recheck"):
+                    verdict = self._invoke_model(
+                        peer,
+                        self._role_packet(spec, "reviewer") + "\n\n"
+                        f"Task: {spec.description}\n\n"
+                        "You reviewed this task while it ran in parallel with sibling tasks, and these "
+                        f"findings were left open:\n{listed}\n\n"
+                        "All the tasks are now merged, and your working directory holds the merged source. "
+                        "Check only these findings against the source as it now stands. Do not raise new "
+                        "findings. Reply exactly 'RESOLVED' if every one is addressed, otherwise "
+                        "'UNRESOLVED: <what specifically remains>'." + self._review_turn_budget_note(peer))
+            except TurnLimitReached:
+                row["verdict"] = "kept: recheck capped"
+                continue
+            if not _resolved_verdict(verdict):
+                row["verdict"] = "kept: " + verdict.strip()[:200]
+                continue
+            for entry in group:
+                if entry["text"] in self.open_findings:
+                    self.open_findings.remove(entry["text"])
+                for fact in outcome.facts:
+                    if fact.kind == "unverified" and fact.active and (fact.full or fact.detail) in (
+                            entry["text"], entry["text"][:400]):
+                        fact.recovered = True
+            outcome.note("unverified", f"rechecked by {peer} on the merged source: resolved "
+                                       f"{len(group)} finding(s) left open during the parallel run", terminal=False)
+            row["verdict"] = "resolved"
+            self._note(f"{spec.task_id}: {len(group)} open finding(s) resolved by {peer} on the merged source")
+        return result
 
     def _review_capped_final_child(self, spec, covers, outcome, record, size) -> dict:
         """A turn-capped child of the job's final parallel batch meets one
@@ -8582,6 +8653,7 @@ class Session:
                if self._collaboration_applicable(spec) else "")
             + self._changed_originals_note()
             + self._goal_authority(peer)
+            + self._sibling_note()
             + self._review_turn_budget_note(peer)
         )
 
@@ -8658,6 +8730,54 @@ class Session:
             note += "\n" + "\n".join(f"BLOCKING: {rid} is NOT MET (the reviewer's own verdict line)."
                                       for rid in unmet)
         return note
+
+    def _sibling_note(self) -> str:
+        """For a parallel child's reviewer: the sibling tasks whose changes are
+        not in this copy (r09 on ded0095: t3's reviewer blocked twice on HTTP
+        routes that the still-running sibling t2 owned, and the finding stayed
+        open after the merge though the merged source held the routes)."""
+        siblings = getattr(self, "_batch_siblings", None) or []
+        if not siblings:
+            return ""
+        rows = "\n".join(f"- {tid}: may change only {', '.join(paths) or 'nothing'}; intended: {intended}"
+                         for tid, paths, intended in siblings)
+        return ("\n\nThis task runs in parallel with the tasks below. Their changes are not in your copy "
+                "and are merged after all of them finish:\n" + rows + "\nA condition that depends on work "
+                "inside a sibling's paths is not a finding against this task: write it on its own line as "
+                "'DEFERRED: <task id> - <condition>'. It stays open and unverified until it is rechecked "
+                "against the merged source; it is never an approval. Judge everything inside this task's own "
+                "paths as usual.")
+
+    def _record_deferred(self, spec, peer: str, note: str) -> None:
+        """DEFERRED lines in a parallel child's review: each one an open,
+        unverified finding the parent rechecks after the merge."""
+        siblings = {tid for tid, _, _ in (getattr(self, "_batch_siblings", None) or [])}
+        if not siblings:
+            return
+        for match in re.finditer(r"^\s*(?:[-*+]\s+)?DEFERRED\s*:\s*(\S+)\s*[-:]\s*(.+)$", note or "",
+                                 re.IGNORECASE | re.MULTILINE):
+            sibling, condition = match.group(1).strip(" .,:"), match.group(2).strip()
+            if sibling not in siblings:
+                continue
+            text = (f"Task {spec.task_id}: deferred by {peer} to parallel task {sibling}, unverified until "
+                    f"rechecked on the merged source: {condition}")
+            self._open_finding("unverified", text)
+            self.unresolved_reviews.append(dict(task=spec.task_id, peer=peer, finding=match.group(0).strip(),
+                                                text=text, deferred=sibling))
+
+    def _record_scratch_evidence(self, spec, peer: str) -> None:
+        """What a review asked for a scratch demonstration actually left in
+        its copy, measured by the runtime, never read from the reply (r09 on
+        ded0095: the codex reviewer read source and reran the existing suites;
+        its copy held no new test file). Recorded as a fact on the task; it
+        decides nothing by itself."""
+        found = getattr(self, "_last_scratch_tests", None)
+        if found is None or self._outcome is None:
+            return
+        self._outcome.note("unverified", f"scratch demonstration by {peer}: "
+                           + (", ".join(found) if found else "none: no new test file in its copy"),
+                           terminal=False)
+        self._last_scratch_tests = None
 
     def _changed_originals_note(self) -> str:
         """For a reviewer: run-start test or support files that now differ.

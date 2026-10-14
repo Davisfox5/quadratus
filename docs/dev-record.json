@@ -1999,7 +1999,8 @@
         "claude: r05 on 1655cf1 corrections: per-requirement review verdicts (_judge_goal_review) and one cross-vendor review of capped work in the final parallel batch (_review_capped_final_child). Awaiting root's scoped review; final gates held.",
         "claude: r06 on 5b31818: error-path rule for reviews and audits, goal authority over requirement wording in the audit; NOT RUN discharge unchanged, full-file evidence design proposed to root (helper/config is root's). Awaiting root's scoped review.",
         "claude: r07 on 820bed6: capped-final-child review accepts a finished approval with every covered requirement MET and non-blocking notes kept on record (_approving_review); holds unchanged otherwise. CLI review miss assessed as reviewer judgement; no engine change.",
-        "claude: r08 on f247f0a: final audit measured as not catching the CLI refusal condition. Scratch-capable review/audit seats (CLISpec.copy_args, today codex) now asked to demonstrate error conditions with a scratch test and the approved check; unmeasured until a run."
+        "claude: r08 on f247f0a: final audit measured as not catching the CLI refusal condition. Scratch-capable review/audit seats (CLISpec.copy_args, today codex) now asked to demonstrate error conditions with a scratch test and the approved check; unmeasured until a run.",
+        "claude: r09 correction: DEFERRED sibling findings and unresolved child findings rechecked once on merged source after merge gate (RESOLVED closes, else kept; no lead call, no MET). Scratch probe files measured from the copy as an unverified fact, not gating. Old/new controls in test_step2_recovery; focused 309 passed. No full suite or provider run."
       ]
     },
     {

@@ -885,3 +885,98 @@ def test_the_review_seat_is_asked_for_a_scratch_run_and_the_auditor_never_sees_a
     assert any(k.startswith("openai:") for k, _, _ in reviews) and any(not k.startswith("openai:") for k, _, _ in reviews)
     for _, role, prompt in audits:
         assert _PROBE_RULE not in prompt and "ONE EXCEPTION" not in role and "-m pytest" not in prompt
+
+
+# -- r09 on ded0095: parallel findings are rechecked on the merged source -----------------
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("shape,after_merge", [
+    ("deferred", "RESOLVED"), ("deferred", "UNRESOLVED: add still missing"),
+    ("blocking", "RESOLVED"), ("blocking", "UNRESOLVED: add still missing"),
+])
+def test_a_parallel_finding_on_sibling_work_is_rechecked_once_on_the_merged_source(
+        tmp_path, monkeypatch, shape, after_merge):
+    """r09: t3's reviewer blocked twice on HTTP routes that the still-running
+    sibling t2 owned; the finding stayed open after the merge although the
+    merged source held the routes, and the job stopped FindingsOpen. A child's
+    reviewer now sees its siblings' paths and may write DEFERRED for their
+    work; that, or a finding left unresolved after the child's own rounds, is
+    held open and rechecked once by the same reviewer on the merged source
+    after the merge gate passes. RESOLVED closes exactly those findings;
+    UNRESOLVED keeps them. No lead call follows the recheck."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    batch = ("REQUIREMENTS:\nR1: " + _R1 + "\nR2: README documents add\n"
+             "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1")
+             + "\n---\n" + _simple("README.md", "Document add in README.md.", "R2"))
+
+    def lead(call, replay):
+        if call.task == "t1":
+            H.write(call, {"app.py": fixed})
+            return 'Implemented add.\nCHANGED: ["app.py"]'
+        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
+        return 'Documented add.\nCHANGED: ["README.md"]'
+
+    reviews = []
+
+    def collaborator(call, replay):
+        reviews.append(call)
+        if call.task == "t2" and shape == "deferred":
+            return "DEFERRED: t1 - the documented add is not in app.py yet\nR2: MET - README.md:3\nREVIEW: COMPLETE"
+        if call.task == "t2":
+            return "BLOCKING: app.py does not define the add the README documents\nR2: MET - README.md:3"
+        return "NO FINDINGS\nR1: MET - app.py:2"
+
+    merged = []
+
+    def recheck(call, replay):
+        if "now merged" in call.prompt:
+            merged.append(call)
+            return after_merge
+        return "UNRESOLVED: app.py still lacks add in this copy"
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(batch), lead=lead,
+                                                 collaborator=collaborator, recheck=recheck),
+                   files=FILES, max_tasks=2, record_complete=False)
+    assert len(merged) == 1 and merged[0].task == "t2", "one recheck on the merged source, by t2's reviewer"
+    t2_review = next(r for r in reviews if r.task == "t2")
+    assert "This task runs in parallel with" in t2_review.prompt and "- t1: may change only app.py" in t2_review.prompt
+    rechecks = (H.result_json(replay).get("parallel_batches") or [{}])[0].get("post_merge_rechecks")
+    assert rechecks and rechecks[0]["task"] == "t2"
+    still_open = "FindingsOpen" in (replay.result.error or "")
+    if after_merge == "RESOLVED":
+        assert rechecks[0]["rechecked"][0]["verdict"] == "resolved" and not still_open
+    else:
+        assert rechecks[0]["rechecked"][0]["verdict"].startswith("kept") and still_open
+    assert [c.task for c in replay.of("lead")].count("t2") == 1
+    after = replay.calls[replay.calls.index(merged[0]) + 1:]
+    assert not [c for c in after if c.role.startswith(("lead", "revision"))], "no editing call after the merge recheck"
+
+
+def test_a_scratch_demonstration_is_measured_from_the_copy_not_read_from_the_reply(tmp_path, monkeypatch):
+    """r09: the codex reviewer asked for a scratch demonstration only read
+    source and reran the existing suites. Whether the call left a new test
+    file in its copy is now measured by the runtime and handed back; the
+    reply's own claim is never the evidence."""
+    from quadratus.config import Settings
+    from quadratus.delegation import invocation, invocation_context
+    from quadratus.runtime import Fleet
+    monkeypatch.setattr("shutil.which", lambda name: f"/fake/bin/{name}")
+    (tmp_path / "app.py").write_text("x = 1\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_app.py").write_text("def test_x():\n    assert True\n")
+
+    def generate(self, key, provider, prompt, system, **kw):
+        if "write" in prompt:
+            (Path(provider.workdir) / "tests" / "test_scratch_refusal.py").write_text("def test_r():\n    pass\n")
+        return "NO FINDINGS\nR1: MET - scratch run passed"
+    monkeypatch.setattr(Fleet, "_generate", generate)
+    fleet = Fleet(Settings(backend="cli"), project=tmp_path)
+    fleet.check_commands = ("python -m pytest -q tests",)
+    seen = {}
+    for label, prompt in (("wrote", "write a scratch test"), ("claimed", "only claim it")):
+        with invocation("t1", "collaborator", probe=True):
+            fleet.invoke("openai:gpt-5.6-sol", prompt)
+            seen[label] = (invocation_context.get() or {}).get("scratch_tests")
+    assert seen["wrote"] == ["tests/test_scratch_refusal.py"]
+    assert seen["claimed"] == [], "a claimed run with no new file in the copy is measured as none"
+    assert not (tmp_path / "tests" / "test_scratch_refusal.py").exists(), "scratch never reaches the project"

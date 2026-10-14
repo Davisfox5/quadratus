@@ -770,6 +770,23 @@ Key design decisions already settled:
   that scratch file (`runtime._probe_exception`). The auditor gets no probe
   and no command line. No new command, grant or role. Whether it changes the
   verdict is unmeasured until a run shows it.
+- **A parallel child's finding on a sibling's work is rechecked on the
+  merged source, once** (r09 on ded0095). t3's reviewer blocked twice on
+  routes the running sibling owned, spent two revisions and two rechecks,
+  and the finding stayed open after the merge although the merged source
+  held the routes. A child's reviewer now sees each sibling's paths and
+  intended result and may write `DEFERRED: <task id> - <condition>`; that,
+  or a finding left unresolved after the child's own rounds, is held open
+  as unverified and, only when the merge gate passes, rechecked once by
+  the same reviewer on the merged source (`_recheck_after_merge`).
+  RESOLVED closes exactly those findings; anything else keeps them. No
+  lead call follows, no MET is written, and a sibling id outside the batch
+  is ignored. The same run showed the scratch proof asked for in r08 was
+  not done: the reviewer read source and reran the suites. Prose cannot
+  enforce it, so the runtime now measures new test files the probe call
+  left in its copy (`context["scratch_tests"]`) and the session records
+  that as an unverified fact. It informs, it does not gate: which
+  requirements need a demonstration is a policy call for root and Davis.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.

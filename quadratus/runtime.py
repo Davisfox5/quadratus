@@ -615,6 +615,12 @@ class Fleet:
             reply = self._generate(model_key, view, prompt, role)
             _raise_if_infrastructure(model_key, view)
             altered = _copy_altered(directory, handed)
+            if context.get("probe"):
+                # Measured, not read from the reply: the new test files the
+                # call left in its copy (r09 on ded0095).
+                from .integration import _test_family
+                context["scratch_tests"] = sorted(p for p in _copy_digests(directory)
+                                                  if p not in handed and _test_family(p))
             if altered:
                 raise ReviewCopyAltered(
                     f"{model_key} changed or removed files it was handed to read in its source copy "
