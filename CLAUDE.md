@@ -787,6 +787,25 @@ Key design decisions already settled:
   left in its copy (`context["scratch_tests"]`) and the session records
   that as an unverified fact. It informs, it does not gate: which
   requirements need a demonstration is a policy call for root and Davis.
+- **Causal addendum to the r09 note above** (root on 40b2133, from the
+  actual parallel prompt and native rollout). The r09 codex reviewer never
+  received `_PROBE_RULE` or the runtime exception: `_run_batch` gives each
+  child `integration_gate=None` and `_probe_applies` required a gate, so
+  the rule and the probe flag never reached a parallel child. Earlier
+  qualification covered the parent path only. So r09 shows no scratch
+  run, not a model ignoring a delivered rule, and 40b2133's file
+  measurement never activated there either. A child now reads its parent's
+  approved gate commands (`_inherited_checks`, scratch only; its own gate
+  stays off). Under root's decision, a new file name is not execution:
+  when the probe call leaves a test file in its copy, the runtime runs the
+  approved discovering commands itself with `GateSuite` in that copy
+  (`runtime._scratch_proof`). Each scratch case counts only by identity:
+  a pytest line naming the file (verbosity raised through
+  `PYTEST_ADDOPTS` only, never argv), or a node name no handed test
+  declares. Only every declared case executed and passed is `passed`.
+  Failed, skipped, absent, unnamed or a handed file changed is `failed`
+  or `not run`, recorded unverified in `scratch_proofs`, never a MET.
+  Nothing from the project's dependency trees is linked into the copy.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.

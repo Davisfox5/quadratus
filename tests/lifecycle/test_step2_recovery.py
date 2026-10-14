@@ -980,3 +980,129 @@ def test_a_scratch_demonstration_is_measured_from_the_copy_not_read_from_the_rep
     assert seen["wrote"] == ["tests/test_scratch_refusal.py"]
     assert seen["claimed"] == [], "a claimed run with no new file in the copy is measured as none"
     assert not (tmp_path / "tests" / "test_scratch_refusal.py").exists(), "scratch never reaches the project"
+
+
+# -- root on 40b2133: the parallel child never received the scratch rule -----------------
+
+_SCRATCH = {
+    "passes": "def test_scratch_refusal():\n    assert 1 + 1 == 2\n",
+    "fails": "def test_scratch_refusal():\n    assert 1 + 1 == 3\n",
+    "skipped": "import pytest\n\n\n@pytest.mark.skip(reason='scratch')\ndef test_scratch_refusal():\n    pass\n",
+    "claimed": None,
+}
+
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("variant,status", [
+    ("passes", "passed"), ("fails", "failed"), ("skipped", "not run"), ("claimed", "not run"),
+])
+def test_a_parallel_childs_reviewer_gets_the_scratch_rule_and_the_harness_runs_its_test(
+        tmp_path, monkeypatch, variant, status):
+    """Root on 40b2133: r09's parallel codex reviewer never received
+    _PROBE_RULE or the runtime exception, because _run_batch gives each child
+    integration_gate=None and the rule required a gate. A child now reads the
+    commands its parent approved, for the demonstration only, while its own
+    gate stays off. The scratch test the reviewer leaves in its copy is run by
+    the harness with the approved command, in that copy, and only a case of
+    that file shown executed and passed is recorded as passed. A failing,
+    skipped or absent scratch test stays unverified, and none of them is a
+    MET or reaches the project."""
+    from quadratus.delegation import invocation_context
+    from quadratus.session import _PROBE_RULE, Session
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    batch = ("REQUIREMENTS:\nR1: " + _R1 + "\nR2: README documents add\n"
+             "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1")
+             + "\n---\n" + _simple("README.md", "Document add in README.md.", "R2"))
+    gates = []
+    real_run_task = Session.run_task
+
+    def run_task(self, spec):
+        if getattr(self, "_batch_siblings", None) is not None:
+            gates.append((spec.task_id, self.config.integration_gate))
+        return real_run_task(self, spec)
+    monkeypatch.setattr(Session, "run_task", run_task)
+
+    def lead(call, replay):
+        if call.task == "t1":
+            H.write(call, {"app.py": fixed})
+            return 'Implemented add.\nCHANGED: ["app.py"]'
+        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
+        return 'Documented add.\nCHANGED: ["README.md"]'
+
+    asked = []
+
+    def collaborator(call, replay):
+        context = invocation_context.get() or {}
+        if call.vendor == "codex" and call.task == "t2":
+            asked.append((_PROBE_RULE in call.prompt, bool(context.get("probe")),
+                           bool(context.get("probe_checks"))))
+            if _SCRATCH[variant] is not None:
+                H.write(call, {"tests/test_scratch_refusal.py": _SCRATCH[variant]})
+            return "NO FINDINGS\nR2: MET - README.md:3 (scratch test_scratch_refusal executed and passed)"
+        return "NO FINDINGS\n" + ("R1: MET - app.py:2" if call.task == "t1" else "R2: MET - README.md:3")
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(batch), lead=lead,
+                                                 collaborator=collaborator),
+                   files=FILES, max_tasks=2, record_complete=False)
+    assert asked and asked[0] == (True, True, True), "the child's codex review carried the rule and the checks"
+    assert sorted(t for t, _ in gates) == ["t1", "t2"] and all(g is None for _, g in gates), \
+        "each child's own integration gate stays off"
+    proofs = [p for p in H.result_json(replay).get("scratch_proofs") or [] if p["task"] == "t2"]
+    assert len(proofs) == 1 and proofs[0]["status"] == status, proofs
+    if variant == "passes":
+        assert proofs[0]["cases"] == ["tests/test_scratch_refusal.py::test_scratch_refusal: passed"]
+        assert proofs[0]["receipts"] and all("command" not in r for r in proofs[0]["receipts"])
+    if variant == "claimed":
+        assert proofs[0]["files"] == [], "a claimed run with no file in the copy is measured as none"
+    assert not (replay.project / "tests" / "test_scratch_refusal.py").exists(), "scratch never reaches the project"
+
+
+def test_a_scratch_run_that_rewrites_handed_source_proves_nothing(tmp_path, monkeypatch):
+    """The harness runs the scratch test in the copy; a test that changes a
+    handed file while it runs is recorded not run, never passed."""
+    import sys
+
+    from quadratus.config import Settings
+    from quadratus.delegation import invocation, invocation_context
+    from quadratus.integration import GateCommand
+    from quadratus.runtime import Fleet
+    monkeypatch.setattr("shutil.which", lambda name: f"/fake/bin/{name}")
+    (tmp_path / "app.py").write_text("x = 1\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_app.py").write_text("def test_x():\n    assert True\n")
+    scratch = ("from pathlib import Path\n\n\ndef test_scratch_refusal():\n"
+               "    Path('app.py').write_text('x = 2\\n')\n")
+    rewrote = {"rewrites": scratch, "clean": "def test_scratch_refusal():\n    assert True\n"}
+
+    def generate(self, key, provider, prompt, system, **kw):
+        (Path(provider.workdir) / "tests" / "test_scratch_refusal.py").write_text(rewrote[prompt])
+        return "NO FINDINGS"
+    monkeypatch.setattr(Fleet, "_generate", generate)
+    fleet = Fleet(Settings(backend="cli"), project=tmp_path)
+    check = GateCommand(id="check", argv=(sys.executable, "-m", "pytest", "-q", "tests"))
+    seen = {}
+    for label in rewrote:
+        with invocation("t1", "collaborator", probe=True, probe_checks=(check,)):
+            fleet.invoke("openai:gpt-5.6-sol", label)
+            seen[label] = (invocation_context.get() or {}).get("scratch_proof")
+    assert seen["clean"]["status"] == "passed"
+    assert seen["rewrites"]["status"] == "not run" and "handed file changed" in seen["rewrites"]["reason"]
+    assert (tmp_path / "app.py").read_text() == "x = 1\n"
+
+
+def test_a_node_case_name_a_handed_test_also_declares_is_not_scratch_identity():
+    """node prints case names without their file: a scratch case counts only
+    when no handed test file declares the same name."""
+    from quadratus.integration import GateReceipt, GateResult, case_record, scratch_receipt
+    output = "✔ rejects bad input (1.0ms)\n✔ scratch only case (1.0ms)\n"
+    receipt = GateReceipt(id="check", status="passed", reason="exit 0", required=True,
+                          cases=case_record(output, "node"))
+    result = GateResult(True, "gate suite", 0, output, (receipt,))
+    handed = {"tests/app.test.js": b"test('rejects bad input', () => {})\n"}
+    shared = {"tests/scratch.test.js": b"test('rejects bad input', () => {})\n"}
+    unique = {"tests/scratch.test.js": b"test('scratch only case', () => {})\n"}
+    assert scratch_receipt([result], shared, handed)["status"] == "not run"
+    assert scratch_receipt([result], unique, handed)["status"] == "passed"
+    failed = GateReceipt(id="check", status="failed", reason="nonzero exit", required=True,
+                         cases=case_record("✖ scratch only case (1.0ms)\n", "node"))
+    assert scratch_receipt([GateResult(False, "gate suite", 1, "", (failed,))], unique, handed)["status"] == "failed"

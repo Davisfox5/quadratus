@@ -116,7 +116,7 @@ def record_invocation(ledger, event):
 
 @contextmanager
 def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None, evidence_files=None,
-               evidence_sha256=None, harness_checks=None, probe=False):
+               evidence_sha256=None, harness_checks=None, probe=False, probe_checks=None):
     context = dict(task=task, role=role, origin=origin)
     if prompt_artifact:
         context["prompt_artifact"] = prompt_artifact
@@ -140,6 +140,11 @@ def invocation(task, role, origin="seat", prompt_artifact=None, worker_tool=None
         # A review asked for a scratch demonstration; Fleet names the approved
         # command that may run it (runtime._probe_exception).
         context["probe"] = True
+    if probe and probe_checks:
+        # The approved gate commands (integration.GateCommand, cwd relative
+        # to the project) Fleet runs itself in the copy when the call left a
+        # new test file there (runtime._scratch_proof).
+        context["probe_checks"] = tuple(probe_checks)
     token = invocation_context.set(context)
     try:
         yield

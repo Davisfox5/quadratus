@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shlex
 import shutil
@@ -859,9 +860,12 @@ class GateSuite:
     entries live for this runner instance and only successful receipts are kept.
     """
 
-    def __init__(self, commands: Sequence[GateCommand], *, cwd, exclude=()):
+    def __init__(self, commands: Sequence[GateCommand], *, cwd, exclude=(), report_env=None):
         from .project import Project
 
+        #: Reporting-only environment for the runner (scratch_receipt's case
+        #: lines); never selection, never a different command.
+        self.report_env = dict(report_env or {})
         self.cwd = Path(cwd).resolve()
         self.project = Project(self.cwd, exclude=exclude)
         self.commands = tuple(commands)
@@ -877,7 +881,7 @@ class GateSuite:
 
     def cheap(self):
         view = GateSuite([c for c in self.commands if c.cheap], cwd=self.cwd,
-                         exclude=self.project.exclude)
+                         exclude=self.project.exclude, report_env=self.report_env)
         view._cache = self._cache
         return view
 
@@ -922,7 +926,8 @@ class GateSuite:
                 if command.cacheable and runner and key in self._cache:
                     receipts.append(replace(self._cache[key], cached=True))
                     continue
-                with _fresh_bytecode_env() as fresh, _report_slot(command.argv, fresh) as (argv, env, path, expected):
+                with _fresh_bytecode_env() as fresh, _report_slot(command.argv, dict(fresh, **self.report_env)) \
+                        as (argv, env, path, expected):
                     returncode, output, cleanup = _run_owned(argv, cwd=cwd, timeout=command.timeout, env=env)
                     report = read_report(path, expected) if returncode is not None else None
                 if returncode is None:
@@ -1363,7 +1368,32 @@ def case_record(output: str, runner: Optional[str] = None) -> Optional[dict]:
             qualified.add(key)
     # Keys a pytest verbose line printed: only these carry their file (V1).
     record['qualified'] = sorted(qualified)
+    # Executed cases the runner printed as failed (scratch_receipt): a
+    # subset of ``executed``, so a reader of the other keys is unaffected.
+    record['failed'] = _failed_cases(output, runner)
     return record
+
+
+def _failed_cases(output: str, runner: Optional[str] = None) -> dict:
+    """``case_key``-to-count of the executed case lines that report a
+    failure: pytest FAILED or ERROR, TAP ``not ok``, spec \u2716."""
+    failed = {}
+    node_lines, pytest_lines = runner in (None, 'node'), runner in (None, 'pytest')
+    for line in (output or '').splitlines():
+        spec = _SPEC_CASE.match(line) if node_lines else None
+        tap = None if spec or not node_lines else _TAP_CASE.match(line)
+        case = None if spec or tap or not pytest_lines else _PYTEST_CASE.match(line)
+        if spec and spec.group(1) == '\u2716' and not (spec.group(3) or ''):
+            name = spec.group(2)
+        elif tap and tap.group(1).lower() == 'not ok' and not tap.group(3):
+            name = tap.group(2)
+        elif case and case.group(2) in ('FAILED', 'ERROR'):
+            name = case.group(1)
+        else:
+            continue
+        key = case_key(name)
+        failed[key] = failed.get(key, 0) + 1
+    return failed
 
 
 def skipped_cases(receipt):
@@ -1556,6 +1586,85 @@ def run_original_tests(gate, root, originals: dict, current: dict, keep=()):
     passed = all(r.status in ('passed', 'skipped') for r in receipts if r.required) and any(
         r.status == 'passed' for r in receipts)
     return GateResult(passed, 'original tests', 0 if passed else 1, output, receipts), ''
+
+
+def scratch_report_env(argv) -> dict:
+    """The reporting-only environment under which a pytest command prints
+    one ``path::name OUTCOME`` line per case whatever ``-q`` its argv
+    carries, so the harness can name the scratch cases it executed. Empty
+    for any other runner, whose case lines already carry names."""
+    if runner_of(argv) != 'pytest':
+        return {}
+    level = 0
+    for arg in (str(a) for a in argv):
+        if arg in ('--verbose',):
+            level += 1
+        elif arg in ('--quiet',):
+            level -= 1
+        elif re.fullmatch(r'-v+', arg):
+            level += len(arg) - 1
+        elif re.fullmatch(r'-q+', arg):
+            level -= len(arg) - 1
+    if level >= 1:
+        return {}
+    extra = '-' + 'v' * (1 - level)
+    inherited = os.environ.get('PYTEST_ADDOPTS', '')
+    return {'PYTEST_ADDOPTS': f'{inherited} {extra}'.strip()}
+
+
+def scratch_receipt(results, scratch: dict, others: dict) -> dict:
+    """Whether the harness's own runs of approved commands executed every
+    case each scratch test file declares, and each passed (r09 root
+    decision on 40b2133: a new file name alone is not execution).
+
+    ``results`` are GateResults from the disposable copy; ``scratch`` and
+    ``others`` map copy-relative test paths to bytes, the scratch files and
+    the handed test files. A case counts only by identity: a pytest line
+    naming the scratch file, or a node case name the scratch file declares
+    and no handed test file does. ``status`` is ``passed`` only when every
+    declared scratch case executed and passed; ``failed`` when one executed
+    and failed; ``not run`` otherwise. Nothing here is a verdict on a
+    requirement. No command text or path outside the copy is returned."""
+    out = dict(files=sorted(scratch), cases=[], receipts=[])
+    declared = {}
+    for path, data in sorted(scratch.items()):
+        names = declared_cases(path, data)
+        if not names:
+            return dict(out, status='not run', reason=f'{path}: its case names could not all be read')
+        declared[path] = set(names)
+    taken = set()
+    for path, data in others.items():
+        taken |= set(declared_cases(path, data) or ())
+    passed, failed = set(), set()
+    for result in results:
+        for receipt in result.receipts:
+            out['receipts'].append(dict(id=receipt.id, status=receipt.status, reason=receipt.reason,
+                                        tests=receipt.tests, source_hash=receipt.source_hash))
+            if receipt.status in ('blocked', 'error', 'skipped') or not isinstance(receipt.cases, dict):
+                continue
+            cases = receipt.cases
+            bad = set(cases.get('failed') or {})
+            qualified = set(cases.get('qualified') or ())
+            for key in set(cases.get('executed') or {}):
+                if key in qualified:
+                    file, _, rest = key.partition('::')
+                    name = rest.split('::')[-1].split('[', 1)[0]
+                    paths = [p for p in declared if p in (file, posixpath.normpath(posixpath.join(receipt.cwd, file)))]
+                else:
+                    name = key
+                    paths = [p for p in declared if key in declared[p]] if key not in taken else []
+                if len(paths) != 1 or name not in declared[paths[0]]:
+                    continue
+                (failed if key in bad else passed).add((paths[0], name))
+    wanted = {(p, n) for p, names in declared.items() for n in names}
+    out['cases'] = sorted(f'{p}::{n}: ' + ('failed' if (p, n) in failed else 'passed' if (p, n) in passed
+                                            else 'not executed') for p, n in wanted)
+    if failed & wanted:
+        return dict(out, status='failed', reason='a scratch case executed and failed')
+    missing = wanted - passed
+    if missing:
+        return dict(out, status='not run', reason=f'{len(missing)} declared scratch case(s) not shown executed')
+    return dict(out, status='passed', reason='every declared scratch case executed and passed')
 
 
 def _relative(cwd: str, operand: str, copy: Path) -> str:

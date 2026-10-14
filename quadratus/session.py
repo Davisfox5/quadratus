@@ -2190,6 +2190,8 @@ class Session:
         #: rounds, or deferred to a sibling): the parent rechecks them once
         #: against the merged source (_recheck_after_merge).
         self.unresolved_reviews: List[dict] = []
+        #: Harness-executed scratch demonstrations (runtime._scratch_proof).
+        self.scratch_proofs: List[dict] = []
         #: One per task that declared a scope. Evidence for the operator; the
         #: work itself is never reverted on the strength of these.
         self.scope_reports: List[ScopeReport] = []
@@ -2440,11 +2442,13 @@ class Session:
             facts = self._harness_facts(current_only=True)
             if facts:
                 context = dict(context, harness_checks=facts)
-        if (not allow_writes and context.get("role") == "collaborator" and self._covered_texts()
-                and self._probe_applies(key)):
-            # The review prompt asked for a scratch demonstration; the runtime
-            # names the one approved command that may run it.
-            context = dict(context, probe=True)
+        if not allow_writes and context.get("role") == "collaborator" and self._covered_texts():
+            probe_checks = self._probe_checks(key)
+            if probe_checks:
+                # The review prompt asked for a scratch demonstration; the
+                # runtime names the approved command that may run it and runs
+                # those commands itself on whatever test file the call adds.
+                context = dict(context, probe=True, probe_checks=tuple(probe_checks))
         # Every prompt is kept, not only an interrupted one: without it there was
         # no proof of which packet or instructions a seat actually received.
         try:
@@ -2470,6 +2474,7 @@ class Session:
                 self._last_changed_report = (invocation_context.get() or {}).get("changed_report")
                 self._last_tool_failures = (invocation_context.get() or {}).get("tool_failures") or []
                 self._last_scratch_tests = (invocation_context.get() or {}).get("scratch_tests")
+                self._last_scratch_proof = (invocation_context.get() or {}).get("scratch_proof")
                 if allow_writes and spec is not None and self._task_memory is not None:
                     report = self._assess_scope(spec, self._task_memory, self._task_before)
                     if spec.scope is not None and report is None:
@@ -6576,6 +6581,10 @@ class Session:
         project = Project(self.project, exclude=self.config.project_excludes)
         base = project.contents()
         record = dict(tasks=[s.task_id for s, _, _ in parsed], leads=[s.lead for s, _, _ in parsed])
+        from . import integration
+        approved = self._original_gate if self._original_gate is not None else self.config.integration_gate
+        integration_checks = (integration._gate_commands(approved, Path(self.project).resolve()) or []
+                              if approved is not None else [])
         with contextlib.ExitStack() as stack:
             children, roots = [], []
             for spec, _, _ in parsed:
@@ -6600,6 +6609,9 @@ class Session:
                 for child, (mine, covers, _) in zip(children, parsed, strict=True):
                     child._current_covers = list(covers)
                     child._requirement_texts = dict(self.memory.ledger.requirements)
+                    # The parent's approved commands, for the scratch
+                    # demonstration only: the child's own gate stays off.
+                    child._inherited_checks = integration_checks
                     child._batch_siblings = [
                         (other.task_id, sorted(_literal_paths(other.scope) or ()),
                          (other.scope.intended_result if other.scope else "") or "")
@@ -6622,6 +6634,7 @@ class Session:
                 self.scope_reports.extend(child.scope_reports)
                 self.design_checks.extend(child.design_checks)
                 self.open_findings.extend(child.open_findings)
+                self.scratch_proofs.extend(child.scratch_proofs)
                 # A child's execution facts come back with it, re-based to the
                 # parent's checks: only a check the parent runs after the merge
                 # can discharge them (Codex review of b6ba3ba, F5).
@@ -8688,17 +8701,27 @@ class Session:
                 + (" " + _PROBE_RULE if covered and self._probe_applies(peer) else ""))
 
     def _probe_applies(self, key: str) -> bool:
-        """A demonstration is asked for only where the seat can make one: a
-        copy that takes scratch, and an approved command that would run a new
-        test file (root review of b24b6db: an empty suite or an explicit file
-        list never runs one)."""
-        if not (self.project and self.config.integration_gate is not None and _seat_takes_scratch(key)):
-            return False
+        return bool(self._probe_checks(key))
+
+    def _probe_checks(self, key: str) -> list:
+        """The approved gate commands that would run a new scratch test file
+        in ``key``'s copy; empty where no demonstration can be asked for: a
+        seat whose copy takes no scratch, or no approved command that would
+        run a new test file (root review of b24b6db: an empty suite or an
+        explicit file list never runs one). A parallel child has no gate of
+        its own, so it reads the commands its parent approved (root on
+        40b2133: r09's parallel reviewer never received the rule because
+        the child's gate is None)."""
+        if not (self.project and _seat_takes_scratch(key)):
+            return []
         from . import integration
-        commands = integration._gate_commands(self.config.integration_gate, Path(self.project).resolve()) or []
         root = Path(self.project).resolve()
-        return any(integration.discovers_added_tests(integration.model_facing(c.argv), root / c.cwd)
-                   for c in commands if not c.skip_reason)
+        if self.config.integration_gate is not None:
+            commands = integration._gate_commands(self.config.integration_gate, root) or []
+        else:
+            commands = getattr(self, "_inherited_checks", None) or []
+        return [c for c in commands if not c.skip_reason
+                and integration.discovers_added_tests(integration.model_facing(c.argv), root / c.cwd)]
 
     def _covered_texts(self) -> List[tuple]:
         """(rid, original text) for each requirement the current task covers.
@@ -8772,12 +8795,24 @@ class Session:
         its copy held no new test file). Recorded as a fact on the task; it
         decides nothing by itself."""
         found = getattr(self, "_last_scratch_tests", None)
+        proof = getattr(self, "_last_scratch_proof", None)
+        self._last_scratch_tests = self._last_scratch_proof = None
         if found is None or self._outcome is None:
             return
-        self._outcome.note("unverified", f"scratch demonstration by {peer}: "
-                           + (", ".join(found) if found else "none: no new test file in its copy"),
-                           terminal=False)
-        self._last_scratch_tests = None
+        if not found:
+            detail = "not run: no new test file in its copy"
+        elif not proof:
+            detail = "not run: " + ", ".join(found) + " added; the harness did not run it"
+        else:
+            detail = (f"{proof.get('status')}: {proof.get('reason')}; "
+                      + "; ".join(proof.get("cases") or proof.get("files") or ()))
+        self.scratch_proofs.append(dict(task=spec.task_id, peer=peer, files=list(found),
+                                        **({k: proof[k] for k in ("status", "reason", "cases", "receipts")}
+                                           if proof else dict(status="not run"))))
+        fact = self._outcome.note("unverified", f"scratch demonstration by {peer}, as the harness measured "
+                                  "and ran it: " + detail, terminal=False)
+        # Executed and passed is evidence the operator can read, never a MET.
+        fact.recovered = bool(proof and proof.get("status") == "passed")
 
     def _changed_originals_note(self) -> str:
         """For a reviewer: run-start test or support files that now differ.

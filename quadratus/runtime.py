@@ -626,6 +626,12 @@ class Fleet:
                     f"{model_key} changed or removed files it was handed to read in its source copy "
                     f"({', '.join(altered[:5])}{', …' if len(altered) > 5 else ''}); its answer is not "
                     "accepted as a judgement of the delivered source and evidence.")
+            if context.get("scratch_tests") and context.get("probe_checks"):
+                # Executed, not inferred: the harness runs the approved check
+                # commands in this disposable copy and reads the scratch cases
+                # by identity (r09 root decision on 40b2133).
+                context["scratch_proof"] = _scratch_proof(directory, context["scratch_tests"], handed,
+                                                          context["probe_checks"])
             # Rewritten while the copy still exists, because its path is the
             # only thing that identifies which references need rewriting. A
             # reviewer that cited the copy by absolute path would otherwise
@@ -1225,6 +1231,39 @@ def _probe_exception(commands) -> str:
             "them. Run it for that file only, not to confirm the delivered source again: the records "
             "above stand. If its output does not show your scratch test executed and passed, the "
             "condition is not demonstrated.")
+
+
+def _scratch_proof(directory, scratch, handed, checks) -> dict:
+    """The harness's own run, in the disposable copy, of each approved gate
+    command that discovers a new test file there, and what it shows about
+    the scratch files' cases (integration.scratch_receipt). Same commands,
+    timeouts and runner as the gate; nothing is linked in from the project,
+    so a check that needs the project's dependency tree records not run."""
+    from .integration import (
+        GateSuite,
+        _test_family,
+        discovers_added_tests,
+        model_facing,
+        scratch_receipt,
+        scratch_report_env,
+    )
+    root = Path(directory).resolve()
+    commands = [c for c in checks if not c.skip_reason
+                and discovers_added_tests(model_facing(c.argv), root / c.cwd)]
+    base = dict(files=sorted(scratch), cases=[], receipts=[])
+    if not commands:
+        return dict(base, status="not run", reason="no approved command discovers a new test file in this copy")
+    try:
+        files = {p: (root / p).read_bytes() for p in scratch}
+        others = {p: (root / p).read_bytes() for p in handed if _test_family(p) and (root / p).is_file()}
+        results = [GateSuite([c], cwd=root, report_env=scratch_report_env(c.argv)).run() for c in commands]
+    except (OSError, ValueError) as exc:
+        return dict(base, status="not run", reason=f"the approved runner could not run here: {type(exc).__name__}")
+    proof = scratch_receipt(results, files, others)
+    if _copy_altered(directory, handed):
+        # A scratch test that rewrote handed source proved nothing about it.
+        return dict(proof, status="not run", reason="a handed file changed during the run")
+    return proof
 
 
 def _copy_digests(directory) -> Dict[str, str]:
