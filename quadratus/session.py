@@ -2431,13 +2431,18 @@ class Session:
                     if context.get('role') == 'verifier' else 'reviewer')
             prompt += '\n\n' + self._role_packet(spec, role)
         if (context.get('origin') != 'worker' and spec is not None and context.get('role') in _EDITING_ROLES
-                and context.get('role') != 'lead' and '## Original goal (verbatim' not in prompt):
+                and context.get('role') != 'lead'):
             # Every editing call after the draft is held to the original goal
             # and covered requirements, once, here (r11 on 136a3ec and root's
             # review of af5814d: revision, fix, gate-fix, design-fix,
             # security-fix and fixture-supply prompts carried only generated
             # task text). The draft has the goal through the memory render.
-            prompt = self._writer_goal().strip() + "\n\n" + prompt
+            # Only the complete current block counts as already bound: a
+            # copied heading over other text must not suppress it (root
+            # review of 21639d6).
+            block = self._writer_goal().strip()
+            if block not in prompt:
+                prompt = block + "\n\n" + prompt
         if context.get("role") != "closeout" and spec is not None and spec.scope is not None:
             if spec.scope.render() not in prompt:
                 prompt += "\n\n" + spec.scope.render()

@@ -851,7 +851,9 @@ Key design decisions already settled:
   to it too (root review of af5814d); the draft keeps the memory render's
   goal, and a parallel child's draft adds its covered requirements. It
   says a task text or generated recipe does not change them, grants
-  nothing and changes no bound.
+  nothing and changes no bound. Only the complete current block counts as
+  already bound (root review of 21639d6): a copied heading over other text,
+  or a block with another covered requirement, never suppresses it.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.
