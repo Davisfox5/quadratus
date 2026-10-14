@@ -630,8 +630,9 @@ class Fleet:
                 # Executed, not inferred: the harness runs the approved check
                 # commands in this disposable copy and reads the scratch cases
                 # by identity (r09 root decision on 40b2133).
-                context["scratch_proof"] = _scratch_proof(directory, context["scratch_tests"], handed,
-                                                          context["probe_checks"])
+                context["scratch_proof"] = _scratch_proof(
+                    directory, context["scratch_tests"], handed, context["probe_checks"],
+                    private=_private_paths(self.project.root, getattr(self, "check_commands", ()) or (), directory))
             # Rewritten while the copy still exists, because its path is the
             # only thing that identifies which references need rewriting. A
             # reviewer that cited the copy by absolute path would otherwise
@@ -1233,12 +1234,72 @@ def _probe_exception(commands) -> str:
             "condition is not demonstrated.")
 
 
-def _scratch_proof(directory, scratch, handed, checks) -> dict:
+def _private_paths(project_root, checks, directory) -> List[str]:
+    """What a scratch run must not read: the live project, and every
+    existing absolute path an approved check names outside the copy (an
+    operator's private grading files). Never shown to any model."""
+    copy = os.path.realpath(directory)
+    out = [os.path.realpath(project_root)] if project_root else []
+    for command in checks:
+        try:
+            argv = shlex.split(command)
+        except ValueError:
+            continue
+        for arg in argv[1:]:
+            value = arg.split("=", 1)[1] if arg.startswith("-") and "=" in arg else arg
+            if not os.path.isabs(value):
+                continue
+            real = os.path.realpath(value)
+            if os.path.lexists(real) and not (real == copy or real.startswith(copy + os.sep)):
+                out.append(real)
+    return sorted(set(out))
+
+
+def _scratch_isolation(directory, private) -> Optional[tuple]:
+    """``(launcher, env)`` holding a scratch run to what the codex reviewer's
+    copy policy allows (``CODEX_SPEC.copy_args``: the copy is the only
+    writable root, /tmp and $TMPDIR excluded, no extra roots, and no network)
+    and hiding ``private`` from reads; None when no such sandbox is available
+    here, which makes the run not run (root review of 1c14ea9: the gate
+    runner let a scratch test write outside the copy). The launcher's own
+    refusal to start is read from the output (SANDBOX_REFUSAL)."""
+    import platform
+    copy = os.path.realpath(directory)
+    temp = os.path.join(copy, ".quadratus-scratch-tmp")
+    env = {"TMPDIR": temp, "TMP": temp, "TEMP": temp}
+    if any(path == copy or copy.startswith(path + os.sep) for path in private):
+        return None
+    if platform.system() == "Darwin" and os.path.exists("/usr/bin/sandbox-exec"):
+        def quote(path):
+            return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        hidden = " ".join(f"(subpath {quote(p)})" if os.path.isdir(p) else f"(literal {quote(p)})"
+                          for p in private)
+        profile = ("(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n"
+                   f"(allow file-write* (subpath {quote(copy)}) (literal \"/dev/null\") (literal \"/dev/tty\"))\n"
+                   + (f"(deny file-read* {hidden})\n" if hidden else ""))
+        return ("/usr/bin/sandbox-exec", "-p", profile), env
+    # Pinned paths, never PATH: a launcher found by lookup could be anything.
+    bwrap = "/usr/bin/bwrap"
+    if platform.system() == "Linux" and os.path.isfile(bwrap):
+        launcher = [bwrap, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-net",
+                    "--die-with-parent", "--new-session", "--bind", copy, copy]
+        for path in private:
+            launcher += (["--tmpfs", path] if os.path.isdir(path) else ["--ro-bind", "/dev/null", path])
+        return tuple(launcher), env
+    return None
+
+
+def _scratch_proof(directory, scratch, handed, checks, private=()) -> dict:
     """The harness's own run, in the disposable copy, of each approved gate
-    command that discovers a new test file there, and what it shows about
-    the scratch files' cases (integration.scratch_receipt). Same commands,
-    timeouts and runner as the gate; nothing is linked in from the project,
-    so a check that needs the project's dependency tree records not run."""
+    command that discovers a new test file there, as the reviewer would run
+    it (its model-facing argv), inside _scratch_isolation, and what it shows
+    about the scratch files' cases (integration.scratch_receipt). Same
+    commands, timeouts and owned cleanup as the gate; nothing is linked in
+    from the project, so a check that needs the project's dependency tree
+    records not run."""
+    from dataclasses import replace as _replace
+
+    from .cli_providers import SANDBOX_REFUSAL
     from .integration import (
         GateSuite,
         _test_family,
@@ -1248,17 +1309,26 @@ def _scratch_proof(directory, scratch, handed, checks) -> dict:
         scratch_report_env,
     )
     root = Path(directory).resolve()
-    commands = [c for c in checks if not c.skip_reason
+    commands = [_replace(c, argv=tuple(model_facing(c.argv))) for c in checks if not c.skip_reason
                 and discovers_added_tests(model_facing(c.argv), root / c.cwd)]
     base = dict(files=sorted(scratch), cases=[], receipts=[])
     if not commands:
         return dict(base, status="not run", reason="no approved command discovers a new test file in this copy")
+    isolation = _scratch_isolation(directory, private)
+    if isolation is None:
+        return dict(base, status="not run", reason="no sandbox here holds a scratch run to its copy")
+    launcher, env = isolation
     try:
         files = {p: (root / p).read_bytes() for p in scratch}
         others = {p: (root / p).read_bytes() for p in handed if _test_family(p) and (root / p).is_file()}
-        results = [GateSuite([c], cwd=root, report_env=scratch_report_env(c.argv)).run() for c in commands]
+        Path(env["TMPDIR"]).mkdir(exist_ok=True)
+        results = [GateSuite([c], cwd=root, exclude=(env["TMPDIR"],),
+                             report_env=dict(scratch_report_env(c.argv), **env), isolation=launcher).run()
+                   for c in commands]
     except (OSError, ValueError) as exc:
         return dict(base, status="not run", reason=f"the approved runner could not run here: {type(exc).__name__}")
+    if any(SANDBOX_REFUSAL.search(r.output or "") for result in results for r in result.receipts):
+        return dict(base, status="not run", reason="the scratch sandbox could not start")
     proof = scratch_receipt(results, files, others)
     if _copy_altered(directory, handed):
         # A scratch test that rewrote handed source proved nothing about it.

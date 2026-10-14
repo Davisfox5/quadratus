@@ -860,12 +860,15 @@ class GateSuite:
     entries live for this runner instance and only successful receipts are kept.
     """
 
-    def __init__(self, commands: Sequence[GateCommand], *, cwd, exclude=(), report_env=None):
+    def __init__(self, commands: Sequence[GateCommand], *, cwd, exclude=(), report_env=None, isolation=()):
         from .project import Project
 
         #: Reporting-only environment for the runner (scratch_receipt's case
         #: lines); never selection, never a different command.
         self.report_env = dict(report_env or {})
+        #: An OS sandbox launcher put in front of each command, for a scratch
+        #: run of a reviewer's test only (runtime._scratch_isolation).
+        self.isolation = tuple(isolation)
         self.cwd = Path(cwd).resolve()
         self.project = Project(self.cwd, exclude=exclude)
         self.commands = tuple(commands)
@@ -881,7 +884,8 @@ class GateSuite:
 
     def cheap(self):
         view = GateSuite([c for c in self.commands if c.cheap], cwd=self.cwd,
-                         exclude=self.project.exclude, report_env=self.report_env)
+                         exclude=self.project.exclude, report_env=self.report_env,
+                         isolation=self.isolation)
         view._cache = self._cache
         return view
 
@@ -928,7 +932,8 @@ class GateSuite:
                     continue
                 with _fresh_bytecode_env() as fresh, _report_slot(command.argv, dict(fresh, **self.report_env)) \
                         as (argv, env, path, expected):
-                    returncode, output, cleanup = _run_owned(argv, cwd=cwd, timeout=command.timeout, env=env)
+                    returncode, output, cleanup = _run_owned([*self.isolation, *argv], cwd=cwd,
+                                                             timeout=command.timeout, env=env)
                     report = read_report(path, expected) if returncode is not None else None
                 if returncode is None:
                     raise _GateTimeout(output, cleanup)
@@ -1621,10 +1626,16 @@ def scratch_receipt(results, scratch: dict, others: dict) -> dict:
     ``others`` map copy-relative test paths to bytes, the scratch files and
     the handed test files. A case counts only by identity: a pytest line
     naming the scratch file, or a node case name the scratch file declares
-    and no handed test file does. ``status`` is ``passed`` only when every
-    declared scratch case executed and passed; ``failed`` when one executed
-    and failed; ``not run`` otherwise. Nothing here is a verdict on a
-    requirement. No command text or path outside the copy is returned."""
+    and no handed test file does. Each instance a runner printed is kept
+    with its own id and count (root review of 1c14ea9: a parametrized case
+    whose True instance passed and False instance skipped was collapsed to
+    its function and passed). A declared case is passed only when it has at
+    least one instance and every instance executed and passed; one failed
+    instance makes it failed, and a skipped or otherwise unexecuted one
+    makes it not executed. ``status`` is ``passed`` only when every declared
+    case passed, ``failed`` when any failed, ``not run`` otherwise. Nothing
+    here is a verdict on a requirement. No command text or path outside the
+    copy is returned."""
     out = dict(files=sorted(scratch), cases=[], receipts=[])
     declared = {}
     for path, data in sorted(scratch.items()):
@@ -1635,7 +1646,7 @@ def scratch_receipt(results, scratch: dict, others: dict) -> dict:
     taken = set()
     for path, data in others.items():
         taken |= set(declared_cases(path, data) or ())
-    passed, failed = set(), set()
+    instances = {}
     for result in results:
         for receipt in result.receipts:
             out['receipts'].append(dict(id=receipt.id, status=receipt.status, reason=receipt.reason,
@@ -1643,28 +1654,49 @@ def scratch_receipt(results, scratch: dict, others: dict) -> dict:
             if receipt.status in ('blocked', 'error', 'skipped') or not isinstance(receipt.cases, dict):
                 continue
             cases = receipt.cases
-            bad = set(cases.get('failed') or {})
+            bad = cases.get('failed') or {}
             qualified = set(cases.get('qualified') or ())
-            for key in set(cases.get('executed') or {}):
-                if key in qualified:
-                    file, _, rest = key.partition('::')
-                    name = rest.split('::')[-1].split('[', 1)[0]
-                    paths = [p for p in declared if p in (file, posixpath.normpath(posixpath.join(receipt.cwd, file)))]
-                else:
-                    name = key
-                    paths = [p for p in declared if key in declared[p]] if key not in taken else []
-                if len(paths) != 1 or name not in declared[paths[0]]:
-                    continue
-                (failed if key in bad else passed).add((paths[0], name))
-    wanted = {(p, n) for p, names in declared.items() for n in names}
-    out['cases'] = sorted(f'{p}::{n}: ' + ('failed' if (p, n) in failed else 'passed' if (p, n) in passed
-                                            else 'not executed') for p, n in wanted)
-    if failed & wanted:
-        return dict(out, status='failed', reason='a scratch case executed and failed')
-    missing = wanted - passed
+            for kind in ('executed', 'skipped', 'other'):
+                for key, count in (cases.get(kind) or {}).items():
+                    if key in qualified:
+                        file, _, rest = key.partition('::')
+                        name = rest.split('::')[-1].split('[', 1)[0]
+                        paths = [p for p in declared
+                                 if p in (file, posixpath.normpath(posixpath.join(receipt.cwd, file)))]
+                    else:
+                        name = key
+                        paths = [p for p in declared if key in declared[p]] if key not in taken else []
+                    if len(paths) != 1 or name not in declared[paths[0]]:
+                        continue
+                    seen = instances.setdefault((paths[0], name), {})
+                    if kind == 'executed':
+                        failed = min(int(bad.get(key, 0)), int(count))
+                        outcomes = ['failed'] * failed + ['passed'] * (int(count) - failed)
+                    else:
+                        outcomes = ['skipped' if kind == 'skipped' else 'not executed'] * int(count)
+                    seen.setdefault(key, []).extend(outcomes)
+    verdicts = {}
+    rows = []
+    for path, names in declared.items():
+        for name in names:
+            seen = instances.get((path, name), {})
+            outcomes = [o for runs in seen.values() for o in runs]
+            verdicts[(path, name)] = ('failed' if 'failed' in outcomes
+                                      else 'passed' if outcomes and set(outcomes) == {'passed'}
+                                      else 'not executed')
+            if not seen:
+                rows.append(f'{path}::{name}: not executed')
+            for key, runs in seen.items():
+                label = key if '::' in key else f'{path}::{key}'
+                rows.extend(f'{label}: {o}' for o in runs)
+    out['cases'] = sorted(rows)
+    if 'failed' in verdicts.values():
+        return dict(out, status='failed', reason='a scratch case instance executed and failed')
+    missing = [k for k, v in verdicts.items() if v != 'passed']
     if missing:
-        return dict(out, status='not run', reason=f'{len(missing)} declared scratch case(s) not shown executed')
-    return dict(out, status='passed', reason='every declared scratch case executed and passed')
+        return dict(out, status='not run',
+                    reason=f'{len(missing)} declared scratch case(s) with an instance not shown executed and passed')
+    return dict(out, status='passed', reason='every instance of every declared scratch case executed and passed')
 
 
 def _relative(cwd: str, operand: str, copy: Path) -> str:

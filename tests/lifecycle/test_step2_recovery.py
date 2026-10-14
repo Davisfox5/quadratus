@@ -1048,8 +1048,9 @@ def test_a_parallel_childs_reviewer_gets_the_scratch_rule_and_the_harness_runs_i
     assert sorted(t for t, _ in gates) == ["t1", "t2"] and all(g is None for _, g in gates), \
         "each child's own integration gate stays off"
     proofs = [p for p in H.result_json(replay).get("scratch_proofs") or [] if p["task"] == "t2"]
-    assert len(proofs) == 1 and proofs[0]["status"] == status, proofs
-    if variant == "passes":
+    expected = status if _sandboxed() or variant == "claimed" else "not run"
+    assert len(proofs) == 1 and proofs[0]["status"] == expected, proofs
+    if variant == "passes" and _sandboxed():
         assert proofs[0]["cases"] == ["tests/test_scratch_refusal.py::test_scratch_refusal: passed"]
         assert proofs[0]["receipts"] and all("command" not in r for r in proofs[0]["receipts"])
     if variant == "claimed":
@@ -1085,8 +1086,9 @@ def test_a_scratch_run_that_rewrites_handed_source_proves_nothing(tmp_path, monk
         with invocation("t1", "collaborator", probe=True, probe_checks=(check,)):
             fleet.invoke("openai:gpt-5.6-sol", label)
             seen[label] = (invocation_context.get() or {}).get("scratch_proof")
-    assert seen["clean"]["status"] == "passed"
-    assert seen["rewrites"]["status"] == "not run" and "handed file changed" in seen["rewrites"]["reason"]
+    assert seen["clean"]["status"] == ("passed" if _sandboxed() else "not run")
+    assert seen["rewrites"]["status"] == "not run"
+    assert ("handed file changed" if _sandboxed() else "no sandbox") in seen["rewrites"]["reason"]
     assert (tmp_path / "app.py").read_text() == "x = 1\n"
 
 
@@ -1106,3 +1108,104 @@ def test_a_node_case_name_a_handed_test_also_declares_is_not_scratch_identity():
     failed = GateReceipt(id="check", status="failed", reason="nonzero exit", required=True,
                          cases=case_record("✖ scratch only case (1.0ms)\n", "node"))
     assert scratch_receipt([GateResult(False, "gate suite", 1, "", (failed,))], unique, handed)["status"] == "failed"
+
+
+# -- root review of 1c14ea9: isolation and instance identity of the scratch run -----------
+
+def _scratch_fleet(tmp_path, monkeypatch, checks):
+    """A real Fleet whose codex review writes the scratch file its prompt
+    names into its copy; returns run(source) -> scratch_proof."""
+    import sys
+
+    from quadratus.config import Settings
+    from quadratus.delegation import invocation, invocation_context
+    from quadratus.integration import GateCommand
+    from quadratus.runtime import Fleet
+    project = tmp_path / "project"
+    (project / "tests").mkdir(parents=True)
+    (project / "app.py").write_text("x = 1\n")
+    (project / "tests" / "test_app.py").write_text("def test_x():\n    assert True\n")
+    monkeypatch.setattr("shutil.which", lambda name: f"/fake/bin/{name}")
+
+    def generate(self, key, provider, prompt, system, **kw):
+        (Path(provider.workdir) / "tests" / "test_scratch_refusal.py").write_text(prompt)
+        return "NO FINDINGS"
+    monkeypatch.setattr(Fleet, "_generate", generate)
+    fleet = Fleet(Settings(backend="cli"), project=project)
+    fleet.check_commands = tuple(checks)
+    check = GateCommand(id="check", argv=(sys.executable, "-m", "pytest", "-q", "tests"))
+
+    def run(source):
+        with invocation("t1", "collaborator", probe=True, probe_checks=(check,)):
+            fleet.invoke("openai:gpt-5.6-sol", source)
+            return (invocation_context.get() or {}).get("scratch_proof")
+    return project, run
+
+
+def _sandboxed() -> bool:
+    import os
+    import platform
+    return ((platform.system() == "Linux" and os.path.isfile("/usr/bin/bwrap"))
+            or (platform.system() == "Darwin" and os.path.exists("/usr/bin/sandbox-exec")))
+
+
+def test_a_scratch_run_writes_only_its_copy_and_cannot_read_private_or_live_paths(tmp_path, monkeypatch):
+    """Root review of 1c14ea9: under the gate runner a reviewer's scratch test
+    changed a marker outside its copy and the proof still said passed. The
+    run now sits in a sandbox holding it to the reviewer's copy policy: the
+    copy is the only writable root, the live project and every absolute path
+    an approved check names outside the copy are unreadable, and no network.
+    Each forbidden test below passes only if its action succeeds, so a
+    passed proof would mean the boundary failed. Where no sandbox exists the
+    run is not run, never executed."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "marker.txt"
+    marker.write_text("held\n")
+    private = tmp_path / "private-grading"
+    private.mkdir()
+    (private / "answers.txt").write_text("PRIVATE-ANSWER-SENTINEL\n")
+    project, run = _scratch_fleet(tmp_path, monkeypatch, (
+        "python -m pytest -q tests", f"python3 -m pytest -q {private}"))
+    write = (f"from pathlib import Path\n\n\ndef test_scratch_refusal():\n"
+             f"    Path({str(marker)!r}).write_text('modified\\n')\n")
+    read_private = (f"from pathlib import Path\n\n\ndef test_scratch_refusal():\n"
+                    f"    assert 'PRIVATE-ANSWER' in Path({str(private / 'answers.txt')!r}).read_text()\n")
+    read_live = (f"from pathlib import Path\n\n\ndef test_scratch_refusal():\n"
+                 f"    assert Path({str(project / 'app.py')!r}).read_text() == 'x = 1\\n'\n")
+    positive = "def test_scratch_refusal():\n    assert 1 + 1 == 2\n"
+    proofs = {name: run(source) for name, source in
+              (("write", write), ("private", read_private), ("live", read_live), ("positive", positive))}
+    assert marker.read_text() == "held\n", "a scratch run never writes outside its copy"
+    for name in ("write", "private", "live"):
+        assert proofs[name]["status"] != "passed", (name, proofs[name])
+        assert "PRIVATE-ANSWER-SENTINEL" not in repr(proofs[name])
+    if _sandboxed():
+        assert all(proofs[n]["status"] == "failed" for n in ("write", "private", "live")), proofs
+        assert proofs["positive"]["status"] == "passed", proofs["positive"]
+    else:
+        assert all(p["status"] == "not run" and "sandbox" in p["reason"] for p in proofs.values()), proofs
+    assert not (project / "tests" / "test_scratch_refusal.py").exists()
+
+
+@pytest.mark.parametrize("false_case,status", [
+    ("    assert value or not value\n", "passed"),
+    ("    if not value:\n        pytest.skip('false instance')\n", "not run"),
+    ("    assert value\n", "failed"),
+], ids=["all-pass", "false-skipped", "false-failed"])
+def test_every_parametrized_instance_of_a_scratch_case_must_execute_and_pass(
+        tmp_path, monkeypatch, false_case, status):
+    """Root review of 1c14ea9: a parametrized scratch case whose True
+    instance passed and False instance skipped was collapsed to its function
+    and passed. Each instance keeps its own id: a skipped instance is not
+    run, a failed one is failed, and only all instances passing is passed."""
+    _, run = _scratch_fleet(tmp_path, monkeypatch, ("python -m pytest -q tests",))
+    source = ("import pytest\n\n\n@pytest.mark.parametrize('value', [True, False])\n"
+              "def test_every_case(value):\n" + false_case)
+    proof = run(source)
+    if not _sandboxed():
+        assert proof["status"] == "not run"
+        return
+    assert proof["status"] == status, proof
+    cases = proof["cases"]
+    assert any("test_every_case[True]" in c for c in cases) and any("test_every_case[False]" in c for c in cases)

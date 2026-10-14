@@ -806,6 +806,19 @@ Key design decisions already settled:
   Failed, skipped, absent, unnamed or a handed file changed is `failed`
   or `not run`, recorded unverified in `scratch_proofs`, never a MET.
   Nothing from the project's dependency trees is linked into the copy.
+- **A scratch run has the reviewer's authority, not the gate's** (root
+  review of 1c14ea9). Through the gate runner, a reviewer's scratch test
+  changed a marker outside its copy and the proof still said passed; the
+  gate's authority is not the reviewer's. `runtime._scratch_isolation` now
+  puts each scratch run in an OS sandbox matching `CODEX_SPEC.copy_args`:
+  the copy is the only writable root (TMPDIR moved inside it), no network,
+  and the live project plus every absolute path an approved check names
+  outside the copy are unreadable. Linux uses `/usr/bin/bwrap`, macOS
+  `/usr/bin/sandbox-exec`, both pinned paths, never PATH. No sandbox, or a
+  launcher refusal (`SANDBOX_REFUSAL`, e.g. a nested seatbelt under an
+  outer profile), is `not run`. The run uses the reviewer's model-facing
+  argv. And each pytest instance keeps its id: a parametrized case passes
+  only when every printed instance executed and passed.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.
