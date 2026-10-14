@@ -119,12 +119,51 @@ def test_actual_complete_file_receipt_clears_and_skip_stays_held(tmp_path, skip,
 def test_opt_in_restores_on_controlled_interruption():
     import quadratus.integration as integration
     import quadratus.project_run as project_run
-    before = integration.GateSuite, project_run.GateSuite
+    before = integration.GateSuite, project_run.GateSuite, integration.model_facing
     with pytest.raises(KeyboardInterrupt):
         with installed():
             assert (integration.GateSuite, project_run.GateSuite) == (WholeFileGateSuite, WholeFileGateSuite)
             raise KeyboardInterrupt('synthetic controlled pause')
-    assert (integration.GateSuite, project_run.GateSuite) == before
+    assert (integration.GateSuite, project_run.GateSuite, integration.model_facing) == before
+
+
+def test_workers_are_told_and_granted_the_real_discovery_command(tmp_path, monkeypatch):
+    import shlex
+    from types import SimpleNamespace
+
+    from quadratus import cli_providers, integration
+    from quadratus.cli_providers import ClaudeCLIProvider
+    from quadratus.config import Settings
+    from quadratus.project import Project
+    from quadratus.runtime import Fleet
+
+    populate(tmp_path)
+    monkeypatch.setattr('shutil.which', lambda name: f'/fake/bin/{name}')
+    provider = ClaudeCLIProvider(model='opus')
+    monkeypatch.setattr('quadratus.runtime.build_provider', lambda *a, **k: provider)
+    observed = {}
+
+    def launch(argv, **kwargs):
+        observed['argv'] = argv
+        return SimpleNamespace(stdout='{"result": "CHANGED: []", "is_error": false}',
+                               stderr='', returncode=0)
+
+    monkeypatch.setattr(cli_providers, '_launch', launch)
+    with installed():
+        # Same call-time lookup and join as project_run's approved checks.
+        plain = shlex.join(integration.model_facing(command().argv))
+        assert plain == shlex.join((command().argv[0], '-m', 'pytest', '-q', 'tests'))
+        raw = ('python3', '-m', 'unittest', 'discover', '-s', 'tests')
+        assert integration.model_facing(raw) == list(raw)
+        fleet = Fleet(Settings(backend='cli'), project=Project(tmp_path), allow_writes=True)
+        fleet.check_commands = (plain,)
+        assert fleet.lead_can_run('claude:opus', plain)
+        fleet.invoke('claude:opus', 'Run the configured checks.', allow_writes=True)
+    argv = observed['argv']
+    system = argv[argv.index('--system-prompt') + 1]
+    assert plain in system and 'Run these commands verbatim' in system
+    assert f'Bash({plain})' in argv
+    assert not any(MARKER in arg or '--quadratus-report' in arg for arg in argv)
 
 
 def test_real_default_discovery_and_explicit_inventory_have_the_same_population(tmp_path):

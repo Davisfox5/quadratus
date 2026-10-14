@@ -11,6 +11,7 @@ from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 
 from quadratus.integration import GateSuite as BaseGateSuite
+from quadratus.integration import model_facing as base_model_facing
 
 MARKER = "@all-pytest-files:"
 # Pinned pytest default discovery. Custom selection is refused, not guessed.
@@ -80,6 +81,15 @@ def render(command, project):
     return replace(command, argv=tuple(result))
 
 
+def model_facing(argv):
+    """Workers run ordinary discovery; only the trusted runner expands files.
+
+    This preserves the same population without leaking an operator marker
+    into the exact command workers are told and granted permission to run.
+    """
+    return base_model_facing([arg[len(MARKER):] if arg.startswith(MARKER) else arg for arg in argv])
+
+
 class WholeFileGateSuite(BaseGateSuite):
     """Logical marker stays stable across checkpoints; each executed receipt
     records the actual complete current file operands. Source changes and
@@ -112,11 +122,12 @@ def installed():
     """
     import quadratus.integration as integration
     import quadratus.project_run as project_run
-    previous = integration.GateSuite, project_run.GateSuite
-    if previous != (BaseGateSuite, BaseGateSuite):
+    previous = integration.GateSuite, project_run.GateSuite, integration.model_facing
+    if previous != (BaseGateSuite, BaseGateSuite, base_model_facing):
         raise RuntimeError("nested or unexpected selector installation")
     integration.GateSuite = project_run.GateSuite = WholeFileGateSuite
+    integration.model_facing = model_facing
     try:
         yield
     finally:
-        integration.GateSuite, project_run.GateSuite = previous
+        integration.GateSuite, project_run.GateSuite, integration.model_facing = previous
