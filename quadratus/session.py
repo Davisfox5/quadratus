@@ -2443,6 +2443,9 @@ class Session:
             block = self._writer_goal().strip()
             if block not in prompt:
                 prompt = block + "\n\n" + prompt
+            budget = self._writer_turn_budget_note(key, context.get('role'), allow_writes)
+            if budget and budget not in prompt:
+                prompt += "\n\n" + budget
         if context.get("role") != "closeout" and spec is not None and spec.scope is not None:
             if spec.scope.render() not in prompt:
                 prompt += "\n\n" + spec.scope.render()
@@ -8693,6 +8696,31 @@ class Session:
                 "from the files and notes in this prompt, which are current; have the edit "
                 f"written by about round {write_by}; keep the last rounds for running the "
                 "project's check and fixing what it shows.")
+
+    def _writer_turn_budget_note(self, key: str, role, allow_writes: bool) -> str:
+        """The round budget in words for a capped writing call after the
+        draft: the cap the Fleet already applies to this role on this CLI,
+        and nothing else (r12 on 56ff155: t3's capped Grok revision spent
+        its 8 rounds on 19 reads, greps and commands and wrote nothing; its
+        prompt carried the goal and the headroom but no cap, which only the
+        draft was told). No note for an uncapped role, a CLI with no round
+        cap, or a call without the write grant."""
+        from .runtime import LEAD_CAPPED_ROLES
+        limit = self.config.lead_max_turns
+        if not limit or not allow_writes or role == "lead" or role not in LEAD_CAPPED_ROLES:
+            return ""
+        from .cli_providers import CLI_SPECS
+        spec = CLI_SPECS.get(key.partition(":")[0])
+        if spec is None or not spec.max_turns_flag:
+            return ""
+        write_by = max(max(1, limit // 3) + 1, (2 * limit) // 3)
+        return (f"## Your round budget\n"
+                f"This call has at most {limit} tool rounds. At round {limit} this call stops; the "
+                "edits already on disk are kept, and the task's checks, its reviewers and the final "
+                "audit still decide what happens to them. The findings, the goal and "
+                "your remaining room are in this prompt and are current: read only the files they name, "
+                f"have the edit written by about round {write_by}, and keep the last rounds for running "
+                "the project's check.")
 
     def _lead_prompt(
         self,

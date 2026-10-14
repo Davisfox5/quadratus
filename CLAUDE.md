@@ -854,6 +854,17 @@ Key design decisions already settled:
   nothing and changes no bound. Only the complete current block counts as
   already bound (root review of 21639d6): a copied heading over other text,
   or a block with another covered requirement, never suppresses it.
+- **A capped writer after the draft is told its round budget** (r12 on
+  56ff155). t3's capped Grok revision spent its 8 rounds on 19 reads,
+  greps and commands and wrote nothing; its prompt had the goal and the
+  headroom, but only the draft had ever been told a cap existed.
+  `_writer_turn_budget_note` adds it at the editing boundary for revision,
+  gate-fix and design-fix (`runtime.LEAD_CAPPED_ROLES`) with the write
+  grant, on a CLI with a round flag, using the draft's limit and planning
+  arithmetic. It says the call stops with its edits kept and that checks,
+  reviewers and the final audit still decide; no status promise. Codex,
+  security-fix and uncapped runs are told no cap. The cap itself is
+  unchanged.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.

@@ -1543,3 +1543,85 @@ def test_only_the_complete_current_goal_block_counts_as_already_bound(tmp_path, 
     assert "R1: " + _CONTRACT in prompt and goal in prompt
     if preface in ("already-bound", "ordinary"):
         assert prompt.startswith(current + "\n\n" if preface == "ordinary" else body)
+
+
+# -- r12 on 56ff155: a capped writer after the draft is told its round budget --------------
+
+@pytest.mark.parametrize("case", ["claude-revision", "grok-gate-fix", "codex-revision", "uncapped"])
+def test_a_capped_writing_call_after_the_draft_is_told_its_real_round_budget(tmp_path, monkeypatch, case):
+    """r12: t3's capped Grok revision spent its 8 rounds reading and wrote
+    nothing; its prompt had the goal and headroom, but only the draft was
+    ever told a cap existed. Revision, gate-fix and design-fix calls on a
+    CLI that takes the cap now carry the same budget in words, once. A
+    codex writer (no round cap), a run with no cap, the reviewers and the
+    draft get no writer note; nothing changes the cap itself."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    tier = {"grok-gate-fix": "simple", "codex-revision": "standard"}.get(case, "complex")
+    declared = DECL_SIMPLE.replace("backend simple", "backend " + tier)
+    failing = case == "grok-gate-fix"
+
+    def lead(call, replay):
+        H.write(call, {"app.py": "def add(a, b):\n    return a - b\n" if failing else fixed})
+        return 'Implemented add.\nCHANGED: ["app.py"]'
+
+    def revision(call, replay):
+        H.write(call, {"app.py": _TYPED})
+        return 'Revised add.\nCHANGED: ["app.py"]'
+
+    def gate_fix(call, replay):
+        H.write(call, {"app.py": fixed})
+        return 'Fixed add.\nCHANGED: ["app.py"]'
+
+    review = "NO FINDINGS" if failing else _FINDING + "\nREVIEW: COMPLETE"
+    settings = Settings(backend="cli", lead_max_turns=None if case == "uncapped" else 8)
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(declared), lead=lead, revision=revision,
+                                                 collaborator=lambda c, r: review,
+                                                 recheck=lambda c, r: "RESOLVED", **{"gate-fix": gate_fix}),
+                   files=FILES, max_tasks=1, settings=settings, record_complete=False)
+    note = ("This call has at most 8 tool rounds. At round 8 this call stops; the edits already on disk are "
+            "kept, and the task's checks, its reviewers and the final audit still decide what happens to them.")
+    writers = [c for c in replay.calls if c.role in ("revision", "gate-fix")]
+    assert [c.role for c in writers] == (["gate-fix"] if failing else ["revision"])
+    others = [c for c in replay.calls if c.role in ("lead", "collaborator", "recheck")]
+    assert others and all(note not in c.prompt for c in others), "no writer note outside the writer roles"
+    draft = replay.of("lead")[0]
+    capped_cli = draft.vendor in ("grok", "claude")
+    assert draft.prompt.count("## Your round budget") == (1 if capped_cli and case != "uncapped" else 0)
+    if case in ("claude-revision", "grok-gate-fix"):
+        assert writers[0].vendor == ("grok" if failing else "claude")
+        assert writers[0].prompt.count(note) == 1, "the real cap, once"
+        assert "have the edit written by about round 5" in writers[0].prompt
+    else:
+        assert all(note not in c.prompt and "## Your round budget" not in c.prompt for c in writers)
+        if case == "codex-revision":
+            assert writers[0].vendor == "codex", "a CLI with no round cap is told none"
+
+
+@pytest.mark.parametrize("role,key,writes,told", [
+    ("design-fix", "claude:opus", True, True),
+    ("security-fix", "claude:opus", True, False),
+    ("design-fix", "openai:gpt-5.6-sol", True, False),
+    ("design-fix", "claude:opus", False, False),
+])
+def test_the_writer_budget_note_follows_the_cap_the_fleet_applies(tmp_path, role, key, writes, told):
+    """At the editing boundary: the note goes only where the runtime caps the
+    call (LEAD_CAPPED_ROLES on a CLI with a round flag) and the call can
+    write. security-fix is not capped and codex has no round cap, so neither
+    is told one."""
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.session import Session, SessionConfig, TaskSpec
+    seen = []
+
+    def invoke(k, prompt, *, allow_writes=False):
+        seen.append(prompt)
+        return 'Done.\nCHANGED: []'
+
+    (tmp_path / "app.py").write_text("def add(a, b):\n    return a + b\n")
+    session = Session("Implement add.", ArtifactStore(tmp_path / ".quadratus"), invoke, available=lambda k: True,
+                      config=SessionConfig(project=tmp_path, allow_writes=writes, lead_max_turns=8))
+    session._active_spec = TaskSpec("t1", "Implement add.")
+    session._edit(key, "Task: Implement add.\n\nFix it.", role=role)
+    assert ("This call has at most 8 tool rounds" in seen[-1]) is told
+    if told:
+        assert "the edits already on disk are kept" in seen[-1] and "unreviewed" not in seen[-1]
+        assert "unfinished" not in seen[-1] and "unchecked" not in seen[-1], "no status promise"
