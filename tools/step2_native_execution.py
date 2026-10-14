@@ -55,6 +55,26 @@ def cleanup_owned_scratch(home):
     shutil.rmtree(path)
 
 
+def _one_clause(line):
+    """The line is exactly one balanced clause, then at most a comment: a
+    second clause after the first would escape the per-line check."""
+    depth, quoted, escaped = 0, False, False
+    for index, char in enumerate(line):
+        if quoted:
+            escaped, quoted = (not escaped and char == "\\"), quoted and (escaped or char != '"')
+            continue
+        if char == '"':
+            quoted = True
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                rest = line[index + 1:].strip()
+                return not rest or rest.startswith(";")
+    return False
+
+
 def protected_gate_argv(argv, outer_profile, *, cwd):
     """One macOS sandbox applies both the answer and scratch-copy policies.
 
@@ -87,7 +107,8 @@ def protected_gate_argv(argv, outer_profile, *, cwd):
         if not line.strip() or line.lstrip().startswith(";"):
             continue
         operation = re.match(r"\((allow|deny)\s+([^\s()]+)", line.strip())
-        if operation is None or (operation[1] == "allow" and not operation[2].startswith("file-read")):
+        if operation is None or (operation[1] == "allow" and not operation[2].startswith("file-read")) \
+                or not _one_clause(line.strip()):
             raise ValueError("Parent policy could expand scratch authority")
     profile = "\n".join([*expected, lines[4], *parent, *hidden]) + "\n"
     return ["/usr/bin/sandbox-exec", "-p", profile, *argv[3:]]

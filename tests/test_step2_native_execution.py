@@ -345,3 +345,40 @@ def test_parent_allow_exception_cannot_expand_scratch_authority(tmp_path, operat
     parent.write_text(f'(version 1)\n(allow default)\n(allow {operation})\n')
     with pytest.raises(ValueError, match="expand scratch authority"):
         protected_gate_argv(['/usr/bin/sandbox-exec', '-p', _scratch_policy(copy), 'python3'], parent, cwd=copy)
+
+
+@pytest.mark.parametrize("line", [
+    '(deny file-read* (subpath "/answers")) (allow file-write* (subpath "/out"))',
+    '(allow file-read* (subpath "/x")) (allow network*)',
+])
+def test_a_second_clause_on_one_parent_line_is_refused(tmp_path, line):
+    """Only the first clause of a line was checked, so a write or network
+    allow after it was composed after the scratch denies and won."""
+    from tools.step2_native_execution import protected_gate_argv
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    parent = tmp_path / "outer.sb"
+    parent.write_text(f'(version 1)\n(allow default)\n{line}\n')
+    with pytest.raises(ValueError, match="expand scratch authority"):
+        protected_gate_argv(['/usr/bin/sandbox-exec', '-p', _scratch_policy(copy), 'python3'], parent, cwd=copy)
+
+
+@pytest.mark.parametrize("line", [
+    '(allow file-read-data (subpath "/x"))',
+    '(deny file-read* (subpath "/odd)(path"))',
+    '(deny file-read* (subpath "/a\\"b"))',
+    '(deny file-read* (subpath "/answers")) ; note (allow file-write*)',
+])
+def test_one_clause_parent_lines_still_compose(tmp_path, line):
+    """Quoted parentheses, an escaped quote and a trailing comment are one
+    clause; each composes once, before the scratch read denies."""
+    from tools.step2_native_execution import protected_gate_argv
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    parent = tmp_path / "outer.sb"
+    parent.write_text(f'(version 1)\n(allow default)\n{line}\n')
+    hidden = '(deny file-read* (subpath "/private/live"))\n'
+    result = protected_gate_argv(['/usr/bin/sandbox-exec', '-p', _scratch_policy(copy) + hidden, 'python3'],
+                                 parent, cwd=copy)
+    assert result[2].count(line) == 1
+    assert result[2].rstrip().endswith(hidden.strip())
