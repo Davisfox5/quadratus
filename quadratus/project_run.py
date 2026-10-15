@@ -950,15 +950,22 @@ def _budget_fields(budget) -> dict:
     remaining = int(total) - int(used)
     if remaining >= reserve:
         return {'budget': snapshot, 'budget_note': None}
+    from .run_budget import SUMMARY_CALL_RESERVE_TOKENS
+    # RunBudget.reserve's own shaping: the smaller of the two, never more.
+    shaped = min(reserve, SUMMARY_CALL_RESERVE_TOKENS)
     unknown = int(snapshot.get('unknown_usage_attempts') or 0)
+    shape = (f'A summary-only call whose CLI enforces one turn reserves {shaped:,} here, the same as an '
+             'ordinary call, so it could not have been admitted either.' if shaped >= reserve else
+             f'A summary-only call whose CLI enforces one turn reserves {shaped:,} here, so one '
+             + ('could still have been admitted.' if remaining >= shaped else 'could not have been admitted either.'))
     text = (f'At the end of the run {remaining:,} reported tokens remained, below the ordinary-call '
             f'reserve of {reserve:,}: no further ordinary call could have been admitted. This is an '
-            'observation, not the run\'s stop. A summary-only call whose CLI enforces one turn reserves '
-            'less, so it is not a statement that no call of any kind fit.'
+            'observation, not the run\'s stop. ' + shape
             + (f' {unknown} attempt(s) reported no usage, so the true remainder may be lower.' if unknown else ''))
     return {'budget': snapshot, 'budget_note': {
         'remaining_reported_tokens': remaining, 'ordinary_call_reserve': reserve,
-        'stop_reason': snapshot.get('stop_reason') or '', 'unknown_usage_attempts': unknown, 'text': text}}
+        'summary_call_reserve': shaped, 'stop_reason': snapshot.get('stop_reason') or '',
+        'unknown_usage_attempts': unknown, 'text': text}}
 
 
 def _requirements_record(session):

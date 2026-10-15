@@ -175,7 +175,17 @@ def test_the_terminal_record_says_when_the_rest_could_not_admit_an_ordinary_call
     note = _budget_fields(budget(1_858_053))["budget_note"]
     assert note["remaining_reported_tokens"] == 141_947 and note["ordinary_call_reserve"] == 200_000
     assert note["stop_reason"] == "" and "not the run's stop" in note["text"]
-    assert "reserves less, so it is not a statement that no call of any kind fit" in note["text"]
+    assert note["summary_call_reserve"] == 64_000
+    assert "reserves 64,000 here, so one could still have been admitted." in note["text"]
+    for reserve, used in ((600, 2_000_000 - 500), (64_000, 2_000_000 - 500)):
+        # At or under the summary allowance the shaped reservation is the
+        # same as the ordinary one, never less (root on b4d8398).
+        same = _budget_fields(budget(used, reserve=reserve))["budget_note"]
+        assert same["summary_call_reserve"] == reserve
+        assert f"reserves {reserve:,} here, the same as an ordinary call, so it could not have been admitted either." \
+            in same["text"] and "less" not in same["text"]
+    tight = _budget_fields(budget(2_000_000 - 50_000))["budget_note"]
+    assert "reserves 64,000 here, so one could not have been admitted either." in tight["text"]
     assert _budget_fields(budget(1_000_000))["budget_note"] is None, "room left: no note"
     assert _budget_fields(budget(1_858_053, reserve=0))["budget_note"] is None, "no reserve configured"
     assert "may be lower" in _budget_fields(budget(1_900_000, unknown=2))["budget_note"]["text"]
@@ -209,6 +219,7 @@ def test_a_reserve_starved_terminal_keeps_its_own_stop_and_outcome(tmp_path, mon
     result = H.result_json(tight)
     assert H.result_json(roomy)["budget_note"] is None
     assert result["budget_note"]["remaining_reported_tokens"] == 500
+    assert "reserves 600 here, the same as an ordinary call" in result["budget_note"]["text"]
     assert (tight.result.completed, tight.result.error) == (roomy.result.completed, roomy.result.error)
     assert result["workflow"]["run"] == H.result_json(roomy)["workflow"]["run"], "no new fact"
     assert json.dumps(result["budget"]["stop_reason"]) == json.dumps(H.result_json(roomy)["budget"]["stop_reason"])
