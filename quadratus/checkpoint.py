@@ -55,7 +55,8 @@ _CARRIED = (
     "original_test_runs", "requirement_audits", "requirement_reviews", "verification_handoffs",
     "verification_dispatched", "policy_plans", "parallel_batches", "_partial_tasks", "_cap_baselines",
     "_turn_limited_in_a_row", "_requirement_reopens", "_covers_corrections", "_original_tests",
-    "_run_start_contents", "_original_selection", "scratch_proofs",
+    "_run_start_contents", "_original_selection", "scratch_proofs", "evidence_requests",
+    "unresolved_reviews",
 )
 #: State a checkpoint does not carry. Any of it present makes the point not
 #: resumable, rather than resuming a job whose record would be incomplete.

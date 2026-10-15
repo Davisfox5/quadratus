@@ -660,6 +660,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'unexecuted_acceptance': list(getattr(session, 'unexecuted_acceptance', []) or []) if session else [],
         # Harness runs of a reviewer's scratch test in its copy; never a MET.
         'scratch_proofs': list(getattr(session, 'scratch_proofs', []) or []) if session else [],
+        'evidence_requests': list(getattr(session, 'evidence_requests', []) or []) if session else [],
         'stale_capture_fixtures': stale_fixtures,
         'lineage': lineage,
         'resumable': interrupted,

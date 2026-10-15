@@ -921,6 +921,36 @@ Key design decisions already settled:
   typed-or-legacy set that blocks completion), what a later task took over,
   and recovery tasks used of the allowance. Records stay as written; no
   CONTINUES is stripped, and the allowance stop is unchanged.
+- **A disputed finding is tested by the harness, never argued** (Davis,
+  2026-10-15, after R18's false audit finding). Reviewers and the auditor
+  state a finding with its condition, location and a concrete failing
+  example. The orchestrator may reply `EVIDENCE: <R<n>|U<n>|none>`, a
+  `FILE:` line and one new test file (`_parse_evidence`). The harness runs it
+  with the configured discovering checks in a disposable, sandboxed copy of
+  the current source (`_run_evidence` over `runtime._scratch_proof`); no
+  command line or path goes to the planner or the auditor. Failed confirms
+  the finding with no further call; not run (skip, no sandbox, a test that
+  rewrote handed source, a project that moved) leaves it held; passed goes
+  once to the model that made the finding, which reassesses it alone
+  (`_reassess`). An audit MET there still needs a resolved citation and is
+  lowered by any standing NOT RUN record; it sets the requirement met and
+  the next DONE audits everything again with the evidence in its prompt
+  (`_evidence_block`). A review RESOLVED closes exactly that held finding.
+  Only the latest audit's own NOT MET lines on the current source and held,
+  non-deferred review findings can be tested (`_disputable`); one request per
+  finding per source, kept in `evidence_requests` (checkpointed, written at
+  a quiescent point before the planner is re-asked). Requests share the
+  decision's ASK bound; the reassessment is an ordinary reserved call.
+  Held review findings with COVERS, a slot left and a discovering check are
+  debt instead of a FindingsOpen stop (`_review_debt_continues`), as a
+  failed check is; they still block completion.
+  After the task cap's final audit (root boundary on 83b658c: seven
+  controls stopped RequirementsUnmet at max_tasks=1 with 8 of 20 calls
+  used and no challenge), `_final_challenge` offers the seated orchestrator
+  the same channel read-only: no task, writer, slot or recovery, only the
+  orchestrator's turns and the same auditor's one reassessment, each a
+  reserved call. A budget that cannot admit one ends the challenge and the
+  audit stands; a requirement leaves the unmet set only when reassessed MET.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.
