@@ -899,6 +899,16 @@ Key design decisions already settled:
   its own cap takes the capped paths. Whether it helps is unproven.
   A cap raised inside a size trim is tagged and never read as a no-edit
   revision (root review of b5ea0ef: it bought a third writer call).
+- **A capped draft past the size stop gets the same one trim** (R16 on
+  78f76bb). t2's draft stopped at its cap with 153 in-path lines against a
+  stated 85 and failed on scope with both cycles unused.
+  `_trim_capped_draft` gives its kept edits the r13 trim (charged as the
+  first cycle, only while one is left after it, prompt stating the cap and
+  aiming at the stated bound). Under the stop it is a capped draft like
+  any other: the cap stays recorded and the existing capped paths decide
+  (the last-slot review, the final-batch child review, or the capped
+  close). Still over fails as before; a capped trim goes straight to the
+  capped close; a path breach gets no trim.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.

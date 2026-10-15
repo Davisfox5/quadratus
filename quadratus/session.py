@@ -3462,6 +3462,48 @@ class Session:
                 "changed no file: the source is byte-identical to before it. The findings above are "
                 "unchanged and still open. This attempt is charged to the task's fix allowance.")
 
+    def _trim_capped_draft(self, lead, spec, task, exc, before):
+        """A capped initial draft whose kept edits crossed the size stop inside
+        their paths: one trim from the fix allowance, as a finished draft gets
+        (r13). Returns None when it does not apply, True when the trim landed
+        under the stop, False when the trim itself stopped at its cap; still
+        past the stop it raises the trim's TaskFailed, as before.
+
+        Step 2 R16 on 78f76bb: t2's Grok draft stopped at its 8-round cap
+        with 153 changed lines inside its paths against a stated 85, and
+        _close_turn_limited failed it on scope with both fix cycles unused.
+        Brought under the stop, the work is a capped draft like any other:
+        the native cap stays recorded, and the existing capped paths decide
+        (the last-slot review, the final-batch child review after the merge
+        gate, or the capped close). The trim is charged as the task's first
+        cycle and offered only while a cycle is left after it. A capped trim
+        goes straight to the capped close, never to another writer call."""
+        if not self._writes() or spec.scope is None or self.config.max_fix_cycles <= 1:
+            return None
+        state = self._inspect_partial_edits(before)
+        if not state["inspected"] or not state["changed"]:
+            return None
+        report = self._measure_scope(spec, before)
+        if report is None or report.blocking or not report.oversized or report.max_lines is None:
+            return None
+        stop = int(report.max_lines * report.overrun_ratio)
+        self._count("revision")
+        self._note(f"task {spec.task_id}: capped draft crossed the size stop ({report.changed_lines} > {stop}); "
+                   "one trim from the remaining fix allowance")
+        task.keep(json.dumps(dict(task=spec.task_id, changed_lines=report.changed_lines, stop=stop,
+                                  max_lines=report.max_lines, spent=1, after="capped draft", turns=exc.turns,
+                                  allowance=self.config.max_fix_cycles)),
+                  kind="scope-trim", author=lead)
+        try:
+            self._edit(lead, self._trim_prompt(spec, report, stop, what="capped draft", turns=exc.turns))
+        except TurnLimitReached:
+            return False
+        if self._outcome is not None:
+            self._outcome.note("failed", f"the capped draft made the change {report.changed_lines} lines, past "
+                                         f"the stop at {stop}; one call from the fix allowance brought it "
+                                         "back", terminal=False).recovered = True
+        return True
+
     def _trim_overrun(self, lead, spec, task, failure, *, spent: int, what: str) -> str:
         """One call, charged as a fix cycle, to bring a size-only overrun back
         under the stop; re-raises ``failure`` when it does not qualify: another
@@ -3491,15 +3533,17 @@ class Session:
                                          "back", terminal=False).recovered = True
         return reply
 
-    def _trim_prompt(self, spec: TaskSpec, report, stop: int, *, what: str = "revision") -> str:
+    def _trim_prompt(self, spec: TaskSpec, report, stop: int, *, what: str = "revision", turns=None) -> str:
         # R15: asked for "at most {stop}", the draft trim landed at 152 against
         # 150, as r11's revision had at 151: the model aims at the number it
         # is given. The target is the task's own stated bound; the stop is
         # still the only line that fails the task.
         target = ("Aim for about {bound} lines, the task's stated bound; the run stops at {stop}, and a "
                   "change even one line past {stop} fails the task. ")
-        if what == "draft":
-            ask = ("Your draft made this task's change {n} lines (tests count in full), past the run's "
+        if what in ("draft", "capped draft"):
+            ask = (("Your draft stopped at its {turns}-round limit; the edits it made are kept. "
+                    if what == "capped draft" else "")
+                   + "Your draft made this task's change {n} lines (tests count in full), past the run's "
                    "stop at {stop} for a stated bound of ~{bound}. The work is kept exactly as it is now; "
                    "nothing was reverted. Bring the change down by removing what neither the task nor the "
                    "goal asked for. " + target + "Do not remove behaviour the task or the goal "
@@ -3512,7 +3556,7 @@ class Session:
                    "finding or a test that shows one. If it cannot fit, change ")
         return (
             f"Task: {spec.description}\n\n"
-            + ask.format(n=report.changed_lines, stop=stop, bound=report.max_lines)
+            + ask.format(n=report.changed_lines, stop=stop, bound=report.max_lines, turns=turns or "?")
             + "nothing more and write a line 'BLOCKER: <what> needs about N more lines'; the task then "
             "stops at the size limit as before."
             + _revision_changed_delivery(self._interim_edits_note())
@@ -4156,6 +4200,10 @@ class Session:
         try:
             draft = self._draft_with_channels(lead, spec, task)
         except TurnLimitReached as exc:
+            trimmed = self._trim_capped_draft(lead, spec, task, exc, before)
+            if trimmed is False:
+                return self._close_turn_limited(lead, spec, task, exc, before)
+            charged = 1 if trimmed else 0
             draft, collaborators = self._capped_final_draft(lead, spec, task, exc, before, collaborators)
             if draft is None:
                 return self._close_turn_limited(lead, spec, task, exc, before)
