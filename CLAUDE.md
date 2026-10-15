@@ -951,6 +951,24 @@ Key design decisions already settled:
   orchestrator's turns and the same auditor's one reassessment, each a
   reserved call. A budget that cannot admit one ends the challenge and the
   audit stands; a requirement leaves the unmet set only when reassessed MET.
+  A proof is bound to `_evidence_identity` (source, effective gate or
+  inherited checks, root, excludes) and relied on only while it holds:
+  drift after the run spends no reassessment, drift during it discards the
+  verdict (root review of 8f68ea0). The request is checkpointed before it
+  runs and its receipt before the reassessment is reserved; the run's
+  receipts and check ids stay on the record, never in a model prompt. A
+  checkpoint from the cap's challenge carries `_cap_goal` and
+  `_final_audit` and is the one spent-slot checkpoint a resume admits: it
+  finishes the decision with no goal question, audit, execution or
+  reassessment repeated. Evidence files are at most 16,000 bytes and shown
+  to the reassessor whole.
+  Every reassessment reads `_authority_context`, the same block the final
+  audit reads (verbatim goal, the requirements judged, redacted check facts
+  and configured checks, decisions and operator rulings, design evidence,
+  NOT RUN records), plus `_EVIDENCE_AUTHORITY`: a test cannot authorize
+  another reading or stand in for renders or unrun checks. A review
+  reassessment gets the goal and its task's covered requirements, not only
+  the generated task text (root review of 8f68ea0).
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.

@@ -424,3 +424,168 @@ def test_a_final_challenge_that_does_not_establish_the_requirement_leaves_it_hel
     assert not replay.result.completed and "RequirementsUnmet" in (replay.result.error or "")
     assert [c.task for c in _writers(replay)] == ["t1"], "no writer after the cap"
     assert (replay.project / "ratio.py").read_text() == source
+
+
+# -- root review of 8f68ea0: proof identity and durability ------------------------------
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("drift", ["source-after-run", "gate-after-run", "source-during-reassessment"])
+def test_a_passing_proof_is_relied_on_only_while_its_source_and_checks_hold(tmp_path, monkeypatch, drift):
+    """Root on 8f68ea0: the proof's source was hashed before execution and
+    never compared again, so a change to the project, or a gate replaced by
+    the same command with minimum_tests=999, between the real run and the
+    reassessment let the same auditor's MET stand on stale evidence. The
+    proof is now bound to the source and the effective checks: drift after
+    the run spends no reassessment, drift during it discards the verdict,
+    and R1 stays NOT MET either way."""
+    from quadratus.integration import IntegrationGate
+    from quadratus.session import Session
+    if not _sandboxed():
+        pytest.skip("no scratch sandbox here")
+    real = Session._run_evidence
+
+    def run_evidence(self, path, text):
+        receipt = real(self, path, text)
+        assert receipt["status"] == "passed", receipt
+        if drift == "source-after-run":
+            (Path(self.project) / "ratio.py").write_text(_SAFE + "\n# changed after the proof\n")
+        elif drift == "gate-after-run":
+            gate = self.config.integration_gate
+            assert isinstance(gate, IntegrationGate), type(gate)
+            self.config.integration_gate = IntegrationGate(gate.command, cwd=gate.cwd, timeout=gate.timeout,
+                                                           minimum_tests=999)
+        return receipt
+    monkeypatch.setattr(Session, "_run_evidence", run_evidence)
+    if drift == "source-during-reassessment":
+        real_invoke = Session._invoke_model
+
+        def invoke(self, key, prompt, *a, **kw):
+            reply = real_invoke(self, key, prompt, *a, **kw)
+            if REASSESS in prompt:
+                (Path(self.project) / "ratio.py").write_text(_SAFE + "\n# changed during the reassessment\n")
+            return reply
+        monkeypatch.setattr(Session, "_invoke_model", invoke)
+    replay = _ratio_run(tmp_path, monkeypatch)
+    (record,) = _records(replay)
+    assert record["receipt"]["status"] == "passed"
+    assert record["disposition"].startswith("held: the source or checks changed"), record["disposition"]
+    assert bool(_reassessments(replay)) == (drift == "source-during-reassessment"), \
+        "no reassessment is spent on a proof that no longer holds"
+    assert record["execution"]["checks"] and record["execution"]["receipts"], "runner identity kept privately"
+    assert not replay.result.completed and "RequirementsUnmet" in (replay.result.error or "")
+    status = (H.result_json(replay).get("requirements") or {}).get("status") or {}
+    assert status.get("R1", "").startswith("NOT MET")
+
+
+@pytest.mark.requirements_ledger
+def test_an_interrupted_challenge_resumes_with_its_proof_and_never_replays_it(tmp_path, monkeypatch):
+    """Root on 8f68ea0: interrupted at the reassessment's entry, after a real
+    passing proof, the checkpoint still held evidence_requests=[]. The
+    request is now durable before it runs and its receipt before the
+    reassessment is reserved. The resumed episode carries E1 and the spent
+    allowance; it does not ask the goal question, audit, execute or
+    reassess again, and the run ends RequirementsUnmet within the job's
+    allowance."""
+    from quadratus import checkpoint
+    from quadratus.session import Session
+    from tests.lifecycle.test_step2_recovery import _budget, _episode
+    if not _sandboxed():
+        pytest.skip("no scratch sandbox here")
+    real = Session._reassess
+    fired = []
+
+    def reassess(self, *a, **kw):
+        if not fired:
+            fired.append(True)
+            raise KeyboardInterrupt
+        return real(self, *a, **kw)
+    monkeypatch.setattr(Session, "_reassess", reassess)
+    replay = _ratio_run(tmp_path, monkeypatch)
+    first = Path(replay.result.run_dir)
+    assert "KeyboardInterrupt" in (replay.result.error or "")
+    body = checkpoint.load(first)
+    assert body["resumable"], body.get("uncarried")
+    carried = checkpoint._decode(body["state"]["evidence_requests"])
+    assert [(r["id"], r["receipt"]["status"], r["disposition"]) for r in carried] == [
+        ("E1", "passed", "held: reassessment not made")]
+    spent = _budget(first)
+    assert spent["in_flight"] == 0
+    before = len(replay.calls)
+    second = Path(_episode(replay, resume_from=first.name, max_tasks=1, limits=_ROOT_LIMITS).run_dir)
+    new = replay.calls[before:]
+    assert not [c for c in new if c.role in ("auditor", "orchestrator", "lead")], \
+        [(c.role, c.task) for c in new]
+    result = json.loads((second / "result.json").read_text())
+    assert [(r["id"], r["disposition"]) for r in result["evidence_requests"]] == [
+        ("E1", "held: reassessment not made")]
+    assert not result.get("completed") and "RequirementsUnmet" in (result.get("error") or "")
+    budget = _budget(second)
+    assert budget["carried_from_earlier_episodes"]["calls"] == spent["reserved_attempts"]
+    assert budget["reserved_attempts"] == spent["reserved_attempts"] + len(new) <= 20
+
+
+# -- root review: the reassessment keeps the original authority context ------------------
+
+_RULING = "Q: may safe_ratio return 0.0 for a zero divisor? -- A: no; RULING-4417 requires None"
+
+
+@pytest.mark.requirements_ledger
+def test_an_audit_reassessment_is_bound_by_the_rulings_checks_and_goal_of_the_original(tmp_path, monkeypatch):
+    """Root on 8f68ea0: with a real passing proof, the reassessment prompt
+    omitted ledger.rulings. It now reads the same authority context as the
+    final audit: verbatim goal, the requirement, the redacted check facts
+    and configured checks, decisions and operator rulings, NOT RUN records,
+    and the rule that a test cannot authorize another reading."""
+    from quadratus.session import Session
+    if not _sandboxed():
+        pytest.skip("no scratch sandbox here")
+    real = Session._audit_requirements
+
+    def audit(self, *a, **kw):
+        if _RULING not in self.memory.ledger.rulings:
+            self.memory.ledger.rulings.append(_RULING)
+        return real(self, *a, **kw)
+    monkeypatch.setattr(Session, "_audit_requirements", audit)
+    replay = _ratio_run(tmp_path, monkeypatch)
+    (judge,) = _reassessments(replay)
+    first = replay.of("auditor")[0]
+    assert _RULING in first.prompt, "the original audit had the ruling"
+    for needed in (_RULING, "## Goal (verbatim)", "Build the feature.", "R1: " + _RATIO_REQ,
+                   "## Latest project checks", "## Configured project checks",
+                   "A test cannot authorize a different reading"):
+        assert needed in judge.prompt, needed
+    for leak in (sys.executable, "--quadratus-report", "quadratus-review-"):
+        assert leak not in judge.prompt
+    assert replay.result.completed, replay.result.error
+
+
+@pytest.mark.requirements_ledger
+def test_a_review_reassessment_is_bound_by_the_original_goal_not_only_the_task_text(tmp_path, monkeypatch):
+    """Root on 8f68ea0: the peer reassessment had only the generated task
+    description. It now carries the verbatim goal and the task's covered
+    requirements as well, so a full-goal condition the task text left out
+    still binds the reviewer."""
+    if not _sandboxed():
+        pytest.skip("no scratch sandbox here")
+    goal = "Build the feature. GOAL-CONDITION-7: add must also accept negative integers."
+
+    def orchestrator(call, replay):
+        n = len(replay.of("orchestrator"))
+        return DECLARED if n == 1 else _request(target="U1") if n == 2 else "DONE"
+
+    def lead(call, replay):
+        H.write(call, {"app.py": FIXED})
+        return 'Implemented add.\nCHANGED: ["app.py"]'
+
+    replay = H.run(tmp_path, monkeypatch, Script(
+        orchestrator=orchestrator, lead=lead,
+        collaborator=lambda c, r: "BLOCKING: negative sums are not shown; at app.py add; example: add(-1, -2)\n"
+                                  "R1: MET - app.py:2",
+        recheck=lambda c, r: "UNRESOLVED: still open",
+        auditor=lambda c, r: "R1: MET - app.py:2", **{"requirements-review": lambda c, r: "COMPLETE"}),
+        files=FILES, max_tasks=3, record_complete=False, goal=goal)
+    judges = [c for c in replay.of("recheck") if "Result: passed" in c.prompt]
+    assert len(judges) == 1 and _records(replay)[0]["receipt"]["status"] == "passed"
+    for needed in ("GOAL-CONDITION-7", "## Goal (verbatim)", "R1: " + _R1, "## Task t1",
+                   "A test cannot authorize a different reading"):
+        assert needed in judges[0].prompt, needed

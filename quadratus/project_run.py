@@ -404,7 +404,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
                                        >= run_limits.max_reported_tokens
                                        or carried['elapsed_seconds'] >= run_limits.wall_seconds):
             raise checkpoint.CheckpointRefused("the job's allowance is spent; nothing is left to resume with")
-        if int(body['state'].get('slots_used') or 0) >= max_tasks:
+        if int(body['state'].get('slots_used') or 0) >= max_tasks and not body['state'].get('_final_audit'):
+            # A checkpoint written during the cap's final challenge carries
+            # the final audit, and resumes to finish that decision without
+            # asking, auditing or executing again; any other is spent.
             raise checkpoint.CheckpointRefused("the job's task slots are spent; nothing is left to resume with")
         prior = body.get('lineage') or {}
         lineage = dict(root=prior.get('root') or parent.name, parent=parent.name,

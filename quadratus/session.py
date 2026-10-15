@@ -1629,8 +1629,16 @@ _EVIDENCE_CHANNEL = (
     "reassesses that finding alone; nothing becomes met or resolved without that judgement. One "
     "request per finding per source. It never discharges a check that failed, skipped or did not run.")
 
-#: The one size an evidence file may have: a test, not a payload.
-_MAX_EVIDENCE_TEST_BYTES = 64_000
+#: What a test cannot do in a reassessment, whoever wrote it.
+_EVIDENCE_AUTHORITY = (
+    "The goal, the decisions and operator rulings, the configured checks and design evidence above bind "
+    "this judgement exactly as they bound the original one. A test cannot authorize a different reading "
+    "of the goal, a decision or a ruling, cannot stand in for missing renders or a design approval, and "
+    "cannot discharge a check that failed, skipped or did not run.")
+
+#: The one size an evidence file may have: a test, not a payload, and small
+#: enough that the reassessment is always shown the whole file.
+_MAX_EVIDENCE_TEST_BYTES = 16_000
 
 _EVIDENCE_HEAD = re.compile(r"\s*EVIDENCE\s*:\s*(\S+?)\s*(?:[-:—]\s*(.*))?$", re.IGNORECASE)
 _EVIDENCE_FILE = re.compile(r"\s*FILE\s*:\s*`?([^`\s]+)`?\s*$", re.IGNORECASE)
@@ -2333,6 +2341,10 @@ class Session:
         #: Capped tasks not yet finished by a task that names them in a
         #: CONTINUES line. Any entry blocks completion.
         self._partial_tasks: set = set()
+        #: The cap's goal answer and final audit, kept so a job resumed at the
+        #: cap (from an evidence checkpoint) is not asked or audited again.
+        self._cap_goal: Optional[bool] = None
+        self._final_audit: Optional[dict] = None
         self._done_refusal = ""
         self._requirement_reopens = 0
         self._covers_corrections = 0
@@ -6009,6 +6021,10 @@ class Session:
                 self._note(f"task {spec.task_id} did not resolve {', '.join(unresolved)}; stopping incomplete")
                 break
         else:
+            # Every slot is spent: a checkpoint written at the cap (an
+            # evidence challenge's durable point) resumes here, not at the
+            # last task's dispatch.
+            self._slots_used = used
             # Every slot went to a task and none of them stopped the loop, so
             # the orchestrator never had the turn that says the goal is met:
             # whenever the cap equalled the tasks the goal needed, completion
@@ -6338,9 +6354,21 @@ class Session:
                 raise RuntimeError(f"completion step {decision.step} requested twice")
             made.add(decision.step)
             if decision.step == CONFIRM_GOAL:
-                answers["goal_confirmed"] = bool(self._confirm_goal_met())
+                if site == CAP and self._cap_goal is not None:
+                    # A job resumed at the cap: its goal answer is on record.
+                    answers["goal_confirmed"] = self._cap_goal
+                else:
+                    answers["goal_confirmed"] = bool(self._confirm_goal_met())
+                    if site == CAP:
+                        self._cap_goal = answers["goal_confirmed"]
             elif decision.step == CHECK_REQUIREMENTS:
-                answers["requirements_satisfied"] = bool(self._requirements_satisfied(final=site == CAP))
+                # The cap's check is the final one (its challenge, _final_challenge);
+                # passed as state so the call's own seam stays argument-free.
+                self._final_check = site == CAP
+                try:
+                    answers["requirements_satisfied"] = bool(self._requirements_satisfied())
+                finally:
+                    self._final_check = False
                 answers["done_refusal"] = self._done_refusal or ""
             else:
                 self._verify_dependencies("at DONE")
@@ -7440,13 +7468,15 @@ class Session:
         self.requirement_reviews.append(dict(reviewer=reviewer, result="reviewed", added=added,
                                              ambiguous=disputed))
 
-    def _requirements_satisfied(self, final: bool = False) -> bool:
+    def _requirements_satisfied(self, final: Optional[bool] = None) -> bool:
         """Whether DONE may stand: every requirement covered, then audited met.
 
         Not satisfied means DONE goes back to the orchestrator with the gap
         named. No requirements listed means the ledger is inactive for this
         run; that is recorded, not invented.
         """
+        if final is None:
+            final = bool(getattr(self, "_final_check", False))
         ledger = self.memory.ledger
         refusal = self._original_tests_at_done()
         if refusal:
@@ -7502,9 +7532,9 @@ class Session:
         if self._explicit_tasks is not None:
             self._note("requirements no listed task claimed, left unjudged: "
                        + ", ".join(self.explicit["requirements_unclaimed"]))
-            verdicts = self._audit_requirements(ids=self.explicit["requirements_claimed"]) if claimed else {}
+            verdicts = self._audit_requirements(ids=self.explicit["requirements_claimed"], final=final) if claimed else {}
         else:
-            verdicts = self._audit_requirements()
+            verdicts = self._audit_requirements(final=final)
         unmet = {r: why for r, (ok, why) in verdicts.items() if not ok}
         for rid, (ok, why) in verdicts.items():
             status[rid] = "met (audited)" if ok else f"NOT MET: {why[:160]}"
@@ -7549,21 +7579,19 @@ class Session:
                     continue
         return found
 
-    def _audit_requirements(self, ids: Optional[List[str]] = None) -> dict:
-        """One read-only call: each requirement met or not, with evidence.
-        ``ids`` restricts the audit to those requirements (an explicit run
-        audits only what its listed tasks claimed); every listed requirement
-        otherwise."""
+    def _authority_context(self, audited: dict, ids=None) -> str:
+        """What binds any judgement of the delivered work against the goal:
+        the verbatim goal, the requirements judged, the harness's redacted
+        check facts and configured checks, the orchestrator's decisions and
+        operator rulings, the design evidence and its independent verdicts,
+        and what is not shown to have run. The final audit and every
+        evidence reassessment read this same context (root review of
+        8f68ea0: a reassessment without the rulings or the goal could be
+        led by a test to another reading)."""
         ledger = self.memory.ledger
-        audited = {r: t for r, t in ledger.requirements.items() if ids is None or r in ids}
-        auditor = self._auditor()
-        if auditor is None:
-            self.requirement_audits.append(dict(auditor=None, result="no auditor from another vendor available"))
-            return {r: (False, "no auditor from another vendor available") for r in audited}
-        before = self._capture_source() if self.project else None
         checks = _audit_check_facts(self.checks[-3:], self._source_fingerprint())
         configured = _configured_checks(self.config.integration_gate) if self.project else ""
-        prompt = (
+        return (
             f"## Goal (verbatim)\n\n{self.memory.goal.strip()}\n\n## Requirements\n\n"
             + "\n".join(f"{rid}: {text}" for rid, text in audited.items())
             + ("\n\nOnly the requirements listed above are audited; the others the goal names were "
@@ -7595,7 +7623,29 @@ class Session:
                 + "\nA design review verdict listed above is the independent approval of that task's "
                 "renders; where one reads APPROVED, do not report the approval as absent.")
                if self.design_checks else "")
-            + self._not_run_block()
+            + self._not_run_block())
+
+    def _audit_requirements(self, ids: Optional[List[str]] = None, final: bool = False) -> dict:
+        """One read-only call: each requirement met or not, with evidence.
+        ``ids`` restricts the audit to those requirements (an explicit run
+        audits only what its listed tasks claimed); every listed requirement
+        otherwise."""
+        ledger = self.memory.ledger
+        audited = {r: t for r, t in ledger.requirements.items() if ids is None or r in ids}
+        kept = self._final_audit if final else None
+        if (kept and kept.get("source") == self._source_fingerprint()
+                and kept.get("ids") == (sorted(ids) if ids is not None else None)):
+            # Resumed at the cap: the final audit of this exact source is on
+            # record, and asking again would be a second draw.
+            self._note("the final audit of this source is on record; it is not asked again")
+            return {r: (bool(v[0]), str(v[1])) for r, v in kept["verdicts"].items()}
+        auditor = self._auditor()
+        if auditor is None:
+            self.requirement_audits.append(dict(auditor=None, result="no auditor from another vendor available"))
+            return {r: (False, "no auditor from another vendor available") for r in audited}
+        before = self._capture_source() if self.project else None
+        prompt = (
+            self._authority_context(audited, ids)
             + self._evidence_block()
             + "\n\nYou are an independent auditor. The project in your working directory is the "
             "delivered work. The goal above is the authority; the requirements are this run's reading "
@@ -7650,6 +7700,10 @@ class Session:
                                                                        for r, (ok, why) in verdicts.items()},
                                             lowered=lowered, stated=[r for r in stated if r in audited],
                                             source=self._source_fingerprint() if self.project else None))
+        if final:
+            self._final_audit = dict(source=self.requirement_audits[-1]["source"],
+                                     ids=sorted(ids) if ids is not None else None,
+                                     verdicts={r: [ok, why] for r, (ok, why) in verdicts.items()})
         return verdicts
 
     # -- evidence loop -------------------------------------------------------
@@ -7667,9 +7721,15 @@ class Session:
         it MET on passing evidence (``_reassess``)."""
         if self._explicit_tasks is not None or not (self.project and self._discovering_checks()):
             return unmet
-        open_ = {rid: e for rid, e in self._disputable().items() if e["kind"] == "audit" and rid in unmet}
+        identity = self._evidence_identity()
+        tested = {tuple(r["key"][:2]) for r in self.evidence_requests if r.get("identity") == identity}
+        open_ = {rid: e for rid, e in self._disputable().items()
+                 if e["kind"] == "audit" and rid in unmet and ("audit", e["identity"]) not in tested}
         if not open_:
-            return unmet
+            # Nothing left to challenge, including after a resume: a request
+            # already made on this source and checks is never made again.
+            return {r: why for r, why in unmet.items()
+                    if not str(self.memory.ledger.requirement_status.get(r, "")).startswith("met (reassessed")}
         from .run_budget import RunBudgetExceeded
         seat = self.seat()
         self._note(f"final audit found {', '.join(unmet)} not met; offering {seat.key} a read-only challenge")
@@ -7748,14 +7808,30 @@ class Session:
                                                              .encode()).hexdigest()[:16])
         return out
 
+    def _evidence_identity(self) -> str:
+        """What an evidence proof is bound to: the source, the effective
+        gate (commands, cwd, timeouts, minimums; or the parent's approved
+        commands for a child), the project root and its excludes. Any drift
+        between execution and reliance holds the finding. Never shown to a
+        model."""
+        gate = self.config.integration_gate
+        checks = ("gate", _gate_identity(gate)) if gate is not None else (
+            "inherited", [dataclasses.asdict(c) if dataclasses.is_dataclass(c) else repr(c)
+                          for c in getattr(self, "_inherited_checks", None) or ()])
+        body = dict(source=self._source_fingerprint(), checks=checks,
+                    root=str(Path(self.project).resolve()) if self.project else "",
+                    excludes=sorted(map(str, self.config.project_excludes or ())))
+        return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:32]
+
     def _evidence_note(self) -> str:
         """The evidence channel, offered only where the harness can serve it
         (a configured check that discovers a new test file) and there is
         something to test: a disputable finding or a failure on record."""
         if not (self.project and self._discovering_checks()):
             return ""
-        source = self._source_fingerprint()
-        tested = {tuple(r["key"][:2]) for r in self.evidence_requests if r.get("source") == source}
+        identity = self._evidence_identity()
+        mine = [r for r in self.evidence_requests if r.get("identity") == identity]
+        tested = {tuple(r["key"][:2]) for r in mine}
         open_ = {fid: e for fid, e in self._disputable().items() if (e["kind"], e["identity"]) not in tested}
         failing = bool(self._partial_tasks) or bool(self.checks and not self.checks[-1].get("passed"))
         if not open_ and not failing:
@@ -7768,32 +7844,34 @@ class Session:
             "finding blocks completion until its reviewer resolves it."
             + (f"\nFindings you may test: {listed}." if listed else "")
             + ("\nAlready tested on this source: " + "; ".join(
-                f"{r['id']} on {r['target']}: {r['disposition'][:160]}" for r in self.evidence_requests
-                if r.get("source") == source) + "." if tested else ""))
+                f"{r['id']} on {r['target']}: {r['disposition'][:160]}" for r in mine) + "." if mine else ""))
 
     def _run_evidence(self, path: str, text: str) -> dict:
         """The harness's own run of one new test file, in a disposable copy of
         the current source, with the approved discovering checks, inside the
         scratch sandbox (runtime._scratch_proof). Returns status, reason and
-        case outcomes; never a command line or a path outside the copy. A
-        file that rewrote handed source, or a project that changed while it
-        ran, is not run."""
+        case outcomes for models, and under ``execution`` the receipts and
+        check ids for the record only; never a command line or a path
+        outside the copy reaches a model. A file that rewrote handed source,
+        or a project that changed while it ran, is not run."""
         import shlex
 
         from .integration import _gate_commands, model_facing
         from .project import Project
         from .runtime import _copy_digests, _private_paths, _scratch_proof
-        base = dict(files=[path], cases=[])
+        base = dict(files=[path], cases=[], execution=dict(checks=[], receipts=[]))
         checks = self._discovering_checks()
         if not checks:
             return dict(base, status="not run", reason="no configured check discovers a new test file here")
+        base["execution"]["checks"] = [c.id for c in checks]
         project = Project(self.project, exclude=self.config.project_excludes)
         before = self._capture_source()
         if path in project.contents():
             return dict(base, status="not run", reason="the file already exists in the project; evidence is a new file")
         root = Path(self.project).resolve()
         gate = self.config.integration_gate
-        every = (_gate_commands(gate, root) or []) if gate is not None else list(getattr(self, "_inherited_checks", None) or [])
+        every = ((_gate_commands(gate, root) or []) if gate is not None
+                 else list(getattr(self, "_inherited_checks", None) or []))
         commands = sorted({shlex.join(argv) for c in every for argv in (tuple(c.argv), tuple(model_facing(c.argv)))})
         try:
             with project.snapshot() as directory:
@@ -7807,6 +7885,7 @@ class Session:
             return dict(base, status="not run", reason=f"the copy could not be prepared: {type(exc).__name__}")
         if self._capture_source() != before:
             proof = dict(proof, status="not run", reason="the project changed while the evidence ran")
+        base["execution"]["receipts"] = list(proof.get("receipts") or [])
         return dict(base, status=str(proof.get("status")), reason=str(proof.get("reason") or ""),
                     cases=list(proof.get("cases") or [])[:40])
 
@@ -7815,11 +7894,14 @@ class Session:
 
         The harness executes; the same auditor or reviewer that made the
         finding reassesses it once, and only on new executed evidence (a
-        passing test). A failing test confirms the finding without another
-        call; a test that did not run leaves it held. The original finding and
-        its disposition stay on the record either way, and the request is
-        refused when the same finding (or, with no finding, the same file)
-        was already tested on this source."""
+        passing test) bound to the source and checks it is judged on. A
+        failing test confirms the finding without another call; a test that
+        did not run, or any drift of that identity, leaves it held. The
+        request is durable before it runs and its receipt before the next
+        call, so a resumed job neither repeats nor loses it. The original
+        finding and its disposition stay on the record either way, and the
+        request is refused when the same finding (or, with no finding, the
+        same file) was already tested on this source and checks."""
         if request.get("error"):
             return f"EVIDENCE request not served: {request['error']}."
         if not (self.project and self._discovering_checks()):
@@ -7835,9 +7917,9 @@ class Session:
         if target != "NONE" and entry is None:
             return (f"EVIDENCE request not served: {target} is not a finding that can be tested now. Only the "
                     "latest audit's own NOT MET lines on the current source and held review findings can be.")
-        source = self._source_fingerprint()
+        identity = self._evidence_identity()
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        key = [entry["kind"], entry["identity"], source] if entry else ["investigation", digest[:16], source]
+        key = [entry["kind"], entry["identity"], identity] if entry else ["investigation", digest[:16], identity]
         prior = next((r for r in self.evidence_requests if r.get("key") == key), None)
         if prior is not None:
             return (f"EVIDENCE request not served: {'that file' if entry is None else target} was already tested "
@@ -7847,26 +7929,33 @@ class Session:
                       reviewer=entry["reviewer"] if entry else None, task=(entry or {}).get("task"),
                       finding=entry["finding"] if entry else None,
                       original_disposition=entry["disposition"] if entry else None,
-                      claim=request.get("claim", ""), file=path, file_sha256=digest, source=source, key=key,
-                      receipt=None, reassessment=None, disposition="held: not yet run")
-        # Kept before anything runs, so a budget stop mid-request leaves the
-        # request on the record and a resumed job cannot make it again.
+                      claim=request.get("claim", ""), file=path, file_sha256=digest,
+                      source=self._source_fingerprint(), identity=identity, key=key,
+                      receipt=None, execution=None, reassessment=None,
+                      disposition="held: interrupted before the evidence ran")
+        # Durable intent: a job resumed after this point never runs it again.
         self.evidence_requests.append(record)
-        receipt = record["receipt"] = self._run_evidence(path, text)
-        record["disposition"] = "held: reassessment not made"
-        if entry is None:
+        self._quiescent()
+        receipt = self._run_evidence(path, text)
+        record["execution"] = receipt.pop("execution", None)
+        record["receipt"] = receipt
+        drifted = self._evidence_identity() != identity
+        if drifted:
+            record["disposition"] = "held: the source or checks changed after the evidence was bound"
+        elif entry is None:
             record["disposition"] = "investigation: the receipt went to the orchestrator"
         elif receipt["status"] == "failed":
             record["disposition"] = "confirmed: the test failed on this source; the finding stands"
         elif receipt["status"] != "passed":
             record["disposition"] = f"held: the evidence did not run ({receipt['reason']})"
         else:
-            record["disposition"] = self._reassess(target, entry, record, text)
-        self._note(f"evidence {record['id']} on {target}: {receipt['status']}; {record['disposition'][:160]}")
-        # Durable before the planner is re-asked: a job resumed from here
-        # keeps the request, so the same finding is never tested twice on
-        # this source and its reassessment is never paid for again.
+            record["disposition"] = "held: reassessment not made"
+        # Durable receipt, before the reassessment call is reserved.
         self._quiescent()
+        if entry is not None and receipt["status"] == "passed" and not drifted:
+            record["disposition"] = self._reassess(target, entry, record, text)
+            self._quiescent()
+        self._note(f"evidence {record['id']} on {target}: {receipt['status']}; {record['disposition'][:160]}")
         cases = "; ".join(receipt.get("cases") or ()) or "none shown"
         follow = ""
         if record["disposition"].startswith("confirmed"):
@@ -7878,31 +7967,34 @@ class Session:
 
     def _reassess(self, target: str, entry: dict, record: dict, text: str) -> str:
         """The one reassessment of a finding on new executed evidence, by the
-        model that made it. Returns the disposition. An audit MET still needs
-        a resolved citation and is lowered by any standing NOT RUN or unrun
+        model that made it. Returns the disposition. The proof's identity
+        (source and effective checks) must hold before the call is spent and
+        after it returns, or the finding is held. An audit MET still needs a
+        resolved citation and is lowered by any standing NOT RUN or unrun
         record (_lower_unexecuted); a review RESOLVED closes exactly that
-        finding. Anything else keeps the finding held."""
+        finding. Anything else keeps the finding held. The whole test file is
+        shown: the size bound keeps it complete."""
         reviewer = entry["reviewer"]
+        if self._evidence_identity() != record["identity"]:
+            return "held: the source or checks changed after the evidence was bound"
         if not self._available(reviewer):
             return "held: the reviewer that made the finding is unavailable, and no other model reassesses it"
         receipt = record["receipt"]
-        shown = text if len(text) <= 6000 else text[:6000] + "\n... (truncated)"
-        evidence = (f"The harness ran this new test file, {record['file']}, unchanged, in a disposable copy of "
-                    f"exactly the current source with the project's own configured checks:\n```\n{shown}\n```\n"
-                    f"Result: {receipt['status']} - {receipt['reason']}\nCases: "
+        evidence = (f"The harness ran this new test file, {record['file']}, unchanged and shown here whole, in a "
+                    f"disposable copy of exactly the current source with the project's own configured checks:"
+                    f"\n```\n{text}\n```\nResult: {receipt['status']} - {receipt['reason']}\nCases: "
                     + ("; ".join(receipt.get("cases") or ()) or "none shown")
                     + (f"\nThe orchestrator says it shows: {record['claim']}" if record.get("claim") else "")
                     + "\nA passing test shows only what it executes. Judge whether it exercises the condition "
                     "your finding names, and whether the finding holds on paths the test does not reach.")
-        before = self._capture_source()
         saved = self._active_spec
         try:
             if entry["kind"] == "audit":
                 rid = target
                 requirement = self.memory.ledger.requirements.get(rid, "")
-                prompt = (f"## Goal (verbatim)\n\n{self.memory.goal.strip()}\n\n## Requirement\n\n{rid}: "
-                          f"{requirement}\n\nYou audited the delivered work and found:\n{entry['finding']}\n\n"
-                          + evidence + self._not_run_block()
+                prompt = (self._authority_context({rid: requirement})
+                          + f"\n\nYou audited the delivered work and found:\n{entry['finding']}\n\n"
+                          + evidence + "\n\n" + _EVIDENCE_AUTHORITY
                           + "\n\nThe project in your working directory is the delivered work. " + _ERROR_PATH_RULE
                           + f" Reassess {rid} alone, once. Reply with exactly one line: '{rid}: MET - <project "
                           f"file path or test name that shows it>' or '{rid}: NOT MET - <what is still missing>'. "
@@ -7911,8 +8003,14 @@ class Session:
                 with invocation("audit", "auditor"):
                     reply = self._invoke_model(reviewer, prompt)
             else:
-                prompt = (f"Task: {entry['entry'].get('description') or entry['task']}\n\nYou reviewed this "
+                texts = self.memory.ledger.requirements
+                covered = next((o.covers for o in self.task_outcomes if o.task_id == entry["task"]), None)
+                relevant = {r: texts[r] for r in (covered or texts) if r in texts}
+                prompt = (self._authority_context(relevant)
+                          + f"\n\n## Task {entry['task']} (this run's reading of part of the goal)\n\n"
+                          f"{entry['entry'].get('description') or entry['task']}\n\nYou reviewed this "
                           f"task and this finding was left open:\n{entry['finding']}\n\n" + evidence
+                          + "\n\n" + _EVIDENCE_AUTHORITY
                           + "\n\nYour working directory holds the current source. Check only this finding "
                           "against the source and that executed evidence. Do not raise new findings. Reply "
                           "exactly 'RESOLVED' if the finding does not hold, otherwise 'UNRESOLVED: <what "
@@ -7926,8 +8024,8 @@ class Session:
         finally:
             self._active_spec = saved
         record["reassessment"] = (reply or "").strip()[:1000]
-        if self.project and self._capture_source() != before:
-            return "held: the source changed during the reassessment"
+        if self._evidence_identity() != record["identity"]:
+            return "held: the source or checks changed during the reassessment"
         if entry["kind"] == "review":
             if not _resolved_verdict(reply or ""):
                 return "confirmed on reassessment: the reviewer kept the finding"
@@ -7968,9 +8066,9 @@ class Session:
         """For the audit: executed evidence on record for exactly this
         source, with each finding and its one reassessment. Evidence, never a
         verdict."""
-        source = self._source_fingerprint() if self.project else None
-        rows = [r for r in self.evidence_requests if r.get("kind") == "audit" and r.get("source") == source
-                and source and (r.get("receipt") or {}).get("status") in ("passed", "failed")]
+        identity = self._evidence_identity() if self.project else None
+        rows = [r for r in self.evidence_requests if r.get("kind") == "audit" and identity
+                and r.get("identity") == identity and (r.get("receipt") or {}).get("status") in ("passed", "failed")]
         if not rows:
             return ""
         lines = [f"- {r['id']} on {r['target']}: earlier finding: {(r.get('finding') or '')[:300]}. The harness "
