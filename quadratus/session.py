@@ -3422,7 +3422,13 @@ class Session:
         try:
             return self._edit(lead, prompt), 0
         except TaskFailed as failure:
-            return self._trim_overrun(lead, spec, task, failure, spent=spent, what="revision"), 1
+            try:
+                return self._trim_overrun(lead, spec, task, failure, spent=spent, what="revision"), 1
+            except TurnLimitReached as exc:
+                # The trim was a cycle of its own and it is spent: a cap here
+                # is never a no-edit revision (root review of b5ea0ef).
+                exc.in_trim = True
+                raise
 
     def _no_edit_cap_note(self, spec, task, exc, mark, blocking, *, spent: int) -> str:
         """The measured outcome of a capped revision that changed nothing, for
@@ -3439,8 +3445,8 @@ class Session:
         write grant, and ``spent`` leaves a cycle of ``max_fix_cycles``. The
         retry is charged as that cycle, measured like any edit, and its own
         cap takes the capped paths. Whether it helps is unproven."""
-        if (not blocking or not self._writes() or spent >= self.config.max_fix_cycles
-                or not mark or self._source_fingerprint() != mark):
+        if (getattr(exc, "in_trim", False) or not blocking or not self._writes()
+                or spent >= self.config.max_fix_cycles or not mark or self._source_fingerprint() != mark):
             return ""
         task.keep(json.dumps(dict(task=spec.task_id, turns=exc.turns, source=mark, spent=spent,
                                   allowance=self.config.max_fix_cycles)),

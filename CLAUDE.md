@@ -897,6 +897,8 @@ Key design decisions already settled:
   blocking finding open, write grant, a cycle left) one more revision from
   that cycle, carrying the measured outcome rather than the same prompt;
   its own cap takes the capped paths. Whether it helps is unproven.
+  A cap raised inside a size trim is tagged and never read as a no-edit
+  revision (root review of b5ea0ef: it bought a third writer call).
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.

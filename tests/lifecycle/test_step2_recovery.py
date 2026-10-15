@@ -1948,3 +1948,67 @@ def test_a_parallel_childs_capped_no_edit_revision_gets_the_same_measured_retry(
     assert len(t1) == 2 and "changed no file" in t1[1].prompt
     assert "t1" not in H.result_json(replay)["turn_limited_tasks"]
     assert (replay.project / "app.py").read_text() == _TYPED, "the fix merged"
+
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("shape", ["serial", "parallel"])
+def test_a_capped_trim_is_never_taken_for_a_no_edit_revision(tmp_path, monkeypatch, shape):
+    """Root review of b5ea0ef: the first revision overran the stop and its
+    trim, the task's second cycle, restored the pre-revision source and then
+    stopped at its cap. The cap escaped before the trim was counted, the
+    source matched the mark taken before the revision, and the no-edit retry
+    bought a third writer call with the default two cycles. A cap raised
+    inside a trim now keeps the existing capped paths: two writer calls."""
+    from quadratus.session import SessionConfig
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    assert SessionConfig().max_fix_cycles == 2, "the default allowance this guards"
+    revisions = []
+
+    def revision(call, replay):
+        n = len([c for c in replay.of("revision") if c.task == "t1"])
+        revisions.append(call)
+        if n == 1:
+            H.write(call, {"app.py": fixed + "".join(f"# note {i}\n" for i in range(80))})
+            return 'Revised add.\nCHANGED: ["app.py"]'
+        if n == 2:
+            H.write(call, {"app.py": fixed})
+            if call.vendor == "claude":
+                return H.claude_cap("Trimming the comments", num_turns=8)
+            return H.grok_ok("Trimming the comments", stop="cancelled", num_turns=8)
+        H.write(call, {"app.py": _TYPED})
+        return 'Added the TypeError.\nCHANGED: ["app.py"]'
+
+    def lead(call, replay):
+        if call.task == "t1":
+            H.write(call, {"app.py": fixed})
+            return 'Implemented add.\nCHANGED: ["app.py"]'
+        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
+        return 'Documented add.\nCHANGED: ["README.md"]'
+
+    def collaborator(call, replay):
+        if call.task == "t1":
+            return _FINDING + "\nR1: NOT MET - TypeError\nREVIEW: COMPLETE"
+        return "NO FINDINGS\nR2: MET - README.md:3"
+
+    def recheck(call, replay):
+        return "RESOLVED" if "TypeError" in (Path(call.cwd) / "app.py").read_text() else "UNRESOLVED: no TypeError"
+
+    if shape == "serial":
+        plan = "REQUIREMENTS:\nR1: " + _R1 + "\n" + DECL_SIMPLE + "\nCOVERS: R1"
+        plan = plan.replace("backend simple", "backend complex")
+        max_tasks = 1
+    else:
+        plan = ("REQUIREMENTS:\nR1: " + _R1 + "\nR2: README documents add\n"
+                "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1")
+                + "\n---\n" + _simple("README.md", "Document add in README.md.", "R2"))
+        max_tasks = 2
+    replay = H.run(tmp_path, monkeypatch, Script(
+        orchestrator=_plan(plan), lead=lead, revision=revision, collaborator=collaborator, recheck=recheck,
+        auditor=lambda c, r: "R1: MET - app.py:2\nR2: MET - README.md:3",
+        **{"requirements-review": lambda c, r: "COMPLETE"}),
+        files=FILES, max_tasks=max_tasks, settings=Settings(backend="cli", lead_max_turns=8), record_complete=False)
+    assert revisions[1].vendor in ("claude", "grok"), "the trim ran on a CLI that takes the round cap"
+    assert len(revisions) == 2, f"revision and its trim only, got {len(revisions)}"
+    assert all("changed no file" not in c.prompt for c in revisions)
+    assert "TypeError" not in (replay.project / "app.py").read_text()
+    assert not replay.result.completed
