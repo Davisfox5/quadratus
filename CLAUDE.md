@@ -909,6 +909,9 @@ Key design decisions already settled:
   (the last-slot review, the final-batch child review, or the capped
   close). Still over fails as before; a capped trim goes straight to the
   capped close; a path breach gets no trim.
+  A capped trim marks the turn-limited record `trim_capped`, and the
+  final-batch capped-child review holds it rather than reviewing past two
+  caps (root review of 860769e).
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.

@@ -4202,7 +4202,7 @@ class Session:
         except TurnLimitReached as exc:
             trimmed = self._trim_capped_draft(lead, spec, task, exc, before)
             if trimmed is False:
-                return self._close_turn_limited(lead, spec, task, exc, before)
+                return self._close_turn_limited(lead, spec, task, exc, before, trim_capped=True)
             charged = 1 if trimmed else 0
             draft, collaborators = self._capped_final_draft(lead, spec, task, exc, before, collaborators)
             if draft is None:
@@ -4640,7 +4640,7 @@ class Session:
             return None
         return state, current, identity
 
-    def _close_turn_limited(self, lead, spec, task, exc, before) -> TaskSummary:
+    def _close_turn_limited(self, lead, spec, task, exc, before, *, trim_capped: bool = False) -> TaskSummary:
         """A lead stopped at its turn limit: keep the work, record it, re-plan.
 
         The call ran and its usage is already on the ledger. Its edits stay
@@ -4680,6 +4680,10 @@ class Session:
                       note=state["note"], partial_text=said[:4000] or None,
                       content=self._content_fingerprint(state["changed"]),
                       **self._attempt_identity(spec))
+        if trim_capped:
+            # The draft and its size trim both stopped at their caps: no
+            # capped-work review lifts this (root review of 860769e).
+            record["trim_capped"] = True
         task.keep(json.dumps(record), kind="turn-limited", author=lead)
         self.turn_limited_records[spec.task_id] = record
         from .project_files import MAX_INSPECT_BYTES
@@ -7119,6 +7123,15 @@ class Session:
             result["verdict"] = "not eligible"
             return result
         capped = self.turn_limited_records.get(spec.task_id) or {}
+        if capped.get("trim_capped"):
+            # Root review of 860769e: a capped draft whose size trim also
+            # stopped at its cap landed in bounds and this review completed
+            # the run. Two caps in one task are held, never reviewed past.
+            self._open_finding("unverified", f"Task {spec.task_id}: its draft and the draft's size trim both "
+                                             "stopped at their turn limits in the final parallel batch; held "
+                                             "unverified, not reviewed.")
+            result["verdict"] = "held: draft and trim both capped"
+            return result
         lead = capped.get("lead") or spec.lead or ""
         vendor = lead.partition(":")[0]
         peer = next((p for p in self.brain_trust

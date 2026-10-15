@@ -2119,3 +2119,44 @@ def test_a_parallel_childs_capped_draft_past_the_stop_is_trimmed_and_reviewed_af
     assert (replay.project / "app.py").read_text() == fixed, "the trimmed source merged"
     reviews = (result.get("parallel_batches") or [{}])[0].get("capped_final_reviews") or []
     assert reviews and reviews[0]["task"] == "t1", "the existing capped final-child review ran"
+
+
+@pytest.mark.requirements_ledger
+def test_a_parallel_childs_capped_trim_that_lands_in_bounds_is_held_not_reviewed(tmp_path, monkeypatch):
+    """Root review of 860769e: the trim of a capped parallel draft wrote an
+    in-bounds source and then stopped at its own cap; the child closed on the
+    draft's cap, and the final-batch capped-child review completed the run.
+    Two caps in one task are now held: no review, not completed, and no
+    third writer call."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    batch = ("REQUIREMENTS:\nR1: " + _R1 + "\nR2: README documents add\n"
+             "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1")
+             + "\n---\n" + _simple("README.md", "Document add in README.md.", "R2"))
+    bloated = fixed + "".join(f"\n\ndef _unused_{i}():\n    return {i}\n" for i in range(8))
+
+    def lead(call, replay):
+        if call.task == "t1":
+            H.write(call, {"app.py": bloated})
+            return H.grok_ok("Adding helpers", stop="cancelled", num_turns=8)
+        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
+        return 'Documented add.\nCHANGED: ["README.md"]'
+
+    def revision(call, replay):
+        H.write(call, {"app.py": _TYPED})
+        return H.grok_ok("Trimmed; checking once more", stop="cancelled", num_turns=8)
+
+    replay = H.run(tmp_path, monkeypatch, Script(
+        orchestrator=_plan(batch), lead=lead, revision=revision,
+        collaborator=lambda c, r: "NO FINDINGS\n" + ("R1: MET - app.py:5" if c.task == "t1" else
+                                                     "R2: MET - README.md:3"),
+        auditor=lambda c, r: "R1: MET - app.py:5\nR2: MET - README.md:3",
+        **{"requirements-review": lambda c, r: "COMPLETE"}),
+        files=FILES, max_tasks=2, settings=Settings(backend="cli", lead_max_turns=8), record_complete=False)
+    result = H.result_json(replay)
+    writers = [c for c in replay.calls if c.task == "t1" and c.role in ("lead", "revision")]
+    assert [c.role for c in writers] == ["lead", "revision"], "draft and its trim, nothing more"
+    assert "t1" in result["turn_limited_tasks"]
+    reviews = (result.get("parallel_batches") or [{}])[0].get("capped_final_reviews") or []
+    t1 = [r for r in reviews if r["task"] == "t1"]
+    assert t1 and not t1[0]["reviewed"] and t1[0]["verdict"].startswith("held"), t1
+    assert not replay.result.completed
