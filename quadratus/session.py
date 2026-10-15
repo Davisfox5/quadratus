@@ -1629,10 +1629,26 @@ _EVIDENCE_CHANNEL = (
     "reassesses that finding alone; nothing becomes met or resolved without that judgement. One "
     "request per finding per source. It never discharges a check that failed, skipped or did not run.")
 
+#: The order of authority every writer and judge is held to (R19 on e2a46a4:
+#: t3's reviewer found that a malformed CLI ID left through argparse's usage
+#: text, against the goal's JSON refusal contract for the new commands, then
+#: waived it because the task asked for the type=int convention and the old
+#: commands already behaved that way, and marked the requirement MET).
+_AUTHORITY_ORDER = (
+    "Authority runs in this order: the original goal and operator rulings, then the numbered "
+    "requirements and the orchestrator's decisions, then the task text, plan or recipe. Where the goal "
+    "states a contract for the work it asks for, nothing lower excuses breaking it: not a convention the "
+    "task text or a plan prescribes, not consistency with existing commands, endpoints or functions, and "
+    "not how older code already behaves. A condition of the goal or a requirement that the work does not "
+    "meet is NOT MET however minor it seems; never mark a requirement MET beside a note that one of its "
+    "conditions is not met. Behaviour the goal does not address, and old behaviour outside the work it "
+    "asks for, is judged on its own merits as before.")
+
 #: What a test cannot do in a reassessment, whoever wrote it.
 _EVIDENCE_AUTHORITY = (
     "The goal, the decisions and operator rulings, the configured checks and design evidence above bind "
-    "this judgement exactly as they bound the original one. A test cannot authorize a different reading "
+    "this judgement exactly as they bound the original one, in this order: " + _AUTHORITY_ORDER + " "
+    "A test cannot authorize a different reading "
     "of the goal, a decision or a ruling, cannot stand in for missing renders or a design approval, and "
     "cannot discharge a check that failed, skipped or did not run.")
 
@@ -2272,6 +2288,10 @@ class Session:
         #: (Session._serve_evidence): the original finding, the harness's
         #: receipt and the one reassessment, kept whatever the outcome.
         self.evidence_requests: List[dict] = []
+        #: Non-blocking task-review observations that name a covered
+        #: requirement, with the source they were written about: carried to
+        #: the final audit, never as verdicts (Session._record_review_notes).
+        self.review_notes: List[dict] = []
         #: One per task that declared a scope. Evidence for the operator; the
         #: work itself is never reverted on the strength of these.
         self.scope_reports: List[ScopeReport] = []
@@ -7091,6 +7111,7 @@ class Session:
                 # Held for the evidence loop too: an entry counts only while
                 # its text is still open (Session._disputable).
                 self.unresolved_reviews.extend(child.unresolved_reviews)
+                self.review_notes.extend(child.review_notes)
                 self.scratch_proofs.extend(child.scratch_proofs)
                 # A child's execution facts come back with it, re-based to the
                 # parent's checks: only a check the parent runs after the merge
@@ -7635,7 +7656,8 @@ class Session:
                 + "\nA design review verdict listed above is the independent approval of that task's "
                 "renders; where one reads APPROVED, do not report the approval as absent.")
                if self.design_checks else "")
-            + self._not_run_block())
+            + self._not_run_block()
+            + self._review_notes_block(audited))
 
     def _audit_requirements(self, ids: Optional[List[str]] = None, final: bool = False) -> dict:
         """One read-only call: each requirement met or not, with evidence.
@@ -7664,7 +7686,8 @@ class Session:
             "of it, and the decisions and rulings listed above bind. Where a requirement's wording "
             "states a condition the goal, a decision and a ruling do not, judge the goal's own "
             "condition and say so on the line ('wording stricter than the goal: <condition>'); a "
-            "condition the goal does state is never relaxed this way. " + _ERROR_PATH_RULE + " "
+            "condition the goal does state is never relaxed this way. " + _AUTHORITY_ORDER + " "
+            + _ERROR_PATH_RULE + " "
             + "For each requirement, check the delivered files themselves: code, "
             "interface, tests and documentation. Documentation must agree with the goal, not only "
             "with the code. A requirement about existing product behaviour is met only if it works "
@@ -9678,6 +9701,7 @@ class Session:
                 + "\n\nMeet the goal and these requirements wherever they fall within this task's work, "
                   "including what they say must happen on an error or a refusal. Task text, a generated "
                   "plan or recipe, or an earlier answer that differs from them does not change them. "
+                  + _AUTHORITY_ORDER + " "
                   "It grants nothing: the task's permitted paths, edits, commands and size bound hold "
                   "as before, and a condition outside them goes to the record as a line 'BLOCKER: "
                   "<condition>', never an edit there.")
@@ -9700,7 +9724,7 @@ class Session:
                   "covered requirement that falls within this task's work and is not met is a BLOCKING "
                   "finding even when the task text omits it. It grants nothing: the task's permitted "
                   "paths, edits and commands bind as before, and a finding that needs a change outside "
-                  "them stays open as a finding, never a reason to edit there."
+                  "them stays open as a finding, never a reason to edit there. " + _AUTHORITY_ORDER
                 + ("\n\nFor each covered requirement give one line 'R<n>: MET - <file>:<line>' naming "
                    "where the source meets every condition of it, including what it says must happen "
                    "on an error or a refusal, or 'R<n>: NOT MET - <the condition>', which is a BLOCKING "
@@ -9732,6 +9756,42 @@ class Session:
         texts = self.memory.ledger.requirements or getattr(self, "_requirement_texts", {}) or {}
         return [(rid, texts[rid]) for rid in getattr(self, "_current_covers", []) or [] if rid in texts]
 
+    def _record_review_notes(self, spec, peer: str, note: str, rids: List[str]) -> None:
+        """Keep each paragraph of a task review that names a covered
+        requirement without blocking on it, with the source it was written
+        about (R19 on e2a46a4: t3's reviewer warned that malformed IDs broke
+        R12's JSON refusal, did not block, and the final auditor's prompt
+        never saw it). BLOCKING findings and verdict lines keep their own
+        routes; nothing here is a verdict or changes one."""
+        source = self._source_fingerprint() if self.project else None
+        for block in re.split(r"\n\s*\n", note or ""):
+            lines = [line for line in block.splitlines()
+                     if line.strip() and not _AUDIT_LINE.match(line) and not _BLOCKING_LINE.match(line)
+                     and line.strip() not in ("NO FINDINGS", _REVIEW_COMPLETE)]
+            text = " ".join(line.strip() for line in lines)
+            named = sorted({r.upper() for r in re.findall(r"\bR\d+\b", text)} & set(rids))
+            if not text or not named:
+                continue
+            self.review_notes.append(dict(task=spec.task_id, peer=peer, requirements=named,
+                                          text=text[:600], source=source))
+
+    def _review_notes_block(self, audited: dict) -> str:
+        """The carried review observations on the requirements judged, each
+        labelled with whether it was written about the current source."""
+        current = self._source_fingerprint() if self.project else None
+        rows = [n for n in self.review_notes if set(n["requirements"]) & set(audited)][-20:]
+        if not rows:
+            return ""
+        lines = [f"- {n['task']} review, about {', '.join(n['requirements'])}, "
+                 + ("written about the current source" if n.get("source") and n["source"] == current
+                    else "written about an earlier source (it may no longer hold)")
+                 + f", not marked blocking and never rechecked: {n['text']}" for n in rows]
+        return ("\n\n## Earlier task-review observations on these requirements (harness record, not verdicts)\n"
+                + "\n".join(lines)
+                + "\nA reviewer raised each of these without blocking on it. Reconcile each against the goal "
+                "and the current source yourself: an observation is neither a finding nor an approval, and "
+                "the reviewer's reason for not blocking binds nothing.")
+
     def _judge_goal_review(self, spec, peer: str, note: str) -> str:
         """Hold a goal-bearing review to its per-requirement verdicts (r05 on
         1655cf1: the CLI reviewer carried the goal and R10 verbatim and still
@@ -9742,6 +9802,7 @@ class Session:
         rids = [rid for rid, _ in self._covered_texts()]
         if not rids:
             return note
+        self._record_review_notes(spec, peer, note, rids)
         verdicts = _requirement_verdicts(note)
         missing = [rid for rid in rids if rid not in verdicts]
         # Only an approval needs every verdict: a review that already raises a

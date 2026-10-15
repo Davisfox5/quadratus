@@ -622,3 +622,118 @@ def test_a_review_reassessment_is_bound_by_the_original_goal_not_only_the_task_t
     for needed in ("GOAL-CONDITION-7", "## Goal (verbatim)", "R1: " + _R1, "## Task t1",
                    "A test cannot authorize a different reading"):
         assert needed in judges[0].prompt, needed
+
+
+# -- R19 (assessed on e2a46a4): the order of authority ------------------------------------
+
+_ORDER = "Authority runs in this order: the original goal and operator rulings"
+_WAIVER = "not consistency with existing commands, endpoints or functions"
+
+
+@pytest.mark.requirements_ledger
+def test_every_judge_and_writer_after_the_draft_is_given_the_order_of_authority(tmp_path, monkeypatch):
+    """R19's t3 reviewer found the goal's JSON refusal broken for malformed
+    new-command IDs, then waived it because the task asked for the type=int
+    convention and the old commands behaved that way, and marked the
+    requirement MET. The goal block was already labelled as outranking the
+    task text; what no prompt said is that a prescribed convention, existing
+    behaviour or an older choice cannot excuse a goal contract on the work
+    it asks for, or that a requirement is never MET beside a note that it is
+    not. Old/new control: on e2a46a4 none of these prompts carries the
+    order; now the revision writer, every task reviewer, the final auditor
+    and the evidence reassessment do. Severity is not forced and nothing is
+    marked MET or NOT MET by the harness."""
+    if not _sandboxed():
+        pytest.skip("no scratch sandbox here")
+    replay = _ratio_run(tmp_path / "audit", monkeypatch)
+    judged = {"collaborator": replay.of("collaborator"), "auditor": replay.of("auditor")}
+    assert _reassessments(replay), "the challenge ran"
+    for role, calls in judged.items():
+        assert calls and all(_ORDER in c.prompt and _WAIVER in c.prompt for c in calls), role
+
+    def collaborator(call, replay):
+        first = not any(c.role == "revision" for c in replay.calls)
+        return ("BLOCKING: negative sums are not shown; at app.py add; example: add(-1, -2)\nR1: MET - app.py:2"
+                if first else "NO FINDINGS\nR1: MET - app.py:2")
+
+    def lead(call, replay):
+        H.write(call, {"app.py": FIXED})
+        return 'Implemented add.\nCHANGED: ["app.py"]'
+
+    (tmp_path / "revision").mkdir()
+    revised = H.run(tmp_path / "revision", monkeypatch, Script(
+        orchestrator=_plan_once(DECLARED), lead=lead, collaborator=collaborator, recheck=lambda c, r: "RESOLVED",
+        auditor=lambda c, r: "R1: MET - app.py:2", **{"requirements-review": lambda c, r: "COMPLETE"}),
+        files=FILES, max_tasks=2, record_complete=False)
+    revisions = revised.of("revision")
+    assert revisions and all(_ORDER in c.prompt for c in revisions), "the writer after the draft"
+    assert not any(_ORDER in c.prompt for c in revised.of("orchestrator")), "planning prompts are unchanged"
+
+
+def _plan_once(declared):
+    def orchestrator(call, replay):
+        return declared if len(replay.of("orchestrator")) == 1 else "DONE"
+    return orchestrator
+
+
+# -- R19 (assessed on e2a46a4): the reviewer's waived warning reaches the audit -------------
+
+_NOTE = ("Low severity, medium confidence: safe_ratio(1, 0) raises instead of returning None. This is "
+         "about R1, but the task's convention allows it, so I do not count it as blocking.")
+_OFF = "Style: the module docstring mentions R9, which no task covers."
+
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("case", ["current", "earlier-source", "resolved-blocking"])
+def test_a_non_blocking_review_warning_reaches_the_final_audit_labelled_never_as_a_verdict(
+        tmp_path, monkeypatch, case):
+    """R19's final auditor prompt (9538 characters) held neither the t3
+    reviewer's explicit malformed-ID warning nor its waiver. A task review's
+    non-blocking paragraph that names a covered requirement is now carried,
+    with its task and whether it was written about the current source, into
+    the final audit (and any reassessment) as an observation to reconcile,
+    never a finding or approval. A resolved BLOCKING finding and a note about
+    a requirement the task does not cover are not carried. No model call is
+    added. Old/new: on e2a46a4 the auditor never sees the warning."""
+    two = case == "earlier-source"
+    second = ("KIND: architect complex\nSCOPE: " + json.dumps(_RATIO_SCOPE)
+              + "\nTidy safe_ratio's docstring.\nCOVERS: R1")
+
+    def orchestrator(call, replay):
+        n = len(replay.of("orchestrator"))
+        if n == 1:
+            return _RATIO_DECL
+        if n == 2 and two:
+            return second
+        return "ACCEPT" if _CHALLENGE in call.prompt else "DONE"
+
+    def lead(call, replay):
+        H.write(call, {"ratio.py": _SAFE if call.task == "t1" else '"""Ratios."""\n' + _SAFE})
+        return 'Implemented safe_ratio.\nCHANGED: ["ratio.py"]'
+
+    def collaborator(call, replay):
+        if call.task != "t1":
+            return "NO FINDINGS\nR1: MET - ratio.py:4"
+        if case == "resolved-blocking":
+            first = not any(c.role == "revision" for c in replay.calls)
+            return (f"BLOCKING: {_NOTE}\nR1: MET - ratio.py:4" if first else "NO FINDINGS\nR1: MET - ratio.py:4")
+        return f"{_NOTE}\n\n{_OFF}\n\nR1: MET - ratio.py:4\n{'REVIEW: COMPLETE'}"
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    replay = H.run(tmp_path, monkeypatch, Script(
+        orchestrator=orchestrator, lead=lead, collaborator=collaborator, recheck=lambda c, r: "RESOLVED",
+        auditor=lambda c, r: "R1: MET - ratio.py:4", **{"requirements-review": lambda c, r: "COMPLETE"}),
+        files={**FILES, "app.py": FIXED, "ratio.py": "def safe_ratio(a, b):\n    return a / b\n"},
+        max_tasks=3 if two else 2, record_complete=False, limits=_ROOT_LIMITS)
+    (audit,) = replay.of("auditor")
+    section = audit.prompt.split("## Earlier task-review observations")
+    if case == "resolved-blocking":
+        assert len(section) == 1, "a resolved BLOCKING finding is history, not carried"
+    else:
+        assert len(section) == 2, "the warning reached the final audit"
+        carried = section[1]
+        assert _NOTE in carried and "R9" not in carried, "only notes on the requirements judged"
+        label = "written about an earlier source" if two else "written about the current source"
+        assert f"t1 review, about R1, {label}" in carried
+        assert "neither a finding nor an approval" in carried
+    assert replay.result.completed, "an observation decides nothing by itself"

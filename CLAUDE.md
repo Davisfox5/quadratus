@@ -975,6 +975,28 @@ Key design decisions already settled:
   another reading or stand in for renders or unrun checks. A review
   reassessment gets the goal and its task's covered requirements, not only
   the generated task text (root review of 8f68ea0).
+- **A goal contract is never waived by a lower authority** (R19 on
+  e2a46a4). t3's reviewer found the goal's JSON refusal broken for malformed
+  new-command IDs, then waived it because the task asked for the type=int
+  convention and the old commands behaved that way, and marked R12 MET; the
+  audit followed. The goal block already said it outranks the task text.
+  `_AUTHORITY_ORDER` now states the order (goal and rulings, then
+  requirements and decisions, then task text or plan) and that no
+  prescribed convention, consistency with existing commands or older
+  behaviour excuses a goal contract on the work it asks for, and that a
+  requirement is never MET beside a note that it is not. It reaches the
+  writer after the draft, every task reviewer, the final auditor and the
+  evidence reassessment. Prompt only: no severity is forced and nothing is
+  marked MET or NOT MET by the harness, and a wording rule is not a
+  measured accuracy fix. The structural half: the final auditor's prompt
+  (9538 chars) never held the reviewer's warning. `_record_review_notes`
+  keeps each non-blocking review paragraph naming a covered requirement,
+  with its task and source fingerprint; `_authority_context` carries those
+  on the requirements judged, labelled current or earlier source, as
+  observations to reconcile. Resolved BLOCKING findings and notes on
+  uncovered requirements are not carried. An executed-demonstration
+  requirement for every error-boundary MET was built and held back as
+  broader than this fact supports (patch kept in the #73 record).
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.
