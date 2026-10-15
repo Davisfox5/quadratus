@@ -11,6 +11,7 @@ import sys
 import pytest
 
 from quadratus.integration import (
+    PRODUCER,
     REPORT_TOKEN,
     GateCommand,
     GateSuite,
@@ -118,7 +119,7 @@ EXPECTED = dict(nonce="n1", module_file="/owned/quadratus_gate_report_ab.py", mo
 
 
 def _report(**changes):
-    good = dict(producer="quadratus-pytest/4", nonce="n1", module_file=EXPECTED["module_file"],
+    good = dict(producer=PRODUCER, nonce="n1", module_file=EXPECTED["module_file"],
                 module_sha256=EXPECTED["module_sha256"], exitstatus=1, collected=1, collect_errors=0,
                 counts=dict(passed=0, failed=1, errors=0, skipped=0),
                 failures=[dict(nodeid="t", when="call", exc_type="builtins.AssertionError", assertion=True)],

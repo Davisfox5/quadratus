@@ -1005,6 +1005,21 @@ Key design decisions already settled:
   stays out (root review of 225367f). An executed-demonstration
   requirement for every error-boundary MET was built and held back as
   broader than this fact supports (patch kept in the #73 record).
+- **Every failed required check carries its own report** (R21 on
+  319385322b). The final check failed on a plain test-body assertion and the
+  run stopped CheckUnattributable with budget left. pytest 9 reports each
+  subtest through the item's hook, so producer `quadratus-pytest/5` tallies
+  subtests apart and counts each item once, failed when it or any subtest
+  failed, its one record an assertion only when every cause is a body
+  `AssertionError` (a parent pytest already flipped to failed with no
+  exception of its own is not a cause). A `python -m unittest ...` check that
+  declares `--quadratus-report={report}` runs the same arguments under the
+  same interpreter through `_gate_producer/quadratus_unittest_report.py`
+  (`unittest.main(module=None)` with a recording result class, copied under
+  a nonce name, unittest's own output and exit), producer
+  `quadratus-unittest/1`, the expected producer bound per invocation. Plain
+  unittest stays undeclared and unattributable; root rejected letting a
+  sibling check's report stand in for another, and `attribute()` is unchanged.
 - **A trim gets what the harness measured** (R20 on c7e9449). t2's one
   scope trim, told only the total, spent 8 rounds and 373,366 reported
   tokens, more than its draft, and the run ended with 141,947 left under the

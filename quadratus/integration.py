@@ -40,7 +40,7 @@ __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateS
 #: (phase 3, #25). Other runners have no producer: their failures are never
 #: attributable, so never repaired.
 REPORT_TOKEN = "{report}"
-PRODUCER = "quadratus-pytest/4"
+PRODUCER = "quadratus-pytest/5"
 #: The node:test producer (series rule-58a4625 f3: the second cycle in a row
 #: ended on a failing node UI test with the work done and the graders
 #: passing, because a node check had no producer and so no fix call). A
@@ -49,9 +49,18 @@ PRODUCER = "quadratus-pytest/4"
 #: reporter beside TAP on stdout, so the text output the count reader needs
 #: is unchanged.
 PRODUCER_NODE = "quadratus-node/1"
-PRODUCERS = (PRODUCER, PRODUCER_NODE)
+#: The unittest producer (R21: a required ``python -m unittest discover``
+#: check failed with no report of its own, so a plain test-body assertion
+#: could not reach a repair). A ``python -m unittest ...`` check declares
+#: ``--quadratus-report={report}``; the harness runs the same arguments under
+#: the same interpreter through the shipped runner module, which is
+#: ``unittest.main(module=None)`` with a recording result class, and writes
+#: this invocation's own report. Undeclared, unittest stays unattributable.
+PRODUCER_UNITTEST = "quadratus-unittest/1"
+PRODUCERS = (PRODUCER, PRODUCER_NODE, PRODUCER_UNITTEST)
 _PRODUCER_FILE = Path(__file__).resolve().parent / "_gate_producer" / "quadratus_gate_report.py"
 _NODE_PRODUCER_FILE = _PRODUCER_FILE.with_suffix(".mjs")
+_UNITTEST_PRODUCER_FILE = _PRODUCER_FILE.with_name("quadratus_unittest_report.py")
 #: Kept for the install-layout proof: where the shipped producer lives.
 _PRODUCER_DIR = str(_PRODUCER_FILE.parent)
 _REPORT_FAILURES = 200
@@ -91,12 +100,33 @@ def _report_slot(argv, env):
     owned = tempfile.mkdtemp(prefix="quadratus-report-")
     nonce = secrets.token_hex(16)
     path = os.path.join(owned, "report.json")
+    if _is_unittest(argv):
+        module = f"quadratus_unittest_report_{secrets.token_hex(8)}"
+        source = _UNITTEST_PRODUCER_FILE.read_bytes()
+        copy = os.path.join(owned, module + ".py")
+        with open(copy, "wb") as out:
+            out.write(source)
+        expected = dict(nonce=nonce, module_file=os.path.realpath(copy), producer=PRODUCER_UNITTEST,
+                        module_sha256=hashlib.sha256(source).hexdigest())
+        # The same interpreter and the same unittest arguments, with only
+        # the declaring argument removed; the owned directory goes after
+        # the working directory ``-m`` puts first, so no project module is
+        # shadowed and none can take the nonce name.
+        rest = [a for a in argv if REPORT_TOKEN not in a]
+        argv = [rest[0], "-m", module] + rest[3:]
+        env = dict(env, QUADRATUS_GATE_NONCE=nonce, QUADRATUS_GATE_REPORT=path,
+                   PYTHONPATH=os.pathsep.join([owned] + [p for p in [env.get("PYTHONPATH")] if p]))
+        try:
+            yield argv, env, path, expected
+        finally:
+            shutil.rmtree(owned, ignore_errors=True)
+        return
     if _is_node_test(argv):
         source = _NODE_PRODUCER_FILE.read_bytes()
         copy = os.path.join(owned, f"quadratus_gate_report_{secrets.token_hex(8)}.mjs")
         with open(copy, "wb") as out:
             out.write(source)
-        expected = dict(nonce=nonce, module_file=os.path.realpath(copy),
+        expected = dict(nonce=nonce, module_file=os.path.realpath(copy), producer=PRODUCER_NODE,
                         module_sha256=hashlib.sha256(source).hexdigest())
         # The declaring argument is replaced, never kept: node pairs each
         # --test-reporter with the next destination, so the runner's own TAP
@@ -119,7 +149,7 @@ def _report_slot(argv, env):
     copy = os.path.join(owned, module + ".py")
     with open(copy, "wb") as out:
         out.write(source)
-    expected = dict(nonce=nonce, module_file=os.path.realpath(copy),
+    expected = dict(nonce=nonce, module_file=os.path.realpath(copy), producer=PRODUCER,
                     module_sha256=hashlib.sha256(source).hexdigest())
     plugins = [p for p in env.get("PYTEST_PLUGINS", "").split(",") if p.strip()]
     env = dict(env, QUADRATUS_GATE_NONCE=nonce, PYTEST_PLUGINS=",".join(plugins + [module]),
@@ -128,6 +158,14 @@ def _report_slot(argv, env):
         yield [a.replace(REPORT_TOKEN, path) for a in argv], env, path, expected
     finally:
         shutil.rmtree(owned, ignore_errors=True)
+
+
+def _is_unittest(argv) -> bool:
+    """``python -m unittest ...`` under a plain ``python``/``pythonX[.Y]``
+    interpreter, the only unittest form with a producer; any other runner,
+    wrapper or custom script is not one."""
+    head = Path(argv[0]).name if argv else ""
+    return bool(re.fullmatch(r"python(\d+(\.\d+)*)?", head)) and list(argv[1:3]) == ["-m", "unittest"]
 
 
 def _is_node_test(argv) -> bool:
@@ -232,7 +270,8 @@ def read_report(path, expected) -> dict:
     if not isinstance(data, dict):
         return dict(state="unparsable", detail="not an object")
     expected = expected or {}
-    if (data.get("producer") not in PRODUCERS or data.get("nonce") != expected.get("nonce")
+    if (data.get("producer") not in PRODUCERS or data.get("producer") != expected.get("producer", data.get("producer"))
+            or data.get("nonce") != expected.get("nonce")
             or data.get("module_file") != expected.get("module_file")
             or data.get("module_sha256") != expected.get("module_sha256")):
         return dict(state="foreign", detail=f"producer {str(data.get('producer'))[:40]!r}, module "

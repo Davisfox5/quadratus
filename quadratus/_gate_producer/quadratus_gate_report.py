@@ -12,7 +12,12 @@ uses.
 
 It records facts pytest already has and never interprets prose: the session
 exit status, collection errors, per-phase counts, and for each failed phase
-the exception's module-qualified type. The report carries the nonce the
+the exception's module-qualified type. A subtest (``unittest`` ``subTest`` or
+the ``subtests`` fixture, which pytest 9 reports through the same hook as
+its item) is part of its item, never an item: it is tallied apart, and its
+failure makes its item fail, with the item's one failure record an
+assertion only when every failure behind it is (R21: seven passing subtests
+were counted as seven more passed items than were collected). The report carries the nonce the
 harness set for this one invocation, so a stale or foreign file is refused.
 """
 
@@ -20,7 +25,7 @@ import hashlib
 import json
 import os
 
-PRODUCER = "quadratus-pytest/4"
+PRODUCER = "quadratus-pytest/5"
 MAX_FAILURES = 200
 
 import pytest  # noqa: E402 -- after the constants a reader of this file wants first
@@ -67,6 +72,18 @@ def _from_body(item, excinfo):
     return False
 
 
+def _subtest_types():
+    """The report classes pytest and the pytest-subtests plugin use for a
+    subtest; by type, never by name."""
+    found = []
+    for module, name in (("_pytest.subtests", "SubtestReport"), ("pytest_subtests", "SubTestReport")):
+        try:
+            found.append(getattr(__import__(module, fromlist=[name]), name))
+        except (ImportError, AttributeError):
+            continue
+    return tuple(found)
+
+
 def _type_name(excinfo):
     if excinfo is None:
         return None
@@ -80,6 +97,9 @@ class _Recorder:
         self.counts = dict(passed=0, failed=0, errors=0, skipped=0)
         self.failures, self.truncated = [], False
         self.collected, self.collect_errors = 0, 0
+        self.subtest_types = _subtest_types()
+        self.subtests = dict(passed=0, failed=0, skipped=0)
+        self.pending = {}
 
     def pytest_collectreport(self, report):
         if report.failed:
@@ -102,12 +122,23 @@ class _Recorder:
                                       and report.quadratus_body)
 
     def pytest_runtest_logreport(self, report):
+        if self.subtest_types and isinstance(report, self.subtest_types):
+            kind = "failed" if report.failed else "skipped" if report.skipped else "passed"
+            self.subtests[kind] += 1
+            if report.failed:
+                self.pending.setdefault(report.nodeid, []).append(report)
+            return
         if report.when == "call":
-            if report.passed:
-                self.counts["passed"] += 1
-            elif report.failed:
+            failed = self.pending.pop(report.nodeid, [])
+            if report.failed or failed:
                 self.counts["failed"] += 1
-                self._fail(report)
+                # pytest may already have turned a parent with failed
+                # subtests into a failure with no exception of its own; that
+                # outcome is its subtests', not a cause beside them.
+                own = report.failed and (getattr(report, "quadratus_exc", None) is not None or not failed)
+                self._fail(report, ([report] if own else []) + failed)
+            elif report.passed:
+                self.counts["passed"] += 1
             elif report.skipped:
                 self.counts["skipped"] += 1
         elif report.failed:
@@ -116,14 +147,20 @@ class _Recorder:
         elif report.skipped and report.when == "setup":
             self.counts["skipped"] += 1
 
-    def _fail(self, report):
+    def _fail(self, report, causes=None):
+        """One record per failed phase; ``causes`` are the item's own failed
+        call report and its failed subtests, all of which must be body
+        assertions for the record to be one."""
         if len(self.failures) >= MAX_FAILURES:
             self.truncated = True
             return
+        causes = causes or [report]
+        other = next((getattr(c, "quadratus_exc", None) for c in causes
+                      if getattr(c, "quadratus_assertion", False) is not True), None)
         self.failures.append(dict(nodeid=report.nodeid[:300], when=report.when,
-                                  exc_type=getattr(report, "quadratus_exc", None),
-                                  assertion=getattr(report, "quadratus_assertion", False) is True,
-                                  body=getattr(report, "quadratus_body", False) is True))
+                                  exc_type=other or getattr(causes[0], "quadratus_exc", None),
+                                  assertion=all(getattr(c, "quadratus_assertion", False) is True for c in causes),
+                                  body=all(getattr(c, "quadratus_body", False) is True for c in causes)))
 
     def pytest_sessionfinish(self, session, exitstatus):
         with open(__file__, "rb") as source:
@@ -132,6 +169,6 @@ class _Recorder:
                     module_file=os.path.realpath(__file__), module_sha256=digest,
                     exitstatus=int(exitstatus), collected=self.collected,
                     collect_errors=self.collect_errors, counts=self.counts,
-                    failures=self.failures, truncated=self.truncated)
+                    failures=self.failures, truncated=self.truncated, subtests=self.subtests)
         with open(self.path, "w", encoding="utf-8") as out:
             json.dump(data, out)
