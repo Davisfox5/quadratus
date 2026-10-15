@@ -5383,6 +5383,9 @@ class Session:
         # Evidence receipts served during this decision (_serve_evidence),
         # carried on every re-ask of it.
         receipts: List[str] = []
+        if self.project and any(r.get("stage") == "awaiting reassessment" for r in self.evidence_requests):
+            # A resumed job finishes an unstarted reassessment before planning.
+            self._finish_pending_evidence()
 
         def build_with_correction(fetched):
             body = build(fetched)
@@ -7478,6 +7481,11 @@ class Session:
         if final is None:
             final = bool(getattr(self, "_final_check", False))
         ledger = self.memory.ledger
+        kept = self._final_audit if final else None
+        if kept and kept.get("status_before") is not None and kept.get("source") == self._source_fingerprint():
+            # Resumed at the cap: the ledger as it stood when the final audit
+            # was asked, before its own verdicts were written over coverage.
+            ledger.requirement_status.update(kept["status_before"])
         refusal = self._original_tests_at_done()
         if refusal:
             self._done_refusal = refusal
@@ -7532,9 +7540,13 @@ class Session:
         if self._explicit_tasks is not None:
             self._note("requirements no listed task claimed, left unjudged: "
                        + ", ".join(self.explicit["requirements_unclaimed"]))
+            asked = dict(status)
             verdicts = self._audit_requirements(ids=self.explicit["requirements_claimed"], final=final) if claimed else {}
         else:
+            asked = dict(status)
             verdicts = self._audit_requirements(final=final)
+        if final and self._final_audit is not None and "status_before" not in self._final_audit:
+            self._final_audit["status_before"] = asked
         unmet = {r: why for r, (ok, why) in verdicts.items() if not ok}
         for rid, (ok, why) in verdicts.items():
             status[rid] = "met (audited)" if ok else f"NOT MET: {why[:160]}"
@@ -7707,6 +7719,38 @@ class Session:
         return verdicts
 
     # -- evidence loop -------------------------------------------------------
+    def _finish_pending_evidence(self) -> None:
+        """Finish, once, each reassessment a resumed job left unstarted: a
+        passed proof whose record reached "awaiting reassessment" and no
+        further. Only with the identity it was bound to (source and checks)
+        unchanged and the finding still disputable; the proof is not run
+        again and the original audit is not asked again. A record whose
+        judgement may have started is never retried, and an outcome already
+        recorded MET on this identity is carried, never re-judged."""
+        identity = self._evidence_identity() if self.project else None
+        for record in self.evidence_requests:
+            if record.get("kind") != "audit" or record.get("identity") != identity:
+                continue
+            if str(record.get("disposition", "")).startswith("MET on reassessment"):
+                self.memory.ledger.requirement_status[record["target"]] = (
+                    f"met (reassessed on evidence {record['id']})")
+        for record in self.evidence_requests:
+            if record.get("stage") != "awaiting reassessment":
+                continue
+            if record.get("identity") != identity or not record.get("test"):
+                record["stage"] = "done"
+                record["disposition"] = "held: the source or checks changed before the pending reassessment"
+                continue
+            entry = self._disputable().get(record["target"])
+            if entry is None or entry["kind"] != record["kind"] or entry["finding"] != record.get("finding"):
+                record["stage"] = "done"
+                record["disposition"] = "held: the finding is no longer the one the proof was made for"
+                continue
+            self._note(f"evidence {record['id']}: finishing the reassessment a resumed job left unstarted")
+            record["disposition"] = self._reassess(record["target"], entry, record, record["test"])
+            record["stage"] = "done"
+            self._quiescent()
+
     def _final_challenge(self, unmet: dict) -> dict:
         """After the task cap's final audit: the orchestrator may challenge
         the auditor's own NOT MET lines with executed evidence, read-only.
@@ -7721,6 +7765,7 @@ class Session:
         it MET on passing evidence (``_reassess``)."""
         if self._explicit_tasks is not None or not (self.project and self._discovering_checks()):
             return unmet
+        self._finish_pending_evidence()
         identity = self._evidence_identity()
         tested = {tuple(r["key"][:2]) for r in self.evidence_requests if r.get("identity") == identity}
         open_ = {rid: e for rid, e in self._disputable().items()
@@ -7931,7 +7976,7 @@ class Session:
                       original_disposition=entry["disposition"] if entry else None,
                       claim=request.get("claim", ""), file=path, file_sha256=digest,
                       source=self._source_fingerprint(), identity=identity, key=key,
-                      receipt=None, execution=None, reassessment=None,
+                      receipt=None, execution=None, reassessment=None, stage="intent", test=text,
                       disposition="held: interrupted before the evidence ran")
         # Durable intent: a job resumed after this point never runs it again.
         self.evidence_requests.append(record)
@@ -7950,10 +7995,13 @@ class Session:
             record["disposition"] = f"held: the evidence did not run ({receipt['reason']})"
         else:
             record["disposition"] = "held: reassessment not made"
+        pending = entry is not None and receipt["status"] == "passed" and not drifted
+        record["stage"] = "awaiting reassessment" if pending else "done"
         # Durable receipt, before the reassessment call is reserved.
         self._quiescent()
-        if entry is not None and receipt["status"] == "passed" and not drifted:
+        if pending:
             record["disposition"] = self._reassess(target, entry, record, text)
+            record["stage"] = "done"
             self._quiescent()
         self._note(f"evidence {record['id']} on {target}: {receipt['status']}; {record['disposition'][:160]}")
         cases = "; ".join(receipt.get("cases") or ()) or "none shown"
@@ -7987,6 +8035,10 @@ class Session:
                     + (f"\nThe orchestrator says it shows: {record['claim']}" if record.get("claim") else "")
                     + "\nA passing test shows only what it executes. Judge whether it exercises the condition "
                     "your finding names, and whether the finding holds on paths the test does not reach.")
+        # Durable before any reservation: a job interrupted from here on never
+        # retries this judgement, since it may have started.
+        record["stage"] = "reassessment started"
+        self._quiescent()
         saved = self._active_spec
         try:
             if entry["kind"] == "audit":

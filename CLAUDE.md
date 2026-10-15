@@ -959,8 +959,14 @@ Key design decisions already settled:
   receipts and check ids stay on the record, never in a model prompt. A
   checkpoint from the cap's challenge carries `_cap_goal` and
   `_final_audit` and is the one spent-slot checkpoint a resume admits: it
-  finishes the decision with no goal question, audit, execution or
-  reassessment repeated. Evidence files are at most 16,000 bytes and shown
+  finishes the decision with no goal question, audit or execution
+  repeated. Each request records its stage durably (intent, awaiting
+  reassessment, reassessment started, done): a resumed job finishes an
+  unstarted reassessment once with the same auditor, from the retained
+  test, finding and bound identity (`_finish_pending_evidence`); a started
+  one is never retried. The reused final audit restores the coverage the
+  ledger had when it was asked, so its own NOT MET cannot read as
+  "never covered" (root review of a93334b). Evidence files are at most 16,000 bytes and shown
   to the reassessor whole.
   Every reassessment reads `_authority_context`, the same block the final
   audit reads (verbatim goal, the requirements judged, redacted check facts

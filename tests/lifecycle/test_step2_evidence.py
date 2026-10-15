@@ -478,50 +478,83 @@ def test_a_passing_proof_is_relied_on_only_while_its_source_and_checks_hold(tmp_
 
 
 @pytest.mark.requirements_ledger
-def test_an_interrupted_challenge_resumes_with_its_proof_and_never_replays_it(tmp_path, monkeypatch):
-    """Root on 8f68ea0: interrupted at the reassessment's entry, after a real
-    passing proof, the checkpoint still held evidence_requests=[]. The
-    request is now durable before it runs and its receipt before the
-    reassessment is reserved. The resumed episode carries E1 and the spent
-    allowance; it does not ask the goal question, audit, execute or
-    reassess again, and the run ends RequirementsUnmet within the job's
-    allowance."""
+@pytest.mark.parametrize("where", ["before-reassessment", "reassessment-started"])
+def test_an_interrupted_challenge_resumes_its_unstarted_judgement_once_and_never_replays(
+        tmp_path, monkeypatch, where):
+    """Root on a93334b: interrupted at the reassessment's entry after a real
+    passing proof, the resumed episode left E1 held and stopped
+    RequirementsUnmet ("R1 never covered") because the final audit's own
+    NOT MET had overwritten coverage before its reuse. The checkpoint now
+    records each request's stage. An unstarted judgement is finished once on
+    resume by the same auditor, from the retained test, finding, authority
+    and bound identity: no second proof, no original audit, goal question,
+    planner or lead call, and the job's allowance carried exactly. A
+    judgement that may have started is never retried and stays held."""
     from quadratus import checkpoint
     from quadratus.session import Session
     from tests.lifecycle.test_step2_recovery import _budget, _episode
     if not _sandboxed():
         pytest.skip("no scratch sandbox here")
-    real = Session._reassess
-    fired = []
+    runs = []
+    real_run = Session._run_evidence
 
-    def reassess(self, *a, **kw):
-        if not fired:
-            fired.append(True)
-            raise KeyboardInterrupt
-        return real(self, *a, **kw)
-    monkeypatch.setattr(Session, "_reassess", reassess)
+    def run_evidence(self, *a, **kw):
+        runs.append(1)
+        return real_run(self, *a, **kw)
+    monkeypatch.setattr(Session, "_run_evidence", run_evidence)
+    fired = []
+    if where == "before-reassessment":
+        real = Session._reassess
+
+        def reassess(self, *a, **kw):
+            if not fired:
+                fired.append(True)
+                raise KeyboardInterrupt
+            return real(self, *a, **kw)
+        monkeypatch.setattr(Session, "_reassess", reassess)
+    else:
+        real_invoke = Session._invoke_model
+
+        def invoke(self, key, prompt, *a, **kw):
+            if REASSESS in prompt and not fired:
+                fired.append(True)
+                raise KeyboardInterrupt
+            return real_invoke(self, key, prompt, *a, **kw)
+        monkeypatch.setattr(Session, "_invoke_model", invoke)
     replay = _ratio_run(tmp_path, monkeypatch)
-    first = Path(replay.result.run_dir)
+    parent = Path(replay.result.run_dir)
     assert "KeyboardInterrupt" in (replay.result.error or "")
-    body = checkpoint.load(first)
+    parent_result = (parent / "result.json").read_bytes()
+    body = checkpoint.load(parent)
     assert body["resumable"], body.get("uncarried")
-    carried = checkpoint._decode(body["state"]["evidence_requests"])
-    assert [(r["id"], r["receipt"]["status"], r["disposition"]) for r in carried] == [
-        ("E1", "passed", "held: reassessment not made")]
-    spent = _budget(first)
+    (carried,) = checkpoint._decode(body["state"]["evidence_requests"])
+    stage = {"before-reassessment": "awaiting reassessment", "reassessment-started": "reassessment started"}[where]
+    assert (carried["id"], carried["receipt"]["status"], carried["stage"]) == ("E1", "passed", stage)
+    spent = _budget(parent)
     assert spent["in_flight"] == 0
     before = len(replay.calls)
-    second = Path(_episode(replay, resume_from=first.name, max_tasks=1, limits=_ROOT_LIMITS).run_dir)
+    second = Path(_episode(replay, resume_from=parent.name, max_tasks=1, limits=_ROOT_LIMITS).run_dir)
     new = replay.calls[before:]
-    assert not [c for c in new if c.role in ("auditor", "orchestrator", "lead")], \
-        [(c.role, c.task) for c in new]
     result = json.loads((second / "result.json").read_text())
-    assert [(r["id"], r["disposition"]) for r in result["evidence_requests"]] == [
-        ("E1", "held: reassessment not made")]
-    assert not result.get("completed") and "RequirementsUnmet" in (result.get("error") or "")
+    assert len(runs) == 1, "the proof is never run again"
+    assert len(replay.of("lead")) == 1
+    assert not [c for c in new if c.role in ("orchestrator", "lead")], "no planner, goal question or writer"
+    assert (parent / "result.json").read_bytes() == parent_result, "the parent's record is unchanged"
     budget = _budget(second)
     assert budget["carried_from_earlier_episodes"]["calls"] == spent["reserved_attempts"]
     assert budget["reserved_attempts"] == spent["reserved_attempts"] + len(new) <= 20
+    (record,) = result["evidence_requests"]
+    if where == "before-reassessment":
+        assert [c.role for c in new] == ["auditor"] and REASSESS in new[0].prompt, \
+            "one reassessment, and no new original audit"
+        assert new[0].vendor == replay.of("auditor")[0].vendor, "by the same auditor"
+        assert len(replay.of("auditor")) == 2
+        assert record["disposition"].startswith("MET on reassessment by the same auditor")
+        assert result.get("completed"), result.get("error")
+    else:
+        assert not [c for c in new if c.role == "auditor"], "a judgement that may have started is not retried"
+        assert record["stage"] == "reassessment started" and record["disposition"] == "held: reassessment not made"
+        assert not result.get("completed") and "RequirementsUnmet" in (result.get("error") or "")
 
 
 # -- root review: the reassessment keeps the original authority context ------------------
