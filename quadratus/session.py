@@ -3424,6 +3424,38 @@ class Session:
         except TaskFailed as failure:
             return self._trim_overrun(lead, spec, task, failure, spent=spent, what="revision"), 1
 
+    def _no_edit_cap_note(self, spec, task, exc, mark, blocking, *, spent: int) -> str:
+        """The measured outcome of a capped revision that changed nothing, for
+        one more revision from the task's fix allowance; "" when it does not
+        apply.
+
+        Step 2 R15 on 7f628ae: t3's Grok revision had the reviewer's concrete
+        CLI finding, the goal, its room and its round budget, spent its 8
+        rounds on 9 reads and 9 greps, attempted no write, and the task closed
+        turn-limited with a fix cycle unused. Re-sending the same prompt would
+        be the verbatim retry the harness refuses; this one carries what the
+        harness measured. It applies only when the source is byte-identical
+        to before the call, a blocking finding is open, the call has the
+        write grant, and ``spent`` leaves a cycle of ``max_fix_cycles``. The
+        retry is charged as that cycle, measured like any edit, and its own
+        cap takes the capped paths. Whether it helps is unproven."""
+        if (not blocking or not self._writes() or spent >= self.config.max_fix_cycles
+                or not mark or self._source_fingerprint() != mark):
+            return ""
+        task.keep(json.dumps(dict(task=spec.task_id, turns=exc.turns, source=mark, spent=spent,
+                                  allowance=self.config.max_fix_cycles)),
+                  kind="capped-no-edit", author=getattr(self._outcome, "lead", "") or "")
+        self._note(f"task {spec.task_id}: revision stopped at its turn limit having changed no file; "
+                   "one more revision from the remaining fix allowance")
+        if self._outcome is not None:
+            self._outcome.note("cap", f"revision stopped at its turn limit ({exc.turns or '?'} turns) with no "
+                                      "change to the source; one more revision from the fix allowance",
+                               terminal=False)
+        return ("\n\n## What the harness measured on your previous attempt\n"
+                f"Your previous revision of this task stopped at its {exc.turns or '?'}-round limit and "
+                "changed no file: the source is byte-identical to before it. The findings above are "
+                "unchanged and still open. This attempt is charged to the task's fix allowance.")
+
     def _trim_overrun(self, lead, spec, task, failure, *, spent: int, what: str) -> str:
         """One call, charged as a fix cycle, to bring a size-only overrun back
         under the stop; re-raises ``failure`` when it does not qualify: another
@@ -3454,17 +3486,23 @@ class Session:
         return reply
 
     def _trim_prompt(self, spec: TaskSpec, report, stop: int, *, what: str = "revision") -> str:
+        # R15: asked for "at most {stop}", the draft trim landed at 152 against
+        # 150, as r11's revision had at 151: the model aims at the number it
+        # is given. The target is the task's own stated bound; the stop is
+        # still the only line that fails the task.
+        target = ("Aim for about {bound} lines, the task's stated bound; the run stops at {stop}, and a "
+                  "change even one line past {stop} fails the task. ")
         if what == "draft":
             ask = ("Your draft made this task's change {n} lines (tests count in full), past the run's "
                    "stop at {stop} for a stated bound of ~{bound}. The work is kept exactly as it is now; "
-                   "nothing was reverted. Bring the change back to at most {stop} lines by removing what "
-                   "neither the task nor the goal asked for. Do not remove behaviour the task or the goal "
+                   "nothing was reverted. Bring the change down by removing what neither the task nor the "
+                   "goal asked for. " + target + "Do not remove behaviour the task or the goal "
                    "requires, or a test that shows it. If it cannot fit, change ")
         else:
             ask = ("Your last revision made this task's change {n} lines (tests count in full), past the "
                    "run's stop at {stop} for a stated bound of ~{bound}. The work is kept exactly as it is "
-                   "now; nothing was reverted. Bring the change back to at most {stop} lines by removing "
-                   "what neither the task nor a review finding asked for. Do not remove a fix for a review "
+                   "now; nothing was reverted. Bring the change down by removing what neither the task nor "
+                   "a review finding asked for. " + target + "Do not remove a fix for a review "
                    "finding or a test that shows one. If it cannot fit, change ")
         return (
             f"Task: {spec.description}\n\n"
@@ -4290,15 +4328,23 @@ class Session:
             self._stage("revision")
             self._count("revision")
             blocking = [(p, n) for p, n in notes if _has_blocking_finding(n)]
-            trims = 0
+            trims = retried = 0
+            revision_prompt = self._revision_prompt(spec, draft, [f"[{labels[p]}]\n{n}" for p, n in notes])
+            mark = self._source_fingerprint()
             try:
-                revision, trims = self._edit_within_stop(
-                    lead, spec, task,
-                    self._revision_prompt(
-                        spec, draft, [f"[{labels[p]}]\n{n}" for p, n in notes]
-                    ),
-                    spent=1 + charged,
-                )
+                try:
+                    revision, trims = self._edit_within_stop(lead, spec, task, revision_prompt, spent=1 + charged)
+                except TurnLimitReached as exc:
+                    # R15: a capped revision that changed nothing, with a
+                    # blocking finding open and a cycle left, is told what was
+                    # measured and asked once more from that cycle.
+                    note = self._no_edit_cap_note(spec, task, exc, mark, blocking, spent=1 + charged)
+                    if not note:
+                        raise
+                    retried = 1
+                    self._count("revision")
+                    revision, trims = self._edit_within_stop(lead, spec, task, revision_prompt + note,
+                                                             spent=2 + charged)
             except TurnLimitReached as exc:
                 # A capped revision takes the capped-task path: kept,
                 # measured, unreviewed and ungated, re-planned by name --
@@ -4314,7 +4360,7 @@ class Session:
                 unresolved = self._recheck_blocking(
                     spec, blocking, revision, task, labels=labels
                 )
-            cycles = 1 + trims + charged
+            cycles = 1 + trims + charged + retried
             while unresolved and cycles < self.config.max_fix_cycles and not capped_writer:
                 self._count("revision")
                 pending = [(p, n) for p, n in blocking if any(p == up for up, _ in unresolved)]

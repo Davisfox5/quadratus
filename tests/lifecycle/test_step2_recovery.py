@@ -1680,6 +1680,9 @@ def test_a_finished_draft_past_the_size_stop_spends_one_fix_cycle_coming_back_un
     if case == "trimmed":
         assert roles == ["lead", "revision"] and "Your draft made this task's change" in writers[1].prompt
         assert "Do not remove behaviour the task or the goal requires" in writers[1].prompt
+        # R15: the trim aims at the stated bound; the stop stays the failure line.
+        assert "Aim for about 40 lines, the task's stated bound; the run stops at 60" in writers[1].prompt
+        assert "at most 60 lines" not in writers[1].prompt
         assert result["failed_tasks"] == [] and replay.of("collaborator"), "the trimmed draft meets its peer"
         assert replay.of("auditor"), "and the final audit"
         assert (replay.project / "app.py").read_text() == _TYPED
@@ -1836,3 +1839,112 @@ def test_the_final_audit_is_admitted_exactly_at_the_unchanged_call_reserve(tmp_p
     assert not refused.of("auditor") and not refused.result.completed
     assert "reported_token_reserve" in (refused.result.error or "") or "RunBudgetExceeded" in (
         refused.result.error or "")
+
+
+# -- R15 on 7f628ae: a capped revision that changed nothing --------------------------------
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("case", ["retried-fixed", "edited-capped", "capped-again", "no-cycle", "non-blocking"])
+def test_a_capped_revision_that_changed_nothing_gets_one_measured_retry_from_the_allowance(
+        tmp_path, monkeypatch, case):
+    """R15: t3's capped revision had a concrete blocking finding, read for all
+    8 rounds and wrote nothing; the task closed turn-limited with a fix cycle
+    unused. A capped revision that left the source byte-identical, with a
+    blocking finding open and a cycle left, now gets one more revision from
+    that cycle carrying what the harness measured. The recheck reads the
+    source (RESOLVED only if the fix is there), and the audit still decides.
+    An edit made before the cap, a second no-edit cap, no cycle left, or no
+    blocking finding keep the existing capped paths."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    declared = ("REQUIREMENTS:\nR1: " + _R1 + "\n" + DECL_T1 + "\nCOVERS: R1")
+
+    def lead(call, replay):
+        H.write(call, {"app.py": _BLOATED if case == "no-cycle" else fixed})
+        return H.claude_ok('Implemented add.\nCHANGED: ["app.py"]')
+
+    def revision(call, replay):
+        n = len(replay.of("revision"))
+        if case == "no-cycle" and n == 1:
+            H.write(call, {"app.py": fixed})                      # the draft trim
+            return H.claude_ok('Trimmed.\nCHANGED: ["app.py"]')
+        if case == "edited-capped":
+            H.write(call, {"app.py": _TYPED})
+            return H.claude_cap("Checking the TypeError path", num_turns=8)
+        if case == "retried-fixed" and n == 2:
+            H.write(call, {"app.py": _TYPED})
+            return H.claude_ok('Added the TypeError.\nCHANGED: ["app.py"]')
+        return H.claude_cap("Still reading app.py", num_turns=8)
+
+    def collaborator(call, replay):
+        if case == "non-blocking":
+            return "Consider naming the argument.\nR1: MET - app.py:2\nREVIEW: COMPLETE"
+        return _FINDING + "\nR1: NOT MET - TypeError\nREVIEW: COMPLETE"
+
+    def recheck(call, replay):
+        source = (Path(call.cwd) / "app.py").read_text()
+        return "RESOLVED" if "TypeError" in source else "UNRESOLVED: add('x', 1) still returns a string."
+
+    replay = H.run(tmp_path, monkeypatch, Script(
+        orchestrator=_plan(declared), lead=lead, revision=revision, collaborator=collaborator, recheck=recheck,
+        auditor=lambda c, r: "R1: MET - app.py:2", **{"requirements-review": lambda c, r: "COMPLETE"}),
+        files=FILES, max_tasks=1, settings=Settings(backend="cli", lead_max_turns=8), record_complete=False)
+    writers = [c for c in replay.calls if c.role in ("lead", "revision", "gate-fix", "design-fix")]
+    roles = [c.role for c in writers]
+    measured = "changed no file: the source is byte-identical to before it"
+    if case == "retried-fixed":
+        assert roles == ["lead", "revision", "revision"] and measured in writers[2].prompt
+        assert _FINDING in writers[2].prompt, "the same findings, with the measured outcome"
+        assert replay.of("recheck") and replay.of("auditor") and replay.result.completed
+        assert (replay.project / "app.py").read_text() == _TYPED
+        return
+    if case == "capped-again":
+        assert roles == ["lead", "revision", "revision"] and measured in writers[2].prompt
+        assert measured not in writers[1].prompt and not replay.result.completed, "no third call"
+        return
+    assert all(measured not in c.prompt for c in writers), "no measured retry"
+    if case != "edited-capped":
+        assert not replay.result.completed
+    expected = {"edited-capped": ["lead", "revision"], "no-cycle": ["lead", "revision", "revision"],
+                "non-blocking": ["lead", "revision"]}[case]
+    assert roles == expected, roles
+
+
+@pytest.mark.requirements_ledger
+def test_a_parallel_childs_capped_no_edit_revision_gets_the_same_measured_retry(tmp_path, monkeypatch):
+    """R15's shape: t3 was a parallel child. The child spends its own task's
+    remaining cycle; the fixed source merges and the task is not left
+    turn-limited."""
+    from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    batch = ("REQUIREMENTS:\nR1: " + _R1 + "\nR2: README documents add\n"
+             "PARALLEL\n" + _simple("app.py", "Implement add in app.py.", "R1")
+             + "\n---\n" + _simple("README.md", "Document add in README.md.", "R2"))
+
+    def lead(call, replay):
+        if call.task == "t1":
+            H.write(call, {"app.py": fixed})
+            return 'Implemented add.\nCHANGED: ["app.py"]'
+        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
+        return 'Documented add.\nCHANGED: ["README.md"]'
+
+    def revision(call, replay):
+        if len([c for c in replay.of("revision") if c.task == "t1"]) == 1:
+            return H.grok_ok("Reading app.py", stop="cancelled", num_turns=8)
+        H.write(call, {"app.py": _TYPED})
+        return 'Added the TypeError.\nCHANGED: ["app.py"]'
+
+    def collaborator(call, replay):
+        if call.task == "t1":
+            return _FINDING + "\nR1: NOT MET - TypeError\nREVIEW: COMPLETE"
+        return "NO FINDINGS\nR2: MET - README.md:3"
+
+    def recheck(call, replay):
+        return "RESOLVED" if "TypeError" in (Path(call.cwd) / "app.py").read_text() else "UNRESOLVED: no TypeError"
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=_plan(batch), lead=lead, revision=revision,
+                                                 collaborator=collaborator, recheck=recheck),
+                   files=FILES, max_tasks=2, settings=Settings(backend="cli", lead_max_turns=8),
+                   record_complete=False)
+    t1 = [c for c in replay.of("revision") if c.task == "t1"]
+    assert len(t1) == 2 and "changed no file" in t1[1].prompt
+    assert "t1" not in H.result_json(replay)["turn_limited_tasks"]
+    assert (replay.project / "app.py").read_text() == _TYPED, "the fix merged"

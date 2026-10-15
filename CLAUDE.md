@@ -887,6 +887,16 @@ Key design decisions already settled:
   says DONE is the goal decision and the independent audit follows. No
   reserve, order, cap or seat change: reordering would only move the
   starvation, since native usage cannot be known before a call.
+- **A trim aims at the stated bound; a no-edit capped revision gets one
+  measured retry** (R15 on 7f628ae). Asked for "at most 150", t2's draft
+  trim landed at 152, as r11's revision had at 151: the model aims at the
+  number given. The trim now aims at the task's stated bound and names the
+  stop as the failure line. t3's capped revision had a concrete blocking
+  finding, read for 8 rounds and wrote nothing, with a fix cycle unused.
+  `_no_edit_cap_note` gives such a revision (source byte-identical, a
+  blocking finding open, write grant, a cycle left) one more revision from
+  that cycle, carrying the measured outcome rather than the same prompt;
+  its own cap takes the capped paths. Whether it helps is unproven.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.
