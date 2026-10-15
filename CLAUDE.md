@@ -994,7 +994,11 @@ Key design decisions already settled:
   with its task and source fingerprint; `_authority_context` carries those
   on the requirements judged, labelled current or earlier source, as
   observations to reconcile. Resolved BLOCKING findings and notes on
-  uncovered requirements are not carried. An executed-demonstration
+  uncovered requirements are not carried. Notes are kept and carried whole,
+  every one (root review of 728c0fc: a 600-character slice kept a benign
+  prefix and a last-20 cap dropped the oldest warning); review volume is
+  already bounded by the job. A BLOCKING line ends what its paragraph can
+  contribute: its continuation belongs to the blocking and recheck route. An executed-demonstration
   requirement for every error-boundary MET was built and held back as
   broader than this fact supports (patch kept in the #73 record).
 - **Capped work in the final parallel batch meets one review** (r05). A

@@ -9765,21 +9765,34 @@ class Session:
         routes; nothing here is a verdict or changes one."""
         source = self._source_fingerprint() if self.project else None
         for block in re.split(r"\n\s*\n", note or ""):
-            lines = [line for line in block.splitlines()
-                     if line.strip() and not _AUDIT_LINE.match(line) and not _BLOCKING_LINE.match(line)
-                     and line.strip() not in ("NO FINDINGS", _REVIEW_COMPLETE)]
-            text = " ".join(line.strip() for line in lines)
+            lines = []
+            for line in block.splitlines():
+                if _BLOCKING_LINE.match(line.replace("**", "")):
+                    # The finding and every line after it in its paragraph
+                    # belong to the blocking and recheck route (root review of
+                    # 728c0fc: a continuation line was carried as an unchecked
+                    # observation).
+                    break
+                if line.strip() and not _AUDIT_LINE.match(line) and line.strip() not in (
+                        "NO FINDINGS", _REVIEW_COMPLETE):
+                    lines.append(line.strip())
+            text = " ".join(lines)
             named = sorted({r.upper() for r in re.findall(r"\bR\d+\b", text)} & set(rids))
             if not text or not named:
                 continue
+            # Whole: a slice kept an innocent prefix and dropped the warning
+            # after it (root review of 728c0fc). Review volume is already
+            # bounded by the job's calls and tokens.
             self.review_notes.append(dict(task=spec.task_id, peer=peer, requirements=named,
-                                          text=text[:600], source=source))
+                                          text=text, source=source))
 
     def _review_notes_block(self, audited: dict) -> str:
         """The carried review observations on the requirements judged, each
         labelled with whether it was written about the current source."""
         current = self._source_fingerprint() if self.project else None
-        rows = [n for n in self.review_notes if set(n["requirements"]) & set(audited)][-20:]
+        # Every one: a count cap dropped the oldest warning behind newer
+        # benign notes (root review of 728c0fc).
+        rows = [n for n in self.review_notes if set(n["requirements"]) & set(audited)]
         if not rows:
             return ""
         lines = [f"- {n['task']} review, about {', '.join(n['requirements'])}, "

@@ -321,7 +321,8 @@ _ROOT_LIMITS = RunLimits(max_calls=20, max_reported_tokens=2_000_000, wall_secon
                          max_tokens_per_call=500_000)
 
 
-def _ratio_run(tmp_path, monkeypatch, *, source=_SAFE, test="zero", keeps=False, limits=_ROOT_LIMITS):
+def _ratio_run(tmp_path, monkeypatch, *, source=_SAFE, test="zero", keeps=False, limits=_ROOT_LIMITS,
+               review="NO FINDINGS\nR1: MET - ratio.py:4"):
     """max_tasks=1: t1 writes ratio.py, the cap question is answered DONE,
     the final audit finds R1 NOT MET claiming ZeroDivisionError escapes
     (false for _SAFE), and the orchestrator challenges R1 once with a new
@@ -350,7 +351,7 @@ def _ratio_run(tmp_path, monkeypatch, *, source=_SAFE, test="zero", keeps=False,
                 "example: safe_ratio(1, 0) raises ZeroDivisionError")
 
     return H.run(tmp_path, monkeypatch, Script(
-        orchestrator=orchestrator, lead=lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - ratio.py:4",
+        orchestrator=orchestrator, lead=lead, collaborator=lambda c, r: review,
         auditor=auditor, **{"requirements-review": lambda c, r: "COMPLETE"}),
         files={**FILES, "app.py": FIXED, "ratio.py": "def safe_ratio(a, b):\n    return a / b\n"},
         max_tasks=1, record_complete=False, limits=limits)
@@ -737,3 +738,81 @@ def test_a_non_blocking_review_warning_reaches_the_final_audit_labelled_never_as
         assert f"t1 review, about R1, {label}" in carried
         assert "neither a finding nor an approval" in carried
     assert replay.result.completed, "an observation decides nothing by itself"
+
+
+
+# -- root review of 728c0fc: carried observations are whole, and never blocking prose -------
+
+_LATE = ("WARNING-TAIL-7731: for R1, safe_ratio(1, 0) raises ZeroDivisionError instead of returning None; "
+         + "the zero-divisor branch is never reached on this path. " * 12)
+_CONTEXT = "\n".join(f"Valid input works for case {k} of R1." for k in range(22))
+
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("shape", ["late-in-a-long-paragraph", "oldest-of-21-paragraphs"])
+def test_a_carried_review_warning_reaches_the_audit_whole(tmp_path, monkeypatch, shape):
+    """Root on 728c0fc: the note was cut to 600 characters and the list to
+    the last 20, so a warning after 22 benign lines, or the oldest of 21
+    paragraphs, never reached the auditor, which could then mark R1 MET.
+    Notes are now kept and carried whole; the review volume is already
+    bounded by the job's calls and tokens."""
+    if not _sandboxed():
+        pytest.skip("no scratch sandbox here")
+    if shape == "late-in-a-long-paragraph":
+        review = f"{_CONTEXT}\n{_LATE}\n\nR1: MET - ratio.py:4\nREVIEW: COMPLETE"
+    else:
+        benign = "\n\n".join(f"R1 note {k}: valid input works." for k in range(20))
+        review = f"{_LATE}\n\n{benign}\n\nR1: MET - ratio.py:4\nREVIEW: COMPLETE"
+    assert len(_LATE) > 600
+    replay = _ratio_run(tmp_path, monkeypatch, review=review)
+    audit = replay.of("auditor")[0].prompt
+    carried = audit.split("## Earlier task-review observations")[1]
+    assert _LATE.strip() in carried, "the whole warning, not a prefix"
+    if shape == "oldest-of-21-paragraphs":
+        assert all(f"R1 note {k}: valid input works." in carried for k in range(20))
+    assert any(_LATE.strip() in n["text"] for n in H.result_json(replay)["review_notes"]), "stored whole"
+
+
+def test_a_blocking_finding_and_its_continuation_are_never_carried_as_an_observation():
+    """Root on 728c0fc: only the BLOCKING line was dropped, so its
+    continuation was carried as 'not marked blocking and never rechecked'.
+    The finding and the rest of its paragraph belong to the blocking and
+    recheck route; a separate non-blocking paragraph is still kept."""
+    from types import SimpleNamespace
+
+    from quadratus.session import Session
+    session = Session.__new__(Session)
+    session.project, session.review_notes = None, []
+    note = ("BLOCKING: invalid input leaks an exception.\nFor R1 this violates the required error object.\n\n"
+            "Separately, R1's README example omits the zero case.\n\nR1: NOT MET - app.py\nREVIEW: COMPLETE")
+    session._record_review_notes(SimpleNamespace(task_id="t1"), "openai:x", note, ["R1"])
+    assert [n["text"] for n in session.review_notes] == ["Separately, R1's README example omits the zero case."]
+    session.review_notes = []
+    session._record_review_notes(SimpleNamespace(task_id="t1"), "openai:x",
+                                 "- **BLOCKING:** leaks.\nFor R1 the error object is missing.", ["R1"])
+    assert session.review_notes == []
+
+
+@pytest.mark.requirements_ledger
+def test_a_carried_warning_survives_a_pause_and_reaches_the_resumed_reassessment(tmp_path, monkeypatch):
+    """Positive resume control: the warning is checkpointed with the closed
+    task, and the reassessment finished by the resumed episode reads it."""
+    from quadratus.session import Session
+    from tests.lifecycle.test_step2_recovery import _episode
+    if not _sandboxed():
+        pytest.skip("no scratch sandbox here")
+    real = Session._reassess
+    fired = []
+
+    def reassess(self, *a, **kw):
+        if not fired:
+            fired.append(True)
+            raise KeyboardInterrupt
+        return real(self, *a, **kw)
+    monkeypatch.setattr(Session, "_reassess", reassess)
+    review = f"{_LATE}\n\nR1: MET - ratio.py:4\nREVIEW: COMPLETE"
+    replay = _ratio_run(tmp_path, monkeypatch, review=review)
+    before = len(replay.calls)
+    _episode(replay, resume_from=Path(replay.result.run_dir).name, max_tasks=1, limits=_ROOT_LIMITS)
+    (judge,) = [c for c in replay.calls[before:] if REASSESS in c.prompt]
+    assert _LATE.strip() in judge.prompt
