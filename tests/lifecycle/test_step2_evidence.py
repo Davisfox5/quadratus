@@ -816,3 +816,41 @@ def test_a_carried_warning_survives_a_pause_and_reaches_the_resumed_reassessment
     _episode(replay, resume_from=Path(replay.result.run_dir).name, max_tasks=1, limits=_ROOT_LIMITS)
     (judge,) = [c for c in replay.calls[before:] if REASSESS in c.prompt]
     assert _LATE.strip() in judge.prompt
+
+
+# -- root review of 225367f: a condition stated without an id ------------------------------
+
+_UNNUMBERED = ("PEER-OBSERVED-UNCAUGHT-INPUT: the required error-object condition is broken in app.py "
+               "parse_quantity; parse_quantity(\"bad\") raises ValueError. Legacy convention is the reviewer "
+               "reason not to block.")
+
+
+def test_a_review_condition_stated_without_an_id_is_kept_as_unassigned():
+    """Root on 225367f: _FINDING_SHAPE lets a finding state 'the requirement
+    or condition it breaks', and a paragraph stating only the condition was
+    dropped because it named no id. It is now kept against the task's covered
+    requirements, labelled as naming none, so the audit can reconcile it
+    without the harness claiming which requirement it concerns. A paragraph
+    naming only an uncovered id stays out."""
+    from types import SimpleNamespace
+
+    from quadratus.session import Session
+    session = Session.__new__(Session)
+    session.project, session.review_notes = None, []
+    note = f"{_UNNUMBERED}\n\nR99 is out of scope here.\n\nR1: MET - app.py\nREVIEW: COMPLETE"
+    session._record_review_notes(SimpleNamespace(task_id="t1"), "openai:x", note, ["R1"])
+    assert [(n["text"], n["requirements"], n["association"]) for n in session.review_notes] == [
+        (_UNNUMBERED, ["R1"], "unassigned")]
+    block = session._review_notes_block({"R1": "text"})
+    assert "naming no requirement (the task covered R1; which one, if any, it concerns is uncertain)" in block
+    assert _UNNUMBERED in block and "R99" not in block
+
+
+@pytest.mark.requirements_ledger
+def test_an_unnumbered_review_warning_reaches_the_final_audit(tmp_path, monkeypatch):
+    if not _sandboxed():
+        pytest.skip("no scratch sandbox here")
+    replay = _ratio_run(tmp_path, monkeypatch, review=f"{_UNNUMBERED}\n\nR1: MET - ratio.py:4\nREVIEW: COMPLETE")
+    audit = replay.of("auditor")[0].prompt
+    assert _UNNUMBERED in audit and "naming no requirement (the task covered R1" in audit
+    assert len(replay.of("auditor")) == 2, "no added call: the audit and the challenge's one reassessment"

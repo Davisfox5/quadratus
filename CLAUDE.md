@@ -998,7 +998,11 @@ Key design decisions already settled:
   every one (root review of 728c0fc: a 600-character slice kept a benign
   prefix and a last-20 cap dropped the oldest warning); review volume is
   already bounded by the job. A BLOCKING line ends what its paragraph can
-  contribute: its continuation belongs to the blocking and recheck route. An executed-demonstration
+  contribute: its continuation belongs to the blocking and recheck route.
+  A paragraph that states a condition without any id (as `_FINDING_SHAPE`
+  allows) is kept against the task's covered requirements and labelled as
+  naming none, its association uncertain; one naming only uncovered ids
+  stays out (root review of 225367f). An executed-demonstration
   requirement for every error-boundary MET was built and held back as
   broader than this fact supports (patch kept in the #73 record).
 - **Capped work in the final parallel batch meets one review** (r05). A

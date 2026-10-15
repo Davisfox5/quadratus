@@ -9777,14 +9777,24 @@ class Session:
                         "NO FINDINGS", _REVIEW_COMPLETE):
                     lines.append(line.strip())
             text = " ".join(lines)
-            named = sorted({r.upper() for r in re.findall(r"\bR\d+\b", text)} & set(rids))
-            if not text or not named:
+            if not text:
                 continue
+            ids = {r.upper() for r in re.findall(r"\bR\d+\b", text)}
+            named = sorted(ids & set(rids))
+            association = "named"
+            if not named:
+                if ids:
+                    # Names only requirements this task does not cover.
+                    continue
+                # _FINDING_SHAPE lets a finding state its condition without
+                # an id (root review of 225367f): kept against the task's
+                # covered requirements, labelled as unassigned.
+                named, association = sorted(rids), "unassigned"
             # Whole: a slice kept an innocent prefix and dropped the warning
             # after it (root review of 728c0fc). Review volume is already
             # bounded by the job's calls and tokens.
             self.review_notes.append(dict(task=spec.task_id, peer=peer, requirements=named,
-                                          text=text, source=source))
+                                          association=association, text=text, source=source))
 
     def _review_notes_block(self, audited: dict) -> str:
         """The carried review observations on the requirements judged, each
@@ -9795,7 +9805,10 @@ class Session:
         rows = [n for n in self.review_notes if set(n["requirements"]) & set(audited)]
         if not rows:
             return ""
-        lines = [f"- {n['task']} review, about {', '.join(n['requirements'])}, "
+        lines = [f"- {n['task']} review, "
+                 + (f"about {', '.join(n['requirements'])}, " if n.get("association", "named") == "named" else
+                    f"naming no requirement (the task covered {', '.join(n['requirements'])}; which one, if "
+                    "any, it concerns is uncertain), ")
                  + ("written about the current source" if n.get("source") and n["source"] == current
                     else "written about an earlier source (it may no longer hold)")
                  + f", not marked blocking and never rechecked: {n['text']}" for n in rows]
