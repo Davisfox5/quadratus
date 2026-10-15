@@ -652,7 +652,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'in_flight': in_flight,
         'policy_preview': preview,
         'policy_plans': getattr(session, 'policy_plans', []),
-        'budget': budget.snapshot() if budget else None,
+        **_budget_fields(budget),
         'selected_limits': selected,
         'unnamed_test_files': list(getattr(session, 'unnamed_test_files', []) or []) if session else [],
         'original_test_runs': list(getattr(session, 'original_test_runs', []) or []) if session else [],
@@ -929,6 +929,36 @@ def _survey_record(session, completed):
         hypotheses=list(session.survey.get("hypotheses", [])),
         completed=completed,
     )
+
+
+def _budget_fields(budget) -> dict:
+    """``budget`` (the terminal snapshot) and ``budget_note``, derived from
+    that same snapshot: whether what was left could admit an ordinary call
+    (R20 on c7e9449: 141,947 reported tokens remained under a 200,000
+    ordinary-call reserve, the run stopped FindingsOpen, and nothing in the
+    record said the allowance had run that low). An observation, never the
+    run's stop, outcome or a failure fact."""
+    if not budget:
+        return {'budget': None, 'budget_note': None}
+    snapshot = budget.snapshot()
+    limits = snapshot.get('limits') or {}
+    reserve = int(limits.get('reserve_tokens_per_call') or 0)
+    total = limits.get('max_reported_tokens')
+    used = snapshot.get('reported_tokens')
+    if not reserve or total is None or used is None:
+        return {'budget': snapshot, 'budget_note': None}
+    remaining = int(total) - int(used)
+    if remaining >= reserve:
+        return {'budget': snapshot, 'budget_note': None}
+    unknown = int(snapshot.get('unknown_usage_attempts') or 0)
+    text = (f'At the end of the run {remaining:,} reported tokens remained, below the ordinary-call '
+            f'reserve of {reserve:,}: no further ordinary call could have been admitted. This is an '
+            'observation, not the run\'s stop. A summary-only call whose CLI enforces one turn reserves '
+            'less, so it is not a statement that no call of any kind fit.'
+            + (f' {unknown} attempt(s) reported no usage, so the true remainder may be lower.' if unknown else ''))
+    return {'budget': snapshot, 'budget_note': {
+        'remaining_reported_tokens': remaining, 'ordinary_call_reserve': reserve,
+        'stop_reason': snapshot.get('stop_reason') or '', 'unknown_usage_attempts': unknown, 'text': text}}
 
 
 def _requirements_record(session):

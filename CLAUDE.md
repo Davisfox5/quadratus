@@ -1005,6 +1005,19 @@ Key design decisions already settled:
   stays out (root review of 225367f). An executed-demonstration
   requirement for every error-boundary MET was built and held back as
   broader than this fact supports (patch kept in the #73 record).
+- **A trim gets what the harness measured** (R20 on c7e9449). t2's one
+  scope trim, told only the total, spent 8 rounds and 373,366 reported
+  tokens, more than its draft, and the run ended with 141,947 left under the
+  200k ordinary-call reserve. `_trim_evidence` gives every trim site
+  (finished draft, capped draft, revision) per-file counts split into code
+  and tests and the task's diff (`project.diff_contents`, the one
+  rendering `Project.diff` uses), measured fresh and filtered by file
+  identity on both sides to what every scope over the task permits; a diff
+  over `_TRIM_DIFF_MAX_CHARS` is stated as omitted, never cut. No call,
+  cap, target, stop or allowance changes; the token effect is a hypothesis.
+  `result.json` `budget_note` records, from the terminal budget snapshot,
+  when what was left sat under the ordinary-call reserve: an observation,
+  never the stop, an outcome fact or a claim that no shaped call could fit.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.

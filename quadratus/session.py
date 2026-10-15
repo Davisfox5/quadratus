@@ -1644,6 +1644,10 @@ _AUTHORITY_ORDER = (
     "conditions is not met. Behaviour the goal does not address, and old behaviour outside the work it "
     "asks for, is judged on its own merits as before.")
 
+#: The largest task diff a trim prompt carries whole (R20 on c7e9449); a
+#: larger one is stated as omitted, never cut.
+_TRIM_DIFF_MAX_CHARS = 32_000
+
 #: What a test cannot do in a reassessment, whoever wrote it.
 _EVIDENCE_AUTHORITY = (
     "The goal, the decisions and operator rulings, the configured checks and design evidence above bind "
@@ -3593,7 +3597,8 @@ class Session:
                                   allowance=self.config.max_fix_cycles)),
                   kind="scope-trim", author=lead)
         try:
-            self._edit(lead, self._trim_prompt(spec, report, stop, what="capped draft", turns=exc.turns))
+            self._edit(lead, self._trim_prompt(spec, report, stop, what="capped draft", turns=exc.turns,
+                                               before=before))
         except TurnLimitReached:
             return False
         if self._outcome is not None:
@@ -3631,7 +3636,52 @@ class Session:
                                          "back", terminal=False).recovered = True
         return reply
 
-    def _trim_prompt(self, spec: TaskSpec, report, stop: int, *, what: str = "revision", turns=None) -> str:
+    def _trim_evidence(self, spec: TaskSpec, before) -> str:
+        """What the harness measured of this task's change, for its trim (R20
+        on c7e9449: a trim given only the total spent its 8 rounds and 373k
+        reported tokens on one task, more than the draft it trimmed, with the
+        per-file counts and the diff already held here). Measured fresh, on
+        the files every scope over this task permits, filtered by file
+        identity on both sides before anything is rendered, so no other path,
+        excluded file or private name reaches the prompt. Per-file counts
+        always; the diff whole, or stated as omitted when over the bound,
+        never a prefix. Whether it saves rounds is a hypothesis."""
+        from .project import Project, diff_contents
+        from .scope import count_change_lines, is_test_path
+        if before is None or spec.scope is None or not self.project:
+            return ""
+        try:
+            after = Project(self.project, exclude=self.config.project_excludes).contents()
+        except Exception:  # noqa: BLE001 -- observation never fails a run
+            return ""
+        scopes = [spec.scope] + list(self._outer_limits(spec))
+
+        def permitted(name):
+            return not spec.scope.review_only and all(s.permits(name) for s in scopes)
+        names = sorted(n for n in set(before) | set(after) if permitted(n)
+                       and (before.get(n) != after.get(n) or (n in before) != (n in after)))
+        if not names:
+            return ""
+        old = {n: before[n] for n in names if n in before}
+        new = {n: after[n] for n in names if n in after}
+        rows, code, tests = [], 0, 0
+        for name in names:
+            count = count_change_lines(diff_contents({name: old[name]} if name in old else {},
+                                                     {name: new[name]} if name in new else {}))
+            test = is_test_path(name)
+            code, tests = (code, tests + count) if test else (code + count, tests)
+            state = "deleted" if name not in new else "added" if name not in old else "changed"
+            rows.append(f"- {name}: {count} line(s), {'test' if test else 'code'}, {state}")
+        diff = diff_contents(old, new)
+        shown = (f"\n\nThe task's current diff, from the harness (against the source before this task):\n"
+                 f"```diff\n{diff}```" if len(diff) <= _TRIM_DIFF_MAX_CHARS else
+                 f"\n\nThe task's current diff is {len(diff):,} characters, over the {_TRIM_DIFF_MAX_CHARS:,}-"
+                 "character bound for this prompt, so it is not shown here; the files above hold it.")
+        return ("\n\n## What the harness measured of this change\n" + "\n".join(rows)
+                + f"\nCode lines: {code}; test lines: {tests} (tests count in full)." + shown)
+
+    def _trim_prompt(self, spec: TaskSpec, report, stop: int, *, what: str = "revision", turns=None,
+                     before=None) -> str:
         # R15: asked for "at most {stop}", the draft trim landed at 152 against
         # 150, as r11's revision had at 151: the model aims at the number it
         # is given. The target is the task's own stated bound; the stop is
@@ -3657,6 +3707,7 @@ class Session:
             + ask.format(n=report.changed_lines, stop=stop, bound=report.max_lines, turns=turns or "?")
             + "nothing more and write a line 'BLOCKER: <what> needs about N more lines'; the task then "
             "stops at the size limit as before."
+            + self._trim_evidence(spec, self._task_before if before is None else before)
             + _revision_changed_delivery(self._interim_edits_note())
             + _NO_REQUESTS_IN_FIX
         )
