@@ -33,12 +33,13 @@ __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateS
            "CheckUnattributable", "attribute", "read_report", "model_facing"]
 
 #: The argv token a check uses to declare the harness's structured report.
-#: The only supported producer is the harness-owned pytest plugin
-#: (``_gate_producer``), declared as ``--quadratus-report={report}``. The
-#: harness replaces the token with a path it owns, outside the project, loads
-#: the plugin for that one invocation, and removes the path after reading it
-#: (phase 3, #25). Other runners have no producer: their failures are never
-#: attributable, so never repaired.
+#: Its producers are the harness-owned ones in ``_gate_producer`` (the pytest
+#: plugin, the node:test reporter and the unittest runner module), each
+#: declared as ``--quadratus-report={report}``. The harness replaces the token
+#: with a path it owns, outside the project, loads the producer for that one
+#: invocation, and removes the path after reading it (phase 3, #25). Other
+#: runners have no producer: their failures are never attributable, so never
+#: repaired.
 REPORT_TOKEN = "{report}"
 PRODUCER = "quadratus-pytest/5"
 #: The node:test producer (series rule-58a4625 f3: the second cycle in a row
@@ -158,6 +159,14 @@ def _report_slot(argv, env):
         yield [a.replace(REPORT_TOKEN, path) for a in argv], env, path, expected
     finally:
         shutil.rmtree(owned, ignore_errors=True)
+
+
+def _declared_producer(argv) -> Path:
+    """The shipped producer file ``_report_slot`` copies for ``argv``."""
+    argv = [str(a) for a in argv]
+    if _is_unittest(argv):
+        return _UNITTEST_PRODUCER_FILE
+    return _NODE_PRODUCER_FILE if _is_node_test(argv) else _PRODUCER_FILE
 
 
 def _is_unittest(argv) -> bool:
@@ -934,6 +943,9 @@ class GateSuite:
         if path is None:
             return ''
         files = [Path(__file__), Path(path)]
+        # The shipped producer a declared report selects is part of the
+        # runner: changed bytes must miss the cache (root review of f0b4827).
+        files += [_declared_producer(command.argv)] if any(REPORT_TOKEN in a for a in command.argv) else []
         # Include explicit runner scripts outside the project as well.
         files += [cwd / a for a in command.argv[1:] if (cwd / a).is_file()]
         digest = hashlib.sha256()

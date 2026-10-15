@@ -16,7 +16,8 @@ the exception's module-qualified type. A subtest (``unittest`` ``subTest`` or
 the ``subtests`` fixture, which pytest 9 reports through the same hook as
 its item) is part of its item, never an item: it is tallied apart, and its
 failure makes its item fail, with the item's one failure record an
-assertion only when every failure behind it is (R21: seven passing subtests
+assertion only when every failure behind it is; with no failure, a skipped
+subtest makes its item skipped (R21: seven passing subtests
 were counted as seven more passed items than were collected). The report carries the nonce the
 harness set for this one invocation, so a stale or foreign file is refused.
 """
@@ -125,11 +126,12 @@ class _Recorder:
         if self.subtest_types and isinstance(report, self.subtest_types):
             kind = "failed" if report.failed else "skipped" if report.skipped else "passed"
             self.subtests[kind] += 1
-            if report.failed:
+            if kind != "passed":
                 self.pending.setdefault(report.nodeid, []).append(report)
             return
         if report.when == "call":
-            failed = self.pending.pop(report.nodeid, [])
+            held = self.pending.pop(report.nodeid, [])
+            failed = [r for r in held if r.failed]
             if report.failed or failed:
                 self.counts["failed"] += 1
                 # pytest may already have turned a parent with failed
@@ -137,10 +139,12 @@ class _Recorder:
                 # outcome is its subtests', not a cause beside them.
                 own = report.failed and (getattr(report, "quadratus_exc", None) is not None or not failed)
                 self._fail(report, ([report] if own else []) + failed)
+            elif report.skipped or held:
+                # A skipped subtest is a case that did not run: its item
+                # counts skipped, never passed (root review of f0b4827).
+                self.counts["skipped"] += 1
             elif report.passed:
                 self.counts["passed"] += 1
-            elif report.skipped:
-                self.counts["skipped"] += 1
         elif report.failed:
             self.counts["errors"] += 1
             self._fail(report)

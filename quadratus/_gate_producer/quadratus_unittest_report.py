@@ -13,7 +13,8 @@ has, and the report written once unittest has decided its exit.
 
 It records no prose. A test counts once: failed when its body, its setUp or
 tearDown, or any of its subtests failed or errored, or it succeeded
-unexpectedly; skipped when skipped or an expected failure; otherwise passed.
+unexpectedly; otherwise skipped when it or any of its subtests was skipped,
+or it was an expected failure; otherwise passed.
 Its one failure record is an assertion only when every exception behind it
 is exactly ``AssertionError`` and its traceback passes through the test
 method's own frame. Class and module fixture errors are setup or teardown
@@ -107,7 +108,10 @@ class _Recorder:
 
     def skip(self, test):
         if isinstance(test, getattr(unittest.case, "_SubTest", ())):
-            self.subtests["skipped"] += 1  # a skipped subtest never skips its test
+            self.subtests["skipped"] += 1
+            # A skipped subcase did not run: with no failure its test is
+            # skipped, never passed (root review of f0b4827).
+            self._state(test.test_case)["skipped"] = True
         elif isinstance(test, unittest.TestCase):
             self._state(test)["skipped"] = True
 

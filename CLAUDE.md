@@ -1020,6 +1020,11 @@ Key design decisions already settled:
   `quadratus-unittest/1`, the expected producer bound per invocation. Plain
   unittest stays undeclared and unattributable; root rejected letting a
   sibling check's report stand in for another, and `attribute()` is unchanged.
+  Root on f0b4827: with no failure, a skipped subcase makes its test skipped
+  in both producers (it had vanished, so `skipped_count` read zero), and the
+  selected shipped producer's bytes are part of `GateSuite._runner_hash`, so
+  a changed reporter misses the cache. unittest's own summary for a failed
+  and a skipped subcase reads as zero executed and still fails closed.
 - **A trim gets what the harness measured** (R20 on c7e9449). t2's one
   scope trim, told only the total, spent 8 rounds and 373,366 reported
   tokens, more than its draft, and the run ended with 141,947 left under the

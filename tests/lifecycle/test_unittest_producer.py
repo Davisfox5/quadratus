@@ -117,7 +117,7 @@ def test_the_unittest_producer_keeps_unittests_own_output_exit_and_records_every
     report = receipt.report
     assert report["state"] == "parsed", report
     assert (report["exitstatus"], report["collected"], report["collect_errors"]) == (1, 11, 1)
-    assert report["counts"] == dict(passed=3, failed=5, errors=1, skipped=2)
+    assert report["counts"] == dict(passed=2, failed=5, errors=1, skipped=3), "a skipped subcase skips its test"
     by = {f["nodeid"]: (f["when"], f["exc_type"], f["assertion"], f["body"]) for f in report["failures"]}
     assert by == {
         "setUpClass (test_mix.ClassFixture)": ("setup", "builtins.ValueError", False, False),
@@ -233,7 +233,7 @@ def test_roots_inert_subtest_file_now_parses_with_one_attributable_failure(tmp_p
     ("with self.subTest(v=0):\n                    self.assertTrue(0)", dict(passed=1, failed=1, errors=0, skipped=0), True),
     ("with self.subTest(v=0):\n                    raise RuntimeError('x')", dict(passed=1, failed=1, errors=0, skipped=0),
      False),
-    ("with self.subTest(v=0):\n                    self.skipTest('no')", dict(passed=2, failed=0, errors=0, skipped=0), None),
+    ("with self.subTest(v=0):\n                    self.skipTest('no')", dict(passed=1, failed=0, errors=0, skipped=1), None),
 ])
 def test_a_pytest_subtest_is_part_of_its_item(tmp_path, body, counts, product):
     root = _project(tmp_path, test_sub=f"""
@@ -319,3 +319,66 @@ def test_a_dual_gate_body_assertion_gets_exactly_one_repair(tmp_path, monkeypatc
             replay.result.error, [(c.role, c.cwd) for c in replay.calls])
     else:
         assert not fixes and "CheckUnattributable" in (replay.result.error or ""), replay.result.error
+
+
+# -- root review of f0b4827: skipped subcases and the reporter's cache identity -------------
+
+_SUBCASES = {
+    "pass-and-skip": ("for v in (1, 0):\n    with self.subTest(v=v):\n        if not v:\n"
+                      "            self.skipTest('no')\n        self.assertTrue(v)",
+                      dict(passed=0, failed=0, errors=0, skipped=1), None),
+    "skip-only": ("with self.subTest(v=0):\n    self.skipTest('no')",
+                  dict(passed=0, failed=0, errors=0, skipped=1), None),
+    "fail-and-skip": ("for v in (0, 2):\n    with self.subTest(v=v):\n        if v == 2:\n"
+                      "            self.skipTest('no')\n        self.assertTrue(v)",
+                      dict(passed=0, failed=1, errors=0, skipped=0), dict(pytest=True, unittest=False)),
+}
+
+
+@pytest.mark.parametrize("runner", ["unittest", "pytest"])
+@pytest.mark.parametrize("case", sorted(_SUBCASES))
+def test_a_skipped_subcase_is_never_counted_as_its_test_passing(tmp_path, runner, case):
+    """Root on f0b4827: a skipped subcase vanished from the canonical report,
+    so the receipt showed zero skips and the test as passed. With no
+    failure its test now counts skipped; a failure still decides, with its
+    provenance. Both producers, real runs."""
+    from quadratus.integration import skipped_count
+    body, counts, product = _SUBCASES[case]
+    module = "import unittest\n\n\nclass Sub(unittest.TestCase):\n    def test_case(self):\n"
+    root = _project(tmp_path, test_sub=module + textwrap.indent(body, " " * 8) + "\n")
+    result = _run(root, (UNITTEST if runner == "unittest" else PYTEST) + (TOKEN,))
+    (receipt,) = result.receipts
+    assert receipt.report["state"] == "parsed" and receipt.report["counts"] == counts, receipt.report
+    assert skipped_count(receipt) == counts["skipped"]
+    if product is not None:
+        # unittest's own summary for fail-and-skip is "Ran 1 test ... (failures=1,
+        # skipped=1)", which the unchanged runner count reads as zero executed:
+        # the receipt fails closed as unattributable, as it did before this fix.
+        assert attribute(result)["product"] is product[runner], attribute(result)
+
+
+@pytest.mark.parametrize("runner", ["unittest", "pytest"])
+def test_the_selected_reporters_bytes_are_part_of_the_cache_identity(tmp_path, monkeypatch, runner):
+    """Root on f0b4827: a changed copy of the unittest producer still hit the
+    gate cache with the same runner hash. The shipped producer a declared
+    report selects is now hashed with the runner: unchanged stays cached,
+    changed bytes miss."""
+    import quadratus.integration as integration
+    root = _project(tmp_path, test_one="""
+        import unittest
+        class One(unittest.TestCase):
+            def test_ok(self):
+                self.assertTrue(True)
+        """)
+    name = "_UNITTEST_PRODUCER_FILE" if runner == "unittest" else "_PRODUCER_FILE"
+    copy = tmp_path / Path(getattr(integration, name)).name
+    copy.write_bytes(Path(getattr(integration, name)).read_bytes())
+    monkeypatch.setattr(integration, name, copy)
+    argv = (UNITTEST if runner == "unittest" else PYTEST) + (TOKEN,)
+    suite = GateSuite([GateCommand("c", argv=argv, cacheable=True)], cwd=root)
+    first = suite.run().receipts[0]
+    again = suite.run().receipts[0]
+    assert (first.cached, again.cached, again.runner_hash) == (False, True, first.runner_hash)
+    copy.write_bytes(copy.read_bytes() + b"\n# changed\n")
+    changed = suite.run().receipts[0]
+    assert changed.cached is False and changed.runner_hash != first.runner_hash
