@@ -5283,6 +5283,7 @@ class Session:
                        if self._capture_guidance() else "")
                     + self._operator_limits_note()
                     + self._slots_note()
+                    + self._unfinished_state_note()
                     + self._survey_request()
                     + ("\n\n" + _tier_request(self.config.direct_max_lines) if self.config.direct_tier else "")
                     + ("\n\nA task identical to the one you named last round is refused and "
@@ -5527,6 +5528,39 @@ class Session:
             self._finalise_findings(exc)
             raise
         return history
+
+    def _unfinished_state_note(self) -> str:
+        """Which unfinished tasks are still owed and which were settled, and
+        the recovery allowance left, as the harness holds them now.
+
+        Step 2 R17 on a3cf7e4: t1 stopped at its cap, t2 CONTINUES t1 closed
+        reviewed and checked, and after a real pause and resume the planner
+        still read t1's record ("not done ... CONTINUES: t1") with nothing
+        saying it was settled or that the one recovery task was spent; it
+        named t3 CONTINUES t1 and the run stopped SurveyAllowanceSpent with
+        CLI and docs unplanned. The old records stay as they are; this says
+        which of them is current. Owed work is the same set that blocks
+        completion (typed and legacy together), so nothing here clears it."""
+        unfinished = [s.task_id for s in self.history
+                      if getattr(s, "outcome", "closed") in ("turn_limited", "failed")]
+        if not unfinished:
+            return ""
+        owed = set(self._partial_tasks) | self._partial_from_outcomes()
+        still = [t for t in unfinished if t in owed] + sorted(t for t in owed if t not in unfinished)
+        settled = [t for t in unfinished if t not in owed]
+        text = ("\n\nUnfinished work as the harness holds it now (this supersedes the 'not done' and "
+                "'CONTINUES' notes in older task records): ")
+        text += (f"still owed: {', '.join(still)}; a task that takes one over says CONTINUES with its id. "
+                 if still else "nothing is owed. ")
+        if settled:
+            text += (f"No longer owed: {', '.join(settled)} (a later task took the debt over); their records "
+                     "are history, and new work does not continue them. ")
+        if self.config.survey is not None:
+            total = self.config.survey.recovery_tasks
+            used = min(int(self.survey.get("recovery_used", 0) or 0), total)
+            text += (f"Recovery tasks (CONTINUES or RESOLVES) used: {used} of {total}"
+                     + ("; none is left, and naming one stops the run." if used >= total else "."))
+        return text.rstrip()
 
     def _slots_note(self) -> str:
         """The job's task allowance as the planner must plan against it: the

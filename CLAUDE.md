@@ -912,6 +912,15 @@ Key design decisions already settled:
   A capped trim marks the turn-limited record `trim_capped`, and the
   final-batch capped-child review holds it rather than reviewing past two
   caps (root review of 860769e).
+- **The planner is told which unfinished work is still owed** (R17 on
+  a3cf7e4). After t2 CONTINUES t1 closed and a real pause and resume, the
+  planner still read t1's "not done ... CONTINUES: t1" record with nothing
+  saying it was settled or that the one recovery task was spent; it named
+  t3 CONTINUES t1 and the run stopped SurveyAllowanceSpent. The next-task
+  prompt now carries `_unfinished_state_note`: what is still owed (the same
+  typed-or-legacy set that blocks completion), what a later task took over,
+  and recovery tasks used of the allowance. Records stay as written; no
+  CONTINUES is stripped, and the allowance stop is unchanged.
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.

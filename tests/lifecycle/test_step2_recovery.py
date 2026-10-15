@@ -2160,3 +2160,67 @@ def test_a_parallel_childs_capped_trim_that_lands_in_bounds_is_held_not_reviewed
     t1 = [r for r in reviews if r["task"] == "t1"]
     assert t1 and not t1[0]["reviewed"] and t1[0]["verdict"].startswith("held"), t1
     assert not replay.result.completed
+
+
+# -- R17 on a3cf7e4: the planner's view of settled and owed unfinished work ----------------
+
+@pytest.mark.parametrize("t2_outcome", ["closed", "failed"])
+def test_after_a_resume_the_planner_is_told_which_unfinished_work_is_still_owed(tmp_path, monkeypatch, t2_outcome):
+    """R17: t1 stopped unfinished, t2 CONTINUES t1 closed, and after a real
+    pause and resume the planner still read t1's 'not done ... CONTINUES: t1'
+    record with nothing saying it was settled or that the one recovery task
+    was spent; it named t3 CONTINUES t1 and the run stopped. The planner now
+    gets the current state: what is still owed, what a later task took over,
+    and the recovery allowance used. The scripted planner continues t1 unless
+    told it is no longer owed. Genuine debt stays named, and a spent
+    allowance still stops a real continuation."""
+    from quadratus.session import SurveyConfig
+    from tests.lifecycle.test_survey_run import _continue
+    _interrupt_after(monkeypatch, 2)
+    planner_prompts = []
+
+    def orchestrator(call, replay):
+        planner_prompts.append(call.prompt)
+        n = len(planner_prompts)
+        if n == 1:
+            return DECL_T1
+        if n == 2:
+            return _continue("t1", "t1 wrote outside its scope; t2 keeps to the listed files")
+        if "Unfinished work as the harness holds it now" not in call.prompt and n > 3:
+            return "DONE"
+        if "still owed: t2" in call.prompt:
+            return DECL_T2 + "\nCONTINUES: t2\nHYPOTHESIS: t2 also wrote outside its scope"
+        if "No longer owed: t1" in call.prompt:
+            return DECL_T2
+        return DECL_T2 + "\nCONTINUES: t1\nHYPOTHESIS: t1 is not done"
+
+    def lead(call, replay):
+        if call.task == "t1" or (call.task == "t2" and t2_outcome == "failed"):
+            H.write(call, {"app.py": FIXED, "other.py": f"{call.task}\n"})
+            return 'Did both.\nCHANGED: ["other.py", "app.py"]'
+        if call.task == "t2":
+            H.write(call, {"app.py": FIXED})
+            return 'Finished add.\nCHANGED: ["app.py"]'
+        H.write(call, {"README.md": "# app\n\n`add(a, b)` returns the sum.\n"})
+        return 'Documented add.\nCHANGED: ["README.md"]'
+
+    replay = H.run(tmp_path, monkeypatch, Script(orchestrator=orchestrator, lead=lead), files=FILES, max_tasks=3,
+                   survey=SurveyConfig(recovery_tasks=1), record_complete=False)
+    assert "KeyboardInterrupt" in replay.result.error, replay.result.error
+    first = Path(replay.result.run_dir)
+    second = _episode(replay, resume_from=first.name, max_tasks=3, survey=SurveyConfig(recovery_tasks=1))
+    resumed = planner_prompts[2]
+    leads = [c.task for c in replay.of("lead")]
+    if t2_outcome == "closed":
+        assert "t3" in leads and "SurveyAllowanceSpent" not in (second.error or ""), \
+            "fresh work dispatched after the resume"
+    else:
+        assert "t3" not in leads and "SurveyAllowanceSpent" in (second.error or ""), \
+            "a spent allowance never authorizes another real continuation"
+    assert "Unfinished work as the harness holds it now" in resumed
+    assert "Recovery tasks (CONTINUES or RESOLVES) used: 1 of 1; none is left" in resumed
+    assert "### Task t1" in resumed, "the historical record is still rendered"
+    if t2_outcome == "closed":
+        assert "nothing is owed" in resumed and "No longer owed: t1" in resumed
+    else:
+        assert "still owed: t2" in resumed and "No longer owed: t1" in resumed
