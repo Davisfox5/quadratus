@@ -2014,7 +2014,8 @@
         "claude: Root review of 728c0fc corrected: carried review notes are stored and rendered whole with no slice or count cap; a BLOCKING line and the rest of its paragraph are never carried as an observation. Controls: late warning in a long paragraph, oldest of 21 paragraphs, multiline BLOCKING continuation (plus markdown-bold form), warning carried through a real pause/resume into the resumed reassessment.",
         "claude: Root review of 225367f corrected: a review paragraph stating a condition without any requirement id is kept against the task's covered requirements, labelled unassigned with uncertain association; a paragraph naming only uncovered ids stays out.",
         "claude: R20 A+B: every trim site gets harness-measured per-file counts (code/test) and the task diff, filtered by file identity on both sides to what all scopes permit, whole or stated omitted over 32,000 chars; result.json budget_note records from the terminal snapshot when the remainder sat under the ordinary-call reserve, observation only. Controls in tests/lifecycle/test_trim_evidence.py.",
-        "claude: Root review of b4d8398 corrected: budget_note states the exact summary-call reservation min(reserve, SUMMARY_CALL_RESERVE_TOKENS) and whether the remainder covered it, instead of claiming it is always less."
+        "claude: Root review of b4d8398 corrected: budget_note states the exact summary-call reservation min(reserve, SUMMARY_CALL_RESERVE_TOKENS) and whether the remainder covered it, instead of claiming it is always less.",
+        "claude: Root review of 38ec681 corrected: budget_note is token capacity only (covers / does not cover the min(reserve, 64000) summary reservation), says it is not an admission decision and that other limits are not assessed. Controls add exhausted-calls and expired-wall RunBudget cases where reserve() refuses."
       ]
     },
     {

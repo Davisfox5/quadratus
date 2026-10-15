@@ -933,8 +933,8 @@ def _survey_record(session, completed):
 
 def _budget_fields(budget) -> dict:
     """``budget`` (the terminal snapshot) and ``budget_note``, derived from
-    that same snapshot: whether what was left could admit an ordinary call
-    (R20 on c7e9449: 141,947 reported tokens remained under a 200,000
+    that same snapshot: token capacity only, against the ordinary and the
+    summary-call reservations; never an admission prediction (R20 on c7e9449: 141,947 reported tokens remained under a 200,000
     ordinary-call reserve, the run stopped FindingsOpen, and nothing in the
     record said the allowance had run that low). An observation, never the
     run's stop, outcome or a failure fact."""
@@ -954,13 +954,11 @@ def _budget_fields(budget) -> dict:
     # RunBudget.reserve's own shaping: the smaller of the two, never more.
     shaped = min(reserve, SUMMARY_CALL_RESERVE_TOKENS)
     unknown = int(snapshot.get('unknown_usage_attempts') or 0)
-    shape = (f'A summary-only call whose CLI enforces one turn reserves {shaped:,} here, the same as an '
-             'ordinary call, so it could not have been admitted either.' if shaped >= reserve else
-             f'A summary-only call whose CLI enforces one turn reserves {shaped:,} here, so one '
-             + ('could still have been admitted.' if remaining >= shaped else 'could not have been admitted either.'))
-    text = (f'At the end of the run {remaining:,} reported tokens remained, below the ordinary-call '
-            f'reserve of {reserve:,}: no further ordinary call could have been admitted. This is an '
-            'observation, not the run\'s stop. ' + shape
+    covers = 'covers' if remaining >= shaped else 'does not cover'
+    text = (f'At the end of the run {remaining:,} reported tokens remained, below the ordinary-call token '
+            f'reservation of {reserve:,}. The token remainder {covers} the {shaped:,}-token reservation for a '
+            'summary-only call whose CLI enforces one turn. This is a token-capacity observation, not the '
+            'run\'s stop or an admission decision; other limits and workflow conditions are not assessed.'
             + (f' {unknown} attempt(s) reported no usage, so the true remainder may be lower.' if unknown else ''))
     return {'budget': snapshot, 'budget_note': {
         'remaining_reported_tokens': remaining, 'ordinary_call_reserve': reserve,

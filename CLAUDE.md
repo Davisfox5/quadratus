@@ -1017,9 +1017,11 @@ Key design decisions already settled:
   cap, target, stop or allowance changes; the token effect is a hypothesis.
   `result.json` `budget_note` records, from the terminal budget snapshot,
   when what was left sat under the ordinary-call reserve: an observation,
-  never the stop or an outcome fact; it states the exact summary-call
-  reservation, `min(reserve, SUMMARY_CALL_RESERVE_TOKENS)`, and whether the
-  remainder covered it (root review of b4d8398).
+  never the stop or an outcome fact. It is token capacity only: whether the
+  remainder covers the summary-call reservation
+  `min(reserve, SUMMARY_CALL_RESERVE_TOKENS)`, never a prediction of
+  admission, since calls, time and workflow are other gates (root reviews
+  of b4d8398 and 38ec681).
 - **Capped work in the final parallel batch meets one review** (r05). A
   child has no gate and no slot context, so t2's capped Grok draft merged
   and the job stopped GoalUnconfirmedAtCap with calls left.

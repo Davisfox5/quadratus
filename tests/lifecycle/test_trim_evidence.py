@@ -174,18 +174,20 @@ def test_the_terminal_record_says_when_the_rest_could_not_admit_an_ordinary_call
 
     note = _budget_fields(budget(1_858_053))["budget_note"]
     assert note["remaining_reported_tokens"] == 141_947 and note["ordinary_call_reserve"] == 200_000
-    assert note["stop_reason"] == "" and "not the run's stop" in note["text"]
-    assert note["summary_call_reserve"] == 64_000
-    assert "reserves 64,000 here, so one could still have been admitted." in note["text"]
-    for reserve, used in ((600, 2_000_000 - 500), (64_000, 2_000_000 - 500)):
-        # At or under the summary allowance the shaped reservation is the
-        # same as the ordinary one, never less (root on b4d8398).
-        same = _budget_fields(budget(used, reserve=reserve))["budget_note"]
-        assert same["summary_call_reserve"] == reserve
-        assert f"reserves {reserve:,} here, the same as an ordinary call, so it could not have been admitted either." \
-            in same["text"] and "less" not in same["text"]
+    assert note["stop_reason"] == "" and note["summary_call_reserve"] == 64_000
+    assert note["text"] == (
+        "At the end of the run 141,947 reported tokens remained, below the ordinary-call token reservation of "
+        "200,000. The token remainder covers the 64,000-token reservation for a summary-only call whose CLI "
+        "enforces one turn. This is a token-capacity observation, not the run's stop or an admission decision; "
+        "other limits and workflow conditions are not assessed.")
     tight = _budget_fields(budget(2_000_000 - 50_000))["budget_note"]
-    assert "reserves 64,000 here, so one could not have been admitted either." in tight["text"]
+    assert "The token remainder does not cover the 64,000-token reservation" in tight["text"]
+    for reserve in (600, 64_000):
+        # At or under the summary allowance the shaped reservation equals
+        # the ordinary one (root on b4d8398).
+        same = _budget_fields(budget(2_000_000 - 500, reserve=reserve))["budget_note"]
+        assert same["summary_call_reserve"] == reserve
+        assert f"does not cover the {reserve:,}-token reservation" in same["text"] and "less" not in same["text"]
     assert _budget_fields(budget(1_000_000))["budget_note"] is None, "room left: no note"
     assert _budget_fields(budget(1_858_053, reserve=0))["budget_note"] is None, "no reserve configured"
     assert "may be lower" in _budget_fields(budget(1_900_000, unknown=2))["budget_note"]["text"]
@@ -219,7 +221,33 @@ def test_a_reserve_starved_terminal_keeps_its_own_stop_and_outcome(tmp_path, mon
     result = H.result_json(tight)
     assert H.result_json(roomy)["budget_note"] is None
     assert result["budget_note"]["remaining_reported_tokens"] == 500
-    assert "reserves 600 here, the same as an ordinary call" in result["budget_note"]["text"]
+    assert "does not cover the 600-token reservation" in result["budget_note"]["text"]
     assert (tight.result.completed, tight.result.error) == (roomy.result.completed, roomy.result.error)
     assert result["workflow"]["run"] == H.result_json(roomy)["workflow"]["run"], "no new fact"
     assert json.dumps(result["budget"]["stop_reason"]) == json.dumps(H.result_json(roomy)["budget"]["stop_reason"])
+
+
+@pytest.mark.parametrize("exhausted", ["calls", "wall"])
+def test_the_budget_note_is_token_capacity_never_an_admission_prediction(tmp_path, exhausted):
+    """Root on 38ec681: with every call used, or the wall clock spent, the
+    note said a summary call could still be admitted while RunBudget refuses
+    it. The note now states token capacity only, says other limits are not
+    assessed, and reading it changes nothing in the budget."""
+    from quadratus.project_run import _budget_fields
+    from quadratus.run_budget import RunBudget, RunBudgetExceeded, RunLimits
+    limits = RunLimits(max_calls=17, max_reported_tokens=2_000_000, wall_seconds=1800,
+                       max_concurrent_workers=2, reserve_tokens_per_call=200_000)
+    carried = dict(calls=17 if exhausted == "calls" else 10, input_tokens=1_858_053, output_tokens=0,
+                   elapsed_seconds=1800 if exhausted == "wall" else 100)
+    budget = RunBudget(limits, carried=carried)
+    def state():
+        return {k: v for k, v in budget.snapshot().items() if k != "elapsed_seconds"}
+    before = state()
+    note = _budget_fields(budget)["budget_note"]
+    assert "The token remainder covers the 64,000-token reservation" in note["text"]
+    assert "not the run's stop or an admission decision; other limits and workflow conditions are not assessed" \
+        in note["text"]
+    assert "could" not in note["text"] and "admitted" not in note["text"]
+    assert state() == before, "metadata only: reading the note changes nothing in the budget"
+    with pytest.raises(RunBudgetExceeded, match="call_limit" if exhausted == "calls" else "wall_deadline"):
+        budget.reserve(expected_tokens=64_000)
