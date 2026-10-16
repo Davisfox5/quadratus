@@ -1941,6 +1941,79 @@
         "claude: History rewrite, content unchanged: at 03:35:39-40Z (committer GitHub, the second #50 merged into claude/direct-tier) claude/engine-repairs-2 and claude/engine-repairs-3 were rewritten; every tree is byte-identical. Map: 4a273a3=d9a6338, 00725ce=ca26d31, 1e5c97f=91d2583, d6e145d=104f9d8, 553e24f=8159a34, 3e95645=cf545dc, f6e1ce1=0a99ee2. Delivery re-recorded at cf545dc (engine range d9a6338..cf545dc; installation delta cf545dc..0a99ee2). Suite-35 on the 3e95645 snapshot tests the tree of cf545dc. #53 comment 6073753038.",
         "claude: Merges observed (not made by this session): at 03:35:35-40Z #42 (claude/direct-tier) merged to main, with #50 and #51 into its stack and #39, #40, #41 to main; the record's candidate gate 'merge #42 to main' is met. #52 (base main, head 727a970) and #53 (base #52, head 0a99ee2) remain open; their SHAs were rewritten in the same second with identical trees (map in the previous note). #55 (claude/run-monitor) is open from the separate monitor session."
       ]
+    },
+    {
+      "id": "T-research-digest-inbox",
+      "purpose": "Davis explicitly requested automated Friday digest delivery and repository-aware agent review on 2026-10-15; separate integration from the active engine milestone.",
+      "base": "b809429aff558630041c121dde3c52b502e69ad1",
+      "owns": [
+        "tools/research_review.py",
+        "tools/install_research_watcher.py",
+        "tests/test_research_review.py",
+        "docs/RESEARCH_INBOX.md",
+        "research"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "reviewed",
+      "claimed_at": "2026-10-16T01:46:27Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "cde1dada323b4f3c021291d954e412abf3a690ea",
+        "at": "2026-10-16T02:15:47Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "61f018a250da1f91c5fad481d1ac529e4ff34ff6",
+          "verdict": "stale",
+          "evidence": "/tmp/quadratus-pr74-claude-verdict.json",
+          "scope": [
+            "tools/research_review.py",
+            "tools/install_research_watcher.py",
+            "tests/test_research_review.py",
+            "docs/RESEARCH_INBOX.md",
+            "research"
+          ],
+          "at": "2026-10-16T02:10:06Z",
+          "stale_reason": "delivery moved from 61f018a to cde1dad"
+        },
+        {
+          "reviewer": "claude",
+          "sha": "cde1dada323b4f3c021291d954e412abf3a690ea",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/74#issuecomment-6206526607",
+          "scope": [
+            "tools/research_review.py",
+            "tools/install_research_watcher.py",
+            "tests/test_research_review.py",
+            "docs/RESEARCH_INBOX.md",
+            "research"
+          ],
+          "at": "2026-10-16T02:15:47Z"
+        }
+      ],
+      "blockers": [
+        {
+          "requirement": "Bounded vendor cleanup and externally qualified completion",
+          "failure": "Outer timeout misses detached vendor process groups; completion headline ignores truth verdict",
+          "evidence": "Independent Claude review session bf3511a4-63c3-4107-8489-fd81315dfd76 of f572dba; cli_providers._launch uses start_new_session",
+          "classification": "reachable",
+          "by": "claude",
+          "sha": "61f018a250da1f91c5fad481d1ac529e4ff34ff6",
+          "at": "2026-10-16T02:10:06Z",
+          "resolved": {
+            "resolution": "cde1dad stops detached vendor groups and requires verified truth for completed status; independent Claude clearance https://github.com/Davisfox5/quadratus/pull/74#issuecomment-6206526607",
+            "by": "codex",
+            "at": "2026-10-16T02:15:47Z"
+          }
+        }
+      ],
+      "decisions": [
+        "codex: 21 targeted offline tests and scoped Ruff pass. No vendor call was made. Independent review and installation on the signed-in Mac remain pending; delivery configuration alone is not end-to-end activation.",
+        "unblocked by codex: cde1dad stops detached vendor groups and requires verified truth for completed status; independent Claude clearance https://github.com/Davisfox5/quadratus/pull/74#issuecomment-6206526607",
+        "codex: Independent Claude review cleared corrected delivery cde1dad; 143 offline watcher/budget/provider tests pass, including detached-process timeout cleanup. Existing Claude Max, ChatGPT Codex Sol and Grok unattended subscription calls pass. Integration and activation authorized directly by Davis; this side integration does not qualify or replace the active engine milestone. Full exact-head CI is required before merge; no digest review has started."
+      ]
     }
   ],
   "receipts": [
