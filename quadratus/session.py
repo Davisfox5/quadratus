@@ -2204,10 +2204,14 @@ def _error_clause(text: str) -> bool:
 #: seats that judge it; the harness enforces it whatever the reply says.
 _EXECUTED_ERROR_RULE = (
     "A requirement about errors, refusals or invalid input is accepted only on executed evidence: "
-    "cite on its MET line a test_* case that exercises the rejecting path (invalid types, missing "
-    "values, conflicts, and the representation or range boundaries the implementation exposes) and "
-    "that the approved checks ran and passed on this source, or demonstrate it with a scratch test "
-    "the harness runs. A MET without that is not counted, whatever it says.")
+    "on its MET line, cite each test case that exercises the rejecting path (invalid types, missing "
+    "values, conflicts, and the representation or range boundaries the implementation exposes) by "
+    "its exact identity, file::test_name, or file::Class::test_name for a method, with [param] for "
+    "one parametrized instance; for example 'R3: MET - tests/test_api.py::test_rejects_bad_id and "
+    "tests/test_cli.py::CliTests::test_bad_id_exit'. A bare test name or a file alone is not such a "
+    "citation. Each cited case must have run and passed on this source in the approved checks, or "
+    "in a scratch test the harness ran for this requirement. A MET without that is not counted, "
+    "whatever it says. Other requirements cite files or tests as before.")
 
 
 _CASE_CITATION = re.compile(r"([\w./-]+\.[A-Za-z]\w*)::((?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]\s]*\])?)")
