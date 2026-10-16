@@ -57,7 +57,7 @@ _CARRIED = (
     "_turn_limited_in_a_row", "_requirement_reopens", "_covers_corrections", "_original_tests",
     "_run_start_contents", "_original_selection", "scratch_proofs", "evidence_requests",
     "unresolved_reviews", "_cap_goal", "_final_audit", "review_notes", "finish_refusals",
-    "review_dispositions", "not_started",
+    "review_dispositions", "not_started", "judgment_completions", "judgment_gaps",
 )
 #: State a checkpoint does not carry. Any of it present makes the point not
 #: resumable, rather than resuming a job whose record would be incomplete.
@@ -266,6 +266,12 @@ def consumed(budget_record: Optional[dict], *, recorded: bool = False) -> dict:
         if not math.isfinite(value) or value < 0:
             raise CheckpointRefused(f"the budget record's {field} is not a finite non-negative number")
         spent[name] = kind(value)
+    # Optional, for records written before it existed: the job's claimed
+    # same-seat judgment completions (RunBudget.claim_judgment_completion).
+    claims = record.get("judgment_completions", 0)
+    if isinstance(claims, bool) or not isinstance(claims, int) or claims < 0:
+        raise CheckpointRefused("the budget record's judgment_completions is not a non-negative count")
+    spent["judgment_completions"] = claims
     return spent
 
 

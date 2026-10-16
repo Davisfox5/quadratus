@@ -58,4 +58,12 @@ def test_recheck_requires_unambiguous_boundary_verdict(tmp_path, reply, resolved
         TaskSpec('t1', 'fix'), [('claude:opus', 'BLOCKING: focus escapes')],
         'Fixed focus', TaskMemory('t1', 'openai:gpt-5.6-sol', store),
     )
-    assert (unresolved == []) is resolved
+    # Not resolved is either a genuine finding (UNRESOLVED, BLOCKING, NOT
+    # RESOLVED: it buys the fix round) or no verdict at all (INVALID: an open
+    # unverified finding, never a pass and never a fix round). Strategy reset
+    # of 2026-10-16 (quadratus.judgment).
+    invalid = [f for f in session.open_findings if "gave no valid verdict" in f]
+    if resolved:
+        assert unresolved == [] and not invalid
+    else:
+        assert (unresolved != []) != bool(invalid), (unresolved, invalid)

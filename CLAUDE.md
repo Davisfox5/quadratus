@@ -1098,6 +1098,38 @@ Key design decisions already settled:
   loop dispatched is asked (`_serial_dispatch`); a direct `run_task`, a
   parallel child or a held-debt task keeps its model close-out. Reviews,
   verdict parsing, debt and stops are unchanged.
+- **Judgment integrity: one strict reading, one same-seat completion per
+  job, an obligation view and a wall hold** (strategy reset approved by
+  Davis, 2026-10-16, from 1b9f0aa).
+  - `quadratus/judgment.py` combines repeated per-requirement lines for the
+    reviewer, the audit and the reassessment alike: any NOT MET wins in either
+    order, and duplicate MET lines approve nothing. Before, the audit kept the
+    last line and the reassessment the first. A recheck reply is RESOLVED,
+    UNRESOLVED (a genuine finding, which buys the fix round) or INVALID (no
+    verdict, which buys nothing).
+  - A review or recheck that ARRIVED without a valid verdict may be completed
+    by the same seat, in its existing role (`collaborator` or `recheck`: turn
+    cap, read-only copy, scratch, privacy), on the same source,
+    `SessionConfig.max_judgment_completions` times per whole job (default 1).
+    The claim is written to budget.json before the call, never refunded, shared
+    by parallel children and carried by `checkpoint.consumed`. A cap, a refusal,
+    a finish-hold refusal or a changed source gives nothing and is never
+    retried. Other failures propagate as the review call's would. The raw reply
+    is kept (`judgment-raw:*`). A genuine BLOCKING, NOT MET or UNRESOLVED is
+    never routed here. If the completion still gives no verdict, the open
+    finding stops the run as before; no other seat and no audit stands in.
+  - `_obligation_view` gives the planner and the auditor each requirement's
+    status and owners, the judgments without a valid verdict
+    (`judgment_gaps`), the executed evidence on the current source and, for
+    the planner, the allowance left after the held finish. It comes from
+    recorded facts only.
+  - `_refuse_unpayable_dispatch` does not start a serial task whose lead and
+    required reviews cannot be paid from the calls left after the hold
+    (exact counts, no estimates).
+  - `RunLimits.finish_wall_seconds` (policy `finish-wall/1`, 120 s per
+    pending stage) holds wall time for the goal question and the audit:
+    ordinary calls get what remains after the holds, and the goal question
+    leaves the audit's.
 - **A trim gets what the harness measured** (R20 on c7e9449). t2's one
   scope trim, told only the total, spent 8 rounds and 373,366 reported
   tokens, more than its draft, and the run ended with 141,947 left under the

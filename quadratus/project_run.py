@@ -641,6 +641,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'finish_refusals': list(getattr(session, 'finish_refusals', []) or []) if session else [],
         # Tasks whose first editing call was refused before any write: NOT RUN.
         'not_started': list(getattr(session, 'not_started', []) or []) if session else [],
+        # Same-seat judgment completions decided this episode, and mandatory
+        # judgments left without a valid verdict (session._complete_judgment).
+        'judgment_completions': list(getattr(session, 'judgment_completions', []) or []) if session else [],
+        'judgment_gaps': list(getattr(session, 'judgment_gaps', []) or []) if session else [],
         'findings': list(getattr(session, 'findings', []) or []) if session else [],
         'dependency_identity': (getattr(getattr(session, 'dependency_watch', None), 'record', None)
                                 if session else None),

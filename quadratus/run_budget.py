@@ -48,6 +48,11 @@ class FinishReserved(RunBudgetExceeded):
 #: per-call reserve from ordinary work; neither takes a smaller shape.
 FINISH_STAGES = ("goal", "audit")
 
+#: The versioned wall-time policy for the finish (strategy reset, 2026-10-16):
+#: 120 s held for the cap's goal question and 120 s for the audit, inside the
+#: run's unchanged wall_seconds (RunLimits.finish_wall_seconds).
+FINISH_WALL_POLICY = "finish-wall/1"
+
 #: The finishing stage the current call belongs to (Session sets it around
 #: the goal question and the audit). None is ordinary work.
 finish_stage: ContextVar = ContextVar("finish_stage", default=None)
@@ -171,6 +176,12 @@ class RunLimits:
     #: reports more than this stops the run with ``call_token_ceiling``.
     #: None is no ceiling. It cannot cut a call short; it says which one.
     max_tokens_per_call: int | None = None
+    #: Wall seconds held for each pending finishing stage (``FINISH_STAGES``)
+    #: while it is pending, inside ``wall_seconds`` (policy
+    #: ``FINISH_WALL_POLICY``). An ordinary call's time is what remains after
+    #: every pending stage's hold; the goal question's leaves the audit's.
+    #: 0 holds no wall time.
+    finish_wall_seconds: float = 120.0
 
     def __post_init__(self):
         if self.max_cost_usd is not None and (
@@ -193,6 +204,9 @@ class RunLimits:
         if self.max_tokens_per_call is not None and (
                 type(self.max_tokens_per_call) is not int or self.max_tokens_per_call < 1):
             raise ValueError('max_tokens_per_call must be a positive integer or None')
+        if (isinstance(self.finish_wall_seconds, bool) or not isinstance(self.finish_wall_seconds, (int, float))
+                or not math.isfinite(self.finish_wall_seconds) or self.finish_wall_seconds < 0):
+            raise ValueError('finish_wall_seconds must be a finite non-negative number')
         if (isinstance(self.wall_seconds, bool)
                 or not isinstance(self.wall_seconds, (int, float))
                 or not math.isfinite(self.wall_seconds) or self.wall_seconds <= 0):
@@ -281,6 +295,10 @@ class RunBudget:
         self._finish_released = []
         self._finish_refusals = []
         self._finish_deferrals = []
+        #: Same-seat judgment completions the job has claimed (carried), and
+        #: what each was for (session._complete_judgment).
+        self._judgments = int(carried.get('judgment_completions') or 0)
+        self._judgment_records = []
         if self.path:
             # Written before any call, so an episode that ends before its
             # first call still leaves the job's record (and what it carried).
@@ -308,6 +326,10 @@ class RunBudget:
                                  'max_tokens_per_call stops the run after it returns'),
             'oversized_calls': list(self._oversized),
             'shaped_reservations': self._shaped,
+            # Claimed before each call and never refunded: carried into a
+            # resumed episode, shared by parallel children (one budget).
+            'judgment_completions': self._judgments,
+            'judgment_completion_records': [dict(r) for r in self._judgment_records],
             # Included in every total above: spent by earlier episodes.
             'carried_from_earlier_episodes': dict(self._carried),
             'shape_boundary': ('a summary-only call whose CLI argv enforces one model turn reserves '
@@ -321,6 +343,9 @@ class RunBudget:
                 'pending': list(self._finish_pending), 'started': list(self._finish_started),
                 'released': list(self._finish_released), 'refusals': list(self._finish_refusals),
                 'deferrals': [dict(d) for d in self._finish_deferrals],
+                'wall_policy': FINISH_WALL_POLICY,
+                'wall_seconds_per_stage': self.limits.finish_wall_seconds,
+                'held_wall_seconds': self._held_wall(None),
                 'editing_exposure': self._editing_exposure(),
                 'boundary': ('an admission policy, not a guarantee about reported usage: while a finishing '
                              'stage is pending, an ordinary call starts only if the attempts after it and '
@@ -332,7 +357,10 @@ class RunBudget:
                              'call is exposed at its reserve and the hold does not bound it. A call that '
                              'only calls in flight keep out waits, unadmitted and without a ticket, until '
                              'one settles, then is evaluated again; a call that cannot fit even with '
-                             'nothing in flight is refused, recorded, and latches nothing'),
+                             'nothing in flight is refused, recorded, and latches nothing. Each pending '
+                             'stage also holds finish_wall_seconds of wall time: an ordinary call gets the '
+                             'time left after every pending hold and is refused when none is left; the goal '
+                             'question gets the time left after the audit\'s hold'),
             },
             'wall_boundary': 'attempt timeout plus required external process supervisor',
         }
@@ -390,6 +418,22 @@ class RunBudget:
             wanted = [s for s in FINISH_STAGES if s in set(stages or ())]
             self._finish_pending = [s for s in wanted if s not in self._finish_started]
             self._persist()
+
+    def claim_judgment_completion(self, limit, record):
+        """Take one of the job's same-seat judgment completions, written to
+        the budget record before the call is made; False when ``limit`` is
+        spent. A claim is never refunded, so a completion that may have
+        started is never offered again, in this episode or a resumed one."""
+        with self._lock:
+            if self._judgments >= int(limit):
+                return False
+            self._judgments += 1
+            self._judgment_records.append(dict(record, claim=self._judgments, after_attempts=self._calls))
+            self._persist()
+            return True
+
+    def _held_wall(self, stage):
+        return len(self._held(stage)) * float(self.limits.finish_wall_seconds or 0)
 
     def release_finish(self, stage, why):
         """Stop holding ``stage``: the run will not ask it (recorded)."""
@@ -458,7 +502,9 @@ class RunBudget:
                         except RunBudgetExceeded:
                             pass
                     raise
-                return ticket, self._remaining()
+                # The call's own time: what remains after the wall held for
+                # the finishing stages still pending after it.
+                return ticket, self._remaining() - self._held_wall(finish_stage.get())
 
     def _admit(self, transport, price_key, expected_tokens, shape, deferral):
         """One admission decision, under the lock: a ticket, or a raise.
@@ -515,6 +561,18 @@ class RunBudget:
                     f"need{'s' if len(held) == 1 else ''} {len(held)} call(s)"
                     + (f" and {len(held) * full:,} reported tokens" if full else "")
                     + f"; {calls_after} call(s) and {max(tokens_after, 0):,} tokens would remain")
+            wall = self._held_wall(stage)
+            if wall and self._remaining() - wall <= 0:
+                # The time the pending finish needs: the call would have none
+                # of its own. Not latched, like the token and call holds.
+                self._finish_refusals.append(dict(
+                    attempt=self._calls + 1, stage=stage, held=list(held), held_wall_seconds=wall,
+                    wall_after=round(self._remaining() - wall, 3), in_flight=len(self._active)))
+                self._persist()
+                raise FinishReserved(
+                    f"Ordinary call refused to keep the finish: {', '.join(held)} "
+                    f"need{'s' if len(held) == 1 else ''} {wall:g} s of wall time; "
+                    f"{max(self._remaining(), 0):.1f} s remain")
         started = stage is not None and stage in self._finish_pending
         if started:
             self._finish_pending.remove(stage)

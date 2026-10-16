@@ -28,6 +28,9 @@ from quadratus.run_budget import (
 
 R22 = dict(max_calls=20, max_reported_tokens=2_000_000, wall_seconds=1800, max_concurrent_workers=2,
            reserve_tokens_per_call=200_000, max_tokens_per_call=500_000)
+#: These cases are about the finish's calls and tokens; its wall hold
+#: (finish_wall_seconds) is exercised in tests/lifecycle/test_judgment_integrity.py
+#: and set to 0 where a case runs a wall shorter than the hold.
 
 
 def _spend(budget, tokens, *, stage=None):
@@ -40,7 +43,7 @@ def _spend(budget, tokens, *, stage=None):
 
 
 def test_held_calls_refuse_ordinary_work_and_latch_nothing():
-    budget = RunBudget(RunLimits(max_calls=5, max_reported_tokens=10_000, wall_seconds=60))
+    budget = RunBudget(RunLimits(max_calls=5, max_reported_tokens=10_000, wall_seconds=60, finish_wall_seconds=0))
     budget.protect_finish(FINISH_STAGES)
     for _ in range(3):
         _spend(budget, 10)
@@ -59,7 +62,7 @@ def test_held_calls_refuse_ordinary_work_and_latch_nothing():
 
 
 def test_held_tokens_are_one_full_reserve_per_stage_and_count_calls_in_flight():
-    budget = RunBudget(RunLimits(max_calls=50, max_reported_tokens=1_000, wall_seconds=60,
+    budget = RunBudget(RunLimits(max_calls=50, max_reported_tokens=1_000, wall_seconds=60, finish_wall_seconds=0,
                                  reserve_tokens_per_call=200))
     budget.protect_finish(FINISH_STAGES)
     _spend(budget, 200)                    # 800 left
@@ -84,7 +87,7 @@ def test_held_tokens_are_one_full_reserve_per_stage_and_count_calls_in_flight():
 
 
 def test_a_goal_follow_up_may_not_spend_the_audits_hold():
-    budget = RunBudget(RunLimits(max_calls=3, max_reported_tokens=10_000, wall_seconds=60))
+    budget = RunBudget(RunLimits(max_calls=3, max_reported_tokens=10_000, wall_seconds=60, finish_wall_seconds=0))
     budget.protect_finish(FINISH_STAGES)
     _spend(budget, 1)
     _spend(budget, 1, stage="goal")        # the goal question itself
@@ -97,7 +100,7 @@ def test_a_goal_follow_up_may_not_spend_the_audits_hold():
 
 def test_holding_is_idempotent_never_additive_and_a_started_stage_is_not_held_again(tmp_path):
     path = tmp_path / "budget.json"
-    budget = RunBudget(RunLimits(max_calls=10, max_reported_tokens=10_000, wall_seconds=60), path=path)
+    budget = RunBudget(RunLimits(max_calls=10, max_reported_tokens=10_000, wall_seconds=60, finish_wall_seconds=0), path=path)
     budget.protect_finish(FINISH_STAGES)
     budget.protect_finish(FINISH_STAGES)
     assert budget.finish_pending() == ["goal", "audit"]
@@ -117,7 +120,7 @@ def test_a_resumed_episode_holds_the_same_capacity_from_the_carried_spend():
     """The allowance is the job's: a resumed episode carries the spend and
     the session names the stages still pending; the hold is the same size,
     not a second one, and grants nothing."""
-    first = RunBudget(RunLimits(max_calls=6, max_reported_tokens=10_000, wall_seconds=60))
+    first = RunBudget(RunLimits(max_calls=6, max_reported_tokens=10_000, wall_seconds=60, finish_wall_seconds=0))
     first.protect_finish(FINISH_STAGES)
     _spend(first, 5)
     _spend(first, 5)
@@ -370,7 +373,7 @@ def test_a_call_that_cannot_fit_alone_or_may_not_wait_is_refused_at_once():
 
 
 def test_the_wall_ends_a_deferral_with_no_attempt_and_no_reset():
-    limits = dict(R22, wall_seconds=0.5)
+    limits = dict(R22, wall_seconds=0.5, finish_wall_seconds=0)
     budget = RunBudget(RunLimits(**limits))
     budget.protect_finish(FINISH_STAGES)
     _left(budget, 1_374_424)
@@ -407,7 +410,7 @@ def test_a_deferred_admission_whose_record_cannot_be_written_is_never_invoked(tm
     (no ticket, attempt or call in flight) and the latched stop is raised."""
     folder = tmp_path / "run"
     folder.mkdir()
-    budget = RunBudget(RunLimits(max_calls=10, max_reported_tokens=1_000, wall_seconds=60,
+    budget = RunBudget(RunLimits(max_calls=10, max_reported_tokens=1_000, wall_seconds=60, finish_wall_seconds=0,
                                  reserve_tokens_per_call=100, max_tokens_per_call=300),
                        path=folder / "budget.json")
     budget.protect_finish(FINISH_STAGES)
@@ -440,7 +443,7 @@ def test_a_deferred_admission_whose_record_cannot_be_written_is_never_invoked(tm
 def test_a_finishing_call_whose_record_cannot_be_written_leaves_its_stage_held(tmp_path):
     folder = tmp_path / "run"
     folder.mkdir()
-    budget = RunBudget(RunLimits(max_calls=10, max_reported_tokens=10_000, wall_seconds=60),
+    budget = RunBudget(RunLimits(max_calls=10, max_reported_tokens=10_000, wall_seconds=60, finish_wall_seconds=0),
                        path=folder / "budget.json")
     budget.protect_finish(FINISH_STAGES)
     _obstruct_when(budget, folder, lambda: finish_stage.get() == "goal")

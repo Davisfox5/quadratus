@@ -492,7 +492,11 @@ def test_goal_bearing_simple_parallel_work_meets_one_cross_vendor_review(tmp_pat
     reviews = []
 
     def collaborator(call, replay):
-        reviews.append(call)
+        # A bare NO FINDINGS on a goal-bearing review is no judgment of its
+        # requirements: the same seat completes it once (strategy reset); that
+        # completion is not a second review.
+        if "arrived without a valid verdict" not in call.prompt:
+            reviews.append(call)
         if call.task == "t1" and contract in call.prompt \
                 and "TypeError" not in Path(call.cwd, "app.py").read_text():
             return "BLOCKING: add('x', 1) returns without the TypeError the goal requires.\nREVIEW: COMPLETE"
