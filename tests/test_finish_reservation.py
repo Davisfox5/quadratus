@@ -22,6 +22,7 @@ from quadratus.run_budget import (
     RunBudgetExceeded,
     RunLimits,
     admitted_as,
+    finish_stage,
     finishing,
 )
 
@@ -381,3 +382,72 @@ def test_the_wall_ends_a_deferral_with_no_attempt_and_no_reset():
     assert snapshot["reserved_attempts"] == first and snapshot["stop_reason"] == "wall_deadline"
     assert _deferred(budget)[0]["outcome"] == "stopped: wall_deadline"
     assert snapshot["elapsed_seconds"] >= 0.5
+
+
+def _obstruct_when(budget, folder, predicate):
+    """Replace the record's folder with an ordinary file the first time the
+    real write runs with ``predicate`` true, so that write fails for real."""
+    real = budget._persist
+
+    def persist():
+        if predicate() and folder.is_dir():
+            for child in folder.iterdir():
+                child.unlink()
+            folder.rmdir()
+            folder.write_text("not a directory")
+        return real()
+    budget._persist = persist
+
+
+def test_a_deferred_admission_whose_record_cannot_be_written_is_never_invoked(tmp_path):
+    """Root on cf8cd2b (#73 6208568305): the admission of a deferred call was
+    recorded in a second write whose failure was swallowed, and the call got
+    its ticket with budget_state_unavailable latched. Now the admission and
+    its deferral record are one write: if it fails, the call is withdrawn
+    (no ticket, attempt or call in flight) and the latched stop is raised."""
+    folder = tmp_path / "run"
+    folder.mkdir()
+    budget = RunBudget(RunLimits(max_calls=10, max_reported_tokens=1_000, wall_seconds=60,
+                                 reserve_tokens_per_call=100, max_tokens_per_call=300),
+                       path=folder / "budget.json")
+    budget.protect_finish(FINISH_STAGES)
+    _spend(budget, 300)
+    first = _editing(budget)               # 700 - 300 >= 200 held
+    sent, errors = [], []
+
+    def second():
+        try:
+            sent.append(_editing(budget))  # 700 - 300 - 300 < 200: waits
+        except RunBudgetExceeded as exc:
+            errors.append(exc)
+    thread = threading.Thread(target=second, daemon=True)
+    thread.start()
+    _wait_for(lambda: budget._finish_deferrals)
+    _obstruct_when(budget, folder, lambda: budget._finish_deferrals[0]["outcome"] == "admitted")
+    budget.finish(first, dict(input_tokens=50, output_tokens=0))
+    thread.join(5)
+    assert sent == [] and len(errors) == 1 and not isinstance(errors[0], FinishReserved)
+    assert "budget_state_unavailable" in str(errors[0])
+    snapshot = budget.snapshot()
+    assert snapshot["stop_reason"] == "budget_state_unavailable"
+    assert snapshot["reserved_attempts"] == first and snapshot["in_flight"] == 0
+    record = snapshot["finish_protection"]["deferrals"][0]
+    assert record["outcome"].startswith("stopped:") and "admitted_as" not in record
+    with pytest.raises(RunBudgetExceeded, match="budget_state_unavailable"):
+        budget.reserve()
+
+
+def test_a_finishing_call_whose_record_cannot_be_written_leaves_its_stage_held(tmp_path):
+    folder = tmp_path / "run"
+    folder.mkdir()
+    budget = RunBudget(RunLimits(max_calls=10, max_reported_tokens=10_000, wall_seconds=60),
+                       path=folder / "budget.json")
+    budget.protect_finish(FINISH_STAGES)
+    _obstruct_when(budget, folder, lambda: finish_stage.get() == "goal")
+    with pytest.raises(RunBudgetExceeded, match="budget_state_unavailable"):
+        with finishing("goal"):
+            budget.reserve()
+    snapshot = budget.snapshot()
+    assert snapshot["reserved_attempts"] == 0 and snapshot["in_flight"] == 0
+    assert snapshot["finish_protection"]["pending"] == ["goal", "audit"]
+    assert snapshot["finish_protection"]["started"] == []

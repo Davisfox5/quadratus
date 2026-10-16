@@ -458,13 +458,6 @@ class RunBudget:
                         except RunBudgetExceeded:
                             pass
                     raise
-                if deferral is not None:
-                    deferral['outcome'] = 'admitted'
-                    deferral['admitted_as'] = ticket
-                    try:
-                        self._persist()
-                    except RunBudgetExceeded:
-                        pass   # latched; the admitted call settles through finish()
                 return ticket, self._remaining()
 
     def _admit(self, transport, price_key, expected_tokens, shape, deferral):
@@ -522,19 +515,33 @@ class RunBudget:
                     f"need{'s' if len(held) == 1 else ''} {len(held)} call(s)"
                     + (f" and {len(held) * full:,} reported tokens" if full else "")
                     + f"; {calls_after} call(s) and {max(tokens_after, 0):,} tokens would remain")
-        if stage is not None and stage in self._finish_pending:
+        started = stage is not None and stage in self._finish_pending
+        if started:
             self._finish_pending.remove(stage)
             self._finish_started.append(stage)
         self._shaped += int(shaped)
         self._calls += 1
         ticket = self._calls
         self._active[ticket] = (transport, price_key, reserve, exposure)
+        if deferral is not None:
+            # Recorded in the same write as the admission: a deferred call is
+            # admitted only if this record is durable (root on cf8cd2b).
+            deferral['outcome'] = 'admitted'
+            deferral['admitted_as'] = ticket
         try:
             self._persist()
         except RunBudgetExceeded:
+            # Never invoked: no ticket, no attempt, nothing in flight, the stage
+            # still pending; the latched stop refuses every later call.
             self._active.pop(ticket)
             self._calls -= 1
             self._shaped -= int(shaped)
+            if started:
+                self._finish_started.remove(stage)
+                self._finish_pending.append(stage)
+                self._finish_pending.sort(key=FINISH_STAGES.index)
+            if deferral is not None:
+                deferral.pop('admitted_as', None)
             raise
         return ticket
 
