@@ -217,6 +217,9 @@ class Settings:
     #: bounded probe has confirmed each CLI's capped envelope and a value is
     #: chosen from observed lead calls. See runtime.Fleet._invoke.
     lead_max_turns: Optional[int] = None
+    # Opt-in analysis profile: every seat reasons over caller-supplied evidence
+    # in an empty directory, using the existing bounded summary CLI form.
+    supplied_context_only: bool = False
     #: Run without the operator's personal CLI configuration where each CLI
     #: allows it (see cli_providers.CLISpec.neutral_args).
     neutral_preferences: bool = field(default_factory=lambda: os.getenv(
