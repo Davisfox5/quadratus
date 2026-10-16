@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import dataclasses
 import fcntl
+import hashlib
 import json
 import os
 import re
 import shlex
+import shutil
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -58,8 +60,12 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                 default_scope=None, run_limits=None, forbid=(), declared_paths=(),
                 security_verdict_json=False, gates=None, extra_checks=(), capture_profile=None,
                 readiness=None, survey=None, direct_tier=False, tasks=None, decider=None,
-                decider_labels="unstated", repair_tests=()):
+                decider_labels="unstated", repair_tests=(), resume_from=None):
     """Keep both successful and interrupted runs next to their source tree.
+
+    ``resume_from`` is the run folder of an interrupted run of the same job
+    (quadratus.checkpoint): the new run is its next episode, carrying its
+    record, its lineage and what it spent, or it is refused before any call.
 
     ``tasks`` is an operator-written task list (explicit-task entry): each
     text is read as an orchestrator reply would be and run in order under the
@@ -139,7 +145,20 @@ def run_project(goal, project, settings, *, allow_writes=False, check='',
                     fleet_type=Fleet, session_factory=new_session, extras=extras,
                     capture_profile=profile, readiness=probes, survey=survey, direct_tier=direct_tier,
                     tasks=list(tasks) if tasks is not None else None, decider=decider,
-                    decider_labels=decider_labels, repair_tests=repair_tests)
+                    decider_labels=decider_labels, repair_tests=repair_tests,
+                    resume_from=resume_from)
+
+
+def _resume_parent(state, resume_from):
+    """The run folder to resume: inside this state folder's runs, never a
+    path elsewhere (a checkpoint is the job's own record, not an input)."""
+    from .checkpoint import CheckpointRefused
+    runs = (state / 'runs').resolve()
+    parent = Path(resume_from).expanduser()
+    parent = (parent if parent.is_absolute() else runs / parent).resolve()
+    if parent.parent != runs or not parent.is_dir():
+        raise CheckpointRefused(f'{resume_from} is not a run of this project state ({runs})')
+    return parent
 
 
 def _repair_tests(root, paths, forbid=()):
@@ -314,7 +333,8 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
          mode, progress, ask_operator, plan_gate, fleet_type, session_factory,
          default_scope=None, run_limits=None, policy=None, gates=None, security_verdict_json=False,
          extras=(), capture_profile=None, readiness=(), survey=None, direct_tier=False, tasks=None,
-         decider=None, decider_labels="unstated", repair_tests=()):
+         decider=None, decider_labels="unstated", repair_tests=(), resume_from=None):
+    parent = _resume_parent(state, resume_from) if resume_from is not None else None
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = state / 'runs' / f'{stamp}-{uuid.uuid4().hex[:8]}'
     run_dir.mkdir(parents=True)
@@ -344,7 +364,64 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     store = ArtifactStore(run_dir / 'artifacts')
     meter = UsageMeter(run_dir / 'usage.jsonl')
     delegation = DelegationLedger(path=run_dir / 'invocations.jsonl')
-    budget = RunBudget(run_limits, path=run_dir / 'budget.json') if run_limits else None
+    # The resume decision needs the settings, limits and gate exactly as this
+    # episode will run with them; it is made here, before any call.
+    from .run_budget import effective_lead_turns as _lead_turns
+    _turns, _source = _lead_turns(getattr(settings, 'lead_max_turns', None), run_limits)
+    _settings = (dataclasses.replace(settings, lead_max_turns=_turns)
+                 if _turns is not None and getattr(settings, 'lead_max_turns', None) is None else settings)
+    _selected = _selected_limits(max_tasks, run_limits, survey, _turns, _source)
+    _preview = (policy.resolve(default_scope.permitted_paths if default_scope else (), writing=allow_writes)
+                if policy else None)
+    from . import checkpoint
+    from .session import _gate_identity
+    held = dict(goal=goal, policy=(_preview or {}).get('hash'),
+                limits=hashlib.sha256(json.dumps(_selected, sort_keys=True).encode()).hexdigest(),
+                settings=checkpoint.settings_identity(_settings), gate=_gate_identity(gate),
+                # The run configuration that decides dispatch: the same job
+                # only under the same one (root review of aaa06a6).
+                workflow=checkpoint.workflow_identity(
+                    allow_writes=allow_writes, mode=mode, direct_tier=direct_tier,
+                    decider=decider,
+                    decider_labels=decider_labels, default_scope=default_scope,
+                    capture_profile=capture_profile, readiness=list(readiness or ()),
+                    security_verdict_json=security_verdict_json, repair_tests=list(repair_tests or ()),
+                    explicit_tasks=list(tasks) if tasks is not None else None,
+                    plan_gate=plan_gate is not None, ask_operator=ask_operator is not None))
+    lineage = dict(root=run_dir.name, parent=None, episode=1)
+    carried = None
+    if parent is not None:
+        from .deptree import DependencyGuard
+        try:
+            dependency = DependencyGuard(project.root).identity().digest
+        except Exception as exc:  # noqa: BLE001 -- an unmeasurable tree refuses the resume
+            dependency = f"unavailable: {type(exc).__name__}"
+        body = checkpoint.load(parent)
+        carried = checkpoint.validate(parent, body, checkpoint.identities(
+            source=project.fingerprint(), dependency=dependency, **held))
+        if run_limits is not None and (carried['calls'] >= run_limits.max_calls
+                                       or carried['input_tokens'] + carried['output_tokens']
+                                       >= run_limits.max_reported_tokens
+                                       or carried['elapsed_seconds'] >= run_limits.wall_seconds):
+            raise checkpoint.CheckpointRefused("the job's allowance is spent; nothing is left to resume with")
+        if int(body['state'].get('slots_used') or 0) >= max_tasks and not body['state'].get('_final_audit'):
+            # A checkpoint written during the cap's final challenge carries
+            # the final audit, and resumes to finish that decision without
+            # asking, auditing or executing again; any other is spent.
+            raise checkpoint.CheckpointRefused("the job's task slots are spent; nothing is left to resume with")
+        prior = body.get('lineage') or {}
+        lineage = dict(root=prior.get('root') or parent.name, parent=parent.name,
+                       episode=int(prior.get('episode') or 1) + 1)
+        checkpoint.claim(parent, run_dir, lineage['episode'])
+        if (parent / 'artifacts').is_dir():
+            # The record's artifact references resolve in the new episode.
+            shutil.copytree(parent / 'artifacts', run_dir / 'artifacts', dirs_exist_ok=True)
+        if progress:
+            progress(f"Resuming {parent.name} as episode {lineage['episode']} of {lineage['root']}; "
+                     f"carried {carried['calls']} call(s), "
+                     f"{carried['input_tokens'] + carried['output_tokens']:,} reported tokens")
+    (run_dir / 'lineage.json').write_text(json.dumps(lineage, indent=2) + '\n', encoding='utf-8')
+    budget = RunBudget(run_limits, path=run_dir / 'budget.json', carried=carried) if run_limits else None
     if isinstance(decider, str) or decider is None:
         from .decisions import decider_from_name
         decider = decider_from_name(decider, meter=meter, budget=budget)
@@ -385,6 +462,25 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         decider_labels=decider_labels,
         repair_tests=tuple(repair_tests),
     )
+
+    def on_quiescent(session):
+        # One snapshot, written to budget.json and into the checkpoint, so
+        # the two agree to the second (root review of aaa06a6).
+        snapshot = budget.persist() if budget else {}
+        watch = getattr(session, 'dependency_watch', None)
+        baseline = getattr(watch, 'baseline', None)
+        state_now = checkpoint.capture_state(session)
+        uncarried = list(state_now.get('uncarried') or []) if 'uncarried' in state_now else []
+        if snapshot.get('in_flight'):
+            uncarried.append('a call in flight')
+        checkpoint.write(run_dir, dict(
+            version=checkpoint.VERSION, lineage=lineage, sealed=False, resumable=not uncarried,
+            uncarried=uncarried, consumed=checkpoint.consumed(snapshot) if snapshot else None,
+            identities=checkpoint.identities(source=session._source_fingerprint(),
+                                             dependency=getattr(baseline, 'digest', None), **held),
+            state={} if uncarried else state_now,
+            written=datetime.now(timezone.utc).isoformat()))
+    config.on_quiescent = on_quiescent
     preview = policy.resolve(default_scope.permitted_paths if default_scope else (),
                              writing=allow_writes) if policy else None
     (run_dir / 'policy-plan.json').write_text(json.dumps(preview, indent=2), encoding='utf-8')
@@ -410,6 +506,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
     except Exception:  # noqa: BLE001 -- a fake fleet may refuse attributes
         pass
     in_flight = {}
+    interrupted = False
     try:
         if preview and preview['blocked']:
             raise ValueError('; '.join(preview['blocked']))
@@ -422,8 +519,17 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             invariants=['Project source is available in the working directory. '
                         'Use actual files as evidence. Do not commit or publish changes.'],
         )
+        if parent is not None:
+            checkpoint.restore_state(session, body['state'])
         session.run(max_tasks=max_tasks, **({'tasks': tasks} if tasks is not None else {}))
     except (Exception, KeyboardInterrupt) as exc:  # persist partial work and its cause
+        interrupted = isinstance(exc, KeyboardInterrupt)
+        if interrupted and budget is not None:
+            try:
+                # The time up to the interruption is the job's spend too.
+                budget.persist()
+            except Exception:  # noqa: BLE001 -- the record keeps its last write
+                pass
         error = f'{type(exc).__name__}: {exc}'
         # A stopped editing call already inspected the tree and kept whatever
         # was there. Carrying that forward is what makes the handoff resumable
@@ -530,6 +636,17 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'personal_preferences': _preferences_record(settings),
         'requirements': _requirements_record(session),
         'design_checks': list(getattr(session, 'design_checks', []) or []) if session else [],
+        # Ordinary calls refused to keep the finish, and what each would have
+        # done (run_budget.FinishReserved); budget.json holds the admissions.
+        'finish_refusals': list(getattr(session, 'finish_refusals', []) or []) if session else [],
+        # Tasks whose first editing call was refused before any write: NOT RUN.
+        'not_started': list(getattr(session, 'not_started', []) or []) if session else [],
+        # Same-seat judgment completions decided this episode, and mandatory
+        # judgments left without a valid verdict (session._complete_judgment).
+        'judgment_completions': list(getattr(session, 'judgment_completions', []) or []) if session else [],
+        'judgment_gaps': list(getattr(session, 'judgment_gaps', []) or []) if session else [],
+        # The last obligations view the planner or the audit read (quadratus.obligations).
+        'obligations': dict(getattr(session, 'obligation_view', {}) or {}) if session else {},
         'findings': list(getattr(session, 'findings', []) or []) if session else [],
         'dependency_identity': (getattr(getattr(session, 'dependency_watch', None), 'record', None)
                                 if session else None),
@@ -546,7 +663,7 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'in_flight': in_flight,
         'policy_preview': preview,
         'policy_plans': getattr(session, 'policy_plans', []),
-        'budget': budget.snapshot() if budget else None,
+        **_budget_fields(budget),
         'selected_limits': selected,
         'unnamed_test_files': list(getattr(session, 'unnamed_test_files', []) or []) if session else [],
         'original_test_runs': list(getattr(session, 'original_test_runs', []) or []) if session else [],
@@ -555,7 +672,13 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'test_repairs': list(getattr(session, 'test_repairs', []) or []) if session else [],
         'skip_baselines': list(getattr(session, 'skip_baselines', []) or []) if session else [],
         'unexecuted_acceptance': list(getattr(session, 'unexecuted_acceptance', []) or []) if session else [],
+        # Harness runs of a reviewer's scratch test in its copy; never a MET.
+        'scratch_proofs': list(getattr(session, 'scratch_proofs', []) or []) if session else [],
+        'evidence_requests': list(getattr(session, 'evidence_requests', []) or []) if session else [],
+        'review_notes': list(getattr(session, 'review_notes', []) or []) if session else [],
         'stale_capture_fixtures': stale_fixtures,
+        'lineage': lineage,
+        'resumable': interrupted,
         'delegation': reconcile(delegation.events, delegation.native_children.values()),
         'scope_reports': [
             {'within_scope': r.within_scope, 'out_of_scope': r.out_of_scope,
@@ -564,6 +687,10 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
             for r in (session.scope_reports if session else [])
         ],
     }, indent=2), encoding='utf-8')
+    if not interrupted:
+        # A run that ended on its own terms is never resumed; only an
+        # interrupted one keeps its last quiescent checkpoint open.
+        checkpoint.seal(run_dir, error or ('completed' if completed else 'incomplete'))
     (run_dir / 'delegation.md').write_text(delegation.render_report(), encoding='utf-8')
     (run_dir / 'findings.json').write_text(
         json.dumps(list(getattr(session, 'findings', []) or []) if session else [], indent=2), encoding='utf-8')
@@ -813,6 +940,41 @@ def _survey_record(session, completed):
         hypotheses=list(session.survey.get("hypotheses", [])),
         completed=completed,
     )
+
+
+def _budget_fields(budget) -> dict:
+    """``budget`` (the terminal snapshot) and ``budget_note``, derived from
+    that same snapshot: token capacity only, against the ordinary and the
+    summary-call reservations; never an admission prediction (R20 on c7e9449: 141,947 reported tokens remained under a 200,000
+    ordinary-call reserve, the run stopped FindingsOpen, and nothing in the
+    record said the allowance had run that low). An observation, never the
+    run's stop, outcome or a failure fact."""
+    if not budget:
+        return {'budget': None, 'budget_note': None}
+    snapshot = budget.snapshot()
+    limits = snapshot.get('limits') or {}
+    reserve = int(limits.get('reserve_tokens_per_call') or 0)
+    total = limits.get('max_reported_tokens')
+    used = snapshot.get('reported_tokens')
+    if not reserve or total is None or used is None:
+        return {'budget': snapshot, 'budget_note': None}
+    remaining = int(total) - int(used)
+    if remaining >= reserve:
+        return {'budget': snapshot, 'budget_note': None}
+    from .run_budget import SUMMARY_CALL_RESERVE_TOKENS
+    # RunBudget.reserve's own shaping: the smaller of the two, never more.
+    shaped = min(reserve, SUMMARY_CALL_RESERVE_TOKENS)
+    unknown = int(snapshot.get('unknown_usage_attempts') or 0)
+    covers = 'covers' if remaining >= shaped else 'does not cover'
+    text = (f'At the end of the run {remaining:,} reported tokens remained, below the ordinary-call token '
+            f'reservation of {reserve:,}. The token remainder {covers} the {shaped:,}-token reservation for a '
+            'summary-only call whose CLI enforces one turn. This is a token-capacity observation, not the '
+            'run\'s stop or an admission decision; other limits and workflow conditions are not assessed.'
+            + (f' {unknown} attempt(s) reported no usage, so the true remainder may be lower.' if unknown else ''))
+    return {'budget': snapshot, 'budget_note': {
+        'remaining_reported_tokens': remaining, 'ordinary_call_reserve': reserve,
+        'summary_call_reserve': shaped, 'stop_reason': snapshot.get('stop_reason') or '',
+        'unknown_usage_attempts': unknown, 'text': text}}
 
 
 def _requirements_record(session):

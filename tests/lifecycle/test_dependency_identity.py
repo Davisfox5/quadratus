@@ -98,7 +98,8 @@ def test_a_capped_gate_fix_that_fixed_the_code_is_gated_again_and_passes(tmp_pat
     (fix,) = replay.of("gate-fix")
     assert _turns_flag(fix) == str(CAP)
     assert H.gate_results(replay) == ["PASSED"], "the required check decides, after the capped fix"
-    assert H.ended_at_cap(replay, 1) and replay.of("closeout")
+    # The job's only task is its last wave: the harness writes its record.
+    assert H.ended_at_cap(replay, 1) and replay.artifact_texts("factual-closeout") and not replay.of("closeout")
     assert H.result_json(replay)["turn_limited_tasks"] == []
     assert replay.artifacts("capped-fix")
 
@@ -182,8 +183,10 @@ def test_a_gate_fix_denied_the_harness_command_at_the_cap_is_a_capability_stop(t
 
 
 def test_review_seats_share_the_cap_and_closeout_and_the_orchestrator_do_not(tmp_path, monkeypatch):
-    replay = _run(tmp_path, monkeypatch, Script(), files=FILES)
-    assert H.ended_at_cap(replay, 1)
+    # Two tasks: t1's close-out is a model call (the next planning call reads
+    # it); the last wave's is the harness's factual record (Davis, 2026-10-16).
+    replay = _run(tmp_path, monkeypatch, Script(), files=FILES, max_tasks=2)
+    assert H.ended_at_cap(replay, 2) and [c.task for c in replay.of("closeout")] == ["t1"]
     assert all(_turns_flag(c) is None for c in replay.of("orchestrator"))
     # The close-out keeps its own one-turn, tool-less summary form.
     assert all(_turns_flag(c) == "1" for c in replay.of("closeout"))

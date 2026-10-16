@@ -647,6 +647,548 @@ Key design decisions already settled:
   SQLite work with "No network access" keeps its database and its network
   ban. A family chosen by a path rule or the project's policy keeps the
   item whole, and so does a scope that rules all I/O out.
+- **Step 2: recovery changes approach, conflicts can be continued, and an
+  interrupted job resumes from a durable quiescent checkpoint** (#35,
+  2026-10-13). An unfinished task's ledger entry carries held facts (cause,
+  first error line, the environment's own tool failures, the harness's run
+  of the checks on the source it left), never the lead's account; a failed
+  task's source now meets the gate once as evidence, as a capped one did. A
+  CONTINUES that re-sends its predecessor's text and declared scope unchanged
+  is sent back before any lead call. A parallel child that wrote outside its
+  scope is a failed, unmerged task (nothing it wrote reaches the project; its
+  files are an artifact) that a scoped CONTINUES may finish; a child stopped
+  by integrity, refusal, budget or an unknown error is unchanged. Merged work
+  that fails the check after the merge fix round is a `check.failed` finding
+  (with the ledger and COVERS) that a RESOLVES task repairs. The run writes
+  `checkpoint.json` (digest-bound) at every point between tasks; `--resume RUN`
+  starts a new episode only from an interrupted run, never a sealed one, never
+  twice, never with a call in flight or unknown usage, and only when source,
+  goal, policy, limits, settings (credential fields excluded by exact
+  name, `max_tokens` bound), gate, dependency and run-configuration
+  (mode, tier, decider, write grant, scope, capture, readiness) identities
+  all match. The checkpoint and `budget.json` come from one persisted
+  snapshot, an interruption persists the time up to it, and every spend
+  counter must be present, finite, non-negative and no lower than the
+  checkpoint's.
+  The record, unfinished work, findings, check debt, typed outcomes and the
+  job's run-start test bytes carry over; the budget starts from what the
+  parent's budget record spent, so the allowance is the job's. State the
+  checkpoint does not carry (design evidence, test repairs, explicit lists)
+  makes the point not resumable rather than partly resumed.
+- **The planner plans against the job's allowance, and recovery is serial**
+  (Step 2 medium job on 3e59970). Every next-task prompt states the task
+  slots left, counting the one being named, and the requirements no task
+  has covered yet: the planner had never been told the cap of 3 and spent it
+  on storage and HTTP while the CLI and docs went unplanned. A parallel
+  batch carrying CONTINUES is sent back before any lead call, as RESOLVES
+  is: a continuation inside a batch skipped the recovery allowance, the
+  hypothesis record, the unchanged-retry check and its contract's
+  predecessor. The cap, the size ceiling and the completion gates are
+  unchanged.
+- **Automated acceptance is what the configured checks can show** (Step 2
+  r02 on 3b629cf, narrowed after root's review of 86e2841). r02's t1 named a
+  scratch two-Store Python session as acceptance, the lead reported it NOT
+  RUN, and R1-R7 stayed open after committed tests covered the same
+  behaviour. Only the configured-checks note, which renders only when a check
+  is configured, now says automated code-behaviour acceptance belongs in
+  collected tests committed in the task's files, never a scratch session,
+  one-off command or script outside the tests. The shared SCOPE text carries
+  no such rule: read-only (`edits: none`) reviews, design or audit judgment,
+  harness captures and operator acceptance keep their own channels. The NOT
+  RUN rule and its discharge are unchanged.
+- **A capped draft in the last task slot meets an independent review**
+  (Step 2 r03 on f4eafea). t3's Grok lead hit its 8-turn cap in slot 3 of 3
+  with the recovery spent; the checks passed on its in-scope source, nothing
+  could continue it, and the job ended GoalUnconfirmedAtCap with nobody
+  having read the work. `Session._capped_final_draft` now sends that source
+  through the existing review, fix, gate and close-out path, with one
+  reviewer from another vendor, only when the task is serial, in the last
+  slot, scoped, inside its scope and passing its own checks on that exact
+  source. The lead stays capped (a capped revision or fix closes capped),
+  the review must give a verdict, the cap's goal question and audits still
+  decide, and the cap stays on the task as a non-blocking fact. A capped
+  task with a slot left still closes unfinished and is continued by name.
+- **Every task review judges the original goal** (root review of d0f3263,
+  then r04 on 5366412). A reviewer saw the role packet, the task's
+  paraphrase and the draft, never the goal; r03's and r04's CLI tasks
+  dropped the goal's JSON refusal contract, closed, and left malformed IDs
+  on argparse's plain-text exit. `Session._goal_authority` now appends the
+  goal verbatim and the covered requirements' original text to every
+  collaborator prompt, ranked above the paraphrase. It grants nothing; a
+  finding that needs a change outside the task's paths stays open. Root's
+  review of 4ed4d30: r04's CLI task was a SIMPLE parallel child, and SIMPLE
+  draws no collaborator, so the goal never reached a review on the route
+  that failed. A task that covers ledger requirements now draws one
+  existing peer from another vendor whatever its difficulty
+  (`collaborators_for`), and a parallel child is handed its covered
+  requirement text by the parent. Missing review is held, never waived
+  (root review of 1a58853): goal-bearing work with no reviewer from another
+  vendor available opens an unverified finding
+  (`_hold_unreviewed_goal_work`), and a direct label on work that covers
+  requirements is refused (`_direct_refusal`), so it runs at the normal
+  tier with its review. With the ledger on, every task carries COVERS, so
+  the direct tier now admits only ledger-off work.
+- **A goal-bearing review owes a verdict per covered requirement** (r05 on
+  1655cf1). The CLI reviewer carried the goal and R10 verbatim and still
+  replied NO FINDINGS while malformed IDs left through argparse's plain
+  exit. A review of work that covers requirements now gives one
+  `R<n>: MET - <file>:<line>` or `R<n>: NOT MET - <condition>` line per
+  covered requirement (`_judge_goal_review`). An approval missing a line
+  is an unfinished review, held unverified; a NOT MET line is a BLOCKING
+  finding even when the reviewer wrote none; a clean review is NO FINDINGS
+  followed only by MET lines and buys no revision. This makes a miss
+  harder, not impossible: the verdict is still the reviewer's judgement.
+- **Reviews and audits trace every error path; the goal outranks requirement
+  wording** (r06 on 5b31818). The reviewer cited per-requirement lines and
+  the auditor judged the CLI requirement, yet both read only the handler that
+  formats errors while input parsing exited before it. `_ERROR_PATH_RULE`
+  now tells both seats to trace parsing and validation ahead of the main
+  operation, outside any error handler, and the helpers, in general words
+  with no runner or known case named. The auditor also held R14 to
+  "exactly", which the requirements review added and the goal never states:
+  the audit prompt now names the goal as the authority, judges the goal's
+  own condition over stricter wording and says so on the line, keeps
+  decisions and rulings binding, and never relaxes a condition the goal
+  states. NOT RUN discharge is unchanged; full-file evidence for discovery
+  commands is a design proposed to root, not implemented.
+- **The final audit is not a proven backstop for refusal conditions** (r08
+  on f247f0a). The reviewer and the final auditor both had the goal, the
+  requirement and the error-path rule, cited a success-path test and
+  called the CLI refusal condition MET; malformed input still left before
+  the handler in another form. Prompt prose did not move either seat.
+  `_PROBE_RULE` asks a review seat whose copy takes scratch
+  (`CLISpec.copy_args`, today codex) to add a scratch test feeding the
+  interface each kind of invalid input the condition covers, including input
+  the interface's own parsing rejects, and report the test's own name as
+  executed and passed; otherwise NOT RUN and no MET line, so the review is
+  held unverified. It applies only when an approved command would discover a
+  new test file (`integration.discovers_added_tests`: verbosity flags only,
+  operands only project-relative directories that exist in the project or
+  copy; no filter, explicit file, absolute or outside path, or other flag;
+  root reviews of b24b6db and 2d9be52, so a private path is never named). The copy-bound role keeps the harness
+  records and "do not run the checks again" and adds one named exception for
+  that scratch file (`runtime._probe_exception`). The auditor gets no probe
+  and no command line. No new command, grant or role. Whether it changes the
+  verdict is unmeasured until a run shows it.
+- **A parallel child's finding on a sibling's work is rechecked on the
+  merged source, once** (r09 on ded0095). t3's reviewer blocked twice on
+  routes the running sibling owned, spent two revisions and two rechecks,
+  and the finding stayed open after the merge although the merged source
+  held the routes. A child's reviewer now sees each sibling's paths and
+  intended result and may write `DEFERRED: <task id> - <condition>`; that,
+  or a finding left unresolved after the child's own rounds, is held open
+  as unverified and, only when the merge gate passes, rechecked once by
+  the same reviewer on the merged source (`_recheck_after_merge`).
+  RESOLVED closes exactly those findings; anything else keeps them. No
+  lead call follows, no MET is written, and a sibling id outside the batch
+  is ignored. The same run showed the scratch proof asked for in r08 was
+  not done: the reviewer read source and reran the suites. Prose cannot
+  enforce it, so the runtime now measures new test files the probe call
+  left in its copy (`context["scratch_tests"]`) and the session records
+  that as an unverified fact. It informs, it does not gate: which
+  requirements need a demonstration is a policy call for root and Davis.
+- **Causal addendum to the r09 note above** (root on 40b2133, from the
+  actual parallel prompt and native rollout). The r09 codex reviewer never
+  received `_PROBE_RULE` or the runtime exception: `_run_batch` gives each
+  child `integration_gate=None` and `_probe_applies` required a gate, so
+  the rule and the probe flag never reached a parallel child. Earlier
+  qualification covered the parent path only. So r09 shows no scratch
+  run, not a model ignoring a delivered rule, and 40b2133's file
+  measurement never activated there either. A child now reads its parent's
+  approved gate commands (`_inherited_checks`, scratch only; its own gate
+  stays off). Under root's decision, a new file name is not execution:
+  when the probe call leaves a test file in its copy, the runtime runs the
+  approved discovering commands itself with `GateSuite` in that copy
+  (`runtime._scratch_proof`). Each scratch case counts only by identity:
+  a pytest line naming the file (verbosity raised through
+  `PYTEST_ADDOPTS` only, never argv), or a node name no handed test
+  declares. Only every declared case executed and passed is `passed`.
+  Failed, skipped, absent, unnamed or a handed file changed is `failed`
+  or `not run`, recorded unverified in `scratch_proofs`, never a MET.
+  Nothing from the project's dependency trees is linked into the copy.
+- **A scratch run has the reviewer's authority, not the gate's** (root
+  review of 1c14ea9). Through the gate runner, a reviewer's scratch test
+  changed a marker outside its copy and the proof still said passed; the
+  gate's authority is not the reviewer's. `runtime._scratch_isolation` now
+  puts each scratch run in an OS sandbox matching `CODEX_SPEC.copy_args`:
+  the copy is the only writable root (TMPDIR moved inside it), no network,
+  and the live project plus every absolute path an approved check names
+  outside the copy are unreadable. Linux uses `/usr/bin/bwrap`, macOS
+  `/usr/bin/sandbox-exec`, both pinned paths, never PATH. No sandbox, or a
+  launcher refusal (`SANDBOX_REFUSAL`, e.g. a nested seatbelt under an
+  outer profile), is `not run`. The run uses the reviewer's model-facing
+  argv. And each pytest instance keeps its id: a parametrized case passes
+  only when every printed instance executed and passed.
+- **A capped revision in the last slot meets its own reviewer, once**
+  (r10 on f6c028c). t3's capped draft took the last-slot handoff to a
+  review that found a real CLI defect; the revision fixed it inside scope
+  with the checks passing, but stopped at its cap and closed turn-limited
+  with no recheck. `_capped_revision_recheck` now sends a capped revision
+  or capped fix back to exactly the reviewers whose blocking findings it
+  answered, once, on the current source. That uses the capped draft's
+  eligibility (`_checked_final_source`): last slot, no operator list, write
+  grant, measured in-scope edits, checks passed on exactly this source.
+  It also needs every one of those reviewers available and no design
+  evidence. RESOLVED lets the task close normally; anything else stays
+  open. The writer is never called again (no fix cycle, gate fix zero). A
+  note with no blocking finding, failing checks or a scope breach keep the
+  capped close. Whole-goal confirmation and the final audit still decide.
+- **A revision past the size stop spends the remaining fix allowance
+  coming back under it** (r11 on 136a3ec). t2's in-bound draft was revised
+  past the hard stop by one line, though its prompt stated the exact room,
+  and the task failed with a fix cycle unused and no slot left.
+  `_edit_within_stop` gives a size-only overrun (no path outside scope),
+  while the call leaves a cycle of `max_fix_cycles`, one trim call. The
+  work is never reverted, the stop is measured again, and still over it
+  fails the task as before. The fix prompt now states the same room.
+- **Every editing call carries the original goal** (r11). Only the draft
+  had it, through the memory render; revision, fix and gate-fix prompts
+  held the generated task text, which in r11 prescribed the defective
+  route branches and called the plain CLI exit a refusal. `_writer_goal`
+  enters once, at the boundary in `_invoke_model_call` where every
+  editing role (`_EDITING_ROLES`) already gets the lead's packet, so
+  design-fix, security-fix, fixture-supply and capture-redeclare are held
+  to it too (root review of af5814d); the draft keeps the memory render's
+  goal, and a parallel child's draft adds its covered requirements. It
+  says a task text or generated recipe does not change them, grants
+  nothing and changes no bound. Only the complete current block counts as
+  already bound (root review of 21639d6): a copied heading over other text,
+  or a block with another covered requirement, never suppresses it.
+- **A capped writer after the draft is told its round budget** (r12 on
+  56ff155). t3's capped Grok revision spent its 8 rounds on 19 reads,
+  greps and commands and wrote nothing; its prompt had the goal and the
+  headroom, but only the draft had ever been told a cap existed.
+  `_writer_turn_budget_note` adds it at the editing boundary for revision,
+  gate-fix and design-fix (`runtime.LEAD_CAPPED_ROLES`) with the write
+  grant, on a CLI with a round flag, using the draft's limit and planning
+  arithmetic. It says the call stops with its edits kept and that checks,
+  reviewers and the final audit still decide; no status promise. Codex,
+  security-fix and uncapped runs are told no cap. The cap itself is
+  unchanged.
+- **A finished draft past the size stop gets the same one trim** (r13 on
+  5e8926b). Two finished parallel drafts crossed the hard stop inside their
+  paths and failed before any check or peer. `_trim_overrun` (shared with
+  the r11 revision trim) now also serves a normally finished draft: one
+  call, charged as a fix cycle against the task's later revision and
+  fixes, and only while a cycle is left for that revision. Never reverted,
+  measured again; still over, a path breach, a capped or transport-failed
+  draft, or no cycle left fails or holds as before. The trimmed source
+  still meets the checks, the peer and the final audit. Its fact is
+  recorded only after the trim lands, so a failed trim leaves the failure
+  record unchanged.
+- **The cap goal question is the goal decision, not a second audit** (R14
+  on 164859f). It rendered every task's full work inline (43k characters)
+  to an uncapped native seat that also read the delivered files; its 183k
+  reported tokens left 163,762, below the unchanged 200,000 call reserve,
+  and the final audit was never invoked. `_confirm_goal_met` now renders
+  with `with_previews=False`: goal, standing rules, requirements, rulings,
+  harness records and summaries as before, each task's full work as
+  artifact ids that FETCH serves whole. With the requirements ledger on, it
+  says DONE is the goal decision and the independent audit follows. No
+  reserve, order, cap or seat change: reordering would only move the
+  starvation, since native usage cannot be known before a call.
+- **A trim aims at the stated bound; a no-edit capped revision gets one
+  measured retry** (R15 on 7f628ae). Asked for "at most 150", t2's draft
+  trim landed at 152, as r11's revision had at 151: the model aims at the
+  number given. The trim now aims at the task's stated bound and names the
+  stop as the failure line. t3's capped revision had a concrete blocking
+  finding, read for 8 rounds and wrote nothing, with a fix cycle unused.
+  `_no_edit_cap_note` gives such a revision (source byte-identical, a
+  blocking finding open, write grant, a cycle left) one more revision from
+  that cycle, carrying the measured outcome rather than the same prompt;
+  its own cap takes the capped paths. Whether it helps is unproven.
+  A cap raised inside a size trim is tagged and never read as a no-edit
+  revision (root review of b5ea0ef: it bought a third writer call).
+- **A capped draft past the size stop gets the same one trim** (R16 on
+  78f76bb). t2's draft stopped at its cap with 153 in-path lines against a
+  stated 85 and failed on scope with both cycles unused.
+  `_trim_capped_draft` gives its kept edits the r13 trim (charged as the
+  first cycle, only while one is left after it, prompt stating the cap and
+  aiming at the stated bound). Under the stop it is a capped draft like
+  any other: the cap stays recorded and the existing capped paths decide
+  (the last-slot review, the final-batch child review, or the capped
+  close). Still over fails as before; a capped trim goes straight to the
+  capped close; a path breach gets no trim.
+  A capped trim marks the turn-limited record `trim_capped`, and the
+  final-batch capped-child review holds it rather than reviewing past two
+  caps (root review of 860769e).
+- **The planner is told which unfinished work is still owed** (R17 on
+  a3cf7e4). After t2 CONTINUES t1 closed and a real pause and resume, the
+  planner still read t1's "not done ... CONTINUES: t1" record with nothing
+  saying it was settled or that the one recovery task was spent; it named
+  t3 CONTINUES t1 and the run stopped SurveyAllowanceSpent. The next-task
+  prompt now carries `_unfinished_state_note`: what is still owed (the same
+  typed-or-legacy set that blocks completion), what a later task took over,
+  and recovery tasks used of the allowance. Records stay as written; no
+  CONTINUES is stripped, and the allowance stop is unchanged.
+- **A disputed finding is tested by the harness, never argued** (Davis,
+  2026-10-15, after R18's false audit finding). Reviewers and the auditor
+  state a finding with its condition, location and a concrete failing
+  example. The orchestrator may reply `EVIDENCE: <R<n>|U<n>|none>`, a
+  `FILE:` line and one new test file (`_parse_evidence`). The harness runs it
+  with the configured discovering checks in a disposable, sandboxed copy of
+  the current source (`_run_evidence` over `runtime._scratch_proof`); no
+  command line or path goes to the planner or the auditor. Failed confirms
+  the finding with no further call; not run (skip, no sandbox, a test that
+  rewrote handed source, a project that moved) leaves it held; passed goes
+  once to the model that made the finding, which reassesses it alone
+  (`_reassess`). An audit MET there still needs a resolved citation and is
+  lowered by any standing NOT RUN record; it sets the requirement met and
+  the next DONE audits everything again with the evidence in its prompt
+  (`_evidence_block`). A review RESOLVED closes exactly that held finding.
+  Only the latest audit's own NOT MET lines on the current source and held,
+  non-deferred review findings can be tested (`_disputable`); one request per
+  finding per source, kept in `evidence_requests` (checkpointed, written at
+  a quiescent point before the planner is re-asked). Requests share the
+  decision's ASK bound; the reassessment is an ordinary reserved call.
+  Held review findings with COVERS, a slot left and a discovering check are
+  debt instead of a FindingsOpen stop (`_review_debt_continues`), as a
+  failed check is; they still block completion.
+  After the task cap's final audit (root boundary on 83b658c: seven
+  controls stopped RequirementsUnmet at max_tasks=1 with 8 of 20 calls
+  used and no challenge), `_final_challenge` offers the seated orchestrator
+  the same channel read-only: no task, writer, slot or recovery, only the
+  orchestrator's turns and the same auditor's one reassessment, each a
+  reserved call. A budget that cannot admit one ends the challenge and the
+  audit stands; a requirement leaves the unmet set only when reassessed MET.
+  A proof is bound to `_evidence_identity` (source, effective gate or
+  inherited checks, root, excludes) and relied on only while it holds:
+  drift after the run spends no reassessment, drift during it discards the
+  verdict (root review of 8f68ea0). The request is checkpointed before it
+  runs and its receipt before the reassessment is reserved; the run's
+  receipts and check ids stay on the record, never in a model prompt. A
+  checkpoint from the cap's challenge carries `_cap_goal` and
+  `_final_audit` and is the one spent-slot checkpoint a resume admits: it
+  finishes the decision with no goal question, audit or execution
+  repeated. Each request records its stage durably (intent, awaiting
+  reassessment, reassessment started, done): a resumed job finishes an
+  unstarted reassessment once with the same auditor, from the retained
+  test, finding and bound identity (`_finish_pending_evidence`); a started
+  one is never retried. The reused final audit restores the coverage the
+  ledger had when it was asked, so its own NOT MET cannot read as
+  "never covered" (root review of a93334b). Evidence files are at most 16,000 bytes and shown
+  to the reassessor whole.
+  Every reassessment reads `_authority_context`, the same block the final
+  audit reads (verbatim goal, the requirements judged, redacted check facts
+  and configured checks, decisions and operator rulings, design evidence,
+  NOT RUN records), plus `_EVIDENCE_AUTHORITY`: a test cannot authorize
+  another reading or stand in for renders or unrun checks. A review
+  reassessment gets the goal and its task's covered requirements, not only
+  the generated task text (root review of 8f68ea0).
+- **A goal contract is never waived by a lower authority** (R19 on
+  e2a46a4). t3's reviewer found the goal's JSON refusal broken for malformed
+  new-command IDs, then waived it because the task asked for the type=int
+  convention and the old commands behaved that way, and marked R12 MET; the
+  audit followed. The goal block already said it outranks the task text.
+  `_AUTHORITY_ORDER` now states the order (goal and rulings, then
+  requirements and decisions, then task text or plan) and that no
+  prescribed convention, consistency with existing commands or older
+  behaviour excuses a goal contract on the work it asks for, and that a
+  requirement is never MET beside a note that it is not. It reaches the
+  writer after the draft, every task reviewer, the final auditor and the
+  evidence reassessment. Prompt only: no severity is forced and nothing is
+  marked MET or NOT MET by the harness, and a wording rule is not a
+  measured accuracy fix. The structural half: the final auditor's prompt
+  (9538 chars) never held the reviewer's warning. `_record_review_notes`
+  keeps each non-blocking review paragraph naming a covered requirement,
+  with its task and source fingerprint; `_authority_context` carries those
+  on the requirements judged, labelled current or earlier source, as
+  observations to reconcile. Resolved BLOCKING findings and notes on
+  uncovered requirements are not carried. Notes are kept and carried whole,
+  every one (root review of 728c0fc: a 600-character slice kept a benign
+  prefix and a last-20 cap dropped the oldest warning); review volume is
+  already bounded by the job. A BLOCKING line ends what its paragraph can
+  contribute: its continuation belongs to the blocking and recheck route.
+  A paragraph that states a condition without any id (as `_FINDING_SHAPE`
+  allows) is kept against the task's covered requirements and labelled as
+  naming none, its association uncertain; one naming only uncovered ids
+  stays out (root review of 225367f). An executed-demonstration
+  requirement for every error-boundary MET was built and held back as
+  broader than this fact supports (patch kept in the #73 record).
+- **Every failed required check carries its own report** (R21 on
+  319385322b). The final check failed on a plain test-body assertion and the
+  run stopped CheckUnattributable with budget left. pytest 9 reports each
+  subtest through the item's hook, so producer `quadratus-pytest/5` tallies
+  subtests apart and counts each item once, failed when it or any subtest
+  failed, its one record an assertion only when every cause is a body
+  `AssertionError` (a parent pytest already flipped to failed with no
+  exception of its own is not a cause). A `python -m unittest ...` check that
+  declares `--quadratus-report={report}` runs the same arguments under the
+  same interpreter through `_gate_producer/quadratus_unittest_report.py`
+  (`unittest.main(module=None)` with a recording result class, copied under
+  a nonce name, unittest's own output and exit), producer
+  `quadratus-unittest/1`, the expected producer bound per invocation. Plain
+  unittest stays undeclared and unattributable; root rejected letting a
+  sibling check's report stand in for another, and `attribute()` is unchanged.
+  Root on f0b4827: with no failure, a skipped subcase makes its test skipped
+  in both producers (it had vanished, so `skipped_count` read zero), and the
+  selected shipped producer's bytes are part of `GateSuite._runner_hash`, so
+  a changed reporter misses the cache. unittest's own summary for a failed
+  and a skipped subcase reads as zero executed and still fails closed.
+- **The finish is held, the last wave closes factually, and error clauses
+  need a run** (Davis, 2026-10-16, after R22: three tasks closed, 20 of 20
+  calls spent, the cap's goal question refused at call 21, no audit).
+  `RunBudget.protect_finish` holds the goal question and the requirements
+  audit (`run_budget.FINISH_STAGES`) one call and one full per-call reserve
+  each from ordinary calls, counting reserves in flight; an ordinary call
+  that would spend them raises `FinishReserved` before it starts, is
+  recorded (`finish_refusals`, `budget.json`) and latches nothing. The
+  session marks the finishing calls (`finishing("goal")`, `"audit"`),
+  recomputes the held stages each episode from its own record, and treats a
+  refused review, recheck, revision, fix or post-merge recheck as not run:
+  the finding stays open and every existing debt gate still decides, so a
+  run can stop FindingsOpen instead of finishing. No limit, reserve or
+  shape changes; finishing calls never take the summary shape. The job's
+  last dispatched wave (and a model close-out refused to keep the finish)
+  closes with `_factual_close_out`: reviews as they ended, last check and
+  its source, open debt, NOT RUN, scratch proofs and artifact pointers, no
+  invented decision or map note; not the direct tier's text. A requirement
+  whose own text is about errors, refusals or invalid input
+  (`_error_clause`) is accepted only on executed evidence, by exact case
+  identity (`_cited_cases`, `_executed_cases`; root review of 17a96d3): a
+  cited `file::[Class::]case` a complete approved run's case record shows
+  executed and passed on the current source (a quiet or unittest run names
+  no case and credits nothing; a same-named case elsewhere never stands
+  in), or a case of a scratch demonstration the harness ran and passed in
+  full, cited on that requirement's own MET line (in the review), or bound
+  by provenance (source and checks identity, covered requirements) at the
+  final audit. The audit lowers any other MET to NOT MET; a review's other
+  MET becomes an UNVERIFIED line the lead answers, never an approval.
+  Root on 5ca254c: a scratch proof is bound to the source and checks its
+  copy was handed (`handed_source`, `handed_checks`, measured by the runtime
+  on the copy), so a live change during the review leaves it stale with its
+  raw result kept; and the own-report producers (`quadratus-pytest/6`,
+  `quadratus-unittest/2`) name every case they count passed
+  (`passed_cases`, one per count, validated), so the unchanged quiet
+  declared gates show exact executed identity without verbose output. Whether the executed test establishes the clause stays the
+  seat's judgment. The R22 ledger replayed through the hold refuses row 17
+  (t2's recheck), which leaves its finding open: the hold makes the stop
+  honest, it does not make that run finish.
+- **An editing call is held at the per-call ceiling, and a first editor
+  refused before any write is NOT RUN** (root reconciliation of R23 on #73,
+  6208197375). R23's t3 lead was admitted on its 200k reserve with 670,394
+  left, reported 346,846, and from then on the goal question itself could
+  not fit beside the audit's hold; the scope trim was only where that
+  surfaced. The hold now exposes a call holding the write grant
+  (`Fleet.invoke` sets `run_budget.admitted_as`) at `max_tokens_per_call`,
+  the most it can report without stopping the run, and counts each call in
+  flight at its own exposure; every other call stays at its reserve, an
+  estimate, and with no ceiling the record says the hold does not bound an
+  edit. A call kept out only by calls in flight (it fits alone) waits on the
+  budget's condition with no ticket, attempt or request and is decided
+  again when one settles (`finish_protection.deferrals`); the wall still
+  runs and is never reset, and a worker never waits, because its lead is in
+  flight. Root's zero-model replay: t3's lead refused before any write, and
+  t2's revision deferred behind t1's. A serial task whose first editing call
+  is refused, with no edit admitted and the measured source unchanged, is
+  `not_started` (`Session._settle_not_started`, `not_started` in
+  result.json): never closed, no coverage, no further planning, and the
+  cap's own decision runs every gate. Partial work blocks the goal
+  question; a not-started task blocks completion by name ("NOT RUN"). A
+  refusal after any edit, in an explicit list or in a parallel child stops
+  the run exactly as before; the R23 trim refusal is unchanged.
+- **A serial task the run is certain to stop after closes factually**
+  (R24 on 54d729: t1 closed with three unverified review facts, a model
+  close-out of 11,772 tokens ran, and the run stopped FindingsOpen before
+  any planning call). `Session._stop_follows_close` reads, without
+  changing anything, what the stop decision in `_run_tasks` reads: a
+  legacy open finding the review debt cannot hold (`_review_debt_holds`,
+  the read-only half of `_review_debt_continues`), or a failed last check
+  with no ledger or no COVERS to hold it as debt. Only a task the serial
+  loop dispatched is asked (`_serial_dispatch`); a direct `run_task`, a
+  parallel child or a held-debt task keeps its model close-out. Reviews,
+  verdict parsing, debt and stops are unchanged.
+- **Judgment integrity: one strict reading, one same-seat completion per
+  job, an obligation view and a wall hold** (strategy reset approved by
+  Davis, 2026-10-16, from 1b9f0aa).
+  - `quadratus/judgment.py` combines repeated per-requirement lines for the
+    reviewer, the audit and the reassessment alike: any NOT MET wins in either
+    order, and duplicate MET lines approve nothing. Before, the audit kept the
+    last line and the reassessment the first. A recheck reply is RESOLVED,
+    UNRESOLVED (a genuine finding, which buys the fix round) or INVALID (no
+    verdict, which buys nothing).
+  - A review or recheck that ARRIVED without a valid verdict may be completed
+    by the same seat, in its existing role (`collaborator` or `recheck`: turn
+    cap, read-only copy, scratch, privacy), on the same source,
+    `SessionConfig.max_judgment_completions` times per whole job (default 1).
+    The claim is written to budget.json before the call, never refunded, shared
+    by parallel children and carried by `checkpoint.consumed`. A cap, a refusal,
+    a finish-hold refusal or a changed source gives nothing and is never
+    retried. Other failures propagate as the review call's would. The raw reply
+    is kept (`judgment-raw:*`). A genuine BLOCKING, NOT MET or UNRESOLVED is
+    never routed here. If the completion still gives no verdict, the open
+    finding stops the run as before; no other seat and no audit stands in.
+  - Root review of d264b0c:
+    - The completion is bound (`_judgment_binding`) to the task, seat, role,
+      contract, source, effective gate identity, approved-check digest, goal,
+      and every requirement's text. The binding is taken before the claim,
+      persisted with it, and compared before the call and before the reply
+      is relied on; any drift voids the answer and spends the claim.
+    - A refusal by the seat, transport, integrity or any other failure is
+      recorded, then raised as the review call's own would be.
+    - Only the strict reader marks an answer a valid judgment
+      (`_settle_completion`).
+    - `checkpoint.consumed` requires the claim counter and refuses claim
+      records that exceed it: a missing counter is unknown usage, never an
+      unused allowance.
+  - `quadratus/obligations.py` (pure) builds the one view the planner and the
+    audit both read, and result.json records it (`obligations`). It covers:
+    requirement status and owners; each task's state (held, continues,
+    continued more than once) and its measured code/test/line consumption
+    against its ceiling; each recorded check's passed cases, current only on
+    this source and gate (otherwise stale or wrong gate); judgments without
+    a valid verdict; and capacity after the held finish (calls, tokens,
+    seconds, slots, recovery).
+  - `dispatch_floor` and `_mandatory_stages` refuse a serial task before any
+    call when the calls left cannot pay its known mandatory stages: lead,
+    each required review, a contract-required design review, or a security
+    task's draft and verification. These are exact counts that never
+    predict revisions.
+  - `RunLimits.finish_wall_seconds` (policy `finish-wall/1`, 120 s per
+    pending stage) holds wall time for the goal question and the audit:
+    ordinary calls get what remains after the holds, and the goal question
+    leaves the audit's.
+- **A trim gets what the harness measured** (R20 on c7e9449). t2's one
+  scope trim, told only the total, spent 8 rounds and 373,366 reported
+  tokens, more than its draft, and the run ended with 141,947 left under the
+  200k ordinary-call reserve. `_trim_evidence` gives every trim site
+  (finished draft, capped draft, revision) per-file counts split into code
+  and tests and the task's diff (`project.diff_contents`, the one
+  rendering `Project.diff` uses), measured fresh and filtered by file
+  identity on both sides to what every scope over the task permits; a diff
+  over `_TRIM_DIFF_MAX_CHARS` is stated as omitted, never cut. No call,
+  cap, target, stop or allowance changes; the token effect is a hypothesis.
+  `result.json` `budget_note` records, from the terminal budget snapshot,
+  when what was left sat under the ordinary-call reserve: an observation,
+  never the stop or an outcome fact. It is token capacity only: whether the
+  remainder covers the summary-call reservation
+  `min(reserve, SUMMARY_CALL_RESERVE_TOKENS)`, never a prediction of
+  admission, since calls, time and workflow are other gates (root reviews
+  of b4d8398 and 38ec681).
+- **Capped work in the final parallel batch meets one review** (r05). A
+  child has no gate and no slot context, so t2's capped Grok draft merged
+  and the job stopped GoalUnconfirmedAtCap with calls left.
+  `_review_capped_final_child` sends the merged source to one reviewer
+  from another vendor when the batch spent the last slot and the merge
+  gate passed. A clean verdict lifts the cap and records coverage;
+  anything else is held. No lead call follows, so a capped lead stays
+  capped.
+  An approval there is a finished review (NO FINDINGS or a REVIEW: COMPLETE
+  line) with no BLOCKING and every covered requirement MET; non-blocking
+  notes beside it are kept on record, not answered (r07 on 820bed6: R8-R10
+  MET, REVIEW: COMPLETE and six low-severity notes were held because only a
+  bare NO FINDINGS counted). Missing lines, NOT MET in either order and
+  BLOCKING still hold.
+- **Native delegation is denied to every seat without the worker bridge**
+  (r04 on 5366412). The goal question at the cap used Claude's own Agent
+  tool, reported four children still running and 1,206,662 unattributed
+  auxiliary tokens, and stopped the job on the per-call ceiling.
+  `runtime.NO_NATIVE_DELEGATION_ROLES` (orchestrator, auditor,
+  requirements-review, consultant and every review seat) gets the
+  verifier's denial with read tools kept. Leads keep the vendor default and
+  the bounded WorkerBridge. Grok's unrestricted seats still take their
+  prompt by file, where `--disallowed-tools` is ignored; there the record
+  stays the check.
 - **The measured diff is the truth; the CHANGED line is the lead's account of
   it** (operator ruling, 2026-09-28, `docs/DIRECTION.md`). Fleet diffs the
   project around every editing call, so it already knows what changed. The

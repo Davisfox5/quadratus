@@ -50,6 +50,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import tempfile
 import threading
 import time
@@ -148,6 +149,16 @@ REVIEW_CAPPED_ROLES = frozenset({"collaborator", "recheck", "design-review", "ve
 #: above the operator's lead cap where that is smaller.
 DECLARATION_ROLES = frozenset({"capture-redeclare", "fixture-supply"})
 DECLARATION_MAX_TURNS = 6
+#: Seats that plan, judge or review and hold no bounded worker bridge: native
+#: delegation is denied on every call they make, with every read tool kept.
+#: Step 2 r04 on 5366412: the orchestrator's goal question at the cap ran in
+#: a source copy, used the CLI's own Agent tool and reported four parallel
+#: children still running; the call reported 1,272,024 tokens, 1,206,662 of
+#: them unattributed auxiliary usage, and stopped the job on the per-call
+#: ceiling. The only sanctioned delegation is the WorkerBridge a lead call
+#: carries; leads keep the vendor default (and lose it under granted checks).
+NO_NATIVE_DELEGATION_ROLES = frozenset({"orchestrator", "auditor", "requirements-review", "consultant"}
+                                       | REVIEW_CAPPED_ROLES)
 
 
 class Fleet:
@@ -361,7 +372,13 @@ class Fleet:
 
     # -- invocation ----------------------------------------------------------
     def invoke(self, model_key, prompt, *, system=None, allow_writes=False):
-        with capture_invocations():
+        from .run_budget import admitted_as
+        # The write grant decides how the run budget exposes this call to
+        # the held finish (run_budget.admission). A worker is served inside
+        # its lead's call, so it never waits on calls in flight: one of them
+        # is its own parent.
+        origin = (invocation_context.get() or {}).get("origin")
+        with capture_invocations(), admitted_as(editing=allow_writes, may_wait=origin != "worker"):
             return self._invoke(model_key, prompt, system=system, allow_writes=allow_writes)
 
     def _invoke(self, model_key: str, prompt: str, *, system: Optional[str] = None,
@@ -392,7 +409,7 @@ class Fleet:
         # evidence/q9v2-rerun2-1m). Delegation is a plausible cause, not an
         # established one. The verifier keeps every read tool and loses only
         # native delegation, on a copy so no other seat inherits it.
-        verifying = (invocation_context.get() or {}).get("role") == "verifier"
+        verifying = (invocation_context.get() or {}).get("role") in NO_NATIVE_DELEGATION_ROLES
         # A lead's agentic turn limit, when the operator set one. Applied per
         # call on a view, never on the shared provider. A capped lead raises
         # TurnLimitReached with its edits still in place; the session keeps
@@ -531,6 +548,12 @@ class Fleet:
             return reply
         with self.project.snapshot() as directory:
             context = invocation_context.get() or {}
+            # The bytes this copy was handed, measured on the copy itself
+            # before anything else lands in it: a scratch proof is bound to
+            # them, never to the live source measured after the call returns
+            # (root review of 5ca254c: the live source moved during review).
+            handed_source = (Project(directory, exclude=self.project.exclude).fingerprint()
+                             if context.get("probe") else None)
             declared = tuple(itertools.islice(iter(context.get("evidence_files") or ()), _MAX_EVIDENCE_FILES + 1))
             copied = _furnish_evidence(self.project.root, directory, declared, task=context.get("task"),
                                        expected=context.get("evidence_sha256"))
@@ -568,6 +591,7 @@ class Fleet:
                      "path of this copy: this copy is deleted when your call ends, and an "
                      "absolute path into it is a dead reference in the report.")
             checks = tuple(getattr(self, "check_commands", ()) or ())
+            probe = _probe_commands(checks, directory) if context.get("probe") else ()
             if checks and context.get("role") in REVIEW_CAPPED_ROLES and context.get("harness_checks"):
                 # r03 (20261011T152432Z-4ceef6b5): seats re-ran the project's
                 # checks in copies with no browser while the harness's own
@@ -579,6 +603,7 @@ class Fleet:
                     "This copy may lack browsers or other dependencies the harness has, so a command that "
                     "cannot run here is not evidence about the source. This copy is not a git repository: "
                     "git commands fail here, so read files and the task's own account of its changes instead."
+                    + _probe_exception(probe)
                 )
             elif checks and context.get("role") in REVIEW_CAPPED_ROLES:
                 # The same exact-command guidance the editing call gets (#51),
@@ -595,6 +620,7 @@ class Fleet:
                     "the task's own account of its changes instead. If a command is denied, do not "
                     "retry variants, delegate it or use another tool to execute it; report the "
                     "unrun check and judge from what you could read."
+                    + _probe_exception(probe)
                 )
             if allow_writes:
                 role += ("\nYou are a bounded editor. Return exactly PATCH: followed by a fenced "
@@ -609,11 +635,27 @@ class Fleet:
             reply = self._generate(model_key, view, prompt, role)
             _raise_if_infrastructure(model_key, view)
             altered = _copy_altered(directory, handed)
+            if context.get("probe"):
+                # Measured, not read from the reply: the new test files the
+                # call left in its copy (r09 on ded0095).
+                from .integration import _test_family
+                context["scratch_tests"] = sorted(p for p in _copy_digests(directory)
+                                                  if p not in handed and _test_family(p))
             if altered:
                 raise ReviewCopyAltered(
                     f"{model_key} changed or removed files it was handed to read in its source copy "
                     f"({', '.join(altered[:5])}{', …' if len(altered) > 5 else ''}); its answer is not "
                     "accepted as a judgement of the delivered source and evidence.")
+            if context.get("scratch_tests") and context.get("probe_checks"):
+                # Executed, not inferred: the harness runs the approved check
+                # commands in this disposable copy and reads the scratch cases
+                # by identity (r09 root decision on 40b2133).
+                from .integration import checks_digest
+                context["scratch_proof"] = dict(
+                    _scratch_proof(directory, context["scratch_tests"], handed, context["probe_checks"],
+                                   private=_private_paths(self.project.root, getattr(self, "check_commands", ())
+                                                          or (), directory)),
+                    handed_source=handed_source, handed_checks=checks_digest(context["probe_checks"]))
             # Rewritten while the copy still exists, because its path is the
             # only thing that identifies which references need rewriting. A
             # reviewer that cited the copy by absolute path would otherwise
@@ -1209,6 +1251,139 @@ class ReviewCopyAltered(ProviderError):
     the call means the answer was formed on bytes other than the ones the
     session hashed and will record, so the answer is refused (Codex review
     of 2ffa7f6 on #52)."""
+
+
+def _probe_commands(checks, directory) -> tuple:
+    """The approved model-facing commands that would run a new scratch test
+    file a review added to its copy: discovery confined to directories inside
+    that copy (integration.discovers_added_tests). Any other command, and any
+    command naming a path outside the copy, is never repeated here."""
+    from .integration import discovers_added_tests
+    out = []
+    for command in checks:
+        try:
+            argv = shlex.split(command)
+        except ValueError:
+            continue
+        if discovers_added_tests(argv, directory):
+            out.append(command)
+    return tuple(out)
+
+
+def _probe_exception(commands) -> str:
+    """The one run a scratch demonstration may make (root review of b24b6db:
+    the review prompt asked for it while this role forbade running checks)."""
+    if not commands:
+        return ""
+    return ("\nONE EXCEPTION, FOR A NEW SCRATCH TEST ONLY: to run a new test file you added to this copy "
+            "for the review's demonstration, run exactly one of these approved commands, verbatim:\n"
+            + "\n".join(commands)
+            + "\nPut the file where that command discovers tests and name it the way its runner collects "
+            "them. Run it for that file only, not to confirm the delivered source again: the records "
+            "above stand. If its output does not show your scratch test executed and passed, the "
+            "condition is not demonstrated.")
+
+
+def _private_paths(project_root, checks, directory) -> List[str]:
+    """What a scratch run must not read: the live project, and every
+    existing absolute path an approved check names outside the copy (an
+    operator's private grading files). Never shown to any model."""
+    copy = os.path.realpath(directory)
+    out = [os.path.realpath(project_root)] if project_root else []
+    for command in checks:
+        try:
+            argv = shlex.split(command)
+        except ValueError:
+            continue
+        for arg in argv[1:]:
+            value = arg.split("=", 1)[1] if arg.startswith("-") and "=" in arg else arg
+            if not os.path.isabs(value):
+                continue
+            real = os.path.realpath(value)
+            if os.path.lexists(real) and not (real == copy or real.startswith(copy + os.sep)):
+                out.append(real)
+    return sorted(set(out))
+
+
+def _scratch_isolation(directory, private) -> Optional[tuple]:
+    """``(launcher, env)`` holding a scratch run to what the codex reviewer's
+    copy policy allows (``CODEX_SPEC.copy_args``: the copy is the only
+    writable root, /tmp and $TMPDIR excluded, no extra roots, and no network)
+    and hiding ``private`` from reads; None when no such sandbox is available
+    here, which makes the run not run (root review of 1c14ea9: the gate
+    runner let a scratch test write outside the copy). The launcher's own
+    refusal to start is read from the output (SANDBOX_REFUSAL)."""
+    import platform
+    copy = os.path.realpath(directory)
+    temp = os.path.join(copy, ".quadratus-scratch-tmp")
+    env = {"TMPDIR": temp, "TMP": temp, "TEMP": temp}
+    if any(path == copy or copy.startswith(path + os.sep) for path in private):
+        return None
+    if platform.system() == "Darwin" and os.path.exists("/usr/bin/sandbox-exec"):
+        def quote(path):
+            return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        hidden = " ".join(f"(subpath {quote(p)})" if os.path.isdir(p) else f"(literal {quote(p)})"
+                          for p in private)
+        profile = ("(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n"
+                   f"(allow file-write* (subpath {quote(copy)}) (literal \"/dev/null\") (literal \"/dev/tty\"))\n"
+                   + (f"(deny file-read* {hidden})\n" if hidden else ""))
+        return ("/usr/bin/sandbox-exec", "-p", profile), env
+    # Pinned paths, never PATH: a launcher found by lookup could be anything.
+    bwrap = "/usr/bin/bwrap"
+    if platform.system() == "Linux" and os.path.isfile(bwrap):
+        launcher = [bwrap, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-net",
+                    "--die-with-parent", "--new-session", "--bind", copy, copy]
+        for path in private:
+            launcher += (["--tmpfs", path] if os.path.isdir(path) else ["--ro-bind", "/dev/null", path])
+        return tuple(launcher), env
+    return None
+
+
+def _scratch_proof(directory, scratch, handed, checks, private=()) -> dict:
+    """The harness's own run, in the disposable copy, of each approved gate
+    command that discovers a new test file there, as the reviewer would run
+    it (its model-facing argv), inside _scratch_isolation, and what it shows
+    about the scratch files' cases (integration.scratch_receipt). Same
+    commands, timeouts and owned cleanup as the gate; nothing is linked in
+    from the project, so a check that needs the project's dependency tree
+    records not run."""
+    from dataclasses import replace as _replace
+
+    from .cli_providers import SANDBOX_REFUSAL
+    from .integration import (
+        GateSuite,
+        _test_family,
+        discovers_added_tests,
+        model_facing,
+        scratch_receipt,
+        scratch_report_env,
+    )
+    root = Path(directory).resolve()
+    commands = [_replace(c, argv=tuple(model_facing(c.argv))) for c in checks if not c.skip_reason
+                and discovers_added_tests(model_facing(c.argv), root / c.cwd)]
+    base = dict(files=sorted(scratch), cases=[], receipts=[])
+    if not commands:
+        return dict(base, status="not run", reason="no approved command discovers a new test file in this copy")
+    isolation = _scratch_isolation(directory, private)
+    if isolation is None:
+        return dict(base, status="not run", reason="no sandbox here holds a scratch run to its copy")
+    launcher, env = isolation
+    try:
+        files = {p: (root / p).read_bytes() for p in scratch}
+        others = {p: (root / p).read_bytes() for p in handed if _test_family(p) and (root / p).is_file()}
+        Path(env["TMPDIR"]).mkdir(exist_ok=True)
+        results = [GateSuite([c], cwd=root, exclude=(env["TMPDIR"],),
+                             report_env=dict(scratch_report_env(c.argv), **env), isolation=launcher).run()
+                   for c in commands]
+    except (OSError, ValueError) as exc:
+        return dict(base, status="not run", reason=f"the approved runner could not run here: {type(exc).__name__}")
+    if any(SANDBOX_REFUSAL.search(r.output or "") for result in results for r in result.receipts):
+        return dict(base, status="not run", reason="the scratch sandbox could not start")
+    proof = scratch_receipt(results, files, others)
+    if _copy_altered(directory, handed):
+        # A scratch test that rewrote handed source proved nothing about it.
+        return dict(proof, status="not run", reason="a handed file changed during the run")
+    return proof
 
 
 def _copy_digests(directory) -> Dict[str, str]:

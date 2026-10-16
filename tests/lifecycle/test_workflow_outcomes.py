@@ -130,7 +130,13 @@ def test_j3_a_gate_still_failing_is_an_attributed_product_fact_and_a_named_stop(
     assert not replay.result.completed
     stop = _stop(replay)
     assert stop["legacy"] == "CheckFailing" and stop["kind"] == "product", "named since G9"
-    assert "still failing at close" in replay.of("closeout")[0].prompt, "the close-out is told the gate failed"
+    # The run stops right after t1, so no planning call reads a summary: the
+    # harness records the close-out, and it states the failed check (R24
+    # known-stop correction; old: a model close-out told "still failing").
+    assert not replay.of("closeout")
+    record = json.loads(replay.artifact_texts("factual-closeout")[0])
+    assert record["task"] == "t1" and "last check FAILED" in record["check"]
+    assert "stops on its failed check" in record["why"]
 
 
 # -- J15 / J16 / J17 / J18 stops that keep their precedence ------------------------------
@@ -195,7 +201,9 @@ def test_j18_a_denial_at_the_cap_is_a_denial_above_the_cap(tmp_path, monkeypatch
 
 def test_j20_a_capped_lead_is_a_cap_that_blocks_completion(tmp_path, monkeypatch):
     def lead(call, replay):
-        H.write(call, {"app.py": FIXED})
+        # A half-done source the checks fail: a checked capped draft in the last
+        # slot meets an independent review instead (Step 2 r03).
+        H.write(call, {"app.py": "def add(a, b):\n    return a\n"})
         return H.claude_cap("Wrote add; tests not run yet.", num_turns=14)
     replay = _run(tmp_path, monkeypatch, Script(lead=lead), settings=CAPPED)
     t1 = _task(replay, "t1")
@@ -243,9 +251,17 @@ def test_j24_budget_exhaustion_is_a_budget_stop_with_the_task_stopped(tmp_path, 
     from quadratus.run_budget import RunLimits
     replay = _run(tmp_path, monkeypatch, Script(), limits=RunLimits(max_calls=2, max_reported_tokens=6_000_000,
                                                                     wall_seconds=600, max_concurrent_workers=2))
-    assert replay.result.error.startswith("RunBudgetExceeded")
+    # Two calls: the goal question's held call refuses the lead before the
+    # call limit is reached (Davis, 2026-10-16). Old (ba0e2be): a budget
+    # stop on FinishReserved with neither finishing judgment. The lead was
+    # the task's first editor and nothing was written, so t1 is NOT RUN and
+    # the held goal question is asked with the second call (root
+    # reconciliation of R23); unconfirmed, the cap names the stop.
+    assert [c.role for c in replay.calls] == ["orchestrator", "orchestrator"]
+    assert _task(replay, "t1")["closed_as"] == "not_started"
+    assert [n["task"] for n in H.result_json(replay)["not_started"]] == ["t1"]
     stop = _stop(replay)
-    assert stop["kind"] == "budget" and stop["legacy"] == "RunBudgetExceeded"
+    assert stop["legacy"] == "GoalUnconfirmedAtCap" and not replay.result.completed
 
 
 def test_j25_a_recovered_transport_failure_is_history_not_a_block(tmp_path, monkeypatch):

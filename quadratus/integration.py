@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shlex
 import shutil
@@ -25,21 +26,22 @@ import subprocess
 import tempfile
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import List, Literal, Optional, Sequence
 
 __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateSuite", "REPORT_TOKEN",
            "CheckUnattributable", "attribute", "read_report", "model_facing"]
 
 #: The argv token a check uses to declare the harness's structured report.
-#: The only supported producer is the harness-owned pytest plugin
-#: (``_gate_producer``), declared as ``--quadratus-report={report}``. The
-#: harness replaces the token with a path it owns, outside the project, loads
-#: the plugin for that one invocation, and removes the path after reading it
-#: (phase 3, #25). Other runners have no producer: their failures are never
-#: attributable, so never repaired.
+#: Its producers are the harness-owned ones in ``_gate_producer`` (the pytest
+#: plugin, the node:test reporter and the unittest runner module), each
+#: declared as ``--quadratus-report={report}``. The harness replaces the token
+#: with a path it owns, outside the project, loads the producer for that one
+#: invocation, and removes the path after reading it (phase 3, #25). Other
+#: runners have no producer: their failures are never attributable, so never
+#: repaired.
 REPORT_TOKEN = "{report}"
-PRODUCER = "quadratus-pytest/4"
+PRODUCER = "quadratus-pytest/6"
 #: The node:test producer (series rule-58a4625 f3: the second cycle in a row
 #: ended on a failing node UI test with the work done and the graders
 #: passing, because a node check had no producer and so no fix call). A
@@ -48,15 +50,26 @@ PRODUCER = "quadratus-pytest/4"
 #: reporter beside TAP on stdout, so the text output the count reader needs
 #: is unchanged.
 PRODUCER_NODE = "quadratus-node/1"
-PRODUCERS = (PRODUCER, PRODUCER_NODE)
+#: The unittest producer (R21: a required ``python -m unittest discover``
+#: check failed with no report of its own, so a plain test-body assertion
+#: could not reach a repair). A ``python -m unittest ...`` check declares
+#: ``--quadratus-report={report}``; the harness runs the same arguments under
+#: the same interpreter through the shipped runner module, which is
+#: ``unittest.main(module=None)`` with a recording result class, and writes
+#: this invocation's own report. Undeclared, unittest stays unattributable.
+PRODUCER_UNITTEST = "quadratus-unittest/2"
+PRODUCERS = (PRODUCER, PRODUCER_NODE, PRODUCER_UNITTEST)
 _PRODUCER_FILE = Path(__file__).resolve().parent / "_gate_producer" / "quadratus_gate_report.py"
 _NODE_PRODUCER_FILE = _PRODUCER_FILE.with_suffix(".mjs")
+_UNITTEST_PRODUCER_FILE = _PRODUCER_FILE.with_name("quadratus_unittest_report.py")
 #: Kept for the install-layout proof: where the shipped producer lives.
 _PRODUCER_DIR = str(_PRODUCER_FILE.parent)
 _REPORT_FAILURES = 200
 _WHEN = ("setup", "call", "teardown")
 _COUNTS = ("passed", "failed", "errors", "skipped")
 _REPORT_MAX_BYTES = 1024 * 1024
+#: The producers' bound on named passed cases (MAX_PASSED in each).
+_REPORT_PASSED = 3000
 
 
 #: How much command output a failed gate carries back. The tail, because test
@@ -90,12 +103,33 @@ def _report_slot(argv, env):
     owned = tempfile.mkdtemp(prefix="quadratus-report-")
     nonce = secrets.token_hex(16)
     path = os.path.join(owned, "report.json")
+    if _is_unittest(argv):
+        module = f"quadratus_unittest_report_{secrets.token_hex(8)}"
+        source = _UNITTEST_PRODUCER_FILE.read_bytes()
+        copy = os.path.join(owned, module + ".py")
+        with open(copy, "wb") as out:
+            out.write(source)
+        expected = dict(nonce=nonce, module_file=os.path.realpath(copy), producer=PRODUCER_UNITTEST,
+                        module_sha256=hashlib.sha256(source).hexdigest())
+        # The same interpreter and the same unittest arguments, with only
+        # the declaring argument removed; the owned directory goes after
+        # the working directory ``-m`` puts first, so no project module is
+        # shadowed and none can take the nonce name.
+        rest = [a for a in argv if REPORT_TOKEN not in a]
+        argv = [rest[0], "-m", module] + rest[3:]
+        env = dict(env, QUADRATUS_GATE_NONCE=nonce, QUADRATUS_GATE_REPORT=path,
+                   PYTHONPATH=os.pathsep.join([owned] + [p for p in [env.get("PYTHONPATH")] if p]))
+        try:
+            yield argv, env, path, expected
+        finally:
+            shutil.rmtree(owned, ignore_errors=True)
+        return
     if _is_node_test(argv):
         source = _NODE_PRODUCER_FILE.read_bytes()
         copy = os.path.join(owned, f"quadratus_gate_report_{secrets.token_hex(8)}.mjs")
         with open(copy, "wb") as out:
             out.write(source)
-        expected = dict(nonce=nonce, module_file=os.path.realpath(copy),
+        expected = dict(nonce=nonce, module_file=os.path.realpath(copy), producer=PRODUCER_NODE,
                         module_sha256=hashlib.sha256(source).hexdigest())
         # The declaring argument is replaced, never kept: node pairs each
         # --test-reporter with the next destination, so the runner's own TAP
@@ -118,7 +152,7 @@ def _report_slot(argv, env):
     copy = os.path.join(owned, module + ".py")
     with open(copy, "wb") as out:
         out.write(source)
-    expected = dict(nonce=nonce, module_file=os.path.realpath(copy),
+    expected = dict(nonce=nonce, module_file=os.path.realpath(copy), producer=PRODUCER,
                     module_sha256=hashlib.sha256(source).hexdigest())
     plugins = [p for p in env.get("PYTEST_PLUGINS", "").split(",") if p.strip()]
     env = dict(env, QUADRATUS_GATE_NONCE=nonce, PYTEST_PLUGINS=",".join(plugins + [module]),
@@ -129,11 +163,35 @@ def _report_slot(argv, env):
         shutil.rmtree(owned, ignore_errors=True)
 
 
+def _declared_producer(argv) -> Path:
+    """The shipped producer file ``_report_slot`` copies for ``argv``."""
+    argv = [str(a) for a in argv]
+    if _is_unittest(argv):
+        return _UNITTEST_PRODUCER_FILE
+    return _NODE_PRODUCER_FILE if _is_node_test(argv) else _PRODUCER_FILE
+
+
+def _is_unittest(argv) -> bool:
+    """``python -m unittest ...`` under a plain ``python``/``pythonX[.Y]``
+    interpreter, the only unittest form with a producer; any other runner,
+    wrapper or custom script is not one."""
+    head = Path(argv[0]).name if argv else ""
+    return bool(re.fullmatch(r"python(\d+(\.\d+)*)?", head)) and list(argv[1:3]) == ["-m", "unittest"]
+
+
 def _is_node_test(argv) -> bool:
     """A ``node --test`` invocation (the runner is node and ``--test`` is an
     argument of its own), the only non-pytest runner with a producer."""
     head = Path(argv[0]).name if argv else ""
     return head in ("node", "nodejs") and "--test" in argv[1:]
+
+
+def checks_digest(commands) -> str:
+    """A digest of the approved commands as they are configured (argv, cwd,
+    timeout, required, minimum, skip): what a scratch proof was run with."""
+    from dataclasses import is_dataclass
+    body = [asdict(c) if is_dataclass(c) else repr(c) for c in commands or ()]
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:32]
 
 
 def model_facing(argv):
@@ -212,6 +270,17 @@ def _malformed(data) -> str:
         return "failure records do not match the counts"
     if data["truncated"] and len(failures) != _REPORT_FAILURES:
         return "truncation flag without a full record"
+    if data.get("producer") in (PRODUCER, PRODUCER_UNITTEST):
+        # Named passed cases (root review of 5ca254c): one per counted pass,
+        # each distinct, or a full bounded list flagged truncated.
+        named, cut = data.get("passed_cases"), data.get("passed_truncated")
+        if (not isinstance(named, list) or type(cut) is not bool or len(named) > _REPORT_PASSED
+                or not all(isinstance(n, str) and 0 < len(n) <= 300 for n in named)
+                or len(set(named)) != len(named)):
+            return "passed cases"
+        if (len(named) != counts["passed"]) if not cut else (len(named) != _REPORT_PASSED
+                                                              or counts["passed"] <= _REPORT_PASSED):
+            return "passed cases do not match the counts"
     return ""
 
 
@@ -231,7 +300,8 @@ def read_report(path, expected) -> dict:
     if not isinstance(data, dict):
         return dict(state="unparsable", detail="not an object")
     expected = expected or {}
-    if (data.get("producer") not in PRODUCERS or data.get("nonce") != expected.get("nonce")
+    if (data.get("producer") not in PRODUCERS or data.get("producer") != expected.get("producer", data.get("producer"))
+            or data.get("nonce") != expected.get("nonce")
             or data.get("module_file") != expected.get("module_file")
             or data.get("module_sha256") != expected.get("module_sha256")):
         return dict(state="foreign", detail=f"producer {str(data.get('producer'))[:40]!r}, module "
@@ -244,7 +314,9 @@ def read_report(path, expected) -> dict:
                 failures=[dict(nodeid=f["nodeid"][:300], when=f["when"], exc_type=(f["exc_type"] or "")[:120],
                                assertion=f["assertion"], body=f.get("body"))
                           for f in data["failures"]],
-                truncated=data["truncated"])
+                truncated=data["truncated"],
+                **({"passed_cases": list(data["passed_cases"]), "passed_truncated": data["passed_truncated"]}
+                   if "passed_cases" in data and data.get("producer") in (PRODUCER, PRODUCER_UNITTEST) else {}))
 
 
 def _report_reasons(gid, status, reason, returncode, report) -> list:
@@ -650,6 +722,69 @@ def _test_family(path: str):
     return folder, (match.group(1) or 'py')
 
 
+#: Flags a discovering command may carry and still be shown to a review
+#: seat for a scratch run: output verbosity only. Anything else, a
+#: selection, a plugin, a config or a path-bearing option, is refused.
+_DISCOVERY_PYTEST_FLAGS = frozenset({"-q", "-qq", "-v", "-vv", "-rA", "-ra"})
+_DISCOVERY_UNITTEST_FLAGS = frozenset({"-v", "-q", "--verbose", "--quiet"})
+
+
+def _local_dir(operand: str, root) -> bool:
+    """A project-relative directory: no absolute path, no traversal, no home
+    or variable expansion, and, when ``root`` is given, an existing directory
+    inside it."""
+    path = PurePosixPath(operand)
+    if (not operand or path.is_absolute() or ".." in path.parts or operand.startswith("~")
+            or any(c in operand for c in "$`*?[]{}:")):
+        return False
+    if root is None:
+        return True
+    target = (Path(root) / operand)
+    try:
+        return target.is_dir() and target.resolve().is_relative_to(Path(root).resolve())
+    except OSError:
+        return False
+
+
+def discovers_added_tests(argv, root=None) -> bool:
+    """Whether a command would also run a test file added inside ``root``:
+    pytest, or ``python -m unittest discover``, whose only options are
+    output verbosity and whose only operands are project-relative
+    directories (for unittest, ``-s``/``-t`` values). An explicit file, a
+    node id, a filter, any other flag, an absolute or outside path, or an
+    unknown form is refused, so nothing private or outside the copy is ever
+    named (root reviews of b24b6db and 2d9be52). The interpreter is the
+    approved one, left as it is."""
+    argv = [str(a) for a in argv]
+    if not argv or is_filtered(argv):
+        return False
+    head = Path(argv[0]).name
+    if head in _PYTEST_NAMES:
+        rest = argv[1:]
+    elif head.startswith("python") and argv[1:3] == ["-m", "pytest"]:
+        rest = argv[3:]
+    elif head.startswith("python") and argv[1:4] == ["-m", "unittest", "discover"]:
+        rest, i = argv[4:], 0
+        while i < len(rest):
+            arg = rest[i]
+            if arg in _DISCOVERY_UNITTEST_FLAGS:
+                i += 1
+            elif arg in ("-s", "-t") and i + 1 < len(rest) and _local_dir(rest[i + 1], root):
+                i += 2
+            else:
+                return False
+        return True
+    else:
+        return False
+    for arg in rest:
+        if arg.startswith("-"):
+            if arg not in _DISCOVERY_PYTEST_FLAGS:
+                return False
+        elif _test_family(arg) or not _local_dir(arg, root):
+            return False
+    return True
+
+
 def uncovered_tests(changed, argvs) -> List[str]:
     """Changed test files no required command runs, where that can be told.
 
@@ -796,9 +931,15 @@ class GateSuite:
     entries live for this runner instance and only successful receipts are kept.
     """
 
-    def __init__(self, commands: Sequence[GateCommand], *, cwd, exclude=()):
+    def __init__(self, commands: Sequence[GateCommand], *, cwd, exclude=(), report_env=None, isolation=()):
         from .project import Project
 
+        #: Reporting-only environment for the runner (scratch_receipt's case
+        #: lines); never selection, never a different command.
+        self.report_env = dict(report_env or {})
+        #: An OS sandbox launcher put in front of each command, for a scratch
+        #: run of a reviewer's test only (runtime._scratch_isolation).
+        self.isolation = tuple(isolation)
         self.cwd = Path(cwd).resolve()
         self.project = Project(self.cwd, exclude=exclude)
         self.commands = tuple(commands)
@@ -814,7 +955,8 @@ class GateSuite:
 
     def cheap(self):
         view = GateSuite([c for c in self.commands if c.cheap], cwd=self.cwd,
-                         exclude=self.project.exclude)
+                         exclude=self.project.exclude, report_env=self.report_env,
+                         isolation=self.isolation)
         view._cache = self._cache
         return view
 
@@ -824,6 +966,9 @@ class GateSuite:
         if path is None:
             return ''
         files = [Path(__file__), Path(path)]
+        # The shipped producer a declared report selects is part of the
+        # runner: changed bytes must miss the cache (root review of f0b4827).
+        files += [_declared_producer(command.argv)] if any(REPORT_TOKEN in a for a in command.argv) else []
         # Include explicit runner scripts outside the project as well.
         files += [cwd / a for a in command.argv[1:] if (cwd / a).is_file()]
         digest = hashlib.sha256()
@@ -859,8 +1004,10 @@ class GateSuite:
                 if command.cacheable and runner and key in self._cache:
                     receipts.append(replace(self._cache[key], cached=True))
                     continue
-                with _fresh_bytecode_env() as fresh, _report_slot(command.argv, fresh) as (argv, env, path, expected):
-                    returncode, output, cleanup = _run_owned(argv, cwd=cwd, timeout=command.timeout, env=env)
+                with _fresh_bytecode_env() as fresh, _report_slot(command.argv, dict(fresh, **self.report_env)) \
+                        as (argv, env, path, expected):
+                    returncode, output, cleanup = _run_owned([*self.isolation, *argv], cwd=cwd,
+                                                             timeout=command.timeout, env=env)
                     report = read_report(path, expected) if returncode is not None else None
                 if returncode is None:
                     raise _GateTimeout(output, cleanup)
@@ -1300,7 +1447,32 @@ def case_record(output: str, runner: Optional[str] = None) -> Optional[dict]:
             qualified.add(key)
     # Keys a pytest verbose line printed: only these carry their file (V1).
     record['qualified'] = sorted(qualified)
+    # Executed cases the runner printed as failed (scratch_receipt): a
+    # subset of ``executed``, so a reader of the other keys is unaffected.
+    record['failed'] = _failed_cases(output, runner)
     return record
+
+
+def _failed_cases(output: str, runner: Optional[str] = None) -> dict:
+    """``case_key``-to-count of the executed case lines that report a
+    failure: pytest FAILED or ERROR, TAP ``not ok``, spec \u2716."""
+    failed = {}
+    node_lines, pytest_lines = runner in (None, 'node'), runner in (None, 'pytest')
+    for line in (output or '').splitlines():
+        spec = _SPEC_CASE.match(line) if node_lines else None
+        tap = None if spec or not node_lines else _TAP_CASE.match(line)
+        case = None if spec or tap or not pytest_lines else _PYTEST_CASE.match(line)
+        if spec and spec.group(1) == '\u2716' and not (spec.group(3) or ''):
+            name = spec.group(2)
+        elif tap and tap.group(1).lower() == 'not ok' and not tap.group(3):
+            name = tap.group(2)
+        elif case and case.group(2) in ('FAILED', 'ERROR'):
+            name = case.group(1)
+        else:
+            continue
+        key = case_key(name)
+        failed[key] = failed.get(key, 0) + 1
+    return failed
 
 
 def skipped_cases(receipt):
@@ -1493,6 +1665,112 @@ def run_original_tests(gate, root, originals: dict, current: dict, keep=()):
     passed = all(r.status in ('passed', 'skipped') for r in receipts if r.required) and any(
         r.status == 'passed' for r in receipts)
     return GateResult(passed, 'original tests', 0 if passed else 1, output, receipts), ''
+
+
+def scratch_report_env(argv) -> dict:
+    """The reporting-only environment under which a pytest command prints
+    one ``path::name OUTCOME`` line per case whatever ``-q`` its argv
+    carries, so the harness can name the scratch cases it executed. Empty
+    for any other runner, whose case lines already carry names."""
+    if runner_of(argv) != 'pytest':
+        return {}
+    level = 0
+    for arg in (str(a) for a in argv):
+        if arg in ('--verbose',):
+            level += 1
+        elif arg in ('--quiet',):
+            level -= 1
+        elif re.fullmatch(r'-v+', arg):
+            level += len(arg) - 1
+        elif re.fullmatch(r'-q+', arg):
+            level -= len(arg) - 1
+    if level >= 1:
+        return {}
+    extra = '-' + 'v' * (1 - level)
+    inherited = os.environ.get('PYTEST_ADDOPTS', '')
+    return {'PYTEST_ADDOPTS': f'{inherited} {extra}'.strip()}
+
+
+def scratch_receipt(results, scratch: dict, others: dict) -> dict:
+    """Whether the harness's own runs of approved commands executed every
+    case each scratch test file declares, and each passed (r09 root
+    decision on 40b2133: a new file name alone is not execution).
+
+    ``results`` are GateResults from the disposable copy; ``scratch`` and
+    ``others`` map copy-relative test paths to bytes, the scratch files and
+    the handed test files. A case counts only by identity: a pytest line
+    naming the scratch file, or a node case name the scratch file declares
+    and no handed test file does. Each instance a runner printed is kept
+    with its own id and count (root review of 1c14ea9: a parametrized case
+    whose True instance passed and False instance skipped was collapsed to
+    its function and passed). A declared case is passed only when it has at
+    least one instance and every instance executed and passed; one failed
+    instance makes it failed, and a skipped or otherwise unexecuted one
+    makes it not executed. ``status`` is ``passed`` only when every declared
+    case passed, ``failed`` when any failed, ``not run`` otherwise. Nothing
+    here is a verdict on a requirement. No command text or path outside the
+    copy is returned."""
+    out = dict(files=sorted(scratch), cases=[], receipts=[])
+    declared = {}
+    for path, data in sorted(scratch.items()):
+        names = declared_cases(path, data)
+        if not names:
+            return dict(out, status='not run', reason=f'{path}: its case names could not all be read')
+        declared[path] = set(names)
+    taken = set()
+    for path, data in others.items():
+        taken |= set(declared_cases(path, data) or ())
+    instances = {}
+    for result in results:
+        for receipt in result.receipts:
+            out['receipts'].append(dict(id=receipt.id, status=receipt.status, reason=receipt.reason,
+                                        tests=receipt.tests, source_hash=receipt.source_hash))
+            if receipt.status in ('blocked', 'error', 'skipped') or not isinstance(receipt.cases, dict):
+                continue
+            cases = receipt.cases
+            bad = cases.get('failed') or {}
+            qualified = set(cases.get('qualified') or ())
+            for kind in ('executed', 'skipped', 'other'):
+                for key, count in (cases.get(kind) or {}).items():
+                    if key in qualified:
+                        file, _, rest = key.partition('::')
+                        name = rest.split('::')[-1].split('[', 1)[0]
+                        paths = [p for p in declared
+                                 if p in (file, posixpath.normpath(posixpath.join(receipt.cwd, file)))]
+                    else:
+                        name = key
+                        paths = [p for p in declared if key in declared[p]] if key not in taken else []
+                    if len(paths) != 1 or name not in declared[paths[0]]:
+                        continue
+                    seen = instances.setdefault((paths[0], name), {})
+                    if kind == 'executed':
+                        failed = min(int(bad.get(key, 0)), int(count))
+                        outcomes = ['failed'] * failed + ['passed'] * (int(count) - failed)
+                    else:
+                        outcomes = ['skipped' if kind == 'skipped' else 'not executed'] * int(count)
+                    seen.setdefault(key, []).extend(outcomes)
+    verdicts = {}
+    rows = []
+    for path, names in declared.items():
+        for name in names:
+            seen = instances.get((path, name), {})
+            outcomes = [o for runs in seen.values() for o in runs]
+            verdicts[(path, name)] = ('failed' if 'failed' in outcomes
+                                      else 'passed' if outcomes and set(outcomes) == {'passed'}
+                                      else 'not executed')
+            if not seen:
+                rows.append(f'{path}::{name}: not executed')
+            for key, runs in seen.items():
+                label = key if '::' in key else f'{path}::{key}'
+                rows.extend(f'{label}: {o}' for o in runs)
+    out['cases'] = sorted(rows)
+    if 'failed' in verdicts.values():
+        return dict(out, status='failed', reason='a scratch case instance executed and failed')
+    missing = [k for k, v in verdicts.items() if v != 'passed']
+    if missing:
+        return dict(out, status='not run',
+                    reason=f'{len(missing)} declared scratch case(s) with an instance not shown executed and passed')
+    return dict(out, status='passed', reason='every instance of every declared scratch case executed and passed')
 
 
 def _relative(cwd: str, operand: str, copy: Path) -> str:

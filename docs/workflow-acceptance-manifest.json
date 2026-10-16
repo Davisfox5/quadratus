@@ -584,7 +584,7 @@
       "id": "J29",
       "tests": [
         "tests/test_workflow_session.py::test_a_merged_parallel_batch_records_each_child_with_its_owner",
-        "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_integrity_and_its_debt_stays_open"
+        "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_a_failed_task_and_its_debt_stays_open"
       ],
       "required_obligations": [
         "calls",
@@ -596,7 +596,7 @@
       "coverage": {
         "outcome": [
           "tests/test_workflow_session.py::test_a_merged_parallel_batch_records_each_child_with_its_owner",
-          "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_integrity_and_its_debt_stays_open"
+          "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_a_failed_task_and_its_debt_stays_open"
         ]
       }
     },
@@ -704,7 +704,7 @@
     {
       "id": "J35",
       "tests": [
-        "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_integrity_and_its_debt_stays_open"
+        "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_a_failed_task_and_its_debt_stays_open"
       ],
       "required_obligations": [
         "calls",
@@ -715,7 +715,7 @@
       ],
       "coverage": {
         "outcome": [
-          "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_integrity_and_its_debt_stays_open"
+          "tests/test_workflow_session.py::test_an_unmerged_parallel_child_is_a_failed_task_and_its_debt_stays_open"
         ]
       }
     },

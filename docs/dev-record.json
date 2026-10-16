@@ -2,9 +2,9 @@
   "version": 1,
   "note": "One shared development record (plan on #35, comment 5922888762). Edited through tools/dev_record.py; the acceptance manifest and workflow scorecard keep their own evidence, referenced here, never copied.",
   "candidate": {
-    "pr": 42,
-    "sha": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
-    "gate": "merge #42 to main, then the five-run series (docs/DIRECTION.md finish line)",
+    "pr": 73,
+    "sha": "b809429aff558630041c121dde3c52b502e69ad1",
+    "gate": "Step 2 (adaptive orchestration, accurate recovery, coordination, persistent progress): root's independent scoped review of #73 and #72, one correction batch, one final combined changed-engine local suite, exact CI and install, then one qualified fresh medium multi-component job. Benchmark stays paused; no automatic PASS or MET.",
     "required_receipts": [
       "ci",
       "acceptance",
@@ -24,6 +24,15 @@
         "reason": "Davis, 2026-10-06: Jev off, keep rule routing, continue the runs to catch further engine errors. b1ff751 (#51, atop #50 atop #42) is the engine every Stage B cell ran on; CI green on all four jobs, Codex focused clearance and Claude independent review recorded on T-stage-b-timeout-fix. Gate: rule-arm continuation series on this SHA; acceptance receipt still owed on this head.",
         "by": "claude",
         "at": "2026-10-06T02:02:43Z"
+      },
+      {
+        "previous": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
+        "sha": "4465156a6d9f30735f4d712001390b9009e212a4",
+        "reason": "Step 1 complete (#71 and #70 merged); Davis approved Step 2 on #35. The baseline is main 4465156; the Step 2 engine batch is #73 and root's native execution adapter is #72.",
+        "by": "claude",
+        "at": "2026-10-13T19:18:56Z",
+        "previous_pr": 42,
+        "previous_gate": "merge #42 to main, then the five-run series (docs/DIRECTION.md finish line)"
       },
       {
         "previous": "5a20957649ad27997b197d91c3093e612b077236",
@@ -1955,6 +1964,188 @@
         "claude: History rewrite, content unchanged: at 03:35:39-40Z (committer GitHub, the second #50 merged into claude/direct-tier) claude/engine-repairs-2 and claude/engine-repairs-3 were rewritten; every tree is byte-identical. Map: 4a273a3=d9a6338, 00725ce=ca26d31, 1e5c97f=91d2583, d6e145d=104f9d8, 553e24f=8159a34, 3e95645=cf545dc, f6e1ce1=0a99ee2. Delivery re-recorded at cf545dc (engine range d9a6338..cf545dc; installation delta cf545dc..0a99ee2). Suite-35 on the 3e95645 snapshot tests the tree of cf545dc. #53 comment 6073753038.",
         "claude: Merges observed (not made by this session): at 03:35:35-40Z #42 (claude/direct-tier) merged to main, with #50 and #51 into its stack and #39, #40, #41 to main; the record's candidate gate 'merge #42 to main' is met. #52 (base main, head 727a970) and #53 (base #52, head 0a99ee2) remain open; their SHAs were rewritten in the same second with identical trees (map in the previous note). #55 (claude/run-monitor) is open from the separate monitor session."
       ]
+    },
+    {
+      "id": "T-step2-adaptive-recovery",
+      "purpose": "Step 2 engine: recovery planning from held facts with changed approach, recoverable worker/integration conflicts, durable quiescent checkpoint resume with lineage and carried budget (#73).",
+      "base": "4465156a6d9f30735f4d712001390b9009e212a4",
+      "owns": [
+        "quadratus/checkpoint.py",
+        "quadratus/session.py",
+        "quadratus/project_run.py",
+        "quadratus/run_budget.py",
+        "quadratus/cli.py",
+        "tools/dev_record.py",
+        "tests/lifecycle/test_step2_recovery.py",
+        "tests/test_step2_parallel.py"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "reviewed",
+      "claimed_at": "2026-10-13T19:19:06Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "0cf52221865e31b1c4199656bb93d1293f263060",
+        "at": "2026-10-13T21:16:06Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "0cf52221865e31b1c4199656bb93d1293f263060",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/73#issuecomment-6155345663 (root exact 0cf5222 scoped CLEAR; 13 independent controls PASS 0 skip; Ruff and diff clean)",
+          "scope": [
+            "quadratus/checkpoint.py",
+            "quadratus/session.py",
+            "quadratus/project_run.py",
+            "quadratus/run_budget.py",
+            "quadratus/cli.py",
+            "tools/dev_record.py",
+            "tests/lifecycle/test_step2_recovery.py",
+            "tests/test_step2_parallel.py"
+          ],
+          "at": "2026-10-13T21:16:06Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [
+        "claude: Step 2 corrections after the 0cf5222 clearance: 86e2841, f4eafea, d0f3263, 5366412, 4ed4d30, 238b2e9; root's 2cfff79 merged at 5112c44. Each awaits root's scoped review; final combined gates held.",
+        "claude: r05 on 1655cf1 corrections: per-requirement review verdicts (_judge_goal_review) and one cross-vendor review of capped work in the final parallel batch (_review_capped_final_child). Awaiting root's scoped review; final gates held.",
+        "claude: r06 on 5b31818: error-path rule for reviews and audits, goal authority over requirement wording in the audit; NOT RUN discharge unchanged, full-file evidence design proposed to root (helper/config is root's). Awaiting root's scoped review.",
+        "claude: r07 on 820bed6: capped-final-child review accepts a finished approval with every covered requirement MET and non-blocking notes kept on record (_approving_review); holds unchanged otherwise. CLI review miss assessed as reviewer judgement; no engine change.",
+        "claude: r08 on f247f0a: final audit measured as not catching the CLI refusal condition. Scratch-capable review/audit seats (CLISpec.copy_args, today codex) now asked to demonstrate error conditions with a scratch test and the approved check; unmeasured until a run.",
+        "claude: r09 correction: DEFERRED sibling findings and unresolved child findings rechecked once on merged source after merge gate (RESOLVED closes, else kept; no lead call, no MET). Scratch probe files measured from the copy as an unverified fact, not gating. Old/new controls in test_step2_recovery; focused 309 passed. No full suite or provider run.",
+        "claude: Root correction on 40b2133: r09 parallel child never received _PROBE_RULE (child gate None). Fix: child inherits parent's approved gate commands for the probe only (own gate stays off); when a probe call leaves a test file in its copy the runtime runs the approved discovering commands with GateSuite in that copy and records scratch_proofs by case identity; only every declared scratch case executed and passed is passed, anything else unverified/not run, never MET. Old/new controls in test_step2_recovery. No full suite or provider run.",
+        "claude: Root review of 1c14ea9 (2 inert failures): scratch run now in an OS sandbox matching codex copy policy (copy-only writes, no network, live project and private check paths unreadable; pinned /usr/bin/bwrap or /usr/bin/sandbox-exec; none or launcher refusal is not run). Pytest instances keep their ids; skipped/failed/unexecuted instance never passes. Old/new controls in test_step2_recovery. No full suite or provider run.",
+        "claude: r10 correction: capped revision or capped fix in the last slot is rechecked once by the reviewers whose blocking findings it answered, under the capped-draft eligibility plus reviewer availability and no design evidence; RESOLVED closes normally, else open; writer never called again. Old/new end-to-end controls in test_step2_recovery. No full suite or provider run.",
+        "claude: r11 correction: size-only revision/fix overrun with a fix cycle left spends that cycle on one trim call (never reverted, re-measured, still over fails as before); fix prompt states headroom; every editing call after the draft and a parallel child's draft carry the original goal and covered requirements verbatim (_writer_goal). Old/new controls in test_step2_recovery. No full suite or provider run.",
+        "claude: Evidence loop (Davis approval after R18 diagnostic 6195193054): findings state condition, location and a failing example; the orchestrator may reply EVIDENCE with one new test file; the harness runs it with the configured discovering checks in a disposable sandboxed copy of the current source; failed confirms, not run holds, passed goes once to the same auditor or reviewer for reassessment. Audit MET still needs a citation and is lowered by standing NOT RUN; the next DONE re-audits with the evidence shown. One request per finding per source, checkpointed. Held review findings with COVERS, a slot and a discovering check are debt, not a FindingsOpen stop. Budgets, roles, models and commands unchanged. Controls: tests/lifecycle/test_step2_evidence.py; old source (83b658c) ends RunStalled on the false finding and FindingsOpen on the held review finding.",
+        "claude: Root boundary on 83b658c (RequirementsUnmet at max_tasks=1, 8/20 calls, no challenge): _final_challenge offers the evidence channel read-only after the cap's final audit; no writer, slot or recovery; only orchestrator turns and the same auditor's one reassessment under the remaining allowance. Controls: safe_ratio/ArithmeticError false finding completes; true defect, irrelevant, skipped, mutating, environment, auditor-keeps-finding and budget variants each deliver a receipt and stay RequirementsUnmet.",
+        "claude: Root review of 8f68ea0 corrected: proofs bound to source plus effective checks (_evidence_identity) through execution and before/after reassessment; request checkpointed before execution and receipt before the reassessment call; a cap-challenge checkpoint carries the goal answer and final audit and resumes without replay; evidence files <=16,000 bytes shown whole; reassessments read the final audit's authority context (goal, requirements, rulings, decisions, check facts, design, NOT RUN). Controls added in tests/lifecycle/test_step2_evidence.py.",
+        "claude: Root review of a93334b corrected: durable request stages; a resumed job finishes an unstarted same-auditor reassessment once from the retained proof, test and identity, never retries a started one; the reused final audit restores pre-audit coverage. Controls: interrupted before the reassessment resumes to completion with one proof, one lead, two auditor calls and the allowance carried; interrupted after it started stays held.",
+        "claude: R19 assessed on e2a46a4: the t3 reviewer detected the malformed-ID JSON refusal break and waived it citing the task's type=int convention and old commands. _AUTHORITY_ORDER (goal and rulings > requirements and decisions > task text or plan; no convention, consistency or older behaviour excuses a goal contract on the asked-for work; never MET beside a not-met note) now reaches writers after the draft, task reviewers, the final auditor and evidence reassessments. Prompt only. Executed-demonstration approach held back, patch kept.",
+        "claude: R19 handoff: non-blocking task-review paragraphs naming a covered requirement are kept with task and source (_record_review_notes) and carried into the final audit and reassessments, labelled current or earlier source, never as verdicts; resolved BLOCKING and uncovered-requirement notes are not carried. No extra call.",
+        "claude: Root review of 728c0fc corrected: carried review notes are stored and rendered whole with no slice or count cap; a BLOCKING line and the rest of its paragraph are never carried as an observation. Controls: late warning in a long paragraph, oldest of 21 paragraphs, multiline BLOCKING continuation (plus markdown-bold form), warning carried through a real pause/resume into the resumed reassessment.",
+        "claude: Root review of 225367f corrected: a review paragraph stating a condition without any requirement id is kept against the task's covered requirements, labelled unassigned with uncertain association; a paragraph naming only uncovered ids stays out.",
+        "claude: R20 A+B: every trim site gets harness-measured per-file counts (code/test) and the task diff, filtered by file identity on both sides to what all scopes permit, whole or stated omitted over 32,000 chars; result.json budget_note records from the terminal snapshot when the remainder sat under the ordinary-call reserve, observation only. Controls in tests/lifecycle/test_trim_evidence.py.",
+        "claude: Root review of b4d8398 corrected: budget_note states the exact summary-call reservation min(reserve, SUMMARY_CALL_RESERVE_TOKENS) and whether the remainder covered it, instead of claiming it is always less.",
+        "claude: Root review of 38ec681 corrected: budget_note is token capacity only (covers / does not cover the min(reserve, 64000) summary reservation), says it is not an admission decision and that other limits are not assessed. Controls add exhausted-calls and expired-wall RunBudget cases where reserve() refuses.",
+        "claude: R21 repair: pytest producer /5 counts subtests as part of their item with all-causes assertion provenance; opt-in unittest producer runs the original python -m unittest arguments through unittest.main(module=None) with a recording result, own nonce/module/producer-bound report; plain unittest stays unattributable; attribute() and the validator unchanged. Controls: tests/lifecycle/test_unittest_producer.py.",
+        "claude: Root f0b4827 corrections: skipped subcase makes its test skipped (pytest and unittest producers, failure still decides); selected declared reporter bytes bound into GateSuite._runner_hash. Focused controls pass+skip/skip-only/fail+skip and cache identity, both runners.",
+        "claude: Davis 2026-10-16 batch (#73 6205536919): finish hold (goal question + audit, one call and one full reserve each, in-flight counted, FinishReserved unlatched, refused reviews stay open), factual last-wave close-outs, executed negative-path evidence for error/refusal requirements (audit lowers, review holds as UNVERIFIED). No limit, role, model or grant changed.",
+        "claude: Root review of 17a96d3 (#73 6206049011) corrected: exact executed case identity (no cross-file/class borrowing, unknown identity never credited), per-requirement association of review scratch cases, source/checks/requirement-bound scratch route at the final audit (never automatic MET). Root's controls kept in tests/lifecycle/test_error_receipts.py.",
+        "claude: Root review of 5ca254c (#73 6206360602): scratch proofs bound to the runtime-measured handed source/checks (drift = stale, raw kept); own-report producers name passed cases (pytest/6, unittest/2) so quiet declared gates credit exact identity. Root's two probes kept in test_error_receipts.py.",
+        "claude: Root reconciliation of R23 (#73 6208197375): finish hold exposes write-granted calls at max_tokens_per_call (in flight too; non-edit calls stay at their reserve; no ceiling stated as unbounded); a call kept out only by calls in flight waits unadmitted on the budget condition and is decided again on settlement (wall unchanged, workers never wait); a serial first editor refused with no edit admitted and source unchanged is not_started (NOT RUN, no coverage, no further planning, cap decision runs every gate, completion blocked by name). Edited/explicit/parallel refusals and the R23 trim refusal unchanged. No limit, role, model or grant changed.",
+        "claude: R24 (#73 6209985668, 6210093479): known-stop factual close-out. A serial-loop task whose close is certain to be followed by the FindingsOpen or CheckFailing stop (read-only predicate over the stop decision's own inputs) gets the harness record instead of a model close-out. Direct run_task callers, parallel children and held review debt keep the model close-out. Reviews, strict verdicts, debt and stops unchanged.",
+        "claude: Strategy-reset batch from 1b9f0aa (Davis approved 2026-10-16): quadratus/judgment.py shared strict verdict combination (reviewer, audit, reassessment; recheck RESOLVED/UNRESOLVED/INVALID); one same-seat judgment completion per whole job for arrived replies without a valid verdict (existing role, claim in budget.json before the call, shared by children, carried on resume, never retried); obligation view for planner and auditor from recorded facts; exact-count unpayable-dispatch refusal; finish wall hold 120 s per pending stage (finish-wall/1). Caps, models, roles, grants and reviewer count unchanged.",
+        "claude: Root review of d264b0c corrected in one batch: seat refusal and every other completion failure recorded then re-raised; completion bound to task/seat/role/contract/source/effective gate/check digest/goal/requirement texts before the claim and re-checked before the call and before reliance (drift voids, claim spent); validity only from the strict reader; obligations.py pure view shared by planner and audit (evidence current only on source+gate, held/continuation state, code/test consumption, capacity), mandatory-stage dispatch floor incl. design review and security; consumed() requires and validates the claim counter."
+      ]
+    },
+    {
+      "id": "T-step2-native-execution",
+      "purpose": "Step 2 development execution boundary: explicit isolated native execution adapter with fresh per-call config/auth, bounded worker bridge, outer profile for other providers and checks (#72). Not benchmark admission; MCP qualification prepared, not admitted.",
+      "base": "4465156a6d9f30735f4d712001390b9009e212a4",
+      "owns": [
+        "tools/step2_native_execution.py",
+        "tests/test_step2_native_execution.py"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "integrated",
+      "claimed_at": "2026-10-13T19:19:23Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "3bca57e804d2a836f88ac2828e8329a2bac4f74a",
+        "at": "2026-10-13T19:19:24Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "3bca57e804d2a836f88ac2828e8329a2bac4f74a",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/72#issuecomment-6153298309 (19 focused PASS; TMPDIR outside measured source, identity-bound scratch cleanup, auth rotation latched, no credential write-back)",
+          "scope": [
+            "tools/step2_native_execution.py",
+            "tests/test_step2_native_execution.py"
+          ],
+          "at": "2026-10-13T19:19:24Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [],
+      "integrated": {
+        "sha": "3bca57e804d2a836f88ac2828e8329a2bac4f74a",
+        "candidate": "b809429aff558630041c121dde3c52b502e69ad1",
+        "at": "2026-10-13T21:16:07Z"
+      }
+    },
+    {
+      "id": "T-step2-judge-delivery",
+      "purpose": "Step 2 Grok transport: native-delegation-off seats take headless -p with --no-subagents; oversized off-mode prompt refused, never downgraded to the file route (#73, root-owned; enforcement NOT RUN until root's canary). Base 4ed4d30 is the #73 head it was built on.",
+      "base": "4ed4d30e8a992870892f0aec5ac655ba5e0dbc63",
+      "owns": [
+        "quadratus/cli_providers.py",
+        "tests/test_native_mode.py"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "reviewed",
+      "claimed_at": "2026-10-14T03:29:43Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "2cfff79ecd15ee4e8950677834d40c1d80450de9",
+        "at": "2026-10-14T03:29:47Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "2cfff79ecd15ee4e8950677834d40c1d80450de9",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/73#issuecomment-6160231826 (scoped clear; merged into #73 at 5112c44; 930 focused PASS; real Grok enforcement NOT RUN)",
+          "scope": [
+            "quadratus/cli_providers.py",
+            "tests/test_native_mode.py"
+          ],
+          "at": "2026-10-14T03:29:47Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": [
+        "claude: Grok qualification worker/profile scoped review on engine 1655cf1: CLEAR on condition that the source.txt and private-link state after the one call is recorded (post-run check or worker-terminal digests); real Grok enforcement NOT RUN until root's canary. https://github.com/Davisfox5/quadratus/pull/73#issuecomment-6161041990"
+      ]
+    },
+    {
+      "id": "T-step2-test-selection",
+      "purpose": "Step 2 opt-in whole-file pytest selection: operator marker expands to every current test file in the tests directory as whole operands in harness receipts (same population, no filter, NOT RUN rule unchanged); workers see and are granted ordinary directory discovery. Root-owned helper (#73).",
+      "base": "5f36a83a3c2003e010e413b3284547ffd49b0ba5",
+      "owns": [
+        "tools/step2_test_selection.py",
+        "tests/test_step2_test_selection.py"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "reviewed",
+      "claimed_at": "2026-10-14T08:56:35Z",
+      "acknowledged": false,
+      "delivery": {
+        "sha": "25e962e85cbcf6bd8db576b4f4ae8ed77f2ca486",
+        "at": "2026-10-14T08:56:47Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "25e962e85cbcf6bd8db576b4f4ae8ed77f2ca486",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/73#issuecomment-6164652796 (scoped clear after HOLD 6164561100; 16 selector tests PASS; merged into #73; real runner and native behaviour not exercised)",
+          "scope": [
+            "tools/step2_test_selection.py",
+            "tests/test_step2_test_selection.py"
+          ],
+          "at": "2026-10-14T08:56:47Z"
+        }
+      ],
+      "blockers": [],
+      "decisions": []
     },
     {
       "id": "T-research-digest-inbox",

@@ -116,6 +116,7 @@ def _run_session(goal: str, args: argparse.Namespace, settings: Settings) -> int
                 forbid=args.forbid, declared_paths=args.declared_paths,
                 **({"repair_tests": tuple(args.repair_tests)} if getattr(args, "repair_tests", None) else {}),
                 max_tasks=args.max_tasks, mode=args.mode,
+                **({"resume_from": args.resume} if getattr(args, "resume", None) else {}),
                 security_verdict_json=getattr(args, "security_verdict_json", False),
                 survey=(SurveyConfig(recovery_tasks=args.survey_recovery)
                         if getattr(args, "survey_recovery", None) else None),
@@ -348,6 +349,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--session",
         action="store_true",
         help="Run the session engine instead of the collaboration pipeline.",
+    )
+    engine.add_argument(
+        "--resume",
+        metavar="RUN",
+        help=("Resume an interrupted run of the same job (a folder under the state "
+              "directory's runs) as its next episode: its record, lineage and spent "
+              "allowance carry over. Refused before any call when the run is sealed, "
+              "already resumed, ended with a call in flight or unknown usage, or when "
+              "the source, goal, policy, limits, settings, gates or dependency trees differ."),
     )
     engine.add_argument(
         "--max-tasks",

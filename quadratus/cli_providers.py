@@ -1226,6 +1226,8 @@ class CLISpec:
     #: Optional run-wide denial request for other vendors' native helpers.
     #: This is not proof their CLI honors it; see the Grok specification.
     native_fanout_off_args: List[str] = field(default_factory=list)
+    #: Startup controls separate from the variadic tool-denial flag.
+    native_fanout_off_flags: List[str] = field(default_factory=list)
     #: Environment set on the subprocess only when the off-mode denial was
     #: folded into this call's argv. Documented kill switches that remove a
     #: fan-out path at startup, so a denial the model never sees cannot be
@@ -1972,6 +1974,7 @@ GROK_SPEC = CLISpec(
     # single nonsense name denies: nothing. Hence the separator field.
     native_fanout_off_args=["--disallowed-tools",
                             "Agent,spawn_subagent,workflow,scheduler_create,use_tool,search_tool"],
+    native_fanout_off_flags=["--no-subagents"],
     # grok reaches MCP tools through use_tool (and finds them with
     # search_tool). Attached only inside the container, whose HOME holds no
     # other integrations; see _worker_tool_argv.
@@ -2538,6 +2541,7 @@ class CLIProvider(LLMProvider):
             argv = _fold_disallowed(argv, spec.disallowed_tools_flag or flag, denied,
                                     spec.disallowed_tools_separator)
             self._native_fanout_denied = denied
+            argv += list(spec.native_fanout_off_flags)
         else:
             self._native_fanout_denied = []
         if (getattr(self, "_disposable", False) and not self._allow_writes
@@ -2574,17 +2578,19 @@ class CLIProvider(LLMProvider):
             argv += list(spec.summary_only_args)
         elif self.max_turns and spec.max_turns_flag:
             argv += [spec.max_turns_flag, str(int(self.max_turns))]
-        if self.restricted and spec.restricted_prompt_flag:
+        if (self.restricted or mode == 'off') and spec.restricted_prompt_flag:
             if len(prompt) > MAX_ARGV_PROMPT:
                 # Falling back to a prompt file here would silently drop the
                 # tool restrictions with it, turning a bounded worker call
                 # into a full agent with writes. Refusing is the only option
                 # that cannot be mistaken for success.
                 raise ProviderError(
-                    f"{self.label}: a restricted call delivers its prompt as an "
+                    f"{self.label}: a restricted or native-delegation-off call delivers its prompt as an "
                     f"argument, and this one is {len(prompt):,} characters "
-                    f"(limit {MAX_ARGV_PROMPT:,}). Route this task to an "
-                    f"unrestricted seat rather than sending it unbounded."
+                    f"(limit {MAX_ARGV_PROMPT:,}). "
+                    + ("Shorten the prompt without removing its native-delegation controls."
+                       if mode == 'off' else
+                       "Route this task to an unrestricted seat rather than sending it unbounded.")
                 )
             argv += [spec.restricted_prompt_flag, prompt]
         elif spec.prompt_file_flag:

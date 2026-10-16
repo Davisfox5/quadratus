@@ -104,24 +104,7 @@ class Project:
             yield root
 
     def diff(self, before):
-        after = self.contents()
-        out = []
-        for name in sorted(before.keys() | after.keys()):
-            old, new = before.get(name, b''), after.get(name, b'')
-            if old == new and (name in before) == (name in after):
-                continue
-            try:
-                old_lines, new_lines = old.decode().splitlines(True), new.decode().splitlines(True)
-            except UnicodeDecodeError:
-                out.append(f'Binary file changed: {name}\n')
-                continue
-            diff_lines = difflib.unified_diff(
-                old_lines, new_lines, fromfile=f'a/{name}' if name in before else '/dev/null',
-                tofile=f'b/{name}' if name in after else '/dev/null')
-            chunk = ''.join(line if line.endswith('\n') else
-                            line + '\n\\ No newline at end of file\n' for line in diff_lines)
-            out.append(chunk or f'Empty file added/deleted: {name}\n')
-        return ''.join(out)
+        return diff_contents(before, self.contents())
 
     def apply_patch(self, patch):
         """Apply an explicitly requested unified diff without granting tools."""
@@ -155,3 +138,26 @@ class Project:
             return self._command(['git', 'status', '--short'], cwd=self.root).strip()
         except ProviderError:
             return 'This folder is not a Git repository.'
+
+
+def diff_contents(before, after):
+    """The unified diff between two ``{relative path: bytes}`` maps, file by
+    file in path order: the one rendering Project.diff and any caller that
+    narrows the maps first share."""
+    out = []
+    for name in sorted(before.keys() | after.keys()):
+        old, new = before.get(name, b''), after.get(name, b'')
+        if old == new and (name in before) == (name in after):
+            continue
+        try:
+            old_lines, new_lines = old.decode().splitlines(True), new.decode().splitlines(True)
+        except UnicodeDecodeError:
+            out.append(f'Binary file changed: {name}\n')
+            continue
+        diff_lines = difflib.unified_diff(
+            old_lines, new_lines, fromfile=f'a/{name}' if name in before else '/dev/null',
+            tofile=f'b/{name}' if name in after else '/dev/null')
+        chunk = ''.join(line if line.endswith('\n') else
+                        line + '\n\\ No newline at end of file\n' for line in diff_lines)
+        out.append(chunk or f'Empty file added/deleted: {name}\n')
+    return ''.join(out)
