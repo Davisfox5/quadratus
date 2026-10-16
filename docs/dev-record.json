@@ -1955,18 +1955,18 @@
       ],
       "author": "codex",
       "reviewer": "claude",
-      "state": "blocked",
+      "state": "reviewed",
       "claimed_at": "2026-10-16T01:46:27Z",
       "acknowledged": false,
       "delivery": {
-        "sha": "61f018a250da1f91c5fad481d1ac529e4ff34ff6",
-        "at": "2026-10-16T01:53:46Z"
+        "sha": "cde1dada323b4f3c021291d954e412abf3a690ea",
+        "at": "2026-10-16T02:15:47Z"
       },
       "reviews": [
         {
           "reviewer": "claude",
           "sha": "61f018a250da1f91c5fad481d1ac529e4ff34ff6",
-          "verdict": "blocked",
+          "verdict": "stale",
           "evidence": "/tmp/quadratus-pr74-claude-verdict.json",
           "scope": [
             "tools/research_review.py",
@@ -1975,7 +1975,22 @@
             "docs/RESEARCH_INBOX.md",
             "research"
           ],
-          "at": "2026-10-16T02:10:06Z"
+          "at": "2026-10-16T02:10:06Z",
+          "stale_reason": "delivery moved from 61f018a to cde1dad"
+        },
+        {
+          "reviewer": "claude",
+          "sha": "cde1dada323b4f3c021291d954e412abf3a690ea",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/74#issuecomment-6206526607",
+          "scope": [
+            "tools/research_review.py",
+            "tools/install_research_watcher.py",
+            "tests/test_research_review.py",
+            "docs/RESEARCH_INBOX.md",
+            "research"
+          ],
+          "at": "2026-10-16T02:15:47Z"
         }
       ],
       "blockers": [
@@ -1986,11 +2001,18 @@
           "classification": "reachable",
           "by": "claude",
           "sha": "61f018a250da1f91c5fad481d1ac529e4ff34ff6",
-          "at": "2026-10-16T02:10:06Z"
+          "at": "2026-10-16T02:10:06Z",
+          "resolved": {
+            "resolution": "cde1dad stops detached vendor groups and requires verified truth for completed status; independent Claude clearance https://github.com/Davisfox5/quadratus/pull/74#issuecomment-6206526607",
+            "by": "codex",
+            "at": "2026-10-16T02:15:47Z"
+          }
         }
       ],
       "decisions": [
-        "codex: 21 targeted offline tests and scoped Ruff pass. No vendor call was made. Independent review and installation on the signed-in Mac remain pending; delivery configuration alone is not end-to-end activation."
+        "codex: 21 targeted offline tests and scoped Ruff pass. No vendor call was made. Independent review and installation on the signed-in Mac remain pending; delivery configuration alone is not end-to-end activation.",
+        "unblocked by codex: cde1dad stops detached vendor groups and requires verified truth for completed status; independent Claude clearance https://github.com/Davisfox5/quadratus/pull/74#issuecomment-6206526607",
+        "codex: Independent Claude review cleared corrected delivery cde1dad; 143 offline watcher/budget/provider tests pass, including detached-process timeout cleanup. Existing Claude Max, ChatGPT Codex Sol and Grok unattended subscription calls pass. Integration and activation authorized directly by Davis; this side integration does not qualify or replace the active engine milestone. Full exact-head CI is required before merge; no digest review has started."
       ]
     }
   ],
