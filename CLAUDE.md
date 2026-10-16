@@ -1087,6 +1087,17 @@ Key design decisions already settled:
   question; a not-started task blocks completion by name ("NOT RUN"). A
   refusal after any edit, in an explicit list or in a parallel child stops
   the run exactly as before; the R23 trim refusal is unchanged.
+- **A serial task the run is certain to stop after closes factually**
+  (R24 on 54d729: t1 closed with three unverified review facts, a model
+  close-out of 11,772 tokens ran, and the run stopped FindingsOpen before
+  any planning call). `Session._stop_follows_close` reads, without
+  changing anything, what the stop decision in `_run_tasks` reads: a
+  legacy open finding the review debt cannot hold (`_review_debt_holds`,
+  the read-only half of `_review_debt_continues`), or a failed last check
+  with no ledger or no COVERS to hold it as debt. Only a task the serial
+  loop dispatched is asked (`_serial_dispatch`); a direct `run_task`, a
+  parallel child or a held-debt task keeps its model close-out. Reviews,
+  verdict parsing, debt and stops are unchanged.
 - **A trim gets what the harness measured** (R20 on c7e9449). t2's one
   scope trim, told only the total, spent 8 rounds and 373,366 reported
   tokens, more than its draft, and the run ended with 141,947 left under the

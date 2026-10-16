@@ -130,7 +130,13 @@ def test_j3_a_gate_still_failing_is_an_attributed_product_fact_and_a_named_stop(
     assert not replay.result.completed
     stop = _stop(replay)
     assert stop["legacy"] == "CheckFailing" and stop["kind"] == "product", "named since G9"
-    assert "still failing at close" in replay.of("closeout")[0].prompt, "the close-out is told the gate failed"
+    # The run stops right after t1, so no planning call reads a summary: the
+    # harness records the close-out, and it states the failed check (R24
+    # known-stop correction; old: a model close-out told "still failing").
+    assert not replay.of("closeout")
+    record = json.loads(replay.artifact_texts("factual-closeout")[0])
+    assert record["task"] == "t1" and "last check FAILED" in record["check"]
+    assert "stops on its failed check" in record["why"]
 
 
 # -- J15 / J16 / J17 / J18 stops that keep their precedence ------------------------------

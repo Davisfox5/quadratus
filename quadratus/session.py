@@ -2386,6 +2386,9 @@ class Session:
         self._task_edits_admitted = 0
         #: Set on a parallel child Session: its refusals stay the batch's.
         self._batch_child = False
+        #: True only while ``_run_tasks``'s serial loop runs a task, whose stop
+        #: decision follows its close-out (Session._stop_follows_close).
+        self._serial_dispatch = False
         #: Each task's reviewer dispositions in order, for factual close-outs.
         self.review_dispositions: Dict[str, List[tuple]] = {}
         #: Evidence requests the orchestrator made and what each found
@@ -6128,6 +6131,7 @@ class Session:
                 # 20260930T134226Z: "ran" named a task no call ever made).
                 self.explicit["ran"].append(dict(index=self._explicit_index, task=spec.task_id))
             self._last_wave = used >= max_tasks and self._explicit_tasks is None
+            self._serial_dispatch = True
             try:
                 summary = self.run_task(spec)
             except FinishReserved as exc:
@@ -6141,6 +6145,7 @@ class Session:
             finally:
                 self._continues = None
                 self._last_wave = False
+                self._serial_dispatch = False
             unfinished = getattr(summary, "outcome", "closed")
             if unfinished in ("turn_limited", "failed"):
                 # A capped or failed continuation carries its predecessor's
@@ -9615,19 +9620,49 @@ class Session:
         list), a slot is left, and a configured check can run evidence. The
         findings stay open and block completion; only their own reviewer's
         reassessment on executed evidence closes one (Session._reassess)."""
+        if not self._review_debt_holds(covers, slot_left=used < max_tasks):
+            return False
+        self._note("held review findings are debt: the orchestrator may test or repair them while slots remain")
+        return True
+
+    def _review_debt_holds(self, covers, *, slot_left: bool) -> bool:
+        """The rule ``_review_debt_continues`` applies, read only: no note,
+        no record changed, so it may also be asked before the task's stop
+        decision (``_stop_follows_close``)."""
         if not (self.config.requirements_ledger and covers and self._explicit_tasks is None
-                and used < max_tasks and self.open_findings and self._discovering_checks()):
+                and slot_left and self.open_findings and self._discovering_checks()):
             return False
         from .finding_state import from_session
         held = {e["entry"]["text"] for e in self._disputable().values() if e["kind"] == "review"}
         state = from_session(self)
         if state.problems or not all(text in held for text in self.open_findings):
             return False
-        if not all(any(item.whole == text or text.startswith(item.whole) for text in held)
-                   for item in state.findings()):
-            return False
-        self._note("held review findings are debt: the orchestrator may test or repair them while slots remain")
-        return True
+        return all(any(item.whole == text or text.startswith(item.whole) for text in held)
+                   for item in state.findings())
+
+    def _stop_follows_close(self) -> str:
+        """Why the serial loop is certain to stop right after this task
+        closes, or "" (R24 on 54d729: t1 closed with open review findings, a
+        model close-out was written, and the run stopped FindingsOpen before
+        any planning call could read it). Read only, from the record the
+        stop decision in ``_run_tasks`` reads: nothing between this close-out
+        and that decision removes a legacy open finding (check debt only adds
+        one, settlement only resolves design and check findings), so a legacy
+        open finding the review debt cannot hold stops the run; so does a
+        failed last check when no check debt can be recorded (no ledger or no
+        COVERS). Anything less certain keeps the model close-out. Only a task the serial loop dispatched is asked: a task run
+        any other way has no such decision after it, and a parallel child's
+        batch decides."""
+        if self._batch_child or not self._serial_dispatch:
+            return ""
+        covers = list(getattr(self, "_current_covers", []) or [])
+        slot_left = not getattr(self, "_last_wave", False)
+        if self.open_findings and not self._review_debt_holds(covers, slot_left=slot_left):
+            return "the run stops on its open findings right after this task: no planning call reads it"
+        if (self.checks and not self.checks[-1].get("passed")
+                and not (self.config.requirements_ledger and covers)):
+            return "the run stops on its failed check right after this task: no planning call reads it"
+        return ""
 
     def _record_check_debt(self, spec, covers) -> Optional[str]:
         """A task whose last check still fails after its fix round leaves a
@@ -11204,13 +11239,17 @@ class Session:
     def _task_close_out(self, lead: str, spec: TaskSpec, task: TaskMemory, *, mechanical: bool = True):
         """The record that survives a task: the direct tier's harness record;
         a factual record when no later planning call can read a model summary
-        (the job's last dispatched wave) or the model close-out was refused to
-        keep the finish; otherwise the lead's model close-out."""
+        (the job's last dispatched wave, or a serial task the run is certain
+        to stop after) or the model close-out was refused to keep the finish;
+        otherwise the lead's model close-out."""
         if mechanical and self._tier(spec) == "direct":
             return self._mechanical_close_out(lead, spec, task)
         if getattr(self, "_last_wave", False):
             return self._factual_close_out(lead, spec, task, why=(
                 "no later planning call reads it: this task is in the job's last dispatched wave"))
+        stopping = self._stop_follows_close()
+        if stopping:
+            return self._factual_close_out(lead, spec, task, why=stopping)
         try:
             return self._close_out(lead, spec, task)
         except FinishReserved as exc:

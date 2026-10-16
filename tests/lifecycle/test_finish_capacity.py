@@ -254,3 +254,58 @@ def test_a_refusal_after_the_task_has_edited_still_stops_the_run(tmp_path, monke
     assert replay.result.error.startswith("FinishReserved") and H.result_json(replay)["not_started"] == []
     assert (replay.project / "README.md").read_text() == README
     assert not replay.of("auditor")
+
+
+# -- a serial task the run is certain to stop after closes factually ---------------
+# (R24 on 54d729: t1 closed with open review findings, its model close-out was
+# written, and the run stopped FindingsOpen before any planning call read it.)
+
+_BLOCKING = "BLOCKING: add is not shown for negative numbers; example: add(-1, -2) should be -3\nR1: MET - app.py"
+#: A recheck whose verdict is glued to narration: the strict whole-reply
+#: verdict reads it as no verdict, exactly as before this change.
+_GLUED = "I'll re-check only the blocking finding against the revised source.RESOLVED"
+
+
+def test_a_task_closing_into_a_findings_stop_gets_no_model_close_out(tmp_path, monkeypatch):
+    """No ledger, so open review findings cannot be held as debt: t1 closes
+    with its finding open and the run stops FindingsOpen. Old: a model
+    close-out ran first that nothing read. Now the harness records it; the
+    review, the unaccepted recheck and the stop are unchanged."""
+    script = _script([PLAN_1, PLAN_2], recheck=_GLUED)
+    script.overrides["collaborator"] = lambda call, replay: _BLOCKING
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
+    assert replay.of("recheck"), "the review and its recheck still run"
+    assert not replay.of("closeout"), "no model close-out before a certain stop"
+    assert len(replay.of("orchestrator")) == 1 and not [c for c in replay.calls if c.task == "t2"]
+    assert replay.result.error.startswith("FindingsOpen") and not replay.result.completed
+    record = json.loads(replay.artifact_texts("factual-closeout")[0])
+    assert record["task"] == "t1" and "stops on its open findings" in record["why"]
+    assert record["unresolved"] or record["open"], "the open finding is on the record"
+
+
+def test_a_task_closing_into_a_failed_check_stop_gets_no_model_close_out(tmp_path, monkeypatch):
+    """No ledger, so a failed check cannot become debt: its finding stops
+    the run after t1. The harness records the close-out."""
+    script = _script([PLAN_1, PLAN_2])
+    script.overrides["lead"] = lambda call, replay: (H.write(call, {"app.py": "def add(a, b):\n    return a - b\n"})
+                                                     or 'Implemented add.\nCHANGED: ["app.py"]')
+    script.overrides["collaborator"] = lambda call, replay: "NO FINDINGS\nR1: MET - app.py"
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
+    assert not H.result_json(replay)["checks"][-1]["passed"]
+    assert not replay.of("closeout") and len(replay.of("orchestrator")) == 1
+    record = json.loads(replay.artifact_texts("factual-closeout")[0])
+    assert "stops on its open findings" in record["why"] and "last check FAILED" in record["check"]
+
+
+@pytest.mark.requirements_ledger
+def test_a_finding_the_run_holds_as_debt_keeps_the_model_close_out(tmp_path, monkeypatch):
+    """Ledger on, COVERS, a configured check and a slot left: t1's open
+    review finding is held as debt and the orchestrator plans again, so it
+    reads t1's model close-out. That close-out still runs."""
+    script = _script([PLAN_1, PLAN_2], recheck="UNRESOLVED: negative sums are not shown")
+    script.overrides["collaborator"] = lambda call, replay: (
+        _BLOCKING if call.task == "t1" else "NO FINDINGS\nR2: MET - README.md")
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
+    assert [c.task for c in replay.of("closeout")] == ["t1"]
+    assert len(replay.of("orchestrator")) >= 2, "the run planned again after t1"
+    assert not [json.loads(t) for t in replay.artifact_texts("factual-closeout") if json.loads(t)["task"] == "t1"]
