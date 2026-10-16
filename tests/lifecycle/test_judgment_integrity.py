@@ -17,14 +17,17 @@ retried, and no other seat or the audit stands in for a missing review.
 Whole-run replays below the vendor CLI (tests.lifecycle.harness).
 """
 
+import dataclasses
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from quadratus import judgment
+from quadratus import judgment, obligations
 from quadratus.config import Settings
 from quadratus.run_budget import FINISH_STAGES, FinishReserved, RunBudget, RunLimits, finishing
+from quadratus.session import Session
 from tests.lifecycle import harness as H
 from tests.lifecycle.test_finish_capacity import BATCH, PLAN_1, PLAN_2, _budget, _script
 from tests.lifecycle.test_lifecycle_matrix import FILES
@@ -241,16 +244,20 @@ def test_a_claim_is_never_refunded_and_a_refused_budget_write_fails_closed(tmp_p
 # -- C: the obligation view and an unpayable dispatch ------------------------------------
 
 @pytest.mark.requirements_ledger
-def test_the_planner_sees_obligations_and_the_allowance_left_from_recorded_facts(tmp_path, monkeypatch):
+def test_the_planner_and_the_audit_read_the_same_recorded_view(tmp_path, monkeypatch):
     replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2), files=FILES,
                    max_tasks=2, record_complete=False, limits=_limits())
-    second = replay.of("orchestrator")[1].prompt
-    assert "Obligations as the harness holds them now" in second
-    assert "R1: covered by t1; taken on by t1" in second and "R2: not covered; taken on by no task yet" in second
-    assert "last check PASSED on the current source" in second
-    assert "Allowance left after the held finish:" in second and "s. A task needs one call" in second
-    assert "Obligations as the harness holds them now" in replay.of("auditor")[-1].prompt
-    assert "Allowance left" not in replay.of("auditor")[-1].prompt
+    header = "Obligations, evidence and remaining work as the harness holds them now"
+    second, audit = replay.of("orchestrator")[1].prompt, replay.of("auditor")[-1].prompt
+    for prompt in (second, audit):
+        assert header in prompt and "Capacity left after the held finish:" in prompt
+    assert "- R1: covered by t1; taken on by t1 (closed)" in second
+    assert "- R2: not covered; taken on by no task yet" in second
+    assert "PASSED, current; 1 passed case(s): tests/test_app.py::test_add" in second
+    assert "- t1 closed; covers R1; 1 code / 0 test file(s)" in second
+    recorded = H.result_json(replay)["obligations"]
+    for row in recorded["requirements"]:
+        assert f"- {row['rid']}: {row['status'][:160]}; taken on by" in audit, "the audit read the recorded view"
 
 
 @pytest.mark.requirements_ledger
@@ -265,6 +272,7 @@ def test_a_task_whose_lead_and_reviews_cannot_be_paid_is_not_started(tmp_path, m
     result = H.result_json(replay)
     assert [n["task"] for n in result["not_started"]] == ["t2"]
     assert result["finish_refusals"][-1]["what"].startswith("dispatch: the calls left cannot pay")
+    assert "mandatory stage(s): lead draft, review by" in result["finish_refusals"][-1]["detail"]
     assert "t2 NOT RUN" in replay.result.error or "R2" in replay.result.error
 
 
@@ -311,3 +319,164 @@ def test_no_wall_is_held_when_the_policy_is_off_or_nothing_is_pending():
     assert budget.reserve()[1] == 600
     plain = RunBudget(RunLimits(max_calls=20, max_reported_tokens=10_000, wall_seconds=600), clock=clock)
     assert plain.reserve()[1] == 600, "no stage pending: nothing held"
+
+
+# -- root review of d264b0c: refusals, binding, honest facts, the recorded view -----------
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("failure", ["refusal", "transport"])
+def test_a_completion_refused_or_failed_by_the_seat_stops_as_the_review_call_would(tmp_path, monkeypatch, failure):
+    """The same seat declines (or its transport fails) on the completion: the
+    claim stays spent, the raw reply is kept, the failure is recorded, and it
+    is raised exactly as the review call's own: no other seat, revision,
+    audit or call follows."""
+    reply = H.claude_refusal() if failure == "refusal" else H.claude_error("upstream connection reset")
+    script = _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2)
+    script.overrides["collaborator"] = _reviews(NARRATION, then=reply)
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False,
+                   limits=_limits())
+    done = _completions(replay)
+    assert done and done[0].vendor == "claude" and replay.calls[-1] is done[-1], "nothing after the failure"
+    assert not replay.result.completed
+    assert ("ProviderRefusal" if failure == "refusal" else "ProviderError") in replay.result.error
+    record = H.result_json(replay)["judgment_completions"][0]
+    assert record["claimed"] and record["outcome"].startswith("stopped: Provider") and record["raw_artifact"]
+    assert _budget(replay)["judgment_completions"] == 1
+
+
+def _drift_after_completion(monkeypatch, drift):
+    original = Session._invoke_model
+
+    def invoke(self, key, prompt, **kwargs):
+        reply = original(self, key, prompt, **kwargs)
+        if COMPLETION in prompt:
+            drift(self)
+        return reply
+    monkeypatch.setattr(Session, "_invoke_model", invoke)
+
+
+def _stricter_gate(session):
+    """A stricter effective test minimum on the same command and source."""
+    gate = session._current_gate()
+    if hasattr(gate, "commands"):
+        gate.commands = [dataclasses.replace(c, minimum_tests=(c.minimum_tests or 0) + 5) for c in gate.commands]
+    else:
+        gate.minimum_tests = (gate.minimum_tests or 0) + 5
+
+
+def _reworded(session):
+    session.memory.ledger.requirements["R1"] += " for every pair of integers"
+
+
+@pytest.mark.requirements_ledger
+@pytest.mark.parametrize("drift,changed", [(_stricter_gate, "gate"), (_reworded, "covered")],
+                         ids=["check-settings", "requirement-text"])
+def test_a_completion_whose_bound_identity_drifts_is_void_and_spends_the_claim(tmp_path, monkeypatch, drift, changed):
+    """Source unchanged, but the effective check settings (a test minimum)
+    or the covered requirement's text change while the completion runs: its
+    valid-looking answer is void, the review stays unjudged and the run
+    stops on it; the one claim is spent."""
+    _drift_after_completion(monkeypatch, drift)
+    script = _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2)
+    script.overrides["collaborator"] = _reviews(NARRATION, then=CLEAN_T1)
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False,
+                   limits=_limits())
+    record = H.result_json(replay)["judgment_completions"][0]
+    assert record["outcome"].startswith("void: the bound identity changed") and changed in record["outcome"]
+    assert record["binding"]["identity"] and record["judgment"] == ""
+    # The stricter minimum also fails the task's own check afterwards, which
+    # may name the stop first; either way the review stays unjudged.
+    assert not replay.result.completed
+    t1 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t1")
+    assert any("recorded as an unfinished review" in f["detail"] and not f["recovered"] for f in t1["facts"])
+    assert _budget(replay)["judgment_completions"] == 1
+
+
+@pytest.mark.requirements_ledger
+def test_an_answered_completion_that_is_still_no_judgment_is_never_recorded_as_completed(tmp_path, monkeypatch):
+    script = _script([PLAN_1, PLAN_2], t2_review=CLEAN_T2)
+    script.overrides["collaborator"] = _reviews(NARRATION, then="I checked the work carefully and it looks fine.")
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False,
+                   limits=_limits())
+    record = H.result_json(replay)["judgment_completions"][0]
+    assert record["outcome"] == "answered" and record["judgment"] == "still no valid verdict"
+    t1 = next(t for t in replay.workflow["tasks"] if t["task_id"] == "t1")
+    assert not [f for f in t1["facts"] if "completed its judgment" in f["detail"]]
+    assert any("recorded as an unfinished review" in f["detail"] and f["terminal"] and not f["recovered"]
+               for f in t1["facts"])
+
+
+def test_evidence_is_current_only_on_this_source_and_gate_and_names_its_cases():
+    checks = [dict(passed=True, source="old", gate="g", receipts=[dict(report=dict(passed_cases=["a::t1"]))]),
+              dict(passed=True, source="now", gate="other", receipts=[dict(report=dict(passed_cases=["a::t1"]))]),
+              dict(passed=True, source="now", gate="g",
+                   receipts=[dict(report=dict(passed_cases=[f"a::t{n}" for n in range(8)]))])]
+    rows = obligations.build_evidence(checks, source="now", gate="g")
+    assert [r.state for r in rows] == ["stale: another source", "wrong gate", "current"]
+    assert rows[-1].case_count == 8 and len(rows[-1].cases) == obligations.MAX_CASES
+    text = obligations.render(obligations.View((), (), rows, ()))
+    assert "PASSED, current; 8 passed case(s): a::t0" in text and "and 3 more" in text
+
+
+def test_the_view_shows_held_work_repeated_continuation_and_test_size():
+    tasks = (obligations.TaskRow("t1", "turn_limited", ("R1",), held=True, continued_by=("t2", "t3"),
+                                 code_files=1, test_files=2, changed_lines=182, max_lines=150, open_items=2),
+             obligations.TaskRow("t2", "failed", ("R1",), continues="t1"),
+             obligations.TaskRow("t3", "closed", ("R1",), continues="t1"))
+    text = obligations.render(obligations.View((), tasks, (), ("t1 review by a:b: no verdict",)))
+    assert "t1 turn_limited; covers R1; HELD: its work is still owed; continued 2 times (t2, t3)" in text
+    assert "1 code / 2 test file(s), 182 line(s) of 150; 2 open item(s)" in text
+    assert "Mandatory judgments without a valid verdict: t1 review by a:b: no verdict." in text
+
+
+def test_a_known_required_design_or_security_stage_counts_toward_dispatch(tmp_path):
+    session = Session("goal", __import__("quadratus.artifacts", fromlist=["ArtifactStore"]).ArtifactStore(tmp_path),
+                      lambda *a, **k: "")
+    spec = SimpleNamespace(task_id="t1")
+    session._contract = SimpleNamespace(task_id="t1", required=SimpleNamespace(design_review=True))
+    stages = session._mandatory_stages(spec, ["openai:x"])
+    assert stages == ["lead draft", "review by openai:x", "design review"]
+    assert obligations.dispatch_floor(stages, 2).startswith("2 call(s) left after the held finish cannot pay its 3")
+    assert obligations.dispatch_floor(stages, 3) == ""
+    security = session._mandatory_stages(spec, security=True)
+    assert security == ["security worker draft", "security verification"]
+    assert obligations.dispatch_floor(security, 1)
+
+
+def _record(tmp_path, claims=1):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    budget = RunBudget(_limits(), path=tmp_path / "budget.json")
+    for n in range(claims):
+        assert budget.claim_judgment_completion(1, dict(task=f"t{n + 1}", seat="a:b"))
+    return json.loads((tmp_path / "budget.json").read_text())
+
+
+@pytest.mark.parametrize("corrupt", ["missing", "negative", "boolean", "text", "records-exceed", "records-missing"])
+def test_a_missing_or_corrupt_claim_counter_refuses_the_resume_never_reads_as_unused(tmp_path, corrupt):
+    """Root on d264b0c: removing only the counter made consumed() return 0,
+    an unused allowance. A missing or corrupt counter is unknown usage."""
+    from quadratus.checkpoint import CheckpointRefused, consumed
+    record = _record(tmp_path)
+    if corrupt == "missing":
+        del record["judgment_completions"]
+    elif corrupt == "records-exceed":
+        record["judgment_completions"] = 0
+    elif corrupt == "records-missing":
+        del record["judgment_completion_records"]
+    else:
+        record["judgment_completions"] = {"negative": -1, "boolean": True, "text": "1"}[corrupt]
+    with pytest.raises(CheckpointRefused, match="judgment"):
+        consumed(record)
+    with pytest.raises(CheckpointRefused, match="judgment_completions"):
+        consumed({k: v for k, v in consumed(_record(tmp_path)).items() if k != "judgment_completions"},
+                 recorded=True)
+
+
+def test_a_legitimate_record_carries_its_claims(tmp_path):
+    from quadratus.checkpoint import consumed
+    assert consumed(_record(tmp_path))["judgment_completions"] == 1
+    carried = RunBudget(_limits(), path=tmp_path / "next.json",
+                        carried=dict(consumed(_record(tmp_path / "first"))))
+    record = json.loads((tmp_path / "next.json").read_text())
+    assert consumed(record)["judgment_completions"] == 1 and record["judgment_completion_records"] == []
+    assert not carried.claim_judgment_completion(1, dict(task="t9", seat="a:b"))

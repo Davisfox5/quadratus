@@ -1118,14 +1118,32 @@ Key design decisions already settled:
     is kept (`judgment-raw:*`). A genuine BLOCKING, NOT MET or UNRESOLVED is
     never routed here. If the completion still gives no verdict, the open
     finding stops the run as before; no other seat and no audit stands in.
-  - `_obligation_view` gives the planner and the auditor each requirement's
-    status and owners, the judgments without a valid verdict
-    (`judgment_gaps`), the executed evidence on the current source and, for
-    the planner, the allowance left after the held finish. It comes from
-    recorded facts only.
-  - `_refuse_unpayable_dispatch` does not start a serial task whose lead and
-    required reviews cannot be paid from the calls left after the hold
-    (exact counts, no estimates).
+  - Root review of d264b0c:
+    - The completion is bound (`_judgment_binding`) to the task, seat, role,
+      contract, source, effective gate identity, approved-check digest, goal,
+      and every requirement's text. The binding is taken before the claim,
+      persisted with it, and compared before the call and before the reply
+      is relied on; any drift voids the answer and spends the claim.
+    - A refusal by the seat, transport, integrity or any other failure is
+      recorded, then raised as the review call's own would be.
+    - Only the strict reader marks an answer a valid judgment
+      (`_settle_completion`).
+    - `checkpoint.consumed` requires the claim counter and refuses claim
+      records that exceed it: a missing counter is unknown usage, never an
+      unused allowance.
+  - `quadratus/obligations.py` (pure) builds the one view the planner and the
+    audit both read, and result.json records it (`obligations`). It covers:
+    requirement status and owners; each task's state (held, continues,
+    continued more than once) and its measured code/test/line consumption
+    against its ceiling; each recorded check's passed cases, current only on
+    this source and gate (otherwise stale or wrong gate); judgments without
+    a valid verdict; and capacity after the held finish (calls, tokens,
+    seconds, slots, recovery).
+  - `dispatch_floor` and `_mandatory_stages` refuse a serial task before any
+    call when the calls left cannot pay its known mandatory stages: lead,
+    each required review, a contract-required design review, or a security
+    task's draft and verification. These are exact counts that never
+    predict revisions.
   - `RunLimits.finish_wall_seconds` (policy `finish-wall/1`, 120 s per
     pending stage) holds wall time for the goal question and the audit:
     ordinary calls get what remains after the holds, and the goal question

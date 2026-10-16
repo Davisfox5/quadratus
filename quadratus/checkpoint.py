@@ -266,11 +266,19 @@ def consumed(budget_record: Optional[dict], *, recorded: bool = False) -> dict:
         if not math.isfinite(value) or value < 0:
             raise CheckpointRefused(f"the budget record's {field} is not a finite non-negative number")
         spent[name] = kind(value)
-    # Optional, for records written before it existed: the job's claimed
-    # same-seat judgment completions (RunBudget.claim_judgment_completion).
-    claims = record.get("judgment_completions", 0)
+    # The job's claimed same-seat judgment completions
+    # (RunBudget.claim_judgment_completion). Required: a missing counter is
+    # unknown usage, never an unused allowance (root on d264b0c), and a
+    # budget record whose claim records outnumber its counter is not the
+    # record the claims were made against.
+    claims = record.get("judgment_completions")
     if isinstance(claims, bool) or not isinstance(claims, int) or claims < 0:
-        raise CheckpointRefused("the budget record's judgment_completions is not a non-negative count")
+        raise CheckpointRefused("the budget record's judgment_completions is missing or not a non-negative count")
+    if not recorded:
+        claimed = record.get("judgment_completion_records")
+        if not isinstance(claimed, list) or len(claimed) > claims:
+            raise CheckpointRefused("the budget record's judgment completion claims are missing or exceed its "
+                                    "judgment_completions count")
     spent["judgment_completions"] = claims
     return spent
 

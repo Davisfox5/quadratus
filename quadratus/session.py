@@ -38,7 +38,7 @@ from functools import wraps
 from pathlib import Path, PurePosixPath
 from typing import Callable, Dict, List, Optional, Sequence
 
-from . import judgment
+from . import judgment, obligations
 from .artifacts import ArtifactStore
 from .codebase_map import CodebaseMap
 from .completion_decision import (
@@ -2394,6 +2394,8 @@ class Session:
         #: Mandatory judgments that ended without a valid verdict and were not
         #: completed: the obligation view names them (session._judgment_gap).
         self.judgment_gaps: List[dict] = []
+        #: The last obligation view shown to the planner or the audit.
+        self.obligation_view: dict = {}
         #: The job-wide allowance when no run budget holds it; a parallel
         #: child is handed its parent's share (session._run_batch).
         self._judgment_share = {"used": 0, "lock": threading.Lock()}
@@ -4421,6 +4423,7 @@ class Session:
         # live classification says so, and a disagreement is recorded.
         live = spec.work_class == WorkClass.SECURITY
         if self._required("security_verification", live) or live:
+            self._refuse_unpayable_dispatch(spec, self._mandatory_stages(spec, security=True))
             return self._run_security_task(spec)
 
         chosen, self._dispatch_lead = self._dispatch_lead, None
@@ -4431,7 +4434,7 @@ class Session:
             self._outcome.lead = lead
         self._bind_contract(lead)
         collaborators = self.collaborators_for(spec, lead)
-        self._refuse_unpayable_dispatch(spec, collaborators)
+        self._refuse_unpayable_dispatch(spec, self._mandatory_stages(spec, collaborators))
         # Selection is recorded separately from invocation. The 2026-09-13
         # feature task selected Grok as a collaborator and never reached it,
         # because drafting failed first -- and a roster read as coverage would
@@ -4606,9 +4609,12 @@ class Session:
                     # evidence is recorded first, then the same seat may
                     # complete its judgment once (the job's allowance).
                     self._record_scratch_evidence(spec, peer)
-                    note = self._complete_judgment(
+                    completed = self._complete_judgment(
                         spec, peer, "review", note, gaps, role="collaborator",
-                        prompt=self._collaborator_prompt(spec, draft, peer), task=task) or note
+                        prompt=self._collaborator_prompt(spec, draft, peer), task=task)
+                    if completed is not None:
+                        self._settle_completion(spec, peer, "review", not self._review_gaps(completed))
+                        note = completed
                 note = self._judge_goal_review(spec, peer, note)
                 self._record_deferred(spec, peer, note)
                 self._record_scratch_evidence(spec, peer)
@@ -7481,9 +7487,13 @@ class Session:
                 row["verdict"] = "kept: recheck refused to keep the finish"
                 continue
             if judgment.recheck_state(verdict) == judgment.INVALID:
-                verdict = self._complete_judgment(
+                completed = self._complete_judgment(
                     spec, peer, "recheck", verdict, ["one verdict: exactly RESOLVED, or UNRESOLVED: <what remains>"],
-                    role="recheck", prompt=prompt, outcome=outcome) or verdict
+                    role="recheck", prompt=prompt, outcome=outcome)
+                if completed is not None:
+                    self._settle_completion(spec, peer, "recheck",
+                                            judgment.recheck_state(completed) != judgment.INVALID, outcome=outcome)
+                    verdict = completed
             if not _resolved_verdict(verdict):
                 row["verdict"] = "kept: " + verdict.strip()[:200]
                 continue
@@ -7574,9 +7584,12 @@ class Session:
             self.store.put(note, kind=f"review:{peer}", author=peer)
             gaps = self._review_gaps(note)
             if gaps:
-                note = self._complete_judgment(spec, peer, "review", note, gaps, role="collaborator",
-                                               prompt=self._collaborator_prompt(spec, draft, peer),
-                                               outcome=outcome) or note
+                completed = self._complete_judgment(spec, peer, "review", note, gaps, role="collaborator",
+                                                    prompt=self._collaborator_prompt(spec, draft, peer),
+                                                    outcome=outcome)
+                if completed is not None:
+                    self._settle_completion(spec, peer, "review", not self._review_gaps(completed), outcome=outcome)
+                    note = completed
             note = self._judge_goal_review(spec, peer, note)
             rids = [rid for rid, _ in self._covered_texts()]
             clean = _approving_review(note, rids)
@@ -7905,7 +7918,7 @@ class Session:
                if self.design_checks else "")
             + self._not_run_block()
             + self._review_notes_block(audited)
-            + self._obligation_view(audit=True, ids=list(audited)))
+            + self._obligation_view(ids=list(audited)))
 
     def _audit_requirements(self, ids: Optional[List[str]] = None, final: bool = False) -> dict:
         """One read-only call: each requirement met or not, with evidence.
@@ -8915,36 +8928,68 @@ class Session:
             share["used"] = used + 1
             return True
 
+    def _judgment_binding(self, spec, peer: str, role: str) -> dict:
+        """What a judgment completion is bound to (root review of d264b0c):
+        the task, seat, role and contract; the source; the effective check
+        identity (the gate's commands with their settings, cwd and test
+        minimum, and the approved commands' own digest); the original goal and
+        every requirement's text, and the covered ones. Existing identity
+        utilities only (``_gate_identity``, ``integration.checks_digest``)."""
+        from . import integration
+
+        def h(text):
+            return hashlib.sha256((text or "").encode()).hexdigest()[:16]
+        contract = getattr(self, "_contract", None)
+        body = dict(task=spec.task_id, seat=peer, role=role,
+                    contract=(contract.digest if contract is not None
+                              and getattr(contract, "task_id", None) == spec.task_id else None),
+                    source=self._source_fingerprint(), gate=_gate_identity(self._current_gate()),
+                    checks=integration.checks_digest(self._discovering_checks()),
+                    goal=h(self.memory.goal),
+                    requirements=sorted([rid, h(text)] for rid, text in self.memory.ledger.requirements.items()),
+                    covered=sorted([rid, h(text)] for rid, text in self._covered_texts()))
+        body["identity"] = h(json.dumps(body, sort_keys=True))
+        return body
+
     def _complete_judgment(self, spec, peer: str, kind: str, raw: str, gaps: List[str], *, role: str,
                            prompt: str, task: Optional[TaskMemory] = None, outcome=None) -> Optional[str]:
         """One same-seat judgment completion for an ARRIVED reply that is not
         a judgment (strategy reset, 2026-10-16). Returns the seat's new reply,
-        or None when nothing new was obtained.
+        or None when nothing new may be relied on.
 
         The same seat, the same existing role (``collaborator`` or
         ``recheck``: its turn cap, read-only source copy, scratch and privacy
-        rules unchanged), the same source; the original prompt again, with
-        the raw reply and what it lacked. The claim is recorded before the
-        call and never refunded. A cap, a refusal by the seat or by the
-        finish hold, or a changed source gives nothing and is never retried;
-        any other failure propagates exactly as the review call's would. The
-        raw reply is kept unchanged; the new reply is judged by the same
-        strict rules as any other, so it may approve, find, or still fail."""
-        from .providers import ProviderRefusal
-        record = dict(task=spec.task_id, seat=peer, kind=kind, role=role, gaps=list(gaps),
-                      source=self._source_fingerprint(), claimed=False, outcome="")
+        rules unchanged); the original prompt again, with the raw reply and
+        what it lacked. The binding (``_judgment_binding``) is taken before
+        the claim, persisted with it, and compared before the call and again
+        before the reply is relied on: any change voids the answer and the
+        claim stays spent. The claim is never refunded. A cap or a refusal by
+        the finish hold gives nothing, as the same stop would on the review
+        call; a refusal by the seat, and every other failure, is recorded and
+        then raised exactly as the review call's own would be: nothing works
+        around it. Whether the reply is a judgment is decided by the caller's
+        strict reader (``_settle_completion``), never here."""
+        binding = self._judgment_binding(spec, peer, role)
+        record = dict(task=spec.task_id, seat=peer, kind=kind, role=role, gaps=list(gaps), binding=binding,
+                      claimed=False, outcome="", judgment="")
         raw_ref = self.store.put(raw, kind=f"judgment-raw:{kind}:{peer}", author=peer)
         record["raw_artifact"] = raw_ref.id
         self.judgment_completions.append(record)
         limit = int(getattr(self.config, "max_judgment_completions", 0) or 0)
-        if limit <= 0 or not self._claim_judgment(limit, dict(task=spec.task_id, seat=peer, kind=kind,
-                                                                source=record["source"])):
+        if limit <= 0 or not self._claim_judgment(limit, dict(task=spec.task_id, seat=peer, kind=kind, role=role,
+                                                                identity=binding["identity"],
+                                                                source=binding["source"])):
             record["outcome"] = "not attempted: " + ("turned off" if limit <= 0 else "the job's allowance is spent")
             self._note(f"{spec.task_id}: {peer}'s {kind} gave no valid verdict; completion {record['outcome']}")
             return None
         record["claimed"] = True
         self.store.put(json.dumps(record), kind="judgment-completion-intent", author="harness")
-        target = outcome or self._outcome
+        if task is not None:
+            task.keep(raw, kind=f"{kind}-incomplete:{peer}", author=peer)
+        if self._judgment_binding(spec, peer, role) != binding:
+            record["outcome"] = "void before the call: the bound identity changed"
+            self._note(f"{spec.task_id}: {peer}'s {kind} completion {record['outcome']}")
+            return None
         missing = "; ".join(gaps)
         ask = ("Your previous reply on this same work arrived without a valid verdict in the required "
                f"form. It lacked: {missing}. It is kept on the record unchanged:\n--- previous reply ---\n"
@@ -8959,27 +9004,41 @@ class Session:
         except FinishReserved as exc:
             self._finish_refused(spec, f"{kind} judgment completion by {peer}", exc, outcome=outcome)
             record["outcome"] = "refused to keep the finish"
-        except ProviderRefusal as exc:
-            record["outcome"] = f"refused by the seat: {str(exc)[:160]}"
+        except BaseException as exc:
+            # A refusal by the seat, transport, integrity or anything else:
+            # recorded, then raised as the review call's own failure is.
+            record["outcome"] = f"stopped: {type(exc).__name__}: {str(exc)[:160]}"
+            self.store.put(json.dumps(record), kind="judgment-completion-stopped", author="harness")
+            raise
         else:
-            if self._source_fingerprint() != record["source"]:
-                record["outcome"] = "void: the source changed during the completion"
+            after = self._judgment_binding(spec, peer, role)
+            if after != binding:
+                changed = sorted(k for k in binding if k != "identity" and binding[k] != after.get(k))
+                record["outcome"] = f"void: the bound identity changed during the completion ({', '.join(changed)})"
             else:
                 ref = self.store.put(reply, kind=f"judgment-completion:{kind}:{peer}", author=peer)
                 record.update(outcome="answered", reply_artifact=ref.id)
-                if task is not None:
-                    task.keep(raw, kind=f"{kind}-incomplete:{peer}", author=peer)
-                if target is not None:
-                    target.note("unverified", f"{peer}'s {kind} arrived without a valid verdict ({missing}); "
-                                f"the same seat completed its judgment once (raw reply {raw_ref.id})",
-                                terminal=False)
-                    for fact in target.facts:
-                        if fact.detail.startswith(f"{peer}'s {kind} arrived without a valid verdict"):
-                            fact.recovered = True
-                self._note(f"{spec.task_id}: {peer} completed its {kind} judgment once")
                 return reply
         self._note(f"{spec.task_id}: {peer}'s {kind} judgment completion gave nothing: {record['outcome']}")
         return None
+
+    def _settle_completion(self, spec, peer: str, kind: str, valid: bool, *, outcome=None) -> None:
+        """The strict reader's decision on the answered completion: only a
+        valid judgment is recorded as completed; anything else stays
+        unjudged, its open finding recorded by the ordinary path."""
+        record = next((r for r in reversed(self.judgment_completions)
+                       if r["task"] == spec.task_id and r["seat"] == peer and r["kind"] == kind), None)
+        if record is None or record.get("outcome") != "answered":
+            return
+        record["judgment"] = "valid" if valid else "still no valid verdict"
+        target = outcome or self._outcome
+        if valid and target is not None:
+            fact = target.note("unverified", f"{peer}'s {kind} arrived without a valid verdict; the same seat "
+                                             f"completed its judgment once (raw reply {record['raw_artifact']})",
+                               terminal=False)
+            fact.recovered = True
+        self._note(f"{spec.task_id}: {peer}'s {kind} completion "
+                   + ("is a valid judgment" if valid else "still gave no valid verdict"))
 
     def _judgment_gap(self, spec, peer: str, kind: str, why: str) -> None:
         """A mandatory judgment that ended without a valid verdict and was not
@@ -8992,73 +9051,98 @@ class Session:
                 return
         self.judgment_gaps.append(dict(task=task_id, seat=peer, kind=kind, why=why))
 
-    def _refuse_unpayable_dispatch(self, spec, collaborators) -> None:
+    def _mandatory_stages(self, spec, collaborators=(), *, security: bool = False) -> List[str]:
+        """The model stages this task cannot close without, known before any
+        call: the lead's draft and each required review; a design review its
+        contract requires; for a security task, the worker's draft and the
+        cross-vendor verification. Revisions, fixes and recaptures are not
+        known in advance and are not counted."""
+        if security:
+            return ["security worker draft", "security verification"]
+        stages = ["lead draft"] + [f"review by {peer}" for peer in collaborators]
+        contract = getattr(self, "_contract", None)
+        required = getattr(contract, "required", None) if getattr(contract, "task_id", None) == spec.task_id else None
+        if required is not None and getattr(required, "design_review", False):
+            stages.append("design review")
+        return stages
+
+    def _refuse_unpayable_dispatch(self, spec, stages) -> None:
         """Before any call of a serial task: the calls left after the held
-        finish must pay at least its lead and each required review, exactly
-        counted (one call each), or the task cannot reach a reviewed close and
-        is not started (``_settle_not_started``). No token or line estimate
-        is used; a parallel child is never refused here (its batch decides)."""
+        finish must pay each known mandatory stage (obligations.dispatch_floor),
+        exactly counted, or the task cannot reach its mandatory judgments and
+        is not started (``_settle_not_started``). A parallel child is never
+        refused here (its batch decides)."""
         budget = self._budget()
         if budget is None or not self._serial_dispatch or self._batch_child:
             return
         snap = budget.snapshot()
         held = len((snap.get("finish_protection") or {}).get("pending") or [])
-        left = snap["limits"]["max_calls"] - snap["reserved_attempts"] - held
-        need = 1 + len(collaborators)
-        if left < need:
-            exc = FinishReserved(f"{left} call(s) left after the held finish cannot pay {spec.task_id}'s lead and "
-                                 f"{len(collaborators)} required review(s) ({need} calls)")
+        why = obligations.dispatch_floor(stages, snap["limits"]["max_calls"] - snap["reserved_attempts"] - held)
+        if why:
+            exc = FinishReserved(f"{spec.task_id}: {why}")
             exc.infeasible = True
             raise exc
 
-    def _obligation_view(self, *, audit: bool = False, ids=None) -> str:
-        """The job's obligations as the harness holds them, from recorded
-        facts only (strategy reset, 2026-10-16): each requirement's status and
-        the tasks that took it on, the mandatory judgments that ended without
-        a valid verdict, the executed evidence on the current source, and (for
-        the planner) the allowance left after the held finish. It judges
-        nothing: whether the tests are sufficient stays the seats' judgment."""
+    def _obligations(self, ids=None) -> "obligations.View":
+        """The recorded view the planner and the audit both read
+        (quadratus.obligations), gathered from the session's own records."""
+        from .integration import _test_family
         ledger = self.memory.ledger
-        if not (self.config.requirements_ledger and ledger.requirements):
-            return ""
         owners: Dict[str, List[str]] = {}
         for outcome in self.task_outcomes:
             for rid in outcome.covers or []:
                 owners.setdefault(rid, []).append(f"{outcome.task_id} ({outcome.closed_as})")
-        lines = []
-        for rid in ledger.requirements:
-            if ids is not None and rid not in ids:
-                # An explicit run's audit judges only what its tasks claimed.
-                continue
-            status = str(ledger.requirement_status.get(rid, "") or "not covered")
-            lines.append(f"- {rid}: {status[:160]}; taken on by {', '.join(owners.get(rid, [])) or 'no task yet'}")
-        gaps = [f"{g['task']} {g['kind']} by {g['seat']}: {g['why']}" for g in self.judgment_gaps]
-        current = self._source_fingerprint() if self.project else None
-        last = self.checks[-1] if self.checks else None
-        if last is None:
-            evidence = "no check has run"
-        elif current and last.get("source") == current:
-            evidence = f"last check {'PASSED' if last.get('passed') else 'FAILED'} on the current source"
-        else:
-            evidence = "no check on the current source"
-        text = ("\n\nObligations as the harness holds them now (recorded facts, not a summary):\n"
-                + "\n".join(lines)
-                + f"\nMandatory judgments without a valid verdict: {'; '.join(gaps) if gaps else 'none'}."
-                + f"\nExecuted evidence: {evidence}.")
-        budget = None if audit else self._budget()
+        requirements = tuple(obligations.RequirementRow(rid, str(ledger.requirement_status.get(rid, "") or "not covered"),
+                                                        tuple(owners.get(rid, [])))
+                             for rid in ledger.requirements if ids is None or rid in ids)
+        owed = set(self._partial_tasks) | self._partial_from_outcomes()
+        tasks = []
+        for outcome in self.task_outcomes:
+            partial = outcome.partial if isinstance(outcome.partial, dict) else {}
+            changed = list(partial.get("changed") or [])
+            tests = [p for p in changed if _test_family(p)]
+            scope = ((outcome.contract or {}).get("scope") or {}) if isinstance(outcome.contract, dict) else {}
+            tasks.append(obligations.TaskRow(
+                task=outcome.task_id, closed_as=outcome.closed_as, covers=tuple(outcome.covers or ()),
+                continues=outcome.continues or "", held=outcome.task_id in owed,
+                continued_by=tuple(o.task_id for o in self.task_outcomes if o.continues == outcome.task_id),
+                code_files=len(changed) - len(tests), test_files=len(tests),
+                changed_lines=int(partial.get("changed_lines") or 0), max_lines=scope.get("max_lines"),
+                open_items=len(outcome.active)))
+        evidence = obligations.build_evidence(self.checks, source=self._source_fingerprint() if self.project else None,
+                                              gate=_gate_identity(self._current_gate()))
+        judgments = tuple(f"{g['task']} {g['kind']} by {g['seat']}: {g['why']}" for g in self.judgment_gaps)
+        capacity = None
+        budget = self._budget()
         if budget is not None:
             snap = budget.snapshot()
             fin = snap.get("finish_protection") or {}
             held = len(fin.get("pending") or [])
             limits = snap["limits"]
-            reserve = int(limits.get("reserve_tokens_per_call") or 0)
-            calls = limits["max_calls"] - snap["reserved_attempts"] - held
-            tokens = limits["max_reported_tokens"] - snap["reported_tokens"] - held * reserve
-            wall = limits["wall_seconds"] - snap["elapsed_seconds"] - float(fin.get("held_wall_seconds") or 0)
-            text += (f"\nAllowance left after the held finish: {max(calls, 0)} call(s), "
-                     f"{max(tokens, 0):,} reported tokens, {max(wall, 0):.0f} s. A task needs one call for "
-                     "its lead and one per required review before any revision.")
-        return text
+            total = getattr(self, "_max_tasks", None)
+            survey = self.config.survey
+            capacity = obligations.Capacity(
+                calls=limits["max_calls"] - snap["reserved_attempts"] - held,
+                tokens=limits["max_reported_tokens"] - snap["reported_tokens"]
+                - held * int(limits.get("reserve_tokens_per_call") or 0),
+                wall_seconds=limits["wall_seconds"] - snap["elapsed_seconds"] - float(fin.get("held_wall_seconds") or 0),
+                slots_left=(max(0, total - int(getattr(self, "_slots_used", 0) or 0))
+                            if total and self._explicit_tasks is None else None),
+                slots_total=total if total and self._explicit_tasks is None else None,
+                recovery_left=(max(0, survey.recovery_tasks - int(self.survey.get("recovery_used", 0) or 0))
+                               if survey is not None else None))
+        return obligations.View(requirements=requirements, tasks=tuple(tasks), evidence=evidence,
+                                judgments=judgments, capacity=capacity)
+
+    def _obligation_view(self, *, ids=None) -> str:
+        """The same recorded view for the planner and the audit (an explicit
+        run's audit lists only its audited requirements). The last one shown
+        is kept for the run record (result.json "obligations")."""
+        if not (self.config.requirements_ledger and self.memory.ledger.requirements):
+            return ""
+        view = self._obligations(ids)
+        self.obligation_view = view.to_dict()
+        return "\n\n" + obligations.render(view)
 
     def _settle_not_started(self, spec, exc) -> bool:
         """A serial task whose first editing call was refused to keep the
@@ -10797,6 +10881,7 @@ class Session:
                     verdict = completed
                     task.record("assistant", f"[{shown} recheck, completed] {verdict}")
                     state = judgment.recheck_state(verdict)
+                    self._settle_completion(spec, peer, "recheck", state != judgment.INVALID)
             if state == judgment.UNRESOLVED:
                 unresolved.append((peer, verdict.strip()))
                 self._dispose(spec, peer, "recheck: unresolved: " + verdict.strip()[:200])
