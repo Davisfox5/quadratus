@@ -1053,7 +1053,14 @@ Key design decisions already settled:
   full, cited on that requirement's own MET line (in the review), or bound
   by provenance (source and checks identity, covered requirements) at the
   final audit. The audit lowers any other MET to NOT MET; a review's other
-  MET becomes an UNVERIFIED line the lead answers, never an approval. Whether the executed test establishes the clause stays the
+  MET becomes an UNVERIFIED line the lead answers, never an approval.
+  Root on 5ca254c: a scratch proof is bound to the source and checks its
+  copy was handed (`handed_source`, `handed_checks`, measured by the runtime
+  on the copy), so a live change during the review leaves it stale with its
+  raw result kept; and the own-report producers (`quadratus-pytest/6`,
+  `quadratus-unittest/2`) name every case they count passed
+  (`passed_cases`, one per count, validated), so the unchanged quiet
+  declared gates show exact executed identity without verbose output. Whether the executed test establishes the clause stays the
   seat's judgment. The R22 ledger replayed through the hold refuses row 17
   (t2's recheck), which leaves its finding open: the hold makes the stop
   honest, it does not make that run finish.

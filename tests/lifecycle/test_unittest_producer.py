@@ -382,3 +382,52 @@ def test_the_selected_reporters_bytes_are_part_of_the_cache_identity(tmp_path, m
     copy.write_bytes(copy.read_bytes() + b"\n# changed\n")
     changed = suite.run().receipts[0]
     assert changed.cached is False and changed.runner_hash != first.runner_hash
+
+
+# -- root review of 5ca254c: the quiet own report names the cases it passed -----------------
+
+def test_the_quiet_unittest_report_names_each_passed_case_exactly(tmp_path):
+    """The production unittest gate is quiet and declares the report. The
+    producer names each test it counted passed as ``file::Class::method``;
+    a test with a failed or skipped subcase, a skipped test and a failed
+    test are not named. ``_executed_cases`` credits exactly those, and a
+    same-named method in another class is not one of them."""
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.integration import IntegrationGate
+    from quadratus.session import Session, SessionConfig
+    root = _project(tmp_path, test_cases="""
+        import unittest
+        class Good(unittest.TestCase):
+            def test_refuses(self):
+                for v in (1, 2):
+                    with self.subTest(v=v):
+                        self.assertTrue(v)
+        class Partial(unittest.TestCase):
+            def test_refuses(self):
+                with self.subTest(v=0):
+                    self.skipTest("no")
+        class Skipped(unittest.TestCase):
+            @unittest.skip("later")
+            def test_skipped(self):
+                pass
+        """)
+    gate = IntegrationGate(list(UNITTEST + (TOKEN,)), cwd=root)
+    result = gate.run()
+    assert result.passed and result.report["state"] == "parsed", result.report
+    assert result.report["passed_cases"] == ["tests/test_cases.py::Good::test_refuses"]
+    assert result.report["counts"] == dict(passed=1, failed=0, errors=0, skipped=2)
+    session = Session("goal", ArtifactStore(tmp_path / "a"), lambda *a, **k: "",
+                      config=SessionConfig(project=root, integration_gate=gate))
+    session.checks = [dict(passed=True, command=result.command, output=result.output, report=result.report,
+                           cases=result.cases, source=session._source_fingerprint(), receipts=[])]
+    # Skips make the run incomplete: nothing is credited from it.
+    assert session._executed_cases(["tests/test_cases.py::Good::test_refuses"]) == []
+    (root / "tests" / "test_cases.py").write_text(
+        "import unittest\n\n\nclass Good(unittest.TestCase):\n    def test_refuses(self):\n"
+        "        self.assertTrue(True)\n\n\nclass Other(unittest.TestCase):\n    pass\n")
+    result = gate.run()
+    session.checks = [dict(passed=True, command=result.command, output=result.output, report=result.report,
+                           cases=result.cases, source=session._source_fingerprint(), receipts=[])]
+    assert session._executed_cases(["tests/test_cases.py::Good::test_refuses",
+                                    "tests/test_cases.py::Other::test_refuses",
+                                    "tests/test_cases.py::test_refuses"]) == ["tests/test_cases.py::Good::test_refuses"]

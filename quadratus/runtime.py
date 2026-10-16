@@ -534,6 +534,12 @@ class Fleet:
             return reply
         with self.project.snapshot() as directory:
             context = invocation_context.get() or {}
+            # The bytes this copy was handed, measured on the copy itself
+            # before anything else lands in it: a scratch proof is bound to
+            # them, never to the live source measured after the call returns
+            # (root review of 5ca254c: the live source moved during review).
+            handed_source = (Project(directory, exclude=self.project.exclude).fingerprint()
+                             if context.get("probe") else None)
             declared = tuple(itertools.islice(iter(context.get("evidence_files") or ()), _MAX_EVIDENCE_FILES + 1))
             copied = _furnish_evidence(self.project.root, directory, declared, task=context.get("task"),
                                        expected=context.get("evidence_sha256"))
@@ -630,9 +636,12 @@ class Fleet:
                 # Executed, not inferred: the harness runs the approved check
                 # commands in this disposable copy and reads the scratch cases
                 # by identity (r09 root decision on 40b2133).
-                context["scratch_proof"] = _scratch_proof(
-                    directory, context["scratch_tests"], handed, context["probe_checks"],
-                    private=_private_paths(self.project.root, getattr(self, "check_commands", ()) or (), directory))
+                from .integration import checks_digest
+                context["scratch_proof"] = dict(
+                    _scratch_proof(directory, context["scratch_tests"], handed, context["probe_checks"],
+                                   private=_private_paths(self.project.root, getattr(self, "check_commands", ())
+                                                          or (), directory)),
+                    handed_source=handed_source, handed_checks=checks_digest(context["probe_checks"]))
             # Rewritten while the copy still exists, because its path is the
             # only thing that identifies which references need rewriting. A
             # reviewer that cited the copy by absolute path would otherwise

@@ -1401,7 +1401,7 @@ def _check_runs(check: dict, root=None) -> List[dict]:
         qualified_names = set((row["cases"] or {}).get("qualified") or ()) if isinstance(row["cases"], dict) else set()
         executed_names = names[2] if names[2] is not None else Counter()
         out.append(dict(id=row["id"], passed=row["passed"], required=row["required"], filtered=filtered,
-                        cwd=row["cwd"],
+                        cwd=row["cwd"], report_cases=_report_cases(row["report"]),
                         tests=tests, skipped=skipped_count(SimpleNamespace(output=row["output"],
                                                                            report=row["report"])),
                         files=set(operand_paths(argv, root, row["cwd"])),
@@ -1585,6 +1585,15 @@ def _enclosing_call(text: str, at: int):
                 return text[start:i + 1]
         i += 1
     return None
+
+
+def _report_cases(report) -> set:
+    """The passed cases a parsed own report names (pytest node ids, or
+    ``file::Class::method`` from the unittest producer); empty when it names
+    none or its list was cut at the bound, which credits nothing."""
+    if not isinstance(report, dict) or report.get("state") != "parsed" or report.get("passed_truncated") is not False:
+        return set()
+    return {str(n) for n in report.get("passed_cases") or ()}
 
 
 def _complete_run(run: dict) -> bool:
@@ -8047,6 +8056,33 @@ class Session:
                                                              .encode()).hexdigest()[:16])
         return out
 
+    def _current_checks_digest(self) -> str:
+        from .integration import checks_digest
+        return checks_digest(self._discovering_checks())
+
+    def _scratch_identity(self, source, checks) -> str:
+        """What a scratch proof is bound to: the source its copy was handed and
+        the approved commands it ran with (both measured at hand-out by the
+        runtime), the project root and its excludes. Never shown to a model."""
+        body = dict(source=source, checks=checks, root=str(Path(self.project).resolve()) if self.project else "",
+                    excludes=sorted(map(str, self.config.project_excludes or ())))
+        return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:32]
+
+    def _handed_drift(self, proof) -> str:
+        """Why a scratch proof is not about the current source and checks: the
+        copy's handed bytes or commands differ from now, or were never
+        measured. "" when they hold. The raw result is kept either way."""
+        proof = proof or {}
+        if not proof:
+            return ""
+        if not proof.get("handed_source") or not proof.get("handed_checks"):
+            return "the handed source or checks were not measured"
+        if proof["handed_source"] != self._source_fingerprint():
+            return "the source moved after the copy was handed"
+        if proof["handed_checks"] != self._current_checks_digest():
+            return "the approved checks changed after the copy was handed"
+        return ""
+
     def _evidence_identity(self) -> str:
         """What an evidence proof is bound to: the source, the effective
         gate (commands, cwd, timeouts, minimums; or the parent's approved
@@ -8632,6 +8668,16 @@ class Session:
             for run in _check_runs(record, root):
                 if not _complete_run(run):
                     continue
+                cwd = run.get("cwd") or "."
+                for name in run.get("report_cases") or ():
+                    # The own report's passed cases, exact (root review of
+                    # 5ca254c: the declared quiet gates print no case lines).
+                    file, sep, rest = name.partition("::")
+                    if not sep:
+                        continue
+                    file = posixpath.normpath(posixpath.join(cwd, file)) if cwd not in ("", ".") else file
+                    executed.add(f"{file}::{rest}")
+                    executed.add(f"{file}::{rest.split('[', 1)[0]}")
                 qualified = set(run.get("qualified_names") or ())
                 ran = run.get("executed_names") or {}
                 every = run.get("every_names") or {}
@@ -8647,10 +8693,10 @@ class Session:
                                             == base and str(k).partition("::")[0] == str(key).partition("::")[0]):
                         executed.add(f"{file}::{base}")
         if rid is not None:
-            identity = self._evidence_identity()
+            identity = self._scratch_identity(current, self._current_checks_digest())
             for proof in self.scratch_proofs:
-                if (proof.get("status") != "passed" or proof.get("identity") != identity
-                        or rid not in (proof.get("requirements") or ())):
+                if (proof.get("status") != "passed" or proof.get("eligible") is not True
+                        or proof.get("identity") != identity or rid not in (proof.get("requirements") or ())):
                     continue
                 executed |= _proof_cases(proof)
         return [c for c in citations if c in executed]
@@ -10163,7 +10209,8 @@ class Session:
         # This review's own demonstration, case by case, only if it passed in
         # full: an unrelated passing scratch shows nothing about a requirement
         # whose MET line does not cite its cases (root review of 17a96d3).
-        demonstrated = _proof_cases(proof) if proof.get("status") == "passed" else set()
+        demonstrated = (_proof_cases(proof) if proof.get("status") == "passed" and not self._handed_drift(proof)
+                        else set())
         held = []
         for rid, rest in _met_lines(note).items():
             if verdicts.get(rid) is not True or rid not in texts or not _error_clause(texts[rid]):
@@ -10256,8 +10303,12 @@ class Session:
         # Provenance for the final audit (root review of 17a96d3): the source
         # and checks the copy was handed (the evidence identity), and the
         # requirements this review covered. Never shown to a model.
+        handed = (proof or {}).get("handed_source"), (proof or {}).get("handed_checks")
+        drift = self._handed_drift(proof)
         self.scratch_proofs.append(dict(task=spec.task_id, peer=peer, files=list(found),
-                                        identity=self._evidence_identity() if self.project else None,
+                                        identity=self._scratch_identity(*handed) if self.project and all(handed)
+                                        else None, eligible=bool(proof) and all(handed) and not drift,
+                                        **({"stale": drift} if drift else {}),
                                         requirements=[rid for rid, _ in self._covered_texts()],
                                         **({k: proof[k] for k in ("status", "reason", "cases", "receipts")}
                                            if proof else dict(status="not run"))))

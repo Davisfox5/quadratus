@@ -12,7 +12,11 @@ LLM reliability. Generic fixture; nothing from any live job.
   line does not cite;
 - an uncollected case never borrows a same-named case's execution;
 - (added) a passing scratch proof on an earlier source is not credited at
-  the final audit.
+  the final audit;
+- (root on 5ca254c) a proof is bound to the source its copy was handed, so
+  a live change during the review leaves it stale, never relabelled; and
+  the unchanged quiet own-report gate credits the exact cases its report
+  names as passed.
 """
 # Root's compact layout is kept as written (one-line statements).
 # ruff: noqa: E701, E702
@@ -200,3 +204,46 @@ def test_a_scratch_proof_on_an_earlier_source_is_not_credited_at_the_final_audit
     verdicts = result['requirements']['audits'][-1]['verdicts']
     assert verdicts['R1']['met'] is False and verdicts['R2']['met'] is True
     assert not replay.result.completed
+
+
+def test_source_change_while_scratch_copy_is_reviewed_cannot_be_relabelled_as_current_proof(tmp_path,monkeypatch):
+    changed=[]
+    def lead(c,r):
+        H.write(c,{'switches.py':GOOD});return 'Implemented.\nCHANGED: ["switches.py"]'
+    def peer(c,r):
+        H.write(c,{'tests/test_error_contract.py':NEGATIVE})
+        if not changed:
+            # Simulated OTHER producer, not a permission granted to a native
+            # reviewer: its handed copy remains good while live source moves.
+            (r.project/'switches.py').write_text(BAD);changed.append(True)
+        return 'R1: MET - tests/test_error_contract.py::test_invalid_string_error and tests/test_error_contract.py::test_nonstring_error\nREVIEW: COMPLETE'
+    reply='R1: MET - switches.py; tests/test_error_contract.py::test_invalid_string_error and tests/test_error_contract.py::test_nonstring_error'
+    replay=H.run(tmp_path,monkeypatch,Script(orchestrator=lambda c,r:PLAN if not r.of('lead') else 'DONE',lead=lead,collaborator=peer,auditor=lambda c,r:reply,**{'requirements-review':lambda c,r:'COMPLETE'}),files={'switches.py':GOOD,'tests/test_switches.py':ORIGINAL,'README.md':'# Switch parser\n'},goal=GOAL,max_tasks=1,settings=Settings(backend='cli'))
+    assert changed and (replay.project/'switches.py').read_text()==BAD
+    env={};exec(BAD,env);assert env['parse_switch']('broken')!={'error':'invalid'}
+    data=H.result_json(replay)
+    print(json.dumps({'case':'changed-during-review','completed':replay.result.completed,'error':replay.result.error,'scratch':data.get('scratch_proofs'),'audits':data['requirements'].get('audits')}))
+    assert not replay.result.completed,'old handed-source proof was stamped after the source changed and accepted for broken current code'
+    # Its raw passing result is kept; it is stale, never relabelled current.
+    (proof,)=data['scratch_proofs']
+    assert proof['status']=='passed' and proof['eligible'] is False
+    assert proof['stale']=='the source moved after the copy was handed'
+
+
+def test_actual_declared_quiet_check_can_credit_the_negative_cases_it_executed(tmp_path,monkeypatch):
+    # Same -q and own-report declaration as the production pytest gate.
+    # No verbosity or check population changes may be imposed on that job.
+    scope=dict(permitted_paths=['switches.py','tests/test_errors.py'],intended_result=REQ,acceptance=[REQ],max_lines=60)
+    first='REQUIREMENTS:\nR1: '+REQ+'\nR2: README documents parse_switch.\nKIND: backend simple\nSCOPE: '+json.dumps(scope)+'\nImplement and test switch parsing.\nCOVERS: R1'
+    second='KIND: docs simple\nSCOPE: '+json.dumps(dict(permitted_paths=['README.md'],intended_result='README documents parse_switch',acceptance=['README names function'],max_lines=20))+'\nDocument parsing.\nCOVERS: R2'
+    def planner(c,r):return first if len(r.of('orchestrator'))==1 else second if len(r.of('orchestrator'))==2 else 'DONE'
+    def lead(c,r):
+        if c.task=='t1':
+            H.write(c,{'switches.py':GOOD,'tests/test_errors.py':NEGATIVE});return 'Implemented and tested.\nCHANGED: ["switches.py", "tests/test_errors.py"]'
+        H.write(c,{'README.md':'# Switch parser\n\nparse_switch validates on/off.\n'});return 'Documented.\nCHANGED: ["README.md"]'
+    met='R1: MET - tests/test_errors.py::test_invalid_string_error and tests/test_errors.py::test_nonstring_error'
+    replay=H.run(tmp_path,monkeypatch,Script(orchestrator=planner,lead=lead,collaborator=lambda c,r:met+'\nREVIEW: COMPLETE' if c.task=='t1' else 'R2: MET - README.md\nREVIEW: COMPLETE',auditor=lambda c,r:met+'\nR2: MET - README.md',**{'requirements-review':lambda c,r:'COMPLETE'}),files={'switches.py':BAD,'tests/test_switches.py':ORIGINAL,'README.md':'# Switch parser\n'},goal=GOAL+' Document parse_switch in README.',max_tasks=2,settings=Settings(backend='cli'))
+    data=H.result_json(replay);assert data['checks'] and all(c['passed'] for c in data['checks'])
+    assert (replay.project/'tests/test_errors.py').read_text()==NEGATIVE
+    print(json.dumps({'case':'declared-quiet-proof','completed':replay.result.completed,'error':replay.result.error,'checks':data['checks'],'audits':data['requirements'].get('audits')}))
+    assert replay.result.completed,'actual passing negative cases from the unchanged declared quiet check have no identity route to final acceptance'

@@ -20,14 +20,20 @@ assertion only when every failure behind it is; with no failure, a skipped
 subtest makes its item skipped (R21: seven passing subtests
 were counted as seven more passed items than were collected). The report carries the nonce the
 harness set for this one invocation, so a stale or foreign file is refused.
+
+It also names each item it counted passed, by pytest's own node id, so a
+quiet run still shows exactly which cases executed and passed (Davis,
+2026-10-16; root review of 5ca254c). A subtest is never one of them: its
+item is, and only when the item counted passed.
 """
 
 import hashlib
 import json
 import os
 
-PRODUCER = "quadratus-pytest/5"
+PRODUCER = "quadratus-pytest/6"
 MAX_FAILURES = 200
+MAX_PASSED = 3000
 
 import pytest  # noqa: E402 -- after the constants a reader of this file wants first
 
@@ -101,6 +107,7 @@ class _Recorder:
         self.subtest_types = _subtest_types()
         self.subtests = dict(passed=0, failed=0, skipped=0)
         self.pending = {}
+        self.passed_cases, self.passed_truncated = [], False
 
     def pytest_collectreport(self, report):
         if report.failed:
@@ -145,6 +152,10 @@ class _Recorder:
                 self.counts["skipped"] += 1
             elif report.passed:
                 self.counts["passed"] += 1
+                if len(self.passed_cases) >= MAX_PASSED:
+                    self.passed_truncated = True
+                else:
+                    self.passed_cases.append(report.nodeid[:300])
         elif report.failed:
             self.counts["errors"] += 1
             self._fail(report)
@@ -173,6 +184,7 @@ class _Recorder:
                     module_file=os.path.realpath(__file__), module_sha256=digest,
                     exitstatus=int(exitstatus), collected=self.collected,
                     collect_errors=self.collect_errors, counts=self.counts,
-                    failures=self.failures, truncated=self.truncated, subtests=self.subtests)
+                    failures=self.failures, truncated=self.truncated, subtests=self.subtests,
+                    passed_cases=self.passed_cases, passed_truncated=self.passed_truncated)
         with open(self.path, "w", encoding="utf-8") as out:
             json.dump(data, out)

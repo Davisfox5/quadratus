@@ -41,7 +41,7 @@ __all__ = ["GateResult", "IntegrationGate", "GateCommand", "GateReceipt", "GateS
 #: runners have no producer: their failures are never attributable, so never
 #: repaired.
 REPORT_TOKEN = "{report}"
-PRODUCER = "quadratus-pytest/5"
+PRODUCER = "quadratus-pytest/6"
 #: The node:test producer (series rule-58a4625 f3: the second cycle in a row
 #: ended on a failing node UI test with the work done and the graders
 #: passing, because a node check had no producer and so no fix call). A
@@ -57,7 +57,7 @@ PRODUCER_NODE = "quadratus-node/1"
 #: the same interpreter through the shipped runner module, which is
 #: ``unittest.main(module=None)`` with a recording result class, and writes
 #: this invocation's own report. Undeclared, unittest stays unattributable.
-PRODUCER_UNITTEST = "quadratus-unittest/1"
+PRODUCER_UNITTEST = "quadratus-unittest/2"
 PRODUCERS = (PRODUCER, PRODUCER_NODE, PRODUCER_UNITTEST)
 _PRODUCER_FILE = Path(__file__).resolve().parent / "_gate_producer" / "quadratus_gate_report.py"
 _NODE_PRODUCER_FILE = _PRODUCER_FILE.with_suffix(".mjs")
@@ -68,6 +68,8 @@ _REPORT_FAILURES = 200
 _WHEN = ("setup", "call", "teardown")
 _COUNTS = ("passed", "failed", "errors", "skipped")
 _REPORT_MAX_BYTES = 1024 * 1024
+#: The producers' bound on named passed cases (MAX_PASSED in each).
+_REPORT_PASSED = 3000
 
 
 #: How much command output a failed gate carries back. The tail, because test
@@ -184,6 +186,14 @@ def _is_node_test(argv) -> bool:
     return head in ("node", "nodejs") and "--test" in argv[1:]
 
 
+def checks_digest(commands) -> str:
+    """A digest of the approved commands as they are configured (argv, cwd,
+    timeout, required, minimum, skip): what a scratch proof was run with."""
+    from dataclasses import is_dataclass
+    body = [asdict(c) if is_dataclass(c) else repr(c) for c in commands or ()]
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:32]
+
+
 def model_facing(argv):
     """The check as a model may run it: the harness's report declaration
     removed. The token names nothing outside the harness's own run (series
@@ -260,6 +270,17 @@ def _malformed(data) -> str:
         return "failure records do not match the counts"
     if data["truncated"] and len(failures) != _REPORT_FAILURES:
         return "truncation flag without a full record"
+    if data.get("producer") in (PRODUCER, PRODUCER_UNITTEST):
+        # Named passed cases (root review of 5ca254c): one per counted pass,
+        # each distinct, or a full bounded list flagged truncated.
+        named, cut = data.get("passed_cases"), data.get("passed_truncated")
+        if (not isinstance(named, list) or type(cut) is not bool or len(named) > _REPORT_PASSED
+                or not all(isinstance(n, str) and 0 < len(n) <= 300 for n in named)
+                or len(set(named)) != len(named)):
+            return "passed cases"
+        if (len(named) != counts["passed"]) if not cut else (len(named) != _REPORT_PASSED
+                                                              or counts["passed"] <= _REPORT_PASSED):
+            return "passed cases do not match the counts"
     return ""
 
 
@@ -293,7 +314,9 @@ def read_report(path, expected) -> dict:
                 failures=[dict(nodeid=f["nodeid"][:300], when=f["when"], exc_type=(f["exc_type"] or "")[:120],
                                assertion=f["assertion"], body=f.get("body"))
                           for f in data["failures"]],
-                truncated=data["truncated"])
+                truncated=data["truncated"],
+                **({"passed_cases": list(data["passed_cases"]), "passed_truncated": data["passed_truncated"]}
+                   if "passed_cases" in data and data.get("producer") in (PRODUCER, PRODUCER_UNITTEST) else {}))
 
 
 def _report_reasons(gid, status, reason, returncode, report) -> list:

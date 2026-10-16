@@ -183,12 +183,17 @@ def test_no_command_or_private_path_reaches_a_seat_through_the_rule(tmp_path, mo
 
 
 @pytest.mark.requirements_ledger
-def test_a_quiet_run_names_no_case_and_credits_nothing(tmp_path, monkeypatch):
-    """The same sound work and executed negative test under ``pytest -q``:
-    the run passes but records no case identity, so the cited case is not
-    shown executed and the error requirement stays NOT MET. Unknown is never
-    credited (root review of 17a96d3)."""
-    replay = _run(tmp_path, monkeypatch, source=SOUND, tests=NEGATIVE, check=H.GATE,
+@pytest.mark.parametrize("declared", [True, False], ids=["own-report", "no-report"])
+def test_a_quiet_run_credits_only_the_cases_its_own_report_names(tmp_path, monkeypatch, declared):
+    """The same sound work and executed negative test under ``pytest -q``,
+    which prints no case lines. With the harness report declared, the
+    producer names each case it counted passed, so the cited case is shown
+    exactly and R1 is MET (root review of 5ca254c: the production gates are
+    quiet and declare the report). Without the report nothing names the
+    case: unknown identity credits nothing and R1 stays NOT MET."""
+    check = H.GATE if declared else H.GATE.replace(" --quadratus-report={report}", "")
+    replay = _run(tmp_path, monkeypatch, source=SOUND, tests=NEGATIVE, check=check,
                   review="NO FINDINGS\nR1: MET - tests/test_app.py::test_add_refuses_text",
                   audit="R1: MET - tests/test_app.py::test_add_refuses_text\nR2: MET - README.md")
-    assert _final(replay)["verdicts"]["R1"]["met"] is False and not replay.result.completed
+    assert _final(replay)["verdicts"]["R1"]["met"] is declared
+    assert replay.result.completed is declared, replay.result.error

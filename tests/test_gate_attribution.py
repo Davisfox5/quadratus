@@ -123,7 +123,7 @@ def _report(**changes):
                 module_sha256=EXPECTED["module_sha256"], exitstatus=1, collected=1, collect_errors=0,
                 counts=dict(passed=0, failed=1, errors=0, skipped=0),
                 failures=[dict(nodeid="t", when="call", exc_type="builtins.AssertionError", assertion=True)],
-                truncated=False)
+                truncated=False, passed_cases=[], passed_truncated=False)
     good.update(changes)
     return good
 
@@ -152,7 +152,13 @@ def test_impossible_or_mistyped_reports_are_malformed_never_product(tmp_path):
            dict(counts=dict(passed=5, failed=1, errors=0, skipped=0)),
            dict(failures=[dict(nodeid="t", when="call", exc_type="builtins.AssertionError", assertion=1)]),
            dict(failures=[dict(nodeid="t", when="later", exc_type="x", assertion=True)]),
-           dict(failures=[]), dict(truncated=True)]
+           dict(failures=[]), dict(truncated=True),
+           # Named passed cases (root review of 5ca254c): absent, mistyped,
+           # one per count, distinct, and a cut flag only with a full list.
+           dict(passed_cases=None), dict(passed_truncated=0), dict(passed_cases=["t::a"]),
+           dict(counts=dict(passed=2, failed=1, errors=0, skipped=0), collected=3, passed_cases=["t::a", "t::a"]),
+           dict(counts=dict(passed=1, failed=1, errors=0, skipped=0), collected=2, passed_cases=[""]),
+           dict(passed_truncated=True)]
     for change in bad:
         state = read_report(_written(tmp_path, _report(**change)), EXPECTED)
         assert state["state"] == "unparsable", (change, state)
