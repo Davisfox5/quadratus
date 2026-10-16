@@ -24,6 +24,13 @@
         "reason": "Davis, 2026-10-06: Jev off, keep rule routing, continue the runs to catch further engine errors. b1ff751 (#51, atop #50 atop #42) is the engine every Stage B cell ran on; CI green on all four jobs, Codex focused clearance and Claude independent review recorded on T-stage-b-timeout-fix. Gate: rule-arm continuation series on this SHA; acceptance receipt still owed on this head.",
         "by": "claude",
         "at": "2026-10-06T02:02:43Z"
+      },
+      {
+        "previous": "5a20957649ad27997b197d91c3093e612b077236",
+        "sha": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
+        "reason": "Research inbox PR #74 is a separately authorized side integration. Restore the pre-existing engine milestone candidate after recording its integration; no engine milestone qualification is implied.",
+        "by": "codex",
+        "at": "2026-10-16T02:47:51Z"
       }
     ]
   },
@@ -1955,7 +1962,7 @@
       ],
       "author": "codex",
       "reviewer": "claude",
-      "state": "reviewed",
+      "state": "integrated",
       "claimed_at": "2026-10-16T01:46:27Z",
       "acknowledged": false,
       "delivery": {
@@ -2012,8 +2019,14 @@
       "decisions": [
         "codex: 21 targeted offline tests and scoped Ruff pass. No vendor call was made. Independent review and installation on the signed-in Mac remain pending; delivery configuration alone is not end-to-end activation.",
         "unblocked by codex: cde1dad stops detached vendor groups and requires verified truth for completed status; independent Claude clearance https://github.com/Davisfox5/quadratus/pull/74#issuecomment-6206526607",
-        "codex: Independent Claude review cleared corrected delivery cde1dad; 143 offline watcher/budget/provider tests pass, including detached-process timeout cleanup. Existing Claude Max, ChatGPT Codex Sol and Grok unattended subscription calls pass. Integration and activation authorized directly by Davis; this side integration does not qualify or replace the active engine milestone. Full exact-head CI is required before merge; no digest review has started."
-      ]
+        "codex: Independent Claude review cleared corrected delivery cde1dad; 143 offline watcher/budget/provider tests pass, including detached-process timeout cleanup. Existing Claude Max, ChatGPT Codex Sol and Grok unattended subscription calls pass. Integration and activation authorized directly by Davis; this side integration does not qualify or replace the active engine milestone. Full exact-head CI is required before merge; no digest review has started.",
+        "codex: PR #74 merged as 5a20957; Mac watcher installed under Python 3.12 and loaded as gui/501/com.quadratus.research-inbox (900 seconds). GH account Davisfox5 verified; Claude Max, ChatGPT Codex Sol and Grok unattended subscription probes pass. Exactly one PR #75 assessment attempted: 20261016T024444Z-67c005ed, 1 CLI call, 440752 reported tokens, 120 seconds; stopped at unchanged 150000 per-call post-return ceiling before any task completed. Truth not-met; no research experiment or implementation ran. Incomplete report and receipt committed to draft #75 as f2e14ce; remote bytes verified. Active-run lock and remote receipt deduplication verified. No retry allowance spent; existing Friday automation unchanged. Automatic intake/review is installed, but a successful research assessment remains unproven due to this token-ceiling stop."
+      ],
+      "integrated": {
+        "sha": "cde1dada323b4f3c021291d954e412abf3a690ea",
+        "candidate": "5a20957649ad27997b197d91c3093e612b077236",
+        "at": "2026-10-16T02:47:51Z"
+      }
     }
   ],
   "receipts": [
@@ -2079,6 +2092,13 @@
       "state": "passed",
       "evidence": "https://github.com/Davisfox5/quadratus/pull/50 check suites on 17a2b5f, four jobs green 2026-10-03T21:27Z",
       "at": "2026-10-03T21:27:36Z"
+    },
+    {
+      "kind": "ci",
+      "sha": "4817157fc7c2db55282ad6bc7caac62d4b9708fb",
+      "state": "passed",
+      "evidence": "Full Python 3.11 https://github.com/Davisfox5/quadratus/actions/runs/38839526169/job/116776155510 and 3.12 https://github.com/Davisfox5/quadratus/actions/runs/38839522432/job/116776142576; Ruff included",
+      "at": "2026-10-16T02:47:51Z"
     }
   ]
 }
