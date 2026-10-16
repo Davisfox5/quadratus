@@ -2379,6 +2379,13 @@ class Session:
         #: Ordinary calls the budget refused to keep the finish, and what each
         #: would have done (run_budget.FinishReserved).
         self.finish_refusals: List[dict] = []
+        #: Tasks whose first editing call the budget refused before anything
+        #: was written (Session._settle_not_started): NOT RUN, never closed.
+        self.not_started: List[dict] = []
+        #: Editing calls the budget admitted for the current task.
+        self._task_edits_admitted = 0
+        #: Set on a parallel child Session: its refusals stay the batch's.
+        self._batch_child = False
         #: Each task's reviewer dispositions in order, for factual close-outs.
         self.review_dispositions: Dict[str, List[tuple]] = {}
         #: Evidence requests the orchestrator made and what each found
@@ -2698,7 +2705,10 @@ class Session:
                     if report and (report.blocking or report.oversized):
                         raise TaskFailed("scope", "Task exceeded its declared scope; work preserved. "
                                          + report.render(), partial=self._inspect_partial_edits(self._task_before))
-        except BaseException:
+        except BaseException as exc:
+            if isinstance(exc, FinishReserved):
+                # Refused at admission: nothing was sent, so nothing written.
+                edit_started = None
             if self._task_memory is not None:
                 try:
                     ref = self._task_memory.keep(prompt, kind="interrupted-prompt", author=key)
@@ -2709,6 +2719,7 @@ class Session:
         finally:
             self._activity('call-ended', **activity_context)
             if edit_started is not None:
+                self._task_edits_admitted += 1
                 after = self._source_fingerprint()
                 if source_before is None or after is None or after != source_before:
                     self._last_edit_started = edit_started
@@ -4354,6 +4365,7 @@ class Session:
 
     def _run_task_recorded(self, spec: TaskSpec) -> TaskSummary:
         self._gate_fixes_used = 0
+        self._task_edits_admitted = 0
         self._active_spec = spec
         self._task_before = self._capture_source()
         if self.project and self.config.allow_writes and self._task_before is None:
@@ -6118,6 +6130,14 @@ class Session:
             self._last_wave = used >= max_tasks and self._explicit_tasks is None
             try:
                 summary = self.run_task(spec)
+            except FinishReserved as exc:
+                if not self._settle_not_started(spec, exc):
+                    raise
+                # No further task can start an edit from this allowance
+                # (spend only grows): planning ends here, the slot stays
+                # spent, and the cap's own decision applies every gate.
+                used = max_tasks
+                continue
             finally:
                 self._continues = None
                 self._last_wave = False
@@ -7238,6 +7258,7 @@ class Session:
                     progress=(lambda message, tag=tag: self._note(f"[{tag}] {message}")))
                 child = Session(self.memory.goal, self.store, invoke, config=child_config,
                                 available=self._available)
+                child._batch_child = True
                 children.append(child)
                 roots.append(root)
             started = time.monotonic()
@@ -8796,6 +8817,43 @@ class Session:
         else:
             self.run_outcome.note("unverified", text, terminal=False)
         self._note(f"{task_id}: {text}")
+
+    def _settle_not_started(self, spec, exc) -> bool:
+        """A serial task whose first editing call was refused to keep the
+        finish, before any editing call ran and with the measured source
+        unchanged, is NOT RUN: recorded, never closed, its requirements left
+        uncovered, and the run goes to the finish the existing gates allow.
+        Anything else returns False and the refusal stops the run as before:
+        an explicit list (its listed work cannot be judged done), a parallel
+        child (its batch decides), or a task that already edited."""
+        if self._explicit_tasks is not None or self._batch_child or self._task_edits_admitted:
+            return False
+        state = dict(getattr(self, "in_flight", {}) or {})
+        call = state.get("invocation") or {}
+        if (not state.get("inspected") or state.get("changed") or call.get("role") != "lead"
+                or not call.get("allow_writes")):
+            return False
+        lead = str(call.get("model") or spec.lead or "")
+        self.not_started.append(dict(task=spec.task_id, lead=lead, description=(spec.description or "")[:300],
+                                     detail=str(exc)[:300]))
+        self.finish_refusals.append(dict(task=spec.task_id, what=f"first editing call by {lead}",
+                                         detail=str(exc)[:300]))
+        outcome = next((o for o in reversed(self.task_outcomes) if o.task_id == spec.task_id), None)
+        if outcome is not None:
+            outcome.closed_as = "not_started"
+            for fact in outcome.facts:
+                if fact.active and fact.detail.startswith("FinishReserved:"):
+                    fact.recovered = True
+            outcome.note("unverified", f"NOT RUN: {spec.task_id} was not started; its first editing call was "
+                         f"refused to keep the finish and nothing was written ({str(exc)[:200]})", terminal=False)
+        self.run_outcome.note("unverified", f"{spec.task_id} NOT RUN: its first editing call was refused to keep "
+                              "the finish; no later task can start an edit", terminal=False)
+        self.in_flight = {}
+        self._active_spec = self._task_memory = None
+        self._active_call = {}
+        self._note(f"{spec.task_id} not started: its first editing call was refused to keep the finish and "
+                   "nothing was written; no further task is planned")
+        return True
 
     def _dispose(self, spec, peer: str, disposition: str) -> None:
         """One reviewer's disposition of this task, in order, for the record

@@ -372,7 +372,13 @@ class Fleet:
 
     # -- invocation ----------------------------------------------------------
     def invoke(self, model_key, prompt, *, system=None, allow_writes=False):
-        with capture_invocations():
+        from .run_budget import admitted_as
+        # The write grant decides how the run budget exposes this call to
+        # the held finish (run_budget.admission). A worker is served inside
+        # its lead's call, so it never waits on calls in flight: one of them
+        # is its own parent.
+        origin = (invocation_context.get() or {}).get("origin")
+        with capture_invocations(), admitted_as(editing=allow_writes, may_wait=origin != "worker"):
             return self._invoke(model_key, prompt, system=system, allow_writes=allow_writes)
 
     def _invoke(self, model_key: str, prompt: str, *, system: Optional[str] = None,

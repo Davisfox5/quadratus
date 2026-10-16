@@ -22,6 +22,15 @@ class RunBudgetExceeded(RuntimeError):
     """Terminal run control, deliberately not a recoverable ProviderError."""
 
 
+class _Deferred(Exception):
+    """Internal to ``RunBudget.reserve``: only calls in flight keep this one
+    from fitting beside the held finish."""
+
+    def __init__(self, behind):
+        super().__init__("deferred behind calls in flight")
+        self.behind = list(behind)
+
+
 class FinishReserved(RunBudgetExceeded):
     """An ordinary call refused before it started because it would spend the
     capacity held for the run's finishing judgments (``FINISH_STAGES``).
@@ -42,6 +51,25 @@ FINISH_STAGES = ("goal", "audit")
 #: The finishing stage the current call belongs to (Session sets it around
 #: the goal question and the audit). None is ordinary work.
 finish_stage: ContextVar = ContextVar("finish_stage", default=None)
+
+
+#: How the current call is admitted against the held finish (Fleet sets it
+#: around each seat call): ``editing`` when the call holds the operator's
+#: write grant on the project, ``may_wait`` when no call it depends on is in
+#: flight (a worker served inside its lead's call never waits: the lead it
+#: would wait on is its own parent). Outside a Fleet call: neither.
+admission: ContextVar = ContextVar("budget_admission", default=None)
+
+
+@contextmanager
+def admitted_as(*, editing: bool, may_wait: bool):
+    """Mark the calls made inside as editing (or not) and as free to wait
+    for in-flight calls to settle (or not)."""
+    token = admission.set(dict(editing=bool(editing), may_wait=bool(may_wait)))
+    try:
+        yield
+    finally:
+        admission.reset(token)
 
 
 @contextmanager
@@ -231,6 +259,9 @@ class RunBudget:
         self._carried = carried
         self._started = clock() - float(carried.get('elapsed_seconds') or 0.0)
         self._lock = threading.Lock()
+        #: Signalled whenever a call settles or a held stage is released: a
+        #: call deferred behind in-flight commitments re-evaluates then.
+        self._settled = threading.Condition(self._lock)
         self._calls = int(carried.get('calls') or 0)
         self._active = {}
         self._rates = {r.model: r for r in limits.api_cost_rates}
@@ -249,6 +280,7 @@ class RunBudget:
         self._finish_started = []
         self._finish_released = []
         self._finish_refusals = []
+        self._finish_deferrals = []
         if self.path:
             # Written before any call, so an episode that ends before its
             # first call still leaves the job's record (and what it carried).
@@ -288,11 +320,19 @@ class RunBudget:
             'finish_protection': {
                 'pending': list(self._finish_pending), 'started': list(self._finish_started),
                 'released': list(self._finish_released), 'refusals': list(self._finish_refusals),
+                'deferrals': [dict(d) for d in self._finish_deferrals],
+                'editing_exposure': self._editing_exposure(),
                 'boundary': ('an admission policy, not a guarantee about reported usage: while a finishing '
                              'stage is pending, an ordinary call starts only if the attempts after it and '
-                             'the reported tokens left after its own reserve, the reserves of calls in '
-                             'flight and one full per-call reserve per pending stage still fit; a refused '
-                             'ordinary call is recorded and latches nothing'),
+                             'the reported tokens left after its own exposure and the exposure of every '
+                             'call in flight still fit one full per-call reserve per pending stage. A call '
+                             'holding the write grant is exposed at the post-return per-call ceiling '
+                             '(max_tokens_per_call), the most it can report without stopping the run; '
+                             'any other call at its reserve, an estimate. With no ceiling an editing '
+                             'call is exposed at its reserve and the hold does not bound it. A call that '
+                             'only calls in flight keep out waits, unadmitted and without a ticket, until '
+                             'one settles, then is evaluated again; a call that cannot fit even with '
+                             'nothing in flight is refused, recorded, and latches nothing'),
             },
             'wall_boundary': 'attempt timeout plus required external process supervisor',
         }
@@ -357,11 +397,21 @@ class RunBudget:
             if stage in self._finish_pending:
                 self._finish_pending.remove(stage)
                 self._finish_released.append(dict(stage=stage, why=str(why)[:300]))
+                self._settled.notify_all()
                 self._persist()
 
     def finish_pending(self):
         with self._lock:
             return list(self._finish_pending)
+
+    def _editing_exposure(self):
+        """What the hold counts for a call holding the write grant: the
+        post-return per-call ceiling, never below the reserve; None when no
+        ceiling is set (then the reserve, an estimate, and said so)."""
+        ceiling = self.limits.max_tokens_per_call
+        if ceiling is None:
+            return None
+        return max(ceiling, self.limits.reserve_tokens_per_call)
 
     def _held(self, stage):
         """The pending stages a call of ``stage`` must leave room for: all of
@@ -381,71 +431,120 @@ class RunBudget:
         hard size bound. It never raises the reserve, and the post-return
         threshold is unchanged.
         """
+        shape = admission.get() or {}
+        deferral = None
         with self._lock:
+            while True:
+                try:
+                    ticket = self._admit(transport, price_key, expected_tokens, shape, deferral)
+                except _Deferred as wait:
+                    if deferral is None:
+                        deferral = dict(attempt=self._calls + 1, editing=bool(shape.get('editing')),
+                                        behind=wait.behind, waited_seconds=0.0, outcome='waiting')
+                        self._finish_deferrals.append(deferral)
+                        self._persist()
+                    started = self._clock()
+                    # Unadmitted: no ticket, no attempt, nothing sent. The
+                    # wall still runs and is never reset by waiting.
+                    self._settled.wait(timeout=max(self._remaining(), 0.0))
+                    deferral['waited_seconds'] = round(deferral['waited_seconds'] + self._clock() - started, 3)
+                    continue
+                except RunBudgetExceeded as exc:
+                    if deferral is not None:
+                        deferral['outcome'] = ('refused' if isinstance(exc, FinishReserved)
+                                               else f'stopped: {self._reason or exc}')
+                        try:
+                            self._persist()
+                        except RunBudgetExceeded:
+                            pass
+                    raise
+                if deferral is not None:
+                    deferral['outcome'] = 'admitted'
+                    deferral['admitted_as'] = ticket
+                    try:
+                        self._persist()
+                    except RunBudgetExceeded:
+                        pass   # latched; the admitted call settles through finish()
+                return ticket, self._remaining()
+
+    def _admit(self, transport, price_key, expected_tokens, shape, deferral):
+        """One admission decision, under the lock: a ticket, or a raise.
+        ``_Deferred`` means only calls in flight stand in the way."""
+        self._check()
+        if transport not in ('api', 'cli'):
+            raise ValueError('Unknown budget transport')
+        if self.limits.max_cost_usd is not None and transport == 'api' and price_key not in self._rates:
+            self._reason = 'api_price_unavailable'
             self._check()
-            if transport not in ('api', 'cli'):
-                raise ValueError('Unknown budget transport')
-            if self.limits.max_cost_usd is not None and transport == 'api' and price_key not in self._rates:
-                self._reason = 'api_price_unavailable'
-                self._check()
-            if self._calls >= self.limits.max_calls:
-                self._reason = 'call_limit'
-                self._check()
-            stage = finish_stage.get()
-            if stage is not None and stage not in FINISH_STAGES:
-                raise ValueError('Unknown finishing stage')
-            full = self.limits.reserve_tokens_per_call
-            reserve = full
-            shaped = bool(reserve and expected_tokens and 0 < expected_tokens < reserve and stage is None)
-            if shaped:
-                # A finishing judgment never takes the summary shape.
-                reserve = int(expected_tokens)
-            left = self.limits.max_reported_tokens - (self._input + self._output)
-            if reserve and left < reserve:
-                # Refused before the call: the budget left could not hold a
-                # call of the size the operator said to expect.
-                self._reason = 'reported_token_reserve'
-                self._check()
-            held = self._held(stage)
-            if held:
-                in_flight = sum(r for _, _, r in self._active.values())
-                calls_after = self.limits.max_calls - (self._calls + 1)
-                tokens_after = left - reserve - in_flight
-                if calls_after < len(held) or (full and tokens_after < len(held) * full):
-                    # Ordinary work may not spend what the finish needs. Not
-                    # latched: the finishing calls are still admissible.
-                    self._finish_refusals.append(dict(
-                        attempt=self._calls + 1, stage=stage, held=list(held),
-                        calls_after=calls_after, tokens_after=tokens_after,
-                        held_tokens=len(held) * full, in_flight=len(self._active)))
-                    self._persist()
-                    raise FinishReserved(
-                        f"Ordinary call refused to keep the finish: {', '.join(held)} "
-                        f"need{'s' if len(held) == 1 else ''} {len(held)} call(s)"
-                        + (f" and {len(held) * full:,} reported tokens" if full else "")
-                        + f"; {calls_after} call(s) and {max(tokens_after, 0):,} tokens would remain")
-            if stage is not None and stage in self._finish_pending:
-                self._finish_pending.remove(stage)
-                self._finish_started.append(stage)
-            self._shaped += int(shaped)
-            self._calls += 1
-            ticket = self._calls
-            self._active[ticket] = (transport, price_key, reserve)
-            try:
+        if self._calls >= self.limits.max_calls:
+            self._reason = 'call_limit'
+            self._check()
+        stage = finish_stage.get()
+        if stage is not None and stage not in FINISH_STAGES:
+            raise ValueError('Unknown finishing stage')
+        full = self.limits.reserve_tokens_per_call
+        reserve = full
+        shaped = bool(reserve and expected_tokens and 0 < expected_tokens < reserve and stage is None)
+        if shaped:
+            # A finishing judgment never takes the summary shape.
+            reserve = int(expected_tokens)
+        left = self.limits.max_reported_tokens - (self._input + self._output)
+        if reserve and left < reserve:
+            # Refused before the call: the budget left could not hold a
+            # call of the size the operator said to expect.
+            self._reason = 'reported_token_reserve'
+            self._check()
+        held = self._held(stage)
+        exposure = reserve
+        if shape.get('editing') and stage is None:
+            exposure = max(reserve, self._editing_exposure() or 0)
+        if held:
+            in_flight = sum(a[3] for a in self._active.values())
+            calls_after = self.limits.max_calls - (self._calls + 1)
+            tokens_after = left - exposure - in_flight
+            if calls_after < len(held) or (full and tokens_after < len(held) * full):
+                if (shape.get('may_wait') and self._active and calls_after >= len(held)
+                        and left - exposure >= len(held) * full):
+                    # Only commitments in flight keep it out, and they
+                    # settle: wait for one, unadmitted, then decide again.
+                    raise _Deferred(sorted(self._active))
+                # Ordinary work may not spend what the finish needs. Not
+                # latched: the finishing calls are still admissible.
+                self._finish_refusals.append(dict(
+                    attempt=self._calls + 1, stage=stage, held=list(held),
+                    calls_after=calls_after, tokens_after=tokens_after,
+                    held_tokens=len(held) * full, in_flight=len(self._active),
+                    exposure=exposure, in_flight_exposure=in_flight,
+                    deferred=deferral is not None))
                 self._persist()
-            except RunBudgetExceeded:
-                self._active.pop(ticket)
-                self._calls -= 1
-                self._shaped -= int(shaped)
-                raise
-            return ticket, self._remaining()
+                raise FinishReserved(
+                    f"Ordinary call refused to keep the finish: {', '.join(held)} "
+                    f"need{'s' if len(held) == 1 else ''} {len(held)} call(s)"
+                    + (f" and {len(held) * full:,} reported tokens" if full else "")
+                    + f"; {calls_after} call(s) and {max(tokens_after, 0):,} tokens would remain")
+        if stage is not None and stage in self._finish_pending:
+            self._finish_pending.remove(stage)
+            self._finish_started.append(stage)
+        self._shaped += int(shaped)
+        self._calls += 1
+        ticket = self._calls
+        self._active[ticket] = (transport, price_key, reserve, exposure)
+        try:
+            self._persist()
+        except RunBudgetExceeded:
+            self._active.pop(ticket)
+            self._calls -= 1
+            self._shaped -= int(shaped)
+            raise
+        return ticket
 
     def finish(self, ticket, usage, *, native_children=(), reply='', price_key=None):
         """Account once, latch terminal conditions and reject further calls."""
         with self._lock:
             if ticket not in self._active:
                 raise RuntimeError('Unknown or already-finished budget reservation')
-            transport, reserved_key, _ = self._active.pop(ticket)
+            transport, reserved_key, _, _ = self._active.pop(ticket)
+            self._settled.notify_all()
             usage = usage if isinstance(usage, dict) else {}
             counts = [usage.get('input_tokens'), usage.get('output_tokens')]
             if any(type(n) is not int or n < 0 for n in counts):

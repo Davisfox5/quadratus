@@ -241,15 +241,21 @@ def test_j23_two_caps_in_a_row_are_the_breaker(tmp_path, monkeypatch):
 
 # -- J24 / J25 / J26 budget, transport, operator ------------------------------------------
 
-def test_j24_budget_exhaustion_is_a_budget_stop_with_the_task_stopped(tmp_path, monkeypatch):
+def test_j24_a_refused_first_editor_is_not_run_and_the_goal_question_follows(tmp_path, monkeypatch):
     from quadratus.run_budget import RunLimits
     replay = _run(tmp_path, monkeypatch, Script(), limits=RunLimits(max_calls=2, max_reported_tokens=6_000_000,
                                                                     wall_seconds=600, max_concurrent_workers=2))
     # Two calls: the goal question's held call refuses the lead before the
-    # call limit is reached (Davis, 2026-10-16). Still a budget stop.
-    assert replay.result.error.startswith("FinishReserved")
+    # call limit is reached (Davis, 2026-10-16). Old (ba0e2be): a budget
+    # stop on FinishReserved with neither finishing judgment. The lead was
+    # the task's first editor and nothing was written, so t1 is NOT RUN and
+    # the held goal question is asked with the second call (root
+    # reconciliation of R23); unconfirmed, the cap names the stop.
+    assert [c.role for c in replay.calls] == ["orchestrator", "orchestrator"]
+    assert _task(replay, "t1")["closed_as"] == "not_started"
+    assert [n["task"] for n in H.result_json(replay)["not_started"]] == ["t1"]
     stop = _stop(replay)
-    assert stop["kind"] == "budget" and stop["legacy"] == "FinishReserved"
+    assert stop["legacy"] == "GoalUnconfirmedAtCap" and not replay.result.completed
 
 
 def test_j25_a_recovered_transport_failure_is_history_not_a_block(tmp_path, monkeypatch):

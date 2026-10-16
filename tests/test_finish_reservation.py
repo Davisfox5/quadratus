@@ -10,6 +10,8 @@ still admitted under every existing limit. No limit moves.
 """
 
 import json
+import threading
+import time
 
 import pytest
 
@@ -19,6 +21,7 @@ from quadratus.run_budget import (
     RunBudget,
     RunBudgetExceeded,
     RunLimits,
+    admitted_as,
     finishing,
 )
 
@@ -206,3 +209,175 @@ def test_the_r22_account_replayed_through_admission():
     assert [r for r in refused if r[2] != "closeout"] == [(17, "t2", "recheck"), (19, "t2", "recheck"),
                                                            (20, "t3", "recheck")]
 
+
+
+# -- editing exposure and deferral (root reconciliation of R23, 6208197375) ------
+
+def _editing(budget, tokens=None, *, may_wait=True):
+    """Admit one editing call; finish it with ``tokens`` when given."""
+    with admitted_as(editing=True, may_wait=may_wait):
+        ticket, _ = budget.reserve()
+    if tokens is not None:
+        budget.finish(ticket, dict(input_tokens=tokens, output_tokens=0))
+    return ticket
+
+
+def _left(budget, left):
+    """Spend down to ``left`` reported tokens with ordinary calls, each
+    under the per-call ceiling."""
+    gone = budget.limits.max_reported_tokens - left
+    while gone:
+        step = min(gone, 450_000)
+        _spend(budget, step)
+        gone -= step
+
+
+def test_an_editing_call_is_held_at_the_per_call_ceiling_not_its_reserve():
+    """Old: an editing call needed only its 200k reserve beside the held
+    400k, so with 670,394 left (R23's t3 lead) it started, returned 346,846
+    and left the goal question itself unadmissible. New: it is exposed at
+    the 500k post-return ceiling, refused before it starts, and a call that
+    does not hold the write grant still meets its reserve as before."""
+    old = RunBudget(RunLimits(**R22))
+    old.protect_finish(FINISH_STAGES)
+    _left(old, 670_394)
+    _spend(old, 346_846)                   # admitted on its reserve alone
+    with pytest.raises(FinishReserved, match="audit needs 1 call"):
+        with finishing("goal"):
+            old.reserve()
+
+    new = RunBudget(RunLimits(**R22))
+    new.protect_finish(FINISH_STAGES)
+    _left(new, 670_394)
+    with pytest.raises(FinishReserved):
+        _editing(new)
+    refusal = new.snapshot()["finish_protection"]["refusals"][-1]
+    assert refusal["exposure"] == 500_000 and refusal["tokens_after"] == 170_394
+    _spend(new, 100_000)                   # a review: 670,394 - 200,000 >= 400,000
+    with finishing("goal"):
+        ticket, _ = new.reserve()
+    new.finish(ticket, dict(input_tokens=60_000, output_tokens=0))
+    with finishing("audit"):
+        new.reserve()
+
+
+@pytest.mark.parametrize("used", [200_001, 346_846, 500_000])
+def test_admitted_editing_use_up_to_the_ceiling_never_eats_the_finish(used):
+    budget = RunBudget(RunLimits(**R22))
+    budget.protect_finish(FINISH_STAGES)
+    _left(budget, 900_000)                 # exactly 500,000 + 400,000
+    _editing(budget, used)
+    with finishing("goal"):
+        ticket, _ = budget.reserve()
+    budget.finish(ticket, dict(input_tokens=200_000, output_tokens=0))
+    with finishing("audit"):
+        ticket, _ = budget.reserve()
+    assert budget.snapshot()["finish_protection"]["started"] == ["goal", "audit"]
+
+
+def test_without_a_per_call_ceiling_an_editing_call_is_held_at_its_reserve_and_says_so():
+    limits = dict(R22, max_tokens_per_call=None)
+    budget = RunBudget(RunLimits(**limits))
+    budget.protect_finish(FINISH_STAGES)
+    _left(budget, 600_000)
+    _editing(budget, 0)                    # 600,000 - 200,000 >= 400,000
+    record = budget.snapshot()["finish_protection"]
+    assert record["editing_exposure"] is None and "the hold does not bound it" in record["boundary"]
+
+
+def _wait_for(predicate, seconds=5.0):
+    deadline = time.monotonic() + seconds
+    while not predicate():
+        assert time.monotonic() < deadline, "condition never held"
+        time.sleep(0.01)
+
+
+def _deferred(budget):
+    return budget.snapshot()["finish_protection"]["deferrals"]
+
+
+def test_an_edit_kept_out_only_by_an_edit_in_flight_waits_unadmitted_and_starts_once_it_settles():
+    """R23's t2 revision: 1,374,424 left with t1's revision in flight. Both
+    exposed at 500k leaves 374,424 < 400,000, so it is not admitted; alone
+    it fits, so it waits with no ticket and no attempt, and starts once the
+    in-flight revision settles and the room is there."""
+    budget = RunBudget(RunLimits(**R22))
+    budget.protect_finish(FINISH_STAGES)
+    _left(budget, 1_374_424)
+    first = _editing(budget)
+    admitted = []
+    thread = threading.Thread(target=lambda: admitted.append(_editing(budget)), daemon=True)
+    thread.start()
+    _wait_for(lambda: _deferred(budget))
+    snapshot = budget.snapshot()
+    assert snapshot["reserved_attempts"] == first and snapshot["in_flight"] == 1 and not admitted
+    assert _deferred(budget)[0]["outcome"] == "waiting" and _deferred(budget)[0]["behind"] == [first]
+    assert _deferred(budget)[0]["attempt"] == first + 1
+    budget.finish(first, dict(input_tokens=300_000, output_tokens=0))
+    thread.join(5)
+    assert admitted == [first + 1] and budget.snapshot()["reserved_attempts"] == first + 1
+    record = _deferred(budget)[0]
+    assert record["outcome"] == "admitted" and record["admitted_as"] == first + 1 and record["waited_seconds"] >= 0
+    assert budget.snapshot()["finish_protection"]["refusals"] == []
+
+
+def test_a_deferred_edit_is_refused_when_the_settled_call_leaves_no_room():
+    budget = RunBudget(RunLimits(**R22))
+    budget.protect_finish(FINISH_STAGES)
+    _left(budget, 1_374_424)
+    first = _editing(budget)
+    errors = []
+
+    def second():
+        try:
+            _editing(budget)
+        except FinishReserved as exc:
+            errors.append(exc)
+    thread = threading.Thread(target=second, daemon=True)
+    thread.start()
+    _wait_for(lambda: _deferred(budget))
+    budget.finish(first, dict(input_tokens=480_000, output_tokens=0))   # 894,424 left
+    thread.join(5)
+    assert len(errors) == 1 and _deferred(budget)[0]["outcome"] == "refused"
+    refusal = budget.snapshot()["finish_protection"]["refusals"][-1]
+    assert refusal["deferred"] is True and refusal["in_flight"] == 0
+    assert budget.snapshot()["reserved_attempts"] == first and budget.snapshot()["stop_reason"] == ""
+
+
+def test_a_call_that_cannot_fit_alone_or_may_not_wait_is_refused_at_once():
+    budget = RunBudget(RunLimits(**R22))
+    budget.protect_finish(FINISH_STAGES)
+    _left(budget, 1_000_000)
+    _editing(budget)                       # 1,000,000 - 500,000 >= 400,000
+    # A worker served inside its lead's call never waits on calls in flight.
+    with pytest.raises(FinishReserved):
+        _editing(budget, may_wait=False)
+    # A review kept out by the edit in flight: outside a Fleet call there is
+    # no admission shape, so no waiting either (1,000,000 - 200,000 - 500,000).
+    with pytest.raises(FinishReserved):
+        _spend(budget, 0)
+    assert _deferred(budget) == []
+
+    alone = RunBudget(RunLimits(**R22))
+    alone.protect_finish(FINISH_STAGES)
+    _left(alone, 850_000)
+    ticket, _ = alone.reserve()           # a review in flight
+    with pytest.raises(FinishReserved):
+        _editing(alone)                    # 850,000 - 500,000 < 400,000 even alone
+    assert _deferred(alone) == []
+    alone.finish(ticket, dict(input_tokens=0, output_tokens=0))
+
+
+def test_the_wall_ends_a_deferral_with_no_attempt_and_no_reset():
+    limits = dict(R22, wall_seconds=0.5)
+    budget = RunBudget(RunLimits(**limits))
+    budget.protect_finish(FINISH_STAGES)
+    _left(budget, 1_374_424)
+    first = _editing(budget)
+    with pytest.raises(RunBudgetExceeded, match="wall_deadline") as caught:
+        _editing(budget)
+    assert not isinstance(caught.value, FinishReserved)
+    snapshot = budget.snapshot()
+    assert snapshot["reserved_attempts"] == first and snapshot["stop_reason"] == "wall_deadline"
+    assert _deferred(budget)[0]["outcome"] == "stopped: wall_deadline"
+    assert snapshot["elapsed_seconds"] >= 0.5

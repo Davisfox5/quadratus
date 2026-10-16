@@ -1064,6 +1064,29 @@ Key design decisions already settled:
   seat's judgment. The R22 ledger replayed through the hold refuses row 17
   (t2's recheck), which leaves its finding open: the hold makes the stop
   honest, it does not make that run finish.
+- **An editing call is held at the per-call ceiling, and a first editor
+  refused before any write is NOT RUN** (root reconciliation of R23 on #73,
+  6208197375). R23's t3 lead was admitted on its 200k reserve with 670,394
+  left, reported 346,846, and from then on the goal question itself could
+  not fit beside the audit's hold; the scope trim was only where that
+  surfaced. The hold now exposes a call holding the write grant
+  (`Fleet.invoke` sets `run_budget.admitted_as`) at `max_tokens_per_call`,
+  the most it can report without stopping the run, and counts each call in
+  flight at its own exposure; every other call stays at its reserve, an
+  estimate, and with no ceiling the record says the hold does not bound an
+  edit. A call kept out only by calls in flight (it fits alone) waits on the
+  budget's condition with no ticket, attempt or request and is decided
+  again when one settles (`finish_protection.deferrals`); the wall still
+  runs and is never reset, and a worker never waits, because its lead is in
+  flight. Root's zero-model replay: t3's lead refused before any write, and
+  t2's revision deferred behind t1's. A serial task whose first editing call
+  is refused, with no edit admitted and the measured source unchanged, is
+  `not_started` (`Session._settle_not_started`, `not_started` in
+  result.json): never closed, no coverage, no further planning, and the
+  cap's own decision runs every gate. Partial work blocks the goal
+  question; a not-started task blocks completion by name ("NOT RUN"). A
+  refusal after any edit, in an explicit list or in a parallel child stops
+  the run exactly as before; the R23 trim refusal is unchanged.
 - **A trim gets what the harness measured** (R20 on c7e9449). t2's one
   scope trim, told only the total, spent 8 rounds and 373,366 reported
   tokens, more than its draft, and the run ended with 141,947 left under the

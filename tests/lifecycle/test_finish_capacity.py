@@ -168,3 +168,89 @@ def test_a_resumed_episode_holds_the_same_finish_from_the_carried_spend(tmp_path
     assert budget["finish_protection"]["started"] == ["goal", "audit"] and budget["finish_protection"]["pending"] == []
     assert budget["reserved_attempts"] <= 12 and budget["stop_reason"] == ""
     assert json.loads((second / "result.json").read_text())["completed"]
+
+
+# -- a refused first editor is NOT RUN, and the finish the gates allow follows ----
+# (root reconciliation of R23, 6208197375). Every replayed call reports 110
+# tokens. With a 1,000 reserve and a 3,000 per-call ceiling, an editing call
+# needs 3,000 + 2,000 held, so it starts only while 5,000 tokens remain; a
+# review, or the goal question beside the audit's hold, needs 3,000 or 2,000.
+
+ONE = "REQUIREMENTS:\nR1: add(a, b) returns the sum\n" + _simple("app.py", "Implement add in app.py.", "R1")
+MORE = _simple("app.py", "Add a docstring to add in app.py.", "R1")
+
+
+def _tight(total):
+    return RunLimits(max_calls=40, max_reported_tokens=total, wall_seconds=600, max_concurrent_workers=2,
+                     reserve_tokens_per_call=1_000, max_tokens_per_call=3_000)
+
+
+@pytest.mark.requirements_ledger
+def test_a_first_editor_refused_before_any_write_is_not_run_and_the_finish_follows(tmp_path, monkeypatch):
+    """5,440 tokens. After t1 and the planning call for t2, 4,780 remain:
+    t2's lead is exposed at 3,000 and refused before it starts. Old: that
+    refusal stopped the run with neither finishing judgment. Now t2 is NOT
+    RUN, nothing is planned after it, the goal question and the audit run,
+    and the run still is not complete: the work the plan asked for was not
+    done."""
+    script = _script([ONE, MORE], t2_review="NO FINDINGS\nR1: MET - app.py")
+    script.overrides["auditor"] = lambda call, replay: "R1: MET - app.py"
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(5_440),
+                   record_complete=False)
+    assert not [c for c in replay.calls if c.task == "t2"], "t2's lead never started"
+    assert _roles(replay)[-3:] == [("run", "orchestrator"), ("run", "orchestrator"), ("audit", "auditor")]
+    assert len(replay.of("orchestrator")) == 3, "plan, plan t2, goal question: no planning after the refusal"
+    result = H.result_json(replay)
+    assert [n["task"] for n in result["not_started"]] == ["t2"]
+    assert result["finish_refusals"][-1]["what"] == "first editing call by " + result["not_started"][0]["lead"]
+    t2 = next(t for t in result["workflow"]["tasks"] if t["task_id"] == "t2")
+    assert t2["closed_as"] == "not_started"
+    assert not replay.result.completed and "t2 NOT RUN" in replay.result.error
+    assert result["requirements"]["audits"][-1]["verdicts"]["R1"]["met"] is True
+    budget = _budget(replay)
+    refusal = budget["finish_protection"]["refusals"][0]
+    assert refusal["exposure"] == 3_000 and refusal["tokens_after"] == 4_780 - 3_000
+    assert budget["finish_protection"]["started"] == ["goal", "audit"] and budget["stop_reason"] == ""
+
+
+@pytest.mark.requirements_ledger
+def test_a_not_run_task_never_carries_the_finish_past_partial_debt(tmp_path, monkeypatch):
+    """5,330 tokens: t1's lead stops at its turn cap (partial), then t2's
+    first editing call is refused. t2 is NOT RUN; t1's capped work is still
+    debt, so the cap's own decision stops before the goal question and no
+    audit runs."""
+    from quadratus.config import Settings
+
+    def lead(call, replay):
+        H.write(call, {"app.py": FIXED})
+        return H.claude_cap("Wrote add; tests not run yet.", num_turns=14)
+    script = _script([PLAN_1, PLAN_2])
+    script.overrides["lead"] = lead
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(5_330),
+                   record_complete=False, settings=Settings(backend="cli", lead_max_turns=14))
+    assert [n["task"] for n in H.result_json(replay)["not_started"]] == ["t2"]
+    assert len(replay.of("orchestrator")) == 2 and not replay.of("auditor"), "no goal question, no audit"
+    assert replay.result.error.startswith("GoalUnconfirmedAtCap") and "t1 not continued" in replay.result.error
+    assert _budget(replay)["finish_protection"]["pending"] == ["goal", "audit"]
+
+
+@pytest.mark.requirements_ledger
+def test_a_refusal_after_the_task_has_edited_still_stops_the_run(tmp_path, monkeypatch):
+    """5,660 tokens: t2's lead is admitted with exactly 5,000 left, writes
+    README.md and asks to FETCH; its second turn is refused. Work was
+    written, so this is not a task that never started: the run stops on the
+    refusal as before, with the edit kept and nothing recorded NOT RUN."""
+    def lead(call, replay):
+        if call.task == "t1":
+            H.write(call, {"app.py": FIXED})
+            return 'Implemented add.\nCHANGED: ["app.py"]'
+        H.write(call, {"README.md": README})
+        return "FETCH: no-such-artifact"
+    script = _script([PLAN_1, PLAN_2])
+    script.overrides["lead"] = lead
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, limits=_tight(5_660),
+                   record_complete=False)
+    assert len([c for c in replay.calls if c.task == "t2"]) == 1
+    assert replay.result.error.startswith("FinishReserved") and H.result_json(replay)["not_started"] == []
+    assert (replay.project / "README.md").read_text() == README
+    assert not replay.of("auditor")

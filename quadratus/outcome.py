@@ -163,7 +163,9 @@ class TaskOutcome:
     #: Places where a legacy applicability decision disagreed with the
     #: contract's derived requirement. Recorded, never acted on (phase 2).
     mismatches: List[str] = field(default_factory=list)
-    #: Legacy mirror: "closed", "turn_limited", "failed" or "stopped:<Exception>".
+    #: Legacy mirror: "closed", "turn_limited", "failed", "not_started" (a
+    #: serial task whose first editing call was refused to keep the finish,
+    #: nothing written) or "stopped:<Exception>".
     #: Temporary; removed in phase 3 when history reads outcomes.
     closed_as: str = "open"
 
@@ -471,6 +473,11 @@ def completion_blockers(tasks: List[TaskOutcome], *, owed: Optional[List[str]] =
         tid = task.task_id
         if task.closed_as == "open":
             blockers.append(f"{tid} never closed")
+            continue
+        if task.closed_as == "not_started":
+            # Its first editing call was refused to keep the finish: the
+            # work the plan asked for was never done (session._settle_not_started).
+            blockers.append(f"{tid} NOT RUN: not started, its first editing call refused to keep the finish")
             continue
         blockers += [f"record {m}" for m in missing_facts(task)]
         blockers += [f"{tid}.{fact.kind}: {fact.detail[:120]}" for fact in task.active if fact.terminal]
