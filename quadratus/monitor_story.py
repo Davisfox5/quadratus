@@ -182,6 +182,8 @@ def _activity_line(event, work=None, reply_text=None, check_text=None):
             return f'{_step(failed[1])}: tests failed; planning a correction'
         if 'RunBudgetExceeded' in message and message.startswith('call ended:'):
             return 'Usage limit reached; the run is stopping'
+        if 'FinishReserved' in message and message.startswith('call ended:'):
+            return 'Ordinary work stopped to keep room for the goal check and audit'
     return None
 
 

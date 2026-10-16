@@ -189,11 +189,18 @@ def test_a_reassessment_the_budget_cannot_admit_stops_the_run_with_the_request_o
         pytest.skip("no scratch sandbox here")
     calibration = _run(tmp_path / "calibrate", monkeypatch)
     before = next(i for i, c in enumerate(calibration.calls) if REASSESS in c.prompt)
-    limits = RunLimits(max_calls=before, max_reported_tokens=6_000_000, wall_seconds=600,
+    # The reassessment follows the DONE audit, which has started; the cap's
+    # goal question is still held one call (Davis, 2026-10-16), so with one
+    # call over the reassessment's position it is the ordinary call refused.
+    held = json.loads((Path(calibration.result.run_dir) / "budget.json").read_text())["finish_protection"]
+    assert held["started"] == ["audit"] and held["pending"] == ["goal"], held
+    limits = RunLimits(max_calls=before + 1, max_reported_tokens=6_000_000, wall_seconds=600,
                        max_concurrent_workers=2)
     replay = _run(tmp_path / "limited", monkeypatch, limits=limits)
     assert not _reassessments(replay) and not replay.result.completed
-    assert "call_limit" in (replay.result.error or "") or "RunBudgetExceeded" in (replay.result.error or "")
+    # The reassessment would spend the cap's held goal-question call, so it is
+    # refused as FinishReserved, a budget stop (Davis, 2026-10-16).
+    assert "FinishReserved" in (replay.result.error or "")
     (record,) = _records(replay)
     assert record["receipt"]["status"] == "passed" and record["disposition"] == "held: reassessment not made"
 
@@ -358,7 +365,13 @@ def _ratio_run(tmp_path, monkeypatch, *, source=_SAFE, test="zero", keeps=False,
 
 
 def _writers(replay):
-    return [c for c in replay.calls if c.role in ("lead", "revision", "gate-fix", "gate_fix", "trim", "design-fix")]
+    """Writer calls made after the final audit started (none may be): the
+    lead's revision answering an UNVERIFIED error-clause review line comes
+    before the cap (Davis, 2026-10-16) and is not one of them."""
+    roles = ("lead", "revision", "gate-fix", "gate_fix", "trim", "design-fix")
+    audit = next((i for i, c in enumerate(replay.calls) if c.role == "auditor"), len(replay.calls))
+    first = [c for c in replay.calls if c.role == "lead"][:1]
+    return first + [c for c in replay.calls[audit:] if c.role in roles]
 
 
 @pytest.mark.requirements_ledger
@@ -729,7 +742,9 @@ def test_a_non_blocking_review_warning_reaches_the_final_audit_labelled_never_as
     (audit,) = replay.of("auditor")
     section = audit.prompt.split("## Earlier task-review observations")
     if case == "resolved-blocking":
-        assert len(section) == 1, "a resolved BLOCKING finding is history, not carried"
+        # The harness's own hold note on the unexecuted MET may be carried;
+        # the resolved BLOCKING text never is.
+        assert _NOTE not in "".join(section[1:]), "a resolved BLOCKING finding is history, not carried"
     else:
         assert len(section) == 2, "the warning reached the final audit"
         carried = section[1]
@@ -737,7 +752,12 @@ def test_a_non_blocking_review_warning_reaches_the_final_audit_labelled_never_as
         label = "written about an earlier source" if two else "written about the current source"
         assert f"t1 review, about R1, {label}" in carried
         assert "neither a finding nor an approval" in carried
-    assert replay.result.completed, "an observation decides nothing by itself"
+    # An observation decides nothing by itself: R1 is an error clause the
+    # auditor cites by file only, so the executed-evidence rule (not the
+    # observation) holds it NOT MET (Davis, 2026-10-16).
+    lowered = H.result_json(replay)["requirements"]["audits"][-1]["lowered"]
+    assert [entry["requirement"] for entry in lowered] == ["R1"] and "error or refusal" in lowered[0]["reason"]
+    assert not replay.result.completed
 
 
 

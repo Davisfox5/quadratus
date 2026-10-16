@@ -1044,12 +1044,16 @@ Key design decisions already settled:
   its source, open debt, NOT RUN, scratch proofs and artifact pointers, no
   invented decision or map note; not the direct tier's text. A requirement
   whose own text is about errors, refusals or invalid input
-  (`_error_clause`) is accepted only on executed evidence
-  (`_executed_cases`: a cited `test_*` case a complete approved run executed
-  and passed on the current source; in a review, also that review's passing
-  scratch demonstration). The audit lowers any other MET to NOT MET; a
-  review's other MET becomes an UNVERIFIED line the lead answers, never an
-  approval. Whether the executed test establishes the clause stays the
+  (`_error_clause`) is accepted only on executed evidence, by exact case
+  identity (`_cited_cases`, `_executed_cases`; root review of 17a96d3): a
+  cited `file::[Class::]case` a complete approved run's case record shows
+  executed and passed on the current source (a quiet or unittest run names
+  no case and credits nothing; a same-named case elsewhere never stands
+  in), or a case of a scratch demonstration the harness ran and passed in
+  full, cited on that requirement's own MET line (in the review), or bound
+  by provenance (source and checks identity, covered requirements) at the
+  final audit. The audit lowers any other MET to NOT MET; a review's other
+  MET becomes an UNVERIFIED line the lead answers, never an approval. Whether the executed test establishes the clause stays the
   seat's judgment. The R22 ledger replayed through the hold refuses row 17
   (t2's recheck), which leaves its finding open: the hold makes the stop
   honest, it does not make that run finish.

@@ -1270,8 +1270,11 @@ def test_a_capped_revision_in_the_last_slot_meets_the_reviewer_whose_findings_it
         assert _FINDING in rechecks[0].prompt and "stopped at its turn limit" in rechecks[0].prompt
         assert "while revising" in rechecks[0].prompt
         assert result["turn_limited_tasks"] == [], "the rechecked task is not unfinished debt"
+        # The last slot closes on the harness's record; an open finding then
+        # stops the run before the cap's goal question.
+        after = ["orchestrator"] if case == "resolved" else []
         assert [c.role for c in replay.calls][:6] == ["orchestrator", "lead", "collaborator", "revision",
-                                                      "recheck", "orchestrator"]
+                                                      "recheck"] + after
         assert replay.artifact_texts("factual-closeout"), "the last slot closes on the harness's record"
         if case == "resolved":
             assert replay.result.completed, "completed only on the orchestrator's answer at the cap"
@@ -1820,6 +1823,10 @@ def test_the_final_audit_is_admitted_exactly_at_the_unchanged_call_reserve(tmp_p
     with exactly the reserve left the auditor is invoked, one token less
     and it is refused with the run held incomplete."""
     from tests.lifecycle.test_lifecycle_matrix import FIXED as fixed
+    # The finish hold (Davis, 2026-10-16) would refuse an earlier ordinary
+    # call; this case pins the limit itself, so the hold is off here and is
+    # controlled in tests/lifecycle/test_finish_capacity.py.
+    monkeypatch.setattr("quadratus.session.Session._protect_finish", lambda self: None)
     declared = "REQUIREMENTS:\nR1: " + _R1 + "\n" + DECL_T1 + "\nCOVERS: R1"
     reserve = 1000
 

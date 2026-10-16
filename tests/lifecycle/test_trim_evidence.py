@@ -201,6 +201,10 @@ def test_a_reserve_starved_terminal_keeps_its_own_stop_and_outcome(tmp_path, mon
     Every call is admitted (each starts with at least 610 left against a 600
     reserve) and the run ends with 500, under it."""
     from quadratus.run_budget import RunLimits
+    # The finish hold (Davis, 2026-10-16) would refuse an earlier ordinary
+    # call; this case pins the limit itself, so the hold is off here and is
+    # controlled in tests/lifecycle/test_finish_capacity.py.
+    monkeypatch.setattr("quadratus.session.Session._protect_finish", lambda self: None)
     declared = "REQUIREMENTS:\nR1: " + _R1 + "\n" + DECL_SIMPLE + "\nCOVERS: R1"
 
     def lead(call, replay):

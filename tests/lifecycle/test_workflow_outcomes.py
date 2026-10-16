@@ -245,9 +245,11 @@ def test_j24_budget_exhaustion_is_a_budget_stop_with_the_task_stopped(tmp_path, 
     from quadratus.run_budget import RunLimits
     replay = _run(tmp_path, monkeypatch, Script(), limits=RunLimits(max_calls=2, max_reported_tokens=6_000_000,
                                                                     wall_seconds=600, max_concurrent_workers=2))
-    assert replay.result.error.startswith("RunBudgetExceeded")
+    # Two calls: the goal question's held call refuses the lead before the
+    # call limit is reached (Davis, 2026-10-16). Still a budget stop.
+    assert replay.result.error.startswith("FinishReserved")
     stop = _stop(replay)
-    assert stop["kind"] == "budget" and stop["legacy"] == "RunBudgetExceeded"
+    assert stop["kind"] == "budget" and stop["legacy"] == "FinishReserved"
 
 
 def test_j25_a_recovered_transport_failure_is_history_not_a_block(tmp_path, monkeypatch):

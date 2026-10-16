@@ -1401,7 +1401,7 @@ def _check_runs(check: dict, root=None) -> List[dict]:
         qualified_names = set((row["cases"] or {}).get("qualified") or ()) if isinstance(row["cases"], dict) else set()
         executed_names = names[2] if names[2] is not None else Counter()
         out.append(dict(id=row["id"], passed=row["passed"], required=row["required"], filtered=filtered,
-                        argv=list(argv), cwd=row["cwd"],
+                        cwd=row["cwd"],
                         tests=tests, skipped=skipped_count(SimpleNamespace(output=row["output"],
                                                                            report=row["report"])),
                         files=set(operand_paths(argv, root, row["cwd"])),
@@ -1585,38 +1585,6 @@ def _enclosing_call(text: str, at: int):
                 return text[start:i + 1]
         i += 1
     return None
-
-
-def _case_name(key: str) -> str:
-    """The test function a case key names: pytest ``file::Class::name[param]``
-    or unittest verbose ``name (module.Class...)``."""
-    key = str(key)
-    if "::" in key:
-        return key.split("::")[-1].split("[", 1)[0]
-    return key.split(" ", 1)[0].split("[", 1)[0]
-
-
-def _run_discovers(run: dict, path: str, root) -> bool:
-    """Whether ``run``'s own discovery ran the test file ``path``: pytest
-    over its directory operands (or its working directory), or ``python -m
-    unittest discover`` from its start directory with the default pattern."""
-    import fnmatch
-
-    from .integration import _test_family, discovers_added_tests, model_facing
-    argv = [str(a) for a in model_facing(run.get("argv") or [])]
-    if not argv or root is None:
-        return False
-    base = (Path(root) / (run.get("cwd") or ".")).resolve()
-    if not discovers_added_tests(argv, base):
-        return False
-    target = (Path(root) / path).resolve()
-    if argv[1:4] == ["-m", "unittest", "discover"]:
-        rest = argv[4:]
-        start = rest[rest.index("-s") + 1] if "-s" in rest[:-1] else "."
-        return target.is_relative_to((base / start).resolve()) and fnmatch.fnmatch(target.name, "test*.py")
-    rest = argv[3:] if argv[1:3] == ["-m", "pytest"] else argv[1:]
-    dirs = [(base / a).resolve() for a in rest if not a.startswith("-")] or [base]
-    return bool(_test_family(path)) and any(target.is_relative_to(d) for d in dirs)
 
 
 def _complete_run(run: dict) -> bool:
@@ -2231,6 +2199,30 @@ _EXECUTED_ERROR_RULE = (
     "values, conflicts, and the representation or range boundaries the implementation exposes) and "
     "that the approved checks ran and passed on this source, or demonstrate it with a scratch test "
     "the harness runs. A MET without that is not counted, whatever it says.")
+
+
+_CASE_CITATION = re.compile(r"([\w./-]+\.[A-Za-z]\w*)::((?:[A-Za-z_]\w*::)*test\w*(?:\[[^\]\s]*\])?)")
+
+
+def _cited_cases(text: str) -> List[str]:
+    """Explicit ``file::[Class::]name[param]`` case citations, as written:
+    the file and class a seat named stay bound to the case."""
+    return [f"{m.group(1).lstrip('./') if m.group(1).startswith('./') else m.group(1)}::{m.group(2)}"
+            for m in _CASE_CITATION.finditer(text or "")]
+
+
+def _proof_cases(proof: dict) -> set:
+    """The ``file::case`` identities a harness-run scratch proof shows
+    passed (its rows, ``integration.scratch_receipt``), with a parametrized
+    case's base name when the proof passed in full."""
+    out = set()
+    for row in (proof or {}).get("cases") or ():
+        label, _, outcome = str(row).rpartition(": ")
+        if outcome.strip() != "passed" or "::" not in label:
+            continue
+        out.add(label)
+        out.add(label.split("[", 1)[0])
+    return out
 
 
 def _met_lines(text: str) -> Dict[str, str]:
@@ -8605,41 +8597,63 @@ class Session:
                 + "\nA requirement whose only evidence is a file listed here is NOT MET, and so is a "
                 "requirement a task covering it reported NOT RUN: name what did not run.")
 
-    def _executed_cases(self, citations) -> List[str]:
-        """The cited ``file::test_name`` cases a complete approved run executed
-        and passed on the current source (Davis, 2026-10-16).
+    def _executed_cases(self, citations, rid=None) -> List[str]:
+        """The cited cases shown executed and passed on the current source,
+        each by its exact identity (Davis, 2026-10-16; root review of 17a96d3).
 
-        Source-bound: only a recorded task check or observed check whose
-        source is the current fingerprint counts, never an earlier source.
-        A run counts only when it is complete (passing, required, unfiltered,
-        cases executed, a known zero skips) and it ran the cited file, by name
-        or by its own discovery. Where the run recorded case identity, the
-        cited case must be among the executed names; where it did not, a
-        complete run of the file with no skip stands for its cases. A model's
-        word that something was tested is never one of these."""
+        ``citations`` are explicit ``file::[Class::]name[param]`` cases
+        (``_cited_cases``); a bare function name is never resolved across
+        files. A case counts through one of two routes, both bound to the
+        current source:
+
+        - a complete approved run (passing, required, unfiltered, cases
+          executed, a known zero skips) in a recorded task check or observed
+          check on this source whose case record names this exact case
+          (pytest's file-qualified lines). A run that recorded no case
+          identity (a quiet runner, unittest, a subtest population) credits
+          nothing, and a same-named case in another file or class is never
+          this one;
+        - with ``rid``, a scratch demonstration the harness ran and passed in
+          full in a review of that requirement, on this source and these
+          checks (``scratch_proofs`` provenance), whose rows name this exact
+          case as passed.
+
+        Nothing here is a verdict: the seat still judges whether the case
+        establishes the requirement. A model's word is never a route."""
         if not self.project:
             return []
+        import posixpath
         current = self._source_fingerprint()
+        root = Path(self.project)
         records = [c for c in list(self.checks) + list(self.review_checks)
                    if current and c.get("source") == current]
-        if not records:
-            return []
-        root = Path(self.project)
-        runs = [r for record in records for r in _check_runs(record, root) if _complete_run(r)]
-        shown = []
-        for citation in citations:
-            path, _, name = str(citation).partition("::")
-            if not name.startswith("test"):
-                continue
-            for run in runs:
-                if not (path in run["files"] or _run_discovers(run, path, root)):
+        executed = set()
+        for record in records:
+            for run in _check_runs(record, root):
+                if not _complete_run(run):
                     continue
-                executed = run.get("executed_names") or {}
-                if executed and not any(_case_name(key) == name for key in executed):
+                qualified = set(run.get("qualified_names") or ())
+                ran = run.get("executed_names") or {}
+                every = run.get("every_names") or {}
+                for key in ran:
+                    if key not in qualified:
+                        continue
+                    file, _, rest = str(key).partition("::")
+                    cwd = run.get("cwd") or "."
+                    file = posixpath.normpath(posixpath.join(cwd, file)) if cwd not in ("", ".") else file
+                    executed.add(f"{file}::{rest}")
+                    base = rest.split("[", 1)[0]
+                    if base != rest and all(k in ran for k in every if str(k).split("::", 1)[-1].split("[", 1)[0]
+                                            == base and str(k).partition("::")[0] == str(key).partition("::")[0]):
+                        executed.add(f"{file}::{base}")
+        if rid is not None:
+            identity = self._evidence_identity()
+            for proof in self.scratch_proofs:
+                if (proof.get("status") != "passed" or proof.get("identity") != identity
+                        or rid not in (proof.get("requirements") or ())):
                     continue
-                shown.append(citation)
-                break
-        return shown
+                executed |= _proof_cases(proof)
+        return [c for c in citations if c in executed]
 
     def _lower_unexercised_errors(self, found: dict, audited) -> List[dict]:
         """Turn an error or refusal requirement's MET into NOT MET unless it
@@ -8651,11 +8665,12 @@ class Session:
         for rid, (met, why) in list(found.items()):
             if not met or rid not in audited or not _error_clause(texts.get(rid, "")):
                 continue
-            if self._executed_cases(self._resolve_citations(why)):
+            if self._executed_cases(_cited_cases(why), rid=rid):
                 continue
-            reason = ("an error or refusal requirement: the MET cites no test case that a complete approved "
-                      "check executed and passed on this source; negative-path behaviour must be shown by a "
-                      "run, not read")
+            reason = ("an error or refusal requirement: the MET cites no exact test case shown executed and "
+                      "passed on this source (a complete approved check's case record, or a passing scratch "
+                      "demonstration of this requirement); negative-path behaviour must be shown by a run, "
+                      "not read")
             found[rid] = (False, reason)
             lowered.append(dict(requirement=rid, auditor_said=why[:200], reason=reason))
         return lowered
@@ -10145,12 +10160,16 @@ class Session:
         which applies the same rule to acceptance."""
         texts = dict(self._covered_texts())
         proof = getattr(self, "_last_scratch_proof", None) or {}
-        demonstrated = proof.get("status") == "passed" and bool(proof.get("cases"))
+        # This review's own demonstration, case by case, only if it passed in
+        # full: an unrelated passing scratch shows nothing about a requirement
+        # whose MET line does not cite its cases (root review of 17a96d3).
+        demonstrated = _proof_cases(proof) if proof.get("status") == "passed" else set()
         held = []
         for rid, rest in _met_lines(note).items():
             if verdicts.get(rid) is not True or rid not in texts or not _error_clause(texts[rid]):
                 continue
-            if demonstrated or self._executed_cases(self._resolve_citations(rest)):
+            cited = _cited_cases(rest)
+            if set(cited) & demonstrated or self._executed_cases(cited):
                 continue
             held.append(rid)
         if not held:
@@ -10163,13 +10182,14 @@ class Session:
             m = _AUDIT_LINE.match(line)
             if m and m.group(1).upper() in held and m.group(2).upper() == "MET":
                 line = (f"{m.group(1).upper()}: UNVERIFIED - MET claimed without executed negative-path "
-                        "evidence (harness: no passing scratch demonstration in this review and no cited test "
-                        "case run on this source); add a test that exercises the rejecting path")
+                        "evidence (harness: its MET line cites no exact test case shown executed and passed, by "
+                        "this review's scratch demonstration or a recorded check on this source); add a test "
+                        "that exercises the rejecting path")
             lines.append(line)
         source = self._source_fingerprint() if self.project else None
         for rid in held:
-            text = (f"{peer} marked {rid} MET without executed negative-path evidence: no passing scratch "
-                    "demonstration in its review and no cited test case run on this source; not counted")
+            text = (f"{peer} marked {rid} MET without executed negative-path evidence: its MET line cites no "
+                    "exact test case shown executed and passed on this source; not counted")
             self.review_notes.append(dict(task=spec.task_id, peer=peer, requirements=[rid], association="named",
                                           text=text, source=source))
             if self._outcome is not None:
@@ -10233,7 +10253,12 @@ class Session:
         else:
             detail = (f"{proof.get('status')}: {proof.get('reason')}; "
                       + "; ".join(proof.get("cases") or proof.get("files") or ()))
+        # Provenance for the final audit (root review of 17a96d3): the source
+        # and checks the copy was handed (the evidence identity), and the
+        # requirements this review covered. Never shown to a model.
         self.scratch_proofs.append(dict(task=spec.task_id, peer=peer, files=list(found),
+                                        identity=self._evidence_identity() if self.project else None,
+                                        requirements=[rid for rid, _ in self._covered_texts()],
                                         **({k: proof[k] for k in ("status", "reason", "cases", "receipts")}
                                            if proof else dict(status="not run"))))
         fact = self._outcome.note("unverified", f"scratch demonstration by {peer}, as the harness measured "

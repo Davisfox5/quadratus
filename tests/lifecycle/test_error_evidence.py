@@ -49,10 +49,13 @@ NEGATIVE = (HAPPY + "\n\ndef test_add_refuses_text():\n    import pytest\n"
 SKIPPED = (HAPPY + "\n\nimport pytest\n\n\n@pytest.mark.skip(reason='later')\n"
            "def test_add_refuses_text():\n    with pytest.raises(TypeError):\n        add('1', 2)\n")
 FILES = {"app.py": "def add(a, b):\n    return 0\n", "tests/test_app.py": HAPPY, "README.md": "# app\n"}
+#: The approved check printing each case's file-qualified identity: only a
+#: case record names an executed case exactly (root review of 17a96d3).
+VERBOSE = H.GATE.replace(" -q ", " -v ")
 
 
 def _run(tmp_path, monkeypatch, *, source, tests, audit, review="NO FINDINGS\nR1: MET - app.py",
-         after=None):
+         after=None, check=VERBOSE):
     def orchestrator(call, replay):
         n = len(replay.of("orchestrator"))
         return {1: PLAN, 2: PLAN_2}.get(n, "DONE")
@@ -72,7 +75,7 @@ def _run(tmp_path, monkeypatch, *, source, tests, audit, review="NO FINDINGS\nR1
                     auditor=lambda call, replay: audit,
                     **{"requirements-review": lambda call, replay: "COMPLETE",
                        "revision": lambda call, replay: "Nothing to change.\nCHANGED: []"})
-    return H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False)
+    return H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=2, record_complete=False, check=check)
 
 
 def _final(replay):
@@ -177,3 +180,15 @@ def test_no_command_or_private_path_reaches_a_seat_through_the_rule(tmp_path, mo
         assert "--quadratus-report" not in call.prompt and "-m pytest" not in call.prompt
     lowered = json.dumps(_final(replay)["lowered"])
     assert "pytest" not in lowered and str(replay.project) not in lowered
+
+
+@pytest.mark.requirements_ledger
+def test_a_quiet_run_names_no_case_and_credits_nothing(tmp_path, monkeypatch):
+    """The same sound work and executed negative test under ``pytest -q``:
+    the run passes but records no case identity, so the cited case is not
+    shown executed and the error requirement stays NOT MET. Unknown is never
+    credited (root review of 17a96d3)."""
+    replay = _run(tmp_path, monkeypatch, source=SOUND, tests=NEGATIVE, check=H.GATE,
+                  review="NO FINDINGS\nR1: MET - tests/test_app.py::test_add_refuses_text",
+                  audit="R1: MET - tests/test_app.py::test_add_refuses_text\nR2: MET - README.md")
+    assert _final(replay)["verdicts"]["R1"]["met"] is False and not replay.result.completed
