@@ -1,5 +1,16 @@
 # Automated research intake and review
 
+> **Current workflow — superseded by Davis on 2026-10-15:** The Quadratus
+> digest reviewer is disabled. Its LaunchAgent was unloaded and moved out of
+> login startup. Do not run the legacy installer/reviewer below or send digest
+> intake through the Quadratus engine. The existing research publisher remains
+> Fridays at 8:00 AM America/New_York. A Codex chat automation checks GitHub once
+> weekly at 8:15 AM, with Claude preferred for direct review and applicable
+> implementation under the repository's normal review/approval rules. Codex can
+> coordinate or act as fallback. No additional polling, automatic digest merges,
+> or automatic reprocessing of historical PR #75 is enabled. The implementation
+> below and its failed assessment receipts are retained as history.
+
 The existing Friday ChatGPT task publishes a complete digest as a date-keyed
 draft PR. A local watcher checks every 15 minutes and runs Quadratus against
 a clean copy of the latest fetched `main`, with no source-write grant. It
