@@ -2044,18 +2044,18 @@
       ],
       "author": "codex",
       "reviewer": "claude",
-      "state": "blocked",
+      "state": "reviewed",
       "claimed_at": "2026-10-16T02:57:21Z",
-      "acknowledged": false,
+      "acknowledged": true,
       "delivery": {
-        "sha": "c9e9e20",
-        "at": "2026-10-16T03:02:49Z"
+        "sha": "2933af26773d5e8e601a3e3d0d4149b8cb0596cd",
+        "at": "2026-10-16T03:11:46Z"
       },
       "reviews": [
         {
           "reviewer": "claude",
           "sha": "c9e9e20",
-          "verdict": "blocked",
+          "verdict": "stale",
           "evidence": "/tmp/quadratus-research-context-review.json",
           "scope": [
             "quadratus/config.py",
@@ -2067,7 +2067,25 @@
             "quadratus/providers.py",
             "quadratus/cli_providers.py"
           ],
-          "at": "2026-10-16T03:09:03Z"
+          "at": "2026-10-16T03:09:03Z",
+          "stale_reason": "delivery moved from c9e9e20 to 2933af2"
+        },
+        {
+          "reviewer": "claude",
+          "sha": "2933af26773d5e8e601a3e3d0d4149b8cb0596cd",
+          "verdict": "cleared",
+          "evidence": "https://github.com/Davisfox5/quadratus/pull/76#issuecomment-6207194908",
+          "scope": [
+            "quadratus/config.py",
+            "quadratus/runtime.py",
+            "tools/research_review.py",
+            "tests/test_research_review.py",
+            "tests/test_research_context.py",
+            "docs/RESEARCH_INBOX.md",
+            "quadratus/providers.py",
+            "quadratus/cli_providers.py"
+          ],
+          "at": "2026-10-16T03:11:46Z"
         }
       ],
       "blockers": [
@@ -2078,14 +2096,22 @@
           "classification": "reachable",
           "by": "claude",
           "sha": "c9e9e20",
-          "at": "2026-10-16T03:09:03Z"
+          "at": "2026-10-16T03:09:03Z",
+          "resolved": {
+            "resolution": "2933af2 preserves the original 180s analysis timeout, original short low-effort closeout, and catches HTTPException as unverified abstract evidence; regression controls pass. Independent Claude delta review cleared at #76 comment 6207194908.",
+            "by": "codex",
+            "at": "2026-10-16T03:11:46Z"
+          }
         }
       ],
       "decisions": [
         "codex: scope extended to quadratus/providers.py",
         "codex: Direct Davis authorization scopes this correction to research invocation context. providers.py change only prevents the new research summary-form calls from lowering the configured token reserve; ordinary summary/closeout reservation behavior remains unchanged. Prior reserve-shape task ownership preserved; no routing, model, API, or budget expansion.",
-        "codex: scope extended to quadratus/cli_providers.py"
-      ]
+        "codex: scope extended to quadratus/cli_providers.py",
+        "unblocked by codex: 2933af2 preserves the original 180s analysis timeout, original short low-effort closeout, and catches HTTPException as unverified abstract evidence; regression controls pass. Independent Claude delta review cleared at #76 comment 6207194908.",
+        "codex: 236 focused runtime/provider/budget/research/truth-canary tests and full Ruff pass. Model choices, effort, shared usage limits and subscription-only transport unchanged. Diagnosis confirmed seven native turns with cumulative 434366 input and 6386 output tokens, not a cache double count; original harness prompt13205 bytes and source-copy CLAUDE.md94101 bytes. Root cause is native context amplification before the first task. One retry of #75 explicitly authorized by Davis but not yet spent; wait for final-head CI, integrate correction, then exactly one --retry 75. Existing receipt continues to suppress automatic duplicates."
+      ],
+      "acknowledged_at": "2026-10-16T03:11:46Z"
     }
   ],
   "receipts": [
