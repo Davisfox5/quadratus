@@ -1,0 +1,21 @@
+{
+  "review_version": 1,
+  "digest_sha256": "735d9b2a259dd36523cccc3172b8dce26aa6fc40068dcc73ccbcff2ec3e85d2e",
+  "base_sha": "5a20957649ad27997b197d91c3093e612b077236",
+  "engine_sha": "5a20957649ad27997b197d91c3093e612b077236",
+  "status": "incomplete",
+  "date": "2026-09-18",
+  "engine_completed": false,
+  "truth_check": {
+    "verdict": "not-met",
+    "run": "/Users/davisfox/.quadratus/research-inbox/75-735d9b2a259dd36523cccc3172b8dce26aa6fc40068dcc73ccbcff2ec3e85d2e/engine/runs/20261016T024444Z-67c005ed",
+    "not_met": [
+      "the run did not complete",
+      "the run stopped with an error: RunBudgetExceeded: Run stopped: call_token_ceiling"
+    ],
+    "unverified": [
+      "no check ran",
+      "no requirements were recorded, so none was audited"
+    ]
+  }
+}
