@@ -31,6 +31,13 @@
         "reason": "Research inbox PR #74 is a separately authorized side integration. Restore the pre-existing engine milestone candidate after recording its integration; no engine milestone qualification is implied.",
         "by": "codex",
         "at": "2026-10-16T02:47:51Z"
+      },
+      {
+        "previous": "67dca03fb996e2e4c2f58dc949f1066e1c25b9d5",
+        "sha": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
+        "reason": "Research-token correction PR#76 is a separately authorized integration; restore the original active engine milestone candidate after recording integration. No engine milestone qualification implied.",
+        "by": "codex",
+        "at": "2026-10-16T03:43:32Z"
       }
     ]
   },
@@ -2044,7 +2051,7 @@
       ],
       "author": "codex",
       "reviewer": "claude",
-      "state": "reviewed",
+      "state": "integrated",
       "claimed_at": "2026-10-16T02:57:21Z",
       "acknowledged": true,
       "delivery": {
@@ -2109,9 +2116,15 @@
         "codex: Direct Davis authorization scopes this correction to research invocation context. providers.py change only prevents the new research summary-form calls from lowering the configured token reserve; ordinary summary/closeout reservation behavior remains unchanged. Prior reserve-shape task ownership preserved; no routing, model, API, or budget expansion.",
         "codex: scope extended to quadratus/cli_providers.py",
         "unblocked by codex: 2933af2 preserves the original 180s analysis timeout, original short low-effort closeout, and catches HTTPException as unverified abstract evidence; regression controls pass. Independent Claude delta review cleared at #76 comment 6207194908.",
-        "codex: 236 focused runtime/provider/budget/research/truth-canary tests and full Ruff pass. Model choices, effort, shared usage limits and subscription-only transport unchanged. Diagnosis confirmed seven native turns with cumulative 434366 input and 6386 output tokens, not a cache double count; original harness prompt13205 bytes and source-copy CLAUDE.md94101 bytes. Root cause is native context amplification before the first task. One retry of #75 explicitly authorized by Davis but not yet spent; wait for final-head CI, integrate correction, then exactly one --retry 75. Existing receipt continues to suppress automatic duplicates."
+        "codex: 236 focused runtime/provider/budget/research/truth-canary tests and full Ruff pass. Model choices, effort, shared usage limits and subscription-only transport unchanged. Diagnosis confirmed seven native turns with cumulative 434366 input and 6386 output tokens, not a cache double count; original harness prompt13205 bytes and source-copy CLAUDE.md94101 bytes. Root cause is native context amplification before the first task. One retry of #75 explicitly authorized by Davis but not yet spent; wait for final-head CI, integrate correction, then exactly one --retry 75. Existing receipt continues to suppress automatic duplicates.",
+        "codex: Merged #76 as67dca03; original checkout fast-forwarded with unrelated report preserved. Exactly one authorized --retry75 ran: 20261016T033715Z-a7335507. First orchestrator call18640 tokens instead of440752; six model calls117743 total, largest28245,186s, no oversized/unknown-usage calls or token stop; no source edits. Research comparison/review text generated, but task settlement hit automatically discovered repository pytest check: No module named pytest. Engine completedfalse, truthnot-met, statusincomplete. Report+receipt published to draft #75 as6ad8ee8, remote bytes verified. Original outcome archived once under attempts and original engine run retained. Installed declared requirements-dev.txt in watcher venv after the failed check; pytest9.1.1 --version verified, no assessment or tests rerun afterwards. LaunchAgent remains loaded at900s; subsequent poll says Already assessed. Retry allowance spent; no further retry, paper implementation, experiment, or digest merge. Assessment completion remains unproven."
       ],
-      "acknowledged_at": "2026-10-16T03:11:46Z"
+      "acknowledged_at": "2026-10-16T03:11:46Z",
+      "integrated": {
+        "sha": "2933af26773d5e8e601a3e3d0d4149b8cb0596cd",
+        "candidate": "67dca03fb996e2e4c2f58dc949f1066e1c25b9d5",
+        "at": "2026-10-16T03:43:32Z"
+      }
     }
   ],
   "receipts": [
@@ -2184,6 +2197,20 @@
       "state": "passed",
       "evidence": "Full Python 3.11 https://github.com/Davisfox5/quadratus/actions/runs/38839526169/job/116776155510 and 3.12 https://github.com/Davisfox5/quadratus/actions/runs/38839522432/job/116776142576; Ruff included",
       "at": "2026-10-16T02:47:51Z"
+    },
+    {
+      "kind": "ci",
+      "sha": "9fefdced8e0caf168b23ae2210dc0f1aedce712d",
+      "state": "passed",
+      "evidence": "Full Python 3.11 and3.12 matrix passed: https://github.com/Davisfox5/quadratus/actions/runs/38844301415 ; Ruff included; independent Claude review #76 comment6207194908",
+      "at": "2026-10-16T03:43:31Z"
+    },
+    {
+      "kind": "acceptance",
+      "sha": "9fefdced8e0caf168b23ae2210dc0f1aedce712d",
+      "state": "failed",
+      "evidence": "Single authorized digest #75 retry 20261016T033715Z-a7335507 stayed inside token limits but assessment incomplete/not-met: default repository pytest check failed because watcher environment lacked pytest; report+receipt commit6ad8ee8a387e2ee2c2d2ba5270c1cfdf5fb35c70. Test dependencies installed afterwards; no further retry.",
+      "at": "2026-10-16T03:43:31Z"
     }
   ]
 }
