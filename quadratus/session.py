@@ -2207,8 +2207,8 @@ _EXECUTED_ERROR_RULE = (
     "on its MET line, cite each test case that exercises the rejecting path (invalid types, missing "
     "values, conflicts, and the representation or range boundaries the implementation exposes) by "
     "its exact identity, file::test_name, or file::Class::test_name for a method, with [param] for "
-    "one parametrized instance; for example 'R3: MET - tests/test_api.py::test_rejects_bad_id and "
-    "tests/test_cli.py::CliTests::test_bad_id_exit'. A bare test name or a file alone is not such a "
+    "one parametrized instance; for example 'R3: MET - tests/test_parser.py::test_invalid_syntax and "
+    "tests/test_config.py::ConfigTests::test_wrong_type'. A bare test name or a file alone is not such a "
     "citation. Each cited case must have run and passed on this source in the approved checks, or "
     "in a scratch test the harness ran for this requirement. A MET without that is not counted, "
     "whatever it says. Other requirements cite files or tests as before.")
