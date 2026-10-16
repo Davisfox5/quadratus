@@ -1955,13 +1955,18 @@
       ],
       "author": "codex",
       "reviewer": "claude",
-      "state": "claimed",
+      "state": "delivered",
       "claimed_at": "2026-10-16T01:46:27Z",
       "acknowledged": false,
-      "delivery": null,
+      "delivery": {
+        "sha": "61f018a250da1f91c5fad481d1ac529e4ff34ff6",
+        "at": "2026-10-16T01:53:46Z"
+      },
       "reviews": [],
       "blockers": [],
-      "decisions": []
+      "decisions": [
+        "codex: 21 targeted offline tests and scoped Ruff pass. No vendor call was made. Independent review and installation on the signed-in Mac remain pending; delivery configuration alone is not end-to-end activation."
+      ]
     }
   ],
   "receipts": [
