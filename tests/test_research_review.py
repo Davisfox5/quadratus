@@ -235,6 +235,8 @@ def test_real_engine_adapter_keeps_cli_transport_and_readonly_scope(tmp_path, mo
         assert project.root != inbox.ROOT
         assert (project.root / "pyproject.toml").exists()
         assert all(settings.backend_for(name) == "cli" for name in ("claude", "openai", "grok"))
+        assert settings.supplied_context_only is True
+        assert settings.lead_max_turns == 4
         assert "BEGIN UNTRUSTED DIGEST DATA" in goal
         with pytest.raises(OperatorInputNeeded):
             kwargs["ask_operator"]("May I implement this?")
@@ -251,3 +253,30 @@ def test_real_engine_adapter_keeps_cli_transport_and_readonly_scope(tmp_path, mo
     assert observed["allow_writes"] is False
     assert observed["decider"] == "rule"
     assert observed["run_limits"].max_calls == 36
+
+
+def test_retry_preserves_previous_receipt_and_runs_once(tmp_path, monkeypatch):
+    prepare(monkeypatch)
+    directory = tmp_path / "100-digest"
+    directory.mkdir()
+    previous = {"phase": "published", "status": "incomplete", "report": "old outcome"}
+    inbox.save(directory / "review.json", previous)
+    calls = []
+    monkeypatch.setattr(inbox, "bounded_review", lambda *a: calls.append("engine") or
+                        ("new assessment", False, {"verdict": "not-met"}))
+    monkeypatch.setattr(inbox, "publish", lambda *a: calls.append("publish"))
+    inbox.process(pr(), tmp_path, retry=True)
+    inbox.process(pr(), tmp_path)
+    assert calls == ["engine", "publish"]
+    preserved = list((directory / "attempts").glob("*/review.json"))
+    assert len(preserved) == 1 and json.loads(preserved[0].read_text()) == previous
+
+
+def test_explicit_retry_cannot_replace_a_running_assessment(tmp_path, monkeypatch):
+    prepare(monkeypatch)
+    directory = tmp_path / "100-digest"
+    directory.mkdir()
+    inbox.save(directory / "review.json", {"phase": "running"})
+    monkeypatch.setattr(inbox, "bounded_review", lambda *a: pytest.fail("duplicate call"))
+    with pytest.raises(RuntimeError, match="running"):
+        inbox.process(pr(), tmp_path, retry=True)

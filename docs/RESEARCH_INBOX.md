@@ -37,8 +37,13 @@ recorded as incomplete, never silently retried or marked successful.
 
 ## Review contract and limits
 
-The master agent uses the existing session engine, routing, reviewer seats,
-and source-copy behavior. Each item must connect demonstrated findings to
+The master agent uses the existing session engine, routing and reviewer seats.
+Research calls reason over bounded, supplied evidence in an empty directory,
+using the existing summary CLI form instead of vendor-native exploration loops.
+The caller reads exact-main source excerpts (path, symbol, line and file hash)
+and retrieves at most five allowlisted arXiv abstract pages as untrusted text.
+Source snippets may be truncated and abstracts do not verify full-paper results;
+missing evidence must be reported as unverified. Each item must connect demonstrated findings to
 observed paths and symbols in this repository, recommend adopt/experiment/
 monitor/skip, and propose a measurable baseline comparison. The final report
 names one experiment to prioritize. No implementation is authorized by a digest.
@@ -49,6 +54,14 @@ reserve, four lead turns, 30-minute internal wall and 32.5-minute outer wall.
 Token ceilings are checked from reported usage and may overshoot within a call;
 they are not guaranteed spend caps. All provider transports are forced to CLI.
 No automatic model retry or interactive operator answer is enabled.
+The source packet is bounded to two excerpts of at most 900 characters from each
+of ten relevant engine modules. Each seat's full prompt is refused above 128,000
+UTF-8 bytes. Calls retain their selected model and effort, the full configured
+token reserve, and the same shared budget. The summary CLI form uses one attempt
+and at most 60 seconds; native one-turn/tool controls differ by vendor (Claude
+disables tools, Grok has a one-turn restricted read allowlist, Codex retains its
+read-only sandbox). This reduces repeated context; it is not a hard token guarantee.
+The research prompt groups the digest into at most two analysis tasks before synthesis.
 The outer timeout stops the engine and its detached vendor process groups.
 The published status is `review-completed` only when both the engine completes
 and the independent truth check is verified; otherwise it remains `incomplete`.
@@ -77,7 +90,10 @@ launchctl bootout gui/$(id -u)/com.quadratus.research-inbox
 ```
 
 `--retry` grants one explicit additional review attempt for that PR. Inspect
-`watcher-error.log` and its digest's `engine.log` first. Stop the LaunchAgent
+the preceding result first. A retry archives the old receipt, job, output and log
+under its local `attempts/` directory; engine run directories and GitHub history
+remain intact. An unresolved local `running` record refuses even an explicit retry.
+Inspect `watcher-error.log` and its digest's `engine.log` first. Stop the LaunchAgent
 with the last command; remove its plist from `~/Library/LaunchAgents/` to keep
 it stopped after login. Keep failed reports in draft and do not merge them as
 accepted research. No background workflow implements or merges recommendations.
@@ -90,3 +106,15 @@ They do not prove that a Mac is awake, vendor CLIs are signed in, or a future
 scheduled ChatGPT run can perform an unattended GitHub write. Those are shown
 by the first real digest PR and its returned review receipt. The setup is not
 end-to-end active until the Mac installer runs and a real review succeeds.
+
+## First-run token diagnosis
+
+PR #75's first invocation (`20261016T024444Z-67c005ed`) used seven native Claude
+turns before dispatching a task. Their input sizes grew from 53,143 to 70,550
+tokens as the orchestrator made 14 source-read/search tool calls. Vendor usage
+reported 434,366 cumulative input tokens (including cache reads) and 6,386 output
+tokens: 440,752 total. Cached input is usage, not an additional double count.
+The four-turn lead cap did not cover the orchestrator. The existing 150,000
+per-call threshold correctly stopped the run after the CLI returned.
+The supplied-context profile removes that exploration loop for research seats;
+other project sessions keep their existing behavior. No threshold is raised.

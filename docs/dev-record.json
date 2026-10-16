@@ -2027,6 +2027,32 @@
         "candidate": "5a20957649ad27997b197d91c3093e612b077236",
         "at": "2026-10-16T02:47:51Z"
       }
+    },
+    {
+      "id": "T-research-context-bound",
+      "purpose": "Davis authorized diagnosing the 440752-token first research call, fixing repeated native context within unchanged limits, and exactly one retry of digest #75. Separate from engine milestone.",
+      "base": "d8d60494e8de0cd5708a925df626b7611c3eb57c",
+      "owns": [
+        "quadratus/config.py",
+        "quadratus/runtime.py",
+        "tools/research_review.py",
+        "tests/test_research_review.py",
+        "tests/test_research_context.py",
+        "docs/RESEARCH_INBOX.md",
+        "quadratus/providers.py"
+      ],
+      "author": "codex",
+      "reviewer": "claude",
+      "state": "claimed",
+      "claimed_at": "2026-10-16T02:57:21Z",
+      "acknowledged": false,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": [
+        "codex: scope extended to quadratus/providers.py",
+        "codex: Direct Davis authorization scopes this correction to research invocation context. providers.py change only prevents the new research summary-form calls from lowering the configured token reserve; ordinary summary/closeout reservation behavior remains unchanged. Prior reserve-shape task ownership preserved; no routing, model, API, or budget expansion."
+      ]
     }
   ],
   "receipts": [
