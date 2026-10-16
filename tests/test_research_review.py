@@ -1,6 +1,11 @@
 import base64
 import copy
 import json
+import os
+import signal
+import subprocess
+import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -152,6 +157,57 @@ def test_publication_retry_reuses_completed_result(tmp_path, monkeypatch):
         inbox.process(pr(), tmp_path)
     inbox.process(pr(), tmp_path)
     assert calls == ["engine", "publish", "publish"]
+
+
+@pytest.mark.parametrize("completed,verdict,status", [
+    (True, "verified", "review-completed"),
+    (True, "unverified", "incomplete"),
+    (True, "not-met", "incomplete"),
+    (False, "verified", "incomplete"),
+])
+def test_status_requires_engine_and_independent_truth(tmp_path, monkeypatch, completed, verdict, status):
+    prepare(monkeypatch)
+    monkeypatch.setattr(inbox, "bounded_review", lambda *a: ("assessment", completed, {"verdict": verdict}))
+    published = []
+    monkeypatch.setattr(inbox, "publish", lambda *a: published.append(a[-1].copy()))
+    inbox.process(pr(), tmp_path)
+    assert published[0]["status"] == status
+    assert published[0]["engine_completed"] == completed
+    assert published[0]["truth_check"]["verdict"] == verdict
+
+
+@pytest.mark.skipif(sys.platform != "darwin" and sys.platform != "linux", reason="POSIX process groups")
+def test_outer_cleanup_stops_detached_vendor_group(tmp_path):
+    # Real subprocesses, no models: a vendor double in its own session ignores TERM.
+    marker = tmp_path / "vendor.json"
+    vendor_code = ("import os,signal,time; "
+                   "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                   f"open({str(marker)!r},'w').write(str(os.getpid())); "
+                   "time.sleep(60)")
+    engine_code = ("import subprocess,sys,time; "
+                   f"subprocess.Popen([sys.executable,'-c',{vendor_code!r}],start_new_session=True); "
+                   "time.sleep(60)")
+    child = subprocess.Popen([sys.executable, "-c", engine_code], start_new_session=True)
+    vendor = None
+    try:
+        deadline = time.monotonic() + 5
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(.01)
+        vendor = int(marker.read_text())
+        inbox.stop_engine_tree(child, grace=.05)
+        assert child.poll() is not None
+        # A dead grandchild may briefly remain a zombie until the OS reaps it.
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(vendor)],
+                               capture_output=True, text=True).stdout.strip()
+        assert not state or state.startswith("Z")
+    finally:
+        for pid in (vendor, child.pid):
+            if pid:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+        child.wait(timeout=5)
 
 
 def test_remote_receipt_prevents_repeat_after_reinstall(tmp_path, monkeypatch):

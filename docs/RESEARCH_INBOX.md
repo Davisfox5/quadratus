@@ -49,6 +49,10 @@ reserve, four lead turns, 30-minute internal wall and 32.5-minute outer wall.
 Token ceilings are checked from reported usage and may overshoot within a call;
 they are not guaranteed spend caps. All provider transports are forced to CLI.
 No automatic model retry or interactive operator answer is enabled.
+The outer timeout stops the engine and its detached vendor process groups.
+The published status is `review-completed` only when both the engine completes
+and the independent truth check is verified; otherwise it remains `incomplete`.
+The receipt records engine completion and the truth verdict separately.
 
 The watcher accepts only Davisfox5's numeric GitHub account ID, same-repository
 draft PRs to `main`, exact date/branch/title agreement, and the three documented

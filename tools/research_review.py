@@ -18,6 +18,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
@@ -184,17 +185,58 @@ def bounded_review(day, markdown, base_sha, directory):
         try:
             code = child.wait(timeout=1950)
         except subprocess.TimeoutExpired:
-            os.killpg(child.pid, signal.SIGTERM)
-            try:
-                child.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(child.pid, signal.SIGKILL)
-                child.wait()
+            stop_engine_tree(child)
             raise RuntimeError("Research review exceeded its 32.5-minute outer wall limit") from None
     if code:
         raise RuntimeError("Research engine failed; inspect the retained local engine.log")
     result = json.loads((directory / "engine-output.json").read_text())
     return result["report"], result["completed"], result["truth"]
+
+
+def stop_engine_tree(child, grace=5):
+    """Capture detached CLI groups before terminating their engine ancestor.
+
+    Vendor launchers create new sessions, including on worker threads. Signalling
+    only the engine group, or raising only on its main thread, misses those calls.
+    Fail closed if process enumeration fails rather than claiming cleanup.
+    """
+    groups = {child.pid}  # child was launched with start_new_session=True
+
+    def send(sig):
+        for group in groups:
+            try:
+                os.killpg(group, sig)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                # macOS may return EPERM for a group whose last member exited.
+                rows = command(["ps", "-axo", "pgid=,stat="])
+                if any(int(row.split()[0]) == group and not row.split()[1].startswith("Z")
+                       for row in rows.splitlines() if row.strip()):
+                    raise
+
+    # Freeze ancestors first, then discover/freeze their detached descendants.
+    # Repeat the snapshot to catch children born before their launcher stopped.
+    descendants = {child.pid}
+    while True:
+        send(signal.SIGSTOP)
+        rows = command(["ps", "-axo", "pid=,ppid=,pgid="])
+        processes = [tuple(map(int, row.split())) for row in rows.splitlines() if row.strip()]
+        while True:
+            found = {pid for pid, parent, _ in processes if parent in descendants}
+            if found <= descendants:
+                break
+            descendants.update(found)
+        discovered = {group for pid, _, group in processes if pid in descendants}
+        discovered.discard(os.getpgrp())
+        if discovered <= groups:
+            break
+        groups.update(discovered)
+    send(signal.SIGTERM)
+    send(signal.SIGCONT)
+    time.sleep(grace)
+    send(signal.SIGKILL)
+    child.wait(timeout=5)
 
 
 def publish(pr, day, digest, record):
@@ -253,7 +295,9 @@ def process(pr, state, *, dry_run=False, retry=False):
     save(record_path, record)
     try:
         report, completed, truth = bounded_review(day, markdown, base_sha, directory)
-        record["status"] = "review-completed" if completed else "incomplete"
+        record["engine_completed"] = completed
+        record["status"] = ("review-completed" if completed and truth.get("verdict") == "verified"
+                            else "incomplete")
         record["truth_check"] = truth
     except Exception as exc:
         report = f"Review could not complete: {type(exc).__name__}: {exc}"
