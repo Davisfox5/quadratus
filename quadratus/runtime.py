@@ -376,6 +376,8 @@ class Fleet:
                 raise ProviderError("Supplied-context analysis cannot receive a write grant.")
             if self.settings.backend_for(model_key.partition(':')[0]) != 'cli':
                 raise ProviderError("Supplied-context analysis requires subscription CLI transport.")
+            if (invocation_context.get() or {}).get("role") == "closeout":
+                return self._closeout(model_key, provider, prompt)
             return self._supplied_context(model_key, provider, prompt, role)
         if (invocation_context.get() or {}).get("role") == "closeout":
             if allow_writes:
@@ -641,8 +643,9 @@ class Fleet:
             raise ProviderError("Supplied analysis context exceeds its 128,000-byte prompt bound.")
         view = copy.copy(provider.for_seat(provider.model, effort=provider.effort, restricted=True))
         view.summary_only = True
+        view.supplied_analysis = True
         view.full_token_reserve = True  # retain the operator's full configured reserve
-        view.timeout = min(view.timeout, 60.0) if view.timeout is not None else 60.0
+        view.timeout = min(view.timeout, 180.0) if view.timeout is not None else 180.0
         view.max_retries = 1  # CLIProvider counts attempts, not additional retries
         view.refusal_fallback_model = None
         role += ("\nUse only the supplied evidence. Do not inspect files, run tools or commands, "

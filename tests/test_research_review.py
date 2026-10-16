@@ -253,6 +253,9 @@ def test_real_engine_adapter_keeps_cli_transport_and_readonly_scope(tmp_path, mo
     assert observed["allow_writes"] is False
     assert observed["decider"] == "rule"
     assert observed["run_limits"].max_calls == 36
+    assert observed["run_limits"].reserve_tokens_per_call == 50_000
+    assert observed["run_limits"].max_tokens_per_call == 150_000
+    assert observed["run_limits"].max_reported_tokens == 750_000
 
 
 def test_retry_preserves_previous_receipt_and_runs_once(tmp_path, monkeypatch):

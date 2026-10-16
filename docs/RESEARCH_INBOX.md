@@ -58,7 +58,8 @@ The source packet is bounded to two excerpts of at most 900 characters from each
 of ten relevant engine modules. Each seat's full prompt is refused above 128,000
 UTF-8 bytes. Calls retain their selected model and effort, the full configured
 token reserve, and the same shared budget. The summary CLI form uses one attempt
-and at most 60 seconds; native one-turn/tool controls differ by vendor (Claude
+and the original 180-second analysis timeout; ordinary closeouts retain their
+existing 60-second, low-effort form. Native one-turn/tool controls differ by vendor (Claude
 disables tools, Grok has a one-turn restricted read allowlist, Codex retains its
 read-only sandbox). This reduces repeated context; it is not a hard token guarantee.
 The research prompt groups the digest into at most two analysis tasks before synthesis.

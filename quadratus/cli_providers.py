@@ -2503,11 +2503,15 @@ class CLIProvider(LLMProvider):
             if self.max_retries != 1:
                 raise ProviderError(f"{self.label}: summary_only allows exactly one attempt, not {self.max_retries}")
             timeout = self.timeout
+            # Supplied research analysis preserves its existing call timeout
+            # and model effort. Ordinary closeout keeps the 60 s bound.
+            timeout_limit = 180 if getattr(self, 'supplied_analysis', False) else 60
             if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
-                    or not math.isfinite(timeout) or timeout <= 0 or timeout > 60):
+                    or not math.isfinite(timeout) or timeout <= 0 or timeout > timeout_limit):
                 # nan compares false against everything, so "not > 60" is not
                 # "<= 60"; the bound is stated positively.
-                raise ProviderError(f"{self.label}: summary_only needs a finite timeout in (0, 60], not {timeout!r}")
+                raise ProviderError(f"{self.label}: summary_only needs a finite timeout in "
+                                    f"(0, {timeout_limit}], not {timeout!r}")
             if os.listdir(self.workdir):
                 raise ProviderError(f"{self.label}: summary_only requires an empty working directory")
             mode = 'off'

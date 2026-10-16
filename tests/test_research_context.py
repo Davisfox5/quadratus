@@ -3,6 +3,7 @@
 import hashlib
 import json
 import subprocess
+from http.client import IncompleteRead
 from pathlib import Path
 
 import pytest
@@ -25,13 +26,14 @@ def test_research_seats_keep_model_effort_budget_but_cannot_explore(tmp_path, mo
     owner = ClaudeCLIProvider('', workdir=root, timeout=180, max_retries=4)
     monkeypatch.setattr('quadratus.runtime.build_provider', lambda *a, **kw: owner)
     budget = RunBudget(RunLimits(max_calls=36, max_reported_tokens=750_000,
-                                max_tokens_per_call=150_000, reserve_tokens_per_call=50_000))
+                                max_tokens_per_call=150_000, reserve_tokens_per_call=100_000))
     fleet = Fleet(Settings(backend='cli', supplied_context_only=True), project=root, run_budget=budget)
     observed = []
 
     def launch(argv, **kwargs):
         observed.append(Path(kwargs['cwd']))
         assert not list(Path(kwargs['cwd']).iterdir())
+        assert kwargs['timeout'] == (60 if role == 'closeout' else 180)
         assert argv[argv.index('--tools') + 1] == ''
         assert argv[argv.index('--max-turns') + 1] == '1'
         assert argv[argv.index('--model') + 1] == 'fable'
@@ -51,7 +53,7 @@ def test_research_seats_keep_model_effort_budget_but_cannot_explore(tmp_path, mo
     assert not selected.summary_only and owner.max_retries == 4
     assert budget.snapshot()['reported_tokens'] == 160
     assert budget.snapshot()['reserved_attempts'] == 1
-    assert budget.snapshot()['shaped_reservations'] == 0
+    assert budget.snapshot()['shaped_reservations'] == (1 if role == 'closeout' else 0)
     assert len(observed) == 1 and not observed[0].exists()
 
 
@@ -95,3 +97,24 @@ def test_paper_failure_is_unverified_and_redirects_are_allowlisted(tmp_path, mon
     assert 'source unavailable' in context['papers'][0]['reason']
     with pytest.raises(ValueError, match='allowlist'):
         inbox.ArxivRedirects().redirect_request(None, None, 302, '', {}, 'https://attacker.invalid/')
+
+
+def test_truncated_abstract_response_does_not_consume_retry(tmp_path, monkeypatch):
+    class BrokenResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self, *args):
+            raise IncompleteRead(b'partial')
+
+    class Broken:
+        def open(self, *args, **kwargs):
+            return BrokenResponse()
+
+    monkeypatch.setattr(inbox, 'build_opener', lambda *args: Broken())
+    context = inbox.research_context(tmp_path, 'https://arxiv.org/abs/2609.20812')
+    assert context['papers'][0]['status'] == 'unverified'
+    assert 'IncompleteRead' in context['papers'][0]['reason']

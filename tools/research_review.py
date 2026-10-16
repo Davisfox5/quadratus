@@ -23,6 +23,7 @@ import time
 from contextlib import contextmanager
 from datetime import date
 from html.parser import HTMLParser
+from http.client import HTTPException
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -122,7 +123,7 @@ def research_context(project, markdown):
             record.update(status="abstract-retrieved", sha256=hashlib.sha256(raw).hexdigest(),
                           excerpt=abstract.group(1)[:1000],
                           limitation="Abstract excerpt only; full paper and reported results not verified")
-        except (OSError, URLError, ValueError) as exc:
+        except (OSError, URLError, ValueError, HTTPException) as exc:
             record["reason"] = f"{type(exc).__name__}: {str(exc)[:200]}"
         papers.append(record)
     return {"source_excerpts": excerpts, "papers": papers,

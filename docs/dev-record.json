@@ -2039,19 +2039,52 @@
         "tests/test_research_review.py",
         "tests/test_research_context.py",
         "docs/RESEARCH_INBOX.md",
-        "quadratus/providers.py"
+        "quadratus/providers.py",
+        "quadratus/cli_providers.py"
       ],
       "author": "codex",
       "reviewer": "claude",
-      "state": "claimed",
+      "state": "blocked",
       "claimed_at": "2026-10-16T02:57:21Z",
       "acknowledged": false,
-      "delivery": null,
-      "reviews": [],
-      "blockers": [],
+      "delivery": {
+        "sha": "c9e9e20",
+        "at": "2026-10-16T03:02:49Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "claude",
+          "sha": "c9e9e20",
+          "verdict": "blocked",
+          "evidence": "/tmp/quadratus-research-context-review.json",
+          "scope": [
+            "quadratus/config.py",
+            "quadratus/runtime.py",
+            "tools/research_review.py",
+            "tests/test_research_review.py",
+            "tests/test_research_context.py",
+            "docs/RESEARCH_INBOX.md",
+            "quadratus/providers.py",
+            "quadratus/cli_providers.py"
+          ],
+          "at": "2026-10-16T03:09:03Z"
+        }
+      ],
+      "blockers": [
+        {
+          "requirement": "Research analysis uses original time allowance and unavailable abstracts remain evidence gaps",
+          "failure": "Summary form imposes 60s on full-effort analysis; HTTPException from truncated abstract escapes before model work",
+          "evidence": "Independent Claude review of c9e9e20; offline InterruptedRead and argv controls",
+          "classification": "reachable",
+          "by": "claude",
+          "sha": "c9e9e20",
+          "at": "2026-10-16T03:09:03Z"
+        }
+      ],
       "decisions": [
         "codex: scope extended to quadratus/providers.py",
-        "codex: Direct Davis authorization scopes this correction to research invocation context. providers.py change only prevents the new research summary-form calls from lowering the configured token reserve; ordinary summary/closeout reservation behavior remains unchanged. Prior reserve-shape task ownership preserved; no routing, model, API, or budget expansion."
+        "codex: Direct Davis authorization scopes this correction to research invocation context. providers.py change only prevents the new research summary-form calls from lowering the configured token reserve; ordinary summary/closeout reservation behavior remains unchanged. Prior reserve-shape task ownership preserved; no routing, model, API, or budget expansion.",
+        "codex: scope extended to quadratus/cli_providers.py"
       ]
     }
   ],
