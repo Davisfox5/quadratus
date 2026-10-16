@@ -17,6 +17,13 @@ LLM reliability. Generic fixture; nothing from any live job.
   a live change during the review leaves it stale, never relabelled; and
   the unchanged quiet own-report gate credits the exact cases its report
   names as passed.
+
+The four scratch cases run twice (root on 8e98697: CI's Linux runner has no
+/usr/bin/bwrap). ``host``: the real sandbox where this host has one, with
+every positive, negative, unrelated and stale assertion; where it has none,
+the truthful refusal. ``forced-off``: the sandbox made unavailable on any
+host. A refused scratch run is ``not run``, names no case, carries no
+receipt and is never acceptance; nothing here skips.
 """
 # Root's compact layout is kept as written (one-line statements).
 # ruff: noqa: E701, E702
@@ -30,6 +37,30 @@ from tests.lifecycle import harness as H
 from tests.lifecycle.test_lifecycle_matrix import Script
 
 pytestmark = pytest.mark.requirements_ledger
+
+NO_SANDBOX = 'not run: no sandbox here holds a scratch run to its copy'
+
+
+def _host_sandbox() -> bool:
+    import os
+    import platform
+    return ((platform.system() == 'Linux' and os.path.isfile('/usr/bin/bwrap'))
+            or (platform.system() == 'Darwin' and os.path.exists('/usr/bin/sandbox-exec')))
+
+
+@pytest.fixture(params=['host', 'forced-off'])
+def sandbox(request, monkeypatch):
+    """True when the scratch run really executes in a sandbox here."""
+    if request.param == 'forced-off':
+        monkeypatch.setattr('quadratus.runtime._scratch_isolation', lambda directory, private: None)
+        return False
+    return _host_sandbox()
+
+
+def _refused(proof):
+    """The truthful no-sandbox record: not run, no case, no receipt."""
+    return (proof.get('status') == 'not run' and f"not run: {proof.get('reason')}" == NO_SANDBOX
+            and proof.get('cases') == [] and proof.get('receipts') == [])
 
 GOAL = ('Implement parse_switch(text): accept only the strings "on" and "off", returning '
         '{"enabled": true} and {"enabled": false}. Every other string and every non-string '
@@ -84,7 +115,7 @@ NEGATIVE = ('from switches import parse_switch\n'
             'def test_nonstring_error():\n    assert parse_switch(None) == {"error":"invalid"}\n')
 
 @pytest.mark.parametrize('case', ['good-executed', 'broken-failed', 'good-skipped'])
-def test_real_negative_receipt_is_necessary_but_not_an_automatic_verdict(tmp_path, monkeypatch, case):
+def test_real_negative_receipt_is_necessary_but_not_an_automatic_verdict(tmp_path, monkeypatch, case, sandbox):
     source = BAD if case == 'broken-failed' else GOOD
     scratch = ('import pytest\n@pytest.mark.skip(reason="unavailable")\n'+NEGATIVE
                if case == 'good-skipped' else NEGATIVE)
@@ -117,6 +148,11 @@ def test_real_negative_receipt_is_necessary_but_not_an_automatic_verdict(tmp_pat
     print(json.dumps({'case':case,'completed':replay.result.completed,'error':replay.result.error,
         'scratch':proofs,'roles':[c.role for c in replay.calls],
         'audits':(result.get('requirements') or {}).get('audits')}))
+    if not sandbox:
+        assert all(_refused(p) for p in proofs),proofs
+        assert not replay.result.completed, 'a scratch run that did not execute was treated as verified'
+        assert (result['requirements']['audits'] or [{}])[-1].get('verdicts',{}).get('R1',{}).get('met') is not True
+        return
     if case=='good-executed':
         assert any(p.get('status')=='passed' for p in proofs),proofs
         assert replay.result.completed,replay.result.error
@@ -124,7 +160,7 @@ def test_real_negative_receipt_is_necessary_but_not_an_automatic_verdict(tmp_pat
     else:
         assert not replay.result.completed, 'failed or skipped proof was treated as verified error behavior'
 
-def test_unrelated_passing_scratch_does_not_discharge_an_explicit_error_review(tmp_path,monkeypatch):
+def test_unrelated_passing_scratch_does_not_discharge_an_explicit_error_review(tmp_path,monkeypatch,sandbox):
     seen=[]
     def lead(c,r):
         H.write(c,{'switches.py':BAD});return 'Implemented switch.\nCHANGED: ["switches.py"]'
@@ -135,7 +171,10 @@ def test_unrelated_passing_scratch_does_not_discharge_an_explicit_error_review(t
     def revise(c,r):seen.append(c.prompt);return 'Nothing changed.\nCHANGED: []'
     replay=H.run(tmp_path,monkeypatch,Script(orchestrator=lambda c,r:PLAN if not r.of('lead') else 'DONE',lead=lead,collaborator=peer,revision=revise,auditor=lambda c,r:'R1: NOT MET - switches.py invalid strings and nonstrings fail.',**{'requirements-review':lambda c,r:'COMPLETE'}),files={'switches.py':GOOD,'tests/test_switches.py':ORIGINAL,'README.md':'# Switch parser\n'},goal=GOAL,max_tasks=1,settings=Settings(backend='cli'))
     proofs=H.result_json(replay).get('scratch_proofs') or []
-    assert proofs and any(p.get('status')=='passed' for p in proofs),proofs
+    if sandbox:
+        assert proofs and any(p.get('status')=='passed' for p in proofs),proofs
+    else:
+        assert proofs and all(_refused(p) for p in proofs),proofs
     notes=replay.artifact_texts('review:openai:gpt-5.6-sol')+replay.artifact_texts('review:grok:grok-4.3')
     print(json.dumps({'case':'unrelated-doc-scratch','notes':notes,'scratch':proofs,'revision_prompts':seen}))
     assert any('R1: UNVERIFIED' in n for n in notes), 'unrelated doc-only scratch was treated as proof of error handling'
@@ -163,7 +202,7 @@ def test_uncollected_case_cannot_borrow_execution_of_same_name_from_another_file
     print(json.dumps({'case':'same-name-uncollected','actual':dataclasses.asdict(result),'incorrectly_accepted':found}))
     assert found==[], 'unexecuted negative test borrowed same-named positive execution from another file'
 
-def test_a_scratch_proof_on_an_earlier_source_is_not_credited_at_the_final_audit(tmp_path, monkeypatch):
+def test_a_scratch_proof_on_an_earlier_source_is_not_credited_at_the_final_audit(tmp_path, monkeypatch, sandbox):
     """The good-executed shape, then a second task changes README.md after
     the review's scratch proof passed: the proof's handed source is no
     longer the source the audit judges, so the cited scratch cases do not
@@ -200,13 +239,17 @@ def test_a_scratch_proof_on_an_earlier_source_is_not_credited_at_the_final_audit
                    files={'switches.py': GOOD, 'tests/test_switches.py': ORIGINAL, 'README.md': '# Switch parser\n'},
                    goal=GOAL, max_tasks=2, record_complete=False, settings=Settings(backend='cli'))
     result = H.result_json(replay)
-    assert any(p.get('status') == 'passed' and p.get('task') == 't1' for p in result['scratch_proofs'])
+    t1 = [p for p in result['scratch_proofs'] if p.get('task') == 't1']
+    if sandbox:
+        assert any(p.get('status') == 'passed' for p in t1), t1
+    else:
+        assert t1 and all(_refused(p) for p in t1), t1
     verdicts = result['requirements']['audits'][-1]['verdicts']
     assert verdicts['R1']['met'] is False and verdicts['R2']['met'] is True
     assert not replay.result.completed
 
 
-def test_source_change_while_scratch_copy_is_reviewed_cannot_be_relabelled_as_current_proof(tmp_path,monkeypatch):
+def test_source_change_while_scratch_copy_is_reviewed_cannot_be_relabelled_as_current_proof(tmp_path,monkeypatch,sandbox):
     changed=[]
     def lead(c,r):
         H.write(c,{'switches.py':GOOD});return 'Implemented.\nCHANGED: ["switches.py"]'
@@ -226,7 +269,8 @@ def test_source_change_while_scratch_copy_is_reviewed_cannot_be_relabelled_as_cu
     assert not replay.result.completed,'old handed-source proof was stamped after the source changed and accepted for broken current code'
     # Its raw passing result is kept; it is stale, never relabelled current.
     (proof,)=data['scratch_proofs']
-    assert proof['status']=='passed' and proof['eligible'] is False
+    assert proof['status']==('passed' if sandbox else 'not run') and proof['eligible'] is False
+    assert sandbox or _refused(proof)
     assert proof['stale']=='the source moved after the copy was handed'
 
 
