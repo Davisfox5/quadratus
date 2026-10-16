@@ -1025,6 +1025,34 @@ Key design decisions already settled:
   selected shipped producer's bytes are part of `GateSuite._runner_hash`, so
   a changed reporter misses the cache. unittest's own summary for a failed
   and a skipped subcase reads as zero executed and still fails closed.
+- **The finish is held, the last wave closes factually, and error clauses
+  need a run** (Davis, 2026-10-16, after R22: three tasks closed, 20 of 20
+  calls spent, the cap's goal question refused at call 21, no audit).
+  `RunBudget.protect_finish` holds the goal question and the requirements
+  audit (`run_budget.FINISH_STAGES`) one call and one full per-call reserve
+  each from ordinary calls, counting reserves in flight; an ordinary call
+  that would spend them raises `FinishReserved` before it starts, is
+  recorded (`finish_refusals`, `budget.json`) and latches nothing. The
+  session marks the finishing calls (`finishing("goal")`, `"audit"`),
+  recomputes the held stages each episode from its own record, and treats a
+  refused review, recheck, revision, fix or post-merge recheck as not run:
+  the finding stays open and every existing debt gate still decides, so a
+  run can stop FindingsOpen instead of finishing. No limit, reserve or
+  shape changes; finishing calls never take the summary shape. The job's
+  last dispatched wave (and a model close-out refused to keep the finish)
+  closes with `_factual_close_out`: reviews as they ended, last check and
+  its source, open debt, NOT RUN, scratch proofs and artifact pointers, no
+  invented decision or map note; not the direct tier's text. A requirement
+  whose own text is about errors, refusals or invalid input
+  (`_error_clause`) is accepted only on executed evidence
+  (`_executed_cases`: a cited `test_*` case a complete approved run executed
+  and passed on the current source; in a review, also that review's passing
+  scratch demonstration). The audit lowers any other MET to NOT MET; a
+  review's other MET becomes an UNVERIFIED line the lead answers, never an
+  approval. Whether the executed test establishes the clause stays the
+  seat's judgment. The R22 ledger replayed through the hold refuses row 17
+  (t2's recheck), which leaves its finding open: the hold makes the stop
+  honest, it does not make that run finish.
 - **A trim gets what the harness measured** (R20 on c7e9449). t2's one
   scope trim, told only the total, spent 8 rounds and 373,366 reported
   tokens, more than its draft, and the run ended with 141,947 left under the

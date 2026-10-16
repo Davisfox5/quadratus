@@ -85,6 +85,7 @@ from .routing import (
     open_security_excursion,
     orchestrator_seat,
 )
+from .run_budget import FinishReserved, finishing
 from .scope import ScopeReport, TaskScope, changed_paths, count_change_lines
 from .structured import StructuredError, parse_security_verdict
 from .task_kinds import (
@@ -1400,6 +1401,7 @@ def _check_runs(check: dict, root=None) -> List[dict]:
         qualified_names = set((row["cases"] or {}).get("qualified") or ()) if isinstance(row["cases"], dict) else set()
         executed_names = names[2] if names[2] is not None else Counter()
         out.append(dict(id=row["id"], passed=row["passed"], required=row["required"], filtered=filtered,
+                        argv=list(argv), cwd=row["cwd"],
                         tests=tests, skipped=skipped_count(SimpleNamespace(output=row["output"],
                                                                            report=row["report"])),
                         files=set(operand_paths(argv, root, row["cwd"])),
@@ -1583,6 +1585,38 @@ def _enclosing_call(text: str, at: int):
                 return text[start:i + 1]
         i += 1
     return None
+
+
+def _case_name(key: str) -> str:
+    """The test function a case key names: pytest ``file::Class::name[param]``
+    or unittest verbose ``name (module.Class...)``."""
+    key = str(key)
+    if "::" in key:
+        return key.split("::")[-1].split("[", 1)[0]
+    return key.split(" ", 1)[0].split("[", 1)[0]
+
+
+def _run_discovers(run: dict, path: str, root) -> bool:
+    """Whether ``run``'s own discovery ran the test file ``path``: pytest
+    over its directory operands (or its working directory), or ``python -m
+    unittest discover`` from its start directory with the default pattern."""
+    import fnmatch
+
+    from .integration import _test_family, discovers_added_tests, model_facing
+    argv = [str(a) for a in model_facing(run.get("argv") or [])]
+    if not argv or root is None:
+        return False
+    base = (Path(root) / (run.get("cwd") or ".")).resolve()
+    if not discovers_added_tests(argv, base):
+        return False
+    target = (Path(root) / path).resolve()
+    if argv[1:4] == ["-m", "unittest", "discover"]:
+        rest = argv[4:]
+        start = rest[rest.index("-s") + 1] if "-s" in rest[:-1] else "."
+        return target.is_relative_to((base / start).resolve()) and fnmatch.fnmatch(target.name, "test*.py")
+    rest = argv[3:] if argv[1:3] == ["-m", "pytest"] else argv[1:]
+    dirs = [(base / a).resolve() for a in rest if not a.startswith("-")] or [base]
+    return bool(_test_family(path)) and any(target.is_relative_to(d) for d in dirs)
 
 
 def _complete_run(run: dict) -> bool:
@@ -2173,6 +2207,41 @@ def _seat_takes_scratch(key: str) -> bool:
 _REQUIREMENT_VERDICT = re.compile(r"^\s*(?:[-*+]\s+)?\**(R\d+)\**\s*:\s*(NOT\s+MET|MET)\b", re.IGNORECASE | re.MULTILINE)
 
 
+#: A requirement about errors, refusals or invalid input, read from its own
+#: text (Davis, 2026-10-16). General vocabulary only: no project, interface
+#: or value is named. Such a requirement is accepted only on executed
+#: negative-path evidence (Session._executed_cases); no model's reading,
+#: applicability note or "tested" claim stands in for a run.
+_ERROR_CLAUSE = re.compile(
+    r"\b(?:raises?|raised|raising|rejects?|rejected|rejecting|rejection|refus(?:e|es|ed|ing|al)|invalid|"
+    r"malformed|non-?zero|exceptions?|denied|forbidden|conflicts?|not found|(?:HTTP|status)\s*[45]\d\d|"
+    r"errors?\s+(?:response|member|message|code|status|object|output)s?|(?:an|the|JSON)\s+error)\b",
+    re.IGNORECASE)
+
+
+def _error_clause(text: str) -> bool:
+    return bool(_ERROR_CLAUSE.search(text or ""))
+
+
+#: What an error or refusal requirement needs before it is accepted, for the
+#: seats that judge it; the harness enforces it whatever the reply says.
+_EXECUTED_ERROR_RULE = (
+    "A requirement about errors, refusals or invalid input is accepted only on executed evidence: "
+    "cite on its MET line a test_* case that exercises the rejecting path (invalid types, missing "
+    "values, conflicts, and the representation or range boundaries the implementation exposes) and "
+    "that the approved checks ran and passed on this source, or demonstrate it with a scratch test "
+    "the harness runs. A MET without that is not counted, whatever it says.")
+
+
+def _met_lines(text: str) -> Dict[str, str]:
+    """rid -> the rest of its MET line, for lines that say MET (not NOT MET)."""
+    out: Dict[str, str] = {}
+    for m in _AUDIT_LINE.finditer(text or ""):
+        if m.group(2).upper() == "MET":
+            out.setdefault(m.group(1).upper(), m.group(3).strip())
+    return out
+
+
 def _requirement_verdicts(text: str) -> Dict[str, bool]:
     """A reviewer's per-requirement lines: rid -> met. A NOT MET line wins in
     either order (root review of 5cfc841: with the last line winning, NOT MET
@@ -2236,6 +2305,20 @@ def _has_blocking_finding(text: str) -> bool:
                for line in text.splitlines())
 
 
+def _review_disposition(note: str, capped: bool, rids) -> str:
+    """How one review ended, in the record's words, for a factual close-out."""
+    if capped:
+        return "review capped at its turn limit; no verdict"
+    clean = (note.strip().upper().rstrip(".") == "NO FINDINGS" or _clean_goal_review(note, list(rids)))
+    if clean:
+        return "reviewed: no findings"
+    if _has_blocking_finding(note):
+        return "reviewed: blocking findings"
+    if not _review_complete(note):
+        return "review ended without a verdict"
+    return "reviewed: non-blocking notes"
+
+
 def _resolved_verdict(text: str) -> bool:
     """Accept one standalone boundary verdict, rejecting conflicting markers.
 
@@ -2288,6 +2371,11 @@ class Session:
         self.unresolved_reviews: List[dict] = []
         #: Harness-executed scratch demonstrations (runtime._scratch_proof).
         self.scratch_proofs: List[dict] = []
+        #: Ordinary calls the budget refused to keep the finish, and what each
+        #: would have done (run_budget.FinishReserved).
+        self.finish_refusals: List[dict] = []
+        #: Each task's reviewer dispositions in order, for factual close-outs.
+        self.review_dispositions: Dict[str, List[tuple]] = {}
         #: Evidence requests the orchestrator made and what each found
         #: (Session._serve_evidence): the original finding, the harness's
         #: receipt and the one reassessment, kept whatever the outcome.
@@ -4441,8 +4529,7 @@ class Session:
                 # The direct tier closes mechanically on every path; a model
                 # close-out here was an extra call per failed cheap gate
                 # (Codex #35 6090721993, DT-C1).
-                close = self._mechanical_close_out if self._tier(spec) == "direct" else self._close_out
-                summary_text, reasoning, dead_ends = close(lead, spec, task)
+                summary_text, reasoning, dead_ends = self._task_close_out(lead, spec, task)
                 summary = task.close(summary=summary_text, reasoning=reasoning, dead_ends=dead_ends)
                 self.memory.absorb(summary)
                 self.history.append(summary)
@@ -4491,6 +4578,8 @@ class Session:
             task.record("assistant", f"[{labels[peer]}] {note}")
             task.keep(note, kind=f"review:{peer}", author=peer)
             notes.append((peer, note))
+            self._dispose(spec, peer, _review_disposition(note, peer in capped,
+                                                          [r for r, _ in self._covered_texts()]))
 
         # The rebuttal round: the lead answers every finding and revises. This
         # is where the debate actually lands in the artifact -- without it,
@@ -4557,6 +4646,12 @@ class Session:
                 if handoff is None:
                     return self._close_turn_limited(lead, spec, task, exc, before)
                 revision, unresolved, capped_writer = handoff[0], handoff[1], True
+            except FinishReserved as exc:
+                # Refused before it started, to keep the finish: nothing
+                # answered the findings, so every blocking one stays open as
+                # the reviewer wrote it, and no writer call follows.
+                self._finish_refused(spec, "revision", exc)
+                revision, unresolved, capped_writer = draft, list(blocking), True
             else:
                 task.record("assistant", revision)
                 task.keep(revision, kind="revision")
@@ -4581,6 +4676,11 @@ class Session:
                     if handoff is None:
                         return self._close_turn_limited(lead, spec, task, exc, before)
                     revision, unresolved, capped_writer = handoff[0], handoff[1], True
+                    break
+                except FinishReserved as exc:
+                    # The findings the last recheck left open stay open.
+                    self._finish_refused(spec, "fix round", exc)
+                    capped_writer = True
                     break
                 task.record("assistant", revision)
                 task.keep(revision, kind="revision")
@@ -4620,10 +4720,7 @@ class Session:
 
         self._assess_scope(spec, task, before)
         self._stage("closeout")
-        if self._tier(spec) == "direct":
-            summary_text, reasoning, dead_ends = self._mechanical_close_out(lead, spec, task)
-        else:
-            summary_text, reasoning, dead_ends = self._close_out(lead, spec, task)
+        summary_text, reasoning, dead_ends = self._task_close_out(lead, spec, task)
         summary = task.close(
             summary=summary_text, reasoning=reasoning, dead_ends=dead_ends
         )
@@ -5055,9 +5152,8 @@ class Session:
                     self._edge("verification", True)
 
             self._stage("closeout")
-            summary_text, reasoning, dead_ends = self._close_out(
-                excursion.worker, spec, task
-            )
+            summary_text, reasoning, dead_ends = self._task_close_out(excursion.worker, spec, task,
+                                                                      mechanical=False)
             summary = task.close(
                 summary=summary_text, reasoning=reasoning, dead_ends=dead_ends
             )
@@ -5825,6 +5921,7 @@ class Session:
                 # the bytes its own start found (quadratus.checkpoint).
                 for name, value in carried.items():
                     setattr(self, name, value)
+        self._protect_finish()
         if self.config.readiness_probes:
             self._run_readiness()
         if self.config.plan_gate is not None and self._explicit_tasks is not None:
@@ -5864,7 +5961,13 @@ class Session:
             if batch:
                 used += len(batch) - 1
                 previous_description = None
-                if not self._run_batch(batch):
+                # No slot is left after this wave: no planning call follows it.
+                self._last_wave = used >= max_tasks and self._explicit_tasks is None
+                try:
+                    ran = self._run_batch(batch)
+                finally:
+                    self._last_wave = False
+                if not ran:
                     # Sent back before any lead call (map G6): the same as a
                     # serial send-back, one slot spent, not one per task, and
                     # it counts against the same correction allowance.
@@ -6007,10 +6110,12 @@ class Session:
                 # point was intake, not work (Codex, live run
                 # 20260930T134226Z: "ran" named a task no call ever made).
                 self.explicit["ran"].append(dict(index=self._explicit_index, task=spec.task_id))
+            self._last_wave = used >= max_tasks and self._explicit_tasks is None
             try:
                 summary = self.run_task(spec)
             finally:
                 self._continues = None
+                self._last_wave = False
             unfinished = getattr(summary, "outcome", "closed")
             if unfinished in ("turn_limited", "failed"):
                 # A capped or failed continuation carries its predecessor's
@@ -6176,6 +6281,11 @@ class Session:
             # A run the tree moved under shows nothing about any one source.
             "source": None if moved else current,
             "receipts": [dict(dataclasses.asdict(r), output=(r.output or "")[-4000:]) for r in result.receipts],
+            # A single-command gate has no receipts: its own output tail,
+            # case record, selection and cwd make it execution evidence the
+            # same way a task check is (_check_runs; Davis, 2026-10-16).
+            "output": (result.output or "")[-4000:], "cases": getattr(result, "cases", None),
+            "selection": self._gate_selection(gate), "command_cwd": self._gate_cwd(gate),
         })
         self._note(f"task {spec.task_id}: harness ran the checks on the source before {stage}: "
                    + ("passed" if result.passed and not moved else "did not pass"))
@@ -7137,6 +7247,7 @@ class Session:
                     # The parent's approved commands, for the scratch
                     # demonstration only: the child's own gate stays off.
                     child._inherited_checks = integration_checks
+                    child._last_wave = getattr(self, "_last_wave", False)
                     child._batch_siblings = [
                         (other.task_id, sorted(_literal_paths(other.scope) or ()),
                          (other.scope.intended_result if other.scope else "") or "")
@@ -7164,6 +7275,7 @@ class Session:
                 self.unresolved_reviews.extend(child.unresolved_reviews)
                 self.review_notes.extend(child.review_notes)
                 self.scratch_proofs.extend(child.scratch_proofs)
+                self.finish_refusals.extend(child.finish_refusals)
                 # A child's execution facts come back with it, re-based to the
                 # parent's checks: only a check the parent runs after the merge
                 # can discharge them (Codex review of b6ba3ba, F5).
@@ -7303,6 +7415,11 @@ class Session:
             except TurnLimitReached:
                 row["verdict"] = "kept: recheck capped"
                 continue
+            except FinishReserved as exc:
+                # Not rechecked: the findings stay open exactly as they were.
+                self._finish_refused(spec, f"post-merge recheck by {peer}", exc, outcome=outcome)
+                row["verdict"] = "kept: recheck refused to keep the finish"
+                continue
             if not _resolved_verdict(verdict):
                 row["verdict"] = "kept: " + verdict.strip()[:200]
                 continue
@@ -7384,6 +7501,11 @@ class Session:
                 self._open_finding("unverified", f"Task {spec.task_id}: the review of its capped final work "
                                                  f"by {peer} stopped at its turn limit; held unverified.")
                 result.update(reviewer=peer, verdict="held: review capped")
+                return result
+            except FinishReserved as exc:
+                # The cap stands: no review ran, nothing is lifted.
+                self._finish_refused(spec, f"review of the capped final work by {peer}", exc, outcome=outcome)
+                result.update(reviewer=peer, verdict="held: review refused to keep the finish")
                 return result
             self.store.put(note, kind=f"review:{peer}", author=peer)
             note = self._judge_goal_review(spec, peer, note)
@@ -7512,6 +7634,11 @@ class Session:
         try:
             with invocation("plan", "requirements-review"):
                 reply = self._invoke_model(reviewer, prompt, allow_writes=False)
+        except FinishReserved as exc:
+            # Not reviewed: recorded as a failed review, so DONE cannot stand.
+            self._finish_refused(None, "requirements review", exc)
+            self.requirement_reviews.append(dict(reviewer=reviewer, result="failed: refused to keep the finish"))
+            return
         except ProviderError as exc:
             self.requirement_reviews.append(dict(reviewer=reviewer, result=f"failed: {type(exc).__name__}"))
             return
@@ -7738,7 +7865,7 @@ class Session:
             "states a condition the goal, a decision and a ruling do not, judge the goal's own "
             "condition and say so on the line ('wording stricter than the goal: <condition>'); a "
             "condition the goal does state is never relaxed this way. " + _AUTHORITY_ORDER + " "
-            + _ERROR_PATH_RULE + " "
+            + _ERROR_PATH_RULE + " " + _EXECUTED_ERROR_RULE + " "
             + "For each requirement, check the delivered files themselves: code, "
             "interface, tests and documentation. Documentation must agree with the goal, not only "
             "with the code. A requirement about existing product behaviour is met only if it works "
@@ -7755,7 +7882,7 @@ class Session:
         saved = self._active_spec
         self._active_spec = None
         try:
-            with invocation("audit", "auditor"):
+            with invocation("audit", "auditor"), finishing("audit"):
                 reply = self._invoke_model(auditor, prompt)
         except ProviderError as exc:
             # An audit that could not run is not a pass. Budget stops and
@@ -7781,6 +7908,7 @@ class Session:
                     met, why = False, f"MET claimed without a file or test that exists in the project ({why[:100]})"
             found[m.group(1).upper()] = (met, why)
         lowered = self._lower_unexecuted(found)
+        lowered += self._lower_unexercised_errors(found, audited)
         verdicts = {r: found.get(r, (False, "the auditor gave no verdict")) for r in audited}
         self.requirement_audits.append(dict(auditor=auditor, verdicts={r: dict(met=ok, why=why)
                                                                        for r, (ok, why) in verdicts.items()},
@@ -8477,6 +8605,61 @@ class Session:
                 + "\nA requirement whose only evidence is a file listed here is NOT MET, and so is a "
                 "requirement a task covering it reported NOT RUN: name what did not run.")
 
+    def _executed_cases(self, citations) -> List[str]:
+        """The cited ``file::test_name`` cases a complete approved run executed
+        and passed on the current source (Davis, 2026-10-16).
+
+        Source-bound: only a recorded task check or observed check whose
+        source is the current fingerprint counts, never an earlier source.
+        A run counts only when it is complete (passing, required, unfiltered,
+        cases executed, a known zero skips) and it ran the cited file, by name
+        or by its own discovery. Where the run recorded case identity, the
+        cited case must be among the executed names; where it did not, a
+        complete run of the file with no skip stands for its cases. A model's
+        word that something was tested is never one of these."""
+        if not self.project:
+            return []
+        current = self._source_fingerprint()
+        records = [c for c in list(self.checks) + list(self.review_checks)
+                   if current and c.get("source") == current]
+        if not records:
+            return []
+        root = Path(self.project)
+        runs = [r for record in records for r in _check_runs(record, root) if _complete_run(r)]
+        shown = []
+        for citation in citations:
+            path, _, name = str(citation).partition("::")
+            if not name.startswith("test"):
+                continue
+            for run in runs:
+                if not (path in run["files"] or _run_discovers(run, path, root)):
+                    continue
+                executed = run.get("executed_names") or {}
+                if executed and not any(_case_name(key) == name for key in executed):
+                    continue
+                shown.append(citation)
+                break
+        return shown
+
+    def _lower_unexercised_errors(self, found: dict, audited) -> List[dict]:
+        """Turn an error or refusal requirement's MET into NOT MET unless it
+        cites a test case executed and passed on this source; never the other
+        way. The auditor's reasons, applicability notes and readings do not
+        lift it: only a run does (Davis, 2026-10-16)."""
+        texts = self.memory.ledger.requirements
+        lowered = []
+        for rid, (met, why) in list(found.items()):
+            if not met or rid not in audited or not _error_clause(texts.get(rid, "")):
+                continue
+            if self._executed_cases(self._resolve_citations(why)):
+                continue
+            reason = ("an error or refusal requirement: the MET cites no test case that a complete approved "
+                      "check executed and passed on this source; negative-path behaviour must be shown by a "
+                      "run, not read")
+            found[rid] = (False, reason)
+            lowered.append(dict(requirement=rid, auditor_said=why[:200], reason=reason))
+        return lowered
+
     def _lower_unexecuted(self, found: dict) -> List[dict]:
         """Turn a MET into NOT MET where the record shows its acceptance did
         not run, whatever the auditor wrote; never the other way.
@@ -8508,6 +8691,53 @@ class Session:
                 found[rid] = (False, reason)
                 lowered.append(dict(requirement=rid, auditor_said=why[:200], reason=reason))
         return lowered
+
+    def _budget(self):
+        """The run's shared budget, when the transport carries one (the
+        session holds the fleet's bound ``invoke``)."""
+        owner = getattr(self.invoke, "__self__", self.invoke)
+        return getattr(owner, "run_budget", None)
+
+    def _protect_finish(self) -> None:
+        """Hold the finishing judgments' capacity from ordinary work for this
+        episode (Davis, 2026-10-16; run_budget.FINISH_STAGES): the cap's goal
+        question, unless an explicit list ends without one or a resumed job
+        already holds its answer, then the requirements audit while the
+        ledger is on and no final audit is on record. Recomputed per episode
+        from the session's own record, so a resume holds nothing twice and
+        never holds a judgment already made; nothing is added to the job's
+        allowance and no limit changes."""
+        budget = self._budget()
+        if budget is None or not hasattr(budget, "protect_finish"):
+            return
+        stages = []
+        if self._explicit_tasks is None and self._cap_goal is None:
+            stages.append("goal")
+        if self.config.requirements_ledger and self._final_audit is None:
+            stages.append("audit")
+        budget.protect_finish(stages)
+        if stages:
+            self._note("holding " + " and ".join(stages) + " capacity from ordinary calls")
+
+    def _finish_refused(self, spec, what: str, exc, *, outcome=None) -> None:
+        """Record an ordinary call refused to keep the finish. The work it
+        would have done stays undone: the caller keeps every finding open."""
+        task_id = getattr(spec, "task_id", None) or "run"
+        self.finish_refusals.append(dict(task=task_id, what=what, detail=str(exc)[:300]))
+        target = outcome or (self._outcome if spec is not None else None)
+        text = f"{what} not run: ordinary calls stopped to keep the finish ({str(exc)[:200]})"
+        if target is not None:
+            target.note("unverified", text, terminal=False)
+        else:
+            self.run_outcome.note("unverified", text, terminal=False)
+        self._note(f"{task_id}: {text}")
+
+    def _dispose(self, spec, peer: str, disposition: str) -> None:
+        """One reviewer's disposition of this task, in order, for the record
+        a factual close-out writes (it never decides anything)."""
+        task_id = getattr(spec, "task_id", None)
+        if task_id:
+            self.review_dispositions.setdefault(task_id, []).append((peer, disposition))
 
     def _confirm_goal_met(self) -> bool:
         """After the cap: ask once whether the goal is met, and never act on it.
@@ -8546,7 +8776,17 @@ class Session:
                 return prompt
             return prompt + "\n\n" + _render_fetches(fetched) + "\n\nWith that read, answer now."
 
-        _, reply = self._ask_seat(seat, build)
+        try:
+            with finishing("goal"):
+                _, reply = self._ask_seat(seat, build)
+        except FinishReserved as exc:
+            # A follow-up of the goal question (a FETCH turn or a re-ask) may
+            # not spend the audit's hold; with no answer the goal is not
+            # confirmed, as for any reply that is not exactly DONE.
+            self._finish_refused(None, "goal question follow-up", exc)
+            self._note("the task cap was reached without the goal confirmed: its follow-up was refused "
+                       "to keep the audit's capacity")
+            return False
         # Judged whole, not scanned for a DONE line. The loop's own parser
         # accepts DONE beside a preface and ignores what follows, so
         # "task 2 is unverified" then DONE, or DONE then "except the security
@@ -9781,7 +10021,7 @@ class Session:
                    "on an error or a refusal, or 'R<n>: NOT MET - <the condition>', which is a BLOCKING "
                    "finding. A review that leaves a covered requirement without such a line is recorded "
                    "as unfinished. With nothing to change, reply NO FINDINGS on the first line followed "
-                   "only by those lines. " + _ERROR_PATH_RULE if covered else "")
+                   "only by those lines. " + _ERROR_PATH_RULE + " " + _EXECUTED_ERROR_RULE if covered else "")
                 + (" " + _PROBE_RULE if covered and self._probe_applies(peer) else ""))
 
     def _probe_applies(self, key: str) -> bool:
@@ -9892,7 +10132,54 @@ class Session:
         if unmet and not _has_blocking_finding(note):
             note += "\n" + "\n".join(f"BLOCKING: {rid} is NOT MET (the reviewer's own verdict line)."
                                       for rid in unmet)
-        return note
+        return self._hold_unexercised_errors(spec, peer, note, verdicts)
+
+    def _hold_unexercised_errors(self, spec, peer: str, note: str, verdicts: dict) -> str:
+        """A review's MET on a covered error or refusal requirement counts only
+        on executed evidence: this review's own scratch demonstration, run by
+        the harness and passed, or a cited test case a complete approved check
+        executed and passed on this source (Davis, 2026-10-16). Otherwise the
+        MET line is replaced by an UNVERIFIED line, so nothing downstream reads
+        it as an approval (the lead answers it like any note), and the gap is
+        kept as a non-terminal fact and an observation for the final audit,
+        which applies the same rule to acceptance."""
+        texts = dict(self._covered_texts())
+        proof = getattr(self, "_last_scratch_proof", None) or {}
+        demonstrated = proof.get("status") == "passed" and bool(proof.get("cases"))
+        held = []
+        for rid, rest in _met_lines(note).items():
+            if verdicts.get(rid) is not True or rid not in texts or not _error_clause(texts[rid]):
+                continue
+            if demonstrated or self._executed_cases(self._resolve_citations(rest)):
+                continue
+            held.append(rid)
+        if not held:
+            return note
+        # A review that finished keeps finishing: holding one line is not
+        # turning the reply into an unfinished review.
+        finished = _review_complete(note) or _clean_goal_review(note, list(texts))
+        lines = []
+        for line in note.splitlines():
+            m = _AUDIT_LINE.match(line)
+            if m and m.group(1).upper() in held and m.group(2).upper() == "MET":
+                line = (f"{m.group(1).upper()}: UNVERIFIED - MET claimed without executed negative-path "
+                        "evidence (harness: no passing scratch demonstration in this review and no cited test "
+                        "case run on this source); add a test that exercises the rejecting path")
+            lines.append(line)
+        source = self._source_fingerprint() if self.project else None
+        for rid in held:
+            text = (f"{peer} marked {rid} MET without executed negative-path evidence: no passing scratch "
+                    "demonstration in its review and no cited test case run on this source; not counted")
+            self.review_notes.append(dict(task=spec.task_id, peer=peer, requirements=[rid], association="named",
+                                          text=text, source=source))
+            if self._outcome is not None:
+                self._outcome.note("unverified", f"{rid}: {text}", terminal=False)
+        self._note(f"task {spec.task_id}: {peer}'s MET on {', '.join(held)} not counted: no executed "
+                   "negative-path evidence")
+        held_note = "\n".join(lines)
+        if finished and not _review_complete(held_note):
+            held_note += "\n" + _REVIEW_COMPLETE
+        return held_note
 
     def _sibling_note(self) -> str:
         """For a parallel child's reviewer: the sibling tasks whose changes are
@@ -10050,6 +10337,19 @@ class Session:
                     "specifically remains>'."
                     + self._review_turn_budget_note(peer),
                 )
+            except FinishReserved as exc:
+                # Refused to keep the finish: no verdict, so the finding is
+                # neither resolved nor confirmed and buys no fix round, as a
+                # capped recheck (below).
+                self._finish_refused(spec, f"recheck by {peer}", exc)
+                standing = note.strip()
+                self._open_finding("unverified", f"Task {spec.task_id}: not re-checked after the "
+                                                 f"revision (ordinary calls stopped to keep the finish): {standing}")
+                self._dispose(spec, peer, "recheck not run: refused to keep the finish")
+                task.record("user", "A blocking finding was not re-checked against the revision "
+                                    "(ordinary calls were stopped to keep the finish) -- carry it into the "
+                                    f"summary as an open question:\n[{shown}] {standing}")
+                continue
             except TurnLimitReached as exc:
                 # No verdict either way: the finding is neither resolved nor
                 # confirmed, so it does not buy another fix round. The
@@ -10057,6 +10357,7 @@ class Session:
                 # specific unresolved defect (Codex review of 0983dac: only
                 # the generic no-verdict fact survived), beside the cap fact.
                 capped = self._capped_review(spec, peer, 'recheck', exc)
+                self._dispose(spec, peer, "recheck capped at its turn limit; no verdict")
                 task.record("assistant", f"[{shown} recheck] {capped}")
                 # The whole finding as the reviewer wrote it: continuation
                 # lines and every marker form (Codex review of cd8c5b0).
@@ -10070,6 +10371,9 @@ class Session:
             task.record("assistant", f"[{shown} recheck] {verdict}")
             if not _resolved_verdict(verdict):
                 unresolved.append((peer, verdict.strip()))
+                self._dispose(spec, peer, "recheck: unresolved: " + verdict.strip()[:200])
+            else:
+                self._dispose(spec, peer, "recheck: resolved")
         return unresolved
 
     def _capped_review(self, spec: TaskSpec, peer: str, what: str, exc: TurnLimitReached) -> str:
@@ -10163,6 +10467,10 @@ class Session:
                 )
             except TurnLimitReached as exc:
                 fix = self._capped_fix(lead, spec, task, exc, "gate-fix")
+            except FinishReserved as exc:
+                # No fix call to keep the finish: the failed check stands.
+                self._finish_refused(spec, "gate fix", exc)
+                break
             task.record("assistant", fix)
             task.keep(fix, kind="gate-fix")
             latest_fix = fix
@@ -10754,6 +11062,92 @@ class Session:
             "name at least one BLOCKING: or UNRESOLVED: finding above it."
             + self._review_turn_budget_note(verifier)
         )
+
+    def _task_close_out(self, lead: str, spec: TaskSpec, task: TaskMemory, *, mechanical: bool = True):
+        """The record that survives a task: the direct tier's harness record;
+        a factual record when no later planning call can read a model summary
+        (the job's last dispatched wave) or the model close-out was refused to
+        keep the finish; otherwise the lead's model close-out."""
+        if mechanical and self._tier(spec) == "direct":
+            return self._mechanical_close_out(lead, spec, task)
+        if getattr(self, "_last_wave", False):
+            return self._factual_close_out(lead, spec, task, why=(
+                "no later planning call reads it: this task is in the job's last dispatched wave"))
+        try:
+            return self._close_out(lead, spec, task)
+        except FinishReserved as exc:
+            self._finish_refused(spec, "model close-out", exc)
+            return self._factual_close_out(lead, spec, task, why="the model close-out was refused to keep the finish")
+
+    def _factual_close_out(self, lead: str, spec: TaskSpec, task: TaskMemory, *, why: str):
+        """A standard task's record, written by the harness from what it holds
+        (Davis, 2026-10-16: no model summary where nothing later needs one).
+
+        Not the direct tier's text, which says no collaborator reviewed: this
+        task's reviews are stated as they ended, with each recheck. It names
+        the measured changes, the last check and whether it ran on this
+        source, the debt left open, NOT RUN reports and scratch proofs, and
+        points to the full transcript and diff, kept as artifacts as a model
+        close-out's are. It invents nothing: no decision, dead end or map
+        note, and it says so."""
+        transcript = "\n\n".join(f"[{t.role}] {t.content}" for t in task.turns()
+                                   if not (t.role == "user" and t.content == spec.description))
+        changed, lines, diff = [], 0, "No project source diff is available."
+        if self.project and self._task_before is not None:
+            state = self._inspect_partial_edits(self._task_before, stopped=False)
+            if state.get("inspected"):
+                changed, lines = list(state.get("changed") or []), state.get("changed_lines", 0)
+            try:
+                from .project import Project
+                diff = Project(self.project, exclude=self.config.project_excludes).diff(self._task_before) or \
+                    "No source changes in this task."
+            except Exception:  # noqa: BLE001 -- the record says what is missing
+                log.debug("could not prepare factual close-out diff", exc_info=True)
+        pointers = []
+        for title, content in (("Recorded conversation", transcript), ("Source diff captured by the harness", diff)):
+            ref = self.store.put(content, kind="closeout-evidence", author="harness")
+            pointers.append(f"{title}: artifact {ref.id}")
+        task.keep("\n".join(pointers), kind="closeout-evidence-index", author="harness")
+        current = self._source_fingerprint() if self.project else None
+        check = self.checks[-1] if self.checks else None
+        if check is None:
+            checked = "no check recorded"
+        else:
+            view = _check_for_models(check)
+            gates = ", ".join(f"{g.get('id')}: {g.get('status')}" for g in view["gates"])
+            checked = (("last check PASSED" if check.get("passed") else "last check FAILED")
+                       + (f" [{gates}]" if gates else "")
+                       + (" on the current source" if current and check.get("source") == current
+                          else " (not shown to be on the current source)"))
+        reviews = self.review_dispositions.get(spec.task_id) or []
+        reviewed = ("; ".join(f"{peer}: {d}" for peer, d in reviews) if reviews
+                    else "no reviewer was invoked for this task")
+        open_ = [f.full or f.detail for f in (self._outcome.facts if self._outcome is not None else [])
+                 if f.active]
+        unresolved = [e["text"] for e in self.unresolved_reviews if e.get("task") == spec.task_id]
+        not_run = [e["item"] for e in self.unexecuted_acceptance if e.get("task") == spec.task_id]
+        proofs = [f"{p.get('peer')}: {p.get('status')}" for p in self.scratch_proofs if p.get("task") == spec.task_id]
+        refused = [r["what"] for r in self.finish_refusals if r.get("task") == spec.task_id]
+
+        def listed(items):
+            items = [str(i)[:300] for i in items]
+            return "; ".join(items[:8]) + (f" and {len(items) - 8} more" if len(items) > 8 else "") if items else "none"
+        summary_text = (
+            f"Recorded by the harness, not a model ({why}). "
+            f"Changed: {', '.join(changed) or 'no files'}" + (f" ({lines} lines)" if changed else "") + ". "
+            f"Checks: {checked}. Reviews: {reviewed}. "
+            f"Open at close: {listed(open_)}. Unresolved review findings: {listed(unresolved)}. "
+            f"NOT RUN reports: {listed(not_run)}. Scratch proofs: {listed(proofs)}. "
+            f"Calls refused to keep the finish: {listed(refused)}. "
+            "No decisions or dead ends were written by a model, and the codebase map was not amended by "
+            "this task. Evidence: " + "; ".join(pointers))
+        task.keep(json.dumps(dict(task=spec.task_id, lead=lead, why=why, changed=changed, changed_lines=lines,
+                                  check=checked, reviews=reviews, open=open_, unresolved=unresolved,
+                                  not_run=not_run, scratch_proofs=proofs, finish_refused=refused,
+                                  evidence=pointers)),
+                  kind="factual-closeout", author="harness")
+        self._note(f"{spec.task_id}: close-out recorded by the harness ({why})")
+        return summary_text, f"No model-written decision record: recorded by the harness ({why}).", []
 
     def _mechanical_close_out(self, lead: str, spec: TaskSpec, task: TaskMemory):
         """The direct tier's record, written by the harness from what it

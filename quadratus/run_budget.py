@@ -11,6 +11,8 @@ import json
 import math
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -18,6 +20,40 @@ from pathlib import Path
 
 class RunBudgetExceeded(RuntimeError):
     """Terminal run control, deliberately not a recoverable ProviderError."""
+
+
+class FinishReserved(RunBudgetExceeded):
+    """An ordinary call refused before it started because it would spend the
+    capacity held for the run's finishing judgments (``FINISH_STAGES``).
+
+    Not latched: nothing about the run's own allowance is exhausted, so the
+    finishing calls themselves may still start. Every later ordinary call is
+    refused the same way (spend and attempts only grow), and the work it
+    would have done stays undone and on the record: a refused review is not
+    a review, a refused recheck resolves nothing."""
+
+
+#: The run's finishing judgments, in order (Davis, 2026-10-16): the task
+#: cap's goal question, then the independent requirements audit when the
+#: goal answer permits it. Each is held one call and the operator's full
+#: per-call reserve from ordinary work; neither takes a smaller shape.
+FINISH_STAGES = ("goal", "audit")
+
+#: The finishing stage the current call belongs to (Session sets it around
+#: the goal question and the audit). None is ordinary work.
+finish_stage: ContextVar = ContextVar("finish_stage", default=None)
+
+
+@contextmanager
+def finishing(stage):
+    """Mark the calls made inside as ``stage`` of the finish."""
+    if stage not in FINISH_STAGES:
+        raise ValueError(f"unknown finishing stage {stage!r}")
+    token = finish_stage.set(stage)
+    try:
+        yield
+    finally:
+        finish_stage.reset(token)
 
 
 @dataclass(frozen=True)
@@ -207,6 +243,12 @@ class RunBudget:
         self._responses = []
         self._oversized = []
         self._shaped = 0
+        #: Finishing stages still held from ordinary work, stages already
+        #: started, and every ordinary call refused to keep them.
+        self._finish_pending = []
+        self._finish_started = []
+        self._finish_released = []
+        self._finish_refusals = []
         if self.path:
             # Written before any call, so an episode that ends before its
             # first call still leaves the job's record (and what it carried).
@@ -243,6 +285,15 @@ class RunBudget:
                                'including a summary call on a CLI with no turn flag, reserves '
                                'reserve_tokens_per_call in full'),
             'input_boundary': 'normalized provider input includes cached input; do not add it again',
+            'finish_protection': {
+                'pending': list(self._finish_pending), 'started': list(self._finish_started),
+                'released': list(self._finish_released), 'refusals': list(self._finish_refusals),
+                'boundary': ('an admission policy, not a guarantee about reported usage: while a finishing '
+                             'stage is pending, an ordinary call starts only if the attempts after it and '
+                             'the reported tokens left after its own reserve, the reserves of calls in '
+                             'flight and one full per-call reserve per pending stage still fit; a refused '
+                             'ordinary call is recorded and latches nothing'),
+            },
             'wall_boundary': 'attempt timeout plus required external process supervisor',
         }
 
@@ -288,6 +339,38 @@ class RunBudget:
             self._persist()
             raise RunBudgetExceeded(f'Run stopped: {self._reason}')
 
+    def protect_finish(self, stages):
+        """Hold ``stages`` (a subset of ``FINISH_STAGES``) from ordinary work.
+
+        Idempotent and never additive: the held set is replaced, so a resumed
+        episode that names the same pending stages holds them once, and a
+        stage this budget saw start is never held again. Holding grants
+        nothing: the finishing calls still meet every limit."""
+        with self._lock:
+            wanted = [s for s in FINISH_STAGES if s in set(stages or ())]
+            self._finish_pending = [s for s in wanted if s not in self._finish_started]
+            self._persist()
+
+    def release_finish(self, stage, why):
+        """Stop holding ``stage``: the run will not ask it (recorded)."""
+        with self._lock:
+            if stage in self._finish_pending:
+                self._finish_pending.remove(stage)
+                self._finish_released.append(dict(stage=stage, why=str(why)[:300]))
+                self._persist()
+
+    def finish_pending(self):
+        with self._lock:
+            return list(self._finish_pending)
+
+    def _held(self, stage):
+        """The pending stages a call of ``stage`` must leave room for: all of
+        them for ordinary work, only the later ones for a finishing call."""
+        if stage is None:
+            return list(self._finish_pending)
+        later = FINISH_STAGES[FINISH_STAGES.index(stage) + 1:]
+        return [s for s in self._finish_pending if s in later]
+
     def reserve(self, *, transport="cli", price_key="", expected_tokens=None):
         """Atomically authorize one attempt and return its ID and time remaining.
 
@@ -308,23 +391,52 @@ class RunBudget:
             if self._calls >= self.limits.max_calls:
                 self._reason = 'call_limit'
                 self._check()
-            reserve = self.limits.reserve_tokens_per_call
-            if reserve and expected_tokens and 0 < expected_tokens < reserve:
+            stage = finish_stage.get()
+            if stage is not None and stage not in FINISH_STAGES:
+                raise ValueError('Unknown finishing stage')
+            full = self.limits.reserve_tokens_per_call
+            reserve = full
+            shaped = bool(reserve and expected_tokens and 0 < expected_tokens < reserve and stage is None)
+            if shaped:
+                # A finishing judgment never takes the summary shape.
                 reserve = int(expected_tokens)
-                self._shaped += 1
-            if reserve and self.limits.max_reported_tokens - (self._input + self._output) < reserve:
+            left = self.limits.max_reported_tokens - (self._input + self._output)
+            if reserve and left < reserve:
                 # Refused before the call: the budget left could not hold a
                 # call of the size the operator said to expect.
                 self._reason = 'reported_token_reserve'
                 self._check()
+            held = self._held(stage)
+            if held:
+                in_flight = sum(r for _, _, r in self._active.values())
+                calls_after = self.limits.max_calls - (self._calls + 1)
+                tokens_after = left - reserve - in_flight
+                if calls_after < len(held) or (full and tokens_after < len(held) * full):
+                    # Ordinary work may not spend what the finish needs. Not
+                    # latched: the finishing calls are still admissible.
+                    self._finish_refusals.append(dict(
+                        attempt=self._calls + 1, stage=stage, held=list(held),
+                        calls_after=calls_after, tokens_after=tokens_after,
+                        held_tokens=len(held) * full, in_flight=len(self._active)))
+                    self._persist()
+                    raise FinishReserved(
+                        f"Ordinary call refused to keep the finish: {', '.join(held)} "
+                        f"need{'s' if len(held) == 1 else ''} {len(held)} call(s)"
+                        + (f" and {len(held) * full:,} reported tokens" if full else "")
+                        + f"; {calls_after} call(s) and {max(tokens_after, 0):,} tokens would remain")
+            if stage is not None and stage in self._finish_pending:
+                self._finish_pending.remove(stage)
+                self._finish_started.append(stage)
+            self._shaped += int(shaped)
             self._calls += 1
             ticket = self._calls
-            self._active[ticket] = (transport, price_key)
+            self._active[ticket] = (transport, price_key, reserve)
             try:
                 self._persist()
             except RunBudgetExceeded:
                 self._active.pop(ticket)
                 self._calls -= 1
+                self._shaped -= int(shaped)
                 raise
             return ticket, self._remaining()
 
@@ -333,7 +445,7 @@ class RunBudget:
         with self._lock:
             if ticket not in self._active:
                 raise RuntimeError('Unknown or already-finished budget reservation')
-            transport, reserved_key = self._active.pop(ticket)
+            transport, reserved_key, _ = self._active.pop(ticket)
             usage = usage if isinstance(usage, dict) else {}
             counts = [usage.get('input_tokens'), usage.get('output_tokens')]
             if any(type(n) is not int or n < 0 for n in counts):

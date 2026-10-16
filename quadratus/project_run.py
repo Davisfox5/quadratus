@@ -636,6 +636,9 @@ def _run(goal, project, settings, *, state, allow_writes, check, max_tasks,
         'personal_preferences': _preferences_record(settings),
         'requirements': _requirements_record(session),
         'design_checks': list(getattr(session, 'design_checks', []) or []) if session else [],
+        # Ordinary calls refused to keep the finish, and what each would have
+        # done (run_budget.FinishReserved); budget.json holds the admissions.
+        'finish_refusals': list(getattr(session, 'finish_refusals', []) or []) if session else [],
         'findings': list(getattr(session, 'findings', []) or []) if session else [],
         'dependency_identity': (getattr(getattr(session, 'dependency_watch', None), 'record', None)
                                 if session else None),

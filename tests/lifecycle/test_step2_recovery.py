@@ -403,7 +403,9 @@ def test_a_capped_draft_in_the_last_slot_meets_an_independent_review_only_when_c
     assert "Nothing here says the work is finished" in seen[0].prompt
     assert [c.task for c in replay.of("lead")] == ["t1"], "no further lead turn or task was added"
     assert not capped, "the reviewed task is not left as unfinished debt"
-    assert [c.role for c in replay.calls] == ["orchestrator", "lead", "collaborator", "closeout", "orchestrator"]
+    # The last slot's record is the harness's; no model close-out call.
+    assert [c.role for c in replay.calls] == ["orchestrator", "lead", "collaborator", "orchestrator"]
+    assert replay.artifact_texts("factual-closeout")
     assert replay.result.completed, "completed only on the orchestrator's own answer at the cap"
 
 
@@ -1269,7 +1271,8 @@ def test_a_capped_revision_in_the_last_slot_meets_the_reviewer_whose_findings_it
         assert "while revising" in rechecks[0].prompt
         assert result["turn_limited_tasks"] == [], "the rechecked task is not unfinished debt"
         assert [c.role for c in replay.calls][:6] == ["orchestrator", "lead", "collaborator", "revision",
-                                                      "recheck", "closeout"]
+                                                      "recheck", "orchestrator"]
+        assert replay.artifact_texts("factual-closeout"), "the last slot closes on the harness's record"
         if case == "resolved":
             assert replay.result.completed, "completed only on the orchestrator's answer at the cap"
         else:

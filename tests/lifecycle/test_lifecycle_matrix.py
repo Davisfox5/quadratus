@@ -156,7 +156,10 @@ def test_the_whole_task_lifecycle_in_every_request_layout(tmp_path, monkeypatch,
     assert _read(replay, "app.py") == FIXED and "test_negative" in _read(replay, "tests/test_app.py")
     assert "returns the sum" in _read(replay, "README.md")
     assert len(replay.of("worker")) == 1
-    assert [c.task for c in replay.of("closeout")] == ["t1", "t2"]
+    # t2 is the last wave: no planning call reads its record, so the harness
+    # writes it from facts instead of a model close-out (Davis, 2026-10-16).
+    assert [c.task for c in replay.of("closeout")] == ["t1"]
+    assert [json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")] == ["t2"]
     assert len(replay.of("recheck")) == 1
     assert not replay.result.completed, "a task cap is an incomplete outcome, never completion"
 
@@ -253,7 +256,7 @@ def test_a_fix_round_is_told_which_files_are_already_recorded(tmp_path, monkeypa
 def test_a_revision_with_no_edits_and_an_empty_declaration_proceeds(tmp_path, monkeypatch):
     replay = _run(tmp_path, monkeypatch, Script())
     assert H.ended_at_cap(replay, 1) and _gate_passed(replay)
-    assert [c.task for c in replay.of("closeout")] == ["t1"]
+    assert not replay.of("closeout") and len(replay.artifact_texts("factual-closeout")) == 1
 
 
 # -- 3. design work: stale renders corrected with no new source edits ----------------
@@ -451,7 +454,8 @@ def test_a_refused_closeout_keeps_a_harness_record_and_the_run_continues(tmp_pat
 
     replay = _run(tmp_path, monkeypatch, Script(closeout=closeout), max_tasks=2)
     assert H.ended_at_cap(replay, 2) and _gate_passed(replay)
-    assert [c.task for c in replay.of("closeout")] == ["t1", "t2"], "one close-out call per task, no retry"
+    assert [c.task for c in replay.of("closeout")] == ["t1"], "one close-out call, no retry; t2 is the last wave"
+    assert [json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")] == ["t2"]
     refused = replay.artifact_texts("closeout-refused")
     assert len(refused) == 1 and "declined" in refused[0]
 
