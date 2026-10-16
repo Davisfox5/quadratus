@@ -1,21 +1,35 @@
 {
   "review_version": 1,
   "digest_sha256": "735d9b2a259dd36523cccc3172b8dce26aa6fc40068dcc73ccbcff2ec3e85d2e",
-  "base_sha": "5a20957649ad27997b197d91c3093e612b077236",
-  "engine_sha": "5a20957649ad27997b197d91c3093e612b077236",
+  "base_sha": "67dca03fb996e2e4c2f58dc949f1066e1c25b9d5",
+  "engine_sha": "67dca03fb996e2e4c2f58dc949f1066e1c25b9d5",
   "status": "incomplete",
   "date": "2026-09-18",
   "engine_completed": false,
   "truth_check": {
     "verdict": "not-met",
-    "run": "/Users/davisfox/.quadratus/research-inbox/75-735d9b2a259dd36523cccc3172b8dce26aa6fc40068dcc73ccbcff2ec3e85d2e/engine/runs/20261016T024444Z-67c005ed",
+    "run": "/Users/davisfox/.quadratus/research-inbox/75-735d9b2a259dd36523cccc3172b8dce26aa6fc40068dcc73ccbcff2ec3e85d2e/engine/runs/20261016T033715Z-a7335507",
     "not_met": [
       "the run did not complete",
-      "the run stopped with an error: RunBudgetExceeded: Run stopped: call_token_ceiling"
+      "the run stopped with an error: CheckUnattributable: the check failed without an attributable assertion failure (check: structured report undeclared); returncode 1; output artifact 848e9a72e8f7. No repair call was made. Work preserv",
+      "work was still in flight when the run stopped",
+      "the last check failed: /Users/davisfox/Documents/GitHub/quadratus/.quadratus/research-venv/bin/python -m pytest -q"
     ],
     "unverified": [
-      "no check ran",
-      "no requirements were recorded, so none was audited"
+      "the latest recorded check did not pass",
+      "the last check shows no test case running",
+      "R1 has no met status (None)",
+      "R10 has no met status (None)",
+      "R2 has no met status (None)",
+      "R3 has no met status (None)",
+      "R4 has no met status (None)",
+      "R5 has no met status (None)",
+      "R6 has no met status (None)",
+      "R7 has no met status (None)",
+      "R8 has no met status (None)",
+      "R9 has no met status (None)"
     ]
-  }
+  },
+  "context_sha256": "32c9ddc49298f011a52274f2e90f0389bab43083051d455d738530df5d2522ed",
+  "profile": "supplied-context-v1"
 }
