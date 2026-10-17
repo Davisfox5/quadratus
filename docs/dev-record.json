@@ -2139,11 +2139,28 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "claimed",
+      "state": "reviewed",
       "claimed_at": "2026-10-17T17:02:11Z",
       "acknowledged": true,
-      "delivery": null,
-      "reviews": [],
+      "delivery": {
+        "sha": "9dca3b10e21ca96566b7a60cf6431b2a01d1ab0c",
+        "at": "2026-10-17T17:10:49Z"
+      },
+      "reviews": [
+        {
+          "reviewer": "codex",
+          "sha": "9dca3b10e21ca96566b7a60cf6431b2a01d1ab0c",
+          "verdict": "cleared",
+          "evidence": "Independent Codex source review: complete vs partial totals, malformed schema handling, selected vs invoked, retry counting, cache subset, exact-source synthetic verifier alternatives. 43 focused tests pass and Ruff clean. Historical saved ledgers reproduce 440752 and117743 tokens with not-met outcomes and null verified denominator. No engine/policy/budget changes. PR81. Mechanical reviewer corrections: missing good_record test fixture and documentation of changes.diff read. Full suite and CI pending.",
+          "scope": [
+            "tools/research_usage_report.py",
+            "tests/test_research_usage_report.py",
+            "tests/test_verifier_valid_alternatives.py",
+            "docs/RESEARCH_FOLLOWUPS.md"
+          ],
+          "at": "2026-10-17T17:10:49Z"
+        }
+      ],
       "blockers": [],
       "decisions": [],
       "acknowledged_at": "2026-10-17T17:02:11Z"
