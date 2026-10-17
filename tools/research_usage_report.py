@@ -190,10 +190,18 @@ def _schema_problems(record):
             found.append('requirements.audits is not a list')
         else:
             for audit in audits:
-                if not isinstance(audit, dict) or not isinstance(audit.get('verdicts'), dict):
+                if not isinstance(audit, dict):
                     found.append('requirements.audits has an entry without an object verdicts')
                     break
-                if not all(isinstance(v, dict) for v in audit['verdicts'].values()):
+                verdicts = audit.get('verdicts')
+                if verdicts is None:
+                    # Audit recorded without verdicts (e.g. no auditor available):
+                    # incomplete evidence, not a schema problem.
+                    continue
+                if not isinstance(verdicts, dict):
+                    found.append('requirements.audits has an entry without an object verdicts')
+                    break
+                if not all(isinstance(v, dict) for v in verdicts.values()):
                     found.append('requirements.audits verdicts has a non-object value')
                     break
     return found

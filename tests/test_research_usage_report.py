@@ -273,3 +273,14 @@ def test_runs_isolated_without_quadratus_imports(tmp_path):
     names = [n.module or '' for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)]
     names += [a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names]
     assert not any(name.split('.')[0] == 'quadratus' for name in names)
+
+
+def test_audit_without_verdicts_is_incomplete_not_malformed(tmp_path):
+    rec = good_record()
+    rec['requirements']['audits'] = [{'auditor': None, 'result': 'no auditor'}]
+    run = make_run(tmp_path, [ev(input_tokens=3, output_tokens=4)], rec)
+    report = tool.build_report(run)
+    assert report['usage']['global']['total_tokens'] == 7
+    assert not report['problems']
+    assert report['outcome']['verdict'] == 'unverified'
+    assert report['outcome']['verified_requirements'] is None
