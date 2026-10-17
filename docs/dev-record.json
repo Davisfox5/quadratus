@@ -2126,6 +2126,27 @@
         "candidate": "67dca03fb996e2e4c2f58dc949f1066e1c25b9d5",
         "at": "2026-10-16T03:43:32Z"
       }
+    },
+    {
+      "id": "T-research-verifier-usage",
+      "purpose": "User-authorized side task: verifier valid alternatives and offline usage report; preserve active engine milestone",
+      "base": "34354d5bb398afb1448faefb672877826c0851e6",
+      "owns": [
+        "tools/research_usage_report.py",
+        "tests/test_research_usage_report.py",
+        "tests/test_verifier_valid_alternatives.py",
+        "docs/RESEARCH_FOLLOWUPS.md"
+      ],
+      "author": "claude",
+      "reviewer": "codex",
+      "state": "claimed",
+      "claimed_at": "2026-10-17T17:02:11Z",
+      "acknowledged": true,
+      "delivery": null,
+      "reviews": [],
+      "blockers": [],
+      "decisions": [],
+      "acknowledged_at": "2026-10-17T17:02:11Z"
     }
   ],
   "receipts": [
