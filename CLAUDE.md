@@ -1929,9 +1929,7 @@ Key design decisions already settled:
   the held finish, so a correction can never invade the reserve. Unpayable,
   no editor is called, the findings stay open as the reviewer wrote them
   (`open`, never `unresolved`: nothing rechecked them), the task closes
-  with them and the run ends incomplete and says so (`FindingsOpen`). A
-  gate fix after a failed check is admitted the same way
-  (`_gate_repair_stages`: the fix, then the reviews it still owes). No
+  with them and the run ends incomplete and says so (`FindingsOpen`). No
   review is dropped to fit, no lower tier is counted as a saving, the
   explicit-list, parallel-batch and uncertain cases keep their fail-closed
   admissions, and nothing synthesises a slot or a completion. The stop is
@@ -1939,10 +1937,37 @@ Key design decisions already settled:
   (`_route_forfeit`, carried through the checkpoint) and every cap stop
   names it ("t2's route could not be paid from the allowance left (...),
   so 2 of 3 task slot(s) were forfeited") instead of the cap
-  (`completion_decision._reached`). Last-slot and last-wave tasks have no
-  close-out, so there the known stages are the route and a shortfall is
-  found at the mandatory admission (`dispatch_floor`); the serial
-  full-route control therefore runs over three slots.
+  (`completion_decision._reached`). The forfeit is an election, not a
+  proof: no replanning of the remaining slots is attempted and nothing
+  claims a cheaper scope could not exist. Last-slot and last-wave tasks
+  have no close-out, so there the known stages are the route and a
+  shortfall is found at the mandatory admission (`dispatch_floor`); the
+  serial full-route control therefore runs over three slots.
+- **Every selected repair carries the task's known remainder** (root's
+  control on fef1e27, the default bound: a fix cycle admitted as
+  revision + recheck, 700,000 against 773,864, omitted t1's known 200,000
+  model close-out; the revision ran and resolved the finding and the job
+  stopped `FinishReserved` at the close-out with the goal question and
+  audit never asked). One helper, `_known_remainder(spec, after=)`, names
+  what the task still owes after a point on its route: after the draft,
+  each required review; after the reviews, the required design review
+  (`_design_review_ahead`, the contract's `design_review`); at every
+  point, the model close-out where one is made. It is on the route of
+  every optional editor: the fix cycle (first and further), the gate fix
+  after a subset or full gate, the render fix (a required design review
+  of the repaired capture is counted when no reviewer has blocked yet),
+  the security fix, the size-stop trims (`_admit_trim`: the trim, then
+  what followed the overrunning call on its admitted route) and the
+  no-edit-cap revision retry (admitted before the note that offers it;
+  refused, the capped revision takes the capped paths as before). The
+  measured gate wall is counted where known (`_route_wall`: nothing to
+  know without a gate, else the measured run or reported unmeasured).
+  Nothing is listed twice: a correction's rechecks follow its findings
+  and are named by the caller, the held finish is counted once by the
+  admission, and a last-slot task owes no close-out. A refused repair
+  stands as found: the finding open, the overrun failed, the cap capped.
+  Hypothetical later repairs stay conditional; known judgments never
+  leave the cost.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

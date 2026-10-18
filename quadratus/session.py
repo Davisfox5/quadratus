@@ -3857,7 +3857,7 @@ class Session:
                 limits.append(limit)
         return limits
 
-    def _edit_within_stop(self, lead, spec, task, prompt, *, spent: int):
+    def _edit_within_stop(self, lead, spec, task, prompt, *, spent: int, then=None):
         """A revision or fix, and if it crossed the size stop, one call from the
         remaining fix allowance to bring the change back under it. Returns
         ``(reply, trims)``.
@@ -3870,12 +3870,14 @@ class Session:
         call (``spent``, counting revisions and fixes) leaves a cycle of
         ``max_fix_cycles``, buys the trim; it is measured like any edit, and
         still past the stop it fails the task exactly as before. A capped
-        trim takes the capped paths."""
+        trim takes the capped paths. ``then`` is what follows the call on
+        its admitted route (its rechecks and the task's known remainder),
+        which the trim's own admission carries."""
         try:
             return self._edit(lead, prompt), 0
         except TaskFailed as failure:
             try:
-                return self._trim_overrun(lead, spec, task, failure, spent=spent, what="revision"), 1
+                return self._trim_overrun(lead, spec, task, failure, spent=spent, what="revision", then=then), 1
             except TurnLimitReached as exc:
                 # The trim was a cycle of its own and it is spent: a cap here
                 # is never a no-edit revision (root review of b5ea0ef).
@@ -3899,6 +3901,14 @@ class Session:
         cap takes the capped paths. Whether it helps is unproven."""
         if (getattr(exc, "in_trim", False) or not blocking or not self._writes()
                 or spent >= self.config.max_fix_cycles or not mark or self._source_fingerprint() != mark):
+            return ""
+        # The retry is an editor like the revision it repeats: its route
+        # (the revision, the rechecks it answers, the task's known
+        # remainder) is admitted whole before it is offered; refused, the
+        # capped revision takes the capped paths as it did before the retry.
+        wall_extra, wall_known = self._route_wall(spec)
+        if not self._admit_repair(spec, "revision retry", "fix-cycle", self._fix_cycle_stages(spec, blocking),
+                                  after="no-edit cap", wall_extra=wall_extra, wall_known=wall_known):
             return ""
         task.keep(json.dumps(dict(task=spec.task_id, turns=exc.turns, source=mark, spent=spent,
                                   allowance=self.config.max_fix_cycles)),
@@ -3929,7 +3939,9 @@ class Session:
         (the last-slot review, the final-batch child review after the merge
         gate, or the capped close). The trim is charged as the task's first
         cycle and offered only while a cycle is left after it. A capped trim
-        goes straight to the capped close, never to another writer call."""
+        goes straight to the capped close, never to another writer call.
+        The trim's route (the trim, the reviews ahead, the task's known
+        remainder) is admitted whole first; refused, it does not apply."""
         if not self._writes() or spec.scope is None or self.config.max_fix_cycles <= 1:
             return None
         state = self._inspect_partial_edits(before)
@@ -3939,6 +3951,8 @@ class Session:
         if report is None or report.blocking or not report.oversized or report.max_lines is None:
             return None
         stop = int(report.max_lines * report.overrun_ratio)
+        if not self._admit_trim(spec, what="capped draft", then=self._known_remainder(spec, after="draft")):
+            return None
         self._count("revision")
         self._note(f"task {spec.task_id}: capped draft crossed the size stop ({report.changed_lines} > {stop}); "
                    "one trim from the remaining fix allowance")
@@ -3957,19 +3971,36 @@ class Session:
                                          "back", terminal=False).recovered = True
         return True
 
-    def _trim_overrun(self, lead, spec, task, failure, *, spent: int, what: str) -> str:
+    def _admit_trim(self, spec, *, what: str, then) -> bool:
+        """A trim is an editor holding the write grant: its route (the trim,
+        then ``then``, what follows it on the admitted route) is admitted
+        whole before it is called (``_admit_repair``); refused, the
+        failure it would have mended stands as found."""
+        rows = [delivery.PlanStage("trim", "editing", editing=True)] + list(then or [])
+        wall_extra, wall_known = self._route_wall(spec)
+        return self._admit_repair(spec, "trim", "trim", rows, after=f"size stop on the {what}",
+                                  wall_extra=wall_extra, wall_known=wall_known)
+
+    def _trim_overrun(self, lead, spec, task, failure, *, spent: int, what: str, then=None) -> str:
         """One call, charged as a fix cycle, to bring a size-only overrun back
         under the stop; re-raises ``failure`` when it does not qualify: another
         cause, a path outside scope, no write grant, or ``spent`` (the cycles
         already charged in this task, the overrunning call included) leaving
         no cycle of ``max_fix_cycles``. The trim is measured like any edit;
-        still past the stop it fails the task as before."""
+        still past the stop it fails the task as before. Its route (the
+        trim, then ``then``: what followed the overrunning call on its
+        admitted route, else the task's known remainder after a draft) is
+        admitted whole first; refused, ``failure`` stands."""
         if failure.cause != "scope" or spent >= self.config.max_fix_cycles or not self._writes():
             raise failure
         report = self._measure_scope(spec, self._task_before)
         if report is None or report.blocking or not report.oversized or report.max_lines is None:
             raise failure
         stop = int(report.max_lines * report.overrun_ratio)
+        if then is None:
+            then = self._known_remainder(spec, after="draft" if what == "draft" else "review")
+        if not self._admit_trim(spec, what=what, then=then):
+            raise failure
         self._count("revision")
         self._note(f"task {spec.task_id}: {what} crossed the size stop ({report.changed_lines} > {stop}); "
                    "one trim from the remaining fix allowance")
@@ -4925,7 +4956,9 @@ class Session:
                 # whose blocking finding it answers, admitted whole before
                 # the editor writes; unpayable, nothing is written and the
                 # findings stay open as the reviewers wrote them.
-                cycle = self._admit_plan(spec.task_id, self._fix_cycle_stages(spec, blocking), scope="fix-cycle")
+                wall_extra, wall_known = self._route_wall(spec)
+                cycle = self._admit_plan(spec.task_id, self._fix_cycle_stages(spec, blocking), scope="fix-cycle",
+                                         wall_extra=wall_extra, wall_known=wall_known)
                 admitted = cycle.feasible
                 if not admitted:
                     self._finish_refused(spec, "fix round", FinishReserved(
@@ -4936,7 +4969,8 @@ class Session:
                     refused.recorded = True
                     raise refused
                 try:
-                    revision, trims = self._edit_within_stop(lead, spec, task, revision_prompt, spent=1 + charged)
+                    revision, trims = self._edit_within_stop(lead, spec, task, revision_prompt, spent=1 + charged,
+                                                             then=self._fix_cycle_stages(spec, blocking)[1:])
                 except TurnLimitReached as exc:
                     # R15: a capped revision that changed nothing, with a
                     # blocking finding open and a cycle left, is told what was
@@ -4947,7 +4981,8 @@ class Session:
                     retried = 1
                     self._count("revision")
                     revision, trims = self._edit_within_stop(lead, spec, task, revision_prompt + note,
-                                                             spent=2 + charged)
+                                                             spent=2 + charged,
+                                                             then=self._fix_cycle_stages(spec, blocking)[1:])
             except TurnLimitReached as exc:
                 # A capped revision takes the capped-task path: kept,
                 # measured, unreviewed and ungated, re-planned by name --
@@ -4976,8 +5011,9 @@ class Session:
                 if self._budget() is not None:
                     # Beyond the admitted route: one more cycle only when
                     # what is left pays it whole, decided before its call.
+                    wall_extra, wall_known = self._route_wall(spec)
                     extra = self._admit_plan(spec.task_id, self._fix_cycle_stages(spec, unresolved),
-                                             scope="fix-cycle")
+                                             scope="fix-cycle", wall_extra=wall_extra, wall_known=wall_known)
                     if not extra.feasible:
                         self._finish_refused(spec, "fix round", FinishReserved(
                             f"{spec.task_id}: a further fix cycle cannot be paid whole: {extra.detail}"))
@@ -4993,6 +5029,7 @@ class Session:
                             [(labels[p], v) for p, v in unresolved],
                         ),
                         spent=cycles + 1,
+                        then=self._fix_cycle_stages(spec, unresolved)[1:],
                     )
                 except TurnLimitReached as exc:
                     handoff = self._capped_revision_recheck(lead, spec, task, exc, before, pending, labels)
@@ -6489,10 +6526,11 @@ class Session:
             except FinishReserved as exc:
                 if not self._settle_not_started(spec, exc):
                     raise
-                # The route's known stages cannot be paid from what is left,
-                # and no cheaper reviewed route exists (a review is never
-                # dropped to fit, and the close-out is factual only in the
-                # last slot): planning ends here, the remaining slots are
+                # The route's known stages cannot be paid from what is left.
+                # This policy elects to forfeit: a review is never dropped
+                # to fit and no replanning of the remaining slots is
+                # attempted, so no claim is made that no cheaper scope
+                # exists. Planning ends here, the remaining slots are
                 # forfeited and recorded as such, and the cap's own decision
                 # applies every gate, naming the forfeit rather than the cap.
                 self._route_forfeit = dict(task=spec.task_id, detail=str(exc)[:400],
@@ -10209,11 +10247,48 @@ class Session:
         if security:
             return ["security worker draft", "security verification"]
         stages = ["lead draft"] + [f"review by {peer}" for peer in collaborators]
-        contract = getattr(self, "_contract", None)
-        required = getattr(contract, "required", None) if getattr(contract, "task_id", None) == spec.task_id else None
-        if required is not None and getattr(required, "design_review", False):
+        if self._design_review_ahead(spec):
             stages.append("design review")
         return stages
+
+    def _design_review_ahead(self, spec) -> bool:
+        """Whether the task's contract requires the cross-vendor design
+        review (``_check_design``, after the last edit and the gate): a
+        known judgment every repair before it still owes."""
+        contract = getattr(self, "_contract", None)
+        required = getattr(contract, "required", None) if getattr(contract, "task_id", None) == spec.task_id else None
+        return bool(required is not None and getattr(required, "design_review", False))
+
+    def _known_remainder(self, spec, *, after: str) -> list:
+        """What the task still owes after a point on its route, known before
+        the editor being admitted is called, in the budget's exposure
+        classes: after the draft (``after="draft"``), each required review;
+        after the reviews (``"review"``), the required design review; at
+        every point, the model close-out where one is made. A correction's
+        own rechecks follow its findings and are the caller's to name;
+        nothing is listed twice, and the held finish is counted by the
+        admission itself. Root's control on fef1e27: a fix cycle admitted
+        without the task's known 200,000 close-out ran, resolved the
+        finding, and the job stopped FinishReserved at the close-out with
+        the goal question and audit never asked."""
+        rows = []
+        if after == "draft":
+            rows.extend(delivery.PlanStage(f"review by {peer}", "reserve")
+                        for peer in list(getattr(self, "_route_peers", None) or []))
+        if after in ("draft", "review") and self._design_review_ahead(spec):
+            rows.append(delivery.PlanStage("design review", "reserve"))
+        if not self._closes_factually(spec):
+            rows.append(delivery.PlanStage("close-out", "reserve"))
+        return rows
+
+    def _route_wall(self, spec):
+        """The wall time of one run of the task's gate after an edit, as
+        ``(wall_extra, wall_known)``: none and nothing to know without a
+        gate; else the measured run, or 0.0 reported as unmeasured."""
+        if self._route_gate(spec) is None:
+            return 0.0, None
+        extra = self._gate_wall(spec)
+        return extra, extra > 0
 
     def _plan_stages(self, spec, stages, *, collaborators=(), security: bool = False,
                      post_merge: bool = False, slots: int = 1) -> list:
@@ -10226,7 +10301,9 @@ class Session:
         write grant and one recheck per reviewer whose finding it answers)
         is not on the route: it exists only once a review has made a
         finding, and is admitted whole at that moment, before its editor
-        writes (``_fix_cycle_stages``, every cycle, the first included);
+        writes, together with everything the task still owes after it (the
+        required design review, the model close-out: ``_known_remainder``;
+        ``_fix_cycle_stages``, every cycle, the first included);
         unpayable, no editor is called and the findings stay open as the
         reviewer wrote them, so the task closes with them and the run ends
         incomplete and says so. The same holds for a gate fix after a
@@ -10272,9 +10349,9 @@ class Session:
 
     def _gate_repair_stages(self, spec, gate, kind: str) -> list:
         """The route a failed check has selected: one gate fix holding the
-        write grant, then what the task still owes. A cheap pre-review gate
-        (``kind`` subset) leaves the reviews, the one revision and the
-        rechecks ahead; the full gate after them leaves only the close-out
+        write grant, then what the task still owes (``_known_remainder``).
+        A cheap pre-review gate (``kind`` subset) leaves the reviews ahead;
+        either gate leaves the required design review and the close-out
         where a model makes one. The check that judges the repair is wall
         time, counted by ``_gate_wall_of``."""
         rows = [delivery.PlanStage("gate fix", "editing" if self._writes() else "reserve", editing=self._writes())]
@@ -10289,12 +10366,11 @@ class Session:
                         for task_id in after_merge.get("capped") or ())
             return rows
         peers = list(getattr(self, "_route_peers", None) or [])
-        if kind == "subset" and peers:
-            # The reviews ahead are known; the correction they may select
-            # is admitted when they do (admission/2).
-            rows.extend(delivery.PlanStage(f"review by {peer}", "reserve") for peer in peers)
-        if not self._closes_factually(spec):
-            rows.append(delivery.PlanStage("close-out", "reserve"))
+        # After a pre-review subset gate the reviews ahead are known (the
+        # correction they may select is admitted when they do, admission/2);
+        # after either gate the required design review and the model
+        # close-out are, and every one is on the repair's route.
+        rows.extend(self._known_remainder(spec, after="draft" if kind == "subset" and peers else "review"))
         return rows
 
     def _gate_repair_wall(self, spec, gate, kind: str):
@@ -10335,22 +10411,21 @@ class Session:
         writes = bool(self._writes())
         rows = [delivery.PlanStage("security fix", "editing" if writes else "reserve", editing=writes),
                 delivery.PlanStage(f"security verification by {verifier}", "reserve")]
-        if not self._closes_factually(spec):
-            rows.append(delivery.PlanStage("close-out", "reserve"))
+        rows.extend(self._known_remainder(spec, after="design"))
         return rows
 
     def _design_repair_stages(self, spec, reviewer: Optional[str] = None) -> list:
         """The route a broken render or a blocking design review selects:
         one fix holding the write grant, the same reviewer's judgment of the
-        new renders where a reviewer blocked, the close-out where a model
-        makes one. The check and the recapture are wall time; the recapture
-        is unmeasured, so the route's wall is reported unknown."""
+        new renders where a reviewer blocked (else the required design
+        review of the repaired capture, still ahead), the close-out where a
+        model makes one. The check and the recapture are wall time; the
+        recapture is unmeasured, so the route's wall is reported unknown."""
         writes = bool(self._writes())
         rows = [delivery.PlanStage("design fix", "editing" if writes else "reserve", editing=writes)]
         if reviewer:
             rows.append(delivery.PlanStage(f"design review by {reviewer}", "reserve"))
-        if not self._closes_factually(spec):
-            rows.append(delivery.PlanStage("close-out", "reserve"))
+        rows.extend(self._known_remainder(spec, after="design" if reviewer else "review"))
         return rows
 
     def _design_fix_edit(self, spec, task, record: dict, lead: str, prompt: str, *,
@@ -10378,12 +10453,15 @@ class Session:
         return float((getattr(self, "_check_walls", None) or {}).get(_gate_identity(gate), 0.0))
 
     def _fix_cycle_stages(self, spec, unresolved) -> list:
-        """One further fix cycle: a revision with the write grant and one
-        recheck per reviewer whose findings it answers."""
+        """One fix cycle: a revision with the write grant, one recheck per
+        reviewer whose findings it answers, and what the task still owes
+        after its reviews (the required design review, the model close-out:
+        ``_known_remainder``)."""
         writes = bool(self._writes())
         rows = [delivery.PlanStage("fix revision", "editing" if writes else "reserve", editing=writes)]
         rows.extend(delivery.PlanStage(f"recheck by {peer}", "reserve")
                     for peer in sorted({peer for peer, _ in unresolved}))
+        rows.extend(self._known_remainder(spec, after="review"))
         return rows
 
     def _execution_identity(self, gate) -> dict:

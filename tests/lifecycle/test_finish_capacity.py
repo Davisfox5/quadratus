@@ -217,6 +217,65 @@ ONE = "REQUIREMENTS:\nR1: add(a, b) returns the sum\n" + _simple("app.py", "Impl
 MORE = _simple("app.py", "Add a docstring to add in app.py.", "R1")
 
 
+@pytest.mark.requirements_ledger
+def test_a_selected_repair_carries_the_known_nonfinal_closeout(tmp_path, monkeypatch):
+    """Root's control on fef1e27, the default bound (20 calls, 2,000,000
+    tokens, 3 slots, 200,000 reserve, 500,000 ceiling): a planner of
+    86,663 and a requirements review of 39,473 (126,136 intake), a lead
+    and a reviewer of 350,000 each leave 773,864 after the 400,000 finish
+    hold. The review's correction (revision 490,000, recheck 190,000:
+    700,000 in exposure classes) was admitted without t1's known 200,000
+    model close-out, ran and resolved the finding, and the job stopped
+    FinishReserved at the close-out: goal and audit never asked. Every
+    selected repair now carries the task's known remainder, so the
+    correction (900,000, the measured gate wall counted) is refused before
+    its editor writes, no revision runs, the finding stays open, the
+    close-out, the audit and the goal question all run, and the run ends
+    incomplete on the uncovered requirement, never on the finish."""
+    monkeypatch.setattr(H, "USAGE", dict(input_tokens=100, output_tokens=10))
+
+    def lead(call, replay):
+        H.write(call, {"app.py": FIXED})
+        return 'Implemented add.\nCHANGED: ["app.py"]'
+    plan = "REQUIREMENTS:\nR1: add(a, b) returns the sum\n" + _simple("app.py", "Implement add in app.py.", "R1")
+    script = Script(orchestrator=lambda c, r: plan if len(r.of("orchestrator")) == 1 else "DONE", lead=lead,
+                    collaborator=lambda c, r: ("BLOCKING: negative-number behavior needs an explicit regression "
+                                               "test.\nR1: MET - app.py"),
+                    auditor=lambda c, r: "R1: MET - app.py", **{"requirements-review": lambda c, r: "COMPLETE"})
+
+    def respond(call, replay):
+        role = call.role
+        total = (86_663 if len(replay.calls) == 1 else 39_473 if role.startswith("requirements-review")
+                 else 350_000 if role.startswith(("lead", "collaborator")) else 490_000 if role.startswith("revision")
+                 else 190_000 if role.startswith("recheck") else 110)
+        H.USAGE = dict(input_tokens=total - 10, output_tokens=10)
+        return script(call, replay)
+    replay = H.run(tmp_path, monkeypatch, respond, files=FILES, max_tasks=3, record_complete=False,
+                   limits=RunLimits(max_calls=20, max_reported_tokens=2_000_000, wall_seconds=1800,
+                                    max_concurrent_workers=2, reserve_tokens_per_call=200_000,
+                                    max_tokens_per_call=500_000))
+    result = H.result_json(replay)
+    roles = [(c.task, c.role) for c in replay.calls]
+    assert not replay.of("revision") and not replay.of("recheck"), roles
+    cycle = [a for a in result["plan_admissions"] if a["scope"] == "fix-cycle"]
+    assert [a["feasible"] for a in cycle] == [False]
+    assert cycle[0]["stages"] == ["fix revision(editing/write)", "recheck by claude:opus(reserve)",
+                                  "close-out(reserve)"]
+    assert cycle[0]["short"] == {"tokens": 900_000 - 773_864}, cycle[0]
+    refusal = [r for r in result["finish_refusals"] if r["what"] == "fix round"]
+    assert refusal and "the correction the review selected cannot be paid whole" in refusal[0]["detail"]
+    assert replay.of("closeout") and replay.of("auditor"), roles
+    assert roles[:6] == [("run", "orchestrator"), ("plan", "requirements-review"), ("t1", "lead"),
+                         ("t1", "collaborator"), ("t1", "closeout"), ("run", "orchestrator")], roles
+    assert not replay.result.completed, "the finding is open and R1 uncovered: not complete"
+    assert "FinishReserved" not in (replay.result.error or ""), replay.result.error
+    assert "R1" in replay.result.error and "Work preserved" in replay.result.error, replay.result.error
+    budget = _budget(replay)
+    assert sorted(budget["finish_protection"]["started"]) == ["audit", "goal"], "both finishing judgments ran"
+    assert budget["finish_protection"]["refusals"] == [], "nothing was refused at the budget"
+    assert budget["stop_reason"] == ""
+
+
 def _tight(total):
     return RunLimits(max_calls=40, max_reported_tokens=total, wall_seconds=600, max_concurrent_workers=2,
                      reserve_tokens_per_call=1_000, max_tokens_per_call=3_000)

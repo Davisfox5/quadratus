@@ -818,6 +818,30 @@ def test_the_repair_route_lists_what_follows_the_repaired_gate(tmp_path, monkeyp
     # admitted when they do (admission/2), never costed here.
     assert names == ["gate fix", "review by openai:gpt-5.6-sol", "review by xai:grok:default", "close-out"]
     assert [r.name for r in s._gate_repair_stages(spec, gate, "full")] == ["gate fix", "close-out"]
+    # Every repair carries the task's known remainder (root's control on
+    # fef1e27): a required design review still ahead and the model
+    # close-out are on the fix cycle's, the gate fix's, the render fix's
+    # and the trim's routes; nothing is listed twice, and a last-slot
+    # task, which closes factually, owes no close-out.
+    assert [r.name for r in s._fix_cycle_stages(spec, [("openai:gpt-5.6-sol", "BLOCKING: x")])] == [
+        "fix revision", "recheck by openai:gpt-5.6-sol", "close-out"]
+    s._contract = SimpleNamespace(task_id="t1", required=SimpleNamespace(design_review=True))
+    assert s._mandatory_stages(spec, ["openai:gpt-5.6-sol"]) == ["lead draft", "review by openai:gpt-5.6-sol",
+                                                                  "design review"]
+    assert [r.name for r in s._fix_cycle_stages(spec, [("openai:gpt-5.6-sol", "BLOCKING: x")])] == [
+        "fix revision", "recheck by openai:gpt-5.6-sol", "design review", "close-out"]
+    assert [r.name for r in s._gate_repair_stages(spec, gate, "full")] == ["gate fix", "design review", "close-out"]
+    assert [r.name for r in s._gate_repair_stages(spec, gate, "subset")] == [
+        "gate fix", "review by openai:gpt-5.6-sol", "review by xai:grok:default", "design review", "close-out"]
+    assert [r.name for r in s._design_repair_stages(spec, None)] == ["design fix", "design review", "close-out"]
+    assert [r.name for r in s._design_repair_stages(spec, "openai:independent")] == [
+        "design fix", "design review by openai:independent", "close-out"]
+    assert [r.name for r in s._known_remainder(spec, after="design")] == ["close-out"]
+    s._slots_used = 3
+    assert [r.name for r in s._fix_cycle_stages(spec, [("openai:gpt-5.6-sol", "BLOCKING: x")])] == [
+        "fix revision", "recheck by openai:gpt-5.6-sol", "design review"]
+    s._slots_used = 0
+    s._contract = None
     s._route_after_merge = dict(rechecks=["openai:gpt-5.6-sol"], capped=["t2"])
     assert [r.name for r in s._gate_repair_stages(TaskSpec("t2-merge", "merge"), gate, "full")] == [
         "gate fix", "post-merge recheck by openai:gpt-5.6-sol", "capped final review of t2"]
@@ -843,6 +867,11 @@ def test_the_repair_route_lists_what_follows_the_repaired_gate(tmp_path, monkeyp
     assert s._admit_repair(spec, "security fix", "security-repair", [], after="security verification") is False
     assert s.finish_refusals[-1]["what"] == "security fix"
     assert "after the failed security verification" in s.finish_refusals[-1]["detail"]
+    # A refused trim: recorded, and the overrun it would have mended stands.
+    monkeypatch.setattr(s, "_writes", lambda: True)
+    assert s._admit_trim(spec, what="draft", then=s._known_remainder(spec, after="draft")) is False
+    assert s.finish_refusals[-1]["what"] == "trim"
+    assert "after the failed size stop on the draft" in s.finish_refusals[-1]["detail"]
 
 
 def test_readers_say_when_the_committed_state_cannot_be_read(tmp_path):
