@@ -38,6 +38,13 @@
         "reason": "Research-token correction PR#76 is a separately authorized integration; restore the original active engine milestone candidate after recording integration. No engine milestone qualification implied.",
         "by": "codex",
         "at": "2026-10-16T03:43:32Z"
+      },
+      {
+        "previous": "5746057fcf7c5555327e5e25b8c51912a1df8b20",
+        "sha": "b1ff751f0cd8ffc1e271e6cd7a95791c4e77fe7b",
+        "reason": "PR81 is the user-authorized research follow-up side integration, merged only after diagnostic run20261018T180602Z-53831960 terminal result and process cleanup. Restore existing engine milestone unchanged; diagnostic failed and is not engine acceptance.",
+        "by": "codex",
+        "at": "2026-10-18T18:19:11Z"
       }
     ]
   },
@@ -2139,7 +2146,7 @@
       ],
       "author": "claude",
       "reviewer": "codex",
-      "state": "reviewed",
+      "state": "integrated",
       "claimed_at": "2026-10-17T17:02:11Z",
       "acknowledged": true,
       "delivery": {
@@ -2176,8 +2183,15 @@
         }
       ],
       "blockers": [],
-      "decisions": [],
-      "acknowledged_at": "2026-10-17T17:02:11Z"
+      "decisions": [
+        "codex: Merged PR81 at5746057 after run20261018T180602Z-53831960 saved terminal incomplete result and all16 observed owned PIDs absent. User authorized merge after run completion regardless success. Exact reviewed head6953db8 has all four Python3.11/3.12 checks SUCCESS; primary matrix39052979044 each3724PASS63SKIP plus Ruff. Run failure is not claimed as acceptance of engine or research performance."
+      ],
+      "acknowledged_at": "2026-10-17T17:02:11Z",
+      "integrated": {
+        "sha": "c85eabcc458a0c37362c00df65b18ae40d05ec01",
+        "candidate": "5746057fcf7c5555327e5e25b8c51912a1df8b20",
+        "at": "2026-10-18T18:19:11Z"
+      }
     }
   ],
   "receipts": [
