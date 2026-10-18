@@ -194,41 +194,88 @@ def test_the_terminal_record_says_when_the_rest_could_not_admit_an_ordinary_call
     assert _budget_fields(None) == {"budget": None, "budget_note": None}
 
 
-@pytest.mark.requirements_ledger
-def test_a_reserve_starved_terminal_keeps_its_own_stop_and_outcome(tmp_path, monkeypatch):
-    """Whole controller: the note is metadata beside the run's own result;
-    completed, error and the typed outcome are what they would have been.
-    Every call is admitted (each starts with at least 610 left against a 600
-    reserve) and the run ends with 500, under it."""
+def _starved_run(tmp_path, monkeypatch, where, total):
+    """One run of the reserve-starved scenario under ``total`` tokens: a
+    600-token reserve, no finish hold, one simple task, DONE, the audit."""
     from quadratus.run_budget import RunLimits
-    # The finish hold (Davis, 2026-10-16) would refuse an earlier ordinary
-    # call; this case pins the limit itself, so the hold is off here and is
-    # controlled in tests/lifecycle/test_finish_capacity.py.
-    monkeypatch.setattr("quadratus.session.Session._protect_finish", lambda self: None)
     declared = "REQUIREMENTS:\nR1: " + _R1 + "\n" + DECL_SIMPLE + "\nCOVERS: R1"
 
     def lead(call, replay):
         H.write(call, {"app.py": _TYPED})
         return 'Implemented add.\nCHANGED: ["app.py"]'
+    where.mkdir()
+    return H.run(where, monkeypatch, Script(
+        orchestrator=_plan(declared), lead=lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:5",
+        auditor=lambda c, r: "R1: MET - app.py:5", **{"requirements-review": lambda c, r: "COMPLETE"}),
+        files=FILES, max_tasks=1, record_complete=False,
+        limits=RunLimits(max_calls=120, max_reported_tokens=total, wall_seconds=600,
+                         max_concurrent_workers=2, reserve_tokens_per_call=600))
 
-    def run(where, total):
-        where.mkdir()
-        return H.run(where, monkeypatch, Script(
-            orchestrator=_plan(declared), lead=lead, collaborator=lambda c, r: "NO FINDINGS\nR1: MET - app.py:5",
-            auditor=lambda c, r: "R1: MET - app.py:5", **{"requirements-review": lambda c, r: "COMPLETE"}),
-            files=FILES, max_tasks=1, record_complete=False,
-            limits=RunLimits(max_calls=120, max_reported_tokens=total, wall_seconds=600,
-                             max_concurrent_workers=2, reserve_tokens_per_call=600))
-    roomy = run(tmp_path / "roomy", 6_000_000)
+
+@pytest.mark.requirements_ledger
+def test_a_reserve_starved_terminal_keeps_its_own_stop_and_outcome(tmp_path, monkeypatch):
+    """Whole controller: the note is metadata beside the run's own result;
+    completed, error and the typed outcome are what they would have been.
+    Every call is admitted and the run ends with 500, under the 600 reserve.
+
+    Restaged on the admitted route (root's cap reconciliation on bc421f8):
+    t1's selected route (the draft, the review, the revision and the
+    recheck, each at the 600 reserve here: 2,400; its mandatory two,
+    1,200) is admitted at dispatch only from what the allowance holds
+    after the calls already made, so the harness's default 110-token calls
+    cannot both admit the route and end 500 under the reserve (that
+    refusal is kept below). With each call reporting 590 (under the
+    reserve; test-local H.USAGE), the measured spend is 3,540 over six
+    calls; the tight allowance of used + 500 = 4,040 admits the route at
+    dispatch (2,860 left against 2,400), every later call starts with at
+    least 1,090, and the final audit ends with 500. Same calls, same
+    admitted route, same stop and outcome as the roomy run; the receipts
+    are asserted, not assumed."""
+    # The finish hold (Davis, 2026-10-16) would refuse an earlier ordinary
+    # call; this case pins the limit itself, so the hold is off here and is
+    # controlled in tests/lifecycle/test_finish_capacity.py.
+    monkeypatch.setattr("quadratus.session.Session._protect_finish", lambda self: None)
+    monkeypatch.setattr(H, "USAGE", {"input_tokens": 580, "output_tokens": 10})
+    roomy = _starved_run(tmp_path, monkeypatch, tmp_path / "roomy", 6_000_000)
     used = H.result_json(roomy)["budget"]["reported_tokens"]
-    tight = run(tmp_path / "tight", used + 500)
+    assert used == 590 * len(roomy.calls) == 3_540, (used, len(roomy.calls))
+    tight = _starved_run(tmp_path, monkeypatch, tmp_path / "tight", used + 500)
     result = H.result_json(tight)
+    assert [c.role for c in tight.calls] == [c.role for c in roomy.calls], "the same calls, every one admitted"
+    admitted = [a for a in result["plan_admissions"] if a["task"] == "t1" and a["scope"] == "full"]
+    assert admitted and admitted[-1]["feasible"] and len(admitted[-1]["stages"]) == 4, admitted
+    assert "4 call(s), 2,400 tokens" in admitted[-1]["detail"] and "2,860 tokens" in admitted[-1]["detail"]
+    assert used + 500 - 590 * admitted[-1]["at_attempt"] == 2_860 >= 2_400, "the route was paid from what was left"
+    assert result["not_started"] == [] and result["finish_refusals"] == []
     assert H.result_json(roomy)["budget_note"] is None
     assert result["budget_note"]["remaining_reported_tokens"] == 500
     assert "does not cover the 600-token reservation" in result["budget_note"]["text"]
     assert (tight.result.completed, tight.result.error) == (roomy.result.completed, roomy.result.error)
     assert result["workflow"]["run"] == H.result_json(roomy)["workflow"]["run"], "no new fact"
     assert json.dumps(result["budget"]["stop_reason"]) == json.dumps(H.result_json(roomy)["budget"]["stop_reason"])
+
+
+@pytest.mark.requirements_ledger
+def test_an_allowance_that_cannot_pay_the_route_never_reaches_the_reserve_starved_terminal(tmp_path, monkeypatch):
+    """The original fixture's raw failure on bc421f8, kept as the control:
+    with the harness's default 110-token calls, the tight allowance of
+    used + 500 holds 940 at dispatch against t1's two-call route at the
+    600 reserve (1,200), so the task is NOT STARTED before any task call,
+    the shortfall is named, no reserve-starved terminal is reached and no
+    budget note is written. The run's own stop stands: incomplete,
+    RequirementsUnmet, nothing written."""
+    monkeypatch.setattr("quadratus.session.Session._protect_finish", lambda self: None)
+    roomy = _starved_run(tmp_path, monkeypatch, tmp_path / "roomy", 6_000_000)
+    used = H.result_json(roomy)["budget"]["reported_tokens"]
+    assert used == 110 * len(roomy.calls)
+    tight = _starved_run(tmp_path, monkeypatch, tmp_path / "tight", used + 500)
+    result = H.result_json(tight)
+    assert not tight.result.completed and "RequirementsUnmet" in (tight.result.error or "")
+    assert [n["task"] for n in result["not_started"]] == ["t1"] and not tight.of("lead")
+    (refusal,) = [r for r in result["finish_refusals"] if r["task"] == "t1"]
+    assert "2 call(s), 1,200 tokens" in refusal["detail"] and "short by tokens" in refusal["detail"], refusal
+    assert result["budget_note"] is None
+    assert (tight.project / "app.py").read_text() == FILES["app.py"]
 
 
 @pytest.mark.parametrize("exhausted", ["calls", "wall"])
