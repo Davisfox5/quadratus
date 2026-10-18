@@ -136,18 +136,28 @@ def test_a_second_fix_cycle_is_admitted_before_it_starts_and_refused_when_it_can
     replay = H.run(tmp_path, monkeypatch, _recheck_script(replies), files=FILES, max_tasks=2, record_complete=False)
     assert replay.result.completed, replay.result.error
     assert len(replay.of("revision")) == 2
-    cycle = [a for a in H.result_json(replay)["plan_admissions"] if a["scope"] == "fix-cycle"]
-    assert len(cycle) == 1 and cycle[0]["task"] == "t2" and cycle[0]["feasible"]
-    assert cycle[0]["stages"] == ["fix revision(editing/write)", "recheck by openai:gpt-5.6-sol(reserve)"]
+    cycle = [a for a in H.result_json(replay)["plan_admissions"] if a["scope"] == "fix-cycle" and a["task"] == "t2"]
+    # Every correction cycle is admitted on its own before its editor
+    # writes (admission/2): the first, selected by the review's findings,
+    # and the second, selected by the recheck's.
+    assert len(cycle) == 2 and all(a["feasible"] for a in cycle)
+    assert cycle[0]["stages"] == cycle[1]["stages"] == ["fix revision(editing/write)",
+                                                         "recheck by openai:gpt-5.6-sol(reserve)"]
 
     # The same job, with a second cycle that cannot be paid: it is refused
     # before its revision, recorded, and the findings it would have
     # answered stay open as the reviewer wrote them.
     from quadratus import delivery
+    real = Session._fix_cycle_stages
+    unpayable = [delivery.PlanStage("fix revision", "editing", editing=True)] + [
+        delivery.PlanStage(f"recheck {n}", "reserve") for n in range(300)]
+    asked = []
+
+    def second_unpayable(self, spec, unresolved):
+        asked.append(spec.task_id)
+        return real(self, spec, unresolved) if asked.count(spec.task_id) == 1 else unpayable
     (tmp_path / "short").mkdir()
-    monkeypatch.setattr(Session, "_fix_cycle_stages", lambda self, spec, unresolved: [
-        delivery.PlanStage("fix revision", "editing", editing=True)] + [
-        delivery.PlanStage(f"recheck {n}", "reserve") for n in range(300)])
+    monkeypatch.setattr(Session, "_fix_cycle_stages", second_unpayable)
     short = H.run(tmp_path / "short", monkeypatch, _recheck_script(replies), files=FILES, max_tasks=2,
                   record_complete=False)
     assert not short.result.completed and short.result.error.startswith("FindingsOpen")
@@ -155,8 +165,28 @@ def test_a_second_fix_cycle_is_admitted_before_it_starts_and_refused_when_it_can
     result = H.result_json(short)
     refusal = [r for r in result["finish_refusals"] if r["what"] == "fix round"][-1]
     assert "a further fix cycle cannot be paid whole" in refusal["detail"]
-    assert [a["feasible"] for a in result["plan_admissions"] if a["scope"] == "fix-cycle"] == [False]
+    assert [a["feasible"] for a in result["plan_admissions"] if a["scope"] == "fix-cycle"] == [True, False]
     assert _findings(short)["RFT2-1"]["state"] == "unresolved"
+
+    # The first cycle unpayable (admission/2): the correction the review
+    # selected is refused before its editor writes, no revision call is
+    # made, the findings stay open as the reviewer wrote them, and the run
+    # ends with them open; no review was dropped to fit.
+    monkeypatch.setattr(Session, "_fix_cycle_stages", lambda self, spec, unresolved: unpayable)
+    (tmp_path / "first").mkdir()
+    first = H.run(tmp_path / "first", monkeypatch, _recheck_script(replies), files=FILES, max_tasks=2,
+                  record_complete=False)
+    assert not first.result.completed and first.result.error.startswith("FindingsOpen")
+    assert not first.of("revision") and not first.of("recheck")
+    result = H.result_json(first)
+    refusal = [r for r in result["finish_refusals"] if r["what"] == "fix round"][-1]
+    assert "the correction the review selected cannot be paid whole" in refusal["detail"]
+    assert [a["feasible"] for a in result["plan_admissions"] if a["scope"] == "fix-cycle"] == [False]
+    # Never rechecked, so never "unresolved": open, exactly as the reviewer wrote them.
+    assert [(f["state"], f["closed"]) for f in result["review_findings"] if f["fid"].startswith("RFT2")] == [
+        ("open", False), ("open", False)]
+    assert [a["stages"] for a in result["plan_admissions"] if a["task"] == "t2" and a["scope"] == "full"][0] == [
+        "lead draft(editing/write)", "review by openai:gpt-5.6-sol(reserve)"]
 
 
 # -- boundary 2: the effect lifecycle --------------------------------------------------------
@@ -660,5 +690,5 @@ def test_a_pre_review_subset_gate_repair_route_carries_the_reviews_ahead_of_it(t
                  if c.role.startswith("collaborator") and c.task == "t1" and i > fix_index}
     assert reviewers, "the reviews followed the repaired subset gate"
     assert len([s for s in stages if s.startswith("review by")]) == len(reviewers), stages
-    assert any(s.startswith("revision") for s in stages) and any(s.startswith("recheck by") for s in stages)
+    assert not any(s.startswith(("revision", "recheck by")) for s in stages), "a correction is admitted when selected"
     assert repair[0]["at_attempt"] <= fix_index, "admitted before the editor wrote"

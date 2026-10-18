@@ -101,50 +101,56 @@ def test_serial_the_last_wave_closes_factually_and_the_finish_runs_inside_the_li
 
 @pytest.mark.requirements_ledger
 def test_serial_a_route_the_finish_cannot_afford_is_refused_at_dispatch_and_nothing_of_it_runs(tmp_path, monkeypatch):
-    """11 calls: after t1 (lead, review, close-out) and the planning call
-    for t2, three calls are left after the held goal question and audit,
-    and t2's selected route is four (its lead, its review, the revision
-    and the recheck a finding buys). The route is refused before t2's first
-    call, exactly counted: no call of t2's is made, nothing is written for
-    it, t2 is NOT RUN, and the run ends on the requirement it left
+    """10 calls over three slots: after t1 (lead, review, close-out) and
+    the planning call for t2, two calls are left after the held goal
+    question and audit. t2's known stages (its lead and its review) fit
+    them; its selected route is three, because a task before the last
+    slot still closes through a model close-out (the revision and the
+    recheck a finding may buy are admitted when it does, admission/2).
+    The route is refused before t2's first call, exactly counted: no call
+    of t2's is made, nothing is written for it, t2 is NOT RUN, the third
+    slot is forfeited, and the run ends on the requirement it left
     uncovered. Before the route admission the recheck ran out of calls
     mid-task and its finding was kept open (12f8: the run stopped at
     call_limit on t2's model close-out)."""
-    replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2]), files=FILES, max_tasks=2,
-                   limits=_limits(11), record_complete=False)
+    replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2]), files=FILES, max_tasks=3,
+                   limits=_limits(10), record_complete=False)
     assert not [c for c in replay.calls if c.task == "t2"], "nothing of t2 ran"
     assert not replay.of("auditor") and not replay.result.completed
+    assert len(replay.of("orchestrator")) == 3, "plan, plan t2, goal question: no planning after the refusal"
     result = H.result_json(replay)
     assert [n["task"] for n in result["not_started"]] == ["t2"]
     refusal = result["finish_refusals"][-1]
     assert refusal["what"].startswith("dispatch:") and "cannot pay its selected route" in refusal["detail"]
+    mandatory = [a for a in result["plan_admissions"] if a["task"] == "t2" and a["scope"] == "mandatory"][-1]
+    assert mandatory["feasible"], "the known stages fit; the close-out is what does not"
     admission = [a for a in result["plan_admissions"] if a["task"] == "t2"][-1]
     assert admission["scope"] == "full" and not admission["feasible"] and admission["short"] == {"calls": 1}
     assert admission["stages"] == ["lead draft(editing/write)", "review by openai:gpt-5.6-sol(reserve)",
-                                   "revision(editing/write)", "recheck by openai:gpt-5.6-sol(reserve)"]
+                                   "close-out(reserve)"]
+    assert "t2's route could not be paid" in replay.result.error and "1 of 3 task slot(s)" in replay.result.error
     assert (replay.project / "README.md").read_text() == FILES["README.md"], "nothing was written"
     budget = _budget(replay)
     assert budget["stop_reason"] == "" and budget["finish_protection"]["refusals"] == []
 
 
 @pytest.mark.requirements_ledger
-@pytest.mark.parametrize("calls", [14, 13])
+@pytest.mark.parametrize("calls", [14, 7])
 def test_parallel_last_wave_closes_factually_and_its_route_is_admitted_whole_or_not_started(tmp_path, monkeypatch,
                                                                                             calls):
     """Both children are the last wave and close factually (no close-out
-    on either route). The batch's selected route is ten calls: each child's
-    lead, review, revision and recheck, and one post-merge recheck each;
-    with the two orchestrator calls made and the two finishing judgments
-    held, fourteen calls admit it exactly. t2's finding is left open in its
-    copy (UNRESOLVED there, after its two fix rounds; the second cycle is
-    admitted on its own before it starts) and rechecked once on the merged
-    source, which resolves it; the goal question and audit follow. One call
-    short, the wave is not started before any child's call: both tasks are
-    NOT RUN with the route's shortfall named, nothing is written, and the
-    run ends on the uncovered requirements. The post-merge recheck's own
-    refusal to keep the finish stays a recorded outcome
-    (``_recheck_after_merge``), but an exactly admitted route no longer
-    reaches it."""
+    on either route). The batch's selected route is its known stages, four
+    calls: each child's lead and review; the revision, the rechecks and a
+    post-merge recheck exist only once a finding does and are admitted
+    then (admission/2). With the two orchestrator calls made and the two
+    finishing judgments held, eight calls admit it exactly; fourteen pay
+    the whole job. t2's finding is left open in its copy (UNRESOLVED there,
+    after its two fix rounds, each admitted on its own before it starts)
+    and rechecked once on the merged source, which resolves it; the goal
+    question and audit follow. With seven calls the wave is one short and
+    is not started before any child's call: both tasks are NOT RUN with
+    the route's shortfall named, nothing is written, and the run ends on
+    the uncovered requirements."""
     def recheck(call, replay):
         return "RESOLVED" if "now merged" in call.prompt else "UNRESOLVED: no example yet"
 
@@ -154,24 +160,29 @@ def test_parallel_last_wave_closes_factually_and_its_route_is_admitted_whole_or_
                    record_complete=False)
     assert not replay.of("closeout"), "no model close-out in the last wave"
     result = H.result_json(replay)
-    admission = [a for a in result["plan_admissions"] if a["scope"] == "full"][-1]
-    assert admission["task"] == "batch:t1,t2" and "close-out(reserve)" not in admission["stages"]
-    assert admission["stages"].count("post-merge recheck by openai:gpt-5.6-sol(reserve)") == 1
+    admission = [a for a in result["plan_admissions"] if a["task"] == "batch:t1,t2"][-1]
+    assert "close-out(reserve)" not in admission["stages"]
+    assert not any("recheck" in s or "revision" in s for s in admission["stages"]), admission["stages"]
+    assert len(admission["stages"]) == 4
     if calls == 14:
-        assert admission["feasible"]
+        assert admission["scope"] == "full" and admission["feasible"]
         assert sorted(json.loads(t)["task"] for t in replay.artifact_texts("factual-closeout")) == ["t1", "t2"]
         batch = result["parallel_batches"][0]
         assert batch["post_merge_rechecks"][0]["rechecked"][0]["verdict"] == "resolved"
-        assert [a["scope"] for a in result["plan_admissions"] if a["task"] == "t2"] == ["fix-cycle"]
+        assert [a["scope"] for a in result["plan_admissions"] if a["task"] == "t2"] == ["fix-cycle", "fix-cycle"]
         assert replay.result.completed, replay.result.error
         assert _roles(replay)[-2:] == [("run", "orchestrator"), ("audit", "auditor")]
         assert _budget(replay)["reserved_attempts"] == 13
     else:
+        # In the last wave the batch's route is its known stages, so the
+        # shortfall is found at the mandatory admission and no further
+        # admission is asked.
+        assert admission["scope"] == "mandatory"
         assert not admission["feasible"] and admission["short"] == {"calls": 1}
         assert not [c for c in replay.calls if c.task in ("t1", "t2")], "no child call was made"
         assert [n["task"] for n in result["not_started"]] == ["t1", "t2"]
         assert result["finish_refusals"][0]["what"].startswith("batch dispatch:")
-        assert "cannot pay its selected route" in result["finish_refusals"][0]["detail"]
+        assert "short by calls 1" in result["finish_refusals"][0]["detail"], result["finish_refusals"][0]
         assert (replay.project / "app.py").read_text() == FILES["app.py"], "nothing was written"
         assert not replay.result.completed and not replay.of("recheck")
 
@@ -213,22 +224,23 @@ def _tight(total):
 
 @pytest.mark.requirements_ledger
 def test_a_first_editor_refused_before_any_write_is_not_run_and_the_finish_follows(tmp_path, monkeypatch):
-    """11,400 tokens over three slots. t1's selected route (its lead at
-    the 3,000 ceiling, its review at the 1,000 reserve, one revision at the
-    ceiling, one recheck and its close-out at the reserve: 9,000) fits the
-    9,180 left after the two 1,000 holds. After t1 and the planning call
-    for t2, 8,740 remain after the holds: t2's mandatory stages (4,000)
-    fit, its route (the same 9,000, not the last slot) does not, so t2 is
-    refused at dispatch, before its first editing call is even asked of the
-    budget (blueprint stage A: the selected route is costed before the
-    wave; root's admission finding on f4fe5b7: a recorded shortfall is not
-    an admission). Old: the lead's own reservation was refused by the hold.
+    """7,400 tokens over three slots. t1's selected route (its lead at
+    the 3,000 ceiling, its review and its close-out at the 1,000 reserve:
+    5,000, admission/2) fits the 5,180 left after the two 1,000 holds and
+    the 220 of intake. After t1 and the planning call for t2, 4,740 remain
+    after the holds: t2's mandatory stages (4,000) fit, its route (the
+    same 5,000, not the last slot) does not, so t2 is refused at dispatch,
+    before its first editing call is even asked of the budget (blueprint
+    stage A: the selected route is costed before the wave; root's
+    admission finding on f4fe5b7: a recorded shortfall is not an
+    admission). Old: the lead's own reservation was refused by the hold.
     Either way t2 is NOT RUN, nothing is planned after it, the goal
     question and the audit run, and the run still is not complete: the
-    work the plan asked for was not done."""
+    work the plan asked for was not done, and the stop says the route was
+    refused and a slot forfeited, not that the cap was reached."""
     script = _script([ONE, MORE], t2_review="NO FINDINGS\nR1: MET - app.py")
     script.overrides["auditor"] = lambda call, replay: "R1: MET - app.py"
-    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(11_400),
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(7_400),
                    record_complete=False)
     assert not [c for c in replay.calls if c.task == "t2"], "t2's lead never started"
     assert replay.of("auditor"), "the audit still runs after the refusal"
@@ -239,11 +251,13 @@ def test_a_first_editor_refused_before_any_write_is_not_run_and_the_finish_follo
     mandatory = [a for a in result["plan_admissions"] if a["task"] == "t2" and a["scope"] == "mandatory"][-1]
     assert mandatory["feasible"], "the mandatory stages fit; the route is what does not"
     admission = [a for a in result["plan_admissions"] if a["task"] == "t2" and a["scope"] == "full"][-1]
-    assert not admission["feasible"] and admission["short"] == {"tokens": 9_000 - 8_740}
+    assert not admission["feasible"] and admission["short"] == {"tokens": 5_000 - 4_740}
     assert "Plan admission for t2: its selected route could not be paid" in replay.of("auditor")[-1].prompt
     t2 = next(t for t in result["workflow"]["tasks"] if t["task_id"] == "t2")
     assert t2["closed_as"] == "not_started"
     assert not replay.result.completed and "t2 NOT RUN" in replay.result.error
+    assert "t2's route could not be paid" in replay.result.error and "1 of 3 task slot(s) were forfeited" in replay.result.error
+    assert "the task cap (3) was reached" not in replay.result.error
     assert result["requirements"]["audits"][-1]["verdicts"]["R1"]["met"] is True
     budget = _budget(replay)
     assert budget["finish_protection"]["refusals"] == [], "refused at dispatch, never at the budget"
@@ -252,12 +266,12 @@ def test_a_first_editor_refused_before_any_write_is_not_run_and_the_finish_follo
 
 @pytest.mark.requirements_ledger
 def test_a_not_run_task_never_carries_the_finish_past_partial_debt(tmp_path, monkeypatch):
-    """11,400 tokens over three slots: t1's selected route fits (9,180 left
-    after the holds for its 9,000), its lead stops at its turn cap
-    (partial), then t2's route (9,000 against 8,960) does not fit and t2 is
+    """7,400 tokens over three slots: t1's selected route fits (5,180 left
+    after the holds for its 5,000), its lead stops at its turn cap
+    (partial), then t2's route (5,000 against 4,960) does not fit and t2 is
     refused at dispatch. t2 is NOT RUN; t1's capped work is still debt, so
     the cap's own decision stops before the goal question and no audit
-    runs."""
+    runs, and the stop names the forfeited route."""
     from quadratus.config import Settings
 
     def lead(call, replay):
@@ -265,11 +279,12 @@ def test_a_not_run_task_never_carries_the_finish_past_partial_debt(tmp_path, mon
         return H.claude_cap("Wrote add; tests not run yet.", num_turns=14)
     script = _script([PLAN_1, PLAN_2])
     script.overrides["lead"] = lead
-    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(11_400),
+    replay = H.run(tmp_path, monkeypatch, script, files=FILES, max_tasks=3, limits=_tight(7_400),
                    record_complete=False, settings=Settings(backend="cli", lead_max_turns=14))
     assert [n["task"] for n in H.result_json(replay)["not_started"]] == ["t2"]
     assert len(replay.of("orchestrator")) == 2 and not replay.of("auditor"), "no goal question, no audit"
     assert replay.result.error.startswith("GoalUnconfirmedAtCap") and "t1 not continued" in replay.result.error
+    assert "t2's route could not be paid" in replay.result.error
     assert _budget(replay)["finish_protection"]["pending"] == ["goal", "audit"]
 
 

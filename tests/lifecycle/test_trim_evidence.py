@@ -219,15 +219,15 @@ def test_a_reserve_starved_terminal_keeps_its_own_stop_and_outcome(tmp_path, mon
     Every call is admitted and the run ends with 500, under the 600 reserve.
 
     Restaged on the admitted route (root's cap reconciliation on bc421f8):
-    t1's selected route (the draft, the review, the revision and the
-    recheck, each at the 600 reserve here: 2,400; its mandatory two,
-    1,200) is admitted at dispatch only from what the allowance holds
+    t1's selected route (the draft and the review, each at the 600 reserve
+    here: 1,200; a correction is admitted only when a finding selects it,
+    admission/2) is admitted at dispatch only from what the allowance holds
     after the calls already made, so the harness's default 110-token calls
     cannot both admit the route and end 500 under the reserve (that
     refusal is kept below). With each call reporting 590 (under the
     reserve; test-local H.USAGE), the measured spend is 3,540 over six
     calls; the tight allowance of used + 500 = 4,040 admits the route at
-    dispatch (2,860 left against 2,400), every later call starts with at
+    dispatch (2,860 left against 1,200), every later call starts with at
     least 1,090, and the final audit ends with 500. Same calls, same
     admitted route, same stop and outcome as the roomy run; the receipts
     are asserted, not assumed."""
@@ -243,9 +243,9 @@ def test_a_reserve_starved_terminal_keeps_its_own_stop_and_outcome(tmp_path, mon
     result = H.result_json(tight)
     assert [c.role for c in tight.calls] == [c.role for c in roomy.calls], "the same calls, every one admitted"
     admitted = [a for a in result["plan_admissions"] if a["task"] == "t1" and a["scope"] == "full"]
-    assert admitted and admitted[-1]["feasible"] and len(admitted[-1]["stages"]) == 4, admitted
-    assert "4 call(s), 2,400 tokens" in admitted[-1]["detail"] and "2,860 tokens" in admitted[-1]["detail"]
-    assert used + 500 - 590 * admitted[-1]["at_attempt"] == 2_860 >= 2_400, "the route was paid from what was left"
+    assert admitted and admitted[-1]["feasible"] and len(admitted[-1]["stages"]) == 2, admitted
+    assert "2 call(s), 1,200 tokens" in admitted[-1]["detail"] and "2,860 tokens" in admitted[-1]["detail"]
+    assert used + 500 - 590 * admitted[-1]["at_attempt"] == 2_860 >= 1_200, "the route was paid from what was left"
     assert result["not_started"] == [] and result["finish_refusals"] == []
     assert H.result_json(roomy)["budget_note"] is None
     assert result["budget_note"]["remaining_reported_tokens"] == 500

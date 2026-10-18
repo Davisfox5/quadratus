@@ -1901,15 +1901,48 @@ Key design decisions already settled:
   (`_requirements_satisfied` calls `_finish_pending_evidence` first; an
   awaited record moved the packet, the status restore was skipped, and a
   resumed cap stopped on "never covered"; a judgment that may have started
-  stays held). *The ratio family's bound*: under `_ROOT_LIMITS` (2M, the
-  default shape) the first task's selected route (1,800,000 in exposure
-  classes, 2,000,000 with a close-out) cannot be paid after the held finish
-  and is NOT STARTED before any call; that refusal is kept as a control and
-  the positive fixtures run under a named allowance (`_FUNDED_LIMITS`,
-  2,600,000), never claimed as a default positive. The call calibrations
-  make the route's calls (`blocking=True`: a standing finding per reviewer
-  resolved on the recheck) so the allowance that admits the route is spent
-  exactly at the reassessment.
+  stays held). *The ratio family's bound*: the family runs under
+  `_ROOT_LIMITS` (2M, the default shape) since admission/2 below; a
+  starved allowance (`_STARVED_LIMITS`, 1.2M) that cannot pay the known
+  stages still refuses the task before any call and is kept as the
+  control. The call calibrations make the route's calls (`blocking=True`:
+  a standing finding per reviewer resolved on the recheck) so the
+  allowance is spent exactly at the reassessment.
+- **A task's route is admitted at its known stages; a correction is
+  admitted when a finding selects it** (admission/2, `Session._plan_stages`,
+  the fresh end-to-end A+B job on 21b342d). The old route costed every
+  hypothetical call at its exposure ceiling (draft, revision, two rechecks,
+  reviews, close-out: 1,600,000) and refused the first reviewed task of a
+  default-bound run against the 1,473,864 left after a 126,136 intake and
+  the 400,000 finish hold; the slot latch (`used = max_tasks`) then
+  forfeited the other two slots and the stop read "the task cap (3) was
+  reached" with nothing written. Root reconciled that no replan reaches the
+  default case, and the policy was corrected deliberately rather than the
+  latch deleted. The dispatch route is now the stages known before any call
+  (the lead's draft at the editing ceiling, every required review, a
+  required design review or security verification), the model close-out
+  where one is made, and the finishing holds: 900,000 for a reviewed task,
+  1,100,000 before the last slot. The revision with the write grant and one
+  recheck per answering reviewer are not on it: `_fix_cycle_stages` admits
+  them whole the moment a review has made a finding, every cycle including
+  the first, through `_admit_plan` (scope `fix-cycle`), which still counts
+  the held finish, so a correction can never invade the reserve. Unpayable,
+  no editor is called, the findings stay open as the reviewer wrote them
+  (`open`, never `unresolved`: nothing rechecked them), the task closes
+  with them and the run ends incomplete and says so (`FindingsOpen`). A
+  gate fix after a failed check is admitted the same way
+  (`_gate_repair_stages`: the fix, then the reviews it still owes). No
+  review is dropped to fit, no lower tier is counted as a saving, the
+  explicit-list, parallel-batch and uncertain cases keep their fail-closed
+  admissions, and nothing synthesises a slot or a completion. The stop is
+  honest: a route refused at dispatch is recorded on the session
+  (`_route_forfeit`, carried through the checkpoint) and every cap stop
+  names it ("t2's route could not be paid from the allowance left (...),
+  so 2 of 3 task slot(s) were forfeited") instead of the cap
+  (`completion_decision._reached`). Last-slot and last-wave tasks have no
+  close-out, so there the known stages are the route and a shortfall is
+  found at the mandatory admission (`dispatch_floor`); the serial
+  full-route control therefore runs over three slots.
 - **Frontend evidence comes from a real browser** (`browser.py`, optional
   `playwright` extra): screenshot, console errors (including late throws),
   failed requests. Deterministic and dumb by design — it produces evidence,

@@ -814,8 +814,9 @@ def test_the_repair_route_lists_what_follows_the_repaired_gate(tmp_path, monkeyp
     s._max_tasks, s._slots_used = 4, 0
     s._route_peers = ["openai:gpt-5.6-sol", "xai:grok:default"]
     names = [r.name for r in s._gate_repair_stages(spec, gate, "subset")]
-    assert names == ["gate fix", "review by openai:gpt-5.6-sol", "review by xai:grok:default", "revision",
-                     "recheck by openai:gpt-5.6-sol", "recheck by xai:grok:default", "close-out"]
+    # The reviews ahead are known; the correction they may select is
+    # admitted when they do (admission/2), never costed here.
+    assert names == ["gate fix", "review by openai:gpt-5.6-sol", "review by xai:grok:default", "close-out"]
     assert [r.name for r in s._gate_repair_stages(spec, gate, "full")] == ["gate fix", "close-out"]
     s._route_after_merge = dict(rechecks=["openai:gpt-5.6-sol"], capped=["t2"])
     assert [r.name for r in s._gate_repair_stages(TaskSpec("t2-merge", "merge"), gate, "full")] == [

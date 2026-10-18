@@ -309,23 +309,24 @@ def test_a_route_the_tokens_cannot_pay_refuses_the_task_before_its_first_call_an
         tmp_path, monkeypatch):
     """The controller-reset numbers in miniature. With 1.3M total, t1's
     mandatory stages (one editing call at the 500k ceiling, one review at
-    the 200k reserve) fit the 900k left after the two 200k holds, and its
-    selected route (the revision at the ceiling, the recheck and the
-    close-out at the reserve: 1.6M) does not: the task is not started
-    before any call, the route's shortfall named in tokens (root's
-    admission finding on f4fe5b7: a route merely recorded was still
-    started, and ended short of its judgments). With 2.1M total the route
-    fits exactly (1.7M left) and the run completes; t2's route, without a
-    close-out in the last slot, is admitted the same way. With 1.0M total
-    the mandatory stages themselves do not fit: the shortfall names them."""
+    the 200k reserve) fit the 899,780 left after the two 200k holds and
+    the 220 of intake, and its selected route (the close-out at the
+    reserve too: 900k, admission/2) does not, by those 220: the task is
+    not started before any call, the route's shortfall named in tokens
+    (root's admission finding on f4fe5b7: a route merely recorded was
+    still started, and ended short of its judgments). The revision and
+    the recheck are not on the route: a correction is admitted when a
+    finding selects it. With 2.1M total the route fits and the run
+    completes; t2's route, without a close-out in the last slot, is
+    admitted the same way. With 1.0M total the mandatory stages themselves
+    do not fit: the shortfall names them."""
     replay = H.run(tmp_path, monkeypatch, _script([PLAN_1, PLAN_2], t2_review="NO FINDINGS\nR2: MET - README.md"),
                    files=FILES, max_tasks=2, record_complete=False, limits=_token_limits(1_300_000))
     admissions = [a for a in H.result_json(replay)["plan_admissions"] if a["task"] == "t1"]
     assert [a["scope"] for a in admissions] == ["mandatory", "full"]
     assert admissions[0]["feasible"] and not admissions[1]["feasible"]
-    assert admissions[1]["short"] == {"tokens": 1_600_000 - 899_780}
+    assert admissions[1]["short"] == {"tokens": 900_000 - 899_780}
     assert admissions[1]["stages"] == ["lead draft(editing/write)", "review by claude:opus(reserve)",
-                                       "revision(editing/write)", "recheck by claude:opus(reserve)",
                                        "close-out(reserve)"]
     assert not [c for c in replay.calls if c.task in ("t1", "t2")], "an unpayable route is not started"
     result = H.result_json(replay)
@@ -339,8 +340,7 @@ def test_a_route_the_tokens_cannot_pay_refuses_the_task_before_its_first_call_an
     assert paid.result.completed, paid.result.error
     rows = {(a["task"], a["scope"]): a for a in H.result_json(paid)["plan_admissions"]}
     assert rows[("t1", "full")]["feasible"] and rows[("t2", "full")]["feasible"]
-    assert rows[("t2", "full")]["stages"] == ["lead draft(editing/write)", "review by openai:gpt-5.6-sol(reserve)",
-                                              "revision(editing/write)", "recheck by openai:gpt-5.6-sol(reserve)"]
+    assert rows[("t2", "full")]["stages"] == ["lead draft(editing/write)", "review by openai:gpt-5.6-sol(reserve)"]
     assert "Plan admission for" not in paid.of("auditor")[-1].prompt, "an admitted route is not a note"
 
     # With 1.0M total the 600k left after the two holds cannot pay even the

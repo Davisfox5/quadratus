@@ -225,19 +225,18 @@ def test_a_reassessment_the_budget_cannot_admit_stops_the_run_with_the_request_o
     if not _sandboxed():
         pytest.skip("no scratch sandbox here")
     # The route's calls are made (``blocking``: one standing finding per
-    # reviewer, resolved on the recheck): t1 spends its selected seven
-    # (lead draft, two reviews, revision, two rechecks, close-out), so the
-    # call allowance that admits the route at dispatch (two calls used, two
-    # held for the finish) is the one that is spent exactly at the
-    # reassessment. With clean reviews the route's revision and rechecks are
-    # counted but never made, and the same allowance refuses t1 at dispatch
-    # instead (root's calibration finding on bc421f8).
+    # reviewer, resolved on the recheck): t1 spends its known four (lead
+    # draft, two reviews, close-out) and the correction the findings
+    # selected (revision, two rechecks), admitted on its own, so the call
+    # allowance that admits the route at dispatch (two calls used, two held
+    # for the finish) is the one that is spent exactly at the reassessment
+    # (root's calibration finding on bc421f8).
     calibration = _run(tmp_path / "calibrate", monkeypatch, blocking=True)
     before = next(i for i, c in enumerate(calibration.calls) if REASSESS in c.prompt)
     roles = [c.role for c in calibration.calls[:before]]
     assert roles.count("revision") == 1 and roles.count("recheck") == 2, roles
     admitted = [a for a in H.result_json(calibration)["plan_admissions"] if a["task"] == "t1" and a["scope"] == "full"]
-    assert len(admitted[0]["stages"]) == 7 and before + 1 - admitted[0]["at_attempt"] - 2 >= 7, (admitted, before)
+    assert len(admitted[0]["stages"]) == 4 and before + 1 - admitted[0]["at_attempt"] - 2 >= 4, (admitted, before)
     # The reassessment follows the DONE audit, which has started; the cap's
     # goal question is still held one call (Davis, 2026-10-16), so with one
     # call over the reassessment's position it is the ordinary call refused.
@@ -391,22 +390,20 @@ _CHALLENGE = "may challenge it with executed evidence"
 _ROOT_LIMITS = RunLimits(max_calls=20, max_reported_tokens=2_000_000, wall_seconds=1800,
                          max_concurrent_workers=2, reserve_tokens_per_call=200_000,
                          max_tokens_per_call=500_000)
-#: The ratio family's fundable fixture allowance. Under the default-shaped
-#: bound (_ROOT_LIMITS: 2,000,000 tokens, a 500,000 editing ceiling, a 200,000
-#: reserve) the first task's selected route, counted in exposure classes
-#: (the lead draft and the revision at the editing ceiling, two reviews and
-#: two rechecks at the reserve: 1,800,000; with a model close-out ahead of
-#: later tasks, 2,000,000), cannot be paid from what is left after the held
-#: finish (two calls at the reserve: 1,600,000 less reported usage), and the
-#: task is NOT STARTED before any call (root's Mac receipt on bc421f8, kept
-#: as test_the_default_shaped_bound_refuses_the_ratio_route_before_any_call).
-#: The positive fixtures run under the same calls, ceiling and reserve with
-#: 2,600,000 tokens, which pays the larger route whole with 200,000 of
-#: headroom for reported usage. A fixture allowance, never a claim about the
-#: product's defaults.
-_FUNDED_LIMITS = RunLimits(max_calls=20, max_reported_tokens=2_600_000, wall_seconds=1800,
-                           max_concurrent_workers=2, reserve_tokens_per_call=200_000,
-                           max_tokens_per_call=500_000)
+#: The ratio family runs under the default-shaped bound (_ROOT_LIMITS). The
+#: fresh end-to-end job on 21b342d showed the old whole-route admission
+#: refusing every reviewed task there (a 1,600,000 route against the
+#: 1,473,864 left after a 126,136 intake and the 400,000 finish hold);
+#: under admission/2 the known stages (the draft at the 500,000 ceiling,
+#: two reviews at the 200,000 reserve: 900,000, with a model close-out
+#: ahead of later tasks 1,100,000) are paid from what is left and a
+#: correction is admitted when a finding selects it. A smaller allowance
+#: that cannot pay the known stages still refuses the task before any call
+#: (test_an_allowance_that_cannot_pay_the_required_stages_refuses_the_task_
+#: before_any_call).
+_STARVED_LIMITS = RunLimits(max_calls=20, max_reported_tokens=1_200_000, wall_seconds=1800,
+                            max_concurrent_workers=2, reserve_tokens_per_call=200_000,
+                            max_tokens_per_call=500_000)
 #: The typed shape of a standing review finding (a basis given): held open
 #: through the fix cycles and offered to the evidence loop as U<n>; a bare
 #: BLOCKING line with no basis is carried to the final audit by id instead.
@@ -430,7 +427,7 @@ def _ratio_reassessment(prompt: str) -> str:
                        judged)
 
 
-def _ratio_run(tmp_path, monkeypatch, *, source=_SAFE, test="zero", keeps=False, limits=_FUNDED_LIMITS,
+def _ratio_run(tmp_path, monkeypatch, *, source=_SAFE, test="zero", keeps=False, limits=_ROOT_LIMITS,
                review="NO FINDINGS\nR1: MET - ratio.py:4", blocking=False):
     """max_tasks=1: t1 writes ratio.py, the cap question is answered DONE,
     the final audit finds R1 NOT MET claiming ZeroDivisionError escapes
@@ -493,8 +490,8 @@ def test_a_false_final_audit_finding_is_challenged_after_the_cap_without_another
     challenges R1 read-only, the harness runs its test on the delivered
     source, the same auditor reassesses once and the run completes, with no
     writer, slot or recovery bought and inside the unchanged 20-call
-    allowance (the token allowance is the fixture's funded one,
-    _FUNDED_LIMITS). The served record came in while the final audit was
+    allowance (the default-shaped bound, _ROOT_LIMITS: the positive proof
+    under 2,000,000). The served record came in while the final audit was
     current and the acceptance on record consumed it: the terminal's
     acceptance is current, names E1, and the auditor's own packet beside
     it (the production path of Session._consume_evidence)."""
@@ -544,7 +541,7 @@ def test_a_final_challenge_that_does_not_establish_the_requirement_leaves_it_hel
         before = next(i for i, c in enumerate(calibration.calls) if REASSESS in c.prompt)
         assert [c.role for c in calibration.calls[:before]].count("recheck") == 2
         kw = dict(blocking=True, limits=RunLimits(
-            max_calls=before, max_reported_tokens=_FUNDED_LIMITS.max_reported_tokens, wall_seconds=1800,
+            max_calls=before, max_reported_tokens=_ROOT_LIMITS.max_reported_tokens, wall_seconds=1800,
             max_concurrent_workers=2, reserve_tokens_per_call=200_000, max_tokens_per_call=500_000))
     replay = _ratio_run(tmp_path / "run", monkeypatch, **kw)
     source = kw.get("source", _SAFE)
@@ -673,7 +670,7 @@ def test_an_interrupted_challenge_resumes_its_unstarted_judgement_once_and_never
     spent = _budget(parent)
     assert spent["in_flight"] == 0
     before = len(replay.calls)
-    second = Path(_episode(replay, resume_from=parent.name, max_tasks=1, limits=_FUNDED_LIMITS).run_dir)
+    second = Path(_episode(replay, resume_from=parent.name, max_tasks=1, limits=_ROOT_LIMITS).run_dir)
     new = replay.calls[before:]
     result = json.loads((second / "result.json").read_text())
     assert len(runs) == 1, "the proof is never run again"
@@ -865,7 +862,7 @@ def test_a_non_blocking_review_warning_reaches_the_final_audit_labelled_never_as
         recheck=lambda c, r: recheck_reply(c.prompt, default="RESOLVED the revision returns None for zero"),
         auditor=lambda c, r: "R1: MET - ratio.py:4", **{"requirements-review": lambda c, r: "COMPLETE"}),
         files={**FILES, "app.py": FIXED, "ratio.py": "def safe_ratio(a, b):\n    return a / b\n"},
-        max_tasks=3 if two else 2, record_complete=False, limits=_FUNDED_LIMITS)
+        max_tasks=3 if two else 2, record_complete=False, limits=_ROOT_LIMITS)
     (audit,) = replay.of("auditor")
     section = audit.prompt.split("## Earlier task-review observations")
     if case == "resolved-blocking":
@@ -960,7 +957,7 @@ def test_a_carried_warning_survives_a_pause_and_reaches_the_resumed_reassessment
     review = f"{_LATE}\n\nR1: MET - ratio.py:4\nREVIEW: COMPLETE"
     replay = _ratio_run(tmp_path, monkeypatch, review=review)
     before = len(replay.calls)
-    _episode(replay, resume_from=Path(replay.result.run_dir).name, max_tasks=1, limits=_FUNDED_LIMITS)
+    _episode(replay, resume_from=Path(replay.result.run_dir).name, max_tasks=1, limits=_ROOT_LIMITS)
     (judge,) = [c for c in replay.calls[before:] if REASSESS in c.prompt]
     assert _LATE.strip() in judge.prompt
 
@@ -1038,25 +1035,27 @@ def test_a_positive_reassessment_without_a_sufficiency_judgment_keeps_the_requir
 
 
 @pytest.mark.requirements_ledger
-def test_the_default_shaped_bound_refuses_the_ratio_route_before_any_call(tmp_path, monkeypatch):
-    """Root's Mac receipt on bc421f8, kept as the family's bound control:
-    under _ROOT_LIMITS the first task's selected route (six calls,
-    1,800,000 in exposure classes) cannot be paid from what is left after
-    the held finish, so the task is NOT STARTED before any task call, no
-    effect is launched, no evidence or audit record exists, and the result
-    is incomplete and says so. A positive under this bound is not claimed
-    anywhere; the positive fixtures name their own allowance."""
-    replay = _ratio_run(tmp_path, monkeypatch, limits=_ROOT_LIMITS)
+def test_an_allowance_that_cannot_pay_the_required_stages_refuses_the_task_before_any_call(tmp_path, monkeypatch):
+    """The family's bound control (root's Mac receipt on bc421f8, restaged
+    under admission/2): an allowance that cannot pay t1's known stages
+    (the draft at the 500,000 ceiling and two reviews at the 200,000
+    reserve: 900,000, against the 800,000 left of 1,200,000 after the held
+    finish and the intake) refuses the task before any task call: no
+    effect is launched, no evidence or audit record exists, the shortfall
+    is named, and the result is incomplete and says a route was forfeited.
+    No review is dropped to fit, and the default bound's positive stands
+    in test_a_false_final_audit_finding_is_challenged_after_the_cap_
+    without_another_writer."""
+    replay = _ratio_run(tmp_path, monkeypatch, limits=_STARVED_LIMITS)
     result = H.result_json(replay)
     assert not replay.result.completed
     assert {c.role for c in replay.calls} <= {"orchestrator", "requirements-review"}, [c.role for c in replay.calls]
     assert _records(replay) == [] and not replay.of("auditor") and not replay.of("lead")
     (refusal,) = [r for r in result["finish_refusals"] if r["task"] == "t1"]
     detail = refusal["detail"]
-    assert "cannot pay its selected route" in detail, detail
+    assert "lead draft" in detail and detail.count("review by") == 2, detail
     numbers = [int(n.replace(",", "")) for n in re.findall(r"\d[\d,]{2,}", detail)]
-    assert 1_800_000 in numbers, detail
-    available = max(n for n in numbers if n < 1_800_000)
-    assert available <= _ROOT_LIMITS.max_reported_tokens - 2 * _ROOT_LIMITS.reserve_tokens_per_call, detail
+    assert 900_000 in numbers, detail
     assert [n["task"] for n in result["not_started"]] == ["t1"]
+    assert "t1's route could not be paid" in (replay.result.error or "") and "forfeited" in (replay.result.error or "")
     assert (replay.project / "ratio.py").read_text() == "def safe_ratio(a, b):\n    return a / b\n"

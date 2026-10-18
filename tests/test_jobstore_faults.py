@@ -194,3 +194,23 @@ def test_a_checkpoint_written_before_the_typed_records_still_restores(tmp_path):
     checkpoint.restore_state(fresh, state)
     assert fresh.review_findings == [] and fresh.evidence_obligations == [] and fresh.operations == []
     assert fresh.plan_admissions == [] and fresh._requirement_revision_record == {}
+
+
+def test_a_route_forfeit_is_carried_through_the_checkpoint_and_absent_from_older_ones(tmp_path):
+    """A refused route forfeits the slots after it; continued from a
+    quiescent checkpoint, the cap's stop still names the forfeit rather
+    than the cap (admission/2)."""
+    from quadratus.artifacts import ArtifactStore
+    from quadratus.session import Session, SessionConfig
+    session = Session("goal", ArtifactStore(tmp_path / "a"), lambda *a, **k: "", config=SessionConfig())
+    forfeit = dict(task="t2", detail="t2: cannot pay its selected route", slots_unused=2, slots_used=1)
+    session._route_forfeit = dict(forfeit)
+    state = checkpoint.capture_state(session)
+    assert state["_route_forfeit"] == forfeit
+    fresh = Session("goal", ArtifactStore(tmp_path / "b"), lambda *a, **k: "", config=SessionConfig())
+    checkpoint.restore_state(fresh, state)
+    assert fresh._route_forfeit == forfeit
+    older = Session("goal", ArtifactStore(tmp_path / "c"), lambda *a, **k: "", config=SessionConfig())
+    state.pop("_route_forfeit")
+    checkpoint.restore_state(older, state)
+    assert older._route_forfeit is None

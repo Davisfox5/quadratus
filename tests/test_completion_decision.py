@@ -229,6 +229,32 @@ def test_requirements_unmet_at_the_cap_is_named_with_the_cap():
     assert decision.done_accepted is False
 
 
+_FORFEIT = dict(task="t2", detail="t2: cannot pay its selected route: short by tokens 126,136",
+                slots_unused=2, slots_used=1)
+
+
+def test_a_route_forfeit_names_the_refused_route_at_every_cap_stop_never_the_cap():
+    """The fresh end-to-end job on 21b342d stopped on 'the task cap (3) was
+    reached' when t2's route was refused at dispatch and two slots were
+    never planned. Carried in, the forfeit is what each cap stop names."""
+    reached = ("t2's route could not be paid from the allowance left (t2: cannot pay its selected "
+               "route: short by tokens 126,136), so 2 of 3 task slot(s) were forfeited")
+    unmet = decide(answered(CAP, satisfied=False, refusal="\n\n--- DONE SENT BACK ---\nR1 not met",
+                            route_forfeit=_FORFEIT))
+    assert unmet.stop.reason == (f"RequirementsUnmet: {reached} with the goal confirmed but the "
+                                 "requirements not met: R1 not met. Work preserved.")
+    unconfirmed, _made = drive(inputs(CAP, route_forfeit=_FORFEIT), goal=False)
+    assert unconfirmed.stop.reason == (f"GoalUnconfirmedAtCap: {reached} and the orchestrator did not "
+                                       "confirm the goal met. Work preserved.")
+    unproven = decide(answered(CAP, tasks=[task(covers=["R2"], edges={"review": None})], route_forfeit=_FORFEIT))
+    assert unproven.stop.reason.startswith(f"CompletionUnproven: the goal confirmation (asked when {reached}) "
+                                           "was accepted but the record does not support it: ")
+    for decision in (unmet, unconfirmed, unproven):
+        assert "the task cap (3) was reached" not in decision.stop.reason
+    # Without a forfeit every stop reads as before.
+    assert "the task cap (3) was reached" in decide(answered(CAP, satisfied=False)).stop.reason
+
+
 def test_dependencies_are_verified_only_after_requirements_pass():
     decision, made = drive(inputs(), satisfied=False)
     assert made == [CHECK_REQUIREMENTS] and decision.status == SEND_BACK

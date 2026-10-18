@@ -59,12 +59,12 @@ _CARRIED = (
     "unresolved_reviews", "_cap_goal", "_final_audit", "review_notes", "finish_refusals",
     "review_dispositions", "not_started", "judgment_completions", "judgment_gaps",
     "review_findings", "evidence_obligations", "plan_admissions", "operations", "_requirement_revision_record",
-    "_plan_gate_receipt",
+    "_plan_gate_receipt", "_route_forfeit",
 )
 #: Carried state added by the A+B batch (2026-10-18): absent from earlier
 #: checkpoints, which are still readable and resumable with these empty.
 _ADDED_LATER = frozenset({"review_findings", "evidence_obligations", "plan_admissions", "operations",
-                          "_requirement_revision_record", "_plan_gate_receipt"})
+                          "_requirement_revision_record", "_plan_gate_receipt", "_route_forfeit"})
 #: State a checkpoint does not carry. Any of it present makes the point not
 #: resumable, rather than resuming a job whose record would be incomplete.
 _NOT_CARRIED = (
@@ -199,7 +199,7 @@ def restore_state(session, state: dict) -> None:
         if name in _ADDED_LATER and name not in state:
             # A checkpoint written before these records existed carries
             # none: the records start empty, which is what that run held.
-            setattr(session, name, {} if name == "_requirement_revision_record" else [])
+            setattr(session, name, {"_requirement_revision_record": {}, "_route_forfeit": None}.get(name, []))
             continue
         setattr(session, name, state[name])
     session._carried_baselines = dict(_original_tests=state["_original_tests"],

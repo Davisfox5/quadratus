@@ -2600,6 +2600,9 @@ class Session:
         #: The current task's reviewers, for the route a failed check selects:
         #: cleared as each task starts, set when its reviewers are drawn.
         self._route_peers: List[str] = []
+        #: A task route refused at dispatch that forfeited the remaining
+        #: slots; carried, and named by the cap's stop.
+        self._route_forfeit: Optional[dict] = None
         #: While the merge gate runs: the post-merge rechecks and capped
         #: final reviews that follow it, for its repair route.
         self._route_after_merge: Optional[dict] = None
@@ -4915,7 +4918,23 @@ class Session:
             trims = retried = 0
             revision_prompt = self._revision_prompt(spec, draft, [f"[{labels[p]}]\n{n}" for p, n in notes])
             mark = self._source_fingerprint()
+            admitted = True
+            if self._budget() is not None:
+                # The correction the review selected (admission/2): the
+                # revision with the write grant and one recheck per reviewer
+                # whose blocking finding it answers, admitted whole before
+                # the editor writes; unpayable, nothing is written and the
+                # findings stay open as the reviewers wrote them.
+                cycle = self._admit_plan(spec.task_id, self._fix_cycle_stages(spec, blocking), scope="fix-cycle")
+                admitted = cycle.feasible
+                if not admitted:
+                    self._finish_refused(spec, "fix round", FinishReserved(
+                        f"{spec.task_id}: the correction the review selected cannot be paid whole: {cycle.detail}"))
             try:
+                if not admitted:
+                    refused = FinishReserved(f"{spec.task_id}: the correction the review selected cannot be paid whole")
+                    refused.recorded = True
+                    raise refused
                 try:
                     revision, trims = self._edit_within_stop(lead, spec, task, revision_prompt, spent=1 + charged)
                 except TurnLimitReached as exc:
@@ -4939,10 +4958,12 @@ class Session:
                     return self._close_turn_limited(lead, spec, task, exc, before)
                 revision, unresolved, capped_writer = handoff[0], handoff[1], True
             except FinishReserved as exc:
-                # Refused before it started, to keep the finish: nothing
-                # answered the findings, so every blocking one stays open as
-                # the reviewer wrote it, and no writer call follows.
-                self._finish_refused(spec, "revision", exc)
+                # Refused before it started, to keep the finish (or at its
+                # admission above, already recorded): nothing answered the
+                # findings, so every blocking one stays open as the reviewer
+                # wrote it, and no writer call follows.
+                if not getattr(exc, "recorded", False):
+                    self._finish_refused(spec, "revision", exc)
                 revision, unresolved, capped_writer = draft, list(blocking), True
             else:
                 task.record("assistant", revision)
@@ -6468,9 +6489,14 @@ class Session:
             except FinishReserved as exc:
                 if not self._settle_not_started(spec, exc):
                     raise
-                # No further task can start an edit from this allowance
-                # (spend only grows): planning ends here, the slot stays
-                # spent, and the cap's own decision applies every gate.
+                # The route's known stages cannot be paid from what is left,
+                # and no cheaper reviewed route exists (a review is never
+                # dropped to fit, and the close-out is factual only in the
+                # last slot): planning ends here, the remaining slots are
+                # forfeited and recorded as such, and the cap's own decision
+                # applies every gate, naming the forfeit rather than the cap.
+                self._route_forfeit = dict(task=spec.task_id, detail=str(exc)[:400],
+                                           slots_unused=max(0, max_tasks - used), slots_used=used - 1)
                 used = max_tasks
                 continue
             finally:
@@ -10192,27 +10218,32 @@ class Session:
     def _plan_stages(self, spec, stages, *, collaborators=(), security: bool = False,
                      post_merge: bool = False, slots: int = 1) -> list:
         """The selected finite route of one task as plan stages in the
-        budget's exposure classes (delivery.PlanStage): its known mandatory
-        stages, then the one correction the route allows (one revision with
-        the write grant and one recheck per reviewer; a second fix cycle is
-        admitted on its own before it starts, ``_fix_cycle_stages``), for a
-        parallel child one post-merge recheck per reviewer, its model
-        close-out where one is made, and the finishing judgments still held.
-        A gate fix is not on the route: it is bought only when a check fails,
-        by the budget at that moment, and a refusal there is recorded loudly
-        (the failed check stands); costing it in advance would refuse every
-        task under the normal bounds. Nothing is cheaper than its class: a
-        call holding the write grant is at the editing ceiling."""
+        budget's exposure classes (delivery.PlanStage), admission policy
+        admission/2: the stages known before any call (the lead's draft,
+        each required review, a required design review or security
+        verification), its model close-out where one is made, and the
+        finishing judgments still held. A correction (the revision with the
+        write grant and one recheck per reviewer whose finding it answers)
+        is not on the route: it exists only once a review has made a
+        finding, and is admitted whole at that moment, before its editor
+        writes (``_fix_cycle_stages``, every cycle, the first included);
+        unpayable, no editor is called and the findings stay open as the
+        reviewer wrote them, so the task closes with them and the run ends
+        incomplete and says so. The same holds for a gate fix after a
+        failed check and for a merged child's post-merge recheck. Costing
+        these hypothetical calls in advance at their exposure ceilings
+        refused every reviewed task under the default bound (the fresh
+        end-to-end job on 21b342d: a 1,600,000 route against the
+        1,473,864 left after a 126,136 intake and the 400,000 finish hold,
+        nothing written); the known stages still must be paid whole, no
+        review is dropped to fit, and the finish keeps its hold. Nothing is
+        cheaper than its class: a call holding the write grant is at the
+        editing ceiling."""
         writes = bool(self._writes())
         rows = []
         for name in stages:
             editing = writes and name in ("lead draft", "security worker draft")
             rows.append(delivery.PlanStage(name, "editing" if editing else "reserve", editing=editing))
-        if collaborators and not security:
-            rows.append(delivery.PlanStage("revision", "editing" if writes else "reserve", editing=writes))
-            rows.extend(delivery.PlanStage(f"recheck by {peer}", "reserve") for peer in collaborators)
-        if post_merge:
-            rows.extend(delivery.PlanStage(f"post-merge recheck by {peer}", "reserve") for peer in collaborators)
         if not self._closes_factually(spec, slots=slots):
             rows.append(delivery.PlanStage("close-out", "reserve"))
         budget = self._budget()
@@ -10259,10 +10290,9 @@ class Session:
             return rows
         peers = list(getattr(self, "_route_peers", None) or [])
         if kind == "subset" and peers:
+            # The reviews ahead are known; the correction they may select
+            # is admitted when they do (admission/2).
             rows.extend(delivery.PlanStage(f"review by {peer}", "reserve") for peer in peers)
-            rows.append(delivery.PlanStage("revision", "editing" if self._writes() else "reserve",
-                                           editing=self._writes()))
-            rows.extend(delivery.PlanStage(f"recheck by {peer}", "reserve") for peer in peers)
         if not self._closes_factually(spec):
             rows.append(delivery.PlanStage("close-out", "reserve"))
         return rows

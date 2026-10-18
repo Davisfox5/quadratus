@@ -162,6 +162,10 @@ class CompletionInputs:
     #: The refusal text the requirements check left (``_done_refusal``).
     done_refusal: str = ""
     dependencies_verified: bool = False
+    #: A task route refused at dispatch that forfeited the remaining slots
+    #: (``Session._route_forfeit``): the cap's stop names it, never the cap
+    #: alone.
+    route_forfeit: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -340,7 +344,7 @@ def _cap(inputs: CompletionInputs, debt: Debt) -> Decision:
         # No slot is left to repay them, so the goal question is not asked.
         if inputs.goal_confirmed is not None or inputs.requirements_satisfied is not None:
             raise ValueError("open audit findings at the cap forbid the goal question")
-        return _findings_stop(site, debt, "the task cap was reached")
+        return _findings_stop(site, debt, _reached(inputs) if inputs.route_forfeit else "the task cap was reached")
     mismatches = debt.partial_mismatches
     confirmed = satisfied = None
     if debt.partial:
@@ -359,22 +363,36 @@ def _cap(inputs: CompletionInputs, debt: Debt) -> Decision:
     completed = bool(confirmed and satisfied and not debt.legacy_open_findings
                      and not _checks_standing_failed(debt))
     if completed:
-        return _guard(inputs, debt, "the cap's goal confirmation", done_accepted=True,
-                      partial_mismatches=mismatches)
-    cap = inputs.max_tasks
+        where = "the cap's goal confirmation"
+        if inputs.route_forfeit:
+            where = f"the goal confirmation (asked when {_reached(inputs)})"
+        return _guard(inputs, debt, where, done_accepted=True, partial_mismatches=mismatches)
     if confirmed is False:
         return _classed(Decision(INCOMPLETE, site, debt, done_accepted=False, partial_mismatches=mismatches,
-                                 stop=Stop("cap", (f"GoalUnconfirmedAtCap: the task cap ({cap}) was reached and "
-                                                   "the orchestrator did not confirm the goal met. "
+                                 stop=Stop("cap", (f"GoalUnconfirmedAtCap: {_reached(inputs)} and the "
+                                                   "orchestrator did not confirm the goal met. "
                                                    "Work preserved."))))
     if confirmed and satisfied is False:
         return _classed(Decision(INCOMPLETE, site, debt, done_accepted=False, partial_mismatches=mismatches,
                                  stop=Stop("unverified", (
-                                     f"RequirementsUnmet: the task cap ({cap}) was reached with the goal "
+                                     f"RequirementsUnmet: {_reached(inputs)} with the goal "
                                      f"confirmed but the requirements not met: {_why(inputs)}. "
                                      "Work preserved."))))
-    return _open_work_stop(inputs, debt, "GoalUnconfirmedAtCap", f"the task cap ({cap}) was reached",
+    return _open_work_stop(inputs, debt, "GoalUnconfirmedAtCap", _reached(inputs),
                            done_accepted=False, partial_mismatches=mismatches)
+
+
+def _reached(inputs: CompletionInputs) -> str:
+    """How the cap's decision was reached: the cap itself, or a task route
+    refused at dispatch that forfeited the remaining slots (the honest
+    stop reason: the fresh end-to-end job on 21b342d read 'the task cap
+    (3) was reached' when one slot was refused and two forfeited)."""
+    forfeit = inputs.route_forfeit
+    if forfeit:
+        return (f"{forfeit.get('task')}'s route could not be paid from the allowance left "
+                f"({forfeit.get('detail')}), so {forfeit.get('slots_unused')} of {inputs.max_tasks} task "
+                "slot(s) were forfeited")
+    return f"the task cap ({inputs.max_tasks}) was reached"
 
 
 def _why(inputs: CompletionInputs) -> str:
@@ -516,6 +534,7 @@ def snapshot_session(session, *, site: str, max_tasks: int = 0, **answers) -> Co
         legacy_open_findings=tuple(session.open_findings),
         legacy_partial=frozenset(session._partial_tasks),
         max_tasks=max_tasks,
+        route_forfeit=getattr(session, "_route_forfeit", None),
         reopens=answers.pop("reopens", session._requirement_reopens),
         max_reopens=answers.pop("max_reopens", session.config.max_requirement_reopens),
         **answers,
